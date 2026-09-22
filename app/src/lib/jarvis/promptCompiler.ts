@@ -1,3 +1,4 @@
+import { contextTerminalCoordinationIntent } from '@/features/local-command-bridge/modelCoordinationPolicy';
 import { requestsNoTools } from '@/lib/ai/intent';
 import { reasoningModeInstructions } from '@/lib/ai/reasoningControls';
 import type {
@@ -628,7 +629,8 @@ export function compileJarvisPrompt(
   const omittedSourceRefs: JarvisSourceRef[] = [];
   const contextToolOnly =
     !requestsNoTools(envelope.userText) &&
-    envelope.model.capabilities.tools === true && requestsReadOnlyContextTool(envelope.userText);
+    envelope.model.capabilities.tools === true && requestsReadOnlyContextTool(envelope.userText) &&
+    !contextTerminalCoordinationIntent(envelope.userText);
   const directAddress = contextToolOnly && requestsDirectContextAddress(envelope.userText);
   const allAboutMeItems = envelope.context.items.filter(
     (item) => item.source.id === JARVIS_ALL_ABOUT_ME_SOURCE_ID,

@@ -6,6 +6,32 @@ import {
 } from './terminalPeerFabricTool';
 
 describe('Terminal Peer Fabric preloaded tool', () => {
+  it('recovers ten members but rejects an eleventh before native invocation', async () => {
+    const port = {
+      capability: vi
+        .fn()
+        .mockResolvedValue({ available: true, version: '2.0.0', operations: ['connect'] }),
+      connect: vi.fn().mockResolvedValue({ status: 'completed' }),
+      command: vi.fn(),
+    };
+    const peers = Array.from({ length: 10 }, (_, i) => ({
+      paneId: `p-${i}`,
+      sessionId: `s-${i}`,
+      projectId: 'proj',
+      runtimeGeneration: 'gen',
+    }));
+    await expect(recoverTerminalPeerFabricTeam('ten', peers, port)).resolves.toMatchObject({
+      status: 'completed',
+    });
+    await expect(
+      recoverTerminalPeerFabricTeam(
+        'eleven',
+        [...peers, { ...peers[0], paneId: 'p-10', sessionId: 's-10' }],
+        port,
+      ),
+    ).rejects.toThrow();
+    expect(port.connect).toHaveBeenCalledTimes(1);
+  });
   it('is bundled as a preloaded tool with no install or download action', () => {
     expect(TERMINAL_PEER_FABRIC_TOOL).toMatchObject({
       id: 'terminal-peer-fabric',
@@ -50,13 +76,11 @@ describe('Terminal Peer Fabric preloaded tool', () => {
 
   it('rejects legacy capabilities and preserves stored delivery truth', async () => {
     const legacy = createTerminalPeerFabricCommandPort(
-      vi
-        .fn()
-        .mockResolvedValue({
-          available: true,
-          version: '1.9.9',
-          operations: ['connect', 'team.status'],
-        }),
+      vi.fn().mockResolvedValue({
+        available: true,
+        version: '1.9.9',
+        operations: ['connect', 'team.status'],
+      }),
     );
     await expect(legacy.capability()).resolves.toEqual({ available: false });
 
@@ -76,20 +100,16 @@ describe('Terminal Peer Fabric preloaded tool', () => {
 
   it('recovers after restart only by reconnecting verified stable peer generations', async () => {
     const port = {
-      capability: vi
-        .fn()
-        .mockResolvedValue({
-          available: true,
-          version: '2.0.0',
-          operations: ['connect', 'team.status'],
-        }),
-      connect: vi
-        .fn()
-        .mockResolvedValue({
-          correlationId: 'recovery-1',
-          status: 'completed',
-          targetIds: ['sess-1', 'sess-2'],
-        }),
+      capability: vi.fn().mockResolvedValue({
+        available: true,
+        version: '2.0.0',
+        operations: ['connect', 'team.status'],
+      }),
+      connect: vi.fn().mockResolvedValue({
+        correlationId: 'recovery-1',
+        status: 'completed',
+        targetIds: ['sess-1', 'sess-2'],
+      }),
       command: vi.fn(),
     };
     const peerRefs = [

@@ -62,6 +62,7 @@ import {
   detectInteractiveAgentCli,
   resolveAgentForSlug,
 } from './agentPromptDelivery';
+import { normalizeTerminalContextAgentSlug } from './terminalCommandFoundation';
 import {
   getOrCreateTerminalContextSession,
   getTerminalContextSession,
@@ -768,7 +769,7 @@ export function TerminalView({
   // effect below catches up on the next prop change, but any early
   // output that arrived before that window had the wrong tag. Reading
   // through the ref eliminates the window.
-  const agentSlugRef = useRef(agentSlug ?? null);
+  const agentSlugRef = useRef(normalizeTerminalContextAgentSlug(agentSlug));
   const agentModeRef = useRef(resolvedAgentMode);
   useEffect(() => {
     onReadyRef.current = onReady;
@@ -822,7 +823,7 @@ export function TerminalView({
     };
   }, [paneId]);
   useEffect(() => {
-    const slug = agentSlug ?? null;
+    const slug = normalizeTerminalContextAgentSlug(agentSlug);
     agentSlugRef.current = slug;
   }, [agentSlug]);
   useEffect(() => {
@@ -867,9 +868,9 @@ export function TerminalView({
   useEffect(() => {
     const sid = sessionRef.current;
     if (!sid) return;
-    useTerminalTranscriptStore.getState().retagSession(sid, agentSlug ?? null);
+    useTerminalTranscriptStore.getState().retagSession(sid, normalizeTerminalContextAgentSlug(agentSlug));
 
-    const slug = agentSlug ?? null;
+    const slug = normalizeTerminalContextAgentSlug(agentSlug);
     const mode = resolvedAgentMode;
     if (deliveredSlugRef.current === slug && deliveredModeRef.current === mode) return;
     deliveredSlugRef.current = slug;
@@ -978,7 +979,7 @@ export function TerminalView({
   useEffect(() => {
     const sid = activeSessionId;
     const sessionCwd = cwdRef.current;
-    const slug = agentSlug ?? null;
+    const slug = normalizeTerminalContextAgentSlug(agentSlug);
     if (!sid || !sessionCwd || resolvedAgentMode !== 'coordinated' || !slug) return;
 
     const agentName = resolveAgentForSlug(slug).name;
@@ -1854,7 +1855,7 @@ export function TerminalView({
           // Register the new session!
           useTerminalTranscriptStore.getState().registerSession(sid, {
             paneId: paneId,
-            agentSlug: agentSlug ?? null,
+            agentSlug: normalizeTerminalContextAgentSlug(agentSlug),
             command: command ?? null,
             projectId: projectId ?? null,
           });
@@ -2629,7 +2630,7 @@ export function TerminalView({
         projectId={projectId ?? null}
         evidence={terminalPromptEvidence}
         cwd={cwdRef.current ?? cwd ?? null}
-        agentSlug={agentSlug ?? null}
+        agentSlug={normalizeTerminalContextAgentSlug(agentSlug)}
         projectName={projectName ?? null}
         projectRoot={cwd ?? null}
         onClose={() => {

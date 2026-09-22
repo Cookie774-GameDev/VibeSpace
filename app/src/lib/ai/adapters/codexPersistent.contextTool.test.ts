@@ -348,3 +348,80 @@ it('does not advertise a disabled plugin mutation tool to native Codex', async (
   expect(bridge.executeTool).not.toHaveBeenCalled();
   expect(bridge.dispose).toHaveBeenCalledOnce();
 });
+
+it('resumes a legacy persisted Codex thread without a capability receipt and keeps its context tools bound', async () => {
+  const writes: Array<Record<string, any>> = [];
+  const bridge = {
+    dynamicTools: [
+      { type: 'function' as const, name: 'mcp_list', description: 'List approved MCP tools.', inputSchema: { type: 'object' } },
+    ],
+    bind: vi.fn(),
+    execute: vi.fn(async () => ({ success: true, contentItems: [{ type: 'inputText' as const, text: 'context' }] })),
+    executeTool: vi.fn(),
+    dispose: vi.fn(),
+  };
+  const accountId = 'legacy-resume-account';
+  const chatId = 'legacy-resume-chat';
+  const key = 'vibespace.codex-context-thread.v1:' + JSON.stringify([
+    accountId, 'workspace', 'project', chatId, 'C:\\workspace',
+  ]);
+  localStorage.setItem(key, 'thread_legacy');
+  const adapter = createCodexPersistentAdapter({
+    contextTool: async () => bridge,
+    findExecutable: async () => ({ executableId: 'trusted-codex' }),
+    start: async () => ({ generation: 'generation-legacy-resume' }),
+    frames: () => ({ ready: Promise.resolve(), stream: (async function* () {
+      yield { id: 'request_legacy_model_1', result: { data: [{ model: 'gpt-5.6-luna', supportedReasoningEfforts: [], serviceTiers: [] }], nextCursor: null } };
+      yield { id: 'request_legacy_resume', result: {
+        thread: { id: 'thread_legacy' }, model: 'gpt-5.6-luna', modelProvider: 'openai', serviceTier: null,
+        cwd: 'C:\\workspace', approvalPolicy: 'never', approvalsReviewer: 'user',
+        sandbox: { type: 'readOnly', networkAccess: false }, reasoningEffort: null,
+      } };
+      yield { method: 'turn/started', params: { threadId: 'thread_legacy', turn: { id: 'turn_legacy' } } };
+      yield { method: 'turn/completed', params: { threadId: 'thread_legacy', turnId: 'turn_legacy', turn: { id: 'turn_legacy', status: 'completed' } } };
+    })() }),
+    write: async (_generation, frame) => { writes.push(frame); }, stop: async () => true,
+  });
+  try {
+    for await (const _event of adapter.send!({
+      requestId: 'request_legacy', connection, codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-luna' },
+      sessionId: 'thread_legacy', expectedSessionId: 'thread_legacy',
+      chatId, accountId, workspaceId: 'workspace', projectId: 'project', prompt: 'Continue the legacy task.',
+      modelId: 'gpt-5.6-luna', workingDirectory: 'C:\\workspace', interactionMode: 'ask',
+      tools: { 'mcp.list': true },
+    })) { /* consume */ }
+    expect(writes.map((frame) => frame.method)).toEqual(['model/list', 'thread/resume', 'turn/start']);
+    expect(writes.find((frame) => frame.method === 'thread/start')).toBeUndefined();
+    expect(writes.find((frame) => frame.method === 'thread/resume')?.params).not.toHaveProperty('dynamicTools');
+    expect(writes.find((frame) => frame.method === 'turn/start')?.params.input[0].text).toBe('Continue the legacy task.');
+    expect(bridge.bind).toHaveBeenCalledWith('thread_legacy', expect.objectContaining({ model: 'gpt-5.6-luna' }), 'generation-legacy-resume');
+  } finally {
+    localStorage.removeItem(key);
+  }
+});
+
+it('does not implicitly resume a thread whose dynamic tool manifest is unknown', async () => {
+  const writes: Array<any> = [];
+  const bridge = { dynamicTools: [{ type: 'function' as const, name: 'terminal_list', description: 'Read live targets', inputSchema: { type: 'object' } }], toolNames: ['terminal_list' as const], bind: vi.fn(), execute: vi.fn(), executeTool: vi.fn(), dispose: vi.fn() };
+  const scope = ['tool-change-account', 'workspace', 'project', 'tool-change-chat', 'C:\\workspace'];
+  const oldKey = 'vibespace.codex-context-thread.v1:' + JSON.stringify(scope);
+  localStorage.setItem(oldKey, 'thread_old_context_only');
+  const adapter = createCodexPersistentAdapter({
+    contextTool: async () => bridge,
+    findExecutable: async () => ({ executableId: 'trusted-codex' }),
+    start: async () => ({ generation: 'tool-change-generation' }),
+    frames: () => ({ ready: Promise.resolve(), stream: (async function* () {
+      yield { id: 'request_changed_model_1', result: { data: [{ model: 'gpt-5.6-luna', supportedReasoningEfforts: [], serviceTiers: [] }], nextCursor: null } };
+      yield { id: 'request_changed_thread', result: { thread: { id: 'thread_new' }, model: 'gpt-5.6-luna', modelProvider: 'openai', serviceTier: null, cwd: 'C:\\workspace', approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: { type: 'readOnly', networkAccess: false }, reasoningEffort: null } };
+      yield { method: 'turn/started', params: { threadId: 'thread_new', turn: { id: 'turn_new' } } };
+      yield { method: 'turn/completed', params: { threadId: 'thread_new', turnId: 'turn_new', turn: { id: 'turn_new', status: 'completed' } } };
+    })() }),
+    write: async (_generation, frame) => { writes.push(frame); }, stop: async () => true,
+  });
+  try {
+    for await (const _event of adapter.send!({ requestId: 'request_changed', connection, codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-luna' }, accountId: scope[0], workspaceId: scope[1], projectId: scope[2], chatId: scope[3], workingDirectory: scope[4], prompt: 'Verify the existing workers.', modelId: 'gpt-5.6-luna', interactionMode: 'ask', tools: { 'terminal.list': true } })) { /* consume */ }
+    expect(writes.some(frame => frame.method === 'thread/resume')).toBe(false);
+    expect(writes.find(frame => frame.method === 'thread/start')?.params.dynamicTools.map((tool: { name: string }) => tool.name)).toEqual(['terminal_list']);
+    expect(localStorage.getItem(oldKey)).toBe('thread_old_context_only');
+  } finally { localStorage.removeItem(oldKey); }
+});

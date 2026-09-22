@@ -1,13 +1,55 @@
 import { describe, expect, it } from 'vitest';
 import {
   isProviderRuntimeError,
+  isProviderRateLimitError,
+  isProviderUsageLimitError,
+  presentProviderError,
   providerErrorDetails,
+  richestProviderErrorDetails,
   providerErrorFromEvent,
   ProviderRuntimeError,
 } from './providerError';
 import { JarvisProviderAttemptFailureError } from './providerAttemptEvidence';
 
 describe('provider error boundary', () => {
+  it.each([
+    { code: '429', message: 'Too Many Requests.' },
+    { code: 'rate_limit_exceeded', message: 'The provider rejected the request.' },
+  ])('recognizes a temporary provider rate limit: %j', (details) => {
+    expect(isProviderRateLimitError(details)).toBe(true);
+    expect(isProviderUsageLimitError(details)).toBe(false);
+    expect(presentProviderError({ ...details })).toEqual({
+      title: 'Too many requests',
+      message:
+        'The provider is temporarily rate limited. Wait a moment and try again, or switch to another available model or credential.',
+      usageLimit: false,
+    });
+  });
+
+  it.each([
+    { code: 'quota_exhausted', message: 'The provider quota is exhausted.' },
+    { code: 'usage_limit', message: 'You have reached the weekly usage limit.' },
+    { code: 'usage_limit_exceeded', message: 'The provider rejected this request.' },
+  ])('recognizes exhausted provider usage: %j', (details) => {
+    expect(isProviderRateLimitError(details)).toBe(true);
+    expect(isProviderUsageLimitError(details)).toBe(true);
+    expect(presentProviderError({ ...details })).toEqual({
+      title: 'Usage limit reached',
+      message:
+        "The provider's current usage limit was reached for this request. Review the route and connection below, then retry after the limit resets or switch to another available model or credential.",
+      usageLimit: true,
+    });
+  });
+
+  it('keeps non-limit provider wording intact', () => {
+    expect(isProviderRateLimitError({ code: 'auth_failed', message: 'Reconnect the provider.' })).toBe(false);
+    expect(presentProviderError({ code: 'auth_failed', message: 'Reconnect the provider.' })).toEqual({
+      title: 'Provider error',
+      message: 'Reconnect the provider.',
+      usageLimit: false,
+    });
+  });
+
   it('bounds and redacts structured provider metadata', () => {
     const error = providerErrorFromEvent({
       code: 'quota_exhausted',
@@ -175,6 +217,53 @@ describe('provider error boundary', () => {
       connectionId: 'opencode-cli',
       requestId: 'request-1',
       runId: 'run-1',
+    });
+  });
+
+  it('keeps the richest safe provider failure when a later session error is generic', () => {
+    const details = richestProviderErrorDetails(
+      [
+        {
+          message: 'You have reached the weekly usage limit; api_key=private-value',
+          code: 'quota_exhausted',
+          retryable: false,
+          resetAt: 1_900_000_000_000,
+        },
+        { message: 'OpenCode session failed.' },
+      ],
+      {
+        providerId: 'opencode',
+        modelId: 'openai/gpt-5.6-luna',
+        connectionId: 'opencode-cli',
+        requestId: 'request-rich',
+        runId: 'run-rich',
+      },
+    );
+
+    expect(details).toEqual({
+      message: 'You have reached the weekly usage limit; api_key=[REDACTED]',
+      code: 'quota_exhausted',
+      providerId: 'opencode',
+      modelId: 'openai/gpt-5.6-luna',
+      connectionId: 'opencode-cli',
+      retryable: false,
+      resetAt: 1_900_000_000_000,
+      requestId: 'request-rich',
+      runId: 'run-rich',
+    });
+  });
+
+  it('shows a brand-new safe provider message without requiring phrase classification', () => {
+    expect(
+      richestProviderErrorDetails(
+        [{ message: 'Brand new upstream capacity condition XYZ-2026.', code: 'xyz_2026' }],
+        { providerId: 'new-provider', modelId: 'future-model' },
+      ),
+    ).toMatchObject({
+      message: 'Brand new upstream capacity condition XYZ-2026.',
+      code: 'xyz_2026',
+      providerId: 'new-provider',
+      modelId: 'future-model',
     });
   });
 

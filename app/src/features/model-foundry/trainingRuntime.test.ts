@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { FoundryTrainingConfiguration } from './modelHub';
 import {
+  calibrateLocalTraining,
   cancelVerifiedTrainingModelDownload,
   downloadVerifiedTrainingModel,
   getLocalTrainingWorkerStatus,
@@ -48,6 +50,82 @@ describe('trainingRuntime', () => {
     expect(status.modalities).toEqual(['text', 'image', 'video', 'audio']);
     expect(status.precisions).toEqual(['fp32', 'fp16', 'bf16', 'int4']);
     expect(status.localOnly).toBe(true);
+  });
+
+  it('routes model calibration through the attested native worker and preserves evidence', async () => {
+    const invoke = vi.fn<TrainingRuntimeInvoke>().mockResolvedValue({
+      installed: true,
+      attested: true,
+      protocol: 1,
+      sourceSha256: 'a'.repeat(64),
+      python: 'D:/foundry/python.exe',
+      methods: ['full'],
+      modalities: ['text'],
+      precisions: ['bf16'],
+      calibration: {
+        qualified: true,
+        modelId: 'smollm2-135m-instruct',
+        method: 'full',
+        computeDevice: 'gpu',
+        device: 'cuda:0',
+        precision: 'bf16',
+        forwardBackward: true,
+        optimizerStep: true,
+        batchSize: 1,
+        gradientAccumulation: 8,
+        maxSequenceLength: 1024,
+        warmupSteps: 3,
+        measuredSteps: 10,
+        stepTimeMs: 820,
+        stepTimeMsP95: 910,
+        peakVramMb: 1420,
+        vramTotalMb: 6141,
+        vramHeadroomMb: 4721,
+        elapsedMs: 820,
+        reason: null,
+      },
+      reason: null,
+    });
+    const configuration: FoundryTrainingConfiguration = {
+      method: 'full',
+      computeDevice: 'gpu',
+      seed: 7,
+      epochs: 1,
+      batchSize: 1,
+      gradientAccumulation: 8,
+      maxSequenceLength: 1024,
+      learningRate: 0.00002,
+      loraRank: 16,
+      loraAlpha: 32,
+      loraDropout: 0.05,
+    };
+
+    const evidence = await calibrateLocalTraining('smollm2-135m-instruct', configuration, {
+      native: true,
+      invoke,
+    });
+
+    expect(invoke).toHaveBeenCalledWith('model_foundry_training_worker_status', {
+      calibration: { modelId: 'smollm2-135m-instruct', trainingConfig: configuration },
+    });
+    expect(evidence).toMatchObject({
+      qualified: true,
+      method: 'full',
+      computeDevice: 'gpu',
+      device: 'cuda:0',
+      forwardBackward: true,
+      optimizerStep: true,
+      batchSize: 1,
+      gradientAccumulation: 8,
+      maxSequenceLength: 1024,
+      warmupSteps: 3,
+      measuredSteps: 10,
+      stepTimeMs: 820,
+      stepTimeMsP95: 910,
+      peakVramMb: 1420,
+      vramTotalMb: 6141,
+      vramHeadroomMb: 4721,
+    });
   });
 
   it('requests the optional verified QLoRA runtime explicitly', async () => {
@@ -188,12 +266,24 @@ describe('trainingRuntime', () => {
 describe('concurrent worker readiness', () => {
   it('shares an in-flight inspection between the page and wizard, then refreshes', async () => {
     let complete!: (value: unknown) => void;
-    const invoke = vi.fn<TrainingRuntimeInvoke>().mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const invoke = vi.fn<TrainingRuntimeInvoke>().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
     const first = getLocalTrainingWorkerStatus({ native: true, invoke });
     const second = getLocalTrainingWorkerStatus({ native: true, invoke });
     await Promise.resolve();
     expect(invoke).toHaveBeenCalledTimes(1);
-    complete({ installed: true, attested: true, protocol: 1, methods: ['full'], modalities: ['text'], precisions: ['fp32'] });
+    complete({
+      installed: true,
+      attested: true,
+      protocol: 1,
+      methods: ['full'],
+      modalities: ['text'],
+      precisions: ['fp32'],
+    });
     expect((await first).methods).toEqual(['full']);
     expect((await second).methods).toEqual(['full']);
     invoke.mockResolvedValue({ installed: false, methods: [] });

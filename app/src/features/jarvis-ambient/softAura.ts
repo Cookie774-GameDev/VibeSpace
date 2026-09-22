@@ -2,6 +2,16 @@ import { EDGE_AURA_PALETTES } from './edge-aura/palettes';
 import { createAuraEngine, type AuraEngine, type EdgeAuraPaletteStops } from './edge-aura/engine';
 import { JARVIS_EDGE_PRESETS, type JarvisEdgePreset } from './presets';
 import type { JarvisAmbientSnapshot } from './types';
+
+const WARM_SNAPSHOT: JarvisAmbientSnapshot = Object.freeze({
+  revision: 0,
+  state: 'listening',
+  source: 'voice',
+  observedAt: 0,
+  energy: 0,
+  active: true,
+});
+
 export function createSoftAura() {
   let engine: AuraEngine | null = null,
     buffer: HTMLCanvasElement | null = null,
@@ -116,8 +126,14 @@ export function createSoftAura() {
     context.restore();
   }
 
+  function warm(context: CanvasRenderingContext2D, width: number, height: number) {
+    drawSoftAura(context, WARM_SNAPSHOT, width, height, 0, true);
+    context.clearRect(0, 0, width, height);
+  }
+
   return {
     draw: drawSoftAura,
+    warm,
     destroy() {
       engine?.destroy();
       engine = null;

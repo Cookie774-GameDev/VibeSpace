@@ -139,6 +139,7 @@ const NAVIGATION_ORDER = [
   'launcher.open',
   'fullscreen.set',
   'connections.open',
+  'status.show',
 ] as const;
 
 const navigationOrder = new Map(NAVIGATION_ORDER.map((id, index) => [id, index]));
@@ -227,6 +228,19 @@ export const NAVIGATION_COMMAND_INPUTS: readonly NavigationCommandInput[] = Obje
             })
           : Object.freeze({ status: 'rejected' as const, reason: target.reason });
       },
+    }),
+    Object.freeze({
+      id: 'status.show',
+      aliases: Object.freeze([
+        'show status',
+        'show router status',
+        'display status',
+        'display router status',
+      ]),
+      authority: 'router.status',
+      safety: 'read',
+      availability: 'available',
+      slotGrammar: 'none',
     }),
     ...(
       [

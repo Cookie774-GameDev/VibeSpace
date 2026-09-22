@@ -61,6 +61,7 @@ export function TerminalPanel({ panel, onUpdate }: TerminalPanelProps) {
         pendingCommandId={currentPending?.id}
         className="h-full min-h-0 rounded-none border-0 shadow-none"
         hideChrome
+        preserveExisting
         paneId={panel.id}
         projectId={projectId}
         sessionId={panel.settings.resourceId}

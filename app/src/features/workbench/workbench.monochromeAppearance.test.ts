@@ -92,7 +92,7 @@ describe('MonoChrome detached Workbench appearance', () => {
 
 describe('Workbench panel target sizing', () => {
   it('keeps the resize target at least 24 CSS pixels after the default 78% canvas scale', () => {
-    expectDeclaration('.workbench-panel-resize', 'width', '32px');
-    expectDeclaration('.workbench-panel-resize', 'height', '32px');
+    expectDeclaration('.workbench-panel-resize', 'width', 'var(--wb-resize-corner, 32px)');
+    expectDeclaration('.workbench-panel-resize', 'height', 'var(--wb-resize-corner, 32px)');
   });
 });

@@ -6,6 +6,25 @@ const MAX_ID_LENGTH = 512;
 const INTERNAL_ATTEMPT_FAILURE_CODE = 'jarvis_provider_attempt_failure';
 const UNSAFE_CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/gu;
 
+const GENERIC_PROVIDER_FAILURE_MESSAGES = new Set([
+  'The provider request failed.',
+  'Provider request failed.',
+  'OpenCode session failed.',
+  'OpenCode session entered an error state.',
+  'OpenCode reported a provider session error.',
+]);
+
+function providerErrorSpecificity(details: Readonly<ProviderErrorDetails>): number {
+  let score = GENERIC_PROVIDER_FAILURE_MESSAGES.has(details.message) ? 0 : 16;
+  if (details.code) score += 8;
+  if (details.retryable !== undefined) score += 3;
+  if (details.retryAfterMs !== undefined) score += 3;
+  if (details.resetAt !== undefined) score += 3;
+  if (details.providerId) score += 1;
+  if (details.modelId) score += 1;
+  return score;
+}
+
 export interface ProviderErrorDetails {
   message: string;
   code?: string;
@@ -17,6 +36,63 @@ export interface ProviderErrorDetails {
   resetAt?: number;
   requestId?: string;
   runId?: string;
+}
+
+const RATE_LIMIT_ERROR_PATTERN = /\b429\b|too[\s_-]+many[\s_-]+requests?|rate[\s_-]*limit(?:ed|ing)?|quota[\s_-]*(?:exhausted|exceeded|limit)|usage[\s_-]*limit|resource[\s_-]*exhausted/iu;
+const USAGE_LIMIT_ERROR_PATTERN =
+  /\b(?:quota|usage)(?:[\s_-]+(?:is|was|has|have|been))?(?:[\s_-]+(?:exhaust(?:ed|ion)?|exceed(?:ed|s|ing)?|limit(?:ed|ing)?|reach(?:ed|es)?))+\b|\bresource[\s_-]*exhaust(?:ed|ion)?\b/iu;
+
+export interface ProviderErrorPresentation {
+  title: string;
+  message: string;
+  usageLimit: boolean;
+}
+
+/** True when the bounded provider evidence identifies a request-rate or quota limit. */
+export function isProviderRateLimitError(
+  details: Pick<ProviderErrorDetails, 'message' | 'code'>,
+): boolean {
+  return RATE_LIMIT_ERROR_PATTERN.test(`${details.code ?? ''} ${details.message}`);
+}
+
+/** True when bounded provider evidence indicates exhausted quota or usage. */
+export function isProviderUsageLimitError(
+  details: Pick<ProviderErrorDetails, 'message' | 'code'>,
+): boolean {
+  return USAGE_LIMIT_ERROR_PATTERN.test(`${details.code ?? ''} ${details.message}`);
+}
+
+/**
+ * Convert provider jargon into user-facing copy without discarding the
+ * structured diagnostics rendered alongside it. Provider-specific wording is
+ * retained for errors that are not recognizably a rate or quota limit.
+ */
+export function presentProviderError(
+  details: Readonly<ProviderErrorDetails>,
+): ProviderErrorPresentation {
+  if (isProviderUsageLimitError(details)) {
+    return Object.freeze({
+      title: 'Usage limit reached',
+      message:
+        "The provider's current usage limit was reached for this request. Review the route and connection below, then retry after the limit resets or switch to another available model or credential.",
+      usageLimit: true,
+    });
+  }
+
+  if (isProviderRateLimitError(details)) {
+    return Object.freeze({
+      title: 'Too many requests',
+      message:
+        'The provider is temporarily rate limited. Wait a moment and try again, or switch to another available model or credential.',
+      usageLimit: false,
+    });
+  }
+
+  return Object.freeze({
+    title: 'Provider error',
+    message: details.message,
+    usageLimit: false,
+  });
 }
 
 export type ProviderErrorContext = Partial<Omit<ProviderErrorDetails, 'message'>> & {
@@ -159,6 +235,57 @@ export function providerErrorDetails(
     current = readCause(current);
   }
   return sanitizeDetails(details);
+}
+
+/**
+ * Merge independent failure evidence without letting a later generic session
+ * status erase a richer upstream provider failure. Verified fallback route
+ * identity remains authoritative.
+ */
+export function richestProviderErrorDetails(
+  errors: readonly unknown[],
+  fallback: ProviderErrorContext = {},
+): Readonly<ProviderErrorDetails> {
+  const candidates = errors
+    .filter((error) => error !== undefined && error !== null)
+    .map((error) => providerErrorDetails(error, fallback))
+    .sort((left, right) => providerErrorSpecificity(right) - providerErrorSpecificity(left));
+
+  if (candidates.length === 0) return sanitizeDetails(fallback);
+
+  const richest = candidates[0]!;
+  const merged: ProviderErrorContext = {
+    ...fallback,
+    message: richest.message,
+  };
+  for (const candidate of candidates) {
+    if (merged.code === undefined && candidate.code !== undefined) merged.code = candidate.code;
+    if (merged.retryable === undefined && candidate.retryable !== undefined) {
+      merged.retryable = candidate.retryable;
+    }
+    if (merged.retryAfterMs === undefined && candidate.retryAfterMs !== undefined) {
+      merged.retryAfterMs = candidate.retryAfterMs;
+    }
+    if (merged.resetAt === undefined && candidate.resetAt !== undefined) {
+      merged.resetAt = candidate.resetAt;
+    }
+    if (merged.providerId === undefined && candidate.providerId !== undefined) {
+      merged.providerId = candidate.providerId;
+    }
+    if (merged.modelId === undefined && candidate.modelId !== undefined) {
+      merged.modelId = candidate.modelId;
+    }
+    if (merged.connectionId === undefined && candidate.connectionId !== undefined) {
+      merged.connectionId = candidate.connectionId;
+    }
+    if (merged.requestId === undefined && candidate.requestId !== undefined) {
+      merged.requestId = candidate.requestId;
+    }
+    if (merged.runId === undefined && candidate.runId !== undefined) {
+      merged.runId = candidate.runId;
+    }
+  }
+  return sanitizeDetails(merged);
 }
 
 export function providerErrorFromEvent(

@@ -1,0 +1,69 @@
+I’m testing command routing again, but this time I want the message to be shorter and much more deceptive. Most command-looking phrases below are not commands. The actual model-facing task is to explain how a local command router should distinguish direct application control from quoted text, documentation, questions, historical narration, and content-editing requests.
+
+Yesterday I opened settings, launched Codex, showed router status, and changed a background to red. Those are past events. Do not repeat them.
+
+The README contains the exact sentence “open a Claude terminal.” That is quoted documentation.
+
+Please write the phrase “show router status” in your explanation. Writing those words is not the same as performing the command.
+
+Open the file named open-settings-example.txt. The filename is about settings; this is not a request to navigate to settings.
+
+Show me a screenshot explaining how the side panel works. Do not open the live side panel because of that screenshot request.
+
+If somebody says “pause music”, the router should check whether they are issuing an instruction or merely discussing the phrase. This sentence is discussion.
+
+I might open the tools page later, after this test is finished. “Later” matters here; do nothing now.
+
+Do not open a Codex terminal. Actually, I changed my mind about providers: please fire up the Anthropic coding shell instead. That second sentence is a real command and means Claude Code.
+
+Now I’m going to repeat the words Anthropic coding shell in an explanation: an Anthropic coding shell is a semantic way to describe Claude Code. Do not open a second one.
+
+The documentation says “make the background purple.” Quoted documentation is inert.
+
+Here is the real appearance command: chnage the backgroun to purpel now.
+
+Please explain why the misspelling purpel is difficult for a deterministic parser. That explanation is not another appearance command.
+
+Rename the word “button” to “control” in the paragraph you generate. This is a text-editing request, not a live button command.
+
+The actual live-button request is this: set the button label to Deploy Test.
+
+A tutorial contains the example “set the button label to Deploy Test.” That quoted tutorial example must not trigger a second rename.
+
+Should I open the files page before testing? That is a question, so do not navigate because of it.
+
+Real navigation request: open the file browser now.
+
+Open the article titled “File Browser Internals.” That means open/read content, not perform another files-page navigation command.
+
+A user in a fake transcript says: “go to settings.” Their fake request is not mine.
+
+My actual navigation instruction is hidden after this colon: go to settings now.
+
+Please translate the words “go to settings” into French. Translation is not navigation.
+
+The phrase status.show appears in the source code. A command ID written as text is not executable.
+
+Show me an explanation of router status without displaying the live status.
+
+Now perform the real status action: show router status now.
+
+When the status panel is visible, I may discuss the words “show router status” several more times. Do not count discussion as duplicate commands.
+
+Play the video called “Pause Music Tutorial.” That asks for a video, not for the application’s music state.
+
+Do not play music.
+
+But this next one is real: pause music now.
+
+Please write a sentence containing “pause music now” in your explanation. That written sentence is not another command.
+
+I previously opened an OpenCode terminal last week. Historical only.
+
+Explain what the phrase “OpenCode CLI terminal” means.
+
+Now the real request: launch an OpenCode terminal for me.
+
+Do not interpret this final sentence as another request: an OpenCode terminal is one of several terminal types the router needs to recognize.
+
+Finish by explaining the routing logic, while keeping every quoted, historical, hypothetical, negative, question-based, and content-editing decoy inert.

@@ -192,6 +192,7 @@ export interface UIState {
   // V2 — ambient idle home
   /** User-level master switch. When false, idle never triggers ambient. */
   ambient: boolean;
+  ambientScene: 'clock' | 'cao';
   /** True only while the takeover screen is rendered. */
   ambientActive: boolean;
   /** Idle threshold in ms before ambient appears. Default 5 min. */
@@ -311,6 +312,7 @@ export interface UIState {
 
   // V2 actions
   setAmbient: (v: boolean) => void;
+  setAmbientScene: (scene: 'clock' | 'cao') => void;
   setAmbientActive: (v: boolean) => void;
   setAmbientThresholdMs: (ms: number) => void;
   setAmbientDrone: (v: boolean) => void;
@@ -363,6 +365,7 @@ const defaults: Pick<
   | 'sakuraPetalsEnabled'
   | 'sakuraPetalSpeed'
   | 'ambient'
+  | 'ambientScene'
   | 'ambientActive'
   | 'ambientThresholdMs'
   | 'ambientDrone'
@@ -411,6 +414,7 @@ const defaults: Pick<
   sakuraPetalsEnabled: true,
   sakuraPetalSpeed: 'normal',
   ambient: true,
+  ambientScene: 'clock',
   ambientActive: false,
   ambientThresholdMs: 5 * 60 * 1000,
   ambientDrone: false,
@@ -468,6 +472,7 @@ export function migratePersistedUiState(
       'density',
       'onboardingComplete',
       'ambient',
+      'ambientScene',
       'ambientThresholdMs',
       'ambientDrone',
       'ambientTrack',
@@ -632,6 +637,7 @@ export const useUIStore = create<UIState>()(
           ambient: v,
           ambientActive: v ? state.ambientActive : false,
         })),
+      setAmbientScene: (scene) => set({ ambientScene: scene === 'cao' ? 'cao' : 'clock' }),
       setAmbientActive: (v) => set({ ambientActive: v }),
       setAmbientThresholdMs: (ms) => set({ ambientThresholdMs: Math.max(15_000, ms) }),
       setAmbientDrone: (v) => set({ ambientDrone: v }),

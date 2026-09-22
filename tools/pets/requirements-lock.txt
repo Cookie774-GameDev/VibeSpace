@@ -6,7 +6,7 @@ jsonschema-specifications==2025.9.1
 numpy==2.4.6
 opencv-python-headless==4.13.0.92
 packaging==26.0
-Pillow==11.3.0
+Pillow==12.3.0
 pluggy==1.6.0
 Pygments==2.19.2
 pytest==9.0.3

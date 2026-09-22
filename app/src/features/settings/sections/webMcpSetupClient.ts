@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-
 export type GuideTab = 'tunnel' | 'api';
 export type WebMcpStatus = {
   packaged: boolean;
@@ -16,6 +15,7 @@ export type WebMcpStatus = {
   enabled?: boolean;
   watchdog?: boolean;
   startOnComputer?: boolean | null;
+  errorCode?: string;
 };
 export type SetupDraft = {
   displayName: string;
@@ -29,8 +29,41 @@ export const setupLinks = {
   'open-chatgpt': 'https://chatgpt.com/#settings/Connectors',
 } as const;
 export type SetupLink = keyof typeof setupLinks;
+export const setupErrorMessages: Record<string, string> = {
+  CREDENTIAL_STORAGE_UNAVAILABLE:
+    'Windows secure storage could not save or unlock your API key. The tunnel has not been authenticated.',
+  INVALID_PLUGIN_NAME: 'Use a plugin name of at most 64 characters without control characters.',
+  INVALID_TUNNEL_ID: 'Paste the complete tunnel ID from OpenAI.',
+  INVALID_RUNTIME_KEY: 'Use a restricted runtime API key, not an admin key.',
+  TUNNEL_CONFIGURATION_REQUIRED: 'Add your tunnel ID and runtime API key first.',
+  TUNNEL_CREDENTIALS_IN_USE: 'Disconnect before replacing active tunnel credentials.',
+  TUNNEL_START_FAILED:
+    'The local tunnel client could not start. Check its packaged runtime and retry.',
+  TUNNEL_AUTHENTICATION_FAILED:
+    'OpenAI rejected this runtime API key. Replace it with a valid key.',
+  TUNNEL_PERMISSION_DENIED:
+    'OpenAI denied access. The runtime key needs Tunnels Read and Use for this tunnel.',
+  TUNNEL_CONNECTION_FAILED:
+    'The tunnel is not ready. Automatic recovery is retrying; you can stop and check setup.',
+};
+export function describeSetupError(error: unknown, fallback: string): string {
+  const text = typeof error === 'string' ? error : error instanceof Error ? error.message : '';
+  const code = text.split(':', 1)[0].trim();
+  if (Object.hasOwn(setupErrorMessages, code)) return setupErrorMessages[code];
+  if (Object.values(setupErrorMessages).includes(text)) return text;
+  return fallback;
+}
+export const pluginName = (name: string) => name.trim() || 'VibeSpace Desktop';
 export const readWebMcpStatus = () => invoke<WebMcpStatus>('desktop_connector_status');
-export const setupAction = (action: string) => invoke<void>('desktop_connector_setup', { action });
+export async function setupAction(action: string): Promise<void> {
+  try {
+    await invoke('desktop_connector_setup', { action });
+  } catch (error) {
+    throw new Error(
+      describeSetupError(error, 'The local connector action could not be confirmed. Please retry.'),
+    );
+  }
+}
 export function draftFromStatus(status?: WebMcpStatus): SetupDraft {
   return {
     displayName: status?.displayName || 'VibeSpace Desktop',
@@ -40,14 +73,10 @@ export function draftFromStatus(status?: WebMcpStatus): SetupDraft {
   };
 }
 export function validateSetupDraft(draft: SetupDraft, apiKey: string): string | undefined {
-  if (
-    !draft.displayName.trim() ||
-    draft.displayName.trim().length > 64 ||
-    /[\u0000-\u001f\u007f]/.test(draft.displayName)
-  )
-    return 'Use an app name between 1 and 64 characters.';
+  if (draft.displayName.trim().length > 64 || /[\u0000-\u001f\u007f]/.test(draft.displayName))
+    return setupErrorMessages.INVALID_PLUGIN_NAME;
   if (draft.tunnelId.trim() && !/^tunnel_[a-zA-Z0-9_-]{8,128}$/.test(draft.tunnelId.trim()))
-    return 'Paste the complete tunnel ID from OpenAI.';
+    return setupErrorMessages.INVALID_TUNNEL_ID;
   if (
     apiKey &&
     (apiKey.length < 20 ||
@@ -55,29 +84,35 @@ export function validateSetupDraft(draft: SetupDraft, apiKey: string): string | 
       /\s/.test(apiKey) ||
       apiKey.startsWith('sk-admin-'))
   )
-    return 'Use a restricted runtime API key, not an admin key.';
+    return setupErrorMessages.INVALID_RUNTIME_KEY;
   return undefined;
 }
 export async function saveWebMcpDraft(draft: SetupDraft, apiKey: string): Promise<WebMcpStatus> {
   const problem = validateSetupDraft(draft, apiKey);
   if (problem) throw new Error(problem);
-  await invoke('desktop_connector_setup', {
-    action: 'save',
-    draft: {
-      displayName: draft.displayName.trim(),
-      tunnelId: draft.tunnelId.trim(),
-      guideTab: draft.guideTab,
-      step: draft.step,
-      ...(apiKey ? { apiKey } : {}),
-    },
-  });
-  const confirmed = await readWebMcpStatus();
-  if (
-    confirmed.displayName !== draft.displayName.trim() ||
-    confirmed.tunnelId !== draft.tunnelId.trim() ||
-    confirmed.guideTab !== draft.guideTab ||
-    (apiKey && !confirmed.hasKey)
-  )
-    throw new Error('The saved progress could not be confirmed. Please retry.');
-  return confirmed;
+  try {
+    await invoke('desktop_connector_setup', {
+      action: 'save',
+      draft: {
+        displayName: pluginName(draft.displayName),
+        tunnelId: draft.tunnelId.trim(),
+        guideTab: draft.guideTab,
+        step: draft.step,
+        ...(apiKey ? { apiKey } : {}),
+      },
+    });
+    const confirmed = await readWebMcpStatus();
+    if (
+      confirmed.displayName !== pluginName(draft.displayName) ||
+      confirmed.tunnelId !== draft.tunnelId.trim() ||
+      confirmed.guideTab !== draft.guideTab ||
+      (apiKey && !confirmed.hasKey)
+    )
+      throw new Error('Setup readback mismatch');
+    return confirmed;
+  } catch (error) {
+    throw new Error(
+      describeSetupError(error, 'Setup progress could not be saved and verified. Please retry.'),
+    );
+  }
 }

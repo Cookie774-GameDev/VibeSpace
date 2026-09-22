@@ -39,7 +39,10 @@ describe('model foundry domain', () => {
       { ...workstation, freeStorageGb: Number.NaN },
       { ...workstation, ramGb: Number.POSITIVE_INFINITY },
     ]) {
-      expect(planLocalTrainingMethod({ method: 'knowledge', parametersB: 1, hardware, worker: null }).available).toBe(false);
+      expect(
+        planLocalTrainingMethod({ method: 'knowledge', parametersB: 1, hardware, worker: null })
+          .available,
+      ).toBe(false);
     }
   });
   it('measures plain local training text without inventing a fixed source count', () => {
@@ -58,8 +61,8 @@ describe('model foundry domain', () => {
       seed: 7,
       epochs: 1,
       batchSize: 1,
-      gradientAccumulation: 4,
-      maxSequenceLength: 2048,
+      gradientAccumulation: 8,
+      maxSequenceLength: 1024,
       learningRate: 0.0002,
       loraRank: 16,
       loraAlpha: 32,
@@ -147,7 +150,21 @@ describe('model foundry domain', () => {
     expect(balanced.maximumHours).toBeGreaterThan(faster.maximumHours);
     expect(lowMemory.maximumHours).toBeGreaterThan(faster.maximumHours);
     expect(lowMemory.basis).toMatch(/2 measured examples/i);
-    expect(lowMemory.disclaimer).toMatch(/calibrated prediction/i);
+    expect(lowMemory.disclaimer).toMatch(/planning estimate/i);
+    expect(lowMemory.disclaimer).toMatch(/verified training telemetry/i);
+  });
+
+  it('keeps LoRA bounds aligned with the verified worker contract', () => {
+    const baseline = defaultFoundryTrainingConfiguration('lora');
+    expect(
+      validateFoundryTrainingConfiguration({ ...baseline, loraRank: 512, loraAlpha: 1024 }),
+    ).toBeNull();
+    expect(
+      validateFoundryTrainingConfiguration({ ...baseline, loraRank: 513 }),
+    ).toMatch(/LoRA rank.*512/);
+    expect(
+      validateFoundryTrainingConfiguration({ ...baseline, loraAlpha: 1025 }),
+    ).toMatch(/LoRA alpha.*1024/);
   });
 
   it('estimates the explicitly selected device and never treats GPU-only as a CPU fallback', () => {

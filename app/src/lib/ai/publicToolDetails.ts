@@ -2,8 +2,12 @@ import { applySecretPolicy } from '../security/secretDetector';
 import { isSensitiveMcpKey, redactMcpText } from '../mcp/toolResult';
 import type { PublicJson, PublicToolDetails, PublicToolFileChange, PublicToolOutput } from './adapters/types';
 
-export const MAX_PUBLIC_TOOL_OUTPUT_BYTES = 32 * 1024;
-const MAX_DETAIL_BYTES = 128 * 1024;
+// Retain provider payloads, not just the small collapsed UI preview. This bound
+// stays within the secret detector's scan window and the native SSE event limit.
+export const MAX_PUBLIC_TOOL_OUTPUT_BYTES = 1024 * 1024;
+const MAX_DETAIL_BYTES = 4 * MAX_PUBLIC_TOOL_OUTPUT_BYTES;
+const MAX_DETAIL_NODES = 65_536;
+const MAX_DETAIL_DEPTH = 32;
 const MAX_CHANGES = 64;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -35,7 +39,7 @@ function arrayValues(value: readonly unknown[]): { values: unknown[]; length: nu
         !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) return undefined;
     const length = lengthDescriptor.value as number;
     const values: unknown[] = [];
-    for (let index = 0; index < Math.min(length, 128); index++) {
+    for (let index = 0; index < Math.min(length, MAX_DETAIL_NODES); index++) {
       const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
       if (descriptor && !('value' in descriptor)) return undefined;
       values.push(descriptor && 'value' in descriptor ? descriptor.value : undefined);
@@ -61,7 +65,7 @@ function byteLength(text: string): number {
 }
 
 function prefix(text: string, limit: number): { text: string; bytes: number } {
-  const target = new Uint8Array(Math.max(0, limit));
+  const target = new Uint8Array(Math.max(0, Math.min(limit, text.length * 3)));
   const { written = 0 } = encoder.encodeInto(text, target);
   return { text: decoder.decode(target.subarray(0, written)), bytes: written };
 }
@@ -100,7 +104,10 @@ export function publicToolDetails(value: Readonly<Record<string, unknown>>): Rea
     return result.text;
   };
   const json = (value: unknown, depth = 0): PublicJson => {
-    if (++nodes > 512 || depth > 8 || remaining <= 0) { truncated = true; return '[omitted: detail limit]'; }
+    if (++nodes > MAX_DETAIL_NODES || depth > MAX_DETAIL_DEPTH || remaining <= 0) { truncated = true; return '[omitted: detail limit]'; }
+    // Charge JSON structure and primitive values too, so many tiny fields cannot
+    // bypass the aggregate public payload bound.
+    remaining = Math.max(0, remaining - 8);
     if (value === null || typeof value === 'boolean') return value;
     if (typeof value === 'number') return Number.isFinite(value) ? value : null;
     if (typeof value === 'string') return text(value);
@@ -112,20 +119,20 @@ export function publicToolDetails(value: Readonly<Record<string, unknown>>): Rea
         const items = arrayValues(value);
         if (!items) { truncated = true; return '[unavailable]'; }
         const result = items.values.map(item => json(item, depth + 1));
-        if (items.length > 128) { truncated = true; result.push('[omitted: additional items]'); }
+        if (items.length > MAX_DETAIL_NODES) { truncated = true; result.push('[omitted: additional items]'); }
         return Object.freeze(result);
       }
       const source = record(value);
       if (!source) { truncated = true; return '[unavailable]'; }
       const result: Record<string, PublicJson> = Object.create(null);
       const keys = Object.keys(source);
-      for (const key of keys.slice(0, 128)) {
+      for (const key of keys.slice(0, MAX_DETAIL_NODES)) {
         if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
         const name = text(key, 256);
         if (SECRET_KEY.test(key) || isSensitiveMcpKey(key)) { redacted = true; result[name] = '[redacted: credentials]'; }
         else result[name] = json(source[key], depth + 1);
       }
-      if (keys.length > 128) { truncated = true; result['[omitted]'] = 'Additional fields'; }
+      if (keys.length > MAX_DETAIL_NODES) { truncated = true; result['[omitted]'] = 'Additional fields'; }
       return Object.freeze(result);
     } finally { seen.delete(value); }
   };
@@ -134,7 +141,7 @@ export function publicToolDetails(value: Readonly<Record<string, unknown>>): Rea
     if (input[key] !== undefined) result[key] = json(input[key]);
   }
   for (const key of ['command', 'cwd'] as const) {
-    if (typeof input[key] === 'string') result[key] = text(input[key] as string, key === 'cwd' ? 4096 : 8192);
+    if (typeof input[key] === 'string') result[key] = text(input[key] as string, key === 'cwd' ? 4096 : MAX_PUBLIC_TOOL_OUTPUT_BYTES);
   }
   if (typeof input.output === 'string') {
     result.output = publicToolOutput(input.output, 'replace', input.outputComplete !== false, remaining);
@@ -165,6 +172,14 @@ export function publicToolDetails(value: Readonly<Record<string, unknown>>): Rea
         remaining = Math.max(0, remaining - byteLength(diff.text));
         redacted ||= diff.redacted === true;
         truncated ||= !diff.complete;
+      }
+      if (typeof change.writtenContent === 'string') {
+        const content = publicToolOutput(change.writtenContent, 'replace', true, remaining);
+        item.writtenContent = content.text;
+        item.complete = item.diff === undefined ? content.complete : item.complete && content.complete;
+        remaining = Math.max(0, remaining - byteLength(content.text));
+        redacted ||= content.redacted === true;
+        truncated ||= !content.complete;
       }
       changes.push(Object.freeze(item));
     }
@@ -203,6 +218,19 @@ export function mergePublicToolDetails(
 
 
 /** Both live SSE and persisted recovery use the same public OpenCode projection. */
+function editTextDiff(before: string, after: string): string {
+  const lines = (value: string) => value.replace(/\r\n?/gu, '\n').split('\n');
+  return [...lines(before).map(line => `-${line}`), ...lines(after).map(line => `+${line}`)].join('\n');
+}
+
+function createFileDiff(content: string): string {
+  const normalized = content.replace(/\r\n?/gu, '\n');
+  const lines = normalized.length === 0 ? [] : normalized.split('\n');
+  const body = lines.at(-1) === '' ? lines.slice(0, -1) : lines;
+  const count = body.length;
+  return `@@ -0,0 +${count === 0 ? 0 : 1},${count} @@${count === 0 ? '' : `\n${body.map(line => `+${line}`).join('\n')}`}`;
+}
+
 export function openCodeToolDetails(tool: string, value: unknown): Readonly<PublicToolDetails> {
   const state = record(value);
   const input = record(state?.input);
@@ -246,12 +274,47 @@ export function openCodeToolDetails(tool: string, value: unknown): Readonly<Publ
   }
   const filePath = input?.path ?? input?.filePath ?? input?.file_path ?? input?.filepath;
   const isEdit = /^(edit|write|apply_patch)$/.test(tool);
-  const changes = isEdit && Array.isArray(metadata?.files)
-    ? metadata.files.map(raw => { const file = record(raw); return {
-        path: file?.path ?? file?.filePath, kind: file?.type ?? 'unknown', diff: file?.diff,
-      }; })
+  const editDiff = input && typeof input.oldString === 'string' && typeof input.newString === 'string'
+    ? editTextDiff(input.oldString, input.newString)
+    : input && typeof input.old_string === 'string' && typeof input.new_string === 'string'
+      ? editTextDiff(input.old_string, input.new_string)
+      : undefined;
+  const writtenContent = tool === 'write' && input
+    ? (typeof input.content === 'string' ? input.content
+      : typeof input.contents === 'string' ? input.contents
+        : undefined)
+    : undefined;
+  const metadataDiff = typeof metadata?.diff === 'string' ? metadata.diff : undefined;
+  const metadataFiles = Array.isArray(metadata?.files) ? metadata.files : undefined;
+  const completeWriteContent = tool === 'write' && state?.status === 'completed' &&
+    metadata?.truncated !== true && typeof writtenContent === 'string' &&
+    byteLength(writtenContent) <= MAX_PUBLIC_TOOL_OUTPUT_BYTES ? writtenContent : undefined;
+  const createDiffCandidate = metadata?.exists === false && completeWriteContent !== undefined
+    ? createFileDiff(completeWriteContent) : undefined;
+  const createDiff = createDiffCandidate !== undefined &&
+    byteLength(createDiffCandidate) <= MAX_PUBLIC_TOOL_OUTPUT_BYTES ? createDiffCandidate : undefined;
+  const changes = isEdit && metadataFiles
+    ? metadataFiles.map((raw, index) => {
+        const file = record(raw);
+        const fileDiff = typeof file?.diff === 'string' ? file.diff : undefined;
+        const fileContent = typeof file?.content === 'string' ? file.content : undefined;
+        return {
+          path: file?.path ?? file?.filePath,
+          kind: file?.type ?? 'unknown',
+          ...(fileDiff === undefined ? {} : { diff: fileDiff }),
+          ...(fileContent === undefined && writtenContent !== undefined && metadataFiles.length === 1 && index === 0
+            ? { writtenContent }
+            : fileContent === undefined ? {} : { writtenContent: fileContent }),
+        };
+      })
     : isEdit && typeof filePath === 'string'
-      ? [{ path: filePath, kind: tool === 'edit' ? 'update' : 'unknown', diff: metadata?.diff }]
+      ? [{
+          path: filePath,
+          kind: tool === 'edit' ? 'update' : createDiff === undefined ? 'unknown' : 'add',
+          ...(metadataDiff === undefined && editDiff === undefined && createDiff === undefined
+            ? {} : { diff: metadataDiff ?? editDiff ?? createDiff }),
+          ...(writtenContent === undefined ? {} : { writtenContent }),
+        }]
       : undefined;
   const details = publicToolDetails({ arguments: displayInput, command: input?.command ?? input?.cmd,
     cwd: input?.workdir ?? input?.cwd, output: displayOutput,

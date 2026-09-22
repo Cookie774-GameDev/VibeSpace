@@ -96,12 +96,16 @@ function utf8Bytes(value: string): number {
 function truncateUtf8(value: string, maxBytes: number): { text: string; truncated: boolean } {
   const encoded = new TextEncoder().encode(value);
   if (encoded.byteLength <= maxBytes) return { text: value, truncated: false };
-  return {
-    text: new TextDecoder('utf-8', { fatal: false }).decode(
-      encoded.slice(0, Math.max(0, maxBytes)),
-    ),
-    truncated: true,
-  };
+  let end = Math.max(0, Math.min(encoded.byteLength, Math.floor(maxBytes)));
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  while (end > 0) {
+    try {
+      return { text: decoder.decode(encoded.slice(0, end)), truncated: true };
+    } catch {
+      end -= 1;
+    }
+  }
+  return { text: '', truncated: true };
 }
 
 function historicalQuestion(question: string): boolean {

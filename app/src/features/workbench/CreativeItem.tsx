@@ -160,9 +160,18 @@ export function CreativeItem({
         className="wb-creative-art"
         style={{ opacity: style.opacity }}
         onPointerDown={(e) => {
-          e.stopPropagation();
-          onSelect(e.shiftKey);
+          if (style.kind === 'draw') {
+            e.stopPropagation();
+            onSelect(e.shiftKey);
+            return;
+          }
+          if (!isText) begin(e, 'move');
+          else {
+            e.stopPropagation();
+            onSelect(e.shiftKey);
+          }
         }}
+        {...(!isText && style.kind !== 'draw' ? gestureProps : {})}
         onDoubleClick={() => {
           if (isText) setEditing(true);
         }}

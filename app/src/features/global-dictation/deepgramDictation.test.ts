@@ -139,7 +139,8 @@ describe('Deepgram capture and finalization ownership', () => {
   });
 
   it('keeps an hour-long streaming take alive and accumulates every confirmed segment', async () => {
-    vi.useFakeTimers();
+    // Keep the explicit meter-frame fixture; the clock only drives connection deadlines.
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     const onFinal = vi.fn();
     const session = await createDeepgramDictationSession({onFinal}, 'nova-3-mono');
     const socket = sockets[0]!;

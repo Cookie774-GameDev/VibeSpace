@@ -58,6 +58,7 @@ const mocks = vi.hoisted(() => ({
   runAgent: vi.fn(),
   listOpenCodeModels: vi.fn(),
   lockChatBackendForDispatch: vi.fn(),
+  captureToolGatewayAuthorityClaim: vi.fn(),
   chatGetById: vi.fn(),
   chatUpdate: vi.fn(),
   getProjectContextBlock: vi.fn(),
@@ -98,10 +99,19 @@ const mocks = vi.hoisted(() => ({
   bindPersistentOpenCodeQuestionRoute: vi.fn(),
   isActiveOpenCodeChildApproval: vi.fn(() => false),
   kernelRuntimeInterceptor: null as
-    ((composition: JarvisKernelRuntimeComposition) => JarvisKernelRuntimeComposition) | null,
+    | ((composition: JarvisKernelRuntimeComposition) => JarvisKernelRuntimeComposition)
+    | null,
 }));
 
 vi.mock('@/lib/nativeFetch', () => ({ nativeFetch: mocks.nativeFetch }));
+
+vi.mock('@/lib/harness/toolGatewayAuthority', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/harness/toolGatewayAuthority')>();
+  return {
+    ...actual,
+    captureToolGatewayAuthorityClaim: mocks.captureToolGatewayAuthorityClaim,
+  };
+});
 
 vi.mock('@/lib/mcp/taskContext', () => ({
   buildRoutedMcpTaskContext: mocks.buildRoutedMcpTaskContext,
@@ -123,9 +133,10 @@ vi.mock('./adapters/opencodePersistent', async (importOriginal) => {
     isActiveOpenCodeChildApproval: mocks.isActiveOpenCodeChildApproval,
     openCodePersistentAdapter: {
       ...actual.openCodePersistentAdapter,
-      listModels: () => mocks.listOpenCodeModels.getMockImplementation()
-        ? mocks.listOpenCodeModels()
-        : actual.openCodePersistentAdapter.listModels?.(),
+      listModels: () =>
+        mocks.listOpenCodeModels.getMockImplementation()
+          ? mocks.listOpenCodeModels()
+          : actual.openCodePersistentAdapter.listModels?.(),
     },
   };
 });
@@ -237,8 +248,10 @@ import {
   assertRuntimeCaoExecutionIdentity,
   liveVariantLookupForChatSelection,
   mayAutoApproveOpenCodeRequest,
+  openCodeApprovalRisk,
   openCodeToolsForInteractionMode,
   appendToolGatewayContextCitations,
+  assertRuntimeBackendConnectionCompatibility,
   prepareOpenCodeMessagesForInteractionMode,
   prependOpenCodePublicTimeline,
   reconcileApprovalContinuationResponse,
@@ -256,7 +269,11 @@ import { setPermissionAccess } from '@/features/jarvis-interaction/permissionAcc
 import { selectionFromOption } from './modelSelection';
 import { DEFAULT_CUSTOM_STEPS } from './stacks/presets';
 import { CODEX_CLI_CONNECTION, PROVIDER_CONNECTIONS } from './adapters/catalog';
-import { GEMINI_API_CONNECTION, GROQ_API_CONNECTION } from './adapters/nativeCatalog';
+import {
+  GEMINI_API_CONNECTION,
+  GROQ_API_CONNECTION,
+  OPENAI_API_CONNECTION,
+} from './adapters/nativeCatalog';
 import {
   resetDiscoveredConnectionModelsForTests,
   setDiscoveredConnectionModels,
@@ -358,34 +375,75 @@ describe('first-turn policy history identity', () => {
 
 describe('canonical OpenCode public chronology', () => {
   it('shows native intermediate plans as prose without creating another approval authority', () => {
-    const finalPlan = { kind: 'plan_review' as const, plan: {
-      id: 'validated-final', title: 'Final approved scope', summary: 'Create only plan.txt.',
-      steps: ['Await approval', 'Write three lines', 'Verify the file'], status: 'pending' as const,
-    } };
+    const finalPlan = {
+      kind: 'plan_review' as const,
+      plan: {
+        id: 'validated-final',
+        title: 'Final approved scope',
+        summary: 'Create only plan.txt.',
+        steps: ['Await approval', 'Write three lines', 'Verify the file'],
+        status: 'pending' as const,
+      },
+    };
     const envelope = {
-      schemaVersion: 1 as const, requestId: 'jreq-native-plan', runId: 'jrun-native-plan',
-      mode: 'direct_answer' as const, displayText: 'Final plan', parts: [finalPlan],
-      artifactIds: [], sourceRefs: [], completedAt: 1,
-      provider: { providerId: 'opencode', modelId: 'openai/gpt-5.6-luna', connectionMode: 'external-cli' as const, capabilities: {}, capturedAt: 1 },
-      enforcement: { linted: true, violations: [], repairAttempted: false, repairSucceeded: false, fallbackUsed: false },
+      schemaVersion: 1 as const,
+      requestId: 'jreq-native-plan',
+      runId: 'jrun-native-plan',
+      mode: 'direct_answer' as const,
+      displayText: 'Final plan',
+      parts: [finalPlan],
+      artifactIds: [],
+      sourceRefs: [],
+      completedAt: 1,
+      provider: {
+        providerId: 'opencode',
+        modelId: 'openai/gpt-5.6-luna',
+        connectionMode: 'external-cli' as const,
+        capabilities: {},
+        capturedAt: 1,
+      },
+      enforcement: {
+        linted: true,
+        violations: [],
+        repairAttempted: false,
+        repairSucceeded: false,
+        fallbackUsed: false,
+      },
     } satisfies JarvisResponseEnvelope;
-    const nativePlan = '```jarvis_plan\n' + JSON.stringify({
-      id: 'codex_plan_native', title: 'Review plan', summary: 'Read before writing.',
-      steps: ['Create plan.txt'], risks: ['Await explicit approval'],
-    }) + '\n```';
+    const nativePlan =
+      '```jarvis_plan\n' +
+      JSON.stringify({
+        id: 'codex_plan_native',
+        title: 'Review plan',
+        summary: 'Read before writing.',
+        steps: ['Create plan.txt'],
+        risks: ['Await explicit approval'],
+      }) +
+      '\n```';
     const timeline = [{ kind: 'text' as const, text: nativePlan }];
     const before = JSON.stringify({ envelope, timeline });
     const result = prependOpenCodePublicTimeline(envelope, timeline);
     expect(result.parts).toEqual([
-      { kind: 'text', text: 'Review plan\n\nRead before writing.\n\n1. Create plan.txt\n\nRisks:\n- Await explicit approval' },
+      {
+        kind: 'text',
+        text: 'Review plan\n\nRead before writing.\n\n1. Create plan.txt\n\nRisks:\n- Await explicit approval',
+      },
       finalPlan,
     ]);
-    expect(result.parts.filter(part => part.kind === 'plan_review')).toHaveLength(1);
+    expect(result.parts.filter((part) => part.kind === 'plan_review')).toHaveLength(1);
     expect(JSON.stringify({ envelope, timeline })).toBe(before);
     // Without an already-validated final plan, do not reinterpret protocol text.
-    expect(prependOpenCodePublicTimeline({ ...envelope, parts: [] }, timeline).parts).toEqual(timeline);
-    for (const text of ['```jarvis_plan\n{invalid}\n```', '```json\n{"summary":"data, not a native plan"}\n```']) {
-      expect(prependOpenCodePublicTimeline(envelope, [{ kind: 'text', text }]).parts[0]).toEqual({ kind: 'text', text });
+    expect(prependOpenCodePublicTimeline({ ...envelope, parts: [] }, timeline).parts).toEqual(
+      timeline,
+    );
+    for (const text of [
+      '```jarvis_plan\n{invalid}\n```',
+      '```json\n{"summary":"data, not a native plan"}\n```',
+    ]) {
+      expect(prependOpenCodePublicTimeline(envelope, [{ kind: 'text', text }]).parts[0]).toEqual({
+        kind: 'text',
+        text,
+      });
     }
   });
   it('prepends the authoritative display timeline even when Jarvis policy edits the final text', () => {
@@ -588,6 +646,28 @@ describe('approval continuation provider evidence', () => {
 });
 
 describe('approved action history context', () => {
+  it('auto approves catalog read-only plugin operations without approve-all', () => {
+    const request = {
+      approveAllForRun: false,
+      interactionMode: 'agent' as const,
+      accessLevel: 'full' as const,
+      capability: 'plugins.run',
+      risk: 'low' as const,
+      pluginOperation: { pluginId: 'github', operation: 'identity' },
+    };
+    expect(mayAutoApproveOpenCodeRequest(request)).toBe(true);
+    expect(mayAutoApproveOpenCodeRequest({ ...request, pluginOperation: undefined })).toBe(false);
+    expect(
+      mayAutoApproveOpenCodeRequest({
+        ...request,
+        pluginOperation: { pluginId: 'github', operation: 'delete_repo' },
+      }),
+    ).toBe(false);
+    expect(mayAutoApproveOpenCodeRequest({ ...request, capability: 'terminal.write' })).toBe(false);
+    expect(mayAutoApproveOpenCodeRequest({ ...request, interactionMode: 'ask' })).toBe(false);
+    expect(mayAutoApproveOpenCodeRequest({ ...request, risk: 'high' })).toBe(false);
+  });
+
   it.each([
     ['agent/full edit', true, 'agent', 'full', 'files.write', 'low', true],
     ['agent/write terminal', true, 'agent', 'write', 'terminal.write', 'low', false],
@@ -610,6 +690,90 @@ describe('approved action history context', () => {
       ).toBe(expected);
     },
   );
+
+  it('auto approves safe review-profile requests but leaves risky native actions pending', () => {
+    const review = {
+      approveAllForRun: false,
+      agentApprovalMode: 'review' as const,
+      interactionMode: 'agent' as const,
+      accessLevel: 'full' as const,
+      capability: 'files.write',
+      risk: 'low' as const,
+    };
+    expect(mayAutoApproveOpenCodeRequest(review)).toBe(true);
+    expect(mayAutoApproveOpenCodeRequest({ ...review, risk: 'medium' })).toBe(true);
+    expect(mayAutoApproveOpenCodeRequest({ ...review, risk: 'high' })).toBe(false);
+    expect(
+      mayAutoApproveOpenCodeRequest({ ...review, agentApprovalMode: 'full', risk: 'high' }),
+    ).toBe(true);
+    expect(mayAutoApproveOpenCodeRequest({ ...review, capability: 'terminal.write' })).toBe(true);
+    expect(
+      mayAutoApproveOpenCodeRequest({
+        ...review,
+        accessLevel: 'write',
+        capability: 'terminal.write',
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ['git status --short', 'medium'],
+    ['npm run build', 'medium'],
+    ['Get-Content src/index.ts', 'medium'],
+    ['rm -rf project', 'high'],
+    ['Remove-Item -Recurse project', 'high'],
+    ['git reset --hard HEAD', 'high'],
+    ['git status; rm -rf project', 'high'],
+    ['rg --pre=untrusted-script hello', 'high'],
+    ['python unknown.py', 'high'],
+    ['*', 'high'],
+  ] as const)('classifies native command %s before deciding review approval', (command, risk) => {
+    const approval = {
+      id: 'approval-risk',
+      sessionId: 'session-risk',
+      title: 'Run command',
+      capability: 'terminal.write',
+      pattern: [command],
+    };
+    expect(openCodeApprovalRisk(approval)).toBe(risk);
+    expect(
+      mayAutoApproveOpenCodeRequest({
+        approveAllForRun: false,
+        agentApprovalMode: 'review',
+        interactionMode: 'agent',
+        accessLevel: 'full',
+        capability: approval.capability,
+        risk: openCodeApprovalRisk(approval),
+      }),
+    ).toBe(risk !== 'high');
+  });
+
+  it.each([
+    ['mcp.run', 'high'],
+    ['playwright.browser_evaluate', 'high'],
+    ['unknown.execute', 'high'],
+    ['files.write', 'medium'],
+    ['files.read', 'low'],
+    ['context.read', 'low'],
+  ] as const)('requires review for unclassified capability %s', (capability, risk) => {
+    const approval = {
+      id: 'approval-capability',
+      sessionId: 'session-risk',
+      title: 'Use tool',
+      capability,
+    };
+    expect(openCodeApprovalRisk(approval)).toBe(risk);
+    expect(
+      mayAutoApproveOpenCodeRequest({
+        approveAllForRun: false,
+        agentApprovalMode: 'review',
+        interactionMode: 'agent',
+        accessLevel: 'full',
+        capability,
+        risk: openCodeApprovalRisk(approval),
+      }),
+    ).toBe(risk !== 'high');
+  });
 
   it('keeps a chat-native worker non-terminal while its response awaits approval', () => {
     expect(
@@ -733,6 +897,29 @@ type TrackedStopper = (() => void) & {
 const activeStoppers: TrackedStopper[] = [];
 
 describe('startRuntimeListener agent routing', () => {
+  it('rejects an OpenCode backend paired with the Codex subscription before dispatch', () => {
+    expect(() =>
+      assertRuntimeBackendConnectionCompatibility({
+        backend: 'opencode',
+        connectionId: CODEX_CLI_CONNECTION.id,
+        providerId: 'openai',
+        modelId: 'gpt-5.6-terra',
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        details: expect.objectContaining({ code: 'chat_backend_connection_mismatch' }),
+      }),
+    );
+    expect(() =>
+      assertRuntimeBackendConnectionCompatibility({
+        backend: 'codex',
+        connectionId: 'opencode-cli',
+        providerId: 'opencode',
+        modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      }),
+    ).not.toThrow();
+  });
+
   it('fails closed unless every observed CAO execution identity field is exact', () => {
     expect(
       assertRuntimeCaoExecutionIdentity(undefined, {
@@ -760,6 +947,7 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   it('rejects mismatched terminal CAO completion evidence before publishing success', async () => {
+    lockTestBackend('codex');
     const selection = selectionFromOption('openai', 'gpt-5.6-terra', CODEX_CLI_CONNECTION);
     setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
       {
@@ -775,7 +963,9 @@ describe('startRuntimeListener agent routing', () => {
     useAuthStore.setState({ chatModelSelection: selection });
     const jarvis = agent('agent_cao_identity', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_cao_identity' as ChatId;
-    const updateMessage = vi.fn(async () => undefined);
+    const updateMessage = vi.fn(
+      async (_id: MessageId, _patch: { usage?: unknown; [key: string]: unknown }) => undefined,
+    );
     mocks.runAgent.mockImplementationOnce(async (providerInput) => {
       providerInput.onChunk?.({ delta: 'UNTRUSTED_STREAMED_CAO', done: false });
       await providerInput.onToolActivity?.({
@@ -850,6 +1040,7 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   it('publishes CAO success only from an exact request and session-bound completion receipt', async () => {
+    lockTestBackend('codex');
     const selection = selectionFromOption('openai', 'gpt-5.6-terra', CODEX_CLI_CONNECTION);
     setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
       {
@@ -946,6 +1137,7 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   it('publishes no streamed CAO content when terminal completion evidence is missing', async () => {
+    lockTestBackend('codex');
     const selection = selectionFromOption('openai', 'gpt-5.6-terra', CODEX_CLI_CONNECTION);
     setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
       {
@@ -1024,6 +1216,7 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   it('reports cancellation when a late mismatched CAO response arrives after abort', async () => {
+    lockTestBackend('codex');
     const selection = selectionFromOption('openai', 'gpt-5.6-terra', CODEX_CLI_CONNECTION);
     setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
       {
@@ -1104,6 +1297,7 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   it('rejects mismatched CAO request controls before provider dispatch', async () => {
+    lockTestBackend('codex');
     const selection = selectionFromOption('openai', 'gpt-5.6-terra', CODEX_CLI_CONNECTION);
     setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
       {
@@ -1247,30 +1441,78 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   it('resolves automatic native modes from the exact connected model catalog', async () => {
-    const selected = {providerId: 'opencode', connectionId: 'opencode-cli', modelId: 'opencode-go/deepseek-v4-flash-vision-exp'};
-    const list = vi.fn(async () => [{id: selected.modelId, label: 'DeepSeek', variants: ['low', 'high', 'max']}]);
-    for (const [mode, effort] of [['token-saver', 'low'], ['token-final-boss', 'max']] as const) {
-      await expect(resolveCapturedRuntimeReasoningPolicy(selected, {mode, effortOverride: null}, list)).resolves.toMatchObject({selection: selected, mode, resolvedEffort: effort, providerOptions: {}});
+    const selected = {
+      providerId: 'opencode',
+      connectionId: 'opencode-cli',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+    };
+    const list = vi.fn(async () => [
+      { id: selected.modelId, label: 'DeepSeek', variants: ['low', 'high', 'max'] },
+    ]);
+    for (const [mode, effort] of [
+      ['token-saver', null],
+      ['token-final-boss', 'max'],
+    ] as const) {
+      await expect(
+        resolveCapturedRuntimeReasoningPolicy(selected, { mode, effortOverride: null }, list),
+      ).resolves.toMatchObject({
+        selection: selected,
+        mode,
+        resolvedEffort: effort,
+        providerOptions: {},
+      });
     }
-    await expect(resolveCapturedRuntimeReasoningPolicy(selected, {mode: 'token-saver', effortOverride: null}, async () => [])).rejects.toThrow('unavailable');
+    await expect(
+      resolveCapturedRuntimeReasoningPolicy(
+        selected,
+        { mode: 'token-saver', effortOverride: null },
+        async () => [],
+      ),
+    ).rejects.toThrow('unavailable');
     expect(list).toHaveBeenCalledTimes(2);
   });
 
   it('does not start the OpenCode catalog for a chat bound to Codex', async () => {
     rememberLiveOpenCodeProviders([]);
-    const selected = { providerId: 'opencode', connectionId: 'opencode-cli', modelId: 'opencode-go/gpt-5.6-luna' };
-    const list = vi.fn(async () => { throw new Error('Other backend unavailable'); });
-    await expect(resolveCapturedRuntimeReasoningPolicy(selected,
-      { mode: 'normal', effortOverride: 'low' }, list, 'codex'))
-      .resolves.toMatchObject({ selection: selected, requestedEffort: 'low', resolvedEffort: 'low' });
+    const selected = {
+      providerId: 'opencode',
+      connectionId: 'opencode-cli',
+      modelId: 'opencode-go/gpt-5.6-luna',
+    };
+    const list = vi.fn(async () => {
+      throw new Error('Other backend unavailable');
+    });
+    await expect(
+      resolveCapturedRuntimeReasoningPolicy(
+        selected,
+        { mode: 'normal', effortOverride: 'low' },
+        list,
+        'codex',
+      ),
+    ).resolves.toMatchObject({
+      selection: selected,
+      requestedEffort: 'low',
+      resolvedEffort: 'low',
+    });
     expect(list).not.toHaveBeenCalled();
   });
 
   it('resolves explicit Normal effort from the captured catalog before saving its receipt', async () => {
-    const selected = { providerId: 'opencode', connectionId: 'opencode-cli', modelId: 'openai/gpt-5.6-luna-fast' };
-    const list = vi.fn(async () => [{ id: selected.modelId, label: 'Luna Fast', variants: ['none', 'high', 'xhigh', 'max'] }]);
-    await expect(resolveCapturedRuntimeReasoningPolicy(selected, { mode: 'normal', effortOverride: 'ultra' }, list))
-      .resolves.toMatchObject({ resolvedEffort: 'ultra', providerEffort: 'xhigh' });
+    const selected = {
+      providerId: 'opencode',
+      connectionId: 'opencode-cli',
+      modelId: 'openai/gpt-5.6-luna-fast',
+    };
+    const list = vi.fn(async () => [
+      { id: selected.modelId, label: 'Luna Fast', variants: ['none', 'high', 'xhigh', 'max'] },
+    ]);
+    await expect(
+      resolveCapturedRuntimeReasoningPolicy(
+        selected,
+        { mode: 'normal', effortOverride: 'ultra' },
+        list,
+      ),
+    ).resolves.toMatchObject({ resolvedEffort: 'ultra', providerEffort: 'xhigh' });
     expect(list).toHaveBeenCalledTimes(1);
   });
 
@@ -1314,7 +1556,14 @@ describe('startRuntimeListener agent routing', () => {
         await input.onHarnessSessionBound?.({ sessionId: 'session_exact' });
         return {
           text: 'Evidence ready.',
-          usage: { input_tokens: 10, output_tokens: 2, cost_usd: 0.01 },
+          usage: {
+            input_tokens: 10,
+            output_tokens: 2,
+            total_tokens: 12,
+            cache_read_tokens: 5,
+            cache_write_tokens: 1,
+            cost_usd: 0.01,
+          },
           provider: 'opencode',
           model: 'opencode-go/deepseek-v4-flash-vision-exp',
           tool_evidence: {
@@ -1330,7 +1579,14 @@ describe('startRuntimeListener agent routing', () => {
         await input.onHarnessSessionBound?.({ sessionId: 'session_exact' });
         return {
           text: invalidDraft,
-          usage: { input_tokens: 20, output_tokens: 800, cost_usd: 0.02 },
+          usage: {
+            input_tokens: 20,
+            output_tokens: 800,
+            total_tokens: 820,
+            cache_read_tokens: 7,
+            cache_write_tokens: 2,
+            cost_usd: 0.02,
+          },
           provider: 'opencode',
           model: 'opencode-go/deepseek-v4-flash-vision-exp',
           tool_evidence: {
@@ -1346,7 +1602,14 @@ describe('startRuntimeListener agent routing', () => {
         await input.onHarnessSessionBound?.({ sessionId: 'session_exact' });
         return {
           text: correctedDraft,
-          usage: { input_tokens: 30, output_tokens: 690, cost_usd: 0.03 },
+          usage: {
+            input_tokens: 30,
+            output_tokens: 690,
+            total_tokens: 720,
+            cache_read_tokens: 9,
+            cache_write_tokens: 3,
+            cost_usd: 0.03,
+          },
           provider: 'opencode',
           model: 'opencode-go/deepseek-v4-flash-vision-exp',
           tool_evidence: {
@@ -1428,7 +1691,14 @@ describe('startRuntimeListener agent routing', () => {
       boundedSearchObserved: true,
       representativeReadCount: 2,
     });
-    expect(result.usage).toEqual({ input_tokens: 60, output_tokens: 1492, cost_usd: 0.06 });
+    expect(result.usage).toEqual({
+      input_tokens: 60,
+      output_tokens: 1492,
+      total_tokens: 1552,
+      cache_read_tokens: 21,
+      cache_write_tokens: 6,
+      cost_usd: 0.06,
+    });
 
     const validDispatch = vi
       .fn()
@@ -1471,6 +1741,9 @@ describe('startRuntimeListener agent routing', () => {
     );
     expect(validDispatch).toHaveBeenCalledTimes(2);
     expect(valid.text).toBe(correctedDraft);
+    expect(valid.usage).not.toHaveProperty('total_tokens');
+    expect(valid.usage).not.toHaveProperty('cache_read_tokens');
+    expect(valid.usage).not.toHaveProperty('cache_write_tokens');
   });
 
   it('requires evidence-qualified coverage for every broad root-audit category', () => {
@@ -1997,6 +2270,8 @@ describe('startRuntimeListener agent routing', () => {
     rememberLiveOpenCodeProviders([]);
     mocks.runAgent.mockReset();
     mocks.lockChatBackendForDispatch.mockReset();
+    mocks.captureToolGatewayAuthorityClaim.mockReset();
+    mocks.captureToolGatewayAuthorityClaim.mockReturnValue(null);
     mocks.lockChatBackendForDispatch.mockResolvedValue({
       version: 1,
       backend: 'opencode',
@@ -2071,57 +2346,83 @@ describe('startRuntimeListener agent routing', () => {
     useAllAboutMeStore.setState(useAllAboutMeStore.getInitialState(), true);
   });
 
-  it('injects the selected mode on the first send after Composer persisted its user message', async () => {
-    const jarvis = agent('agent_first_turn_policy', 'jarvis', 'You are Jarvis.');
-    const chatId = 'chat_first_turn_policy' as ChatId;
-    const userMessage: Message = {
-      id: 'msg_first_turn_policy_user' as MessageId,
-      chat_id: chatId,
-      role: 'user',
-      parts: [{ kind: 'text', text: 'Use the selected mode.' }],
-      created_at: 1,
-      updated_at: 1,
-    };
-    mocks.runAgent.mockResolvedValueOnce({
-      text: 'Mode applied.',
-      usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 },
-      provider: 'groq',
-      model: 'llama-3.3-70b-versatile',
+  function lockTestBackend(backend: 'codex' | 'opencode'): void {
+    mocks.lockChatBackendForDispatch.mockResolvedValueOnce({
+      version: 1,
+      backend,
+      locked: true,
+      selectedAt: 1,
+      lockedAt: 2,
     });
-    const stop = trackListener(
-      startRuntimeListener({
-        getAgentById: (id) => (id === jarvis.id ? jarvis : null),
-        getAgentBySlug: (slug) => (slug === jarvis.slug ? jarvis : null),
-        getAgentForChat: vi.fn(async () => jarvis),
-        getMessages: vi.fn(async () => [userMessage]),
-        appendMessage: vi.fn(async (message) => ({
-          ...message,
-          id: 'msg_first_turn_policy_assistant' as MessageId,
-          created_at: 2,
-          updated_at: 2,
-        })),
-        updateMessage: vi.fn(async () => undefined),
-      }),
-    );
+  }
 
-    window.dispatchEvent(
-      new CustomEvent('jarvis:send', {
-        detail: {
-          chatId,
-          cancellationKey: userMessage.id,
-          text: 'Use the selected mode.',
-          reasoningPreference: { mode: 'token-saver', effortOverride: null },
-        },
-      }),
-    );
+  it.each([undefined, 'off'] as const)(
+    'respects explicit optimizer %s and legacy requested mode on the first send',
+    async (tokenOptimizationMode) => {
+      const jarvis = agent('agent_first_turn_policy', 'jarvis', 'You are Jarvis.');
+      const chatId = 'chat_first_turn_policy' as ChatId;
+      const userMessage: Message = {
+        id: 'msg_first_turn_policy_user' as MessageId,
+        chat_id: chatId,
+        role: 'user',
+        parts: [{ kind: 'text', text: 'Use the selected mode.' }],
+        created_at: 1,
+        updated_at: 1,
+      };
+      mocks.runAgent.mockImplementationOnce(async (input) => {
+        input.onProviderWarning?.('Usage limit reached. OpenCode is retrying.');
+        expect(getChatActivityEvents(chatId)).toContainEqual(
+          expect.objectContaining({
+            status: 'running',
+            category: 'response',
+            title: 'Usage limit reached. OpenCode is retrying.',
+          }),
+        );
+        return {
+          text: 'Mode applied.',
+          usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 },
+          provider: 'groq',
+          model: 'llama-3.3-70b-versatile',
+        };
+      });
+      const stop = trackListener(
+        startRuntimeListener({
+          getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+          getAgentBySlug: (slug) => (slug === jarvis.slug ? jarvis : null),
+          getAgentForChat: vi.fn(async () => jarvis),
+          getMessages: vi.fn(async () => [userMessage]),
+          appendMessage: vi.fn(async (message) => ({
+            ...message,
+            id: 'msg_first_turn_policy_assistant' as MessageId,
+            created_at: 2,
+            updated_at: 2,
+          })),
+          updateMessage: vi.fn(async () => undefined),
+        }),
+      );
 
-    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
-    expect(mocks.runAgent.mock.calls[0]![0].agent.system_prompt).toContain(
-      '## Reasoning mode: Token Saver',
-    );
-    stop();
-    await stop.whenIdle();
-  });
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId,
+            cancellationKey: userMessage.id,
+            text: 'Use the selected mode.',
+            ...(tokenOptimizationMode === undefined ? {} : { tokenOptimizationMode }),
+            reasoningPreference: { mode: 'token-saver', effortOverride: null },
+          },
+        }),
+      );
+
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      expect(mocks.runAgent.mock.calls[0]![0].agent.system_prompt).toContain(
+        tokenOptimizationMode === 'off'
+          ? '## Reasoning mode: Normal'
+          : '## Reasoning mode: Token Saver',
+      );
+      stop();
+      await stop.whenIdle();
+    },
+  );
 
   it('routes a locked Codex chat through the exact selected provider connection without changing its model', async () => {
     mocks.lockChatBackendForDispatch.mockResolvedValueOnce({
@@ -2137,11 +2438,13 @@ describe('startRuntimeListener agent routing', () => {
         id: 'opencode-go',
         name: 'OpenCode Go',
         connected: true,
-        models: [{
-          id: 'deepseek-v4-flash-vision-exp',
-          name: 'DeepSeek V4 FLASH Vision Exp',
-          variants: ['low', 'medium', 'high', 'max'],
-        }],
+        models: [
+          {
+            id: 'deepseek-v4-flash-vision-exp',
+            name: 'DeepSeek V4 FLASH Vision Exp',
+            variants: ['low', 'medium', 'high', 'max'],
+          },
+        ],
       },
     ]);
     const selection = selectionFromOption(
@@ -2160,7 +2463,8 @@ describe('startRuntimeListener agent routing', () => {
     writeConnectionPickerStates({
       'opencode-cli': { available: true, auth: 'authenticated' },
     });
-    useAuthStore.setState({ chatModelSelection: selection });    const selectedAgent = agent('agent_codex_affinity', 'apple', 'You are Apple.');
+    useAuthStore.setState({ chatModelSelection: selection });
+    const selectedAgent = agent('agent_codex_affinity', 'apple', 'You are Apple.');
     const chatId = 'chat_codex_affinity' as ChatId;
     const userMessage: Message = {
       id: 'msg_codex_affinity_user' as MessageId,
@@ -2209,6 +2513,64 @@ describe('startRuntimeListener agent routing', () => {
     await stop.whenIdle();
   });
 
+  it('fails before executor dispatch when OpenCode keeps the Codex subscription connection', async () => {
+    mocks.lockChatBackendForDispatch.mockResolvedValueOnce({
+      version: 1,
+      backend: 'opencode',
+      locked: true,
+      selectedAt: 1,
+      lockedAt: 2,
+    });
+    const selection = selectionFromOption('openai', 'gpt-5.6-terra', CODEX_CLI_CONNECTION);
+    setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
+      {
+        id: 'gpt-5.6-terra',
+        label: 'GPT-5.6 Terra',
+        source: 'provider_list',
+        lastVerifiedAt: 1,
+      },
+    ]);
+    writeConnectionPickerStates({
+      [CODEX_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' },
+    });
+    useAuthStore.setState({ chatModelSelection: selection });
+    const selectedAgent = agent('agent_backend_guard', 'apple', 'You are Apple.');
+    const harness = kernelRuntimeBindings(selectedAgent);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+
+    try {
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId: harness.chatId,
+            cancellationKey: 'msg_backend_guard',
+            text: 'Use the selected route.',
+            modelSelectionOverride: selection,
+          },
+        }),
+      );
+
+      await vi.waitFor(() =>
+        expect(mocks.devLog).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: expect.stringContaining('AI error @apple'),
+          }),
+        ),
+      );
+      expect(mocks.runAgent).not.toHaveBeenCalled();
+      expect(getChatActivityEvents(harness.chatId).at(-1)?.status).toBe('error');
+      expect(
+        JSON.stringify([
+          ...harness.updateMessage.mock.calls,
+          ...harness.bindings.appendMessage.mock.calls,
+        ]),
+      ).toContain('chat_backend_connection_mismatch');
+    } finally {
+      stop();
+      await stop.whenIdle();
+    }
+  });
+
   it('does not advertise tools for an ordinary short Ask Mode chat', () => {
     const tools = openCodeToolsForInteractionMode('ask', [
       { role: 'user', content: 'Reply with the single word pong.' },
@@ -2254,6 +2616,30 @@ describe('startRuntimeListener agent routing', () => {
     ).toBe(true);
   });
 
+  it('preserves contextual terminal coordination without hiding the existing terminal tools', () => {
+    const messages = [{ role: 'user' as const, content: 'Tell each of them to use the project Context Map and RLM. Compose three worker prompts and send them to the new Claude terminals after checking live identities.' }];
+    setPermissionAccess('coordination-full', 'full');
+    const tools = openCodeToolsForInteractionMode('agent', messages, { chatId: 'coordination-full' });
+    for (const tool of ['vibespace_context', 'context.list', 'context.read', 'skills.list', 'skills.load', 'terminal.list', 'terminal.read', 'terminal.write']) expect(tools[tool], tool).toBe(true);
+    for (const tool of ['terminal.open', 'terminal.spawn', 'command.run', 'app.navigate', 'plugins.run', 'mcp.run']) expect(tools[tool], tool).toBe(false);
+    expect(prepareOpenCodeMessagesForInteractionMode(messages)).toBe(messages);
+  });
+
+  it('keeps the same contextual coordination inside current mode and access ceilings', () => {
+    const messages = [{ role: 'user' as const, content: 'Use RLM context and send a project-specific prompt to each Claude terminal.' }];
+    for (const mode of ['ask', 'plan'] as const) {
+      const tools = openCodeToolsForInteractionMode(mode, messages);
+      expect(tools['terminal.list']).toBe(true);
+      expect(tools['terminal.write']).toBe(false);
+    }
+    setPermissionAccess('coordination-read', 'read');
+    const tools = openCodeToolsForInteractionMode('agent', messages, { chatId: 'coordination-read' });
+    expect(tools['terminal.list']).toBe(true);
+    expect(tools['terminal.write']).toBe(false);
+    expect(tools['skills.load']).toBe(false);
+    expect(Object.values(openCodeToolsForInteractionMode('agent', messages, { explicitReadRoot: true })).every(value => value === false)).toBe(true);
+  });
+
   it('advertises explicitly requested semantic MCP tools instead of narrowing to Context', () => {
     const tools = openCodeToolsForInteractionMode('agent', [
       {
@@ -2283,7 +2669,7 @@ describe('startRuntimeListener agent routing', () => {
     expect(prepared[0]).toBe(message);
   });
 
-  it('routes natural read-and-cite file questions only through the Context Map tool', () => {
+  it('keeps generic read-and-cite file questions on the native catalog', () => {
     const naturalContextTools = openCodeToolsForInteractionMode('agent', [
       {
         role: 'user',
@@ -2292,11 +2678,8 @@ describe('startRuntimeListener agent routing', () => {
       },
     ]);
     expect(naturalContextTools.vibespace_context).toBe(true);
-    expect(
-      Object.entries(naturalContextTools)
-        .filter(([tool]) => tool !== 'vibespace_context')
-        .every(([, enabled]) => enabled === false),
-    ).toBe(true);
+    expect(naturalContextTools['context.read']).toBe(true);
+    expect(naturalContextTools['terminal.list']).toBe(true);
   });
 
   it.each([
@@ -2309,27 +2692,13 @@ describe('startRuntimeListener agent routing', () => {
     expect(tools['terminal.write']).toBe(true);
   });
 
-  it('adds one receipt-bearing Gateway/RLM investigation to a natural research turn', () => {
+  it('leaves a generic file research prompt unchanged without bounded Context intent', () => {
     const content =
       'Please read the files and answer with the exact source filename: what belongs to Observatory Lumen?';
-    const messages = prepareOpenCodeMessagesForInteractionMode([{ role: 'user', content }]);
+    const input = [{ role: 'user' as const, content }];
+    const messages = prepareOpenCodeMessagesForInteractionMode(input);
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.content).toMatch(/^Call the real `vibespace_context` function now/);
-    expect(messages[0]?.content).toContain(
-      'Call the real `vibespace_context` function now with exactly these two arguments',
-    );
-    expect(messages[0]?.content).toContain('"operation":"investigate"');
-    expect(messages[0]?.content).toContain(JSON.stringify(content));
-    expect(messages[0]?.content).not.toContain('"operation":"search"');
-    expect(messages[0]?.content).not.toContain('"limit":5');
-    expect(messages[0]?.content).not.toContain('Do not call `search`, `open`, or `expand`');
-    expect(messages[0]?.content).toContain('at most three targeted `search` calls');
-    expect(messages[0]?.content).toContain('Do not repeat the failed investigation');
-    expect(messages[0]?.content).toContain('Gateway/RLM receipt');
-    expect(messages[0]?.content).toContain('canonical `vibespace:context/...` provenance URI');
-    expect(messages[0]?.content).toContain('This is a direct user chat, not a subagent assignment');
-    expect(messages[0]?.content).toContain('Do not answer with a bootstrap receipt');
+    expect(messages).toBe(input);
   });
 
   it.each([
@@ -2552,7 +2921,8 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
   });
 
   it('does not force investigate for a native file read with a retrieval opt-out', () => {
-    const content = 'No Context Maps, RLM, or subagents. Use the real file read tool to reread C:/work/check.txt. Do not write anything.';
+    const content =
+      'No Context Maps, RLM, or subagents. Use the real file read tool to reread C:/work/check.txt. Do not write anything.';
     expect(prepareOpenCodeMessagesForInteractionMode([{ role: 'user', content }])).toEqual([
       { role: 'user', content },
     ]);
@@ -2704,18 +3074,33 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         fileLabel: 'Composer.tsx',
         details: { arguments: { path: 'Composer.tsx', offset: 12 } },
       });
-      expect(getPreview(String(input.accountId), `chat-preview:${placeholderId}`)?.segments)
-        .toEqual(expect.arrayContaining([
-          expect.objectContaining({ kind: 'reasoning', text: 'Checking the scoring. Then the restart.' }),
-          expect.objectContaining({ kind: 'tool', id: 'read-1', status: 'started',
-            details: { arguments: { path: 'Composer.tsx', offset: 12 } } }),
-        ]));
+      expect(
+        getPreview(String(input.accountId), `chat-preview:${placeholderId}`)?.segments,
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'reasoning',
+            text: 'Checking the scoring. Then the restart.',
+          }),
+          expect.objectContaining({
+            kind: 'tool',
+            id: 'read-1',
+            status: 'started',
+            details: { arguments: { path: 'Composer.tsx', offset: 12 } },
+          }),
+        ]),
+      );
       await toolWrite;
-      expect(durableWrites.at(-1)).toEqual(expect.arrayContaining([
-        { kind: 'reasoning', text: 'Checking the scoring. Then the restart.' },
-        expect.objectContaining({ kind: 'tool_call', call_id: 'read-1',
-          details: { arguments: { path: 'Composer.tsx', offset: 12 } } }),
-      ]));
+      expect(durableWrites.at(-1)).toEqual(
+        expect.arrayContaining([
+          { kind: 'reasoning', text: 'Checking the scoring. Then the restart.' },
+          expect.objectContaining({
+            kind: 'tool_call',
+            call_id: 'read-1',
+            details: { arguments: { path: 'Composer.tsx', offset: 12 } },
+          }),
+        ]),
+      );
       await input.onToolActivity?.({
         name: 'read',
         status: 'completed',
@@ -2723,11 +3108,18 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         fileLabel: 'Composer.tsx',
         details: { result: { text: 'score += 10' } },
       });
-      expect(durableWrites.at(-1)).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: 'tool_call', call_id: 'read-1', details: {
-          arguments: { path: 'Composer.tsx', offset: 12 }, result: { text: 'score += 10' },
-        } }),
-      ]));
+      expect(durableWrites.at(-1)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'tool_call',
+            call_id: 'read-1',
+            details: {
+              arguments: { path: 'Composer.tsx', offset: 12 },
+              result: { text: 'score += 10' },
+            },
+          }),
+        ]),
+      );
       await input.onToolActivity?.({
         name: 'read',
         status: 'completed',
@@ -2782,9 +3174,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         delta: 'The full HTML game is ready.',
       });
       input.onChunk?.({ delta: '', done: true });
-      expect(durableWrites.at(-1)).toEqual(expect.arrayContaining([
-        { kind: 'text', text: 'The full HTML game is ready.' },
-      ]));
+      expect(durableWrites.at(-1)).toEqual(
+        expect.arrayContaining([{ kind: 'text', text: 'The full HTML game is ready.' }]),
+      );
       return {
         text: 'The full HTML game is ready.',
         usage: { input_tokens: 2, output_tokens: 1, cost_usd: 0 },
@@ -3225,9 +3617,12 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       // A question can resolve while an older streaming snapshot is still
       // being persisted. Its resolution must wait only for predecessors.
       let finishOlderWrite!: () => void;
-      updateMessage.mockImplementationOnce(() => new Promise<undefined>(resolve => {
-        finishOlderWrite = () => resolve(undefined);
-      }));
+      updateMessage.mockImplementationOnce(
+        () =>
+          new Promise<undefined>((resolve) => {
+            finishOlderWrite = () => resolve(undefined);
+          }),
+      );
       input.onChunk?.({ delta: 'Checking ', first: true });
       await vi.waitFor(() => expect(finishOlderWrite).toBeTypeOf('function'));
       const writesBeforeResolution = updateMessage.mock.calls.length;
@@ -3601,10 +3996,353 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(request.provider_options).toEqual({});
     expect(request.agent.system_prompt).toContain('Token Final Boss');
     expect(request.agent.system_prompt).toContain('Reread the original user request');
-    expect(request.agent.system_prompt).toContain('files.read');
-    expect(request.agent.system_prompt).toContain('Do not broadly claim that you cannot code');
+    expect(request.agent.system_prompt).not.toContain('files.read');
+    expect(request.agent.system_prompt).not.toContain('Do not broadly claim that you cannot code');
     expect(request.agent.system_prompt).toContain('Scale response depth to the task');
     expect(request.agent.system_prompt).toContain('calm, precise, capable');
+    expect(request.agent.system_prompt).toContain('Never ask for passwords');
+  });
+
+  it.each([
+    ['codex', false],
+    ['opencode', false],
+    ['ordinary provider', true],
+  ] as const)(
+    'keeps the request prompt aligned with the %s tool contract',
+    async (route, includesAppActionCatalogue) => {
+      const backend = route === 'ordinary provider' ? undefined : route;
+      mocks.lockChatBackendForDispatch.mockResolvedValueOnce({
+        version: 1,
+        backend,
+        locked: true,
+        selectedAt: 1,
+        lockedAt: 2,
+      });
+      const jarvis = agent(`agent_prompt_contract_${route}`, 'jarvis', 'You are Jarvis.');
+      const chatId = `chat_prompt_contract_${route}` as ChatId;
+      const stop = trackListener(
+        startRuntimeListener({
+          getAgentById: () => jarvis,
+          getAgentBySlug: () => jarvis,
+          getAgentForChat: vi.fn(async () => jarvis),
+          getMessages: vi.fn(async () => []),
+          appendMessage: vi.fn(async (message) => ({
+            ...message,
+            id: `msg_prompt_contract_${route}` as MessageId,
+            created_at: 2,
+            updated_at: 2,
+          })),
+          updateMessage: vi.fn(async () => undefined),
+        }),
+      );
+      try {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:send', {
+            detail: {
+              chatId,
+              text: `Inspect the ${route} prompt contract.`,
+              interactionMode: 'agent',
+            },
+          }),
+        );
+
+        await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+        const request = mocks.runAgent.mock.calls[0]![0];
+        expect(request.backend).toBe(backend);
+        expect(request.toolGatewayAuthority).toBe(null);
+        expect(request.agent.system_prompt).toContain('calm, precise, capable');
+        expect(request.agent.system_prompt).toContain('Never ask for passwords');
+        expect(request.agent.system_prompt.includes('files.read')).toBe(includesAppActionCatalogue);
+        expect(request.agent.system_prompt.includes('You can inspect and change code')).toBe(
+          includesAppActionCatalogue,
+        );
+      } finally {
+        stop();
+        await stop.whenIdle();
+      }
+    },
+  );
+
+  it('sends local-command residual text with attachments and hidden receipts', async () => {
+    const jarvis = agent('agent_local_command_residual', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_local_command_residual' as ChatId;
+    const updateMessage = vi.fn(async () => undefined);
+    mocks.runAgent.mockResolvedValueOnce({
+      text: 'Drafted the game.',
+      usage: {
+        input_tokens: 17,
+        output_tokens: 3,
+        total_tokens: 23,
+        cache_read_tokens: 11,
+        cache_write_tokens: 2,
+        cost_usd: 0.01,
+      },
+      provider: 'groq',
+      model: 'llama-3.3-70b-versatile',
+    });
+    const userMessage: Message = {
+      id: 'msg_local_command_user' as MessageId,
+      chat_id: chatId,
+      role: 'user',
+      parts: [
+        { kind: 'text', text: 'Draft a game and open a Claude terminal' },
+        { kind: 'image', url: 'data:image/png;base64,AAAA', alt: 'reference.png' },
+      ],
+      created_at: 1,
+      updated_at: 1,
+    };
+    const stop = trackListener(
+      startRuntimeListener({
+        getAgentById: () => jarvis,
+        getAgentBySlug: () => jarvis,
+        getAgentForChat: vi.fn(async () => jarvis),
+        getMessages: vi.fn(async () => [userMessage]),
+        appendMessage: vi.fn(async (message) => ({
+          ...message,
+          id: 'msg_local_command_assistant' as MessageId,
+          created_at: 2,
+          updated_at: 2,
+        })),
+        updateMessage,
+      }),
+    );
+
+    try {
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId,
+            cancellationKey: userMessage.id,
+            text: 'Draft a game and open a Claude terminal',
+            modelText: 'Draft a game',
+            localCommandContext:
+              'VibeSpace local action receipts: terminal.open provider=claude status=queued.',
+            interactionMode: 'agent',
+          },
+        }),
+      );
+
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      const request = mocks.runAgent.mock.calls[0]![0];
+      const lastMessage = request.messages.at(-1);
+      expect(lastMessage?.role).toBe('user');
+      expect(JSON.stringify(lastMessage?.content)).toContain('Draft a game');
+      expect(JSON.stringify(lastMessage?.content)).not.toContain('open a Claude terminal');
+      expect(JSON.stringify(lastMessage?.content)).toContain('reference.png');
+      expect(request.agent.system_prompt).toContain('terminal.open provider=claude status=queued');
+      const updateCalls = updateMessage.mock.calls as unknown as Array<
+        [MessageId, { usage?: unknown }]
+      >;
+      await vi.waitFor(() =>
+        expect(updateCalls.some(([, patch]) => Boolean((patch as { usage?: unknown }).usage))).toBe(
+          true,
+        ),
+      );
+      const usagePatch = updateCalls.find(([, patch]) =>
+        Boolean((patch as { usage?: unknown }).usage),
+      )?.[1] as { usage?: Record<string, unknown> } | undefined;
+      expect(usagePatch?.usage).toEqual(
+        expect.objectContaining({
+          input_tokens: 17,
+          output_tokens: 3,
+          total_tokens: 23,
+          cache_read_tokens: 11,
+          cache_write_tokens: 2,
+          cost_usd: 0.01,
+        }),
+      );
+    } finally {
+      stop();
+      await stop.whenIdle();
+    }
+  });
+
+  it.each(['runtime', 'composer'] as const)(
+    'preserves the exact %s authority snapshot before async preparation',
+    async (origin) => {
+      const order: string[] = [];
+      const authority = Object.freeze({
+        scope: Object.freeze({
+          accountId: 'runtime-test-account',
+          accountSource: 'local' as const,
+          workspaceId: 'workspace-authority-race',
+          projectId: 'project-authority-race',
+        }),
+        generation: 17,
+      });
+      mocks.captureToolGatewayAuthorityClaim.mockImplementationOnce(() => {
+        order.push('capture');
+        return authority;
+      });
+      mocks.chatGetById.mockImplementationOnce(async () => {
+        order.push('chat');
+        return undefined;
+      });
+      useAuthStore.setState({ projectId: 'project-authority-race' as never });
+      mocks.getProjectContextBlock.mockImplementationOnce(async () => {
+        order.push('context');
+        return '';
+      });
+
+      const jarvis = agent('agent_authority_race', 'jarvis', 'You are Jarvis.');
+      const chatId = 'chat_authority_race' as ChatId;
+      const stop = trackListener(
+        startRuntimeListener({
+          getAgentById: () => jarvis,
+          getAgentBySlug: () => jarvis,
+          getAgentForChat: vi.fn(async () => jarvis),
+          getMessages: vi.fn(async () => []),
+          appendMessage: vi.fn(async (message) => ({
+            ...message,
+            id: 'msg_authority_race' as MessageId,
+            created_at: 2,
+            updated_at: 2,
+          })),
+          updateMessage: vi.fn(async () => undefined),
+        }),
+      );
+
+      try {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:send', {
+            detail: {
+              chatId,
+              text: 'Capture this request authority.',
+              interactionMode: 'agent',
+              ...(origin === 'composer' ? { toolGatewayAuthority: authority } : {}),
+            },
+          }),
+        );
+
+        await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+        const request = mocks.runAgent.mock.calls[0]![0];
+        expect(request.toolGatewayAuthority).toBe(authority);
+        if (origin === 'composer') {
+          expect(mocks.captureToolGatewayAuthorityClaim).not.toHaveBeenCalled();
+        } else {
+          expect(order.indexOf('capture')).toBeGreaterThanOrEqual(0);
+          expect(order.indexOf('capture')).toBeLessThan(order.indexOf('chat'));
+          expect(order.indexOf('capture')).toBeLessThan(order.indexOf('context'));
+        }
+      } finally {
+        stop();
+        await stop.whenIdle();
+      }
+    },
+  );
+
+  it('keeps the captured project for an unbound chat after navigation before runtime dispatch', async () => {
+    const authority = Object.freeze({
+      scope: Object.freeze({
+        accountId: 'runtime-test-account',
+        accountSource: 'local' as const,
+        workspaceId: 'workspace-authority-navigation',
+        projectId: 'project-origin',
+      }),
+      generation: 23,
+    });
+    const jarvis = agent('agent_authority_navigation', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_authority_navigation' as ChatId;
+    const stop = trackListener(
+      startRuntimeListener({
+        getAgentById: () => jarvis,
+        getAgentBySlug: () => jarvis,
+        getAgentForChat: vi.fn(async () => jarvis),
+        getMessages: vi.fn(async () => []),
+        appendMessage: vi.fn(async (message) => ({
+          ...message,
+          id: 'msg_authority_navigation' as MessageId,
+          created_at: 2,
+          updated_at: 2,
+        })),
+        updateMessage: vi.fn(async () => undefined),
+      }),
+    );
+
+    try {
+      // The Composer claim belongs to the project active at submission. The
+      // chat is still unbound, while the UI has already navigated elsewhere.
+      useAuthStore.setState({
+        workspaceId: 'workspace-authority-navigation' as never,
+        projectId: 'project-after-navigation' as never,
+      });
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId,
+            text: 'Keep the original project authority.',
+            interactionMode: 'agent',
+            toolGatewayAuthority: authority,
+          },
+        }),
+      );
+
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      const request = mocks.runAgent.mock.calls[0]![0];
+      expect(request.projectId).toBe('project-origin');
+      expect(request.accountId).toBe('runtime-test-account');
+      expect(request.workspaceId).toBe('workspace-authority-navigation');
+      expect(request.toolGatewayAuthority).toBe(authority);
+    } finally {
+      stop();
+      await stop.whenIdle();
+    }
+  });
+
+  it('keeps a captured no-project scope unscoped after navigation before runtime dispatch', async () => {
+    const authority = Object.freeze({
+      scope: Object.freeze({
+        accountId: 'runtime-test-account',
+        accountSource: 'local' as const,
+        workspaceId: 'workspace-authority-global',
+        projectId: null,
+      }),
+      generation: 24,
+    });
+    const jarvis = agent('agent_authority_global', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_authority_global' as ChatId;
+    const stop = trackListener(
+      startRuntimeListener({
+        getAgentById: () => jarvis,
+        getAgentBySlug: () => jarvis,
+        getAgentForChat: vi.fn(async () => jarvis),
+        getMessages: vi.fn(async () => []),
+        appendMessage: vi.fn(async (message) => ({
+          ...message,
+          id: 'msg_authority_global' as MessageId,
+          created_at: 2,
+          updated_at: 2,
+        })),
+        updateMessage: vi.fn(async () => undefined),
+      }),
+    );
+
+    try {
+      useAuthStore.setState({
+        workspaceId: 'workspace-authority-global' as never,
+        projectId: 'project-after-navigation' as never,
+      });
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId,
+            text: 'Keep this request outside project scope.',
+            interactionMode: 'agent',
+            toolGatewayAuthority: authority,
+          },
+        }),
+      );
+
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      const request = mocks.runAgent.mock.calls[0]![0];
+      expect(request.projectId).toBeUndefined();
+      expect(request.accountId).toBe('runtime-test-account');
+      expect(request.workspaceId).toBe('workspace-authority-global');
+      expect(request.toolGatewayAuthority).toBe(authority);
+    } finally {
+      stop();
+      await stop.whenIdle();
+    }
   });
 
   it('buffers Token Saver exact-literal text and voice until one reconciled final emission', async () => {
@@ -3923,34 +4661,72 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
   });
 
   it.each(['answered', 'pending', 'cancelled'] as const)(
-    'restores only submitted native question answers into user history (%s)', async (status) => {
+    'restores only submitted native question answers into user history (%s)',
+    async (status) => {
       const jarvis = agent('agent_answer_history', 'jarvis', 'You are Jarvis.');
       const chatId = 'chat_answer_history' as ChatId;
       const history: Message = {
-        id: 'msg_answer_history' as MessageId, chat_id: chatId, role: 'assistant',
-        created_at: 1, updated_at: 1, parts: [{ kind: 'question_block',
-          block: { id: 'qb_history', status,
-            questions: [{ id: 'color', prompt: 'Which audit color?', type: 'single',
-              options: [{ id: 'blue', label: 'Blue' }] }],
-            answers: [{ questionId: 'color', selectedOptionIds: ['blue'] }],
+        id: 'msg_answer_history' as MessageId,
+        chat_id: chatId,
+        role: 'assistant',
+        created_at: 1,
+        updated_at: 1,
+        parts: [
+          {
+            kind: 'question_block',
+            block: {
+              id: 'qb_history',
+              status,
+              questions: [
+                {
+                  id: 'color',
+                  prompt: 'Which audit color?',
+                  type: 'single',
+                  options: [{ id: 'blue', label: 'Blue' }],
+                },
+              ],
+              answers: [{ questionId: 'color', selectedOptionIds: ['blue'] }],
+            },
+            harness: {
+              protocol: 'opencode-question-v1',
+              blockId: 'qb_history',
+              requestId: 'que_history',
+              sessionId: 'ses_history',
+              questions: [],
+            },
           },
-          harness: { protocol: 'opencode-question-v1', blockId: 'qb_history',
-            requestId: 'que_history', sessionId: 'ses_history', questions: [] },
-        }],
+        ],
       };
-      trackListener(startRuntimeListener({
-        getAgentById: () => jarvis, getAgentBySlug: () => jarvis,
-        getAgentForChat: vi.fn(async () => jarvis), getMessages: vi.fn(async () => [history]),
-        appendMessage: vi.fn(async message => ({ ...message, id: 'msg_recall' as MessageId,
-          created_at: 2, updated_at: 2 })), updateMessage: vi.fn(async () => undefined),
-      }));
-      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
-        chatId, text: 'What audit color did I choose?',
-      } }));
+      trackListener(
+        startRuntimeListener({
+          getAgentById: () => jarvis,
+          getAgentBySlug: () => jarvis,
+          getAgentForChat: vi.fn(async () => jarvis),
+          getMessages: vi.fn(async () => [history]),
+          appendMessage: vi.fn(async (message) => ({
+            ...message,
+            id: 'msg_recall' as MessageId,
+            created_at: 2,
+            updated_at: 2,
+          })),
+          updateMessage: vi.fn(async () => undefined),
+        }),
+      );
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId,
+            text: 'What audit color did I choose?',
+          },
+        }),
+      );
       await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
-      expect(mocks.runAgent.mock.calls[0]![0].messages.some((message: { role: string; content: unknown }) =>
-        message.role === 'user' && String(message.content).includes('Which audit color?: Blue'),
-      )).toBe(status === 'answered');
+      expect(
+        mocks.runAgent.mock.calls[0]![0].messages.some(
+          (message: { role: string; content: unknown }) =>
+            message.role === 'user' && String(message.content).includes('Which audit color?: Blue'),
+        ),
+      ).toBe(status === 'answered');
     },
   );
 
@@ -4506,158 +5282,188 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
   });
 
   it.each([
-    { mode: 'normal', requestedEffort: 'medium', expectedEffort: 'medium' },
-    { mode: 'token-saver', requestedEffort: null, expectedEffort: 'low' },
-    { mode: 'token-final-boss', requestedEffort: null, expectedEffort: 'max' },
-  ] as const)('dispatches the exact OpenCode Go DeepSeek route through only the federated Context tool: $mode', async ({ mode, requestedEffort, expectedEffort }) => {
-    mocks.listOpenCodeModels.mockResolvedValue([{ id: 'opencode-go/deepseek-v4-flash-vision-exp', label: 'DeepSeek', variants: ['low', 'medium', 'high', 'max'] }]);
-    const openCodeConnection = PROVIDER_CONNECTIONS.find(
-      (connection) => connection.id === 'opencode-cli',
-    )!;
-    rememberLiveOpenCodeProviders([
-      {
-        id: 'opencode-go',
-        name: 'OpenCode Go',
-        connected: true,
-        models: [
-          {
-            id: 'deepseek-v4-flash-vision-exp',
-            name: 'DeepSeek V4 FLASH Vision Exp',
-            variants: ['low', 'medium', 'high', 'max'],
-          },
-        ],
-      },
-    ]);
-    useAuthStore.setState({
-      projectId: 'project_unified_chungus' as never,
-      chatModelSelection: selectionFromOption(
-        openCodeConnection.providerId as ProviderId,
-        'opencode-go/deepseek-v4-flash-vision-exp',
-        openCodeConnection,
-      ),
-    });
-    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
-    const chatId = 'chat_bound_project_fact' as ChatId;
-    const updateMessage = vi.fn(async () => undefined);
-    mocks.runAgent.mockImplementationOnce(async (providerInput) => {
-      providerInput.onChunk?.({ delta: 'DEEPSEEK_PROGRESSIVE', done: false });
-      await vi.waitFor(() =>
-        expect(JSON.stringify(updateMessage.mock.calls)).toContain('DEEPSEEK_PROGRESSIVE'),
-      );
-      return {
-        text: 'DEEPSEEK_PROGRESSIVE_COMPLETE',
-        usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 },
-        provider: 'opencode',
-        model: 'opencode-go/deepseek-v4-flash-vision-exp',
-      };
-    });
-    const userText =
-      'In the bound Unified Chungus project, what custodian and retention period are authoritative for artifact atlas-0317?';
-    const userMessage: Message = {
-      id: 'msg_bound_project_fact_user' as MessageId,
-      chat_id: chatId,
-      role: 'user',
-      parts: [{ kind: 'text', text: userText }],
-      created_at: 1,
-      updated_at: 1,
-    };
-    mocks.chatGetById.mockResolvedValueOnce({
-      id: chatId,
-      workspace_id: 'workspace_unified_chungus' as never,
-      project_id: 'project_unified_chungus' as never,
-      title: 'Bound project fact',
-      mode: 'chat',
-      active_agent_ids: [jarvis.id],
-      created_at: 1,
-      updated_at: 1,
-    });
-    const stop = trackListener(
-      startRuntimeListener({
-        getAgentById: (id) => (id === jarvis.id ? jarvis : null),
-        getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
-        getAgentForChat: vi.fn(async () => jarvis),
-        getMessages: vi.fn(async () => [userMessage]),
-        appendMessage: vi.fn(async (msg) => ({
-          ...msg,
-          id: 'msg_bound_project_fact_assistant' as MessageId,
-          created_at: 2,
-          updated_at: 2,
-        })),
-        updateMessage,
-      }),
-    );
-
-    window.dispatchEvent(
-      new CustomEvent('jarvis:send', {
-        detail: {
-          chatId,
-          text: userText,
-          reasoningPreference: { mode, effortOverride: requestedEffort },
-          runtimeSettings: {
-            effort: requestedEffort ?? 'auto',
-            performance: 'quality',
-            fastMode: 'off',
-            rlmEnabled: true,
-          },
+    {
+      mode: 'normal',
+      requestedEffort: 'medium',
+      expectedEffort: 'medium',
+      expectedReasoningEffort: 'medium',
+    },
+    {
+      mode: 'token-saver',
+      requestedEffort: null,
+      expectedEffort: 'auto',
+      expectedReasoningEffort: null,
+    },
+    {
+      mode: 'token-final-boss',
+      requestedEffort: null,
+      expectedEffort: 'max',
+      expectedReasoningEffort: 'max',
+    },
+  ] as const)(
+    'dispatches the exact OpenCode Go DeepSeek route through only the federated Context tool: $mode',
+    async ({ mode, requestedEffort, expectedEffort, expectedReasoningEffort }) => {
+      mocks.listOpenCodeModels.mockResolvedValue([
+        {
+          id: 'opencode-go/deepseek-v4-flash-vision-exp',
+          label: 'DeepSeek',
+          variants: ['low', 'medium', 'high', 'max'],
         },
-      }),
-    );
-
-    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
-    expect(mocks.resolveJarvisContext).not.toHaveBeenCalled();
-    expect(mocks.getProjectContextBlock).not.toHaveBeenCalled();
-    expect(mocks.getProjectContextTreeBlock).not.toHaveBeenCalled();
-    expect(mocks.retrieveApprovedLocalKnowledge).not.toHaveBeenCalled();
-    expect(mocks.getConnectedFilesBlock).not.toHaveBeenCalled();
-    expect(mocks.getJarvisCoordinationContextBlock).not.toHaveBeenCalled();
-    const providerInput = mocks.runAgent.mock.calls[0]![0];
-    expect(providerInput.agent.model).toEqual({
-      provider: 'opencode',
-      model: 'opencode-go/deepseek-v4-flash-vision-exp',
-    });
-    expect(providerInput.connectionId).toBe('opencode-cli');
-    // This OpenCode route carries its verified effort through runtimeSettings.
-    // Do not invent a provider-specific wire field for the OpenCode Go namespace.
-    expect(providerInput.provider_options).toEqual({});
-    expect(providerInput.runtimeSettings).toEqual({
-      effort: expectedEffort,
-      performance: 'quality',
-      fastMode: 'off',
-      rlmEnabled: true,
-    });
-    expect(mocks.devLog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: 'ai',
-        level: 'info',
-        message: expect.stringContaining('AI request'),
-        detail: expect.objectContaining({
-          chatId,
+      ]);
+      const openCodeConnection = PROVIDER_CONNECTIONS.find(
+        (connection) => connection.id === 'opencode-cli',
+      )!;
+      rememberLiveOpenCodeProviders([
+        {
+          id: 'opencode-go',
+          name: 'OpenCode Go',
+          connected: true,
+          models: [
+            {
+              id: 'deepseek-v4-flash-vision-exp',
+              name: 'DeepSeek V4 FLASH Vision Exp',
+              variants: ['low', 'medium', 'high', 'max'],
+            },
+          ],
+        },
+      ]);
+      useAuthStore.setState({
+        projectId: 'project_unified_chungus' as never,
+        chatModelSelection: selectionFromOption(
+          openCodeConnection.providerId as ProviderId,
+          'opencode-go/deepseek-v4-flash-vision-exp',
+          openCodeConnection,
+        ),
+      });
+      const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+      const chatId = 'chat_bound_project_fact' as ChatId;
+      const updateMessage = vi.fn(async () => undefined);
+      mocks.runAgent.mockImplementationOnce(async (providerInput) => {
+        providerInput.onChunk?.({ delta: 'DEEPSEEK_PROGRESSIVE', done: false });
+        await vi.waitFor(() =>
+          expect(JSON.stringify(updateMessage.mock.calls)).toContain('DEEPSEEK_PROGRESSIVE'),
+        );
+        return {
+          text: 'DEEPSEEK_PROGRESSIVE_COMPLETE',
+          usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 },
           provider: 'opencode',
           model: 'opencode-go/deepseek-v4-flash-vision-exp',
-          connectionId: 'opencode-cli',
-          reasoningMode: mode,
-          reasoningEffort: expectedEffort,
-          providerVariant: undefined,
-          runtimePerformance: 'quality',
+        };
+      });
+      const userText =
+        'In the bound Unified Chungus project, what custodian and retention period are authoritative for artifact atlas-0317?';
+      const userMessage: Message = {
+        id: 'msg_bound_project_fact_user' as MessageId,
+        chat_id: chatId,
+        role: 'user',
+        parts: [{ kind: 'text', text: userText }],
+        created_at: 1,
+        updated_at: 1,
+      };
+      mocks.chatGetById.mockResolvedValueOnce({
+        id: chatId,
+        workspace_id: 'workspace_unified_chungus' as never,
+        project_id: 'project_unified_chungus' as never,
+        title: 'Bound project fact',
+        mode: 'chat',
+        active_agent_ids: [jarvis.id],
+        created_at: 1,
+        updated_at: 1,
+      });
+      const stop = trackListener(
+        startRuntimeListener({
+          getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+          getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+          getAgentForChat: vi.fn(async () => jarvis),
+          getMessages: vi.fn(async () => [userMessage]),
+          appendMessage: vi.fn(async (msg) => ({
+            ...msg,
+            id: 'msg_bound_project_fact_assistant' as MessageId,
+            created_at: 2,
+            updated_at: 2,
+          })),
+          updateMessage,
         }),
-      }),
-    );
-    expect(providerInput.tools.vibespace_context).toBe(true);
-    expect(
-      Object.entries(providerInput.tools)
-        .filter(([tool]) => tool !== 'vibespace_context')
-        .every(([, enabled]) => enabled === false),
-    ).toBe(true);
-    expect(providerInput.messages.at(-1)?.content).toContain(
-      'Call the real `vibespace_context` function now',
-    );
-    expect(providerInput.messages.at(-1)?.content).toContain(JSON.stringify(userText));
+      );
 
-    stop();
-  });
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId,
+            text: userText,
+            reasoningPreference: { mode, effortOverride: requestedEffort },
+            runtimeSettings: {
+              effort: requestedEffort ?? 'auto',
+              performance: 'quality',
+              fastMode: 'off',
+              rlmEnabled: true,
+            },
+          },
+        }),
+      );
+
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
+      expect(mocks.resolveJarvisContext).not.toHaveBeenCalled();
+      expect(mocks.getProjectContextBlock).not.toHaveBeenCalled();
+      expect(mocks.getProjectContextTreeBlock).not.toHaveBeenCalled();
+      expect(mocks.retrieveApprovedLocalKnowledge).not.toHaveBeenCalled();
+      expect(mocks.getConnectedFilesBlock).not.toHaveBeenCalled();
+      expect(mocks.getJarvisCoordinationContextBlock).not.toHaveBeenCalled();
+      const providerInput = mocks.runAgent.mock.calls[0]![0];
+      expect(providerInput.agent.model).toEqual({
+        provider: 'opencode',
+        model: 'opencode-go/deepseek-v4-flash-vision-exp',
+      });
+      expect(providerInput.connectionId).toBe('opencode-cli');
+      // This OpenCode route carries its verified effort through runtimeSettings.
+      // Do not invent a provider-specific wire field for the OpenCode Go namespace.
+      expect(providerInput.provider_options).toEqual({});
+      expect(providerInput.runtimeSettings).toEqual({
+        effort: expectedEffort,
+        performance: 'quality',
+        fastMode: 'off',
+        rlmEnabled: true,
+      });
+      expect(mocks.devLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: 'ai',
+          level: 'info',
+          message: expect.stringContaining('AI request'),
+          detail: expect.objectContaining({
+            chatId,
+            provider: 'opencode',
+            model: 'opencode-go/deepseek-v4-flash-vision-exp',
+            connectionId: 'opencode-cli',
+            reasoningMode: mode,
+            reasoningEffort: expectedReasoningEffort,
+            providerVariant: undefined,
+            runtimePerformance: 'quality',
+          }),
+        }),
+      );
+      expect(providerInput.tools.vibespace_context).toBe(true);
+      expect(
+        Object.entries(providerInput.tools)
+          .filter(([tool]) => tool !== 'vibespace_context')
+          .every(([, enabled]) => enabled === false),
+      ).toBe(true);
+      expect(providerInput.messages.at(-1)?.content).toContain(
+        'Call the real `vibespace_context` function now',
+      );
+      expect(providerInput.messages.at(-1)?.content).toContain(JSON.stringify(userText));
+
+      stop();
+    },
+  );
 
   it('uses an explicit leading read root without injecting unrelated project knowledge', async () => {
-    mocks.listOpenCodeModels.mockResolvedValue([{ id: 'opencode-go/deepseek-v4-flash-vision-exp', label: 'DeepSeek fixture', variants: ['high'] }]);
+    mocks.listOpenCodeModels.mockResolvedValue([
+      {
+        id: 'opencode-go/deepseek-v4-flash-vision-exp',
+        label: 'DeepSeek fixture',
+        variants: ['high'],
+      },
+    ]);
     const openCodeConnection = PROVIDER_CONNECTIONS.find(
       (connection) => connection.id === 'opencode-cli',
     )!;
@@ -5113,7 +5919,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(prompt).toContain(
       'Name the relevant file, agent, terminal, context map, or page when it matters',
     );
-    expect(prompt).toContain('/agents references the Agents page/editor');
+    expect(prompt).toContain('Never ask for passwords');
 
     stop();
   });
@@ -5203,7 +6009,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(prompt).toContain('User identity');
     expect(prompt).toContain('**Viper**');
     expect(prompt).toContain('Default write folder');
-    expect(prompt).toMatch(/jarvis_question|question card/i);
+    expect(prompt).toContain('Never ask for passwords');
 
     stop();
   });
@@ -5568,62 +6374,78 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     stop();
   });
 
-  it.each([{ timeline: [] }, { timeline: [{ kind: 'text' as const, text: 'Native provider response.' }] }])('preserves native refusal instead of inventing a filtered approval card (%j)', async ({ timeline: publicTimeline }) => {
-    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
-    const chatId = 'chat_native_no_fake_approval' as ChatId;
-    const placeholderId = 'msg_native_no_fake_approval_assistant' as MessageId;
-    const updateMessage = vi.fn(async () => undefined);
-    const userMessage: Message = {
-      id: 'msg_native_no_fake_approval_user' as MessageId,
-      chat_id: chatId,
-      role: 'user',
-      parts: [{ kind: 'text', text: 'Create C:\\games\\chat-platformer\\index.html now with a complete platform game. Use file tools.' }],
-      created_at: 1,
-      updated_at: 1,
-    };
-    mocks.runAgent.mockResolvedValueOnce({
-      text: "I cannot perform the requested file mutation in this session, sir.",
-      usage: { input_tokens: 1, output_tokens: 8, cost_usd: 0 },
-      public_timeline: publicTimeline,
-      provider: 'ollama',
-      model: 'llama3.2:1b',
-    });
+  it.each([
+    { timeline: [] },
+    { timeline: [{ kind: 'text' as const, text: 'Native provider response.' }] },
+  ])(
+    'preserves native refusal instead of inventing a filtered approval card (%j)',
+    async ({ timeline: publicTimeline }) => {
+      const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+      const chatId = 'chat_native_no_fake_approval' as ChatId;
+      const placeholderId = 'msg_native_no_fake_approval_assistant' as MessageId;
+      const updateMessage = vi.fn(async () => undefined);
+      const userMessage: Message = {
+        id: 'msg_native_no_fake_approval_user' as MessageId,
+        chat_id: chatId,
+        role: 'user',
+        parts: [
+          {
+            kind: 'text',
+            text: 'Create C:\\games\\chat-platformer\\index.html now with a complete platform game. Use file tools.',
+          },
+        ],
+        created_at: 1,
+        updated_at: 1,
+      };
+      mocks.runAgent.mockResolvedValueOnce({
+        text: 'I cannot perform the requested file mutation in this session, sir.',
+        usage: { input_tokens: 1, output_tokens: 8, cost_usd: 0 },
+        public_timeline: publicTimeline,
+        provider: 'ollama',
+        model: 'llama3.2:1b',
+      });
 
-    const stop = trackListener(
-      startRuntimeListener({
-        getAgentById: (id) => (id === jarvis.id ? jarvis : null),
-        getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
-        getAgentForChat: vi.fn(async () => jarvis),
-        getMessages: vi.fn(async () => [userMessage]),
-        appendMessage: vi.fn(async (msg) => ({
-          ...msg,
-          id: placeholderId,
-          created_at: 2,
-          updated_at: 2,
-        })),
-        updateMessage,
-      }),
-    );
+      const stop = trackListener(
+        startRuntimeListener({
+          getAgentById: (id) => (id === jarvis.id ? jarvis : null),
+          getAgentBySlug: (slug) => (slug === 'jarvis' ? jarvis : null),
+          getAgentForChat: vi.fn(async () => jarvis),
+          getMessages: vi.fn(async () => [userMessage]),
+          appendMessage: vi.fn(async (msg) => ({
+            ...msg,
+            id: placeholderId,
+            created_at: 2,
+            updated_at: 2,
+          })),
+          updateMessage,
+        }),
+      );
 
-    window.dispatchEvent(
-      new CustomEvent('jarvis:send', {
-        detail: { chatId, text: 'Create C:\\games\\chat-platformer\\index.html now with a complete platform game. Use file tools.' },
-      }),
-    );
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId,
+            text: 'Create C:\\games\\chat-platformer\\index.html now with a complete platform game. Use file tools.',
+          },
+        }),
+      );
 
-    await vi.waitFor(() => expect(updateMessage).toHaveBeenCalled());
-    const updateCalls = updateMessage.mock.calls as unknown as Array<
-      [MessageId, { parts: Part[] }]
-    >;
-    const finalWrite = updateCalls[updateCalls.length - 1]?.[1];
-    if (!finalWrite) throw new Error('expected a final assistant message write');
-    expect(finalWrite.parts.some(part => part.kind === 'action_proposal')).toBe(false);
-    const prose = finalWrite.parts.flatMap(part => part.kind === 'text' ? [part.text] : []).join(' ');
-    expect(prose).toContain('I cannot perform the requested file mutation in this session, sir.');
-    expect(prose).not.toContain('awaiting your authorisation');
+      await vi.waitFor(() => expect(updateMessage).toHaveBeenCalled());
+      const updateCalls = updateMessage.mock.calls as unknown as Array<
+        [MessageId, { parts: Part[] }]
+      >;
+      const finalWrite = updateCalls[updateCalls.length - 1]?.[1];
+      if (!finalWrite) throw new Error('expected a final assistant message write');
+      expect(finalWrite.parts.some((part) => part.kind === 'action_proposal')).toBe(false);
+      const prose = finalWrite.parts
+        .flatMap((part) => (part.kind === 'text' ? [part.text] : []))
+        .join(' ');
+      expect(prose).toContain('I cannot perform the requested file mutation in this session, sir.');
+      expect(prose).not.toContain('awaiting your authorisation');
 
-    stop();
-  });
+      stop();
+    },
+  );
 
   it('adds an approval proposal when a tiny local model answers an app-control request in prose', async () => {
     const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
@@ -6110,7 +6932,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     const runPayload = mocks.runAgent.mock.calls.at(-1)?.[0] as { agent: Agent } | undefined;
     expect(runPayload?.agent.system_prompt).toContain('## Jarvis chat interface');
     expect(runPayload?.agent.system_prompt).toContain('Coordination Summary');
-    expect(runPayload?.agent.system_prompt).toContain('terminal.bulkOpen');
+    expect(runPayload?.agent.system_prompt).not.toContain('terminal.bulkOpen');
 
     stop();
   });
@@ -6558,16 +7380,18 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         getAgentById: () => selectedAgent,
         getAgentBySlug: () => selectedAgent,
         getAgentForChat: vi.fn(async () => selectedAgent),
-        getMessages: vi.fn(async (): Promise<Message[]> => [
-          {
-            id: 'msg_kernel_user' as MessageId,
-            chat_id: chatId,
-            role: 'user' as const,
-            parts: [{ kind: 'text' as const, text: 'Run the kernel gate.' }],
-            created_at: 1,
-            updated_at: 1,
-          },
-        ]),
+        getMessages: vi.fn(
+          async (): Promise<Message[]> => [
+            {
+              id: 'msg_kernel_user' as MessageId,
+              chat_id: chatId,
+              role: 'user' as const,
+              parts: [{ kind: 'text' as const, text: 'Run the kernel gate.' }],
+              created_at: 1,
+              updated_at: 1,
+            },
+          ],
+        ),
         appendMessage: vi.fn(async (message) => ({
           ...message,
           id: 'msg_kernel_assistant' as MessageId,
@@ -6611,9 +7435,15 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
   it.each(['codex', 'opencode'] as const)(
     'sends hidden approval and resume instructions as the current %s turn without a visible user bubble',
     async (backend) => {
-      const harness = kernelRuntimeBindings(agent('agent_current_turn', 'coder', 'Answer the current request.'));
+      const harness = kernelRuntimeBindings(
+        agent('agent_current_turn', 'coder', 'Answer the current request.'),
+      );
       mocks.lockChatBackendForDispatch.mockResolvedValue({
-        version: 1, backend, locked: true, selectedAt: 1, lockedAt: 2,
+        version: 1,
+        backend,
+        locked: true,
+        selectedAt: 1,
+        lockedAt: 2,
       });
       const stop = trackListener(startRuntimeListener(harness.bindings));
       const turns = [
@@ -6624,19 +7454,28 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       try {
         for (const text of turns) {
           mocks.runAgent.mockClear();
-          window.dispatchEvent(new CustomEvent('jarvis:send', {
-            detail: { chatId: harness.chatId, text, interactionMode: 'agent' },
-          }));
+          window.dispatchEvent(
+            new CustomEvent('jarvis:send', {
+              detail: { chatId: harness.chatId, text, interactionMode: 'agent' },
+            }),
+          );
           await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(1));
           await stop.whenIdle();
           const request = mocks.runAgent.mock.calls[0]![0];
           expect(request.backend).toBe(backend);
-          const users = request.messages.filter((message: { role: string; content: unknown }) => message.role === 'user');
+          const users = request.messages.filter(
+            (message: { role: string; content: unknown }) => message.role === 'user',
+          );
           expect(users.at(-1)?.content).toBe(text);
           expect(users).toHaveLength(text === 'Run the kernel gate.' ? 1 : 2);
         }
-        expect(harness.bindings.appendMessage.mock.calls.every(([message]) => message.role !== 'user')).toBe(true);
-      } finally { stop(); await stop.whenIdle(); }
+        expect(
+          harness.bindings.appendMessage.mock.calls.every(([message]) => message.role !== 'user'),
+        ).toBe(true);
+      } finally {
+        stop();
+        await stop.whenIdle();
+      }
     },
   );
 
@@ -6644,7 +7483,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     'keeps protected %s turns on the selected backend and stable chat',
     async (route) => {
       const backend = route === 'codex' ? 'codex' : 'opencode';
-      if (route === 'opencode-native-provider') configureCaoRuntimeSelection();
+      if (route === 'opencode-native-provider') configureCaoRuntimeSelection('opencode');
       const protectedJarvis = agent('agent_m102_backend', 'jarvis', 'You are Jarvis.', true);
       const harness = kernelRuntimeBindings(protectedJarvis);
       const database = createJarvisDb(uniqueTestDbName('m102-protected-backend'), TEST_INDEXED_DB);
@@ -6695,13 +7534,16 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         const requests = mocks.runAgent.mock.calls.map(([request]) => request);
         expect(requests.map((request) => request.chatId)).toEqual([harness.chatId, harness.chatId]);
         expect(requests[0]!.requestId).not.toBe(requests[1]!.requestId);
-        expect(requests[1]!.messages.filter((message: { role: string; content: unknown }) => message.role === 'user').at(-1)?.content)
-          .toBe('Continue with the approved next step.');
+        expect(
+          requests[1]!.messages
+            .filter((message: { role: string; content: unknown }) => message.role === 'user')
+            .at(-1)?.content,
+        ).toBe('Continue with the approved next step.');
         for (const request of requests) {
           expect(request.backend).toBe(backend);
           expect(request.connectionId).toBe(
             route === 'opencode-native-provider'
-              ? 'openai-codex'
+              ? OPENAI_API_CONNECTION.id
               : GROQ_API_CONNECTION.id,
           );
           expect(request.agent.model.model).toBe(
@@ -6719,9 +7561,10 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     20000,
   );
 
-  function configureCaoRuntimeSelection() {
-    const selection = selectionFromOption('openai', 'gpt-5.6-terra', CODEX_CLI_CONNECTION);
-    setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
+  function configureCaoRuntimeSelection(backend: 'codex' | 'opencode' = 'codex') {
+    const connection = backend === 'codex' ? CODEX_CLI_CONNECTION : OPENAI_API_CONNECTION;
+    const selection = selectionFromOption('openai', 'gpt-5.6-terra', connection);
+    setDiscoveredConnectionModels(connection.id, [
       {
         id: 'gpt-5.6-terra',
         label: 'GPT-5.6 Terra',
@@ -6730,9 +7573,10 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       },
     ]);
     writeConnectionPickerStates({
-      'openai-codex': { available: true, auth: 'authenticated' },
+      [connection.id]: { available: true, auth: 'authenticated' },
     });
     useAuthStore.setState({ chatModelSelection: selection });
+    lockTestBackend(backend);
     return selection;
   }
 
@@ -6987,7 +7831,12 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(harness.bindings.appendMessage).toHaveBeenCalledWith({
       chat_id: harness.chatId,
       role: 'system',
-      parts: [{ kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' }],
+      parts: [
+        {
+          kind: 'text',
+          text: 'The reply could not finish. Check the selected model and request settings, then try again.',
+        },
+      ],
     });
   });
 
@@ -6997,7 +7846,15 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     const harness = kernelRuntimeBindings(protectedJarvis);
     const database = createJarvisDb(uniqueTestDbName('runtime-kernel-tokens'), TEST_INDEXED_DB);
     await database.open();
-    await database.chats.add({ id: harness.chatId, workspace_id: 'workspace_kernel_tokens' as never, title: 'Kernel tokens', mode: 'chat', active_agent_ids: [protectedJarvis.id], created_at: 1, updated_at: 1 });
+    await database.chats.add({
+      id: harness.chatId,
+      workspace_id: 'workspace_kernel_tokens' as never,
+      title: 'Kernel tokens',
+      mode: 'chat',
+      active_agent_ids: [protectedJarvis.id],
+      created_at: 1,
+      updated_at: 1,
+    });
     let providerRequestId: string | undefined;
     mocks.runAgent.mockImplementationOnce(async (providerInput) => {
       providerRequestId = providerInput.requestId;
@@ -7015,63 +7872,92 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         model: 'gpt-5.6-terra',
       };
     });
-    harness.bindings.getMessages.mockImplementation(async (): Promise<Message[]> => [
-      {
-        id: 'msg_kernel_user' as MessageId,
-        chat_id: harness.chatId,
-        role: 'user' as const,
-        parts: [{ kind: 'text' as const, text: 'Give a brief answer.' }],
-        created_at: 1,
-        updated_at: 1,
-      },
-      ...(providerRequestId
-        ? [
-            {
-              id: `msg_${providerRequestId}` as MessageId,
-              chat_id: harness.chatId,
-              role: 'assistant' as const,
-              parts: [{ kind: 'text' as const, text: 'SAVER_OK' }],
-              usage: {
-                input_tokens: 53609,
-                output_tokens: 6230,
-                cache_read_tokens: 1200,
-                cache_write_tokens: 30,
-                total_tokens: 59839,
-                cost_usd: 0.015716574,
-                provider: 'openai' as const,
-                model: 'gpt-5.6-terra',
+    harness.bindings.getMessages.mockImplementation(
+      async (): Promise<Message[]> => [
+        {
+          id: 'msg_kernel_user' as MessageId,
+          chat_id: harness.chatId,
+          role: 'user' as const,
+          parts: [{ kind: 'text' as const, text: 'Give a brief answer.' }],
+          created_at: 1,
+          updated_at: 1,
+        },
+        ...(providerRequestId
+          ? [
+              {
+                id: `msg_${providerRequestId}` as MessageId,
+                chat_id: harness.chatId,
+                role: 'assistant' as const,
+                parts: [{ kind: 'text' as const, text: 'SAVER_OK' }],
+                usage: {
+                  input_tokens: 53609,
+                  output_tokens: 6230,
+                  cache_read_tokens: 1200,
+                  cache_write_tokens: 30,
+                  total_tokens: 59839,
+                  cost_usd: 0.015716574,
+                  provider: 'openai' as const,
+                  model: 'gpt-5.6-terra',
+                },
+                created_at: 2,
+                updated_at: 2,
               },
-              created_at: 2,
-              updated_at: 2,
-            },
-          ]
-        : []),
-    ]);
+            ]
+          : []),
+      ],
+    );
     const disposeHost = await installKernelTestHost(database, 'runtime-kernel-tokens');
-    const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+    const stop = trackListener(
+      startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }),
+    );
     try {
-      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
-        accountId: 'runtime-test-account', chatId: harness.chatId, text: 'Give a brief answer.',
-        modelSelectionOverride: selection, tokenOptimizationMode: 'saver',
-        reasoningPreference: { mode: 'normal', effortOverride: 'high' }, automaticModelRoutingEligible: false,
-      } }));
-      await vi.waitFor(() => expect(harness.bindings.appendMessage, JSON.stringify(mocks.devLog.mock.calls.filter(([entry]) => entry.level === 'error'))).toHaveBeenCalledWith(expect.objectContaining({
-        role: 'system',
-        parts: [expect.objectContaining({
-          kind: 'token_optimization_receipt',
-          receipt: expect.objectContaining({ mode: 'saver', modelChanged: false }),
-          usage: expect.objectContaining({
-            actualInputTokens: 53609,
-            actualOutputTokens: 6230,
-            actualCachedInputTokens: 1200,
-            actualUsageSource: 'provider_reported',
-          }),
-        })],
-      })), { timeout: 5000 });
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            accountId: 'runtime-test-account',
+            chatId: harness.chatId,
+            text: 'Give a brief answer.',
+            modelSelectionOverride: selection,
+            tokenOptimizationMode: 'saver',
+            reasoningPreference: { mode: 'normal', effortOverride: 'high' },
+            automaticModelRoutingEligible: false,
+          },
+        }),
+      );
+      await vi.waitFor(
+        () =>
+          expect(
+            harness.bindings.appendMessage,
+            JSON.stringify(mocks.devLog.mock.calls.filter(([entry]) => entry.level === 'error')),
+          ).toHaveBeenCalledWith(
+            expect.objectContaining({
+              role: 'system',
+              parts: [
+                expect.objectContaining({
+                  kind: 'token_optimization_receipt',
+                  receipt: expect.objectContaining({ mode: 'saver', modelChanged: false }),
+                  usage: expect.objectContaining({
+                    actualInputTokens: 53609,
+                    actualOutputTokens: 6230,
+                    actualCachedInputTokens: 1200,
+                    actualUsageSource: 'provider_reported',
+                  }),
+                }),
+              ],
+            }),
+          ),
+        { timeout: 5000 },
+      );
       expect(mocks.runAgent).toHaveBeenCalledOnce();
-      expect(mocks.runAgent.mock.calls[0]![0].compiledPrompt.systemText).not.toContain('LEGACY SYSTEM PROMPT');
+      expect(mocks.runAgent.mock.calls[0]![0].compiledPrompt.systemText).not.toContain(
+        'LEGACY SYSTEM PROMPT',
+      );
     } finally {
-      stop(); await stop.whenIdle(); disposeHost(); database.close(); await database.delete();
+      stop();
+      await stop.whenIdle();
+      disposeHost();
+      database.close();
+      await database.delete();
     }
   }, 15000);
 
@@ -7311,7 +8197,13 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
   }, 15_000);
 
   it('fails an unsafe grounded audit closed through the installed kernel before any preview is visible', async () => {
-    mocks.listOpenCodeModels.mockResolvedValue([{ id: 'opencode-go/deepseek-v4-flash-vision-exp', label: 'DeepSeek fixture', variants: ['medium'] }]);
+    mocks.listOpenCodeModels.mockResolvedValue([
+      {
+        id: 'opencode-go/deepseek-v4-flash-vision-exp',
+        label: 'DeepSeek fixture',
+        variants: ['medium'],
+      },
+    ]);
     const openCodeConnection = PROVIDER_CONNECTIONS.find(
       (connection) => connection.id === 'opencode-cli',
     )!;
@@ -7659,22 +8551,65 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       expect(providerInput.interactionMode).toBe('agent');
       expect(providerInput.onReasoning).toEqual(expect.any(Function));
       providerInput.onReasoning?.('Live provider summary. '.repeat(300), 'replace');
-      expect(useChatActivityStore.getState().eventsByChat[harness.chatId]?.find(event => event.category === 'thinking')?.detail)
-        .toBe('Live provider summary. '.repeat(300));
+      expect(
+        useChatActivityStore
+          .getState()
+          .eventsByChat[harness.chatId]?.find((event) => event.category === 'thinking')?.detail,
+      ).toBe('Live provider summary. '.repeat(300));
+      providerInput.onProviderWarning?.('Usage limit reached. OpenCode is retrying.');
+      expect(getChatActivityEvents(harness.chatId)).toContainEqual(
+        expect.objectContaining({
+          status: 'running',
+          category: 'response',
+          title: 'Usage limit reached. OpenCode is retrying.',
+        }),
+      );
       expect(providerInput.onApprovalRequested).toEqual(expect.any(Function));
       await providerInput.onHarnessSessionBound?.({ sessionId: 'ses_installed_kernel_host' });
-      await providerInput.onApprovalRequested?.({ id: 'approval_installed_kernel_host', sessionId: 'ses_installed_kernel_host', capability: 'terminal.spawn', title: 'Open terminal' });
-      const childApproval = { id: 'approval_child', sessionId: 'ses_child', capability: 'terminal.spawn' as const, title: 'Review terminal' };
-      await expect(providerInput.onApprovalRequested?.(childApproval)).rejects.toThrow('kernel_provider_approval_scope_unavailable');
+      await providerInput.onApprovalRequested?.({
+        id: 'approval_installed_kernel_host',
+        sessionId: 'ses_installed_kernel_host',
+        capability: 'terminal.spawn',
+        title: 'Open terminal',
+      });
+      const childApproval = {
+        id: 'approval_child',
+        sessionId: 'ses_child',
+        capability: 'terminal.spawn' as const,
+        title: 'Review terminal',
+      };
+      await expect(providerInput.onApprovalRequested?.(childApproval)).rejects.toThrow(
+        'kernel_provider_approval_scope_unavailable',
+      );
       mocks.isActiveOpenCodeChildApproval.mockReturnValueOnce(true);
       await providerInput.onApprovalRequested?.(childApproval);
-      expect(mocks.isActiveOpenCodeChildApproval).toHaveBeenCalledWith('ses_installed_kernel_host', childApproval);
-      expect(harness.bindings.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
-        parts: [expect.objectContaining({kind: 'permission_request', request: expect.objectContaining({id: 'approval_child', status: 'pending'})})],
-      }));
-      expect(harness.bindings.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
-        parts: [expect.objectContaining({kind: 'permission_request', request: expect.objectContaining({id: 'approval_installed_kernel_host', status: 'pending'})})],
-      }));
+      expect(mocks.isActiveOpenCodeChildApproval).toHaveBeenCalledWith(
+        'ses_installed_kernel_host',
+        childApproval,
+      );
+      expect(harness.bindings.appendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parts: [
+            expect.objectContaining({
+              kind: 'permission_request',
+              request: expect.objectContaining({ id: 'approval_child', status: 'pending' }),
+            }),
+          ],
+        }),
+      );
+      expect(harness.bindings.appendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parts: [
+            expect.objectContaining({
+              kind: 'permission_request',
+              request: expect.objectContaining({
+                id: 'approval_installed_kernel_host',
+                status: 'pending',
+              }),
+            }),
+          ],
+        }),
+      );
       expect(providerInput.onQuestionRequested).toEqual(expect.any(Function));
       await providerInput.onQuestionRequested?.(installedHostQuestion);
       expect(providerInput.onToolActivity).toEqual(expect.any(Function));
@@ -7684,43 +8619,95 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         status: 'started',
         callId: 'opencode-tool-1',
         fileLabel: 'game.js',
-        details: { arguments: { path: 'game.js' }, output: { text: 'live file content', mode: 'replace', complete: false, omittedBytes: 0 } },
+        details: {
+          arguments: { path: 'game.js' },
+          output: { text: 'live file content', mode: 'replace', complete: false, omittedBytes: 0 },
+        },
       });
-      expect(getPreview(providerInput.accountId, providerInput.protectedAttempt.runId)?.segments?.find(part => part.kind === 'tool')).toMatchObject({
+      expect(
+        getPreview(providerInput.accountId, providerInput.protectedAttempt.runId)?.segments?.find(
+          (part) => part.kind === 'tool',
+        ),
+      ).toMatchObject({
         details: { arguments: { path: 'game.js' }, output: { text: 'live file content' } },
       });
-      expect(getPreview(providerInput.accountId, providerInput.protectedAttempt.runId)).toMatchObject({
+      expect(
+        getPreview(providerInput.accountId, providerInput.protectedAttempt.runId),
+      ).toMatchObject({
         text: '',
         segments: expect.arrayContaining([
-          expect.objectContaining({ kind: 'tool', id: 'opencode-tool-1', name: 'read', status: 'started', fileLabel: 'game.js' }),
+          expect.objectContaining({
+            kind: 'tool',
+            id: 'opencode-tool-1',
+            name: 'read',
+            status: 'started',
+            fileLabel: 'game.js',
+          }),
         ]),
       });
       expect(
         useChatActivityStore
           .getState()
-          .eventsByChat[harness.chatId]?.some(
-            (event) => event.kind === 'tool' && event.status === 'running',
-          ),
+          .eventsByChat[
+            harness.chatId
+          ]?.some((event) => event.kind === 'tool' && event.status === 'running'),
       ).toBe(true);
       await providerInput.onPublicTimelineSnapshot?.({
         finalText: '',
-        timeline: [{ kind: 'reasoning', text: 'Checking both fixture files.' },
-          {kind: 'tool_call', tool: 'edit', call_id: 'edit-fixture', args: {path: 'src/alpha.txt'}},
-          {kind: 'tool_result', call_id: 'edit-fixture', result: {status: 'completed', diff: '-old\n+new'}},
-          {kind: 'tool_call', tool: 'task', call_id: 'task-a', args: {nativeTask: {name: 'Read alpha', sessionId: 'child-a'}}},
-          {kind: 'tool_call', tool: 'task', call_id: 'task-b', args: {nativeTask: {name: 'Read beta', sessionId: 'child-b'}}},
-          {kind: 'tool_result', call_id: 'task-b', error: 'Tool failed'},
+        timeline: [
+          { kind: 'reasoning', text: 'Checking both fixture files.' },
+          {
+            kind: 'tool_call',
+            tool: 'edit',
+            call_id: 'edit-fixture',
+            args: { path: 'src/alpha.txt' },
+          },
+          {
+            kind: 'tool_result',
+            call_id: 'edit-fixture',
+            result: { status: 'completed', diff: '-old\n+new' },
+          },
+          {
+            kind: 'tool_call',
+            tool: 'task',
+            call_id: 'task-a',
+            args: { nativeTask: { name: 'Read alpha', sessionId: 'child-a' } },
+          },
+          {
+            kind: 'tool_call',
+            tool: 'task',
+            call_id: 'task-b',
+            args: { nativeTask: { name: 'Read beta', sessionId: 'child-b' } },
+          },
+          { kind: 'tool_result', call_id: 'task-b', error: 'Tool failed' },
         ],
       });
       expect(useChatActivityStore.getState().eventsByChat[harness.chatId]).toEqual(
-        expect.arrayContaining([expect.objectContaining({
-          category: 'thinking', title: 'Thinking', detail: 'Checking both fixture files.', status: 'running',
-        }), expect.objectContaining({
-          filePath: 'src/alpha.txt', diff: '-old\n+new', addedLines: 1, removedLines: 1, status: 'done',
-        })]),
+        expect.arrayContaining([
+          expect.objectContaining({
+            category: 'thinking',
+            title: 'Thinking',
+            detail: 'Checking both fixture files.',
+            status: 'running',
+          }),
+          expect.objectContaining({
+            filePath: 'src/alpha.txt',
+            diff: '-old\n+new',
+            addedLines: 1,
+            removedLines: 1,
+            status: 'done',
+          }),
+        ]),
       );
-      expect(useChatActivityStore.getState().eventsByChat[harness.chatId]?.filter(event => event.nativeTask)
-        .map(event => [event.nativeTask?.sessionId, event.status])).toEqual([['child-a', 'running'], ['child-b', 'error']]);
+      expect(
+        useChatActivityStore
+          .getState()
+          .eventsByChat[harness.chatId]?.filter((event) => event.nativeTask)
+          .map((event) => [event.nativeTask?.sessionId, event.status]),
+      ).toEqual([
+        ['child-a', 'running'],
+        ['child-b', 'error'],
+      ]);
       await providerInput.onPublicTimelineSnapshot?.({
         finalText: 'The installed kernel host returned a partial response, Sir.',
         timeline: [
@@ -7742,12 +8729,30 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         useChatActivityStore
           .getState()
           .eventsByChat[harness.chatId]?.filter((event) => event.kind === 'tool'),
-      ).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'done', subtitle: 'game.js' }), expect.objectContaining({ status: 'done', subtitle: 'src/alpha.txt' })]));
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ status: 'done', subtitle: 'game.js' }),
+          expect.objectContaining({ status: 'done', subtitle: 'src/alpha.txt' }),
+        ]),
+      );
       providerInput.onChunk?.({ delta: 'START_P4F8', streamPartId: 'preview-1' });
-      shortPublicPreview.current = getPreview(providerInput.accountId, providerInput.protectedAttempt.runId);
-      providerInput.onChunk?.({delta:'I am checking the file.',streamPartId:'preview-1',mode:'replace'});
-      providerInput.onChunk?.({delta:'I checked the file.',streamPartId:'preview-1',mode:'replace'});
-      expect(getPreview(providerInput.accountId, providerInput.protectedAttempt.runId)?.text).toBe('I checked the file.');
+      shortPublicPreview.current = getPreview(
+        providerInput.accountId,
+        providerInput.protectedAttempt.runId,
+      );
+      providerInput.onChunk?.({
+        delta: 'I am checking the file.',
+        streamPartId: 'preview-1',
+        mode: 'replace',
+      });
+      providerInput.onChunk?.({
+        delta: 'I checked the file.',
+        streamPartId: 'preview-1',
+        mode: 'replace',
+      });
+      expect(getPreview(providerInput.accountId, providerInput.protectedAttempt.runId)?.text).toBe(
+        'I checked the file.',
+      );
       providerInput.onChunk?.({
         delta: 'The installed kernel host returned a partial response, Sir.',
         done: false,
@@ -7808,7 +8813,10 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     const liveCategories: string[] = [];
     const unsubscribeActivity = useChatActivityStore.subscribe((state) => {
       const runningAgent = state.eventsByChat[harness.chatId]?.find(
-        (event) => event.kind === 'agent' && event.agentId === protectedJarvis.id && event.status === 'running',
+        (event) =>
+          event.kind === 'agent' &&
+          event.agentId === protectedJarvis.id &&
+          event.status === 'running',
       );
       if (runningAgent?.category && liveCategories.at(-1) !== runningAgent.category) {
         liveCategories.push(runningAgent.category);
@@ -7830,7 +8838,11 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         .equals(harness.chatId)
         .first();
       expect(shortPublicPreview.current?.text).toBe('START_P4F8');
-      expect(shortPublicPreview.current?.segments).toContainEqual({ kind: 'text', id: 'preview-1', text: 'START_P4F8' });
+      expect(shortPublicPreview.current?.segments).toContainEqual({
+        kind: 'text',
+        id: 'preview-1',
+        text: 'START_P4F8',
+      });
       expect(shortPublicPreview.current?.segments).toContainEqual({
         kind: 'reasoning',
         id: 'reasoning-1',
@@ -8817,7 +9829,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
 
   it('exposes Stop during preparation and cancels unresolved context without dispatching', async () => {
     const errorToast = vi.spyOn(toast, 'error');
-    const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Always answer with APPLE.'));
+    const harness = kernelRuntimeBindings(
+      agent('agent_apple', 'apple', 'Always answer with APPLE.'),
+    );
     const contextGate = deferred<Awaited<ReturnType<typeof mocks.resolveJarvisContext>>>();
     mocks.resolveJarvisContext.mockReturnValueOnce(contextGate.promise);
     const states: string[] = [];
@@ -8825,14 +9839,22 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     window.addEventListener('jarvis:run-state', onState);
     const stop = trackListener(startRuntimeListener(harness.bindings));
     try {
-      window.dispatchEvent(new CustomEvent('jarvis:send', {
-        detail: { chatId: harness.chatId, text: 'Prepare a reply.', cancellationKey: 'msg_kernel_user' },
-      }));
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId: harness.chatId,
+            text: 'Prepare a reply.',
+            cancellationKey: 'msg_kernel_user',
+          },
+        }),
+      );
       await vi.waitFor(() => expect(mocks.resolveJarvisContext).toHaveBeenCalled());
       expect(states.at(-1)).toBe('running');
-      window.dispatchEvent(new CustomEvent('jarvis:cancel', {
-        detail: { chatId: harness.chatId },
-      }));
+      window.dispatchEvent(
+        new CustomEvent('jarvis:cancel', {
+          detail: { chatId: harness.chatId },
+        }),
+      );
       await vi.waitFor(() => expect(states.at(-1)).toBe('cancelled'));
       await stop.whenIdle();
       expect(mocks.runAgent).not.toHaveBeenCalled();
@@ -8848,8 +9870,37 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     }
   });
 
+  it.each([undefined, 'protected-cao-authority'])(
+    'requests only an ordinary composer continuation after restart (%s)',
+    (caoExpectedAuthority) => {
+      const harness = kernelRuntimeBindings(
+        agent('agent_apple', 'apple', 'Always answer with APPLE.'),
+      );
+      const stop = trackListener(startRuntimeListener(harness.bindings));
+      const onUnavailable = vi.fn();
+      try {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:resume', {
+            detail: {
+              chatId: harness.chatId,
+              cancellationKey: 'resume_after_restart',
+              onUnavailable,
+              caoExpectedAuthority,
+            },
+          }),
+        );
+        expect(onUnavailable).toHaveBeenCalledTimes(caoExpectedAuthority ? 0 : 1);
+        expect(mocks.runAgent).not.toHaveBeenCalled();
+      } finally {
+        stop();
+      }
+    },
+  );
+
   it('retains the original task across repeated resumes cancelled before provider dispatch', async () => {
-    const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Always answer with APPLE.'));
+    const harness = kernelRuntimeBindings(
+      agent('agent_apple', 'apple', 'Always answer with APPLE.'),
+    );
     const pending = deferred<Awaited<ReturnType<typeof mocks.resolveJarvisContext>>>();
     mocks.resolveJarvisContext.mockReturnValue(pending.promise);
     const stop = trackListener(startRuntimeListener(harness.bindings));
@@ -8858,16 +9909,22 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     window.addEventListener('jarvis:send', observe);
     const original = 'Write a TypeScript CSV parser with quoted-field support.';
     try {
-      window.dispatchEvent(new CustomEvent('jarvis:send', {
-        detail: { chatId: harness.chatId, text: original, cancellationKey: 'msg_kernel_user' },
-      }));
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: { chatId: harness.chatId, text: original, cancellationKey: 'msg_kernel_user' },
+        }),
+      );
       for (let round = 0; round < 2; round++) {
         await vi.waitFor(() => expect(mocks.resolveJarvisContext).toHaveBeenCalledTimes(round + 1));
-        window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { chatId: harness.chatId } }));
+        window.dispatchEvent(
+          new CustomEvent('jarvis:cancel', { detail: { chatId: harness.chatId } }),
+        );
         await stop.whenIdle();
-        window.dispatchEvent(new CustomEvent('jarvis:resume', {
-          detail: { chatId: harness.chatId, cancellationKey: `resume_${round}` },
-        }));
+        window.dispatchEvent(
+          new CustomEvent('jarvis:resume', {
+            detail: { chatId: harness.chatId, cancellationKey: `resume_${round}` },
+          }),
+        );
         expect(sent.at(-1)?.text).toContain(original);
         expect(sent.at(-1)?.text.match(/Write a TypeScript CSV parser/g)).toHaveLength(1);
       }
@@ -8926,6 +9983,34 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       }),
     );
     expect(mocks.runAgent).not.toHaveBeenCalled();
+  });
+
+  it('preserves a native string rejection with bounded redacted details', async () => {
+    const selectedAgent = agent('agent_apple', 'apple', 'Always answer with APPLE.');
+    const harness = kernelRuntimeBindings(selectedAgent);
+    mocks.runAgent.mockRejectedValueOnce(
+      'Native startup failed: token=private-value ' + 'x'.repeat(3000),
+    );
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: {
+          chatId: harness.chatId,
+          text: 'Report the native error.',
+          cancellationKey: 'msg_kernel_user' as MessageId,
+        },
+      }),
+    );
+    await stop.whenIdle();
+    const update = harness.updateMessage.mock.calls.find(([, value]) =>
+      JSON.stringify(value.parts).includes('Native startup failed:'),
+    );
+    expect(update).toBeDefined();
+    const parts = JSON.stringify(update?.[1].parts);
+    expect(parts).toContain('token=[REDACTED]');
+    expect(parts).not.toContain('private-value');
+    expect(parts.length).toBeLessThan(2150);
+    expect(useAgentStore.getState().runStates[selectedAgent.id]).toBe('error');
   });
 
   it('contains an error object whose name getter throws without breaking listener cleanup', async () => {
@@ -9388,30 +10473,57 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     );
   });
 
-  it.each(['exact', 'wrong provider', 'wrong model'] as const)('retains only exact reported usage on an ordinary failed reply: %s', async (identity) => {
-    const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Answer clearly.'));
-    const gate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
-    let input!: Parameters<typeof mocks.runAgent>[0];
-    mocks.runAgent.mockImplementationOnce(value => { input = value; return gate.promise; });
-    const stop = trackListener(startRuntimeListener(harness.bindings));
-    try {
-      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
-        chatId: harness.chatId, text: 'Inspect the game.', cancellationKey: 'msg_kernel_user',
-      } }));
-      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
-      input.onProviderUsage?.({ requestId: input.requestId!, connectionId: input.connectionId!,
-        providerId: identity === 'wrong provider' ? 'foreign-provider' : input.agent.model.provider,
-        modelId: identity === 'wrong model' ? 'foreign-model' : input.agent.model.model,
-        usage: { capturedAt: Date.now(), totalTokens: { value: 23, provenance: 'provider-reported' } },
+  it.each(['exact', 'wrong provider', 'wrong model'] as const)(
+    'retains only exact reported usage on an ordinary failed reply: %s',
+    async (identity) => {
+      const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Answer clearly.'));
+      const gate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
+      let input!: Parameters<typeof mocks.runAgent>[0];
+      mocks.runAgent.mockImplementationOnce((value) => {
+        input = value;
+        return gate.promise;
       });
-      gate.reject(new ProviderRuntimeError({ message: 'Provider stopped.', code: 'tool_failed' }));
-      await stop.whenIdle();
-      if (identity === 'exact') expect(harness.updateMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-        usage: expect.objectContaining({ total_tokens: 23 }),
-      }));
-      else expect(JSON.stringify(harness.updateMessage.mock.calls)).not.toContain('"usage"');
-    } finally { stop(); await stop.whenIdle(); }
-  });
+      const stop = trackListener(startRuntimeListener(harness.bindings));
+      try {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:send', {
+            detail: {
+              chatId: harness.chatId,
+              text: 'Inspect the game.',
+              cancellationKey: 'msg_kernel_user',
+            },
+          }),
+        );
+        await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+        input.onProviderUsage?.({
+          requestId: input.requestId!,
+          connectionId: input.connectionId!,
+          providerId:
+            identity === 'wrong provider' ? 'foreign-provider' : input.agent.model.provider,
+          modelId: identity === 'wrong model' ? 'foreign-model' : input.agent.model.model,
+          usage: {
+            capturedAt: Date.now(),
+            totalTokens: { value: 23, provenance: 'provider-reported' },
+          },
+        });
+        gate.reject(
+          new ProviderRuntimeError({ message: 'Provider stopped.', code: 'tool_failed' }),
+        );
+        await stop.whenIdle();
+        if (identity === 'exact')
+          expect(harness.updateMessage).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.objectContaining({
+              usage: expect.objectContaining({ total_tokens: 23 }),
+            }),
+          );
+        else expect(JSON.stringify(harness.updateMessage.mock.calls)).not.toContain('"usage"');
+      } finally {
+        stop();
+        await stop.whenIdle();
+      }
+    },
+  );
 
   it('publishes a queued text chunk within the interactive UI budget by default', async () => {
     const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Answer clearly.'));
@@ -9964,27 +11076,51 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
 
   it('settles the visible preparation activity when the selected model catalog is unavailable', async () => {
     const connection = PROVIDER_CONNECTIONS.find((item) => item.id === 'opencode-cli')!;
-    useAuthStore.setState({ chatModelSelection: selectionFromOption(
-      connection.providerId as ProviderId, 'opencode-go/deepseek-v4-flash-vision-exp', connection,
-    ) });
+    useAuthStore.setState({
+      chatModelSelection: selectionFromOption(
+        connection.providerId as ProviderId,
+        'opencode-go/deepseek-v4-flash-vision-exp',
+        connection,
+      ),
+    });
     mocks.listOpenCodeModels.mockResolvedValue([]);
     const harness = kernelRuntimeBindings(agent('agent_apple', 'apple', 'Answer clearly.'));
     trackListener(startRuntimeListener(harness.bindings));
-    window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
-      chatId: harness.chatId, text: 'Build a CSV tool.', cancellationKey: 'catalog-failure',
-      reasoningPreference: { mode: 'token-saver', effortOverride: null },
-    } }));
-    await vi.waitFor(() => expect(mocks.devLog).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'AI setup failed before dispatch', detail: expect.objectContaining({ stage: 'model' }),
-    })));
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: {
+          chatId: harness.chatId,
+          text: 'Build a CSV tool.',
+          cancellationKey: 'catalog-failure',
+          reasoningPreference: { mode: 'token-saver', effortOverride: null },
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mocks.devLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'AI setup failed before dispatch',
+          detail: expect.objectContaining({ stage: 'model' }),
+        }),
+      ),
+    );
     expect(mocks.runAgent).not.toHaveBeenCalled();
-    expect(getChatActivityEvents(harness.chatId).filter((event) => event.status === 'running')).toEqual([]);
+    expect(
+      getChatActivityEvents(harness.chatId).filter((event) => event.status === 'running'),
+    ).toEqual([]);
     expect(getChatActivityEvents(harness.chatId).at(-1)?.status).toBe('error');
-    expect(harness.bindings.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
-      chat_id: harness.chatId,
-      role: 'system',
-      parts: [{ kind: 'text', text: 'The reply could not start. Check the selected model and request settings, then try again.' }],
-    }));
+    expect(harness.bindings.appendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: harness.chatId,
+        role: 'system',
+        parts: [
+          {
+            kind: 'text',
+            text: 'The reply could not start. Check the selected model and request settings, then try again.',
+          },
+        ],
+      }),
+    );
   });
 
   it('releases early cancellation ownership when agent resolution rejects', async () => {
@@ -10716,95 +11852,203 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     }
   });
 
-  it.each(['saved', 'storage failure', 'account changed'])('settles canonical failure notices safely: %s', async (scenario) => {
-    const selectedAgent = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
-    const harness = kernelRuntimeBindings(selectedAgent);
-    const database = createJarvisDb(uniqueTestDbName('canonical-failure-notice'), TEST_INDEXED_DB);
-    mocks.runAgent.mockImplementationOnce(async () => {
-      if (scenario === 'account changed') useAuthStore.setState({ localUserId: 'different-account' });
-      throw new Error('private provider diagnostic must not appear');
-    });
-    if (scenario === 'storage failure') harness.bindings.appendMessage.mockRejectedValueOnce(new Error('storage unavailable'));
-    const disposeHost = await installKernelTestHost(database, 'canonical-failure-notice');
-    const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
-    try {
-      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
-        chatId: harness.chatId, text: 'Answer this current request.', cancellationKey: 'msg_kernel_user',
-      } }));
-      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
-      await vi.waitFor(() => expect(getChatActivityEvents(harness.chatId).at(-1)?.status).toBe('error'));
-      if (scenario === 'account changed') expect(harness.bindings.appendMessage).not.toHaveBeenCalled();
-      else expect(harness.bindings.appendMessage).toHaveBeenCalledWith({
-          chat_id: harness.chatId,
-          role: 'system',
-          parts: [{ kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' }],
-        });
-      expect(JSON.stringify(harness.bindings.appendMessage.mock.calls)).not.toContain('private provider diagnostic');
-      expect(harness.bindings.appendMessage.mock.calls.filter(([message]) => message.role === 'assistant')).toHaveLength(0);
-      expect(useAgentStore.getState().runStates[selectedAgent.id]).toBe('error');
-    } finally {
-      stop();
-      await stop.whenIdle();
-      disposeHost();
-      database.close();
-      await database.delete();
-    }
-  });
+  it.each(['saved', 'storage failure', 'account changed'])(
+    'settles canonical failure notices safely: %s',
+    async (scenario) => {
+      const selectedAgent = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
+      const harness = kernelRuntimeBindings(selectedAgent);
+      const database = createJarvisDb(
+        uniqueTestDbName('canonical-failure-notice'),
+        TEST_INDEXED_DB,
+      );
+      mocks.runAgent.mockImplementationOnce(async () => {
+        if (scenario === 'account changed')
+          useAuthStore.setState({ localUserId: 'different-account' });
+        throw new Error('private provider diagnostic must not appear');
+      });
+      if (scenario === 'storage failure')
+        harness.bindings.appendMessage.mockRejectedValueOnce(new Error('storage unavailable'));
+      const disposeHost = await installKernelTestHost(database, 'canonical-failure-notice');
+      const stop = trackListener(
+        startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }),
+      );
+      try {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:send', {
+            detail: {
+              chatId: harness.chatId,
+              text: 'Answer this current request.',
+              cancellationKey: 'msg_kernel_user',
+            },
+          }),
+        );
+        await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+        await vi.waitFor(() =>
+          expect(getChatActivityEvents(harness.chatId).at(-1)?.status).toBe('error'),
+        );
+        if (scenario === 'account changed')
+          expect(harness.bindings.appendMessage).not.toHaveBeenCalled();
+        else
+          expect(harness.bindings.appendMessage).toHaveBeenCalledWith({
+            chat_id: harness.chatId,
+            role: 'system',
+            parts: [
+              {
+                kind: 'text',
+                text: 'The reply could not finish. Check the selected model and request settings, then try again.',
+              },
+            ],
+          });
+        expect(JSON.stringify(harness.bindings.appendMessage.mock.calls)).not.toContain(
+          'private provider diagnostic',
+        );
+        expect(
+          harness.bindings.appendMessage.mock.calls.filter(
+            ([message]) => message.role === 'assistant',
+          ),
+        ).toHaveLength(0);
+        expect(useAgentStore.getState().runStates[selectedAgent.id]).toBe('error');
+      } finally {
+        stop();
+        await stop.whenIdle();
+        disposeHost();
+        database.close();
+        await database.delete();
+      }
+    },
+  );
 
-  it.each(['failed', 'cancelled', 'secret', 'account changed', 'usage and tools', 'usage only', 'wrong usage identity'] as const)(
-    'retains only safe public partial prose for an interrupted canonical chat: %s', async (scenario) => {
+  it.each([
+    'failed',
+    'cancelled',
+    'secret',
+    'account changed',
+    'usage and tools',
+    'usage only',
+    'wrong usage identity',
+  ] as const)(
+    'retains only safe public partial prose for an interrupted canonical chat: %s',
+    async (scenario) => {
       const selectedAgent = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
       const harness = kernelRuntimeBindings(selectedAgent);
       const database = createJarvisDb(uniqueTestDbName('canonical-partial'), TEST_INDEXED_DB);
       await database.open();
-      await database.chats.add({ id: harness.chatId, workspace_id: 'workspace_partial' as never,
-        title: 'Partial response', mode: 'chat', active_agent_ids: [selectedAgent.id], created_at: 1, updated_at: 1 });
+      await database.chats.add({
+        id: harness.chatId,
+        workspace_id: 'workspace_partial' as never,
+        title: 'Partial response',
+        mode: 'chat',
+        active_agent_ids: [selectedAgent.id],
+        created_at: 1,
+        updated_at: 1,
+      });
       const providerGate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
       let providerInput!: Parameters<typeof mocks.runAgent>[0];
-      mocks.runAgent.mockImplementationOnce(input => { providerInput = input; return providerGate.promise; });
+      mocks.runAgent.mockImplementationOnce((input) => {
+        providerInput = input;
+        return providerGate.promise;
+      });
       const disposeHost = await installKernelTestHost(database, 'canonical-partial');
-      const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+      const stop = trackListener(
+        startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }),
+      );
       try {
-        window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
-          chatId: harness.chatId, text: 'Answer this current request.', cancellationKey: 'msg_partial_user',
-        } }));
+        window.dispatchEvent(
+          new CustomEvent('jarvis:send', {
+            detail: {
+              chatId: harness.chatId,
+              text: 'Answer this current request.',
+              cancellationKey: 'msg_partial_user',
+            },
+          }),
+        );
         await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
-        if (scenario !== 'usage only') providerInput.onChunk?.({ delta: scenario === 'secret' ? 'The api_key=private-value.' : 'The answer began.', first: true });
-        if (['usage and tools', 'usage only', 'wrong usage identity', 'account changed'].includes(scenario)) {
+        if (scenario !== 'usage only')
+          providerInput.onChunk?.({
+            delta: scenario === 'secret' ? 'The api_key=private-value.' : 'The answer began.',
+            first: true,
+          });
+        if (
+          ['usage and tools', 'usage only', 'wrong usage identity', 'account changed'].includes(
+            scenario,
+          )
+        ) {
           providerInput.onProviderUsage?.({
-            requestId: scenario === 'wrong usage identity' ? 'other-request' : providerInput.requestId!,
-            connectionId: providerInput.connectionId!, providerId: providerInput.agent.model.provider, modelId: providerInput.agent.model.model,
-            usage: { capturedAt: Date.now(), inputTokens: { value: 17, provenance: 'provider-reported' },
-              outputTokens: { value: 3, provenance: 'provider-reported' }, totalTokens: { value: 23, provenance: 'provider-reported' } },
+            requestId:
+              scenario === 'wrong usage identity' ? 'other-request' : providerInput.requestId!,
+            connectionId: providerInput.connectionId!,
+            providerId: providerInput.agent.model.provider,
+            modelId: providerInput.agent.model.model,
+            usage: {
+              capturedAt: Date.now(),
+              inputTokens: { value: 17, provenance: 'provider-reported' },
+              outputTokens: { value: 3, provenance: 'provider-reported' },
+              totalTokens: { value: 23, provenance: 'provider-reported' },
+            },
           });
         }
         if (scenario === 'usage and tools') {
           providerInput.onReasoning?.('Public reasoning summary.', 'append');
-          await providerInput.onToolActivity?.({ name: 'read', callId: 'failed-read', status: 'failed',
-            details: { output: { text: 'Permission denied', mode: 'replace', complete: true, omittedBytes: 0 } } });
+          await providerInput.onToolActivity?.({
+            name: 'read',
+            callId: 'failed-read',
+            status: 'failed',
+            details: {
+              output: {
+                text: 'Permission denied',
+                mode: 'replace',
+                complete: true,
+                omittedBytes: 0,
+              },
+            },
+          });
         }
-        if (scenario === 'account changed') useAuthStore.setState({ localUserId: 'different-account' });
+        if (scenario === 'account changed')
+          useAuthStore.setState({ localUserId: 'different-account' });
         if (scenario === 'cancelled') {
-          window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { messageId: 'msg_partial_user' } }));
+          window.dispatchEvent(
+            new CustomEvent('jarvis:cancel', { detail: { messageId: 'msg_partial_user' } }),
+          );
           await vi.waitFor(() => expect(providerInput.signal.aborted).toBe(true));
         }
-        providerGate.reject(new ProviderRuntimeError({ message: 'The provider stopped.', code: 'RATE_LIMIT', retryable: true }));
+        providerGate.reject(
+          new ProviderRuntimeError({
+            message: 'The provider stopped.',
+            code: 'RATE_LIMIT',
+            retryable: true,
+          }),
+        );
         await stop.whenIdle();
-        const assistants = (await database.messages.toArray()).filter(message => message.role === 'assistant');
+        const assistants = (await database.messages.toArray()).filter(
+          (message) => message.role === 'assistant',
+        );
         if (scenario !== 'secret' && scenario !== 'account changed') {
           expect(assistants).toHaveLength(1);
           const status = scenario === 'cancelled' ? 'cancelled' : 'failed';
-          expect(JSON.stringify(assistants[0]?.parts)).toContain(`[Incomplete response: generation ${status}.]`);
-          if (scenario !== 'usage only') expect(JSON.stringify(assistants[0]?.parts)).toContain('The answer began.');
+          expect(JSON.stringify(assistants[0]?.parts)).toContain(
+            `[Incomplete response: generation ${status}.]`,
+          );
+          if (scenario !== 'usage only')
+            expect(JSON.stringify(assistants[0]?.parts)).toContain('The answer began.');
           if (scenario === 'usage and tools' || scenario === 'usage only') {
-            expect(assistants[0]?.usage).toMatchObject({ input_tokens: 17, output_tokens: 3, total_tokens: 23 });
+            expect(assistants[0]?.usage).toMatchObject({
+              input_tokens: 17,
+              output_tokens: 3,
+              total_tokens: 23,
+            });
           } else expect(assistants[0]?.usage).toBeUndefined();
           if (scenario === 'usage and tools') {
-            expect(assistants[0]?.parts).toEqual(expect.arrayContaining([
-              { kind: 'reasoning', text: 'Public reasoning summary.' },
-              expect.objectContaining({ kind: 'tool_call', call_id: 'failed-read' }),
-              expect.objectContaining({ kind: 'tool_result', call_id: 'failed-read', error: expect.any(String) }),
-            ]));
+            expect(assistants[0]?.parts).toEqual(
+              expect.arrayContaining([
+                { kind: 'reasoning', text: 'Public reasoning summary.' },
+                expect.objectContaining({ kind: 'tool_call', call_id: 'failed-read' }),
+                expect.objectContaining({
+                  kind: 'tool_result',
+                  call_id: 'failed-read',
+                  error: expect.any(String),
+                }),
+              ]),
+            );
           }
           expect((await database.jarvis_runs.toArray()).at(-1)?.status).toBe(status);
           expect(await database.jarvis_artifacts.count()).toBe(0);
@@ -10839,32 +12083,52 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       });
     });
     const disposeHost = await installKernelTestHost(database, 'canonical-provider-error');
-    const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+    const stop = trackListener(
+      startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }),
+    );
     try {
-      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
-        chatId: harness.chatId, text: 'Answer this current request.', cancellationKey: 'msg_provider_error',
-      } }));
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId: harness.chatId,
+            text: 'Answer this current request.',
+            cancellationKey: 'msg_provider_error',
+          },
+        }),
+      );
       await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
-      await vi.waitFor(() => expect(getChatActivityEvents(harness.chatId).at(-1)?.status).toBe('error'));
-      expect(harness.bindings.appendMessage).toHaveBeenCalledWith(expect.objectContaining({
-        chat_id: harness.chatId,
-        role: 'system',
-        parts: expect.arrayContaining([
-          { kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' },
-          { kind: 'provider_error', error: expect.objectContaining({
-            message: 'Quota rejected; api_key=[REDACTED]',
-            code: 'QUOTA_EXCEEDED',
-            providerId: 'groq',
-            modelId: 'llama-3.3-70b-versatile',
-            connectionId: 'groq-api',
-            retryable: true,
-            retryAfterMs: 12_345,
-            requestId: 'req-provider-error',
-            runId: 'run-provider-error',
-          }) },
-        ]),
-      }));
-      expect(JSON.stringify(harness.bindings.appendMessage.mock.calls)).not.toContain('private-value');
+      await vi.waitFor(() =>
+        expect(getChatActivityEvents(harness.chatId).at(-1)?.status).toBe('error'),
+      );
+      expect(harness.bindings.appendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chat_id: harness.chatId,
+          role: 'system',
+          parts: expect.arrayContaining([
+            {
+              kind: 'text',
+              text: 'The reply could not finish. Check the selected model and request settings, then try again.',
+            },
+            {
+              kind: 'provider_error',
+              error: expect.objectContaining({
+                message: 'Quota rejected; api_key=[REDACTED]',
+                code: 'QUOTA_EXCEEDED',
+                providerId: 'groq',
+                modelId: 'llama-3.3-70b-versatile',
+                connectionId: 'groq-api',
+                retryable: true,
+                retryAfterMs: 12_345,
+                requestId: 'req-provider-error',
+                runId: 'run-provider-error',
+              }),
+            },
+          ]),
+        }),
+      );
+      expect(JSON.stringify(harness.bindings.appendMessage.mock.calls)).not.toContain(
+        'private-value',
+      );
     } finally {
       stop();
       await stop.whenIdle();
@@ -10874,73 +12138,124 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     }
   });
 
-  it.each(['cancelled', 'error'] as const)('settles only this provider’s pending tool receipts on %s', async (status) => {
-    const protectedJarvis = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
-    const harness = kernelRuntimeBindings(protectedJarvis);
-    useChatActivityStore.getState().clearChat(harness.chatId);
-    const database = createJarvisDb(uniqueTestDbName('runtime-tool-settlement'), TEST_INDEXED_DB);
-    await database.open();
-    await database.chats.add({ id: harness.chatId, workspace_id: 'workspace_runtime_tools' as never,
-      title: 'Tool cancellation', mode: 'chat', active_agent_ids: [protectedJarvis.id], created_at: 1, updated_at: 1 });
-    const providerGate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
-    let providerInput!: Parameters<typeof mocks.runAgent>[0];
-    mocks.runAgent.mockImplementationOnce(input => { providerInput = input; return providerGate.promise; });
-    const disposeHost = await installJarvisKernelRuntimeHost({
-      db: database,
-      bindKernelActions: () =>
-        ({
-          create: vi.fn() as never,
-          decide: vi.fn() as never,
-          execute: vi.fn() as never,
-          executeAutoApprovedSafe: vi.fn() as never,
-        }) as never,
-      capabilitySnapshots: {
-        getForAccount: vi.fn(async () => ({
-          capturedAt: 1,
-          tools: [],
-          plugins: [],
-          mcps: [],
-          terminals: [],
-          agents: [],
-          entitlements: { source: 'unavailable' as const, capabilities: [] },
-        })),
-      },
-      randomUUID: () => 'runtime-voice-failed-run-release',
-      now: () => 10,
-    });
+  it.each(['cancelled', 'error'] as const)(
+    'settles only this provider’s pending tool receipts on %s',
+    async (status) => {
+      const protectedJarvis = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);
+      const harness = kernelRuntimeBindings(protectedJarvis);
+      useChatActivityStore.getState().clearChat(harness.chatId);
+      const database = createJarvisDb(uniqueTestDbName('runtime-tool-settlement'), TEST_INDEXED_DB);
+      await database.open();
+      await database.chats.add({
+        id: harness.chatId,
+        workspace_id: 'workspace_runtime_tools' as never,
+        title: 'Tool cancellation',
+        mode: 'chat',
+        active_agent_ids: [protectedJarvis.id],
+        created_at: 1,
+        updated_at: 1,
+      });
+      const providerGate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
+      let providerInput!: Parameters<typeof mocks.runAgent>[0];
+      mocks.runAgent.mockImplementationOnce((input) => {
+        providerInput = input;
+        return providerGate.promise;
+      });
+      const disposeHost = await installJarvisKernelRuntimeHost({
+        db: database,
+        bindKernelActions: () =>
+          ({
+            create: vi.fn() as never,
+            decide: vi.fn() as never,
+            execute: vi.fn() as never,
+            executeAutoApprovedSafe: vi.fn() as never,
+          }) as never,
+        capabilitySnapshots: {
+          getForAccount: vi.fn(async () => ({
+            capturedAt: 1,
+            tools: [],
+            plugins: [],
+            mcps: [],
+            terminals: [],
+            agents: [],
+            entitlements: { source: 'unavailable' as const, capabilities: [] },
+          })),
+        },
+        randomUUID: () => 'runtime-voice-failed-run-release',
+        now: () => 10,
+      });
 
-    const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
-    try {
-      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
-        chatId: harness.chatId, text: 'Inspect the tool cancellation fixture.', cancellationKey: 'msg_kernel_user' as MessageId,
-      } }));
-      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
-      await providerInput.onToolActivity?.({ name: 'bash', status: 'started', callId: 'pending-before-abort' });
-      await providerInput.onToolActivity?.({ name: 'read', status: 'completed', callId: 'finished-before-abort' });
-      useChatActivityStore.getState().record({ id: 'other-run-tool', chatId: harness.chatId,
-        kind: 'tool', title: 'Other request', status: 'running', ts: 1 });
-      expect(getChatActivityEvents(harness.chatId).find(event => event.providerCallId === 'pending-before-abort'))
-        .toMatchObject({ status: 'running' });
-      if (status === 'cancelled') {
-        window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { messageId: 'msg_kernel_user' as MessageId } }));
-        await vi.waitFor(() => expect(providerInput.signal.aborted).toBe(true));
-      } else providerGate.reject(new Error('provider failed with an active tool'));
-      // Even an uncooperative, unresolved provider cannot leave a cancelled receipt running.
-      await vi.waitFor(() => expect(getChatActivityEvents(harness.chatId).find(event => event.providerCallId === 'pending-before-abort'))
-        .toMatchObject({ status, endedAt: expect.any(Number) }));
-      expect(getChatActivityEvents(harness.chatId).find(event => event.providerCallId === 'finished-before-abort'))
-        .toMatchObject({ status: 'done' });
-      expect(getChatActivityEvents(harness.chatId).find(event => event.id === 'other-run-tool'))
-        .toMatchObject({ status: 'running' });
-    } finally {
-      providerGate.reject(new DOMException('Cancelled', 'AbortError'));
-      stop();
-      await stop.whenIdle();
-      disposeHost();
-      database.close();
-      await database.delete();
-    }
-  });
+      const stop = trackListener(
+        startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }),
+      );
+      try {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:send', {
+            detail: {
+              chatId: harness.chatId,
+              text: 'Inspect the tool cancellation fixture.',
+              cancellationKey: 'msg_kernel_user' as MessageId,
+            },
+          }),
+        );
+        await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+        await providerInput.onToolActivity?.({
+          name: 'bash',
+          status: 'started',
+          callId: 'pending-before-abort',
+        });
+        await providerInput.onToolActivity?.({
+          name: 'read',
+          status: 'completed',
+          callId: 'finished-before-abort',
+        });
+        useChatActivityStore.getState().record({
+          id: 'other-run-tool',
+          chatId: harness.chatId,
+          kind: 'tool',
+          title: 'Other request',
+          status: 'running',
+          ts: 1,
+        });
+        expect(
+          getChatActivityEvents(harness.chatId).find(
+            (event) => event.providerCallId === 'pending-before-abort',
+          ),
+        ).toMatchObject({ status: 'running' });
+        if (status === 'cancelled') {
+          window.dispatchEvent(
+            new CustomEvent('jarvis:cancel', {
+              detail: { messageId: 'msg_kernel_user' as MessageId },
+            }),
+          );
+          await vi.waitFor(() => expect(providerInput.signal.aborted).toBe(true));
+        } else providerGate.reject(new Error('provider failed with an active tool'));
+        // Even an uncooperative, unresolved provider cannot leave a cancelled receipt running.
+        await vi.waitFor(() =>
+          expect(
+            getChatActivityEvents(harness.chatId).find(
+              (event) => event.providerCallId === 'pending-before-abort',
+            ),
+          ).toMatchObject({ status, endedAt: expect.any(Number) }),
+        );
+        expect(
+          getChatActivityEvents(harness.chatId).find(
+            (event) => event.providerCallId === 'finished-before-abort',
+          ),
+        ).toMatchObject({ status: 'done' });
+        expect(
+          getChatActivityEvents(harness.chatId).find((event) => event.id === 'other-run-tool'),
+        ).toMatchObject({ status: 'running' });
+      } finally {
+        providerGate.reject(new DOMException('Cancelled', 'AbortError'));
+        stop();
+        await stop.whenIdle();
+        disposeHost();
+        database.close();
+        await database.delete();
+      }
+    },
+  );
 
   it('releases the exact claimed voice run when canonical execution fails', async () => {
     const protectedJarvis = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);

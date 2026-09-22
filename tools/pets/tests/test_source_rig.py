@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pytest
 from PIL import Image
 
 
@@ -26,6 +27,24 @@ MANIFEST = json.loads(
         encoding="utf-8"
     )
 )
+
+
+def test_source_layer_map_rejects_missing_required_layer() -> None:
+    manifest = json.loads(json.dumps(MANIFEST))
+    manifest['layers'] = [layer for layer in manifest['layers'] if layer['id'] != 'left_hand']
+    manifest['layerOrder'] = [layer for layer in manifest['layerOrder'] if layer != 'left_hand']
+    with pytest.raises(ValueError, match='unknown layer: left_hand'):
+        build_source_layer_map(manifest)
+
+
+def test_runtime_layer_cannot_read_outside_character_root(tmp_path: Path) -> None:
+    manifest = json.loads(json.dumps(MANIFEST))
+    mapping = build_source_layer_map(manifest)
+    for layer in manifest['layers']:
+        if layer['id'] == 'left_hand':
+            layer['file'] = '../private.png'
+    with pytest.raises(ValueError, match='escapes character root'):
+        render_runtime_role('left-hand', mapping, manifest, tmp_path)
 
 
 def test_source_layer_map_accounts_for_every_source_layer_once() -> None:

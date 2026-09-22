@@ -77,16 +77,29 @@ export function JarvisAmbientHost() {
       timer = null;
       if (disposed) return;
       revision = nextRevision(revision);
-      const snapshot = projectJarvisAmbientSnapshot({
+      const voiceOpen = useUIStore.getState().voiceModalOpen;
+      const projectedSnapshot = projectJarvisAmbientSnapshot({
         revision,
         observedAt: Date.now(),
-        voiceOpen: useUIStore.getState().voiceModalOpen,
+        voiceOpen,
         voiceState: useVoiceStore.getState().state,
         sessionId: useVoiceStore.getState().session?.sessionId,
         runs: Object.values(useJarvisTaskRunStore.getState().runs),
         energy: currentEnergy(),
       });
-      const signature = `${snapshot.active}:${snapshot.sessionId ?? ''}:${snapshot.state}:${snapshot.source}:${snapshot.energy}:${snapshot.transientUntil ?? 0}`;
+      const snapshot =
+        isTauriRuntime() && voiceOpen && projectedSnapshot.state === 'idle'
+          ? Object.freeze({ ...projectedSnapshot, prewarm: true })
+          : projectedSnapshot;
+      const signature = [
+        snapshot.active,
+        snapshot.prewarm === true,
+        snapshot.sessionId ?? '',
+        snapshot.state,
+        snapshot.source,
+        snapshot.energy,
+        snapshot.transientUntil ?? 0,
+      ].join(':');
       if (expiryTimer !== null) {
         window.clearTimeout(expiryTimer);
         expiryTimer = null;
@@ -108,9 +121,22 @@ export function JarvisAmbientHost() {
       timer = window.setTimeout(flush, ENERGY_FRAME_MS);
     };
 
+    const flushImmediately = () => {
+      if (disposed) return;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      flush();
+    };
+
     const unsubscribers = [
-      useVoiceStore.subscribe(schedule),
-      useUIStore.subscribe(schedule),
+      useVoiceStore.subscribe((next, previous) =>
+        next.state !== previous.state ? flushImmediately() : schedule(),
+      ),
+      useUIStore.subscribe((next, previous) =>
+        next.voiceModalOpen !== previous.voiceModalOpen ? flushImmediately() : schedule(),
+      ),
       useJarvisTaskRunStore.subscribe(schedule),
       subscribeJarvisInputEnergy(schedule),
       subscribeJarvisPlaybackEnergy(schedule),
@@ -140,6 +166,15 @@ export function JarvisAmbientOverlayView() {
   const [snapshot, setSnapshot] = React.useState<JarvisAmbientSnapshot>(() =>
     normalizeAmbientSnapshot(null),
   );
+  const rendererWarmRef = React.useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
+  if (!rendererWarmRef.current) {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    rendererWarmRef.current = { promise, resolve };
+  }
+  const markRendererWarm = React.useCallback(() => rendererWarmRef.current?.resolve(), []);
 
   React.useEffect(() => {
     let disposed = false;
@@ -159,6 +194,12 @@ export function JarvisAmbientOverlayView() {
           unlisten = undefined;
           return;
         }
+        await rendererWarmRef.current?.promise;
+        if (disposed) {
+          unlisten?.();
+          unlisten = undefined;
+          return;
+        }
         const initial = await invoke<unknown>('jarvis_ambient_renderer_ready');
         applySnapshot(initial);
       })
@@ -172,5 +213,11 @@ export function JarvisAmbientOverlayView() {
     };
   }, []);
 
-  return <JarvisEdgeAura snapshot={snapshot} />;
+  return (
+    <JarvisEdgeAura
+      snapshot={snapshot}
+      warmRendererOnMount
+      onRendererWarm={markRendererWarm}
+    />
+  );
 }

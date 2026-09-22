@@ -71,6 +71,15 @@ describe('ChatActivityTimeline always-visible session panel', () => {
 });
 
 describe('ActivityRow', () => {
+  it('keeps the end of a long diff available inside the scrollable expanded card', () => {
+    const diff = Array.from({ length: 250 }, (_, index) => `+changed line ${index}`).join('\n');
+    render(<ActivityRow event={{ id: 'long-diff', chatId: 'chat-long', kind: 'diff', status: 'done', title: 'Wrote file', filePath: 'game.html', diff, ts: 1 }} />);
+    fireEvent.click(screen.getByRole('button'));
+    const lastLine = screen.getByText('+changed line 249');
+    expect(lastLine.closest('pre')?.className).toContain('overflow-auto');
+    expect(lastLine.closest('pre')?.className).toContain('max-h-80');
+  });
+
   it('renders Edit-style file cards with line counts and expands the diff on click', () => {
     const event: ChatActivityEvent = {
       id: 'diff_1',

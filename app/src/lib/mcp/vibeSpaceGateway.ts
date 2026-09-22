@@ -948,10 +948,6 @@ export function createVibeSpaceMcpGateway(
     }
   };
 
-  const unsubscribeRuntime = runtime.subscribe(rebuild);
-  void unsubscribeRuntime;
-  rebuild();
-
   const exactLiveConnection = (id: string): RemoteMcpSetupConnection => {
     const connection = runtime.getSnapshot().find((candidate) => candidate.id === id);
     if (!connection || connection.state !== 'connected') {
@@ -1001,6 +997,17 @@ export function createVibeSpaceMcpGateway(
     }
     registry = next;
   };
+
+  // Runtime health can change without a gateway method call (for example, a
+  // transport session expiring). Rebuild the capability registry from that
+  // authoritative event so capability consumers cannot retain a dead route.
+  const unsubscribeRuntime = runtime.subscribe(() => {
+    refreshRegistry();
+    rebuild();
+  });
+  void unsubscribeRuntime;
+  refreshRegistry();
+  rebuild();
 
   const saveApproval = (
     connection: RemoteMcpSetupConnection,

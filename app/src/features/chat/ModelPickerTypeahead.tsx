@@ -202,6 +202,9 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
     const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(
       () => new Set(selectedGroupId ? [selectedGroupId] : []),
     );
+    const [collapsedSearchGroupIds, setCollapsedSearchGroupIds] = useState<Set<string>>(
+      () => new Set(),
+    );
     const [searchQuery, setSearchQuery] = useState('');
 
     const flatOptions = useMemo(() => groups.flatMap((group) => group.options), [groups]);
@@ -229,9 +232,13 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
       () =>
         filteredGroups.flatMap((group) => {
           const groupId = group.id ?? `${group.provider}:${group.label}`;
-          return searchTerms.length === 0 && !expandedGroupIds.has(groupId) ? [] : group.options;
+          const isCollapsed =
+            searchTerms.length === 0
+              ? !expandedGroupIds.has(groupId)
+              : collapsedSearchGroupIds.has(groupId);
+          return isCollapsed ? [] : group.options;
         }),
-      [expandedGroupIds, filteredGroups, searchTerms.length],
+      [collapsedSearchGroupIds, expandedGroupIds, filteredGroups, searchTerms.length],
     );
     const exactOptions = useMemo(
       () => flatOptions.flatMap((option) => option.alternativeRoutes ?? [option]),
@@ -255,9 +262,21 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
     }, [onSelectHive, searchTerms, visibleOptions]);
 
     const toggleGroup = (groupId: string) => {
+      const searchIsActive = searchTerms.length > 0;
+      const isExpanded = searchIsActive
+        ? !collapsedSearchGroupIds.has(groupId)
+        : expandedGroupIds.has(groupId);
+      if (searchIsActive) {
+        setCollapsedSearchGroupIds((current) => {
+          const next = new Set(current);
+          if (isExpanded) next.add(groupId);
+          else next.delete(groupId);
+          return next;
+        });
+      }
       setExpandedGroupIds((current) => {
         const next = new Set(current);
-        if (next.has(groupId)) next.delete(groupId);
+        if (isExpanded) next.delete(groupId);
         else next.add(groupId);
         return next;
       });
@@ -716,7 +735,10 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
             filteredGroups.map((group, groupIndex) => {
               const GroupIcon = PROVIDER_ICONS[group.provider] ?? Sparkles;
               const groupId = group.id ?? `${group.provider}:${group.label}`;
-              const isCollapsed = searchTerms.length === 0 && !expandedGroupIds.has(groupId);
+              const isCollapsed =
+                searchTerms.length === 0
+                  ? !expandedGroupIds.has(groupId)
+                  : collapsedSearchGroupIds.has(groupId);
               const optionsId = `${pickerId}-provider-${groupIndex}`;
               return (
                 <div key={groupId}>
@@ -875,9 +897,10 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
               onChange={(event) => {
                 const value = event.currentTarget.value;
                 setSearchQuery(value);
+                setCollapsedSearchGroupIds(new Set());
               }}
               className={cn(
-                'min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/70',
+                'min-w-0 flex-1 rounded-2xl bg-transparent text-foreground outline-none placeholder:text-muted-foreground/70',
                 compact ? 'text-[10px]' : 'text-[12px]',
               )}
             />
@@ -885,7 +908,10 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
               <button
                 type="button"
                 aria-label="Clear model search"
-                onClick={() => setSearchQuery('')}
+                onClick={() => {
+                  setSearchQuery('');
+                  setCollapsedSearchGroupIds(new Set());
+                }}
                 className="rounded-md p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper/60"
               >
                 <X aria-hidden="true" className={compact ? 'h-3 w-3' : 'h-3.5 w-3.5'} />

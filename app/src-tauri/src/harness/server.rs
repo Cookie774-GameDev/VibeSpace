@@ -391,6 +391,13 @@ fn write_scoped_config(
 
 trait CredentialSource {
     fn load(&self) -> Result<Vec<(String, String)>, ServerFailure>;
+
+    /// Return provider IDs whose existing OpenCode auth store entry is native
+    /// OAuth. The auth store is inspected for type metadata only; credential
+    /// values never cross this boundary.
+    fn native_oauth_providers(&self) -> BTreeSet<String> {
+        BTreeSet::new()
+    }
 }
 
 struct VaultCredentialSource;
@@ -399,6 +406,13 @@ impl CredentialSource for VaultCredentialSource {
     fn load(&self) -> Result<Vec<(String, String)>, ServerFailure> {
         crate::credentials::harness_api_keys()
             .map_err(|_| failure("VibeSpace provider credentials could not be loaded."))
+    }
+
+    fn native_oauth_providers(&self) -> BTreeSet<String> {
+        crate::harness::opencode_go_auth::default_auth_store_path()
+            .ok()
+            .map(|path| native_oauth_provider_ids(&path))
+            .unwrap_or_default()
     }
 }
 
@@ -474,22 +488,66 @@ fn qwen_provider_config(environment_name: &str) -> Value {
     })
 }
 
+const MAX_OPENCODE_AUTH_STORE_BYTES: u64 = 256 * 1024;
+
+fn native_oauth_provider_ids_from_bytes(bytes: &[u8]) -> BTreeSet<String> {
+    let Ok(root) = serde_json::from_slice::<Value>(bytes) else {
+        return BTreeSet::new();
+    };
+    root.as_object()
+        .into_iter()
+        .flat_map(|providers| providers.iter())
+        .filter_map(|(provider, auth)| {
+            (auth.get("type").and_then(Value::as_str) == Some("oauth")).then(|| provider.clone())
+        })
+        .collect()
+}
+
+fn native_oauth_provider_ids(path: &Path) -> BTreeSet<String> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return BTreeSet::new();
+    };
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() == 0
+        || metadata.len() > MAX_OPENCODE_AUTH_STORE_BYTES
+    {
+        return BTreeSet::new();
+    }
+    let Ok(bytes) = fs::read(path) else {
+        return BTreeSet::new();
+    };
+    if bytes.len() as u64 != metadata.len() || bytes.len() as u64 > MAX_OPENCODE_AUTH_STORE_BYTES {
+        return BTreeSet::new();
+    }
+    native_oauth_provider_ids_from_bytes(&bytes)
+}
+
 fn scoped_provider_config(
     credentials: Vec<(String, String)>,
     local_models: Vec<String>,
+    native_oauth_providers: &BTreeSet<String>,
 ) -> Result<(String, Vec<(String, String)>), ServerFailure> {
     let mut providers = Map::new();
     let mut environment = Vec::new();
+    let mut seen_providers = BTreeSet::new();
     for (provider, value) in credentials {
         let Some(environment_name) = credential_environment_name(&provider) else {
             return Err(failure(
                 "VibeSpace returned an unsupported provider credential.",
             ));
         };
-        if providers.contains_key(&provider) {
+        if !seen_providers.insert(provider.clone()) {
             return Err(failure(
                 "VibeSpace returned duplicate provider credentials.",
             ));
+        }
+        if native_oauth_providers.contains(&provider) {
+            // A selected native OAuth entry is authoritative for its provider.
+            // Do not let the app keyring API credential shadow that session in
+            // the managed OpenCode config. Explicit native API connections use
+            // their own adapter and remain unaffected by this omission.
+            continue;
         }
         let config = if provider == "qwen" {
             qwen_provider_config(environment_name)
@@ -599,7 +657,14 @@ fn scoped_provider_config(
                            task: &str,
                            mutation: &str| {
         let mut permission = Map::new();
-        permission.insert("*".to_string(), json!("deny"));
+        // Keep CLI-installed MCP/custom tools discoverable in full Agent mode.
+        // Unknown tools still require approval; restricted modes remain denied.
+        let native_tool_permission = if bash != "deny" && mutation != "deny" {
+            "ask"
+        } else {
+            "deny"
+        };
+        permission.insert("*".to_string(), json!(native_tool_permission));
         permission.insert(
             "read".to_string(),
             json!({
@@ -650,9 +715,8 @@ fn scoped_provider_config(
         for (name, action) in [("edit", edit), ("bash", bash), ("task", task)] {
             permission.insert(name.to_string(), json!(action));
         }
-        // Outside-project references require an observable per-directory approval.
-        // A blanket deny prevents the UI from ever asking the user.
-        permission.insert("external_directory".to_string(), json!("ask"));
+        // Explicit Full access uses native authority; Review retains directory approvals.
+        permission.insert("external_directory".to_string(), json!(if bash == "allow" { "allow" } else { "ask" }));
         permission.insert("doom_loop".to_string(), json!("deny"));
         for name in [
             "terminal_open",
@@ -678,7 +742,8 @@ fn scoped_provider_config(
         json!({
             "description": description,
             "mode": "primary",
-            "prompt": "Follow the supplied protected system contract and current user request. Use enabled tools directly. Never describe disabled tools. A question answer is clarification only and never grants tool permission.",
+            // Omit prompt so OpenCode retains its provider-specific coding instructions.
+            // VibeSpace's protected contract is still supplied in each request's system field.
             "permission": Value::Object(permission)
         })
     };
@@ -772,13 +837,16 @@ async function call(name, args, context) {
     "context.attach", "skills.load", "plugins.run", "mcp.run", "tasks.create", "tasks.update",
     "schedule.create", "app.navigate"])
   if (mutations.has(name)) {
-    // MCP inputs can contain credential-looking values. The renderer gateway
+    // MCP/plugin inputs can contain credential-looking values. The renderer gateway
     // remains the transport guard; the native approval surface must not copy
     // the raw input while it waits for the user's decision.
     const approvalArgs = name === "mcp.run" ? {
       connectionId: typeof args.connectionId === "string" ? args.connectionId.slice(0, 256) : undefined,
       toolName: typeof args.toolName === "string" ? args.toolName.slice(0, 256) : undefined,
       classification: typeof args.classification === "string" ? args.classification.slice(0, 32) : undefined,
+    } : name === "plugins.run" ? {
+      pluginId: typeof args.pluginId === "string" ? args.pluginId.slice(0, 512) : undefined,
+      operation: typeof args.operation === "string" ? args.operation.slice(0, 128) : undefined,
     } : args
     await context.ask({ permission: name.replaceAll(".", "_"), patterns: [name], always: [],
       metadata: { title: `Allow ${name}`, args: approvalArgs } })
@@ -962,8 +1030,12 @@ fn build_launch_spec_with(
     local_models: &dyn LocalModelSource,
     tool_gateway: &ToolGatewayEndpoint,
 ) -> Result<ServerLaunchSpec, ServerFailure> {
-    let (config_content, provider_environment) =
-        scoped_provider_config(credentials.load()?, local_models.load())?;
+    let native_oauth_providers = credentials.native_oauth_providers();
+    let (config_content, provider_environment) = scoped_provider_config(
+        credentials.load()?,
+        local_models.load(),
+        &native_oauth_providers,
+    )?;
     let (config_path, config_dir, working_dir) = write_scoped_config(server_root, &config_content)?;
     write_tool_gateway_plugin(&config_dir)?;
     Ok(ServerLaunchSpec {
@@ -2548,9 +2620,10 @@ mod tests {
 
     use super::{
         build_launch_spec_with, claim_start, ensure_transport_caller, event_data, failure,
-        probe_health_once, reserve_loopback_port, reuse_or_stop_existing, server_status,
-        sse_frame_boundary, start_retry_delay, start_server_attempt_with, stop_server,
-        take_crashed_runtime, transport_caller_allowed, transport_route_parts,
+        native_oauth_provider_ids_from_bytes, probe_health_once, reserve_loopback_port,
+        reuse_or_stop_existing, scoped_provider_config, server_status, sse_frame_boundary,
+        start_retry_delay, start_server_attempt_with, stop_server, take_crashed_runtime,
+        transport_caller_allowed, transport_route_parts,
         validate_transport_body, validate_transport_directory, write_scoped_config, ActiveStream,
         CredentialSource, HealthWaiter, LocalModelSource, OpenCodeServerConnection,
         OpenCodeServerState, OpenCodeTransportRequest, OpenCodeTransportRoute, OwnedProcess,
@@ -2559,6 +2632,7 @@ mod tests {
     };
     use crate::harness::tool_gateway::ToolGatewayEndpoint;
     use base64::Engine as _;
+    use std::collections::BTreeSet;
     use std::fs;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -2807,6 +2881,45 @@ mod tests {
     }
 
     #[test]
+    fn native_openai_oauth_omits_keyring_api_key_but_preserves_other_api_routes() {
+        let oauth_providers = BTreeSet::from(["openai".to_string()]);
+        let (content, environment) = scoped_provider_config(
+            vec![
+                ("openai".into(), "openai-secret".into()),
+                ("qwen".into(), "qwen-secret".into()),
+            ],
+            vec![],
+            &oauth_providers,
+        )
+        .unwrap();
+        let config: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert!(config["provider"]["openai"].is_null());
+        assert_eq!(
+            config["provider"]["qwen"]["options"]["apiKey"],
+            "{env:VIBESPACE_OC_QWEN_API_KEY}"
+        );
+        assert_eq!(
+            environment
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+                .collect::<Vec<_>>(),
+            [("VIBESPACE_OC_QWEN_API_KEY", "qwen-secret")]
+        );
+        assert!(!content.contains("VIBESPACE_OC_OPENAI_API_KEY"));
+        assert!(!content.contains("openai-secret"));
+    }
+
+    #[test]
+    fn native_oauth_reader_uses_auth_type_without_reading_credential_values() {
+        let providers = native_oauth_provider_ids_from_bytes(
+            br#"{"openai":{"type":"oauth","access":"redacted"},"qwen":{"type":"api","key":"redacted"}}"#,
+        );
+        assert_eq!(providers, BTreeSet::from(["openai".to_string()]));
+        assert!(native_oauth_provider_ids_from_bytes(br#"not-json"#).is_empty());
+    }
+
+    #[test]
     fn dynamic_ollama_config_contains_every_installed_model_and_no_catalog_phantoms() {
         let fixture = FixtureRoot::new("ollama-dynamic");
         let spec = build_launch_spec_with(
@@ -2913,15 +3026,26 @@ mod tests {
             assert_eq!(reviewer["permission"][capability], "deny");
         }
         assert_eq!(reviewer["permission"]["read"]["**/.env"], "deny");
+        for name in ["vibespace-full", "vibespace-full-auto"] {
+            assert_eq!(config["agent"][name]["permission"]["*"], "ask",
+                "{name} must expose native CLI tools through approval, not silently deny them");
+        }
+        for name in ["vibespace", "vibespace-readonly", "vibespace-write", "vibespace-write-auto"] {
+            assert_eq!(config["agent"][name]["permission"]["*"], "deny",
+                "{name} must not gain unknown tool authority");
+        }
         assert!(reviewer.get("model").is_none());
         assert_eq!(config["permission"]["todo"], "allow");
         assert_eq!(config["permission"]["todoread"], "allow");
         assert_eq!(config["permission"]["todowrite"], "allow");
         assert_eq!(config["permission"]["external_directory"], "deny");
         for name in ["vibespace", "vibespace-readonly", "vibespace-write", "vibespace-write-auto", "vibespace-full", "vibespace-full-auto", "vibespace-reviewer"] {
-            assert_eq!(config["agent"][name]["permission"]["external_directory"], "ask", "{name} must surface an approval for outside-project references");
+            assert_eq!(config["agent"][name]["permission"]["external_directory"], if name == "vibespace-full-auto" { "allow" } else { "ask" }, "{name} must match the selected native access profile");
             assert_eq!(config["agent"][name]["permission"]["doom_loop"], "deny");
             assert!(config["agent"][name].get("steps").is_none(), "{name} must not truncate a long task at an app-defined step ceiling");
+            if name != "vibespace-reviewer" {
+                assert!(config["agent"][name].get("prompt").is_none(), "{name} must preserve the native provider prompt");
+            }
             assert_eq!(config["agent"][name]["permission"]["read"]["**/.env"], "deny");
         }
         assert_eq!(config["permission"]["terminal_list"], "allow");

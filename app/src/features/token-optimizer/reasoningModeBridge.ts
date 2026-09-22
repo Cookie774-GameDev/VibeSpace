@@ -26,7 +26,12 @@ export function reasoningPreferenceForOptimization(
   mode: TokenOptimizationMode,
   current: ReasoningPreference,
 ): ReasoningPreference {
-  if (mode === 'off') return current;
+  if (mode === 'off') {
+    // Turning optimization off must also remove a persisted Saver output cap.
+    return current.mode === 'token-saver'
+      ? Object.freeze({ mode: 'normal', effortOverride: current.effortOverride })
+      : current;
+  }
   return Object.freeze({
     mode: REASONING_MODE_BY_OPTIMIZATION[mode],
     effortOverride: current.effortOverride,

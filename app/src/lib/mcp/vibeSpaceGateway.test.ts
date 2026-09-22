@@ -66,6 +66,10 @@ function runtimeHarness(tool: Readonly<RemoteMcpSetupTool> = readTool) {
     snapshot = snapshot.filter((connection) => connection.id !== id);
     publish();
   });
+  const drop = vi.fn(() => {
+    snapshot = Object.freeze([]);
+    publish();
+  });
   const invoke = vi.fn(async (): Promise<unknown> => ({
     content: [{ type: 'text', text: 'Bearer live-secret-value' }],
     token: 'live-secret-value',
@@ -81,7 +85,7 @@ function runtimeHarness(tool: Readonly<RemoteMcpSetupTool> = readTool) {
     invoke,
     disconnect,
   };
-  return { runtime, connect, setToolExposure, invoke, disconnect };
+  return { runtime, connect, setToolExposure, invoke, disconnect, drop };
 }
 
 function createHarness(options: {
@@ -150,6 +154,25 @@ describe('VibeSpace MCP Gateway', () => {
     expect(harness.runtime.invoke).toHaveBeenCalledTimes(2);
     expect(harness.gateway.getCapabilitySnapshot().connections.map((connection) => connection.id))
       .toContain('reviewed-server');
+  });
+
+  it('refreshes capability routes when the runtime reports an unsolicited disconnect', async () => {
+    const harness = createHarness();
+    await approve(harness);
+    harness.gateway.setToolExposure('reviewed-server', ['repo.read'], { confirmedByUser: true });
+    expect(harness.gateway.getCapabilitySnapshot().connections.map((connection) => connection.id))
+      .toContain('reviewed-server');
+
+    harness.runtime.drop();
+
+    expect(harness.gateway.getCapabilitySnapshot().connections.map((connection) => connection.id))
+      .not.toContain('reviewed-server');
+    await expect(harness.gateway.invoke({
+      accountId: 'account_a', projectId: 'project_a', taskId: 'after-drop',
+      connectionId: 'reviewed-server', toolName: 'repo.read',
+      arguments: { path: 'README.md' }, allowedTools: ['reviewed-server.repo.read'],
+      classification: 'read',
+    })).rejects.toThrow('MCP connector is not live');
   });
 
   it('invokes only an approved task-scoped tool and persists a redacted receipt', async () => {

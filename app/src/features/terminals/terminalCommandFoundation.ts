@@ -29,6 +29,7 @@ export type TerminalContextSession = Readonly<{
 }>;
 
 export const TERMINAL_LOCAL_IPC_METHODS = Object.freeze([
+  'cao.identity.publish',
   'context.list',
   'context.current',
   'context.use',
@@ -146,6 +147,12 @@ function readClosedRecord(value: unknown, keys: readonly string[]): Record<strin
 
 function safeId(value: unknown): value is string {
   return typeof value === 'string' && SAFE_ID.test(value);
+}
+
+/** Optional pane labels are not authority. Ignore malformed historical labels
+ * rather than passing them into the strict context session validator. */
+export function normalizeTerminalContextAgentSlug(value: unknown): string | null {
+  return safeId(value) ? value : null;
 }
 
 function safeOptionalId(value: unknown): value is string | null {

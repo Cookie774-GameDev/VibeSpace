@@ -25,6 +25,7 @@ const expected = {
   file: ['vibespace-context', 'attachment'],
   md: ['opencode-agent', 'structured-agent-request'],
   model: ['vibespace-ui', 'local'],
+  cao: ['vibespace-ui', 'local'],
   effort: ['vibespace-ui', 'local'],
   fast: ['vibespace-ui', 'local'],
   performance: ['vibespace-ui', 'local'],

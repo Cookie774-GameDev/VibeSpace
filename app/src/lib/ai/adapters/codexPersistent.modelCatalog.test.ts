@@ -30,10 +30,11 @@ describe('Codex persistent model catalog', () => {
                 model: 'gpt-5.6-luna',
                 displayName: 'GPT-5.6 Luna',
                 supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }],
+                defaultReasoningEffort: 'low',
               },
             ], 'next-page');
             yield modelListFrame('vibespace-codex-model-catalog_model_2', [
-              { model: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol' },
+              { model: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', defaultReasoningEffort: 'unsupported' },
             ], null);
           })(),
         };
@@ -52,7 +53,7 @@ describe('Codex persistent model catalog', () => {
     const second = await adapter.listModels?.();
 
     expect(first).toEqual([
-      { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', variants: ['low', 'high'] },
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', variants: ['low', 'high'], defaultReasoningEffort: 'low' },
       { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
     ]);
     expect(second).toEqual(first);

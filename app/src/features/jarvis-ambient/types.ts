@@ -22,6 +22,8 @@ export type JarvisAmbientSnapshot = Readonly<{
   transientUntil?: number;
   /** Explicit visibility intent; absent only for older snapshot producers. */
   active?: boolean;
+  /** Keep a native renderer ready while voice mode is open, without drawing. */
+  prewarm?: boolean;
   /** Opaque Voice-session identity, never transcript or account data. */
   sessionId?: string;
 }>;
@@ -31,6 +33,7 @@ export function isJarvisAmbientSnapshot(value: unknown): value is JarvisAmbientS
   const candidate = value as Partial<JarvisAmbientSnapshot>;
   return (
     (candidate.active === undefined || typeof candidate.active === 'boolean') &&
+    (candidate.prewarm === undefined || typeof candidate.prewarm === 'boolean') &&
     (candidate.sessionId === undefined ||
       (typeof candidate.sessionId === 'string' &&
         candidate.sessionId.length > 0 &&

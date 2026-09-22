@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent } from '@/types';
 import type { CompiledJarvisPrompt } from '@/lib/jarvis/contracts';
+import type { ToolGatewayAuthorityClaim } from '@/lib/harness/toolGatewayAuthority';
 import { useAuthStore } from '@/stores/auth';
 import { providerActivityTracker } from '@/features/taskbar-usage/activityTracker';
 import { AGENT_DEFAULT_PROVIDER_MODEL } from './agentProviderOptions';
+import { aggregateConnectionUsage, readConnectionUsageLedger } from './connectionUsageLedger';
 
 const { openCodeDetect, openCodeProbeAuth, openCodeSend, isActiveChildQuestion } = vi.hoisted(() => ({
   openCodeDetect: vi.fn(),
@@ -151,6 +153,91 @@ describe('canonical OpenCode AI routing', () => {
         onApprovalRequested,
         onSessionBound: expect.any(Function),
       }),
+    );
+  });
+
+  it('records provider totals and cache subsets once for the OpenCode route', async () => {
+    openCodeSend.mockImplementationOnce(() => (async function* () {
+      yield { type: 'text', delta: 'done' } as const;
+      yield {
+        type: 'usage',
+        usage: {
+          capturedAt: Date.now(),
+          inputTokens: { value: 33_264, provenance: 'provider-reported' as const },
+          outputTokens: { value: 381, provenance: 'provider-reported' as const },
+          totalTokens: { value: 98_925, provenance: 'provider-reported' as const },
+          cacheReadTokens: { value: 65_280, provenance: 'provider-reported' as const },
+          cacheWriteTokens: { value: 0, provenance: 'provider-reported' as const },
+          costUsd: { value: 0.01, provenance: 'provider-reported' as const },
+        },
+      } as const;
+      yield { type: 'done', finishReason: 'stop' } as const;
+    })());
+
+    await runAgent({
+      agent: openaiAgent,
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(readConnectionUsageLedger()).toMatchObject([{
+      connectionId: 'opencode-cli',
+      providerId: 'openai',
+      modelId: 'gpt-protected',
+      inputTokens: 33_264,
+      cachedInputTokens: 65_280,
+      outputTokens: 381,
+      totalTokens: 98_925,
+      costUsd: 0.01,
+      costType: 'actual',
+    }]);
+    expect(readConnectionUsageLedger()).toHaveLength(1);
+    expect(aggregateConnectionUsage('opencode-cli', 0)).toMatchObject({
+      requests: 1,
+      cachedInputTokens: 65_280,
+      totalTokens: 98_925,
+    });
+  });
+
+  it('forwards the exact early gateway authority claim by reference', async () => {
+    const toolGatewayAuthority: ToolGatewayAuthorityClaim = Object.freeze({
+      scope: Object.freeze({
+        accountId: 'account-a',
+        accountSource: 'local',
+        workspaceId: 'workspace-a',
+        projectId: 'project-a',
+      }),
+      generation: 7,
+    });
+    await runAgent({
+      agent: openaiAgent,
+      accountId: 'account-a',
+      workspaceId: 'workspace-a',
+      projectId: 'project-a',
+      messages: [{ role: 'user', content: 'hello' }],
+      tools: { vibespace_context: true },
+      toolGatewayAuthority,
+    });
+    expect(openCodeSend.mock.calls[0]?.[0]?.toolGatewayAuthority).toBe(toolGatewayAuthority);
+  });
+
+  it('forwards nonterminal provider warnings and continues to the final response', async () => {
+    const onProviderWarning = vi.fn();
+    openCodeSend.mockImplementationOnce(() => (async function* () {
+      yield { type: 'warning', message: 'OpenCode is retrying for up to 60 seconds before stopping.' } as const;
+      yield { type: 'text', delta: 'done' } as const;
+      yield { type: 'done', finishReason: 'stop' } as const;
+    })());
+
+    const response = await runAgent({
+      agent: openaiAgent,
+      messages: [{ role: 'user', content: 'hello' }],
+      onProviderWarning,
+    });
+
+    expect(response).toMatchObject({ text: 'done', provider: 'openai', model: 'gpt-protected' });
+    expect(onProviderWarning).toHaveBeenCalledOnce();
+    expect(onProviderWarning).toHaveBeenCalledWith(
+      'OpenCode is retrying for up to 60 seconds before stopping.',
     );
   });
 

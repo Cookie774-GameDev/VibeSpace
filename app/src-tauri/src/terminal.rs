@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::async_runtime::{spawn_blocking, JoinHandle, Mutex as AsyncMutex};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Tauri-managed shared state. Keyed by short session id (`tty_<nanoid12>`).
 ///
@@ -651,6 +652,8 @@ const MAX_TERMINAL_SESSIONS: usize = 10;
 const MAX_CANCELLATION_TOKEN_BYTES: usize = 512;
 const MAX_STARTUP_COMMAND_BYTES: usize = 32_768;
 const MAX_NATIVE_ID_BYTES: usize = 128;
+const TERMINAL_PROCESS_INSTANCE_ENV: &str = "VIBESPACE_TERMINAL_PROCESS_INSTANCE_ID";
+const TERMINAL_PANE_ENV: &str = "VIBESPACE_PANE_ID";
 const WINDOWS_UNIX_EPOCH_100NS: u64 = 116_444_736_000_000_000;
 const MAX_SAFE_JS_INTEGER: u64 = 9_007_199_254_740_991;
 
@@ -660,6 +663,37 @@ fn valid_native_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn is_opencode_executable(command: &str) -> bool {
+    Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "opencode" | "opencode.exe"
+            )
+        })
+}
+
+fn managed_opencode_identity_scope(
+    command: &str,
+    project_id: Option<&str>,
+    env: Option<&HashMap<String, String>>,
+    cli_available: bool,
+) -> bool {
+    cli_available
+        && is_opencode_executable(command)
+        && project_id.is_some_and(valid_native_id)
+        && env
+            .and_then(|values| values.get(TERMINAL_PANE_ENV))
+            .is_some_and(|pane_id| valid_native_id(pane_id))
+}
+
+fn inherited_opencode_config_content(env: Option<&HashMap<String, String>>) -> Option<String> {
+    env.and_then(|values| values.get("OPENCODE_CONFIG_CONTENT").cloned())
+        .or_else(|| std::env::var("OPENCODE_CONFIG_CONTENT").ok())
 }
 
 fn process_started_at_from_filetime_ticks(ticks: u64) -> Result<u64, String> {
@@ -1141,6 +1175,7 @@ pub async fn terminal_spawn(
         .map_err(|e| format!("terminal: open pty failed: {e}"))?;
 
     let session_id = format!("tty_{}", nanoid::nanoid!(12));
+    let process_instance_id = format!("ptyproc_{}", nanoid::nanoid!(20));
     let mut builder = CommandBuilder::new(&cmd_str);
     for argument in &launch.arguments {
         builder.arg(argument);
@@ -1158,7 +1193,8 @@ pub async fn terminal_spawn(
             builder.env(k, v);
         }
     }
-    if let Some(private_bin_dir) = terminal_cli_state.private_bin_dir() {
+    let private_bin_dir = terminal_cli_state.private_bin_dir();
+    if let Some(private_bin_dir) = private_bin_dir.clone() {
         let requested_path = env.as_ref().and_then(|values| {
             values
                 .iter()
@@ -1174,7 +1210,25 @@ pub async fn terminal_spawn(
             .map_err(|_| "terminal: managed CLI PATH could not be represented".to_string())?;
         builder.env("PATH", managed_path);
     }
+    if managed_opencode_identity_scope(
+        &cmd_str,
+        project_id.as_deref(),
+        env.as_ref(),
+        private_bin_dir.is_some(),
+    ) {
+        let app_local_data_dir = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|_| "terminal: managed OpenCode identity storage unavailable".to_string())?;
+        if let Some(materialized) = crate::harness::terminal_identity_plugin::materialize(
+            &app_local_data_dir,
+            inherited_opencode_config_content(env.as_ref()).as_deref(),
+        )? {
+            builder.env("OPENCODE_CONFIG_CONTENT", materialized.config_content);
+        }
+    }
     builder.env("VIBESPACE_TERMINAL_SESSION_ID", &session_id);
+    builder.env(TERMINAL_PROCESS_INSTANCE_ENV, &process_instance_id);
     if let Some(project_id) = &project_id {
         builder.env("VIBESPACE_PROJECT_ID", project_id);
     }
@@ -1183,7 +1237,6 @@ pub async fn terminal_spawn(
         .slave
         .spawn_command(builder)
         .map_err(|e| format!("terminal: spawn failed: {e}"))?;
-    let process_instance_id = format!("ptyproc_{}", nanoid::nanoid!(20));
     let process_binding = match capture_process_binding(
         child.as_ref(),
         state.runtime_generation(),
@@ -1528,12 +1581,12 @@ mod tests {
 
     use super::{
         build_process_binding, capture_process_binding, decode_terminal_bytes,
-        default_terminal_cwd, emit_before_remove, native_process_started_at,
-        process_started_at_from_filetime_ticks, terminal_launch_spec, valid_cancellation_token,
-        validated_kill_request, ExitReason, KillRequest, KillRequestKind, KillResultKind,
-        KillStart, LifecycleArbiter, NativeProcessBinding, SpawnResponse, TerminalInfo,
-        TerminalKillResult, TerminalState, TerminalWriteBinding, MAX_CANCELLATION_TOKEN_BYTES,
-        WINDOWS_UNIX_EPOCH_100NS,
+        default_terminal_cwd, emit_before_remove, managed_opencode_identity_scope,
+        native_process_started_at, process_started_at_from_filetime_ticks, terminal_launch_spec,
+        valid_cancellation_token, validated_kill_request, ExitReason, KillRequest, KillRequestKind,
+        KillResultKind, KillStart, LifecycleArbiter, NativeProcessBinding, SpawnResponse,
+        TerminalInfo, TerminalKillResult, TerminalState, TerminalWriteBinding,
+        MAX_CANCELLATION_TOKEN_BYTES, WINDOWS_UNIX_EPOCH_100NS,
     };
 
     #[test]
@@ -1741,6 +1794,37 @@ mod tests {
 
         assert_eq!(first.runtime_generation, second.runtime_generation);
         assert_ne!(first.process_instance_id, second.process_instance_id);
+    }
+
+    #[test]
+    fn managed_opencode_identity_scope_requires_direct_app_owned_pane() {
+        let mut env = HashMap::new();
+        env.insert("VIBESPACE_PANE_ID".into(), "pane_identity_1".into());
+
+        assert!(managed_opencode_identity_scope(
+            r"C:\managed\opencode.exe",
+            Some("project_identity_1"),
+            Some(&env),
+            true,
+        ));
+        assert!(!managed_opencode_identity_scope(
+            "powershell.exe",
+            Some("project_identity_1"),
+            Some(&env),
+            true,
+        ));
+        assert!(!managed_opencode_identity_scope(
+            "opencode.exe",
+            Some("project_identity_1"),
+            None,
+            true,
+        ));
+        assert!(!managed_opencode_identity_scope(
+            "opencode.exe",
+            Some("project_identity_1"),
+            Some(&env),
+            false,
+        ));
     }
 
     #[test]

@@ -9,6 +9,8 @@ describe('progressive OpenCode live tool activity', () => {
     ['bash', 'context', 'Running command', 'Ran command'],
     ['apply_patch', 'writing', 'Editing file', 'Edited file'],
     ['verify', 'context', 'Verifying', 'Verified'],
+    ['manual-browser', 'context', 'Using browser', 'Used browser'],
+    ['mcp__playwright__browser_navigate', 'context', 'Using browser', 'Used browser'],
   ] as const)(
     'projects %s lifecycle updates into truthful %s semantics',
     (name, category, runningTitle, doneTitle) => {
@@ -24,6 +26,9 @@ describe('progressive OpenCode live tool activity', () => {
   );
 
   it('projects failed checks and commands as terminal errors instead of completed reads', () => {
+    expect(projectOpenCodeLiveToolActivity({ name: 'manual-browser', status: 'failed' })).toMatchObject({
+      event: { category: 'context', status: 'error', title: 'Browser tool failed', subtitle: 'manual-browser' },
+    });
     expect(projectOpenCodeLiveToolActivity({ name: 'npm_test', status: 'failed' })).toMatchObject({
       event: { category: 'context', status: 'error', title: 'Verification failed' },
       phase: { category: 'context', title: 'Jarvis verification failed' },

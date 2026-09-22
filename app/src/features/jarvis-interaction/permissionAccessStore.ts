@@ -1,4 +1,9 @@
 export type PermissionAccessLevel = 'read' | 'write' | 'full';
+export type AgentApprovalMode = 'full' | 'review';
+export const AGENT_APPROVAL_OPTIONS = [
+  { id: 'full', label: 'Full access', description: 'Run project tools without routine approval prompts.' },
+  { id: 'review', label: 'Review risky actions', description: 'Work autonomously and pause before dangerous actions.' },
+] as const;
 export type PermissionSlashKind = 'mode' | 'status';
 
 export interface PermissionAccessState {
@@ -14,6 +19,7 @@ interface StoredChatAccess {
   access: PermissionAccessLevel;
   approveAll: boolean;
   updatedAt: number;
+  agentApprovalMode?: AgentApprovalMode;
 }
 
 interface StoredAccess {
@@ -48,6 +54,7 @@ function readState(storage: Pick<Storage, 'getItem'> | null | undefined): Stored
       if (!access) continue;
       chats[chatId] = {
         access,
+        agentApprovalMode: (value as Record<string, unknown>).agentApprovalMode === 'full' ? 'full' : 'review',
         approveAll: (value as Record<string, unknown>).approveAll === true,
         updatedAt:
           typeof (value as Record<string, unknown>).updatedAt === 'number'
@@ -102,6 +109,7 @@ function writeChatAccess(
   const next = {
     access: patch.access ?? current.access,
     approveAll: patch.approveAll ?? current.approveAll,
+    agentApprovalMode: current.agentApprovalMode,
     updatedAt: Date.now(),
   };
   state.chats[chatId] = next;
@@ -115,6 +123,25 @@ export function setPermissionAccess(
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null,
 ): PermissionAccessState {
   return writeChatAccess(chatId, { access }, storage);
+}
+
+export function readAgentApprovalMode(
+  chatId: string,
+  storage: Pick<Storage, 'getItem'> | null = defaultStorage(),
+): AgentApprovalMode {
+  return readState(storage).chats[chatId]?.agentApprovalMode ?? 'review';
+}
+
+export function setAgentApprovalMode(
+  chatId: string,
+  mode: AgentApprovalMode,
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null = defaultStorage(),
+): void {
+  const state = readState(storage);
+  state.chats[chatId] = {
+    access: 'full', approveAll: false, agentApprovalMode: mode, updatedAt: Date.now(),
+  };
+  writeState(state, storage);
 }
 
 export function setApproveAllForRun(
@@ -134,9 +161,11 @@ export function expireApproveAllForRun(
 
 export function parsePermissionSlashArg(
   arg: string,
-): { kind: 'mode'; value: 'ask' | 'plan' | 'agent' } | { kind: 'status' } | undefined {
+): { kind: 'mode'; value: 'ask' | 'plan' | 'agent' } | { kind: 'agent-profile'; value: AgentApprovalMode } | { kind: 'status' } | undefined {
   const token = arg.trim().toLowerCase();
   if (!token) return undefined;
+  if (token === 'agent full') return { kind: 'agent-profile', value: 'full' };
+  if (token === 'agent review') return { kind: 'agent-profile', value: 'review' };
   if (token === 'status' || token === 'policy') return { kind: 'status' };
   if (token === 'ask' || token === 'plan' || token === 'agent') {
     return { kind: 'mode', value: token };

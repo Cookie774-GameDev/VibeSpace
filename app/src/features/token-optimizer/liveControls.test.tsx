@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createBrowserTokenOptimizationPreferences } from './browserPreferences';
+import { TokenOptimizationGlobalSettings } from './TokenOptimizationGlobalSettings';
 
 describe('browser Token Optimize preferences', () => {
   it('persists global and per-chat choices without changing a model setting', () => {
@@ -19,8 +20,7 @@ describe('browser Token Optimize preferences', () => {
     expect(persisted).not.toMatch(/"(?:selectedModel|modelId|providerId)"/i);
   });
 
-  it('uses accessible radio semantics for the global setting', async () => {
-    const { TokenOptimizationGlobalSettings } = await import('./TokenOptimizationGlobalSettings');
+  it('uses accessible radio semantics for the global setting', () => {
     render(<TokenOptimizationGlobalSettings />);
     fireEvent.click(screen.getByRole('radio', { name: 'Token Saver' }));
     expect(screen.getByRole('radio', { name: 'Token Saver' }).getAttribute('aria-checked')).toBe(

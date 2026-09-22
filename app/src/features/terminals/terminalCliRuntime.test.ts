@@ -153,6 +153,7 @@ function dependencies(): TerminalCliRuntimeDependencies {
       },
     })),
     verifyContextReceipt: vi.fn(() => true),
+    recordCaoTerminalIdentity: vi.fn(async () => undefined),
   };
 }
 
@@ -177,6 +178,77 @@ describe('terminal CLI frontend runtime', () => {
     expect(() =>
       parseTerminalCliFrontendRequest({ ...request('context.current'), protocolVersion: 2 }),
     ).toThrow(/frontend request/i);
+  });
+
+  it('routes one exact OpenCode identity receipt through the scoped receiver', async () => {
+    const deps = dependencies();
+    const runtime = createTerminalCliRuntime(deps);
+    const response = await runtime.execute(
+      parseTerminalCliFrontendRequest(
+        request('cao.identity.publish', {
+          opencodeSessionId: 'ses-opencode-a',
+          providerId: 'openrouter',
+          modelId: 'deepseek/deepseek-v4-flash',
+          variant: 'high',
+          processInstanceId: 'ptyproc-a',
+        }),
+      ),
+    );
+
+    expect(response).toMatchObject({ ok: true, code: 'ok' });
+    expect(deps.recordCaoTerminalIdentity).toHaveBeenCalledWith({
+      terminalSessionId: 'tty-a',
+      paneId: 'pane-a',
+      projectId: 'project-a',
+      identity: {
+        opencodeSessionId: 'ses-opencode-a',
+        providerId: 'openrouter',
+        modelId: 'deepseek/deepseek-v4-flash',
+        variant: 'high',
+        processInstanceId: 'ptyproc-a',
+      },
+    });
+  });
+
+  it('rejects an identity receipt without the exact terminal scope', async () => {
+    const deps = dependencies();
+    const runtime = createTerminalCliRuntime(deps);
+
+    await expect(
+      runtime.execute(
+        parseTerminalCliFrontendRequest({
+          ...request('cao.identity.publish', {
+            opencodeSessionId: 'ses-opencode-a',
+            providerId: 'openrouter',
+            modelId: 'deepseek/deepseek-v4-flash',
+            variant: 'high',
+            processInstanceId: 'ptyproc-a',
+          }),
+          terminalSessionId: null,
+        }),
+      ),
+    ).resolves.toMatchObject({ ok: false, code: 'permission_denied' });
+    expect(deps.recordCaoTerminalIdentity).not.toHaveBeenCalled();
+  });
+
+  it('rejects identity fields outside the bounded provider/model/variant grammar', async () => {
+    const deps = dependencies();
+    const runtime = createTerminalCliRuntime(deps);
+
+    await expect(
+      runtime.execute(
+        parseTerminalCliFrontendRequest(
+          request('cao.identity.publish', {
+            opencodeSessionId: 'ses-opencode-a',
+            providerId: 'openrouter',
+            modelId: 'deepseek/deepseek-v4-flash',
+            variant: 'high?forged',
+            processInstanceId: 'ptyproc-a',
+          }),
+        ),
+      ),
+    ).resolves.toMatchObject({ ok: false, code: 'invalid_request' });
+    expect(deps.recordCaoTerminalIdentity).not.toHaveBeenCalled();
   });
 
   it('executes one scoped high-level context ask and returns its safe receipt', async () => {

@@ -164,3 +164,49 @@ it('coalesces close with an in-flight autosave instead of resending a runtime cr
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'WebMCP setup' })).toBeNull());
   expect(saves).toBe(1);
 });
+
+it('allows a connecting tunnel to be stopped before replacing credentials', async () => {
+  invoke.mockImplementation(async (command) =>
+    command === 'desktop_connector_status'
+      ? {
+          packaged: true,
+          connectionDetected: true,
+          status: 'connecting',
+          hasKey: true,
+          toolCount: 54,
+          displayName: 'Test',
+          tunnelId: 'tunnel_123456789',
+          step: 1,
+          guideTab: 'tunnel',
+          enabled: true,
+        }
+      : undefined,
+  );
+  render(<DesktopConnectorSetup />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Resume setup' }));
+  const stop = await screen.findByRole('button', { name: 'Stop connection' });
+  fireEvent.click(stop);
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith('desktop_connector_setup', { action: 'disconnect' }),
+  );
+});
+it('keeps a credential-storage failure distinct from tunnel permission errors', async () => {
+  backend();
+  const original = invoke.getMockImplementation()!;
+  invoke.mockImplementation((command, args) =>
+    args?.action === 'save'
+      ? Promise.reject('CREDENTIAL_STORAGE_UNAVAILABLE')
+      : original(command, args),
+  );
+  render(<DesktopConnectorSetup />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Setup' }));
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Tunnel ID' }), {
+    target: { value: 'tunnel_123456789' },
+  });
+  fireEvent.change(screen.getByLabelText('Runtime API key'), {
+    target: { value: 'synthetic-runtime-api-key-123' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Connect tunnel' }));
+  expect((await screen.findByRole('alert')).textContent).toMatch(/secure.*storage/i);
+  expect(invoke).not.toHaveBeenCalledWith('desktop_connector_setup', { action: 'connect' });
+});

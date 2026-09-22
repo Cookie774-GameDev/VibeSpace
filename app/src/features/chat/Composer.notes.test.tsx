@@ -3,7 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui';
 import { useAuthStore } from '@/stores/auth';
 import { Composer } from './Composer';
-vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => undefined }));
+const liveQueryFixture = vi.hoisted(() => ({ emptyArray: [] as unknown[] }));
+vi.mock('dexie-react-hooks', () => ({
+  useLiveQuery: (_query: unknown, _deps: unknown, defaultValue: unknown) =>
+    Array.isArray(defaultValue) && defaultValue.length === 0
+      ? liveQueryFixture.emptyArray
+      : defaultValue,
+}));
 vi.mock('./HarnessReadinessGate', async (original) => ({
   ...(await original<typeof import('./HarnessReadinessGate')>()),
   useHarnessRuntimeState: () => ({ kind: 'ready' }),

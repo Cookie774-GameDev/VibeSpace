@@ -4,10 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::thread;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "windows")]
@@ -23,6 +24,12 @@ const TRAINING_REAL_REQUIREMENTS: &str =
 const TRAINING_QLORA_REQUIREMENTS: &str =
     include_str!("../workers/model_foundry/requirements-qlora.lock");
 const TRAINING_ARTIFACT_MANIFEST: &str = ".vibespace-artifact.json";
+const CALIBRATION_WARMUP_STEPS: u16 = 3;
+const CALIBRATION_MEASURED_STEPS: u16 = 10;
+const CALIBRATION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const WORKER_PROBE_TIMEOUT: Duration = Duration::from_secs(240);
+const WORKER_PROBE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const MAX_PROCESS_CAPTURE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_ARTIFACT_FILES: usize = 4_096;
 const MAX_ARTIFACT_DEPTH: usize = 8;
 const MAX_ARTIFACT_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
@@ -40,6 +47,30 @@ static ACTIVE_MODEL_DOWNLOAD: LazyLock<Mutex<Option<String>>> = LazyLock::new(||
 static MODEL_STORAGE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static TRAINING_RUNTIME_SETUP: Mutex<()> = Mutex::new(());
 static MODEL_DOWNLOAD_CANCELLED: AtomicBool = AtomicBool::new(false);
+static WORKER_PROBE_CACHE: LazyLock<Mutex<Option<WorkerProbeCache>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkerProbeFileIdentity {
+    path: PathBuf,
+    bytes: Option<u64>,
+    modified_unix_nanos: Option<u128>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkerProbeIdentity {
+    python: PathBuf,
+    worker: PathBuf,
+    source_sha256: String,
+    runtime: Vec<WorkerProbeFileIdentity>,
+}
+
+#[derive(Clone)]
+struct WorkerProbeCache {
+    identity: WorkerProbeIdentity,
+    expires_at: Instant,
+    result: Result<TrainingWorkerProbe, String>,
+}
 
 pub(crate) fn foundry_storage_busy() -> Result<bool, String> {
     Ok(!ACTIVE_TRAINING
@@ -447,9 +478,43 @@ pub struct TrainingWorkerStatus {
     modalities: Vec<String>,
     precisions: Vec<String>,
     reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    calibration: Option<TrainingCalibrationEvidence>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TrainingCalibrationEvidence {
+    qualified: bool,
+    model_id: String,
+    method: String,
+    compute_device: String,
+    device: String,
+    precision: String,
+    forward_backward: bool,
+    optimizer_step: bool,
+    batch_size: u16,
+    gradient_accumulation: u16,
+    max_sequence_length: u32,
+    warmup_steps: u16,
+    measured_steps: u16,
+    step_time_ms: u64,
+    step_time_ms_p95: u64,
+    peak_vram_mb: Option<u64>,
+    vram_total_mb: Option<u64>,
+    vram_headroom_mb: Option<u64>,
+    elapsed_ms: u64,
+    reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct TrainingCalibrationRequest {
+    model_id: String,
+    training_config: TrainingConfiguration,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TrainingWorkerProbe {
     protocol: u8,
@@ -864,6 +929,136 @@ fn python_command(program: &str) -> Command {
     command
 }
 
+fn terminate_child_tree(child: &mut Child) {
+    #[cfg(target_os = "windows")]
+    {
+        let pid = child.id().to_string();
+        let _ = hidden_command("taskkill")
+            .args(["/PID", &pid, "/T", "/F"])
+            .status();
+    }
+    let _ = child.kill();
+}
+
+fn captured_output_exceeded(path: &Path) -> Result<bool, String> {
+    fs::metadata(path)
+        .map(|metadata| metadata.len() > MAX_PROCESS_CAPTURE_BYTES)
+        .map_err(|error| format!("Could not inspect process capture: {error}"))
+}
+
+fn read_bounded_capture(path: &Path, operation: &str, stream: &str) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(path)
+        .map_err(|error| format!("Could not collect {operation} {stream} evidence: {error}"))?;
+    let mut bounded = file.take(MAX_PROCESS_CAPTURE_BYTES + 1);
+    let mut bytes = Vec::new();
+    bounded
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Could not collect {operation} {stream} evidence: {error}"))?;
+    if bytes.len() as u64 > MAX_PROCESS_CAPTURE_BYTES {
+        return Err(format!(
+            "{operation} {stream} output exceeded the {} byte limit.",
+            MAX_PROCESS_CAPTURE_BYTES
+        ));
+    }
+    Ok(bytes)
+}
+
+fn bounded_process_output(
+    mut command: Command,
+    timeout: Duration,
+    operation: &str,
+) -> Result<Output, String> {
+    let capture_root =
+        std::env::temp_dir().join(format!("vibespace-foundry-process-{}", nanoid::nanoid!()));
+    fs::create_dir(&capture_root)
+        .map_err(|error| format!("Could not prepare {operation} capture: {error}"))?;
+    let stdout_path = capture_root.join("stdout.log");
+    let stderr_path = capture_root.join("stderr.log");
+    let stdout_file = match fs::File::create(&stdout_path) {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&capture_root);
+            return Err(format!("Could not prepare {operation} capture: {error}"));
+        }
+    };
+    let stderr_file = match fs::File::create(&stderr_path) {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&capture_root);
+            return Err(format!("Could not prepare {operation} capture: {error}"));
+        }
+    };
+    let started = Instant::now();
+    let mut child = match command
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&capture_root);
+            return Err(format!("Could not start {operation}: {error}"));
+        }
+    };
+    loop {
+        let capture_limit_exceeded =
+            captured_output_exceeded(&stdout_path).and_then(|stdout_exceeded| {
+                if stdout_exceeded {
+                    return Ok(Some("stdout"));
+                }
+                captured_output_exceeded(&stderr_path)
+                    .map(|stderr_exceeded| stderr_exceeded.then_some("stderr"))
+            });
+        match capture_limit_exceeded {
+            Err(error) => {
+                terminate_child_tree(&mut child);
+                let _ = child.wait();
+                let _ = fs::remove_dir_all(&capture_root);
+                return Err(format!("Could not inspect {operation} output: {error}"));
+            }
+            Ok(Some(stream)) => {
+                terminate_child_tree(&mut child);
+                let _ = child.wait();
+                let _ = fs::remove_dir_all(&capture_root);
+                return Err(format!(
+                    "{operation} {stream} output exceeded the {} byte limit.",
+                    MAX_PROCESS_CAPTURE_BYTES
+                ));
+            }
+            Ok(None) => {}
+        }
+        let status = match child.try_wait() {
+            Ok(status) => status,
+            Err(error) => {
+                terminate_child_tree(&mut child);
+                let _ = child.wait();
+                let _ = fs::remove_dir_all(&capture_root);
+                return Err(format!("Could not inspect {operation}: {error}"));
+            }
+        };
+        if let Some(status) = status {
+            let stdout = read_bounded_capture(&stdout_path, operation, "stdout");
+            let stderr = read_bounded_capture(&stderr_path, operation, "stderr");
+            let _ = fs::remove_dir_all(&capture_root);
+            return match (stdout, stderr) {
+                (Ok(stdout), Ok(stderr)) => Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                }),
+                (Err(error), _) | (_, Err(error)) => Err(error),
+            };
+        }
+        if started.elapsed() >= timeout {
+            terminate_child_tree(&mut child);
+            let _ = child.wait();
+            let _ = fs::remove_dir_all(&capture_root);
+            return Err(format!("{operation} timed out."));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn locate_system_python() -> Option<String> {
     ["python3", "python", "py"]
         .into_iter()
@@ -1021,16 +1216,334 @@ fn validated_probe(bytes: &[u8]) -> Result<TrainingWorkerProbe, String> {
     Ok(probe)
 }
 
-fn probe_worker(python: &str, path: &Path) -> Result<TrainingWorkerProbe, String> {
-    let output = hidden_command(python)
-        .arg(path)
-        .arg("probe")
-        .output()
-        .map_err(|error| format!("Could not start the verified local training worker: {error}"))?;
-    if !output.status.success() {
-        return Err("The verified local training worker could not inspect its libraries.".into());
+fn training_runtime_ready(methods: &[String], include_qlora: bool) -> bool {
+    methods.iter().any(|method| method == "full")
+        && (!include_qlora || methods.iter().any(|method| method == "qlora"))
+}
+
+fn worker_probe_file_identity(path: PathBuf) -> WorkerProbeFileIdentity {
+    let metadata = fs::metadata(&path).ok();
+    let modified_unix_nanos = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos());
+    WorkerProbeFileIdentity {
+        path,
+        bytes: metadata.map(|metadata| metadata.len()),
+        modified_unix_nanos,
     }
-    validated_probe(&output.stdout)
+}
+
+fn worker_probe_identity(
+    root: &Path,
+    python: &str,
+    path: &Path,
+    source_sha256: &str,
+) -> WorkerProbeIdentity {
+    let runtime_paths = [
+        root.join("pyvenv.cfg"),
+        root.join("requirements-real.lock"),
+        root.join("requirements-qlora.lock"),
+        root.join("Lib").join("site-packages"),
+        root.join("lib"),
+    ];
+    WorkerProbeIdentity {
+        python: PathBuf::from(python),
+        worker: path.to_path_buf(),
+        source_sha256: source_sha256.to_string(),
+        runtime: std::iter::once(PathBuf::from(python))
+            .chain(runtime_paths)
+            .map(worker_probe_file_identity)
+            .collect(),
+    }
+}
+
+fn probe_worker(
+    root: &Path,
+    python: &str,
+    path: &Path,
+    source_sha256: &str,
+) -> Result<TrainingWorkerProbe, String> {
+    let identity = worker_probe_identity(root, python, path, source_sha256);
+    if let Ok(cache) = WORKER_PROBE_CACHE.lock() {
+        if let Some(entry) = cache
+            .as_ref()
+            .filter(|entry| entry.expires_at > Instant::now() && entry.identity == identity)
+        {
+            return entry.result.clone();
+        }
+    }
+    let mut command = hidden_command(python);
+    command.arg(path).arg("probe").stdin(Stdio::null());
+    let result = (|| {
+        let output = bounded_process_output(command, WORKER_PROBE_TIMEOUT, "worker probe")?;
+        if !output.status.success() {
+            return Err(
+                "The verified local training worker could not inspect its libraries.".into(),
+            );
+        }
+        validated_probe(&output.stdout)
+    })();
+    if result.is_ok() {
+        if let Ok(mut cache) = WORKER_PROBE_CACHE.lock() {
+            *cache = Some(WorkerProbeCache {
+                identity,
+                expires_at: Instant::now() + WORKER_PROBE_CACHE_TTL,
+                result: result.clone(),
+            });
+        }
+    }
+    result
+}
+
+fn clear_worker_probe_cache() {
+    if let Ok(mut cache) = WORKER_PROBE_CACHE.lock() {
+        *cache = None;
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerCalibrationResponse {
+    protocol: u8,
+    local_only: bool,
+    #[serde(flatten)]
+    evidence: TrainingCalibrationEvidence,
+}
+
+fn worker_protocol_error(stream: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(stream)
+        .lines()
+        .rev()
+        .find_map(|line| {
+            let value = serde_json::from_str::<serde_json::Value>(line.trim()).ok()?;
+            value
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .filter(|error| !error.trim().is_empty())
+                .map(|error| error.chars().take(1_200).collect())
+        })
+}
+
+fn bounded_output_tail(stream: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stream);
+    let characters = text.chars().collect::<Vec<_>>();
+    let start = characters.len().saturating_sub(400);
+    characters[start..].iter().collect()
+}
+
+fn calibration_failure_detail_from_streams(stdout: &[u8], stderr: &[u8]) -> String {
+    worker_protocol_error(stdout)
+        .or_else(|| worker_protocol_error(stderr))
+        .or_else(|| {
+            (!stderr.is_empty())
+                .then(|| bounded_output_tail(stderr))
+                .filter(|detail| !detail.trim().is_empty())
+        })
+        .or_else(|| {
+            (!stdout.is_empty())
+                .then(|| bounded_output_tail(stdout))
+                .filter(|detail| !detail.trim().is_empty())
+        })
+        .unwrap_or_else(|| "The calibration worker failed before producing evidence.".into())
+}
+
+fn calibration_failure_detail(output: &Output) -> String {
+    let status = output.status.code().map_or_else(
+        || "without an exit code".into(),
+        |code| format!("with exit code {code}"),
+    );
+    format!(
+        "{status}: {}",
+        calibration_failure_detail_from_streams(&output.stdout, &output.stderr)
+    )
+}
+
+fn bounded_calibration_output(command: Command) -> Result<Output, String> {
+    match bounded_process_output(command, CALIBRATION_TIMEOUT, "calibration") {
+        Err(error) if error == "calibration timed out." => {
+            Err("Training calibration timed out after 10 minutes.".into())
+        }
+        result => result,
+    }
+}
+
+fn run_calibration_worker(command: Command, request_path: &Path) -> Result<Output, String> {
+    let output = bounded_calibration_output(command);
+    let _ = fs::remove_file(request_path);
+    output
+}
+
+fn failed_calibration(
+    request: &TrainingCalibrationRequest,
+    reason: impl Into<String>,
+) -> TrainingCalibrationEvidence {
+    TrainingCalibrationEvidence {
+        qualified: false,
+        model_id: request.model_id.clone(),
+        method: request.training_config.method.clone(),
+        compute_device: request.training_config.compute_device.clone(),
+        device: "unknown".into(),
+        precision: "fp32".into(),
+        forward_backward: false,
+        optimizer_step: false,
+        batch_size: request.training_config.batch_size,
+        gradient_accumulation: request.training_config.gradient_accumulation,
+        max_sequence_length: request.training_config.max_sequence_length,
+        warmup_steps: 0,
+        measured_steps: 0,
+        step_time_ms: 0,
+        step_time_ms_p95: 0,
+        peak_vram_mb: None,
+        vram_total_mb: None,
+        vram_headroom_mb: None,
+        elapsed_ms: 0,
+        reason: Some(reason.into()),
+    }
+}
+
+fn run_training_calibration(
+    root: &Path,
+    status: &TrainingWorkerStatus,
+    request: &TrainingCalibrationRequest,
+) -> TrainingCalibrationEvidence {
+    if !status.installed || !status.attested {
+        return failed_calibration(
+            request,
+            status
+                .reason
+                .clone()
+                .unwrap_or_else(|| "The verified local training worker is unavailable.".into()),
+        );
+    }
+    if !status
+        .methods
+        .iter()
+        .any(|method| method == &request.training_config.method)
+    {
+        return failed_calibration(
+            request,
+            format!(
+                "The verified worker does not advertise {} calibration.",
+                request.training_config.method.to_uppercase()
+            ),
+        );
+    }
+    let Some(python) = status.python.as_deref() else {
+        return failed_calibration(request, "Python 3 is required for training calibration.");
+    };
+    let catalog_entry = match catalog_model(&request.model_id) {
+        Ok(model) => model,
+        Err(error) => return failed_calibration(request, error),
+    };
+    let model = match verify_training_model_files(root, &catalog_entry)
+        .map(|_| ())
+        .and_then(|_| training_model_path(root, &request.model_id))
+        .and_then(|path| {
+            path.canonicalize()
+                .map_err(|_| "The verified trainable base model is not installed.".to_string())
+        }) {
+        Ok(model) if model.is_dir() && model.join("config.json").is_file() => model,
+        Ok(_) => return failed_calibration(request, "The verified base model is incomplete."),
+        Err(error) => return failed_calibration(request, error),
+    };
+    let config = match request
+        .training_config
+        .clone()
+        .validated(&request.training_config.method)
+    {
+        Ok(config) => config,
+        Err(error) => return failed_calibration(request, error),
+    };
+    let request_path = root.join(format!(".calibration-{}.json", nanoid::nanoid!(16)));
+    let payload = serde_json::json!({
+        "protocol": WORKER_PROTOCOL,
+        "localOnly": true,
+        "modelId": request.model_id,
+        "method": config.method,
+        "baseModelPath": model.to_string_lossy(),
+        "modelModalities": catalog_entry.modalities,
+        "trainingConfig": config,
+    });
+    let write_result = serde_json::to_vec(&payload)
+        .map_err(|error| format!("Could not encode calibration request: {error}"))
+        .and_then(|bytes| {
+            fs::write(&request_path, bytes)
+                .map_err(|error| format!("Could not persist calibration request: {error}"))
+        });
+    if let Err(error) = write_result {
+        return failed_calibration(request, error);
+    }
+    let worker = worker_path(root);
+    let mut command = hidden_command(python);
+    command
+        .arg(&worker)
+        .arg("calibrate")
+        .arg(&request_path)
+        .current_dir(root)
+        .env("HF_HUB_OFFLINE", "1")
+        .env("TRANSFORMERS_OFFLINE", "1")
+        .env("TOKENIZERS_PARALLELISM", "false")
+        .stdin(Stdio::null());
+    let output = match run_calibration_worker(command, &request_path) {
+        Ok(output) => output,
+        Err(error) => {
+            return failed_calibration(request, format!("Could not start calibration: {error}"))
+        }
+    };
+    if !output.status.success() {
+        return failed_calibration(
+            request,
+            format!(
+                "Calibration worker failed: {}",
+                calibration_failure_detail(&output)
+            ),
+        );
+    }
+    let parsed: WorkerCalibrationResponse = match serde_json::from_slice(&output.stdout) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return failed_calibration(
+                request,
+                format!("Calibration evidence was invalid: {error}"),
+            )
+        }
+    };
+    if parsed.protocol != WORKER_PROTOCOL || !parsed.local_only {
+        return failed_calibration(
+            request,
+            "Calibration worker returned an untrusted protocol.",
+        );
+    }
+    if parsed.evidence.model_id != request.model_id
+        || parsed.evidence.method != request.training_config.method
+        || parsed.evidence.compute_device != request.training_config.compute_device
+        || !parsed.evidence.qualified
+        || !parsed.evidence.forward_backward
+        || !parsed.evidence.optimizer_step
+        || parsed.evidence.batch_size != request.training_config.batch_size
+        || parsed.evidence.gradient_accumulation != request.training_config.gradient_accumulation
+        || parsed.evidence.max_sequence_length != request.training_config.max_sequence_length
+        || parsed.evidence.warmup_steps != CALIBRATION_WARMUP_STEPS
+        || parsed.evidence.measured_steps != CALIBRATION_MEASURED_STEPS
+        || parsed.evidence.step_time_ms == 0
+        || parsed.evidence.step_time_ms_p95 < parsed.evidence.step_time_ms
+        || (request.training_config.compute_device == "gpu"
+            && (!parsed.evidence.device.starts_with("cuda")
+                || parsed.evidence.vram_total_mb.is_none()
+                || parsed.evidence.peak_vram_mb.is_none()
+                || parsed.evidence.vram_headroom_mb.unwrap_or(0) < 512
+                || parsed.evidence.vram_headroom_mb > parsed.evidence.vram_total_mb
+                || parsed.evidence.peak_vram_mb > parsed.evidence.vram_total_mb))
+    {
+        let reason =
+            parsed.evidence.reason.clone().unwrap_or_else(|| {
+                "Calibration did not prove the requested device and method.".into()
+            });
+        return failed_calibration(request, reason);
+    }
+    parsed.evidence
 }
 
 fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
@@ -1051,6 +1564,7 @@ fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
             modalities: Vec::new(),
             precisions: Vec::new(),
             reason: Some("The verified local training worker has not been installed.".into()),
+            calibration: None,
         };
     }
     let bytes = match fs::read(&path) {
@@ -1068,6 +1582,7 @@ fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
                 reason: Some(format!(
                     "Could not inspect the local training worker: {error}"
                 )),
+                calibration: None,
             }
         }
     };
@@ -1082,6 +1597,7 @@ fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
             modalities: Vec::new(),
             precisions: Vec::new(),
             reason: Some("The local training worker failed integrity verification.".into()),
+            calibration: None,
         };
     }
     let Some(python) = runtime_python else {
@@ -1095,9 +1611,10 @@ fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
             modalities: Vec::new(),
             precisions: Vec::new(),
             reason: Some("Set up the private Model Foundry runtime before training.".into()),
+            calibration: None,
         };
     };
-    match probe_worker(&python, &path) {
+    match probe_worker(root, &python, &path, &expected) {
         Ok(probe) if probe.ready => TrainingWorkerStatus {
             installed: true,
             attested: true,
@@ -1108,6 +1625,7 @@ fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
             modalities: probe.modalities,
             precisions: probe.precisions,
             reason: probe.reason,
+            calibration: None,
         },
         Ok(probe) => TrainingWorkerStatus {
             installed: true,
@@ -1121,6 +1639,7 @@ fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
             reason: probe
                 .reason
                 .or_else(|| Some("Verified private training libraries are incomplete.".into())),
+            calibration: None,
         },
         Err(error) => TrainingWorkerStatus {
             installed: true,
@@ -1132,6 +1651,7 @@ fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
             modalities: Vec::new(),
             precisions: Vec::new(),
             reason: Some(error),
+            calibration: None,
         },
     }
 }
@@ -1451,10 +1971,16 @@ fn install_training_model(
 #[tauri::command]
 pub async fn model_foundry_training_worker_status(
     app: tauri::AppHandle,
+    calibration: Option<TrainingCalibrationRequest>,
 ) -> Result<TrainingWorkerStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _setup_guard = claim_training_runtime_setup()?;
-        Ok(inspect_worker(&training_root(&app)?))
+        let root = training_root(&app)?;
+        let mut status = inspect_worker(&root);
+        if let Some(request) = calibration {
+            status.calibration = Some(run_training_calibration(&root, &status, &request));
+        }
+        Ok(status)
     })
     .await
     .map_err(|error| format!("Model Foundry status worker failed: {error}"))?
@@ -1566,25 +2092,21 @@ fn install_training_runtime(
     fs::rename(&temporary, &path).map_err(|error| {
         format!("Could not activate the verified local training worker: {error}")
     })?;
+    clear_worker_probe_cache();
 
     let python = create_private_python(&root)?;
     let python_text = python.to_string_lossy().into_owned();
-    let needs_packages = probe_worker(&python_text, &path)
-        .map(|probe| {
-            !probe.ready
-                || !probe.methods.iter().any(|method| method == "lora")
-                || (include_qlora && !probe.methods.iter().any(|method| method == "qlora"))
-        })
+    let expected = expected_source_sha256();
+    let needs_packages = probe_worker(&root, &python_text, &path, &expected)
+        .map(|probe| !probe.ready || !training_runtime_ready(&probe.methods, include_qlora))
         .unwrap_or(true);
     if needs_packages {
         install_private_training_packages(&python, &root, include_qlora)?;
+        clear_worker_probe_cache();
     }
 
     let status = inspect_worker(&root);
-    if !status.attested
-        || !status.methods.iter().any(|method| method == "lora")
-        || (include_qlora && !status.methods.iter().any(|method| method == "qlora"))
-    {
+    if !status.attested || !training_runtime_ready(&status.methods, include_qlora) {
         return Err(status
             .reason
             .unwrap_or_else(|| "Private Model Foundry runtime verification failed.".into()));
@@ -2101,7 +2623,9 @@ mod tests {
     #[test]
     fn training_setup_rejects_overlap_and_releases_after_completion() {
         let first = claim_training_runtime_setup().unwrap();
-        assert!(claim_training_runtime_setup().unwrap_err().contains("already running"));
+        assert!(claim_training_runtime_setup()
+            .unwrap_err()
+            .contains("already running"));
         drop(first);
         assert!(claim_training_runtime_setup().is_ok());
     }
@@ -2224,6 +2748,47 @@ mod tests {
     }
 
     #[test]
+    fn full_runtime_remains_ready_when_optional_lora_is_unavailable() {
+        let full = vec!["full".to_string()];
+        assert!(training_runtime_ready(&full, false));
+        assert!(!training_runtime_ready(&full, true));
+
+        let lora_only = vec!["lora".to_string()];
+        assert!(!training_runtime_ready(&lora_only, false));
+        assert!(!training_runtime_ready(&lora_only, true));
+
+        let full_with_qlora = vec!["full".to_string(), "qlora".to_string()];
+        assert!(training_runtime_ready(&full_with_qlora, true));
+    }
+
+    #[test]
+    fn worker_probe_identity_tracks_source_and_runtime_setup_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "vibespace-foundry-probe-identity-{}",
+            nanoid::nanoid!()
+        ));
+        let site_packages = root.join("Lib").join("site-packages");
+        fs::create_dir_all(&site_packages).unwrap();
+        let python = root.join("python.exe");
+        let worker = root.join("worker.py");
+        fs::write(&python, b"python").unwrap();
+        fs::write(&worker, b"worker").unwrap();
+        fs::write(root.join("pyvenv.cfg"), b"version=1").unwrap();
+        fs::write(root.join("requirements-real.lock"), b"runtime=1").unwrap();
+
+        let initial = worker_probe_identity(&root, &python.to_string_lossy(), &worker, "source-a");
+        let source_changed =
+            worker_probe_identity(&root, &python.to_string_lossy(), &worker, "source-b");
+        assert_ne!(initial, source_changed);
+
+        fs::write(root.join("pyvenv.cfg"), b"version=2-updated").unwrap();
+        let runtime_changed =
+            worker_probe_identity(&root, &python.to_string_lossy(), &worker, "source-a");
+        assert_ne!(initial, runtime_changed);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn worker_probe_advertises_only_closed_supported_capability_values() {
         let root =
             std::env::temp_dir().join(format!("vibespace-foundry-training-{}", nanoid::nanoid!()));
@@ -2249,6 +2814,149 @@ mod tests {
             assert!(status.reason.is_some());
         }
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn worker_process_capture_times_out_without_pipe_deadlock() {
+        #[cfg(target_os = "windows")]
+        let command = {
+            let mut command = hidden_command("cmd");
+            command.args(["/C", "ping 127.0.0.1 -n 20 > NUL"]);
+            command
+        };
+        #[cfg(not(target_os = "windows"))]
+        let command = {
+            let mut command = hidden_command("sh");
+            command.args(["-c", "sleep 20"]);
+            command
+        };
+
+        let started = Instant::now();
+        let error =
+            bounded_process_output(command, Duration::from_millis(100), "test worker probe")
+                .unwrap_err();
+
+        assert!(error.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn worker_process_capture_handles_output_larger_than_a_pipe_buffer() {
+        #[cfg(target_os = "windows")]
+        let command = {
+            let mut command = hidden_command("cmd");
+            command.args([
+                "/C",
+                "for /L %i in (1,1,20000) do @echo 0123456789012345678901234567890123456789",
+            ]);
+            command
+        };
+        #[cfg(not(target_os = "windows"))]
+        let command = {
+            let mut command = hidden_command("sh");
+            command.args(["-c", "yes 0123456789 | head -n 100000"]);
+            command
+        };
+
+        let output =
+            bounded_process_output(command, Duration::from_secs(10), "noisy test worker probe")
+                .expect("noisy worker output should not deadlock");
+
+        assert!(output.status.success());
+        assert!(output.stdout.len() > 512 * 1024);
+    }
+
+    #[test]
+    fn worker_process_capture_rejects_output_over_the_capture_limit() {
+        #[cfg(target_os = "windows")]
+        let command = {
+            let mut command = hidden_command("cmd");
+            command.args([
+                "/C",
+                "for /L %i in (1,1,200000) do @echo 0123456789012345678901234567890123456789",
+            ]);
+            command
+        };
+        #[cfg(not(target_os = "windows"))]
+        let command = {
+            let mut command = hidden_command("sh");
+            command.args(["-c", "yes 0123456789 | head -c 5000000"]);
+            command
+        };
+
+        let started = Instant::now();
+        let error = bounded_process_output(
+            command,
+            Duration::from_secs(10),
+            "oversized test worker probe",
+        )
+        .unwrap_err();
+
+        assert!(
+            error.contains("output exceeded"),
+            "unexpected bounded capture error: {error}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn calibration_failure_prefers_structured_worker_error_after_warnings() {
+        let detail = calibration_failure_detail_from_streams(
+            b"",
+            br#"use_cache=True is incompatible with gradient checkpointing.
+torch.utils.checkpoint: use_reentrant should be passed explicitly.
+{"protocol":1,"localOnly":true,"valid":false,"error":"Calibration found a trainable parameter without a gradient."}
+"#,
+        );
+
+        assert_eq!(
+            detail,
+            "Calibration found a trainable parameter without a gradient."
+        );
+    }
+
+    #[test]
+    fn calibration_failure_prefers_structured_stdout_error_over_stderr_warnings() {
+        let detail = calibration_failure_detail_from_streams(
+            br#"{"protocol":1,"localOnly":true,"valid":false,"error":"structured stdout failure"}"#,
+            b"warning text only",
+        );
+
+        assert_eq!(detail, "structured stdout failure");
+    }
+
+    #[test]
+    fn calibration_request_stays_available_until_worker_exit_then_is_removed() {
+        let root = std::env::temp_dir().join(format!(
+            "vibespace-foundry-calibration-request-{}",
+            nanoid::nanoid!()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let request_path = root.join("request.json");
+        fs::write(&request_path, b"{}").unwrap();
+
+        #[cfg(target_os = "windows")]
+        let command = {
+            let mut command = hidden_command("cmd");
+            command
+                .args(["/C", "if exist request.json (exit /B 0) else (exit /B 1)"])
+                .current_dir(&root);
+            command
+        };
+        #[cfg(not(target_os = "windows"))]
+        let command = {
+            let mut command = hidden_command("sh");
+            command
+                .args(["-c", "test -f request.json"])
+                .current_dir(&root);
+            command
+        };
+
+        let output = run_calibration_worker(command, &request_path)
+            .expect("calibration worker should see its request file");
+        assert!(output.status.success());
+        assert!(!request_path.exists());
         let _ = fs::remove_dir_all(root);
     }
 

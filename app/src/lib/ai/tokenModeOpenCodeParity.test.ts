@@ -75,7 +75,7 @@ describe('Token mode OpenCode parity', () => {
     });
     const modes: readonly ReasoningMode[] = ['token-saver', 'normal', 'token-final-boss'];
     const expected = {
-      'token-saver': { label: 'Token Saver', variant: 'low', maxOutputTokens: 2_048 },
+      'token-saver': { label: 'Token Saver', variant: undefined, maxOutputTokens: undefined },
       normal: { label: 'Normal', variant: undefined, maxOutputTokens: undefined },
       'token-final-boss': {
         label: 'Token Final Boss',

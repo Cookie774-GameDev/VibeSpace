@@ -2,6 +2,17 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { telemetryConsentStore } from '@/features/telemetry/telemetryConsent';
 import { Telemetry } from './Telemetry';
+import {
+  getAccountTelemetryConsent,
+  updateAccountTelemetryConsent,
+} from '@/features/telemetry/accountTelemetryConsent';
+
+const account = vi.hoisted(() => ({ cloudSession: null as null | { user_id: string } }));
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: Object.assign((selector: (state: typeof account) => unknown) => selector(account), {
+    getState: () => account,
+  }),
+}));
 
 vi.mock('@/features/telemetry/accountTelemetryConsent', () => ({
   getAccountTelemetryConsent: vi.fn(async () => ({ ok: false, error: 'cloud_not_configured' })),
@@ -9,12 +20,20 @@ vi.mock('@/features/telemetry/accountTelemetryConsent', () => ({
 }));
 
 describe('Telemetry settings', () => {
-  beforeEach(() => telemetryConsentStore.resetForTests());
+  beforeEach(() => {
+    account.cloudSession = null;
+    telemetryConsentStore.resetForTests();
+    vi.mocked(getAccountTelemetryConsent).mockResolvedValue({
+      ok: false,
+      error: 'cloud_not_configured',
+    });
+    vi.mocked(updateAccountTelemetryConsent).mockReset();
+  });
 
   it('explains collection boundaries and keeps every optional class off initially', async () => {
     render(<Telemetry />);
     await screen.findByText(/Sign in to a configured VibeSpace account/i);
-    expect(screen.getByRole('heading', { name: 'Anonymous telemetry' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Optional telemetry' })).toBeTruthy();
     expect(screen.getByText(/Essential crash and security logging/i)).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Local AI diagnostics' })).toBeTruthy();
     expect(screen.getByText(/stay in process memory/i)).toBeTruthy();
@@ -46,5 +65,35 @@ describe('Telemetry settings', () => {
     expect(
       screen.getByRole('switch', { name: 'Share product usage' }).getAttribute('data-state'),
     ).toBe('unchecked');
+  });
+
+  it('stops sharing immediately and shows pending withdrawal when offline', async () => {
+    account.cloudSession = { user_id: 'telemetry-ui-test' };
+    const state = {
+      enabled: true,
+      eligible: true,
+      policyVersion: 'v1',
+      noticeUrl: 'https://example.test/notice',
+      discountPercent: 10,
+      requiredDataClasses: ['product_usage', 'diagnostics', 'tool_outcomes'],
+    } as const;
+    telemetryConsentStore.updateConsent({
+      productUsage: true,
+      diagnostics: true,
+      toolOutcomes: true,
+    });
+    vi.mocked(getAccountTelemetryConsent).mockResolvedValue({ ok: true, state });
+    vi.mocked(updateAccountTelemetryConsent).mockResolvedValue({ ok: false, error: 'offline' });
+    render(<Telemetry />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Withdraw 10% reward consent' }));
+    expect(telemetryConsentStore.getSnapshot().consent).toEqual({
+      productUsage: false,
+      diagnostics: false,
+      toolOutcomes: false,
+    });
+    await screen.findByText(/withdrawal pending synchronization/i);
+    expect(JSON.parse(localStorage.getItem('vibespace-telemetry-withdrawals-v1') ?? '[]')).toEqual([
+      expect.objectContaining({ accountId: 'telemetry-ui-test' }),
+    ]);
   });
 });

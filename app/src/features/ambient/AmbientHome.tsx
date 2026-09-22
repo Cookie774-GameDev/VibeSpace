@@ -18,6 +18,7 @@
 import * as React from 'react';
 import { useUIStore } from '@/stores/ui';
 import { formatAmbientClockParts } from '@/lib/timeFormat';
+import { useIdleCaoMission } from '@/features/cao/useIdleCaoMission';
 import { QUOTES } from './quotes';
 import './sakura-ambient.css';
 
@@ -27,9 +28,16 @@ import './sakura-ambient.css';
  * the shared `--ambient-phase` CSS variable so all child layers breathe in
  * sync.
  */
+const CaoDeskScene = React.lazy(() =>
+  import('@/features/cao/CaoDeskScene').then((m) => ({ default: m.CaoDeskScene })),
+);
+
 export function AmbientHome() {
   const ambient = useUIStore((s) => s.ambient);
   const ambientActive = useUIStore((s) => s.ambientActive);
+  const scene = useUIStore((s) => s.ambientScene);
+  const mission = useIdleCaoMission(ambientActive && scene === 'cao');
+  const showCao = scene === 'cao' && Boolean(mission);
   const clockFormat = useUIStore((s) => s.clockFormat);
   const setAmbientActive = useUIStore((s) => s.setAmbientActive);
 
@@ -39,25 +47,25 @@ export function AmbientHome() {
 
   // Tick clock every second while active.
   React.useEffect(() => {
-    if (!ambientActive) return;
+    if (!ambientActive || showCao) return;
     setNow(new Date());
     const id = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(id);
-  }, [ambientActive]);
+  }, [ambientActive, showCao]);
 
   // Rotate quote every 30s.
   React.useEffect(() => {
-    if (!ambientActive) return;
+    if (!ambientActive || showCao) return;
     const id = setInterval(() => {
       setQuote(QUOTES[Math.floor(Math.random() * QUOTES.length)]);
     }, 30_000);
     return () => clearInterval(id);
-  }, [ambientActive]);
+  }, [ambientActive, showCao]);
 
   // Drive --ambient-phase in [0,1] from a single 4.4s cycle so child layers
   // can pulse in lockstep without their own timers.
   React.useEffect(() => {
-    if (!ambientActive) return;
+    if (!ambientActive || showCao) return;
     let raf = 0;
     const start = performance.now();
     const tick = (t: number) => {
@@ -71,12 +79,12 @@ export function AmbientHome() {
       cancelAnimationFrame(raf);
       document.documentElement.style.setProperty('--ambient-phase', '0');
     };
-  }, [ambientActive]);
+  }, [ambientActive, showCao]);
 
   // Wake on any activity. The hook listens at the document level so it
   // catches mouse/keyboard/touch even before the focus reaches a child.
   React.useEffect(() => {
-    if (!ambientActive) return;
+    if (!ambientActive || showCao) return;
     const wake = () => {
       if (exiting) return;
       setExiting(true);
@@ -106,9 +114,23 @@ export function AmbientHome() {
       window.removeEventListener('touchstart', wake, opts);
       window.removeEventListener('wheel', wake, opts);
     };
-  }, [ambientActive, exiting, setAmbientActive]);
+  }, [ambientActive, exiting, setAmbientActive, showCao]);
 
   if (!ambient || !ambientActive) return null;
+
+  if (showCao && mission)
+    return (
+      <div
+        data-monochrome-surface="ambient-home"
+        className="fixed inset-0 z-[200] bg-background"
+        role="dialog"
+        aria-label="Jarvis CAO idle workspace"
+      >
+        <React.Suspense fallback={<p className="p-5">Opening your team workspace…</p>}>
+          <CaoDeskScene mission={mission} immersive onExit={() => setAmbientActive(false)} />
+        </React.Suspense>
+      </div>
+    );
 
   const { h, m, period, date } = formatAmbientClockParts(now, clockFormat);
 

@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { buildUserIdentityContextBlock } from './userIdentity';
 
 describe('buildUserIdentityContextBlock', () => {
+  it('does not impose voice brevity on written replies', () => {
+    const block = buildUserIdentityContextBlock('Viper');
+    expect(block).toContain('do not impose a fixed sentence or word limit');
+    expect(block).not.toContain('1–3 short sentences');
+  });
   it('still requires sir when no display name is set', () => {
     const block = buildUserIdentityContextBlock('');
     expect(block).toContain('User identity');

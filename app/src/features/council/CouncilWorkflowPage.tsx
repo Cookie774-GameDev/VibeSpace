@@ -6,18 +6,57 @@ import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
 import { useUIStore } from '@/stores/ui';
-import { useAccessibleChatModels, type ModelPickerOption } from '@/lib/ai/useAccessibleChatModels';
+import { useAccessibleChatModels } from '@/lib/ai/useAccessibleChatModels';
 import { loadPersistedContextMaps } from '@/features/context/contextPersistence';
 import type { ContextMapRecord } from '@/features/context/tree';
 import { Button } from '@/components/ui/button';
 import { captureCouncilContext, councilRunKey, councilWorkflow } from './workflowProduction';
 import type { CouncilRoute, CouncilRun, CouncilResult } from './workflow';
 import './council.sakura.css';
+import { CaoWorkspace } from '@/features/cao/CaoWorkspace';
+import { CaoModelPicker } from '@/features/cao/CaoModelPicker';
 
 const fieldClass =
   'rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground';
 
 export function CouncilWorkflowPage({ chatId }: { chatId: string | null }) {
+  useAuthStore((state) => state.localUserId);
+  useAuthStore((state) => state.cloudSession);
+  const accountId = getActiveAccountIdentity()?.accountId ?? '';
+  const chat = useLiveQuery(() => (chatId ? db.chats.get(chatId as ChatId) : undefined), [chatId]);
+  return (
+    <section className="cao-council-page h-full overflow-auto">
+      <header className="flex items-center justify-between border-b border-border p-4">
+        <div>
+          <h2 className="font-semibold">Jarvis CAO · Council</h2>
+          <p className="text-xs text-muted-foreground">One workspace for your coordinating team.</p>
+        </div>
+        <Button size="sm" variant="ghost" onClick={() => useUIStore.getState().setChatMode('chat')}>
+          Back to chat
+        </Button>
+      </header>
+      <div className="mx-auto max-w-4xl p-4">
+        <CaoWorkspace
+          key={`${accountId}:${chatId}`}
+          chatId={chatId ?? ''}
+          scope={{
+            accountId,
+            workspaceId: String(chat?.workspace_id ?? ''),
+            projectId: String(chat?.project_id ?? ''),
+          }}
+        />
+      </div>
+    </section>
+  );
+}
+
+export function CouncilPerspectivesPanel({
+  chatId,
+  embedded = false,
+}: {
+  chatId: string | null;
+  embedded?: boolean;
+}) {
   useAuthStore((s) => s.localUserId);
   useAuthStore((s) => s.cloudSession);
   const accountId = getActiveAccountIdentity()?.accountId ?? '';
@@ -40,7 +79,8 @@ export function CouncilWorkflowPage({ chatId }: { chatId: string | null }) {
     async () =>
       accountId && chatId
         ? ((await db.settings.get(councilRunKey(accountId, chatId)))?.value as
-            CouncilRun | undefined)
+            | CouncilRun
+            | undefined)
         : undefined,
     [accountId, chatId],
   );
@@ -134,41 +174,6 @@ export function CouncilWorkflowPage({ chatId }: { chatId: string | null }) {
       setBusy(false);
     }
   }
-  const modelSelect = (label: string, value: string, onChange: (value: string) => void) => (
-    <label className="flex flex-col gap-1 text-sm">
-      {label}
-      <select
-        className={fieldClass}
-        aria-label={label}
-        value={value}
-        disabled={running}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        <option value="">Choose an exact route</option>
-        {options.map((option: ModelPickerOption) => (
-          <option key={option.id} value={option.id}>
-            {option.label} · {option.connectionId ?? option.connection?.id}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-  const effortSelect = (label: string, value: string, onChange: (value: string) => void) => (
-    <label className="flex flex-col gap-1 text-sm">
-      {label}
-      <select
-        className={fieldClass}
-        aria-label={label}
-        value={value}
-        disabled={running}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        {['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map((effort) => (
-          <option key={effort}>{effort}</option>
-        ))}
-      </select>
-    </label>
-  );
   const resultPanel = (result: CouncilResult) => (
     <section key={result.id} className="rounded-md border border-border bg-panel p-3 min-w-0">
       <div className="flex items-center justify-between gap-2">
@@ -206,16 +211,18 @@ export function CouncilWorkflowPage({ chatId }: { chatId: string | null }) {
       className="sakura-council-root flex flex-col h-full min-h-0"
       data-vibespace-owned-chrome="council"
     >
-      <header className="sakura-council-header flex items-center justify-between p-3 border-b border-border">
-        <h2 className="font-medium">Council</h2>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => useUIStore.getState().setChatMode('chat')}
-        >
-          Back to chat
-        </Button>
-      </header>
+      {!embedded && (
+        <header className="sakura-council-header flex items-center justify-between p-3 border-b border-border">
+          <h2 className="font-medium">Council</h2>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => useUIStore.getState().setChatMode('chat')}
+          >
+            Back to chat
+          </Button>
+        </header>
+      )}
       <div className="flex-1 overflow-auto p-4 space-y-4">
         <p className="text-sm text-muted-foreground">
           Two perspectives, one selected Context Map, and a final Critic synthesis. Model routes
@@ -271,17 +278,33 @@ export function CouncilWorkflowPage({ chatId }: { chatId: string | null }) {
                   ))}
                 </select>
               </label>
-              {modelSelect(`Perspective ${index + 1} model route`, value, (next) =>
-                setSelected((values) => values.map((value, i) => (i === index ? next : value))),
-              )}
-              {effortSelect(`Perspective ${index + 1} effort`, efforts[index]!, (next) =>
-                setEfforts((values) => values.map((value, i) => (i === index ? next : value))),
-              )}
+              <CaoModelPicker
+                label={`Perspective ${index + 1} model and effort`}
+                value={options.find((option) => option.id === value)}
+                effort={efforts[index]!}
+                disabled={running}
+                allow={(option) => options.some((route) => route.id === option.id)}
+                onSelect={(option, effort) => {
+                  setSelected((values) =>
+                    values.map((value, i) => (i === index ? option.id : value)),
+                  );
+                  setEfforts((values) => values.map((value, i) => (i === index ? effort : value)));
+                }}
+              />
             </div>
           ))}
         </div>
-        {modelSelect('Critic synthesis model route', synthesisId, setSynthesisId)}
-        {effortSelect('Critic synthesis effort', synthesisEffort, setSynthesisEffort)}
+        <CaoModelPicker
+          label="Critic model and effort"
+          value={options.find((option) => option.id === synthesisId)}
+          effort={synthesisEffort}
+          disabled={running}
+          allow={(option) => options.some((route) => route.id === option.id)}
+          onSelect={(option, effort) => {
+            setSynthesisId(option.id);
+            setSynthesisEffort(effort);
+          }}
+        />
         <Button disabled={!ready} onClick={() => void start()}>
           Run Council
         </Button>

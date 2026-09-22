@@ -9,6 +9,19 @@ import { getPlayableAmbientTrack } from './tracks';
 import { useMusicProjectStore } from './music-studio/musicProject';
 
 export function AmbientAudioHost() {
+  const [deskMusic, setDeskMusic] = React.useState(false);
+  React.useEffect(() => {
+    const players = new Set<string>();
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<{ id: string; playing: boolean }>).detail;
+      if (!detail?.id) return;
+      if (detail.playing) players.add(detail.id);
+      else players.delete(detail.id);
+      setDeskMusic(players.size > 0);
+    };
+    window.addEventListener('vibespace:cao-desk-music', changed);
+    return () => window.removeEventListener('vibespace:cao-desk-music', changed);
+  }, []);
   const ambient = useUIStore((s) => s.ambient);
   const ambientActive = useUIStore((s) => s.ambientActive);
   const ambientDrone = useUIStore((s) => s.ambientDrone);
@@ -16,12 +29,8 @@ export function AmbientAudioHost() {
   const ambientTrack = useUIStore((s) => s.ambientTrack);
   const ambientVolume = useUIStore((s) => s.ambientVolume);
   const plan = useAuthStore((s) => s.plan);
-  const shouldPlay = shouldAmbientMusicPlay(
-    ambient,
-    ambientActive,
-    ambientDrone,
-    ambientAlwaysPlay,
-  );
+  const shouldPlay =
+    !deskMusic && shouldAmbientMusicPlay(ambient, ambientActive, ambientDrone, ambientAlwaysPlay);
   const admin = useAppAdmin();
   const musicClips = useMusicProjectStore((state) => state.clips);
   const musicLoop = useMusicProjectStore((state) => state.loop);

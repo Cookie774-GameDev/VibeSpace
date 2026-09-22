@@ -604,4 +604,32 @@ describe('requestsReadOnlyContextTool', () => {
       ),
     ).toBe(false);
   });
+
+  it('keeps an ordinary workspace file plus MCP review on the native catalog', () => {
+    expect(
+      requestsReadOnlyContextTool(
+        'Read Project6 index.html and call connectedGitHubplugin to review the project files.',
+      ),
+    ).toBe(false);
+  });
+
+  it('keeps a simple code-file review on the native catalog', () => {
+    expect(requestsReadOnlyContextTool('Review index.html')).toBe(false);
+  });
+
+  it('retains explicit RLM routing for bounded corpus evidence', () => {
+    expect(requestsReadOnlyContextTool('Use RLM to inspect the corpus without editing it.')).toBe(true);
+  });
+
+  it('keeps an unnamed file explanation on the full native catalog', () => {
+    expect(requestsReadOnlyContextTool('Read the files and explain the changes.')).toBe(false);
+  });
+
+  it.each([
+    'Read the indexed source files and verify the result. Do not write or edit files.',
+    'Search the corpus records and cite the matching source.',
+    'Read the context authority records and quote the canonical value.',
+  ])('retains bounded Context evidence routing: %s', (prompt) => {
+    expect(requestsReadOnlyContextTool(prompt)).toBe(true);
+  });
 });

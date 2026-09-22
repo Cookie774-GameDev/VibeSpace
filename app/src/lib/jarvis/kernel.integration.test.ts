@@ -312,6 +312,28 @@ function createKernelHarness(
 }
 
 describe('runJarvisKernelTurn explicit kernel integration', () => {
+  it('passes the captured approval profile and run grant to provider preparation', async () => {
+    const input = turnInput({
+      interactionMode: 'agent',
+      accessLevel: 'full',
+      agentApprovalMode: 'review',
+      approveAllForRun: true,
+    });
+    const harness = createKernelHarness(input);
+
+    await expect(runJarvisKernelTurn(input, harness.deps)).resolves.toMatchObject({
+      kind: 'committed',
+    });
+    expect(harness.deps.prepareProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        interactionMode: 'agent',
+        accessLevel: 'full',
+        agentApprovalMode: 'review',
+        approveAllForRun: true,
+      }),
+    );
+  });
+
   it('executes a registered safe response action canonically before terminal projection', async () => {
     const input = turnInput();
     const processed: JarvisResponseEnvelope = {

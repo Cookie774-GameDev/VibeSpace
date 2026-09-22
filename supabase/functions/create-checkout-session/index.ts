@@ -69,16 +69,16 @@ function safeCheckoutUrl(raw: unknown): string | null {
 const TELEMETRY_REWARD_PERCENT = 10;
 
 function telemetryEligible(profile: any, policyVersion: unknown): boolean {
+  const required = ['product_usage', 'diagnostics', 'tool_outcomes'];
+  const classes = profile?.telemetry_data_classes;
   return Boolean(
     profile?.telemetry_opt_in === true &&
     typeof policyVersion === 'string' &&
     policyVersion.length > 0 &&
-    profile?.telemetry_policy_version === policyVersion,
+    profile?.telemetry_policy_version === policyVersion &&
+    Array.isArray(classes) && classes.length === required.length &&
+    required.every((name) => classes.includes(name)),
   );
-}
-
-function combinedDiscountPercent(familyPercent: number): number {
-  return 100 - (100 - familyPercent) * (1 - TELEMETRY_REWARD_PERCENT / 100);
 }
 
 async function resolveAuthoritativeDiscount(
@@ -97,15 +97,12 @@ async function resolveAuthoritativeDiscount(
 
   let couponId: unknown = null;
   let expectedPercent = 0;
-  if (telemetry && hasFamily) {
-    couponId = family.combinedCouponId;
-    expectedPercent = combinedDiscountPercent(familyPercent);
+  if (hasFamily) {
+    couponId = family.familyCouponId;
+    expectedPercent = familyPercent;
   } else if (telemetry) {
     couponId = deps.config?.telemetryCouponId;
     expectedPercent = TELEMETRY_REWARD_PERCENT;
-  } else if (hasFamily) {
-    couponId = family.familyCouponId;
-    expectedPercent = familyPercent;
   }
 
   if (!telemetry && !hasFamily) {
@@ -134,7 +131,7 @@ async function resolveAuthoritativeDiscount(
     ok: true,
     couponId,
     percent: expectedPercent,
-    telemetry,
+    telemetry: telemetry && !hasFamily,
     family: hasFamily,
   };
 }
@@ -296,7 +293,7 @@ if (import.meta.main) {
     getProfile: async (userId: string) => {
       const { data, error } = await admin
         .from('profiles')
-        .select('stripe_customer_id, telemetry_opt_in, telemetry_policy_version')
+        .select('stripe_customer_id, telemetry_opt_in, telemetry_policy_version, telemetry_data_classes')
         .eq('id', userId)
         .maybeSingle();
       if (error) throw error;
@@ -305,7 +302,7 @@ if (import.meta.main) {
     getFamilyDiscount: async (userId: string) => {
       const { data, error } = await admin
         .from('family_discount_entitlements')
-        .select('family_percent_off, family_coupon_id, combined_telemetry_coupon_id')
+        .select('family_percent_off, family_coupon_id')
         .eq('user_id', userId)
         .eq('active', true)
         .maybeSingle();
@@ -314,7 +311,6 @@ if (import.meta.main) {
       return {
         familyPercentOff: Number(data.family_percent_off),
         familyCouponId: data.family_coupon_id,
-        combinedCouponId: data.combined_telemetry_coupon_id,
       };
     },
     setProfileCustomer: async (userId: string, customerId: string) => {

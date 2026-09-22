@@ -1,5 +1,5 @@
 /**
- * Address + brevity overlay applied to every provider/model.
+ * Address preferences applied to every provider/model.
  * Distinct from AllAboutMe.md personality profile.
  */
 
@@ -23,7 +23,7 @@ export function buildUserIdentityContextBlock(displayName: string | null | undef
   return [
     '## User identity (from Settings)',
     ...address,
-    'Keep ordinary replies to 1–3 short sentences unless the user asks for more, or the task is inherently long-form.',
+    'Match written detail to the user request and task; do not impose a fixed sentence or word limit.',
     'Treat the display name as their chosen name only — not legal ID, email, or secrets.',
     'Do not invent other personal details (age, address, employer, etc.) unless the user or AllAboutMe profile states them.',
   ].join('\n');

@@ -10,7 +10,7 @@ describe('Composer selected-STT field transactions', () => {
   let finalText: string;
   let cancel: ReturnType<typeof vi.fn>;
   let stop: ReturnType<typeof vi.fn>;
-  let commit: ReturnType<typeof vi.fn>;
+  let commit: ReturnType<typeof vi.fn<(value: string, caret: number) => void>>;
   beforeEach(() => {
     field = document.createElement('textarea');
     field.value = 'alpha old words omega';

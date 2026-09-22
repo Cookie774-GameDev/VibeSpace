@@ -54,7 +54,12 @@ interface CachedAssetTokenizer {
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/u;
 const OPENAI_O200K_MODELS =
-  /^(?:chatgpt-4o(?:-[A-Za-z0-9.-]+)?|codex-mini-latest|computer-use-preview(?:-[A-Za-z0-9.-]+)?|gpt-(?:4o|4\.1|4\.5|5)(?:-[A-Za-z0-9.-]+)?|o[134](?:-[A-Za-z0-9.-]+)?)$/u;
+  /^(?:chatgpt-4o(?:-[A-Za-z0-9.-]+)?|codex-mini-latest|computer-use-preview(?:-[A-Za-z0-9.-]+)?|gpt-(?:(?:4o|4\.1|4\.5|5)(?:-[A-Za-z0-9.-]+)?|5\.6-(?:luna|sol|terra)(?:-fast)?)|o[134](?:-[A-Za-z0-9.-]+)?)$/u;
+// OpenCode's authoritative live catalog qualifies these reviewed OpenAI models
+// as `openai/<upstream-id>`. Keep this explicit: a provider prefix alone does
+// not prove the upstream tokenizer family or provider usage semantics.
+const OPENCODE_OPENAI_O200K_MODELS =
+  /^openai\/gpt-5\.6-(?:luna|sol|terra)(?:-fast)?$/u;
 const OPENAI_CL100K_MODELS =
   /^(?:gpt-3\.5(?:-[A-Za-z0-9.-]+)?|gpt-4(?:-[A-Za-z0-9.-]+)?|text-embedding-3-(?:small|large))$/u;
 
@@ -112,13 +117,14 @@ function escapeRegExp(value: string): string {
 
 function createOpenAiEngine(input: {
   readonly id: string;
+  readonly providerId?: string;
   readonly modelPattern: RegExp;
   readonly load: () => Promise<GptTokenizerModule>;
 }): ExactLocalTokenizerEngine {
   let modulePromise: Promise<GptTokenizerModule> | undefined;
   return Object.freeze({
     id: input.id,
-    providerId: 'openai',
+    providerId: input.providerId ?? 'openai',
     modelPattern: input.modelPattern,
     reviewed: true as const,
     async countText({
@@ -286,6 +292,14 @@ export function createProductionTokenizers(
   const loadOpenAiO200k =
     options.loadOpenAiO200k ??
     (() => import('gpt-tokenizer/encoding/o200k_base') as Promise<GptTokenizerModule>);
+  let openAiO200kPromise: Promise<GptTokenizerModule> | undefined;
+  const loadOpenAiO200kOnce = () => {
+    openAiO200kPromise ??= loadOpenAiO200k().catch((error) => {
+      openAiO200kPromise = undefined;
+      throw error;
+    });
+    return openAiO200kPromise;
+  };
   const loadOpenAiCl100k =
     options.loadOpenAiCl100k ??
     (() => import('gpt-tokenizer/encoding/cl100k_base') as Promise<GptTokenizerModule>);
@@ -297,7 +311,13 @@ export function createProductionTokenizers(
     createOpenAiEngine({
       id: 'gpt-tokenizer:o200k_base',
       modelPattern: OPENAI_O200K_MODELS,
-      load: loadOpenAiO200k,
+      load: loadOpenAiO200kOnce,
+    }),
+    createOpenAiEngine({
+      id: 'gpt-tokenizer:o200k_base:opencode-openai-catalog',
+      providerId: 'opencode',
+      modelPattern: OPENCODE_OPENAI_O200K_MODELS,
+      load: loadOpenAiO200kOnce,
     }),
     createOpenAiEngine({
       id: 'gpt-tokenizer:cl100k_base',

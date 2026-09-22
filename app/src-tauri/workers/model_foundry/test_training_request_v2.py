@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from worker import _read_request
+from worker import _read_calibration_request, _read_request
 
 
 class TrainingRequestV2Tests(unittest.TestCase):
@@ -97,6 +97,46 @@ class TrainingRequestV2Tests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "computeDevice"):
             _read_request(str(self.request_path))
+
+    def test_calibration_request_is_closed_and_matches_the_selected_model(self) -> None:
+        request = {
+            "protocol": 1,
+            "localOnly": True,
+            "modelId": "smollm2-135m-instruct",
+            "method": "full",
+            "baseModelPath": str(self.model),
+            "modelModalities": ["text"],
+            "trainingConfig": {
+                **self.request()["trainingConfig"],
+                "method": "full",
+                "computeDevice": "gpu",
+            },
+        }
+        self.request_path.write_text(json.dumps(request), encoding="utf-8")
+
+        normalized = _read_calibration_request(str(self.request_path))
+
+        self.assertEqual(normalized["modelId"], "smollm2-135m-instruct")
+        self.assertEqual(normalized["trainingConfig"]["computeDevice"], "gpu")
+
+    def test_calibration_rejects_unknown_fields_without_silent_fallback(self) -> None:
+        request = {
+            "protocol": 1,
+            "localOnly": True,
+            "modelId": "smollm2-135m-instruct",
+            "method": "full",
+            "baseModelPath": str(self.model),
+            "trainingConfig": {
+                **self.request()["trainingConfig"],
+                "method": "full",
+                "computeDevice": "auto",
+            },
+            "silentlyFallback": True,
+        }
+        self.request_path.write_text(json.dumps(request), encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "unsupported fields"):
+            _read_calibration_request(str(self.request_path))
 
     def test_accepts_hash_verified_media_only_for_declared_model_modality(self) -> None:
         media = self.root / "media" / "frame.png"

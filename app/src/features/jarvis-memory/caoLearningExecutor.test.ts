@@ -3,7 +3,6 @@ import {
   createCaoLearningExecutor,
   type CaoLearningExecutorDependencies,
 } from './caoLearningExecutor';
-import { CAO_LEARNER_IDENTITY } from '@/features/cao/bootstrap';
 import type { CaoLearningExecutionInput } from './caoScheduledLearning';
 
 const input: CaoLearningExecutionInput = {
@@ -19,9 +18,16 @@ const input: CaoLearningExecutionInput = {
   throughSeqInclusive: 20,
   requestedAt: 1,
 };
+const identity = {
+  backend: 'codex' as const,
+  providerId: 'openai',
+  connectionId: 'openai-codex',
+  modelId: 'gpt-5.6-luna',
+  reasoningEffort: 'high',
+} as const;
 const result = {
   text: 'Use concise responses and verify changes.',
-  identity: CAO_LEARNER_IDENTITY,
+  identity,
   requestId: 'request',
   sessionId: 'session',
 };
@@ -31,6 +37,7 @@ describe('CAO real learner execution', () => {
     const save = vi.fn();
     const markEvaluated = vi.fn();
     const run = createCaoLearningExecutor({
+      resolveIdentity: async () => identity,
       snapshot: async () => ({
         enabled: true,
         markdown: '# Jarvis Learning\nEvidence',
@@ -57,6 +64,7 @@ describe('CAO real learner execution', () => {
       },
     );
     const run = createCaoLearningExecutor({
+      resolveIdentity: async () => identity,
       snapshot: async () => ({
         enabled: true,
         markdown: '# Jarvis Learning\nPreferences',
@@ -76,7 +84,7 @@ describe('CAO real learner execution', () => {
       receiptId: 'cao_receipt_pass',
     });
     expect(order).toEqual(['execute', 'save', 'evaluated']);
-    expect(execute.mock.calls[0]![0]).toMatchObject({ identity: CAO_LEARNER_IDENTITY });
+    expect(execute.mock.calls[0]![0]).toMatchObject({ identity });
   });
   it('does not consume learning on a substituted model, missing session, failed persistence, or cancellation', async () => {
     for (const scenario of ['model', 'session', 'save', 'abort']) {
@@ -84,6 +92,7 @@ describe('CAO real learner execution', () => {
       const markEvaluated = vi.fn();
       const controller = new AbortController();
       const run = createCaoLearningExecutor({
+        resolveIdentity: async () => identity,
         snapshot: async () => ({
           enabled: true,
           markdown: '# Jarvis Learning\nPreferences',

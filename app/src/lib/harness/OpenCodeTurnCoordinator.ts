@@ -11,6 +11,7 @@ import {
 } from '../../features/chat/runtime/runtimeModelControls';
 import {
   buildEffectivePermissionProfile,
+  type AgentApprovalMode,
   type AccessLevel,
   type EffectivePermissionProfile,
   type InteractionMode,
@@ -57,6 +58,8 @@ export interface TurnPolicyInput {
   mode: InteractionMode;
   access: AccessLevel;
   approveAllForRun: boolean;
+  /** Persisted per-chat Agent profile captured for this exact dispatch. */
+  agentApprovalMode?: AgentApprovalMode;
   projectRoot: string;
 }
 

@@ -9,14 +9,19 @@ import { sameFabricMembers, useFabricPresentationStore } from './fabricPresentat
 import './terminal-fabric.css';
 
 import { createFabricRouter, type FabricBox as Box } from './fabricRouting';
+import { fabricConnections } from './fabricConnections';
 export { fabricBridge } from './fabricRouting';
 
 export function TerminalFabricOverlay({
   visible,
   projectId,
+  readTargets = readLiveTargetSnapshot,
+  paneSelector = '[data-terminal-drop-pane-id]',
 }: {
   visible: boolean;
   projectId: string | null;
+  readTargets?: () => Promise<LiveTerminalTarget[]>;
+  paneSelector?: string;
 }) {
   const selecting = useFabricPresentationStore((s) => s.selecting);
   const peers = useFabricPresentationStore((s) => s.peers);
@@ -67,7 +72,7 @@ export function TerminalFabricOverlay({
       if (pending) return;
       pending = true;
       try {
-        const live = await readLiveTargetSnapshot();
+        const live = await readTargets();
         if (!active) return;
         setTargets(live.filter((t) => t.projectId === projectId));
         if (peers.length) {
@@ -90,11 +95,11 @@ export function TerminalFabricOverlay({
       active = false;
       clearInterval(timer);
     };
-  }, [visible, selecting, peers, projectId]);
+  }, [visible, selecting, peers, projectId, readTargets]);
 
   React.useLayoutEffect(() => {
     if (!visible || (!selecting && peers.length === 0)) return;
-    const selector = '[data-terminal-drop-pane-id]';
+    const selector = paneSelector;
     let frame = 0;
     const observed = new Set<HTMLElement>();
     const update = () => {
@@ -114,7 +119,7 @@ export function TerminalFabricOverlay({
         return r.width > 0 && r.height > 0
           ? [
               {
-                id: pane.dataset.terminalDropPaneId ?? '',
+                id: pane.dataset.terminalDropPaneId ?? pane.dataset.panelId ?? '',
                 x: r.x,
                 y: r.y,
                 width: r.width,
@@ -133,17 +138,26 @@ export function TerminalFabricOverlay({
     const observer = new ResizeObserver(() => flushSync(update));
     const mutations = new MutationObserver((records) => {
       if (
-        records.some((record) =>
-          [...record.addedNodes, ...record.removedNodes].some(
-            (node) =>
-              node instanceof Element && (node.matches(selector) || node.querySelector(selector)),
-          ),
+        records.some(
+          (record) =>
+            (record.type === 'attributes' &&
+              record.target instanceof Element &&
+              (record.target.matches(selector) || record.target.querySelector(selector))) ||
+            [...record.addedNodes, ...record.removedNodes].some(
+              (node) =>
+                node instanceof Element && (node.matches(selector) || node.querySelector(selector)),
+            ),
         )
       )
         schedule();
     });
     update();
-    mutations.observe(document.body, { childList: true, subtree: true });
+    mutations.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'class', 'data-minimized'],
+    });
     window.addEventListener('resize', schedule);
     window.addEventListener('scroll', schedule, true);
     return () => {
@@ -153,7 +167,7 @@ export function TerminalFabricOverlay({
       window.removeEventListener('resize', schedule);
       window.removeEventListener('scroll', schedule, true);
     };
-  }, [visible, selecting, peers.length]);
+  }, [visible, selecting, peers.length, paneSelector]);
 
   const routeBridge = React.useMemo(() => createFabricRouter(boxes), [boxes]);
 
@@ -171,13 +185,13 @@ export function TerminalFabricOverlay({
   }, [selecting]);
 
   const confirm = async () => {
-    if (submitting.current || selected.length < 2 || selected.length > 8) return;
+    if (submitting.current || selected.length < 2 || selected.length > 10) return;
     submitting.current = true;
     setBusy(true);
     setError(null);
     const revision = epoch.current;
     try {
-      const fresh = await readLiveTargetSnapshot();
+      const fresh = await readTargets();
       if (revision !== epoch.current) return;
       const chosen = selected.map((id) => {
         const before = targets.find((t) => t.sessionId === id);
@@ -214,27 +228,32 @@ export function TerminalFabricOverlay({
     }
   };
 
+  const connected = React.useMemo(
+    () =>
+      peers.flatMap((peer) => {
+        if (peer.projectId !== projectId) return [];
+        const live = targets.find(
+          (t) =>
+            t.sessionId === peer.sessionId &&
+            t.paneId === peer.paneId &&
+            t.projectId === peer.projectId &&
+            t.processIdentity.runtimeGeneration === peer.runtimeGeneration,
+        );
+        const box = boxes.find((b) => b.id === peer.paneId);
+        return live && box && verified.includes(peer.sessionId) ? [box] : [];
+      }),
+    [peers, projectId, targets, boxes, verified],
+  );
+  const connections = React.useMemo(
+    () => fabricConnections(connected, routeBridge),
+    [connected, routeBridge],
+  );
   if (!visible) return null;
-  const connected = peers.flatMap((peer) => {
-    if (peer.projectId !== projectId) return [];
-    const live = targets.find(
-      (t) =>
-        t.sessionId === peer.sessionId &&
-        t.paneId === peer.paneId &&
-        t.projectId === peer.projectId &&
-        t.processIdentity.runtimeGeneration === peer.runtimeGeneration,
-    );
-    const box = boxes.find((b) => b.id === peer.paneId);
-    return live && box && verified.includes(peer.sessionId) ? [box] : [];
-  });
   return (
     <>
       {!selecting && connected.length > 1 && (
         <svg className="vs-fabric-bridges" aria-label={`${connected.length} connected terminals`}>
-          {connected.slice(1).map((box, i) => {
-            const from = connected[i];
-            const bridge = routeBridge(from, box);
-            if (!bridge) return null;
+          {connections.map(({ from, to: box, bridge }) => {
             return (
               <g key={`${from.id}:${box.id}`}>
                 <path className="vs-fabric-track" d={bridge.path} />
@@ -283,11 +302,11 @@ export function TerminalFabricOverlay({
               <p>
                 {targets.length < 2
                   ? 'Add at least two terminal panes, then select them here.'
-                  : 'Choose 2–8 panes. Selected terminals light up.'}
+                  : 'Choose 2–10 panes. Selected terminals light up.'}
               </p>
               {error && <p role="alert">{error}</p>}
             </div>
-            <span aria-live="polite">{selected.length} / 8</span>
+            <span aria-live="polite">{selected.length} / 10</span>
             <Button disabled={busy || selected.length < 2} onClick={() => void confirm()}>
               {busy ? 'Connecting…' : 'Confirm connection'}
             </Button>
@@ -312,7 +331,7 @@ export function TerminalFabricOverlay({
                 style={{ left: box.x, top: box.y, width: box.width, height: box.height }}
                 aria-label={`Connect ${target.label ?? 'terminal'} ${target.ordinal}`}
                 aria-pressed={checked}
-                disabled={busy || (!checked && selected.length >= 8)}
+                disabled={busy || (!checked && selected.length >= 10)}
                 onClick={() =>
                   setSelected((ids) =>
                     checked

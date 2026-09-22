@@ -9,6 +9,11 @@ import {
   openProviderConnectionEntrypoint,
   parseProviderConnectionTarget,
 } from '../providerConnectionEntrypoint';
+import {
+  executeRouterStatusCommand,
+  readRouterStatus,
+  type RouterStatusSnapshot,
+} from './statusCommands';
 
 export type NavigationCommandRequest = Readonly<{
   id: string;
@@ -27,6 +32,7 @@ export type NavigationAuthorityPort = Readonly<{
   openPalette: () => void;
   openLauncher: () => void;
   setFullscreen: (enabled: boolean) => Promise<boolean>;
+  readRouterStatus?: () => RouterStatusSnapshot;
 }>;
 
 const ROUTES = new Set<string>(APP_ROUTES);
@@ -42,6 +48,7 @@ const NAVIGATION_COMMANDS = new Set([
   'palette.open',
   'launcher.open',
   'fullscreen.set',
+  'status.show',
 ]);
 
 const defaultPort: NavigationAuthorityPort = {
@@ -67,6 +74,7 @@ const defaultPort: NavigationAuthorityPort = {
   openPalette: () => useUIStore.getState().setPaletteOpen(true),
   openLauncher: () => useUIStore.getState().setLauncherOpen(true),
   setFullscreen: (enabled) => useFullscreenStore.getState().requestSystemActive(enabled),
+  readRouterStatus,
 };
 
 function success(message: string): InstantResult {
@@ -129,6 +137,9 @@ async function executeNavigationCommandUnsafe(
     }
     port.openRoute(route as Route);
     return success(`Opened ${route}.`);
+  }
+  if (request.id === 'status.show') {
+    return executeRouterStatusCommand(request, port.readRouterStatus ?? readRouterStatus, signal);
   }
   if (request.id === 'page.back') {
     port.goBack();

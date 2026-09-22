@@ -45,12 +45,16 @@ import {
   STORES_V13,
   STORES_V14,
   STORES_V15,
+  STORES_V16,
   type BrowserChatBindingRow,
   type BrowserChatImportRow,
   type BrowserChatPermissionProfileRow,
   type BrowserChatSnapshotRow,
   type CaoTargetClaimRow,
   type CaoControlRecordRow,
+  type CaoMissionRow,
+  type CaoExecutionProfileRow,
+  type JevUsageRecordRow,
   type CanvasAssetRow,
   type CanvasCameraRow,
   type CanvasDocumentRow,
@@ -191,6 +195,11 @@ export class JarvisDexie extends Dexie {
   // V15 durable CAO control requests (local-only CAS envelopes)
   cao_control_records!: EntityTable<CaoControlRecordRow, 'requestId'>;
 
+  // V16 durable CAO mission/profile and Jev usage observations
+  cao_missions!: EntityTable<CaoMissionRow, 'id'>;
+  jev_usage_records!: EntityTable<JevUsageRecordRow, 'id'>;
+  cao_execution_profiles!: EntityTable<CaoExecutionProfileRow, 'id'>;
+
   constructor(name = DB_NAME, dependencies?: JarvisDexieDependencies) {
     super(name, dependencies);
     // Replay every additive schema version for existing installations.
@@ -209,6 +218,7 @@ export class JarvisDexie extends Dexie {
     this.version(13).stores(STORES_V13);
     this.version(14).stores(STORES_V14);
     this.version(15).stores(STORES_V15);
+    this.version(16).stores(STORES_V16);
   }
 }
 

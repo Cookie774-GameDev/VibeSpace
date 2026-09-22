@@ -52,6 +52,7 @@ import {
   STORES_V13,
   STORES_V14,
   STORES_V15,
+  STORES_V16,
   type BrowserChatBindingRow,
   type BrowserChatImportRow,
   type BrowserChatPermissionProfileRow,
@@ -235,6 +236,15 @@ const EXPECTED_STORES_V15 = {
   ...EXPECTED_STORES_V14,
   cao_control_records:
     'requestId, accountId, workspaceId, projectId, runId, status, [accountId+workspaceId+projectId], updatedAt',
+} as const;
+
+const EXPECTED_STORES_V16 = {
+  ...EXPECTED_STORES_V15,
+  cao_missions:
+    'id, accountId, workspaceId, projectId, status, [accountId+workspaceId], [accountId+workspaceId+projectId], updatedAt',
+  jev_usage_records:
+    'id, accountId, workspaceId, projectId, missionId, targetId, status, recordedAt, [accountId+workspaceId], [accountId+workspaceId+recordedAt], [missionId+recordedAt], [accountId+workspaceId+projectId]',
+  cao_execution_profiles: 'id, accountId, workspaceId, &[accountId+workspaceId], updatedAt',
 } as const;
 
 const EXPECTED_STORES_V1_SOURCE = `export const STORES_V1 = {
@@ -654,7 +664,7 @@ afterEach(async () => {
   createdNames.clear();
 });
 
-describe('Jarvis Dexie V15 additive migration', () => {
+describe('Jarvis Dexie V16 additive migration', () => {
   it('keeps the exact V1 through V4 declarations and advances only the active version', () => {
     const schemaSource = readFileSync(join(__dirname, 'schema.ts'), 'utf8');
     expect(STORES_V1).toEqual(EXPECTED_STORES_V1);
@@ -672,11 +682,12 @@ describe('Jarvis Dexie V15 additive migration', () => {
     expect(STORES_V13).toEqual(EXPECTED_STORES_V13);
     expect(STORES_V14).toEqual(EXPECTED_STORES_V14);
     expect(STORES_V15).toEqual(EXPECTED_STORES_V15);
+    expect(STORES_V16).toEqual(EXPECTED_STORES_V16);
     expect(frozenStoreBlock(schemaSource, 'STORES_V1')).toBe(EXPECTED_STORES_V1_SOURCE);
     expect(frozenStoreBlock(schemaSource, 'STORES_V2')).toBe(EXPECTED_STORES_V2_SOURCE);
     expect(frozenStoreBlock(schemaSource, 'STORES_V3')).toBe(EXPECTED_STORES_V3_SOURCE);
     expect(frozenStoreBlock(schemaSource, 'STORES_V4')).toBe(EXPECTED_STORES_V4_SOURCE);
-    expect(DB_VERSION).toBe(15);
+    expect(DB_VERSION).toBe(16);
   });
 
   it('opens durable Browser Chat workspace, import, and permission stores on a fresh V12 database', async () => {
@@ -699,12 +710,12 @@ describe('Jarvis Dexie V15 additive migration', () => {
     expect(database.table('browser_chat_permission_profiles').schema.primKey.name).toBe('id');
   });
 
-  it('opens every prior store plus local Status and CAO stores on a fresh V15 database', async () => {
-    const database = createTestJarvisDb(testDbName('jarvis-v15-fresh'));
+  it('opens every prior store plus local Status and CAO stores on a fresh V16 database', async () => {
+    const database = createTestJarvisDb(testDbName('jarvis-v16-fresh'));
     await database.open();
 
     expect(database.tables.map((table) => table.name).sort()).toEqual(
-      Object.keys(STORES_V15).sort(),
+      Object.keys(STORES_V16).sort(),
     );
     expect(database.agents.name).toBe('agents');
     expect(database.settings.name).toBe('settings');
@@ -727,6 +738,9 @@ describe('Jarvis Dexie V15 additive migration', () => {
     expect(database.canvas_tombstones.name).toBe('canvas_tombstones');
     expect(database.canvas_recovery.name).toBe('canvas_recovery');
     expect(database.cao_target_claims.name).toBe('cao_target_claims');
+    expect(database.cao_missions.name).toBe('cao_missions');
+    expect(database.jev_usage_records.name).toBe('jev_usage_records');
+    expect(database.cao_execution_profiles.name).toBe('cao_execution_profiles');
 
     expectTypeOf<JarvisDexie['workspaces']>().toEqualTypeOf<EntityTable<Workspace, 'id'>>();
     expectTypeOf<JarvisDexie['projects']>().toEqualTypeOf<EntityTable<Project, 'id'>>();
@@ -1420,7 +1434,7 @@ describe('Jarvis Dexie V15 additive migration', () => {
     const schemaSource = readFileSync(join(__dirname, 'schema.ts'), 'utf8');
     const databaseSource = readFileSync(join(__dirname, 'database.ts'), 'utf8');
 
-    expect(schemaSource).toContain('export const DB_VERSION = 15');
+    expect(schemaSource).toContain('export const DB_VERSION = 16');
     expect(schemaSource).toContain('export const STORES_V14 = {');
     expect(schemaSource).toContain("cao_target_claims: '[kind+targetId]");
     expect(databaseSource).toContain('cao_target_claims!: Table<CaoTargetClaimRow');
@@ -1432,11 +1446,27 @@ describe('Jarvis Dexie V15 additive migration', () => {
     const schemaSource = readFileSync(join(__dirname, 'schema.ts'), 'utf8');
     const databaseSource = readFileSync(join(__dirname, 'database.ts'), 'utf8');
 
-    expect(schemaSource).toContain('export const DB_VERSION = 15');
+    expect(schemaSource).toContain('export const DB_VERSION = 16');
     expect(schemaSource).toContain('export const STORES_V15 = {');
     expect(schemaSource).toContain("cao_control_records: 'requestId, accountId");
     expect(databaseSource).toContain('cao_control_records!: EntityTable<CaoControlRecordRow');
     expect(databaseSource).toContain('this.version(15).stores(STORES_V15)');
+    expect(databaseSource).not.toContain('.upgrade(');
+  });
+
+  it('registers the additive V16 mission, Jev usage, and execution-profile stores', () => {
+    const schemaSource = readFileSync(join(__dirname, 'schema.ts'), 'utf8');
+    const databaseSource = readFileSync(join(__dirname, 'database.ts'), 'utf8');
+
+    expect(schemaSource).toContain('export const DB_VERSION = 16');
+    expect(schemaSource).toContain('export const STORES_V16 = {');
+    expect(schemaSource).toContain('cao_missions:');
+    expect(schemaSource).toContain('jev_usage_records:');
+    expect(schemaSource).toContain('cao_execution_profiles:');
+    expect(databaseSource).toContain('cao_missions!: EntityTable<CaoMissionRow');
+    expect(databaseSource).toContain('jev_usage_records!: EntityTable<JevUsageRecordRow');
+    expect(databaseSource).toContain('cao_execution_profiles!: EntityTable<CaoExecutionProfileRow');
+    expect(databaseSource).toContain('this.version(16).stores(STORES_V16)');
     expect(databaseSource).not.toContain('.upgrade(');
   });
 

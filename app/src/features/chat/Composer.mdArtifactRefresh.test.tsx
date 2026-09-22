@@ -7,7 +7,13 @@ import type { JarvisArtifactV1 } from '@/lib/jarvis/contracts/execution';
 import { useAuthStore } from '@/stores/auth';
 import { Composer } from './Composer';
 
-vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => undefined }));
+const liveQueryFixture = vi.hoisted(() => ({ emptyArray: [] as unknown[] }));
+vi.mock('dexie-react-hooks', () => ({
+  useLiveQuery: (_query: unknown, _deps: unknown, defaultValue: unknown) =>
+    Array.isArray(defaultValue) && defaultValue.length === 0
+      ? liveQueryFixture.emptyArray
+      : defaultValue,
+}));
 vi.mock('./HarnessReadinessGate', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./HarnessReadinessGate')>();
   return {

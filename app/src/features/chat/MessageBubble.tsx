@@ -5,6 +5,8 @@ import { useThemeMotionLayout, useThemeMotionTransition } from '@/features/appea
 import { useAgentStore } from '@/stores/agents';
 import { cn, formatRelative, hueFromString } from '@/lib/utils';
 import { MessagePart } from './MessagePart';
+import { AssistantRichText } from './AssistantRichText';
+import { parseActiveChatCommandMessage } from './chatActiveCommands';
 import { ResponseDetails } from './ResponseDetails';
 import { AssistantActivityLedger } from './activity-ledger/AssistantActivityLedger';
 import { resolvePluginActionEvidence } from './PluginUsageCard';
@@ -20,6 +22,19 @@ export interface MessageBubbleProps {
 
 const SPRING = 'spring' as const;
 const MESSAGE_TRANSITION = { type: SPRING, stiffness: 400, damping: 30, mass: 0.8 };
+
+function isOrdinaryAssistantText(
+  part: Message['parts'][number],
+  creatorDraftKind?: JarvisCreatorKind,
+): part is Extract<Message['parts'][number], { kind: 'text' }> {
+  return (
+    part.kind === 'text' &&
+    Boolean(part.text) &&
+    !creatorDraftKind &&
+    !part.text.includes('```action') &&
+    !parseActiveChatCommandMessage(part.text)
+  );
+}
 
 function extractText(message: Message): string {
   return message.parts
@@ -50,6 +65,7 @@ export function MessageBubble({
   // we wrap the response in a soft, warm radiant glow that matches the cozy
   // composer halo.
   const isHiveResponse = message.parts.some((p) => p.kind === 'stack_step');
+  const isProviderErrorMessage = message.parts.some((part) => part.kind === 'provider_error');
   const assistantVisibleParts =
     message.role === 'assistant'
       ? message.parts.filter((part) => {
@@ -91,7 +107,8 @@ export function MessageBubble({
     );
   };
 
-  // System: centered, faint, dashed border
+  // System notices stay centered, while a durable provider failure needs the
+  // transcript's full width so its route/request/run evidence remains legible.
   if (message.role === 'system') {
     return (
       <motion.div
@@ -99,15 +116,23 @@ export function MessageBubble({
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={messageTransition}
-        className="flex w-full justify-center"
+        data-provider-error-message={isProviderErrorMessage ? 'true' : undefined}
+        className={cn('flex w-full', isProviderErrorMessage ? 'justify-start' : 'justify-center')}
       >
         <div
           className={cn(
-            'rounded-md border border-dashed border-border bg-elevated/60 px-3 py-2 text-center',
-            compact ? 'max-w-full text-metadata' : 'max-w-[60ch]',
+            isProviderErrorMessage
+              ? 'w-full max-w-none px-0 py-1 text-left'
+              : 'rounded-md border border-dashed border-border bg-elevated/60 px-3 py-2 text-center',
+            !isProviderErrorMessage && (compact ? 'max-w-full text-metadata' : 'max-w-[60ch]'),
           )}
         >
-          <div className="flex flex-col gap-1.5 text-secondary text-muted-foreground">
+          <div
+            className={cn(
+              'flex flex-col gap-1.5 text-secondary text-muted-foreground',
+              isProviderErrorMessage ? 'w-full items-stretch text-left' : 'text-center',
+            )}
+          >
             {message.parts.map((part, i) => (
               <MessagePart
                 key={i}
@@ -238,15 +263,24 @@ export function MessageBubble({
           >
             <div className="flex flex-col gap-2">
               {assistantVisibleParts.map((part, i) => (
-                <MessagePart
-                  key={i}
-                  part={part}
-                  allParts={message.parts}
-                  messageId={message.id}
-                  chatId={message.chat_id}
-                  hiveWords={isHiveResponse}
-                  creatorDraftKind={assistantCreatorDraftKind}
-                />
+                isOrdinaryAssistantText(part, assistantCreatorDraftKind) ? (
+                  <AssistantRichText
+                    key={i}
+                    text={part.text}
+                    className={cn('text-body', isHiveResponse && 'hive-words font-medium')}
+                  />
+                ) : (
+                  <MessagePart
+                    key={i}
+                    part={part}
+                    allParts={message.parts}
+                    messageId={message.id}
+                    chatId={message.chat_id}
+                    hiveWords={isHiveResponse}
+                    creatorDraftKind={assistantCreatorDraftKind}
+                    richText
+                  />
+                )
               ))}
               {message.role === 'assistant' && showActivityLedger ? (
                 <AssistantActivityLedger message={message} compact={compact} />

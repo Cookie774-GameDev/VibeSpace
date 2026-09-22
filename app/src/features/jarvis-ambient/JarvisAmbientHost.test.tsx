@@ -32,6 +32,32 @@ describe('JarvisAmbientHost', () => {
     );
     view.unmount();
   });
+
+  it('prewarms the native Aura when voice mode opens and releases it on close', async () => {
+    useUIStore.setState({ voiceModalOpen: true });
+    const view = render(<JarvisAmbientHost />);
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'set_jarvis_ambient_snapshot',
+        expect.objectContaining({
+          snapshot: expect.objectContaining({ state: 'idle', active: false, prewarm: true }),
+        }),
+      ),
+    );
+
+    invoke.mockClear();
+    act(() => useUIStore.getState().setVoiceModalOpen(false));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'set_jarvis_ambient_snapshot',
+        expect.objectContaining({
+          snapshot: expect.objectContaining({ state: 'idle', active: false }),
+        }),
+      ),
+    );
+    expect((invoke.mock.calls.at(-1)?.[1] as { snapshot: { prewarm?: boolean } }).snapshot.prewarm).toBeUndefined();
+    view.unmount();
+  });
   beforeEach(() => {
     invoke.mockClear();
     useVoiceStore.getState().reset();

@@ -7,6 +7,10 @@ without requiring torch/transformers to be installed.
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
+import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +25,53 @@ def load_worker():
     assert spec is not None and spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+class OptionalProbeTests(unittest.TestCase):
+    def setUp(self):
+        self.worker = load_worker()
+
+    def test_optional_probe_timeout_fails_closed(self):
+        timeout = subprocess.TimeoutExpired(["python", "-c", "probe"], 20)
+        with patch.object(self.worker.subprocess, "run", side_effect=timeout):
+            self.assertFalse(self.worker._optional_probe("raise SystemExit(0)"))
+
+    def test_optional_probe_nonzero_fails_closed(self):
+        result = subprocess.CompletedProcess(["python"], returncode=1)
+        with patch.object(self.worker.subprocess, "run", return_value=result):
+            self.assertFalse(self.worker._optional_probe("raise SystemExit(1)"))
+
+    def test_full_capability_does_not_depend_on_optional_probes(self):
+        class FakeCuda:
+            @staticmethod
+            def is_available():
+                return False
+
+            @staticmethod
+            def is_bf16_supported():
+                return False
+
+        class FakeTorch:
+            cuda = FakeCuda()
+
+        with (
+            patch.object(
+                self.worker,
+                "_core_module_version",
+                side_effect=lambda name: {"torch": "2", "transformers": "4", "accelerate": "1"}[name],
+            ),
+            patch.object(self.worker.importlib, "import_module", return_value=FakeTorch()),
+            patch.object(self.worker, "_module_installed", return_value=False),
+            patch.object(self.worker, "_installed_version", return_value=None),
+            patch.object(self.worker.sys, "stdout", new_callable=io.StringIO) as stdout,
+        ):
+            self.assertEqual(self.worker.probe(), 0)
+
+        report = json.loads(stdout.getvalue())
+        self.assertTrue(report["ready"])
+        self.assertEqual(report["methods"], ["full"])
+        self.assertEqual(report["modalities"], ["text"])
+        self.assertIn("optional capabilities unavailable", report["reason"])
 
 
 class CompletionOnlyLabelsTests(unittest.TestCase):
@@ -41,6 +92,57 @@ class CompletionOnlyLabelsTests(unittest.TestCase):
 
     def test_empty_record_returns_empty_labels(self):
         self.assertEqual(self.worker.completion_only_labels([], 5), [])
+
+    def test_plain_text_rows_keep_tokens_and_ignore_padding(self):
+        self.assertEqual(
+            self.worker.training_labels(
+                [10, 11, 12, 13],
+                attention_mask=[1, 1, 1, 0],
+            ),
+            [10, 11, 12, -100],
+        )
+
+    def test_prompt_and_padding_are_both_ignored(self):
+        self.assertEqual(
+            self.worker.training_labels(
+                [10, 11, 12, 13, 14],
+                prompt_token_count=2,
+                attention_mask=[1, 1, 1, 1, 0],
+            ),
+            [-100, -100, 12, 13, -100],
+        )
+
+    def test_attention_mask_must_match_inputs(self):
+        with self.assertRaisesRegex(ValueError, "match the encoded input"):
+            self.worker.training_labels([1, 2], attention_mask=[1])
+
+    def test_one_step_real_torch_loss_is_finite_when_runtime_is_available(self):
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch runtime is not installed in this stdlib test environment")
+
+        input_ids = torch.tensor([[2, 3, 4, 0]], dtype=torch.long)
+        labels = torch.tensor(
+            [
+                self.worker.training_labels(
+                    input_ids[0].tolist(), attention_mask=[1, 1, 1, 0]
+                )
+            ],
+            dtype=torch.long,
+        )
+        model = torch.nn.Sequential(
+            torch.nn.Embedding(8, 12),
+            torch.nn.Linear(12, 8),
+        )
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        logits = model(input_ids)
+        loss = torch.nn.functional.cross_entropy(
+            logits.reshape(-1, 8), labels.reshape(-1), ignore_index=-100
+        )
+        self.assertTrue(torch.isfinite(loss).item())
+        loss.backward()
+        optimizer.step()
 
 
 class ExplicitTrainingDeviceTests(unittest.TestCase):
@@ -63,6 +165,181 @@ class ExplicitTrainingDeviceTests(unittest.TestCase):
             {"cuda": type("Cuda", (), {"is_available": staticmethod(lambda: True)})()},
         )()
         self.assertEqual(self.worker._require_training_device(fake_torch, "cpu"), "cpu")
+
+
+class CalibrationDevicePlacementTests(unittest.TestCase):
+    def setUp(self):
+        self.worker = load_worker()
+
+    def test_rejects_mixed_cpu_and_gpu_model_tensors(self):
+        class Parameter:
+            def __init__(self, device):
+                self.device = device
+
+            def numel(self):
+                return 1
+
+        class Model:
+            def parameters(self):
+                return [Parameter("cuda:0"), Parameter("cpu")]
+
+        with self.assertRaisesRegex(ValueError, "cannot fall back or offload"):
+            self.worker._assert_model_device(Model(), "gpu")
+
+    def test_accepts_all_tensors_on_requested_gpu(self):
+        class Device:
+            def __init__(self, value):
+                self.value = value
+
+            def __str__(self):
+                return self.value
+
+        class Parameter:
+            device = Device("cuda:0")
+
+            def numel(self):
+                return 1
+
+        class Model:
+            def parameters(self):
+                return [Parameter(), Parameter()]
+
+        self.assertEqual(self.worker._assert_model_device(Model(), "gpu"), "cuda:0")
+
+
+class CalibrationGradientValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.worker = load_worker()
+
+    def test_allows_unused_trainable_parameters_but_requires_a_finite_gradient(self):
+        class FiniteResult:
+            def all(self):
+                return self
+
+            def item(self):
+                return True
+
+        class FakeTorch:
+            @staticmethod
+            def isfinite(_gradient):
+                return FiniteResult()
+
+            @staticmethod
+            def count_nonzero(_gradient):
+                return FiniteResult()
+
+        class Parameter:
+            def __init__(self, gradient):
+                self.grad = gradient
+
+        self.assertEqual(
+            self.worker._check_finite_gradients(
+                FakeTorch,
+                [("unused.adapter", Parameter(None)), ("used.adapter", Parameter(object()))],
+            ),
+            {
+                "trainableParameterCount": 2,
+                "gradientParameterCount": 1,
+                "nonzeroGradientParameterCount": 1,
+                "missingGradientParameterNames": ["unused.adapter"],
+            },
+        )
+
+    def test_rejects_a_forward_with_no_trainable_gradients(self):
+        class Parameter:
+            grad = None
+
+        with self.assertRaisesRegex(ValueError, "no trainable parameter with a gradient"):
+            self.worker._check_finite_gradients(object(), [("missing.adapter", Parameter())])
+
+    def test_requires_a_nonzero_gradient_even_when_finite(self):
+        class FiniteResult:
+            def all(self):
+                return self
+
+            def item(self):
+                return True
+
+        class ZeroResult:
+            def item(self):
+                return False
+
+        class FakeTorch:
+            @staticmethod
+            def isfinite(_gradient):
+                return FiniteResult()
+
+            @staticmethod
+            def count_nonzero(_gradient):
+                return ZeroResult()
+
+        class Parameter:
+            grad = object()
+
+        with self.assertRaisesRegex(ValueError, "only zero trainable gradients"):
+            self.worker._check_finite_gradients(FakeTorch, [("zero.adapter", Parameter())])
+
+    def test_rejects_a_nonfinite_gradient(self):
+        class NonFiniteResult:
+            def all(self):
+                return self
+
+            def item(self):
+                return False
+
+        class FakeTorch:
+            @staticmethod
+            def isfinite(_gradient):
+                return NonFiniteResult()
+
+        class Parameter:
+            grad = object()
+
+        with self.assertRaisesRegex(ValueError, "non-finite gradient in bad.adapter"):
+            self.worker._check_finite_gradients(FakeTorch, [("bad.adapter", Parameter())])
+
+
+class TrainingTargetModuleDefaultsTests(unittest.TestCase):
+    def setUp(self):
+        self.worker = load_worker()
+
+    def test_text_training_and_calibration_share_peft_target_discovery(self):
+        self.assertIsNone(self.worker._target_modules_for_training({}, multimodal=False))
+        self.assertEqual(
+            self.worker._target_modules_for_training({}, multimodal=True), "all-linear"
+        )
+        self.assertEqual(
+            self.worker._target_modules_for_training(
+                {"targetModules": ["q_proj", "v_proj"]}, multimodal=False
+            ),
+            ["q_proj", "v_proj"],
+        )
+
+
+class CalibrationMemoryEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.worker = load_worker()
+
+    def test_p95_uses_nearest_rank_for_ten_measured_steps(self):
+        self.assertEqual(
+            self.worker._nearest_rank_p95(
+                [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+            ),
+            10.0,
+        )
+
+    def test_headroom_is_bounded_by_external_global_memory_pressure(self):
+        mebibyte = 1024 * 1024
+        total = 6141 * mebibyte
+        own_peak = 2000 * mebibyte
+        observed_global_free = [4000 * mebibyte, 1800 * mebibyte]
+
+        self.assertEqual(
+            self.worker._conservative_vram_headroom_mb(
+                total, own_peak, observed_global_free
+            ),
+            1800,
+        )
 
 
 class TrainingArgumentsCompatibilityTests(unittest.TestCase):
@@ -169,6 +446,48 @@ class LocalMediaDecodeTests(unittest.TestCase):
             )
 
         self.assertEqual([frame.index for frame in frames], [0, 2, 4])
+
+
+class TrainingProtocolOutputTests(unittest.TestCase):
+    def setUp(self):
+        self.worker = load_worker()
+
+    def test_noisy_trainer_output_stays_off_stdout(self):
+        class Result:
+            metrics = {"train_loss": 1.0}
+
+        class NoisyTrainer:
+            def train(self, resume_from_checkpoint=None):
+                del resume_from_checkpoint
+                print({"loss": 1.0})
+                return Result()
+
+            def evaluate(self):
+                print({"eval_loss": 2.0})
+                return {"eval_loss": 2.0}
+
+            def save_model(self, path):
+                print(f"saved {path}")
+
+        class NoisyTokenizer:
+            def save_pretrained(self, path):
+                print(f"tokenizer {path}")
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result, metrics = self.worker._run_training_lifecycle(
+                NoisyTrainer(),
+                None,
+                Path("D:/bounded-output"),
+                NoisyTokenizer(),
+                None,
+            )
+
+        self.assertEqual(result.metrics, {"train_loss": 1.0})
+        self.assertEqual(metrics, {"eval_loss": 2.0})
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("loss", stderr.getvalue())
 
 
 if __name__ == "__main__":

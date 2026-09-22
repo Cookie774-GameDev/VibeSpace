@@ -46,6 +46,7 @@ import {
   type ConnectionUsageWindow,
 } from '@/lib/ai/connectionUsageLedger';
 import { DeepgramCredentialCard } from '../components/DeepgramCredentialCard';
+import { JevCredentialCard } from '../components/JevCredentialCard';
 import { ConnectorBrandMark } from './ConnectorBrandMark';
 
 interface ProviderRow {
@@ -454,6 +455,8 @@ export function Providers() {
         </div>
       ) : null}
 
+      <JevCredentialCard />
+
       {/* Provider sections by category */}
       {(['major', 'inference', 'gateway', 'enterprise', 'local'] as const).map((category) => {
         const providers = groupedProviders[category];
@@ -594,6 +597,7 @@ function emptyUsageTotals(): LocalUsageTotals {
     inputTokens: 0,
     outputTokens: 0,
     cachedTokens: 0,
+    totalTokens: 0,
     costUsd: 0,
     calls: 0,
     lastUsed: null,
@@ -601,7 +605,7 @@ function emptyUsageTotals(): LocalUsageTotals {
 }
 
 function toProviderUsageData(totals: LocalUsageTotals): ProviderUsageData | null {
-  const totalTokens = totals.inputTokens + totals.outputTokens + totals.cachedTokens;
+  const totalTokens = totals.totalTokens;
   if (totals.calls === 0 && totalTokens === 0) return null;
   return {
     inputTokens: totals.inputTokens,

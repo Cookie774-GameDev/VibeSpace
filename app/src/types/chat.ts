@@ -60,6 +60,12 @@ export type JarvisArtifactMessageRef = {
  * A part of a message - text, tool call, action proposal, image, etc.
  */
 export type Part =
+  | {
+      kind: 'local_command_receipt';
+      version: 1;
+      modelDispatch: 'skipped';
+      receipts: { commandId: string; status: 'completed' | 'queued' }[];
+    }
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
   | {

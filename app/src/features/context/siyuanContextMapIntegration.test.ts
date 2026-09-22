@@ -1958,92 +1958,116 @@ describe('SiYuan Context Map integration', () => {
     }
   });
 
-  it('refreshes and pauses an approval preflight before any summary dispatch', async () => {
-    const record = { ...map(), id: 'map-approval-preflight' };
-    const policy = { mode: 'all' as const, selectedExtensions: [], selectedPaths: [] };
-    const fingerprint = siyuanIndexPolicyFingerprint(record.rootDir, policy, []);
-    const job = {
-      ...createSiyuanIndexJob({
-        accountId: 'account-1',
-        projectId: 'project-1',
-        mapId: record.id,
-        canonicalRoot: record.rootDir,
-        policyFingerprint: fingerprint,
-      }),
-      phase: 'summarizing' as const,
-      status: 'running' as const,
-      indexed: 1,
-      summaryProviderId: 'deepseek',
-      summaryConnectionId: 'deepseek-api',
-      summaryModelId: 'deepseek-chat',
-      summaryEffort: 'high' as const,
-    };
-    await replaceSiyuanIndexJob(job, {
-      path: record.rootDir,
-      relativePath: '',
-      parentNodeId: null,
-    });
-    await checkpointSiyuanIndexJob({
-      job,
-      appendedEntries: [
-        {
-          nodeId: 'path:index.ts',
-          parentNodeId: null,
-          title: 'index.ts',
-          kind: 'file',
-          relativePath: 'index.ts',
-          sourcePointer: `${record.rootDir}\\index.ts`,
-          summary: null,
-          sizeBytes: 42,
-          modifiedAt: 2,
-        },
-      ],
-    });
-    writeSiyuanMapManifest(createSiyuanMapManifest(record, 'project-1', policy));
-    const previousInternals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
-    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
-    try {
-      await expect(
-        createSiyuanContextMapIntegration(port()).sync('project-1', record, {
-          accountId: 'account-1',
-          workspaceId: 'workspace-1',
-          summaryPolicy: policy,
-          forceReconcile: true,
-          approvalPreflight: true,
-          list: async (path) => ({
-            ok: true,
-            path,
-            entries: [
-              {
-                name: 'index.ts',
-                path: `${record.rootDir}\\index.ts`,
-                isDir: false,
-                size: 43,
-                modifiedMs: 3,
-              },
-            ],
-          }),
-        }),
-      ).rejects.toThrow('siyuan_cloud_summary_scope_ready');
-      expect(await readSiyuanIndexJob('project-1', record.id)).toMatchObject({
-        status: 'paused',
-        phase: 'summarizing',
-        pauseReason: 'cloud_approval_required',
-        summarized: 0,
-        totalTokens: 0,
-      });
-      expect(await readSiyuanIndexEntries('project-1', record.id)).toEqual([
-        expect.objectContaining({ relativePath: 'index.ts', sizeBytes: 43, modifiedAt: 3 }),
-      ]);
-      expect(readSiyuanMapManifest('project-1', record.id)?.status).toBe('paused');
-    } finally {
-      if (previousInternals === undefined) {
-        delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
-      } else {
-        (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = previousInternals;
+  it.each(['explicit', 'saved-unpinned', 'saved-local-pin'] as const)(
+    'refreshes and pauses %s cloud selection before any summary dispatch',
+    async (selection) => {
+      const record = { ...map(), id: `map-approval-preflight-${selection}` };
+      if (selection !== 'explicit') {
+        const { writeSiyuanSummaryRoutePreference } =
+          await import('./siyuan/siyuanSummaryRoutePreference');
+        writeSiyuanSummaryRoutePreference(localStorage, 'account-1', 'project-1', record.id, {
+          providerId: 'opencode-go',
+          connectionId: 'opencode-go-selected',
+          modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+          effort: 'high',
+        });
       }
-    }
-  });
+      const policy = { mode: 'all' as const, selectedExtensions: [], selectedPaths: [] };
+      const fingerprint = siyuanIndexPolicyFingerprint(record.rootDir, policy, []);
+      const job = {
+        ...createSiyuanIndexJob({
+          accountId: 'account-1',
+          projectId: 'project-1',
+          mapId: record.id,
+          canonicalRoot: record.rootDir,
+          policyFingerprint: fingerprint,
+        }),
+        phase: 'summarizing' as const,
+        status: 'running' as const,
+        indexed: 1,
+        summaryProviderId:
+          selection === 'explicit' ? 'deepseek' : selection === 'saved-local-pin' ? 'ollama' : null,
+        summaryConnectionId:
+          selection === 'explicit'
+            ? 'deepseek-api'
+            : selection === 'saved-local-pin'
+              ? 'ollama-local'
+              : null,
+        summaryModelId:
+          selection === 'explicit'
+            ? 'deepseek-chat'
+            : selection === 'saved-local-pin'
+              ? 'llama3.2'
+              : null,
+        summaryEffort: 'high' as const,
+      };
+      await replaceSiyuanIndexJob(job, {
+        path: record.rootDir,
+        relativePath: '',
+        parentNodeId: null,
+      });
+      await checkpointSiyuanIndexJob({
+        job,
+        appendedEntries: [
+          {
+            nodeId: 'path:index.ts',
+            parentNodeId: null,
+            title: 'index.ts',
+            kind: 'file',
+            relativePath: 'index.ts',
+            sourcePointer: `${record.rootDir}\\index.ts`,
+            summary: null,
+            sizeBytes: 42,
+            modifiedAt: 2,
+          },
+        ],
+      });
+      writeSiyuanMapManifest(createSiyuanMapManifest(record, 'project-1', policy));
+      const previousInternals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+      (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+      try {
+        await expect(
+          createSiyuanContextMapIntegration(port()).sync('project-1', record, {
+            accountId: 'account-1',
+            workspaceId: 'workspace-1',
+            summaryPolicy: policy,
+            forceReconcile: true,
+            approvalPreflight: selection === 'explicit',
+            list: async (path) => ({
+              ok: true,
+              path,
+              entries: [
+                {
+                  name: 'index.ts',
+                  path: `${record.rootDir}\\index.ts`,
+                  isDir: false,
+                  size: 43,
+                  modifiedMs: 3,
+                },
+              ],
+            }),
+          }),
+        ).rejects.toThrow('siyuan_cloud_summary_scope_ready');
+        expect(await readSiyuanIndexJob('project-1', record.id)).toMatchObject({
+          status: 'paused',
+          phase: 'summarizing',
+          pauseReason: 'cloud_approval_required',
+          summarized: 0,
+          totalTokens: 0,
+        });
+        expect(await readSiyuanIndexEntries('project-1', record.id)).toEqual([
+          expect.objectContaining({ relativePath: 'index.ts', sizeBytes: 43, modifiedAt: 3 }),
+        ]);
+        expect(readSiyuanMapManifest('project-1', record.id)?.status).toBe('paused');
+      } finally {
+        if (previousInternals === undefined) {
+          delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+        } else {
+          (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = previousInternals;
+        }
+      }
+    },
+  );
 
   it('rebuilds a restored map but pauses before local model identity or inference', async () => {
     const record = { ...map(), id: 'map-restored-no-implicit-model' };

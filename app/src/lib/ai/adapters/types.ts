@@ -1,3 +1,5 @@
+import type { ToolGatewayAuthorityClaim } from '@/lib/harness/toolGatewayAuthority';
+
 export type ConnectionMode = 'external-cli' | 'native-api' | 'local';
 
 export type JarvisPromptTransportStrategy = 'native-system' | 'prefixed-preamble' | 'unsupported';
@@ -96,6 +98,8 @@ export interface PublicToolFileChange {
   kind: 'add' | 'update' | 'delete' | 'move' | 'unknown';
   destinationPath?: string;
   diff?: string;
+  /** Bounded file text for write tools when the provider did not expose a before-state diff. */
+  writtenContent?: string;
   complete: boolean;
 }
 
@@ -185,6 +189,8 @@ export interface ProviderDiscoveredModel {
   label: string;
   /** Exact live upstream variant ids, when exposed by this connection. */
   variants?: readonly string[];
+  /** Exact native provider default effort, only when it is advertised in variants. */
+  defaultReasoningEffort?: string;
   /** Exact live upstream pricing, only when every supported field was observed. */
   pricing?: Readonly<import('@/lib/harness/types').HarnessModelPricing>;
 }
@@ -205,7 +211,7 @@ export type CodexResolvedProviderRoute =
       upstreamModelId: string;
       routeHandle: string;
       configurationGeneration: string;
-      adapter?: 'openai-chat' | 'anthropic' | 'google' | 'azure-openai';
+      adapter?: 'openai-chat' | 'openai-responses' | 'anthropic' | 'google' | 'azure-openai';
     }>;
 
 export interface ProviderRequest {
@@ -217,12 +223,25 @@ export interface ProviderRequest {
   workspaceId?: string;
   projectId?: string;
   worktreeId?: string;
+  /**
+   * Exact authority claim captured when the chat send was accepted. `undefined`
+   * keeps legacy direct-adapter callers on the current-scope fallback; `null`
+   * records that early capture failed and must remain fail-closed.
+   */
+  toolGatewayAuthority?: ToolGatewayAuthorityClaim | null;
   prompt: string;
   /** Supplied conversation context for a newly created persistent thread only. */
   historyPrompt?: string;
   modelId?: string;
   /** Native-revalidated Codex route authority for Codex-backed turns only. */
   codexRoute?: CodexResolvedProviderRoute;
+  /** Immutable request/run identity used to retain exact failure correlation. */
+  protectedAttempt?: Readonly<{
+    accountId: string;
+    runId: string;
+    requestId: string;
+    attemptNumber: number;
+  }>;
   reasoningEffort?: string;
   systemPrompt?: string;
   workingDirectory?: string;
@@ -237,6 +256,7 @@ export interface ProviderRequest {
   runtimeSettings?: import('@/features/chat/runtime/chatRuntimeCommandController').ChatRuntimeSettings;
   interactionMode?: import('@/lib/permissions/OpenCodePermissionProfile').InteractionMode;
   accessLevel?: import('@/lib/permissions/OpenCodePermissionProfile').AccessLevel;
+  agentApprovalMode?: import('@/lib/permissions/OpenCodePermissionProfile').AgentApprovalMode;
   approveAllForRun?: boolean;
   /** Approval events remain user-visible even when the persistent adapter enforces policy. */
   onApprovalRequested?: (

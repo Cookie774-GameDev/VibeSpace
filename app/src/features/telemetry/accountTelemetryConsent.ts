@@ -14,6 +14,10 @@ export type AccountTelemetryConsent = Readonly<{
   noticeUrl: string;
   discountPercent: 10;
   requiredDataClasses: readonly ['product_usage', 'diagnostics', 'tool_outcomes'];
+  withdrawal?: Readonly<{
+    status: 'not_requested' | 'pending' | 'reconciled' | 'failed';
+    requestRevision?: string;
+  }>;
 }>;
 
 export type AccountTelemetryResult =
@@ -41,36 +45,85 @@ function parseState(value: unknown): AccountTelemetryConsent | null {
   } catch {
     return null;
   }
+  if (state.withdrawal !== undefined) {
+    const withdrawal = state.withdrawal as Record<string, unknown> | null;
+    if (
+      !withdrawal ||
+      typeof withdrawal !== 'object' ||
+      !['not_requested', 'pending', 'reconciled', 'failed'].includes(String(withdrawal.status)) ||
+      (withdrawal.requestRevision !== undefined && typeof withdrawal.requestRevision !== 'string')
+    )
+      return null;
+  }
   return state as unknown as AccountTelemetryConsent;
 }
 
-async function invoke(options: Record<string, unknown>): Promise<AccountTelemetryResult> {
+async function invoke(
+  options: Record<string, unknown>,
+  expectedAccountId?: string,
+): Promise<AccountTelemetryResult> {
   const client = getSupabaseClient();
   if (!client) return { ok: false, error: 'cloud_not_configured' };
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<AccountTelemetryResult>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve({ ok: false, error: 'request_timeout' });
+    }, 15_000);
+  });
+  const request = async (): Promise<AccountTelemetryResult> => {
+    try {
+      if (expectedAccountId) {
+        const { data: sessionData, error: sessionError } = await client.auth.getSession();
+        if (controller.signal.aborted) return { ok: false, error: 'request_timeout' };
+        const session = sessionData.session;
+        if (sessionError || session?.user.id !== expectedAccountId || !session.access_token)
+          return { ok: false, error: 'account_changed' };
+        const { data, error } = await client.auth.getUser(session.access_token);
+        if (controller.signal.aborted) return { ok: false, error: 'request_timeout' };
+        if (error || data.user?.id !== expectedAccountId)
+          return { ok: false, error: 'account_changed' };
+        options = { ...options, headers: { Authorization: `Bearer ${session.access_token}` } };
+      }
+      const { data, error } = await client.functions.invoke('telemetry-consent', {
+        ...options,
+        signal: controller.signal,
+      });
+      if (error) return { ok: false, error: 'request_failed' };
+      const state = parseState(data);
+      return state ? { ok: true, state } : { ok: false, error: 'invalid_server_response' };
+    } catch {
+      return { ok: false, error: 'request_failed' };
+    }
+  };
   try {
-    const { data, error } = await client.functions.invoke('telemetry-consent', options);
-    if (error) return { ok: false, error: error.message || 'request_failed' };
-    const state = parseState(data);
-    return state ? { ok: true, state } : { ok: false, error: 'invalid_server_response' };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : 'request_failed' };
+    return await Promise.race([request(), timedOut]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-export function getAccountTelemetryConsent(): Promise<AccountTelemetryResult> {
-  return invoke({ method: 'GET' });
+export function getAccountTelemetryConsent(
+  expectedAccountId?: string,
+): Promise<AccountTelemetryResult> {
+  return invoke({ method: 'GET' }, expectedAccountId);
 }
 
 export function updateAccountTelemetryConsent(
   enabled: boolean,
   current: Pick<AccountTelemetryConsent, 'policyVersion' | 'requiredDataClasses'>,
+  expectedAccountId?: string,
 ): Promise<AccountTelemetryResult> {
-  return invoke({
-    method: 'PUT',
-    body: {
-      enabled,
-      policyVersion: current.policyVersion,
-      dataClasses: enabled ? [...current.requiredDataClasses] : [],
+  return invoke(
+    {
+      method: 'PUT',
+      body: {
+        enabled,
+        policyVersion: current.policyVersion,
+        dataClasses: enabled ? [...current.requiredDataClasses] : [],
+      },
     },
-  });
+    expectedAccountId,
+  );
 }

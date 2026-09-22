@@ -1,0 +1,48 @@
+{
+  "expected": [
+    {
+      "id": "terminal.open",
+      "slots": {
+        "provider": "claude"
+      }
+    },
+    {
+      "id": "appearance.background.set",
+      "slots": {
+        "color": "purple"
+      }
+    },
+    {
+      "id": "button.rename",
+      "slots": {
+        "label": "Deploy Test"
+      }
+    },
+    {
+      "id": "page.open",
+      "slots": {
+        "route": "files"
+      }
+    },
+    {
+      "id": "page.open",
+      "slots": {
+        "route": "settings"
+      }
+    },
+    {
+      "id": "status.show",
+      "slots": {}
+    },
+    {
+      "id": "music.pause",
+      "slots": {}
+    },
+    {
+      "id": "terminal.open",
+      "slots": {
+        "provider": "opencode"
+      }
+    }
+  ]
+}

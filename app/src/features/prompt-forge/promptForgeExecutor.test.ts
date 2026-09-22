@@ -10,12 +10,32 @@ import type { PromptPreservationContract } from './preservation';
 import type { PromptForgeSourcePack } from './sourcePack';
 import { PromptForgeExecutionError, createPromptForgeExecutor } from './promptForgeExecutor';
 
+const requestScope = Object.freeze({
+  accountId: 'account-1',
+  workspaceId: 'workspace-1',
+  projectId: 'project-1',
+});
+function scopedExecutor(dependencies: Parameters<typeof createPromptForgeExecutor>[0] = {}) {
+  return createPromptForgeExecutor({ resolveScope: async () => requestScope, ...dependencies });
+}
 const job = {
   id: 'forge-job-1',
+  accountId: 'account-1',
+  chatId: 'chat-1',
+  projectId: 'project-1',
   originalDraft: 'Keep "exact words" and use app/src/main.ts.',
   regenerationInstructions: 'Keep the verification section concise.',
   createdAt: 100,
-} satisfies Pick<PromptForgeJob, 'id' | 'originalDraft' | 'regenerationInstructions' | 'createdAt'>;
+} satisfies Pick<
+  PromptForgeJob,
+  | 'id'
+  | 'originalDraft'
+  | 'regenerationInstructions'
+  | 'createdAt'
+  | 'accountId'
+  | 'chatId'
+  | 'projectId'
+>;
 
 const model: ResolvedPromptForgeModel = Object.freeze({
   providerId: 'openai',
@@ -89,7 +109,7 @@ describe('Prompt Forge model execution', () => {
     });
     const controller = new AbortController();
     const chunks: string[] = [];
-    const executor = createPromptForgeExecutor({
+    const executor = scopedExecutor({
       runModel,
       now: (() => {
         const values = [200, 240];
@@ -125,6 +145,7 @@ describe('Prompt Forge model execution', () => {
     });
     expect(received).toMatchObject({
       purpose: 'prompt_forge',
+      ...requestScope,
       connectionId: 'openai-codex',
       requestId: 'prompt-forge:forge-job-1',
       signal: controller.signal,
@@ -145,6 +166,7 @@ describe('Prompt Forge model execution', () => {
         memory_scope: 'project',
       },
     });
+    expect(received?.chatId).toBeUndefined();
     expect(received?.agent.effort).toBe('high');
     expect(received?.agent.effort).not.toBe('medium');
     expect(received?.agent.system_prompt).toMatch(/untrusted source data/i);
@@ -170,8 +192,33 @@ describe('Prompt Forge model execution', () => {
     expect(Object.values(received?.tools ?? {})).toEqual(TOOL_GATEWAY_CATALOG.map(() => false));
   });
 
+  it('stops before transport when ownership resolution fails or cancellation arrives during the lookup', async () => {
+    const runModel = vi.fn(async () => response('must not run'));
+    const missing = scopedExecutor({
+      runModel,
+      resolveScope: async () => {
+        throw new Error('scope unavailable');
+      },
+    });
+    await expect(missing.execute({ job, model, sourcePack, preservation })).rejects.toThrow(
+      'scope unavailable',
+    );
+    const controller = new AbortController();
+    const cancelled = scopedExecutor({
+      runModel,
+      resolveScope: async () => {
+        controller.abort();
+        return requestScope;
+      },
+    });
+    await expect(
+      cancelled.execute({ job, model, sourcePack, preservation, signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(runModel).not.toHaveBeenCalled();
+  });
+
   it('returns a failed preservation verdict instead of claiming verification', async () => {
-    const executor = createPromptForgeExecutor({
+    const executor = scopedExecutor({
       runModel: async () => response('A different result without the protected elements.'),
       now: () => 300,
     });
@@ -191,7 +238,7 @@ describe('Prompt Forge model execution', () => {
 
   it('sends current Composer images as ordered multimodal parts without persisting path data', async () => {
     let received: RunAgentRequest | undefined;
-    const executor = createPromptForgeExecutor({
+    const executor = scopedExecutor({
       runModel: async (request) => {
         received = request;
         return { ...response('Keep "exact words" from app/src/main.ts.'), model: 'gpt-4o' };
@@ -226,13 +273,13 @@ describe('Prompt Forge model execution', () => {
     const controller = new AbortController();
     controller.abort();
     const neverRun = vi.fn(async () => response('must not run'));
-    const cancelled = createPromptForgeExecutor({ runModel: neverRun, now: () => 400 });
+    const cancelled = scopedExecutor({ runModel: neverRun, now: () => 400 });
     await expect(
       cancelled.execute({ job, model, sourcePack, preservation, signal: controller.signal }),
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(neverRun).not.toHaveBeenCalled();
 
-    const empty = createPromptForgeExecutor({
+    const empty = scopedExecutor({
       runModel: async () => response(' \n '),
       now: () => 400,
     });
@@ -240,7 +287,7 @@ describe('Prompt Forge model execution', () => {
       code: 'empty_output',
     } satisfies Partial<PromptForgeExecutionError>);
 
-    const substituted = createPromptForgeExecutor({
+    const substituted = scopedExecutor({
       runModel: async () => ({ ...response('Valid-looking result.'), model: 'other-model' }),
       now: () => 400,
     });
@@ -253,7 +300,7 @@ describe('Prompt Forge model execution', () => {
 
   it('rejects secrets in every provider-bound user field before invoking the model', async () => {
     const runModel = vi.fn(async () => response('must not run'));
-    const executor = createPromptForgeExecutor({ runModel, now: () => 500 });
+    const executor = scopedExecutor({ runModel, now: () => 500 });
     const secret = syntheticCredentialFixture('ghp_', 'SyntheticCredentialValue1234567890');
 
     await expect(

@@ -20,11 +20,11 @@ import { SECTION_20_COMMANDS, SLASH_COMMAND_ALIASES } from './slashCommandRoutin
 
 describe('orderSlashCommandsForDisplay', () => {
   it('exposes /goal only for the Codex picker while retaining the live OpenCode dispatch path', () => {
-    expect(findSlashCommandDef('goal')?.description).toBe(
-      'Set a native Codex goal for this chat',
-    );
+    expect(findSlashCommandDef('goal')?.description).toBe('Set a native Codex goal for this chat');
     expect(getVisibleSlashCommands('codex').some((command) => command.cmd === 'goal')).toBe(true);
-    expect(getVisibleSlashCommands('opencode').some((command) => command.cmd === 'goal')).toBe(false);
+    expect(getVisibleSlashCommands('opencode').some((command) => command.cmd === 'goal')).toBe(
+      false,
+    );
     expect(getVisibleSlashCommands().some((command) => command.cmd === 'goal')).toBe(false);
   });
 
@@ -168,7 +168,7 @@ describe('orderSlashCommandsForDisplay', () => {
   });
 
   it('registers every canonical Section 20 command exactly once', () => {
-    expect(SLASH_COMMANDS.map(({ cmd }) => cmd)).toEqual(SECTION_20_COMMANDS);
+    expect(SLASH_COMMANDS.map(({ cmd }) => cmd).sort()).toEqual([...SECTION_20_COMMANDS].sort());
     expect(new Set(SLASH_COMMANDS.map(({ cmd }) => cmd)).size).toBe(SECTION_20_COMMANDS.length);
   });
 

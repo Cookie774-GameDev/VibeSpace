@@ -49,6 +49,7 @@ import {
   type TrainingWorkerCapability,
 } from './modelHub';
 import {
+  calibrateLocalTraining,
   cancelVerifiedTrainingModelDownload,
   downloadVerifiedTrainingModel,
   getLocalTrainingWorkerStatus,
@@ -58,6 +59,7 @@ import {
   removeVerifiedTrainingModel,
   verifiedTrainingModelToTrainableModel,
   type LocalTrainingWorkerStatus,
+  type TrainingCalibrationEvidence,
   type VerifiedTrainingModel,
 } from './trainingRuntime';
 import {
@@ -126,7 +128,8 @@ export function BuildYourOwnAIHub({
   React.useEffect(() => {
     if (!open || !initialMethod) return;
     setMethod(initialMethod);
-    if (initialMethod !== 'knowledge') setTrainingConfig(defaultFoundryTrainingConfiguration(initialMethod));
+    if (initialMethod !== 'knowledge')
+      setTrainingConfig(defaultFoundryTrainingConfiguration(initialMethod));
     setStep(0);
   }, [open, initialMethod]);
   const [method, setMethod] = React.useState<TrainingMethod>('knowledge');
@@ -134,7 +137,7 @@ export function BuildYourOwnAIHub({
     defaultFoundryTrainingConfiguration('lora'),
   );
   const [computePresetId, setComputePresetId] = React.useState<TrainingComputePresetId | null>(
-    'balanced',
+    'low-memory',
   );
   const [purpose, setPurpose] = React.useState('');
   const [name, setName] = React.useState('');
@@ -165,6 +168,11 @@ export function BuildYourOwnAIHub({
     React.useState<LocalTrainingWorkerStatus | null>(null);
   const [trainingSetupBusy, setTrainingSetupBusy] = React.useState(false);
   const [trainingSetupError, setTrainingSetupError] = React.useState<string | null>(null);
+  const [trainingCalibration, setTrainingCalibration] = React.useState<{
+    key: string;
+    evidence: TrainingCalibrationEvidence;
+  } | null>(null);
+  const [trainingCalibrationBusy, setTrainingCalibrationBusy] = React.useState(false);
   const [requestedStorageRoot, setRequestedStorageRoot] = React.useState<string | null>(null);
   const [confirmRemoveModelId, setConfirmRemoveModelId] = React.useState<string | null>(null);
   const [busyJobId, setBusyJobId] = React.useState<string | null>(null);
@@ -303,7 +311,9 @@ export function BuildYourOwnAIHub({
     () =>
       method === 'knowledge'
         ? TRAINABLE_MODELS
-        : trainingCatalog.map(verifiedTrainingModelToTrainableModel),
+        : trainingCatalog
+            .map(verifiedTrainingModelToTrainableModel)
+            .sort((left, right) => left.parametersB - right.parametersB),
     [method, trainingCatalog],
   );
   React.useEffect(() => {
@@ -319,6 +329,17 @@ export function BuildYourOwnAIHub({
     method === 'knowledge'
       ? null
       : (trainingCatalog.find((model) => model.id === selectedModel.id) ?? null);
+  const calibrationKey = React.useMemo(
+    () =>
+      JSON.stringify({
+        modelId: selectedModel.id,
+        method,
+        configuration: method === 'knowledge' ? null : trainingConfig,
+      }),
+    [method, selectedModel.id, trainingConfig],
+  );
+  const matchingCalibration =
+    trainingCalibration?.key === calibrationKey ? trainingCalibration.evidence : null;
   const availableTrainingModalities = React.useMemo(
     () =>
       method === 'knowledge'
@@ -348,7 +369,7 @@ export function BuildYourOwnAIHub({
     });
     const best = [...planned]
       .filter((item) => item.compatible)
-      .sort((left, right) => right.model.parametersB - left.model.parametersB)[0];
+      .sort((left, right) => left.model.parametersB - right.model.parametersB)[0];
     if (best) best.recommended = true;
     return planned;
   }, [availableModels, hardware, method, trainingConfig.computeDevice, trainingWorkerCapability]);
@@ -365,6 +386,13 @@ export function BuildYourOwnAIHub({
     method === 'knowledge'
       ? isModelInstalled(selectedModel.id, installedModels)
       : selectedVerifiedModel?.status === 'ready';
+  const calibrationError =
+    method === 'knowledge' || !selectedModelInstalled
+      ? null
+      : matchingCalibration?.qualified
+        ? null
+        : (matchingCalibration?.reason ??
+          `Run ${trainingConfig.computeDevice.toUpperCase()} calibration before starting weight training.`);
   const startError =
     (method !== 'knowledge' && !selectedVerifiedModel
       ? 'The verified trainable model catalog is unavailable.'
@@ -372,7 +400,8 @@ export function BuildYourOwnAIHub({
     (!selectedModelInstalled
       ? `Download and verify ${selectedModel.label} before local processing.`
       : null) ??
-    (method === 'knowledge' ? null : validateFoundryTrainingConfiguration(trainingConfig));
+    (method === 'knowledge' ? null : validateFoundryTrainingConfiguration(trainingConfig)) ??
+    calibrationError;
   const datasetMeasurement = React.useMemo(() => {
     const total = emptyTrainingMeasurement();
     for (const source of sources) {
@@ -449,6 +478,46 @@ export function BuildYourOwnAIHub({
       }
     } finally {
       setTrainingSetupBusy(false);
+    }
+  };
+
+  const runTrainingCalibration = async () => {
+    if (method === 'knowledge' || !selectedVerifiedModel || !selectedModelInstalled) return;
+    setTrainingCalibrationBusy(true);
+    setError('');
+    try {
+      const evidence = await calibrateLocalTraining(selectedModel.id, trainingConfig);
+      setTrainingCalibration({ key: calibrationKey, evidence });
+      if (!evidence.qualified) setError(evidence.reason ?? 'Training calibration did not qualify.');
+    } catch (caught) {
+      setTrainingCalibration({
+        key: calibrationKey,
+        evidence: {
+          qualified: false,
+          modelId: selectedModel.id,
+          method,
+          computeDevice: trainingConfig.computeDevice,
+          device: 'unknown',
+          precision: 'fp32',
+          forwardBackward: false,
+          optimizerStep: false,
+          batchSize: trainingConfig.batchSize,
+          gradientAccumulation: trainingConfig.gradientAccumulation,
+          maxSequenceLength: trainingConfig.maxSequenceLength,
+          warmupSteps: 0,
+          measuredSteps: 0,
+          stepTimeMs: 0,
+          stepTimeMsP95: 0,
+          peakVramMb: null,
+          vramTotalMb: null,
+          vramHeadroomMb: null,
+          elapsedMs: 0,
+          reason: caught instanceof Error ? caught.message : 'Training calibration failed.',
+        },
+      });
+      setError(caught instanceof Error ? caught.message : 'Training calibration failed.');
+    } finally {
+      setTrainingCalibrationBusy(false);
     }
   };
 
@@ -975,13 +1044,15 @@ export function BuildYourOwnAIHub({
                       onClick={() => {
                         setMethod(id);
                         if (id !== 'knowledge') {
-                          setComputePresetId('balanced');
+                          setComputePresetId('low-memory');
                           setTrainingConfig(defaultFoundryTrainingConfiguration(id));
                         }
                       }}
                       className={cn(
                         'rounded-lg border p-4 text-left disabled:cursor-not-allowed disabled:opacity-60',
-                        method === id ? 'border-accent-copper bg-accent-copper/10' : 'border-border',
+                        method === id
+                          ? 'border-accent-copper bg-accent-copper/10'
+                          : 'border-border',
                       )}
                     >
                       <strong>{title}</strong>
@@ -1046,7 +1117,8 @@ export function BuildYourOwnAIHub({
                   </Button>
                 )}
               </section>
-              {(!effectiveTrainingWorker?.attested || (method !== 'knowledge' && !effectiveTrainingWorker.methods.includes(method))) && (
+              {(!effectiveTrainingWorker?.attested ||
+                (method !== 'knowledge' && !effectiveTrainingWorker.methods.includes(method))) && (
                 <section className="rounded-lg border border-border p-4">
                   <h4 className="font-semibold">Unlock verified weight training</h4>
                   <p className="mt-1 text-secondary text-muted-foreground">
@@ -1829,6 +1901,51 @@ export function BuildYourOwnAIHub({
                   <p className="mt-1 text-metadata text-muted-foreground">
                     {durationEstimate.basis} {durationEstimate.disclaimer}
                   </p>
+                </div>
+              )}
+              {method !== 'knowledge' && (
+                <div className="rounded-lg border border-border bg-background/40 p-3" role="status">
+                  <p className="font-medium">
+                    {trainingConfig.computeDevice.toUpperCase()} method calibration
+                  </p>
+                  <p className="mt-1 text-secondary text-muted-foreground">
+                    Loads the verified local model at the selected batch, context, and gradient
+                    settings, then proves forward, backward, and optimizer steps on the selected
+                    device. No artifact is created.
+                  </p>
+                  {matchingCalibration?.qualified ? (
+                    <p className="mt-2 text-emerald-300">
+                      Qualified: {matchingCalibration.method.toUpperCase()} on{' '}
+                      {matchingCalibration.device} · {matchingCalibration.precision.toUpperCase()} ·{' '}
+                      {matchingCalibration.elapsedMs} ms · {matchingCalibration.batchSize} ×{' '}
+                      {matchingCalibration.maxSequenceLength} tokens · grad{' '}
+                      {matchingCalibration.gradientAccumulation} · {matchingCalibration.stepTimeMs}{' '}
+                      ms/step (P95 {matchingCalibration.stepTimeMsP95} ms ·{' '}
+                      {matchingCalibration.warmupSteps} warmup + {matchingCalibration.measuredSteps}{' '}
+                      measured)
+                      {matchingCalibration.peakVramMb === null
+                        ? ''
+                        : ` · peak VRAM ${matchingCalibration.peakVramMb} MB${
+                            matchingCalibration.vramHeadroomMb === null
+                              ? ''
+                              : ` · headroom ${matchingCalibration.vramHeadroomMb} MB`
+                          }`}
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-amber-300">
+                      {matchingCalibration?.reason ??
+                        'Calibration is required before Start Training.'}
+                    </p>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-3"
+                    disabled={trainingCalibrationBusy || !selectedModelInstalled}
+                    onClick={() => void runTrainingCalibration()}
+                  >
+                    {trainingCalibrationBusy ? 'Calibrating…' : 'Run calibration'}
+                  </Button>
                 </div>
               )}
               {startError && <p className="text-amber-300">{startError}</p>}

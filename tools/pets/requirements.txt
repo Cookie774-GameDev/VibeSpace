@@ -1,5 +1,5 @@
 jsonschema==4.26.0
 numpy==2.4.6
 opencv-python-headless==4.13.0.92
-Pillow==11.3.0
+Pillow==12.3.0
 pytest==9.0.3

@@ -1,4 +1,5 @@
 import { StreamingChatPreview } from '../StreamingChatPreview';
+import { AssistantRichText } from '../AssistantRichText';
 import { DiffView } from './DiffView';
 import { AxoMotion } from '@/components/ui/AxoMotion';
 import * as React from 'react';
@@ -611,7 +612,7 @@ function BlockView({
         >
           <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
           <div className="agentic-native-checkpoint__text">
-            {block.text}
+            <AssistantRichText text={block.text} />
             {finalInMessage ? <ResponseDetails usage={block.message.usage} /> : null}
           </div>
         </div>
@@ -627,7 +628,7 @@ function BlockView({
           <strong>{block.id === finalAnswerId ? 'Final response' : 'Assistant'}</strong>
           {block.message.usage?.model ? <span>{block.message.usage.model}</span> : null}
         </div>
-        <div className="agentic-answer__text">{block.text}</div>
+        <AssistantRichText className="agentic-answer__text" text={block.text} />
         {finalInMessage ? <ResponseDetails usage={block.message.usage} /> : null}
       </article>
     );

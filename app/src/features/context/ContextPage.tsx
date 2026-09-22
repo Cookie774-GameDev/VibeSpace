@@ -116,6 +116,7 @@ import {
 import { buildGitHubProjectContextTree } from './githubContextTree';
 import { getStoredContextSourceRoot, setStoredContextSourceRoot } from './contextSourceRoot';
 import { SIYUAN_CONTEXT_VAULT_ENABLED } from './siyuan/siyuanContracts';
+import { normalizeSiyuanFilesystemPath } from './siyuan/siyuanPathAuthority';
 import { SiyuanVaultSurface } from './siyuan/SiyuanVaultSurface';
 import {
   assertSiyuanCloudApprovalPreflightReady,
@@ -2852,7 +2853,7 @@ export function ContextPage() {
                         accountId,
                         projectId,
                         mapId: restartMap.id,
-                        canonicalRoot: restartMap.rootDir,
+                        canonicalRoot: normalizeSiyuanFilesystemPath(restartMap.rootDir),
                         policyFingerprint: siyuanIndexPolicyFingerprint(
                           restartMap.rootDir,
                           manifest.summaryPolicy,
@@ -2860,7 +2861,7 @@ export function ContextPage() {
                         ),
                       });
                       await archiveAndReplaceSiyuanIndexJob(restarted, {
-                        path: restartMap.rootDir,
+                        path: restarted.canonicalRoot,
                         relativePath: '',
                         parentNodeId: null,
                       });

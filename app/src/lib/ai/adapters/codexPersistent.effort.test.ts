@@ -48,6 +48,12 @@ describe('Codex token-saving effort', () => {
       requestId: 'request',
       chatId: 'chat',
       connection: CODEX_CLI_CONNECTION,
+      codexRoute: {
+        kind: 'official-codex',
+        connectionId: 'openai-codex',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-luna',
+      },
       modelId: 'gpt-5.6-luna',
       reasoningEffort: selectedEffort,
       prompt: 'Brief answer.',

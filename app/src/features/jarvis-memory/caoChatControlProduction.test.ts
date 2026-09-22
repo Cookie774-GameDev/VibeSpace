@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     learningEpoch: undefined as string | undefined,
   },
   dispatch: vi.fn(),
+  pendingRows: new Map<string, { value: unknown }>(),
 }));
 vi.mock('@/lib/accountIdentity', () => ({
   getActiveAccountIdentity: () => ({ accountId: 'account' }),
@@ -42,7 +43,21 @@ vi.mock('@/lib/db', () => ({
     },
     workspaces: { get: async () => ({ owner_id: 'account' }) },
     projects: { get: async () => ({ workspace_id: 'workspace' }) },
-    settings: { get: async () => ({ value: mocks.permission }) },
+    settings: {
+      get: async (key: string) =>
+        key.startsWith('cao.chat.approval.v1:')
+          ? mocks.pendingRows.get(key)
+          : { value: mocks.permission },
+      put: async (row: { key: string; value: unknown }) => {
+        if (row.key.startsWith('cao.chat.approval.v1:'))
+          mocks.pendingRows.set(row.key, { value: row.value });
+      },
+      delete: async (key: string) => {
+        mocks.pendingRows.delete(key);
+      },
+    },
+    transaction: async (_mode: string, _table: unknown, operation: () => Promise<unknown>) =>
+      operation(),
     messages: {
       where: () => ({
         between: () => ({ reverse: () => ({ limit: () => ({ toArray: async () => [] }) }) }),
@@ -51,6 +66,7 @@ vi.mock('@/lib/db', () => ({
   },
 }));
 beforeEach(() => {
+  mocks.pendingRows.clear();
   mocks.chatUpdatedAt = 1;
   mocks.createMessage.mockReset();
   mocks.createMessage.mockImplementation(async (input) => {

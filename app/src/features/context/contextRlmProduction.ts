@@ -2228,6 +2228,14 @@ export function createOpenCodeRlmChildRunner(
   harness: Pick<VibeSpaceHarness, 'createSession' | 'send' | 'deleteSession' | 'listModels'>,
 ) {
   return async (request: RlmChildRequest): Promise<RlmChildAnalysis> => {
+    if (['codex-cli', 'codex-app-server'].includes(request.executionIdentity.transportAdapterId)) {
+      // Codex 0.153.4 ignores ProviderRequest.tools for native tools. Reject before
+      // dispatch until a genuinely tool-free child transport is available.
+      throw new RlmRuntimeError(
+        'execution_route_unavailable',
+        'rlm_codex_tool_free_execution_unavailable',
+      );
+    }
     const variant = await exactOpenCodeChildVariant(harness, request.executionIdentity);
     const session = await harness.createSession({
       chatId: `rlm-child-${Date.now()}`,

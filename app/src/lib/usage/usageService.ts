@@ -44,6 +44,42 @@ function exactSum(
     : unavailable(unit, 'Not reported by responses in this chat.');
 }
 
+function totalSum(messages: readonly Message[]): UsageValue {
+  const values = messages
+    .map((message) => {
+      const reportedTotal = message.usage?.total_tokens;
+      if (
+        typeof reportedTotal === 'number' &&
+        Number.isSafeInteger(reportedTotal) &&
+        reportedTotal >= 0
+      ) {
+        return { value: reportedTotal, reported: true };
+      }
+      const input = message.usage?.input_tokens;
+      const output = message.usage?.output_tokens;
+      if (
+        typeof input === 'number' &&
+        Number.isFinite(input) &&
+        input >= 0 &&
+        typeof output === 'number' &&
+        Number.isFinite(output) &&
+        output >= 0
+      ) {
+        return { value: input + output, reported: false };
+      }
+      return undefined;
+    })
+    .filter((value): value is { value: number; reported: boolean } => value !== undefined);
+  if (values.length === 0) {
+    return unavailable('tokens', 'No total token count is reported by responses.');
+  }
+  return {
+    value: values.reduce((sum, value) => sum + value.value, 0),
+    unit: 'tokens',
+    provenance: values.every((value) => value.reported) ? 'response-metadata' : 'local-exact',
+  };
+}
+
 function unavailableTotals(reason: string): UsageTotals {
   return {
     inputTokens: unavailable('tokens', reason),
@@ -91,14 +127,7 @@ function currentChatTotals(
     'tokens',
   );
   const outputTokens = exactSum(scoped, (message) => message.usage?.output_tokens, 'tokens');
-  const totalTokens =
-    inputTokens.value !== undefined && outputTokens.value !== undefined
-      ? {
-          value: inputTokens.value + outputTokens.value,
-          unit: 'tokens' as const,
-          provenance: 'local-exact' as const,
-        }
-      : unavailable('tokens', 'Input and output token counts are not both available.');
+  const totalTokens = totalSum(scoped);
   return {
     inputTokens,
     cachedInputTokens,
@@ -142,7 +171,7 @@ function routeWindowFromLedger(
     cachedInputTokens: routeWindowValue(ledger.cachedInputTokens, 'tokens', available, reason),
     outputTokens: routeWindowValue(ledger.outputTokens, 'tokens', available, reason),
     totalTokens: routeWindowValue(
-      ledger.inputTokens + ledger.cachedInputTokens + ledger.outputTokens,
+      ledger.totalTokens,
       'tokens',
       available,
       reason,

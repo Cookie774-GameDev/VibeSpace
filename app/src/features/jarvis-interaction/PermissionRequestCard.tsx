@@ -235,18 +235,18 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
       data-testid="permission-request"
       data-approval-id={request.harness?.approvalId ?? request.id}
       data-approval-status={effectiveStatus}
-      className="rounded-xl border border-destructive/35 bg-destructive/5 p-3 shadow-[0_0_20px_-16px_hsl(var(--destructive))]"
+      className="w-full rounded-xl border border-border bg-elevated/70 px-3 py-2 text-xs shadow-sm"
     >
-      <div className="mb-2 flex items-start gap-2">
+      <div className="mb-1.5 flex items-start gap-2">
         <div className="rounded-full border border-destructive/40 bg-destructive/10 p-1">
           <ShieldAlert className="h-3.5 w-3.5 text-destructive" />
         </div>
         <div>
-          <div className="text-ui-strong text-foreground">{request.title}</div>
-          <p className="text-secondary text-muted-foreground">{request.description}</p>
+          <div className="text-xs font-semibold text-foreground">{request.title}</div>
+          <p className="text-xs leading-snug text-muted-foreground">{request.description}</p>
         </div>
       </div>
-      <div className="mb-2 flex flex-wrap gap-1.5 text-metadata">
+      <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[10px]">
         <span className="rounded-full border border-border bg-background px-2 py-0.5">
           Risk: {request.risk}
         </span>
@@ -291,7 +291,7 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
           </Button>
         </div>
       )}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5 [&_button]:h-7 [&_button]:px-2 [&_button]:text-[11px]">
         <Button
           type="button"
           size="sm"

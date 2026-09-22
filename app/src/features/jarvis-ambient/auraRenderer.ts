@@ -82,6 +82,9 @@ export function createAuraRenderer() {
 
   return {
     draw: drawAura,
+    warm(context: CanvasRenderingContext2D, width: number, height: number) {
+      soft.warm(context, width, height);
+    },
     destroy() {
       soft.destroy();
     },

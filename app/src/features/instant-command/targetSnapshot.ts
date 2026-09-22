@@ -178,14 +178,26 @@ export function buildLiveTargetSnapshot(input: LiveTargetSnapshotInput): LiveTer
 }
 
 export type ReadLiveTargetSnapshotDependencies = Readonly<{
+  /**
+   * An explicit scope for callers that are reading a background target. When
+   * omitted, discovery retains the active UI project as its default.
+   */
+  projectId?: string | null;
   listNativeSessions?: () => Promise<readonly NativeTerminalIdentity[]>;
+  readTree?: (projectId: string | null) => PaneNode;
 }>;
 
 export async function readLiveTargetSnapshot(
   dependencies: ReadLiveTargetSnapshotDependencies = {},
 ): Promise<LiveTerminalTarget[]> {
-  const projectId = useAuthStore.getState().projectId ?? null;
-  const tree = getLiveTree(projectId) ?? loadTerminalTreeForProject(projectId);
+  const projectId =
+    dependencies.projectId !== undefined
+      ? dependencies.projectId
+      : (useAuthStore.getState().projectId ?? null);
+  const tree =
+    dependencies.readTree?.(projectId) ??
+    getLiveTree(projectId) ??
+    loadTerminalTreeForProject(projectId);
   try {
     const nativeSessions = await (
       dependencies.listNativeSessions ?? (() => invoke<NativeTerminalIdentity[]>('terminal_list'))

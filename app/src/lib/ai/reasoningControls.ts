@@ -45,8 +45,8 @@ const NO_REASONING: ReasoningCapabilities = {
 const EXECUTION_INSTRUCTIONS: Readonly<Record<ReasoningMode, string>> = {
   'token-saver': [
     '## Reasoning mode: Token Saver',
-    'Keep the selected model. Use the smallest relevant context set, remove duplicate context, and answer concisely.',
-    'Use low native reasoning when supported, but never skip mandatory security, approval, correctness, or user acceptance checks.',
+    'Keep the selected model. Remove only exact optional duplicate context while preserving protected instructions, history, attachments, and evidence.',
+    'Use the selected native reasoning effort and the caller output allowance; never skip mandatory security, approval, correctness, or user acceptance checks.',
     'Do not compress instructions, attachments, patches, schemas, permission decisions, or evidence needed to avoid a false claim.',
     ponytailInstructions,
   ].join('\n'),
@@ -229,10 +229,7 @@ export function resolveReasoningPolicy({
   const requestedEffort =
     preference.mode === 'token-final-boss'
       ? (capabilities.supportedEfforts.at(-1) ?? null)
-      : preference.effortOverride ??
-    (preference.mode === 'token-saver'
-      ? (capabilities.supportedEfforts[0] ?? null)
-      : null);
+      : preference.effortOverride;
   const resolvedEffort = requestedEffort;
   const providerOptions =
     resolvedEffort && capabilities.providerOptionKey
@@ -246,7 +243,7 @@ export function resolveReasoningPolicy({
     resolvedEffort,
     providerEffort: resolvedEffort ? capabilities.wireEffort(resolvedEffort) : null,
     providerOptions,
-    maxOutputTokens: preference.mode === 'token-saver' ? 2048 : undefined,
+    maxOutputTokens: undefined,
     executionInstructions: EXECUTION_INSTRUCTIONS[preference.mode],
   };
 }

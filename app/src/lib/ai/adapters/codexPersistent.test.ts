@@ -1,15 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ProviderConnection, ProviderEvent } from './types';
-import { createCodexPersistentAdapter, resolveCodexExecutable } from './codexPersistent';
+import {
+  codexApprovalPolicyForRequest,
+  createCodexPersistentAdapter,
+  resolveCodexExecutable,
+} from './codexPersistent';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 
 const connection: ProviderConnection = {
   id: 'openai-codex',
   adapterId: 'codex-app-server',
-  providerId: 'opencode-go',
-  displayName: 'Codex via OpenCodex',
+  providerId: 'openai',
+  displayName: 'Codex',
   mode: 'external-cli',
-  authSource: 'opencode-provider-session',
+  authSource: 'codex-cli-session',
   promptTransport: 'native-system',
   enabled: true,
   capabilities: {
@@ -29,6 +33,12 @@ const connection: ProviderConnection = {
     localOnly: false,
   },
 };
+const codexRoute = Object.freeze({
+  kind: 'official-codex' as const,
+  connectionId: 'openai-codex' as const,
+  providerId: 'openai' as const,
+  modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+});
 
 async function* frames() {
   yield {
@@ -98,7 +108,310 @@ async function* frames() {
   };
 }
 
+async function* framesForAgentProfile(profile: 'full' | 'review') {
+  for await (const frame of frames()) {
+    if (frame.id !== 'request_1_thread') {
+      yield frame;
+      continue;
+    }
+    yield {
+      ...frame,
+      result: {
+        ...frame.result,
+        approvalPolicy: profile === 'full' ? 'never' : 'on-request',
+        sandbox: profile === 'full'
+          ? { type: 'dangerFullAccess' }
+          : {
+              type: 'workspaceWrite',
+              writableRoots: ['C:\\workspace'],
+              networkAccess: false,
+              excludeTmpdirEnvVar: true,
+              excludeSlashTmp: true,
+            },
+      },
+    };
+  }
+}
+
 describe('persistent Codex app-server adapter', () => {
+  it.each([
+    ['full profile', { agentApprovalMode: 'full' as const, approveAllForRun: false }, 'never'],
+    ['review profile', { agentApprovalMode: 'review' as const, approveAllForRun: true }, 'on-request'],
+    ['legacy approve-all', { approveAllForRun: true }, 'never'],
+    ['legacy default', { approveAllForRun: false }, 'on-request'],
+  ] as const)('maps %s to the native approval policy', (_label, input, expected) => {
+    expect(codexApprovalPolicyForRequest(input)).toBe(expected);
+  });
+
+  it.each([
+    ['full', 'never', 'danger-full-access'],
+    ['review', 'on-request', 'workspace-write'],
+  ] as const)('serializes the native %s access profile without downgrading it', async (profile, approvalPolicy, sandbox) => {
+    const writes: Array<Record<string, unknown>> = [];
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'trusted-codex', executablePath: 'codex.exe' }),
+      start: async () => ({ generation: `codex-generation-${profile}` }),
+      frames: () => ({ stream: framesForAgentProfile(profile), ready: Promise.resolve() }),
+      write: async (_generation, message) => { writes.push(message); },
+      stop: async () => true,
+    });
+
+    for await (const _event of adapter.send!({
+      requestId: 'request_1',
+      connection,
+      codexRoute,
+      chatId: `chat-${profile}`,
+      prompt: 'Build the requested game.',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      workingDirectory: 'C:\\workspace',
+      interactionMode: 'agent',
+      accessLevel: 'full',
+      agentApprovalMode: profile,
+      // Deliberately stale in review to prove the persistent profile wins.
+      approveAllForRun: profile === 'review',
+    })) { /* drain */ }
+
+    const threadStart = writes.find((message) => message.method === 'thread/start');
+    expect(threadStart).toMatchObject({
+      params: {
+        approvalPolicy,
+        sandbox,
+      },
+    });
+    if (profile === 'full') {
+      expect(threadStart?.params).not.toHaveProperty('config.sandbox_workspace_write');
+    } else {
+      expect(threadStart?.params).toMatchObject({
+        config: {
+          sandbox_workspace_write: {
+            writable_roots: ['C:\\workspace'],
+            network_access: false,
+          },
+        },
+      });
+    }
+  });
+
+  it('preserves richer app-server error evidence across a later generic terminal failure', async () => {
+    async function* failingFrames() {
+      for await (const frame of frames()) {
+        if (frame.method === 'turn/completed') {
+          yield {
+            method: 'error',
+            params: {
+              threadId: 'thread_native_1',
+              turnId: 'turn_native_1',
+              error: {
+                message: 'Weekly usage exhausted; api_key=private-value',
+                code: 'quota_exhausted',
+                retryable: false,
+                resetAt: 1_900_000_000_000,
+              },
+            },
+          };
+          yield {
+            method: 'turn/completed',
+            params: {
+              threadId: 'thread_native_1',
+              turnId: 'turn_native_1',
+              turn: {
+                id: 'turn_native_1',
+                status: 'failed',
+                error: { message: 'The provider request failed.' },
+              },
+            },
+          };
+          return;
+        }
+        yield frame;
+      }
+    }
+
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'trusted-codex' }),
+      start: async () => ({ generation: 'rich-error-generation' }),
+      frames: () => ({ stream: failingFrames(), ready: Promise.resolve() }),
+      write: async () => undefined,
+      stop: async () => true,
+    });
+
+    const events: ProviderEvent[] = [];
+    for await (const event of adapter.send!({
+      requestId: 'request_1',
+      connection,
+      codexRoute,
+      prompt: 'Read the marker',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      workingDirectory: 'C:\\workspace',
+      interactionMode: 'ask',
+      protectedAttempt: {
+        accountId: 'account-1',
+        runId: 'run-rich-error',
+        requestId: 'request_1',
+        attemptNumber: 1,
+      },
+    })) {
+      events.push(event);
+    }
+
+    expect(events.find((event) => event.type === 'error')).toMatchObject({
+      type: 'error',
+      message: 'Codex app-server reported an error.: Weekly usage exhausted; api_key=[REDACTED]',
+      code: 'quota_exhausted',
+      providerId: 'openai',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      connectionId: 'openai-codex',
+      retryable: false,
+      resetAt: 1_900_000_000_000,
+      requestId: 'request_1',
+      runId: 'run-rich-error',
+    });
+  });
+
+  it('does not promote a recoverable reconnect notification into the later terminal error', async () => {
+    async function* retryingFailureFrames() {
+      for await (const frame of frames()) {
+        if (frame.method === 'turn/completed') {
+          yield {
+            method: 'error',
+            params: {
+              threadId: 'thread_native_1',
+              turnId: 'turn_native_1',
+              willRetry: true,
+              error: { message: 'Reconnecting... 1/5' },
+            },
+          };
+          yield {
+            method: 'turn/completed',
+            params: {
+              threadId: 'thread_native_1',
+              turnId: 'turn_native_1',
+              turn: {
+                id: 'turn_native_1',
+                status: 'failed',
+                error: { message: 'The provider request failed.' },
+              },
+            },
+          };
+          return;
+        }
+        yield frame;
+      }
+    }
+
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'trusted-codex' }),
+      start: async () => ({ generation: 'retrying-error-generation' }),
+      frames: () => ({ stream: retryingFailureFrames(), ready: Promise.resolve() }),
+      write: async () => undefined,
+      stop: async () => true,
+    });
+
+    const events: ProviderEvent[] = [];
+    for await (const event of adapter.send!({
+      requestId: 'request_1',
+      connection,
+      codexRoute,
+      prompt: 'Read the marker',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      workingDirectory: 'C:\\workspace',
+      interactionMode: 'ask',
+      protectedAttempt: {
+        accountId: 'account-1',
+        runId: 'run-retrying-error',
+        requestId: 'request_1',
+        attemptNumber: 1,
+      },
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual({ type: 'warning', message: 'Reconnecting... 1/5' });
+    expect(events.find((event) => event.type === 'error')).toMatchObject({
+      type: 'error',
+      message: 'The provider request failed.',
+      providerId: 'openai',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      connectionId: 'openai-codex',
+      requestId: 'request_1',
+      runId: 'run-retrying-error',
+    });
+    expect(events.find((event) => event.type === 'error')?.message).not.toContain('Reconnecting');
+  });
+
+  it('does not enrich a turn failure with a foreign scoped error notification', async () => {
+    async function* foreignErrorFrames() {
+      for await (const frame of frames()) {
+        if (frame.method === 'turn/completed') {
+          yield {
+            method: 'error',
+            params: {
+              threadId: 'foreign-thread',
+              turnId: 'foreign-turn',
+              error: {
+                message: 'A different turn exposed a private provider failure.',
+                code: 'foreign_provider_failure',
+              },
+            },
+          };
+          yield {
+            method: 'turn/completed',
+            params: {
+              threadId: 'thread_native_1',
+              turnId: 'turn_native_1',
+              turn: {
+                id: 'turn_native_1',
+                status: 'failed',
+                error: { message: 'The provider request failed.' },
+              },
+            },
+          };
+          return;
+        }
+        yield frame;
+      }
+    }
+
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'trusted-codex' }),
+      start: async () => ({ generation: 'foreign-error-generation' }),
+      frames: () => ({ stream: foreignErrorFrames(), ready: Promise.resolve() }),
+      write: async () => undefined,
+      stop: async () => true,
+    });
+
+    const events: ProviderEvent[] = [];
+    for await (const event of adapter.send!({
+      requestId: 'request_1',
+      connection,
+      codexRoute,
+      prompt: 'Read the marker',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      workingDirectory: 'C:\\workspace',
+      interactionMode: 'ask',
+      protectedAttempt: {
+        accountId: 'account-1',
+        runId: 'run-foreign-error',
+        requestId: 'request_1',
+        attemptNumber: 1,
+      },
+    })) {
+      events.push(event);
+    }
+
+    expect(events.find((event) => event.type === 'error')).toMatchObject({
+      type: 'error',
+      message: 'The provider request failed.',
+      providerId: 'openai',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      connectionId: 'openai-codex',
+      requestId: 'request_1',
+      runId: 'run-foreign-error',
+    });
+    expect(events.find((event) => event.type === 'error')?.message).not.toContain('private provider');
+    expect(events.find((event) => event.type === 'error')).not.toHaveProperty('code', 'foreign_provider_failure');
+  });
+
   it('cancels while subscription acknowledgement is pending', async () => {
     const controller = new AbortController();
     const active = new Set<string>();
@@ -134,6 +447,7 @@ describe('persistent Codex app-server adapter', () => {
       for await (const _event of adapter.send!({
         requestId: 'request_1',
         connection,
+        codexRoute,
         prompt: 'Read the marker',
         modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
         workingDirectory: 'C:\\workspace',
@@ -179,6 +493,7 @@ describe('persistent Codex app-server adapter', () => {
         for await (const _event of adapter.send!({
           requestId: 'request_1',
           connection,
+          codexRoute,
           prompt: 'Read the marker',
           modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
           workingDirectory: 'C:\\workspace',
@@ -233,6 +548,7 @@ describe('persistent Codex app-server adapter', () => {
         for await (const _event of adapter.send!({
           requestId: 'request_1',
           connection,
+          codexRoute,
           prompt: 'Read the marker',
           modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
           workingDirectory: 'C:\\workspace',
@@ -264,6 +580,7 @@ describe('persistent Codex app-server adapter', () => {
       for await (const _event of adapter.send!({
         requestId: 'request_1',
         connection,
+        codexRoute,
         chatId: 'chat_1',
         prompt: 'Read the marker',
         modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
@@ -275,6 +592,52 @@ describe('persistent Codex app-server adapter', () => {
     };
     await expect(consume()).rejects.toThrow('subscription failed');
     expect([...active]).toEqual([]);
+  });
+
+  it('wraps direct Codex app-server request failures with selected route identity', async () => {
+    async function* rejectedFrames() {
+      yield {
+        id: 'request_1_model_1',
+        error: {
+          code: -32600,
+          providerID: 'stale-provider-label',
+          modelID: 'stale-model-label',
+          message: 'The selected model was rejected by the native app-server.',
+        },
+      };
+    }
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'trusted-codex' }),
+      start: async () => ({ generation: 'request-failure-generation' }),
+      frames: () => ({ stream: rejectedFrames(), ready: Promise.resolve() }),
+      write: vi.fn(async () => undefined),
+      stop: vi.fn(async () => true),
+    });
+    const consume = async () => {
+      for await (const _event of adapter.send!({
+        requestId: 'request_1',
+        connection,
+        codexRoute,
+        chatId: 'chat_1',
+        prompt: 'Read marker',
+        modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+        workingDirectory: 'C:\\workspace',
+        interactionMode: 'ask',
+      })) {
+        /* A rejected request must retain its structured boundary. */
+      }
+    };
+
+    await expect(consume()).rejects.toMatchObject({
+      name: 'ProviderRuntimeError',
+      details: {
+        code: '-32600',
+        providerId: 'openai',
+        modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+        connectionId: 'openai-codex',
+        requestId: 'request_1',
+      },
+    });
   });
 
   it.each(['discovery', 'startup', 'subscription'] as const)(
@@ -308,6 +671,7 @@ describe('persistent Codex app-server adapter', () => {
         for await (const _event of adapter.send!({
           requestId: 'request_1',
           connection,
+          codexRoute,
           chatId: 'chat_1',
           prompt: 'Read the marker',
           modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
@@ -350,6 +714,7 @@ describe('persistent Codex app-server adapter', () => {
         for await (const event of adapter.send!({
           requestId: 'request_1',
           connection,
+          codexRoute,
           chatId: 'chat_1',
           prompt: 'Read the marker',
           modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
@@ -433,6 +798,7 @@ describe('persistent Codex app-server adapter', () => {
       for await (const _event of adapter.send!({
         requestId: 'request_missing_authority',
         connection,
+        codexRoute,
         chatId: 'chat_missing_authority',
         prompt: 'Hello',
         modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
@@ -478,6 +844,7 @@ describe('persistent Codex app-server adapter', () => {
     for await (const event of adapter.send!({
       requestId: 'request_1',
       connection,
+      codexRoute,
       chatId: 'chat_1',
       prompt: 'Please read game.js and report what it does.',
       modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
@@ -565,6 +932,7 @@ describe('persistent Codex app-server adapter', () => {
       for await (const _event of adapter.send!({
         requestId: 'request_1',
         connection,
+        codexRoute,
         chatId: 'chat_1',
         prompt: 'Hello',
         modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
@@ -621,6 +989,7 @@ it('delivers native approval requests to the UI handler and resumes the saved na
     chatId: 'persistent-control-fixture',
     accountId: 'control-fixture',
     connection,
+    codexRoute,
     prompt: 'Read marker',
     modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
     workingDirectory: 'C:\\workspace',
@@ -660,6 +1029,7 @@ it('never dispatches a turn after cancellation while binding its session', async
     for await (const _event of adapter.send!({
       requestId: 'request_1',
       connection,
+      codexRoute,
       prompt: 'Read marker',
       modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
       workingDirectory: 'C:\\workspace',
@@ -722,6 +1092,7 @@ it.each(['binding', 'approval'] as const)(
     const request = {
       requestId: 'request_1',
       connection,
+      codexRoute,
       prompt: 'Read marker',
       modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
       workingDirectory: 'C:\\workspace',

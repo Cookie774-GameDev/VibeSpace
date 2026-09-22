@@ -9,6 +9,9 @@ import {
   type AccountTelemetryConsent,
 } from '@/features/telemetry/accountTelemetryConsent';
 import { toast } from '@/components/ui/toast';
+import { useAuthStore } from '@/stores/auth';
+import { telemetryWithdrawalQueue } from '@/features/telemetry/telemetryWithdrawal';
+import { optionalTelemetryExporter } from '@/features/telemetry/optionalTelemetryRuntime';
 
 const DATA_CLASSES = [
   {
@@ -32,6 +35,18 @@ const DATA_CLASSES = [
 ] as const;
 
 export function Telemetry() {
+  const accountId = useAuthStore((state) => state.cloudSession?.user_id ?? null);
+  const exporter = useSyncExternalStore(
+    optionalTelemetryExporter.subscribe,
+    optionalTelemetryExporter.getSnapshot,
+    optionalTelemetryExporter.getSnapshot,
+  );
+  const withdrawal = useSyncExternalStore(
+    telemetryWithdrawalQueue.subscribe,
+    telemetryWithdrawalQueue.getSnapshot,
+    telemetryWithdrawalQueue.getSnapshot,
+  );
+  const withdrawalPending = withdrawal.pending.some((entry) => entry.accountId === accountId);
   const snapshot = useSyncExternalStore(
     telemetryConsentStore.subscribe,
     telemetryConsentStore.getSnapshot,
@@ -45,7 +60,8 @@ export function Telemetry() {
 
   useEffect(() => {
     let active = true;
-    void getAccountTelemetryConsent().then((result) => {
+    setAccountConsent(null);
+    void getAccountTelemetryConsent(accountId ?? undefined).then((result) => {
       if (!active) return;
       if (result.ok) {
         setAccountConsent(result.state);
@@ -57,13 +73,43 @@ export function Telemetry() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [accountId, withdrawalPending]);
 
   const setRewardEnrollment = async (enabled: boolean) => {
-    if (!accountConsent) return;
+    if (!enabled) {
+      telemetryConsentStore.revoke();
+      if (!accountId || !telemetryWithdrawalQueue.enqueue(accountId)) {
+        setAccountError('Local sharing stopped. Sign in to synchronize reward withdrawal.');
+        return;
+      }
+      setAccountBusy(true);
+      const result = await telemetryWithdrawalQueue.flush(accountId);
+      setAccountBusy(false);
+      if (useAuthStore.getState().cloudSession?.user_id !== accountId) return;
+      if (result?.ok) {
+        setAccountConsent(result.state);
+        setAccountError(null);
+      } else setAccountError('Local sharing stopped. Reward withdrawal will retry when connected.');
+      return;
+    }
+    if (!accountConsent || !accountId) return;
+    if (withdrawalPending) return;
     setAccountBusy(true);
-    const result = await updateAccountTelemetryConsent(enabled, accountConsent);
+    const result = await updateAccountTelemetryConsent(
+      enabled,
+      accountConsent,
+      accountId ?? undefined,
+    );
     setAccountBusy(false);
+    if (useAuthStore.getState().cloudSession?.user_id !== accountId) return;
+    const current = telemetryConsentStore.getSnapshot().consent;
+    if (!(current.productUsage && current.diagnostics && current.toolOutcomes)) {
+      if (accountId) {
+        telemetryWithdrawalQueue.enqueue(accountId);
+        void telemetryWithdrawalQueue.flush(accountId);
+      }
+      return;
+    }
     if (!result.ok) {
       setAccountError(result.error);
       toast.error('Could not update reward consent', result.error);
@@ -71,6 +117,7 @@ export function Telemetry() {
     }
     setAccountConsent(result.state);
     setAccountError(null);
+    window.dispatchEvent(new Event('vibespace:telemetry-consent-changed'));
     toast.success(
       enabled ? '10% telemetry reward enabled' : 'Telemetry reward withdrawn',
       enabled
@@ -81,7 +128,7 @@ export function Telemetry() {
 
   const revokeAll = () => {
     telemetryConsentStore.revoke();
-    if (accountConsent?.enabled) void setRewardEnrollment(false);
+    if (accountId) void setRewardEnrollment(false);
   };
 
   const downloadAudit = () => {
@@ -97,7 +144,7 @@ export function Telemetry() {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
       <header>
-        <h2 className="text-page-title text-foreground">Anonymous telemetry</h2>
+        <h2 className="text-page-title text-foreground">Optional telemetry</h2>
         <p className="mt-1 text-secondary text-muted-foreground">
           Optional product-improvement sharing is off by default. Choose each class separately and
           revoke it whenever you want.
@@ -128,14 +175,26 @@ export function Telemetry() {
         <p className="mt-1 text-secondary text-muted-foreground">
           Privacy-safe AI timing, token, retrieval, retry, and failure-category receipts stay in
           process memory for troubleshooting. They never contain prompts, responses, source code,
-          file paths, credentials, or tool arguments.
+          file paths, credentials, or tool arguments. With all sharing classes and account
+          enrollment enabled, a separate background exporter sends only allowlisted numeric metrics
+          and outcome categories.
         </p>
         <dl className="mt-3 grid gap-2 text-metadata sm:grid-cols-2">
           <DiagnosticDefault label="Local AI diagnostics" value="On" />
-          <DiagnosticDefault label="External telemetry exporter" value="Off" />
+          <DiagnosticDefault
+            label="External telemetry exporter"
+            value={exporter.enabled ? 'On' : 'Off'}
+          />
           <DiagnosticDefault label="Store raw prompts" value="Off" />
           <DiagnosticDefault label="Store raw responses" value="Off" />
         </dl>
+        {exporter.enabled && (
+          <p className="mt-2 text-metadata text-muted-foreground" aria-live="polite">
+            {exporter.queued} queued · {exporter.acknowledged} acknowledged
+            {exporter.sending ? ' · Sending' : ''}
+            {exporter.storageError ? ' · Device storage unavailable' : ''}
+          </p>
+        )}
       </section>
 
       <section aria-labelledby="optional-telemetry-title" className="space-y-2">
@@ -161,7 +220,7 @@ export function Telemetry() {
               checked={snapshot.consent[key]}
               onCheckedChange={(enabled) => {
                 telemetryConsentStore.updateConsent({ [key]: enabled });
-                if (!enabled && accountConsent?.enabled) void setRewardEnrollment(false);
+                if (!enabled && accountId) void setRewardEnrollment(false);
               }}
             />
           </label>
@@ -176,9 +235,10 @@ export function Telemetry() {
           is enabled.
         </PolicyCard>
         <PolicyCard title="Identity and access">
-          Optional events use a rotating pseudonymous installation identifier, not your name or
-          email. Authorized VibeSpace operations staff may access aggregated records for product,
-          reliability, abuse, and security work.
+          Optional events are authenticated to your account by the server. Event payloads contain no
+          names, email addresses, chat identifiers, or project identifiers. Authorized VibeSpace
+          operations staff may access aggregated records for product, reliability, abuse, and
+          security work.
         </PolicyCard>
         <PolicyCard title="Storage and retention">
           Consent records stay locally on this device. Transmitted optional events use the
@@ -199,8 +259,7 @@ export function Telemetry() {
             <p className="mt-1 text-secondary text-muted-foreground">
               Signed-in users who explicitly enable all three optional data classes can receive
               exactly 10% off subscriptions. Eligibility is verified by the billing service and does
-              not stack with other promotions; an authoritative family benefit may use one
-              pre-verified combined discount.
+              not stack with other discounts. An existing family benefit takes priority.
             </p>
             {accountConsent ? (
               <div className="mt-3 grid gap-2">
@@ -216,7 +275,11 @@ export function Telemetry() {
                   type="button"
                   size="sm"
                   variant={accountConsent.enabled ? 'destructive' : 'secondary'}
-                  disabled={accountBusy || (!accountConsent.enabled && !allOptionalClassesEnabled)}
+                  disabled={
+                    accountBusy ||
+                    withdrawalPending ||
+                    (!accountConsent.enabled && !allOptionalClassesEnabled)
+                  }
                   onClick={() => void setRewardEnrollment(!accountConsent.enabled)}
                 >
                   {accountConsent.enabled ? 'Withdraw 10% reward consent' : 'Enable 10% reward'}
@@ -228,7 +291,15 @@ export function Telemetry() {
                 ) : null}
                 <p className="text-metadata text-muted-foreground" aria-live="polite">
                   Account status:{' '}
-                  {accountConsent.eligible ? 'eligible for 10% at checkout' : 'not enrolled'}.
+                  {withdrawalPending
+                    ? 'withdrawal pending synchronization; local sharing stopped'
+                    : accountConsent.withdrawal?.status === 'pending' ||
+                        accountConsent.withdrawal?.status === 'failed'
+                      ? 'sharing stopped; subscription reward update pending'
+                      : accountConsent.eligible
+                        ? 'eligible for 10% at checkout'
+                        : 'not enrolled'}
+                  .
                 </p>
               </div>
             ) : (
@@ -258,6 +329,13 @@ export function Telemetry() {
         </Button>
       </div>
       <p className="text-metadata text-muted-foreground" aria-live="polite">
+        {withdrawalPending &&
+          !accountConsent &&
+          'Withdrawal pending synchronization; local sharing stopped. '}
+        {withdrawal.storageError &&
+          'Withdrawal could not be saved to this device. Keep the app open to retry. '}
+        {snapshot.storageError && 'Consent changed here, but device storage could not save it. '}
+        {accountConsent && accountError ? `${accountError} ` : ''}
         {snapshot.audit.length} local consent {snapshot.audit.length === 1 ? 'record' : 'records'}.
       </p>
     </div>

@@ -14,6 +14,12 @@ const recycleBinMocks = vi.hoisted(() => ({
 }));
 const playUiSound = vi.hoisted(() => vi.fn());
 
+vi.mock('@/features/model-foundry', () => ({
+  BuildYourOwnAIHub: ({ open, onActivateArtifact }: { open: boolean; onActivateArtifact(job: unknown): void }) => open ? (
+    <button onClick={() => onActivateArtifact({ id: 'job_native_test', name: 'Local debater', status: 'completed', artifactVerified: true, artifactPath: 'D:/models/job_native_test' })}>Use verified test artifact</button>
+  ) : null,
+}));
+
 vi.mock('@/lib/sfx', () => ({ playUiSound }));
 
 vi.mock('@/features/recycle-bin/recycleBinService', () => ({
@@ -204,6 +210,18 @@ describe('AgentManager save lifecycle', () => {
     await waitFor(() =>
       expect(screen.getByRole('status').getAttribute('data-editor-status')).toBe('saved'),
     );
+  });
+
+  it('persists an explicitly activated verified local artifact for a custom agent', async () => {
+    const agentRepo = await repoMocks();
+    render(<AgentManager />);
+    fireEvent.click(screen.getByRole('button', { name: 'Build Your Own AI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use verified test artifact' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
+    await waitFor(() => expect(agentRepo.update).toHaveBeenCalledWith(baseAgent.id,
+      expect.objectContaining({ model: { provider: 'foundry', model: 'artifact--job_native_test' } })));
+    expect(vi.mocked(agentRepo.update).mock.calls[0][1]).not.toHaveProperty('effort');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save agent' })).toHaveProperty('disabled', true));
   });
 
   it('requires confirmation before moving a custom agent to the Recycle Bin', async () => {

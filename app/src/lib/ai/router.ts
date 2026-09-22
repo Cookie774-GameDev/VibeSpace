@@ -16,11 +16,16 @@ import type { PublicToolDetails, PublicToolOutput } from './adapters/types';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import type { CompiledJarvisPrompt } from '@/lib/jarvis/contracts';
 import type { VibeSpaceApproval } from '@/lib/harness/types';
+import type { ToolGatewayAuthorityClaim } from '@/lib/harness/toolGatewayAuthority';
 import {
   DEFAULT_CHAT_RUNTIME_SETTINGS,
   type ChatRuntimeSettings,
 } from '@/features/chat/runtime/chatRuntimeCommandController';
-import type { AccessLevel, InteractionMode } from '@/lib/permissions/OpenCodePermissionProfile';
+import type {
+  AccessLevel,
+  AgentApprovalMode,
+  InteractionMode,
+} from '@/lib/permissions/OpenCodePermissionProfile';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
 import type {
@@ -230,6 +235,20 @@ function tokenProvenance(usage: UsageSnapshot | undefined): {
     : {};
 }
 
+function usageCostType(
+  usage: UsageSnapshot | undefined,
+): 'actual' | 'estimated' | 'unknown' {
+  switch (usage?.costUsd?.provenance) {
+    case 'provider-reported':
+      return 'actual';
+    case 'estimated':
+    case 'locally-observed':
+      return 'estimated';
+    default:
+      return 'unknown';
+  }
+}
+
 function reportedUsageDetails(
   usage: UsageSnapshot | undefined,
 ): Pick<import('./types').TokenUsage, 'total_tokens' | 'cache_read_tokens' | 'cache_write_tokens'> {
@@ -380,9 +399,12 @@ export interface RunAgentRequest {
   workspaceId?: string;
   projectId?: string;
   worktreeId?: string;
+  /** Exact authority captured when the runtime accepted this send. */
+  toolGatewayAuthority?: ToolGatewayAuthorityClaim | null;
   runtimeSettings?: ChatRuntimeSettings;
   interactionMode?: InteractionMode;
   accessLevel?: AccessLevel;
+  agentApprovalMode?: AgentApprovalMode;
   approveAllForRun?: boolean;
   tools?: Readonly<Record<string, boolean>>;
   onApprovalRequested?: (approval: VibeSpaceApproval) => void | Promise<void>;
@@ -417,6 +439,8 @@ export interface RunAgentRequest {
     modelId: string;
     usage: Readonly<UsageSnapshot>;
   }>) => void;
+  /** Nonterminal provider status, such as a bounded rate-limit retry notice. */
+  onProviderWarning?: (message: string) => void;
   protectedAttempt?: Readonly<{
     accountId: string;
     runId: string;
@@ -561,6 +585,7 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
     workspaceId: req.workspaceId,
     projectId: req.projectId,
     worktreeId: req.worktreeId,
+    toolGatewayAuthority: req.toolGatewayAuthority,
     prompt: promptForOpenCode(req.messages),
     historyPrompt: req.messages
       .filter((message) => message.role !== 'system')
@@ -568,6 +593,7 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
       .join('\n\n'),
     modelId,
     codexRoute,
+    ...(req.protectedAttempt ? { protectedAttempt: req.protectedAttempt } : {}),
     reasoningEffort,
     systemPrompt: req.compiledPrompt?.systemText ?? req.agent.system_prompt,
     workingDirectory: req.workingDirectory,
@@ -576,6 +602,7 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
     runtimeSettings: req.runtimeSettings,
     interactionMode: req.interactionMode,
     accessLevel: req.accessLevel,
+    agentApprovalMode: req.agentApprovalMode,
     approveAllForRun: req.approveAllForRun,
     tools: req.tools,
     signal: req.signal,
@@ -663,6 +690,8 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
           const merged = mergePublicToolDetails(pending ? { output: pending } : undefined, { output: event.output });
           if (merged.output) pendingToolOutputs.set(event.callId, merged.output);
         }
+      } else if (event.type === 'warning') {
+        req.onProviderWarning?.(event.message);
       } else if (event.type === 'error') {
         terminalObserved = true;
         throw providerErrorFromEvent(event, {
@@ -741,9 +770,12 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
     modelId: response.model,
     timestamp: Date.now(),
     inputTokens: response.usage.input_tokens,
-    cachedInputTokens: 0,
+    cachedInputTokens:
+      (response.usage.cache_read_tokens ?? 0) + (response.usage.cache_write_tokens ?? 0),
     outputTokens: response.usage.output_tokens,
+    totalTokens: response.usage.total_tokens,
     costUsd: response.usage.cost_usd,
+    costType: usageCostType(usage),
   });
   return response;
 }
@@ -937,6 +969,7 @@ async function executePersistentOpenCode(
       workspaceId: req.workspaceId,
       projectId: req.projectId,
       worktreeId: req.worktreeId,
+      toolGatewayAuthority: req.toolGatewayAuthority,
       prompt: promptForOpenCode(req.messages),
       modelId: qualifiedModel,
       historyPrompt: req.messages.filter((message) => message.role !== 'system').length > 1
@@ -952,6 +985,7 @@ async function executePersistentOpenCode(
       runtimeSettings,
       interactionMode: req.interactionMode,
       accessLevel: req.accessLevel,
+      agentApprovalMode: req.agentApprovalMode,
       approveAllForRun: req.approveAllForRun,
       tools: req.tools,
       signal: req.signal,
@@ -1041,7 +1075,7 @@ async function executePersistentOpenCode(
           if (!req.onQuestionRequested) throw new Error('provider_question_handler_missing');
           observedQuestionRequestIds.add(projection.route.requestId);
           await req.onQuestionRequested(projection);
-        } else if (event.type === 'tool') {
+      } else if (event.type === 'tool') {
           anyToolObserved = true;
           if (event.checklist) checklistEvidence.set(event.checklist.callId, event.checklist);
           if (req.explicitReadSynthesis) {
@@ -1070,6 +1104,8 @@ async function executePersistentOpenCode(
             ...(event.nativeTask ? { nativeTask: event.nativeTask } : {}),
             ...(event.details ? { details: event.details } : {}),
           });
+        } else if (event.type === 'warning') {
+          req.onProviderWarning?.(event.message);
         } else if (event.type === 'error') {
           providerReportedFailure = true;
           throw providerErrorFromEvent(event, {
@@ -1114,7 +1150,7 @@ async function executePersistentOpenCode(
         streamedTextParts: textParts.length,
       });
     }
-    return {
+    const response: LLMResponse = {
       text: finalText,
       usage: {
         ...tokenProvenance(usage),
@@ -1140,6 +1176,20 @@ async function executePersistentOpenCode(
         ? { checklist_evidence: Object.freeze([...checklistEvidence.values()]) }
         : {}),
     };
+    recordConnectionUsage({
+      connectionId: connection.id,
+      providerId: response.provider,
+      modelId: response.model,
+      timestamp: Date.now(),
+      inputTokens: response.usage.input_tokens,
+      cachedInputTokens:
+        (response.usage.cache_read_tokens ?? 0) + (response.usage.cache_write_tokens ?? 0),
+      outputTokens: response.usage.output_tokens,
+      totalTokens: response.usage.total_tokens,
+      costUsd: response.usage.cost_usd,
+      costType: usageCostType(usage),
+    });
+    return response;
   } catch (error) {
     if (isAbortError(error) || error instanceof ProviderRuntimeError) throw error;
     if (!providerReportedFailure) reportOpenCodeDispatchFailure(diagnosticCode);
@@ -1237,16 +1287,6 @@ async function dispatchThroughOpenCode(req: RunAgentRequest): Promise<LLMRespons
       response.usage.output_tokens,
       response.usage.cost_usd,
     );
-  recordConnectionUsage({
-    connectionId: selection.connectionId ?? 'opencode-cli',
-    providerId: response.provider,
-    modelId: response.model,
-    timestamp: Date.now(),
-    inputTokens: response.usage.input_tokens,
-    cachedInputTokens: 0,
-    outputTokens: response.usage.output_tokens,
-    costUsd: response.usage.cost_usd,
-  });
   return response;
 }
 
@@ -1263,6 +1303,7 @@ type KernelSmokeCliConnectionArgs = {
   onChunk?: (chunk: LLMStreamChunk) => void;
   onResponseObservation?: (observation: LLMResponseObservation) => void;
   onActionDispatch?: (input: { observedAt: number }) => void;
+  onProviderWarning?: (message: string) => void;
 };
 
 async function runKernelSmokeCliConnection(
@@ -1341,6 +1382,8 @@ async function runKernelSmokeCliConnection(
       first = false;
     } else if (event.type === 'usage') {
       usage = event.usage;
+    } else if (event.type === 'warning') {
+      args.onProviderWarning?.(event.message);
     } else if (event.type === 'error') {
       throw new Error(event.message);
     } else if (event.type === 'done') {
@@ -1426,6 +1469,7 @@ async function runKernelSmokeDispatch(req: RunAgentRequest): Promise<LLMResponse
         onChunk: req.onChunk,
         onResponseObservation: hooks?.onResponseObservation,
         onActionDispatch: hooks?.onActionDispatch,
+        onProviderWarning: req.onProviderWarning,
       });
     const response = protectedDispatch
       ? await runProtectedProviderAttempt(

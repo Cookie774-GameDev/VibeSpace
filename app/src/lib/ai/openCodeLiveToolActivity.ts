@@ -7,7 +7,7 @@ export interface OpenCodeLiveToolActivityInput {
   fileLabel?: string;
 }
 
-type ActivitySemantic = 'read' | 'search' | 'command' | 'edit' | 'check' | 'task' | 'tool';
+type ActivitySemantic = 'read' | 'search' | 'command' | 'edit' | 'check' | 'task' | 'browser' | 'tool';
 
 export interface OpenCodeLiveToolActivityProjection {
   event: Readonly<{
@@ -29,10 +29,12 @@ const READ_TOOL = /(?:^|[._:/-])(read|open|get_file|file_read)(?:$|[._:/-])/iu;
 const SEARCH_TOOL = /(?:^|[._:/-])(search|find|grep|glob|query|vibespace_context)(?:$|[._:/-])/iu;
 const EDIT_TOOL = /(?:^|[._:/-])(edit|write|patch|apply_patch|replace)(?:$|[._:/-])/iu;
 const CHECK_TOOL = /(?:^|[._:/-])(test|verify|check|lint|build)(?:$|[._:/-])/iu;
+const BROWSER_TOOL = /(?:^|[._:/-])(?:browser|playwright)(?:$|[._:/-])/iu;
 const SAFE_PUBLIC_LABEL = /^[^\u0000-\u001f\u007f]{1,256}$/u;
 
 function semantic(name: string): ActivitySemantic {
   if (name === 'task') return 'task';
+  if (BROWSER_TOOL.test(name)) return 'browser';
   if (COMMAND_TOOL.test(name)) return 'command';
   if (READ_TOOL.test(name)) return 'read';
   if (SEARCH_TOOL.test(name)) return 'search';
@@ -104,6 +106,11 @@ const TITLES: Readonly<
     started: ['Running tool', 'Jarvis is running a tool'],
     completed: ['Ran tool', 'Jarvis ran a tool'],
     failed: ['Tool failed', 'Jarvis tool failed'],
+  },
+  browser: {
+    started: ['Using browser', 'Jarvis is using browser'],
+    completed: ['Used browser', 'Jarvis used browser'],
+    failed: ['Browser tool failed', 'Jarvis browser tool failed'],
   },
 });
 

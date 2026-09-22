@@ -31,7 +31,7 @@ export function buildAutomaticProviderSnapshots(input: {
     const local = input.connectionUsage[connection.id];
     const hasExactLedger = (local?.calls ?? 0) > 0;
     const locallyRecordedTokens = local
-      ? local.inputTokens + local.outputTokens + local.cachedTokens
+      ? local.totalTokens ?? local.inputTokens + local.outputTokens
       : 0;
     const activeRequests =
       input.activity.byProvider[connection.id] ??

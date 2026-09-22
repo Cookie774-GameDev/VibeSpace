@@ -8,17 +8,29 @@ cloud execution or uploads.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import importlib
+import importlib.metadata
+import importlib.util
 import hashlib
 import inspect
 import json
+import math
 import os
+import statistics
+import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 PROTOCOL = 1
 LOCAL_ONLY = True
 MAX_REQUEST_BYTES = 128 * 1024
+MAX_CALIBRATION_REQUEST_BYTES = 128 * 1024
+CALIBRATION_WARMUP_STEPS = 3
+CALIBRATION_MEASURED_STEPS = 10
 MAX_DATASET_BYTES = 512 * 1024 * 1024
 MAX_EXAMPLES = 1_000_000
 MAX_LINE_CHARS = 1_000_000
@@ -37,6 +49,18 @@ ALLOWED_REQUEST_KEYS = frozenset(
         "resumeFromCheckpoint",
         "epochs",
         "maxSteps",
+        "trainingConfig",
+        "targetModules",
+    )
+)
+ALLOWED_CALIBRATION_KEYS = frozenset(
+    (
+        "protocol",
+        "localOnly",
+        "modelId",
+        "method",
+        "baseModelPath",
+        "modelModalities",
         "trainingConfig",
         "targetModules",
     )
@@ -72,38 +96,104 @@ ALLOWED_INFERENCE_KEYS = frozenset(
 ALLOWED_MESSAGE_ROLES = frozenset(("system", "user", "assistant"))
 MAX_INFERENCE_CHARS = 128 * 1024
 MAX_INFERENCE_MESSAGES = 64
+OPTIONAL_PROBE_TIMEOUT_SECONDS = 20.0
+_OPTIONAL_DISTRIBUTIONS = {
+    "PIL": "Pillow",
+    "av": "av",
+    "bitsandbytes": "bitsandbytes",
+    "datasets": "datasets",
+    "peft": "peft",
+    "trl": "trl",
+}
+_PEFT_PROBE = "from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training\n"
+_MEDIA_PROBE = "from PIL import Image\nimport av\n"
+_QLORA_PROBE = """import bitsandbytes.functional as bnb_functional
+import torch
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+if not torch.cuda.is_available():
+    raise SystemExit(1)
+probe_tensor = torch.zeros(64, device="cuda", dtype=torch.float16)
+quantized, quantization_state = bnb_functional.quantize_4bit(
+    probe_tensor, quant_type="nf4"
+)
+restored = bnb_functional.dequantize_4bit(
+    quantized, quant_state=quantization_state
+)
+if restored.shape != probe_tensor.shape:
+    raise SystemExit(1)
+"""
+
+
+def _module_installed(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, AttributeError, ValueError):
+        return False
+
+
+def _installed_version(name: str) -> str | None:
+    if not _module_installed(name):
+        return None
+    distribution = _OPTIONAL_DISTRIBUTIONS.get(name, name)
+    try:
+        return str(importlib.metadata.version(distribution))
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+    except Exception:
+        return None
+
+
+def _optional_probe(script: str) -> bool:
+    """Run one optional capability check in a bounded child process.
+
+    Optional libraries can import large ML stacks or initialize native codecs.
+    A slow/broken optional probe must never hold up the verified Full path.
+    The child is local-only and offline; a timeout is an unavailable capability.
+    """
+    environment = os.environ.copy()
+    environment["HF_HUB_OFFLINE"] = "1"
+    environment["TRANSFORMERS_OFFLINE"] = "1"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=environment,
+            timeout=OPTIONAL_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _core_module_version(name: str) -> str | None:
+    try:
+        module = importlib.import_module(name)
+        return str(getattr(module, "__version__", "unknown"))
+    except Exception:
+        return None
 
 
 def probe() -> int:
     """Report installed training libraries without installing or downloading."""
-    packages: dict[str, str | None] = {}
-    for name in (
-        "torch",
-        "transformers",
-        "datasets",
-        "accelerate",
-        "peft",
-        "trl",
-        "bitsandbytes",
-        "PIL",
-        "av",
-    ):
-        try:
-            module = __import__(name)
-            packages[name] = str(getattr(module, "__version__", "unknown"))
-        except Exception:
-            packages[name] = None
+    packages: dict[str, str | None] = {
+        name: _core_module_version(name)
+        for name in ("torch", "transformers", "accelerate")
+    }
+    packages.update({name: _installed_version(name) for name in ("datasets", "trl")})
     core_ready = all(packages.get(name) for name in ("torch", "transformers", "accelerate"))
     methods: list[str] = []
     precisions: list[str] = []
     cuda_ready = False
     bf16_ready = False
-    qlora_smoke_ready = False
     if core_ready:
         methods.append("full")
         precisions.append("fp32")
         try:
-            import torch
+            torch = importlib.import_module("torch")
 
             cuda_ready = bool(torch.cuda.is_available())
             bf16_ready = bool(
@@ -117,30 +207,55 @@ def probe() -> int:
             precisions.append("fp16")
         if bf16_ready:
             precisions.append("bf16")
-    if core_ready and packages.get("peft"):
-        methods.append("lora")
-    if core_ready and packages.get("peft") and packages.get("bitsandbytes") and cuda_ready:
-        try:
-            import bitsandbytes.functional as bnb_functional
-            import torch
 
-            probe_tensor = torch.zeros(64, device="cuda", dtype=torch.float16)
-            quantized, quantization_state = bnb_functional.quantize_4bit(
-                probe_tensor, quant_type="nf4"
+    lora_ready = False
+    media_ready = False
+    qlora_smoke_ready = False
+    if core_ready:
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="optional-probe") as executor:
+            lora_future = (
+                executor.submit(_optional_probe, _PEFT_PROBE)
+                if _module_installed("peft")
+                else None
             )
-            restored = bnb_functional.dequantize_4bit(
-                quantized, quant_state=quantization_state
+            media_future = (
+                executor.submit(_optional_probe, _MEDIA_PROBE)
+                if _module_installed("PIL") and _module_installed("av")
+                else None
             )
-            qlora_smoke_ready = bool(restored.shape == probe_tensor.shape)
-            del restored, quantized, quantization_state, probe_tensor
-            torch.cuda.empty_cache()
-        except Exception:
-            qlora_smoke_ready = False
+            lora_ready = lora_future.result() if lora_future is not None else False
+            media_ready = media_future.result() if media_future is not None else False
+        if lora_ready:
+            packages["peft"] = _installed_version("peft")
+            methods.append("lora")
+        if media_ready:
+            packages["PIL"] = _installed_version("PIL")
+            packages["av"] = _installed_version("av")
+        if lora_ready and cuda_ready and _module_installed("bitsandbytes"):
+            qlora_smoke_ready = _optional_probe(_QLORA_PROBE)
+            if qlora_smoke_ready:
+                packages["bitsandbytes"] = _installed_version("bitsandbytes")
     if qlora_smoke_ready:
         methods.append("qlora")
         precisions.extend(("int8", "int4"))
-    ready = bool(methods)
-    media_ready = bool(ready and packages.get("PIL") and packages.get("av"))
+    ready = "full" in methods
+    optional_unavailable: list[str] = []
+    if ready:
+        if not lora_ready:
+            optional_unavailable.append("lora")
+        if not media_ready:
+            optional_unavailable.append("image/video")
+        if cuda_ready and not qlora_smoke_ready:
+            optional_unavailable.append("qlora")
+    reason = None
+    if not ready:
+        reason = "Verified local training libraries are incomplete; cloud execution is disabled."
+    elif optional_unavailable:
+        reason = (
+            "Full training is ready; optional capabilities unavailable: "
+            + ", ".join(optional_unavailable)
+            + "."
+        )
     print(
         json.dumps(
             {
@@ -151,11 +266,12 @@ def probe() -> int:
                 "methods": methods,
                 "modalities": (["text", "image", "video"] if media_ready else ["text"]) if ready else [],
                 "precisions": list(dict.fromkeys(precisions)),
-                "reason": (
-                    None
-                    if ready
-                    else "Verified local training libraries are incomplete; cloud execution is disabled."
-                ),
+                "optionalCapabilities": {
+                    "lora": lora_ready,
+                    "qlora": qlora_smoke_ready,
+                    "media": media_ready,
+                },
+                "reason": reason,
             },
             separators=(",", ":"),
         )
@@ -389,6 +505,424 @@ def _read_request(request_path: str) -> tuple[dict[str, Any], dict[str, Any]]:
     return normalized, summary
 
 
+def _read_calibration_request(request_path: str) -> dict[str, Any]:
+    path = _absolute_path(request_path, "requestPath")
+    if not path.is_file() or path.stat().st_size > MAX_CALIBRATION_REQUEST_BYTES:
+        _fail("Calibration request is missing or exceeds the safe size limit.")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or set(payload) - ALLOWED_CALIBRATION_KEYS:
+        _fail("Calibration request contains unsupported fields.")
+    if payload.get("protocol") != PROTOCOL or payload.get("localOnly") is not True:
+        _fail("Calibration request must match the local-only worker protocol.")
+    method = payload.get("method")
+    if method not in ALLOWED_METHODS:
+        _fail("Calibration method is not supported.")
+    model_id = payload.get("modelId")
+    if not isinstance(model_id, str) or not model_id.strip() or len(model_id) > 256:
+        _fail("Calibration modelId is invalid.")
+    model = _absolute_path(payload.get("baseModelPath"), "baseModelPath")
+    if not model.is_dir() or not (model / "config.json").is_file():
+        _fail("Base model must be a local Transformers directory with config.json.")
+    model_modalities = payload.get("modelModalities", ["text"])
+    if (
+        not isinstance(model_modalities, list)
+        or not model_modalities
+        or "text" not in model_modalities
+        or any(value not in ("text", "image", "video", "audio") for value in model_modalities)
+    ):
+        _fail("Verified model modalities are invalid.")
+    raw_config = payload.get("trainingConfig")
+    if not isinstance(raw_config, dict) or set(raw_config) - ALLOWED_TRAINING_CONFIG_KEYS:
+        _fail("Calibration requires a closed trainingConfig object.")
+    if raw_config.get("method") != method:
+        _fail("Calibration method and trainingConfig method must match.")
+    config = {
+        "method": method,
+        "computeDevice": _training_compute_device(raw_config.get("computeDevice")),
+        "seed": _bounded_integer(raw_config.get("seed"), "seed", 0, 2**32 - 1),
+        "epochs": _bounded_integer(raw_config.get("epochs"), "epochs", 1, 20),
+        "maxSteps": (
+            None
+            if raw_config.get("maxSteps") is None
+            else _bounded_integer(raw_config.get("maxSteps"), "maxSteps", 1, 1_000_000)
+        ),
+        "batchSize": _bounded_integer(raw_config.get("batchSize"), "batchSize", 1, 64),
+        "gradientAccumulation": _bounded_integer(
+            raw_config.get("gradientAccumulation"), "gradientAccumulation", 1, 1_024
+        ),
+        "maxSequenceLength": _bounded_integer(
+            raw_config.get("maxSequenceLength"), "maxSequenceLength", 64, 32_768
+        ),
+        "learningRate": _bounded_float(raw_config.get("learningRate"), "learningRate", 0.0, 1.0),
+        "loraRank": _bounded_integer(raw_config.get("loraRank"), "loraRank", 1, 512),
+        "loraAlpha": _bounded_integer(raw_config.get("loraAlpha"), "loraAlpha", 1, 1_024),
+        "loraDropout": _bounded_float(
+            raw_config.get("loraDropout"),
+            "loraDropout",
+            0.0,
+            1.0,
+            minimum_inclusive=True,
+            maximum_inclusive=False,
+        ),
+    }
+    if method == "qlora" and config["computeDevice"] != "gpu":
+        _fail("QLoRA requires computeDevice gpu.")
+    target_modules = payload.get("targetModules")
+    if target_modules is not None and (
+        not isinstance(target_modules, list)
+        or not target_modules
+        or len(target_modules) > 128
+        or any(
+            not isinstance(module, str)
+            or not module
+            or len(module) > 128
+            or not all(character.isalnum() or character == "_" for character in module)
+            for module in target_modules
+        )
+    ):
+        _fail("targetModules must be a bounded list of module names.")
+    return {
+        "protocol": PROTOCOL,
+        "localOnly": LOCAL_ONLY,
+        "modelId": model_id,
+        "method": method,
+        "baseModelPath": str(model),
+        "modelModalities": model_modalities,
+        "trainingConfig": config,
+        "targetModules": target_modules,
+    }
+
+
+def _assert_model_device(model: Any, requested: str) -> str:
+    expected = "cuda" if requested == "gpu" else "cpu"
+    devices = {
+        str(parameter.device).split(":", 1)[0]
+        for parameter in model.parameters()
+        if getattr(parameter, "numel", lambda: 0)() > 0
+    }
+    if not devices or devices != {expected}:
+        _fail(
+            f"Calibration found model tensors on {sorted(devices) or ['no device']}; "
+            f"requested {requested}-only training cannot fall back or offload."
+        )
+    return f"{expected}:0" if expected == "cuda" else expected
+
+
+def _target_modules_for_training(request: dict[str, Any], multimodal: bool) -> Any:
+    explicit = request.get("targetModules")
+    if explicit is not None:
+        return explicit
+    return "all-linear" if multimodal else None
+
+
+def _check_finite_gradients(
+    torch_module: Any, trainable: list[tuple[str, Any]]
+) -> dict[str, Any]:
+    """Validate gradients that participated in this forward pass.
+
+    Some PEFT adapter parameters can be registered as trainable while no
+    gradient reaches them for a particular model forward. Their names remain
+    in the calibration evidence for review. Calibration fails closed when no
+    trainable parameter receives a gradient or all received gradients are
+    zero, and every gradient that does exist must be finite.
+    """
+    with_gradient: list[tuple[str, Any]] = []
+    missing: list[str] = []
+    nonzero: list[str] = []
+    for name, parameter in trainable:
+        if parameter.grad is None:
+            missing.append(name)
+            continue
+        if not bool(torch_module.isfinite(parameter.grad).all().item()):
+            _fail(f"Calibration produced a non-finite gradient in {name}.")
+        with_gradient.append((name, parameter))
+        if bool(torch_module.count_nonzero(parameter.grad).item() > 0):
+            nonzero.append(name)
+    if not with_gradient:
+        missing_names = ", ".join(missing[:8]) or "none"
+        if len(missing) > 8:
+            missing_names += ", …"
+        _fail(
+            "Calibration found no trainable parameter with a gradient "
+            f"(trainable={len(trainable)}, missing={len(missing)}: {missing_names})."
+        )
+    if not nonzero:
+        gradient_names = ", ".join(name for name, _ in with_gradient[:8]) or "none"
+        if len(with_gradient) > 8:
+            gradient_names += ", …"
+        _fail(
+            "Calibration produced only zero trainable gradients "
+            f"(trainable={len(trainable)}, withGradient={len(with_gradient)}: {gradient_names})."
+        )
+    return {
+        "trainableParameterCount": len(trainable),
+        "gradientParameterCount": len(with_gradient),
+        "nonzeroGradientParameterCount": len(nonzero),
+        "missingGradientParameterNames": missing[:32],
+    }
+
+
+def _nearest_rank_p95(values: list[float]) -> float:
+    if not values:
+        raise ValueError("Calibration requires at least one measured step.")
+    ordered = sorted(values)
+    rank = max(1, math.ceil(len(ordered) * 0.95))
+    return ordered[min(len(ordered) - 1, rank - 1)]
+
+
+def _conservative_vram_headroom_mb(
+    total_vram_bytes: int,
+    peak_reserved_bytes: int,
+    observed_global_free_bytes: list[int],
+) -> int:
+    if total_vram_bytes <= 0 or peak_reserved_bytes < 0 or not observed_global_free_bytes:
+        raise ValueError("Calibration requires valid global CUDA memory observations.")
+    global_free_bytes = min(max(0, value) for value in observed_global_free_bytes)
+    own_headroom_bytes = max(0, total_vram_bytes - peak_reserved_bytes)
+    return max(0, min(own_headroom_bytes, global_free_bytes)) // (1024 * 1024)
+
+
+def calibrate(request_path: str) -> int:
+    request = _read_calibration_request(request_path)
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except Exception as error:
+        _fail(f"Verified local training libraries are unavailable: {type(error).__name__}.")
+
+    config = request["trainingConfig"]
+    method = str(request["method"])
+    requested_device = _require_training_device(torch, str(config["computeDevice"]))
+    use_gpu = requested_device == "gpu"
+    if any(value != "text" for value in request["modelModalities"]):
+        _fail("Calibration currently requires a text-only verified model.")
+    try:
+        torch.manual_seed(int(config["seed"]))
+        if use_gpu:
+            torch.cuda.manual_seed_all(int(config["seed"]))
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
+    started = time.perf_counter()
+    model_kwargs: dict[str, Any] = {"local_files_only": True, "trust_remote_code": False}
+    use_bf16 = bool(
+        use_gpu
+        and hasattr(torch.cuda, "is_bf16_supported")
+        and torch.cuda.is_bf16_supported()
+    )
+    if method == "qlora":
+        try:
+            from transformers import BitsAndBytesConfig
+            import bitsandbytes  # noqa: F401
+        except Exception as error:
+            _fail(f"QLoRA libraries are unavailable: {type(error).__name__}.")
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16 if use_bf16 else torch.float16,
+        )
+        model_kwargs["device_map"] = {"": 0}
+    elif use_gpu:
+        model_kwargs["torch_dtype"] = torch.bfloat16 if use_bf16 else torch.float16
+    tokenizer = AutoTokenizer.from_pretrained(
+        str(request["baseModelPath"]), local_files_only=True, trust_remote_code=False
+    )
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(str(request["baseModelPath"]), **model_kwargs)
+    if method in ("lora", "qlora"):
+        try:
+            from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        except Exception as error:
+            _fail(f"PEFT libraries are unavailable: {type(error).__name__}.")
+        if method == "qlora":
+            model = prepare_model_for_kbit_training(model)
+        model = get_peft_model(
+            model,
+            LoraConfig(
+                r=int(config["loraRank"]),
+                lora_alpha=int(config["loraAlpha"]),
+                lora_dropout=float(config["loraDropout"]),
+                bias="none",
+                task_type="CAUSAL_LM",
+            # Match real training: text-only requests leave target discovery to
+            # PEFT. Calibration must not add adapters to every linear layer
+            # when the training path will use the model's architecture map.
+            target_modules=_target_modules_for_training(request, multimodal=False),
+            ),
+        )
+    if use_gpu and method != "qlora":
+        model.to("cuda")
+    device_name = _assert_model_device(model, requested_device)
+    sequence_length = int(config["maxSequenceLength"])
+    model_context = getattr(getattr(model, "config", None), "max_position_embeddings", None)
+    if isinstance(model_context, int) and sequence_length > model_context:
+        _fail(
+            f"Calibration sequence length {sequence_length} exceeds the verified model context "
+            f"of {model_context}."
+        )
+    batch_size = int(config["batchSize"])
+    gradient_accumulation = int(config["gradientAccumulation"])
+    calibration_text = (
+        "Calibration example: the verified local trainer must complete a bounded civil-debater "
+        "optimizer step using the selected batch and sequence settings. "
+    )
+    calibration_text *= max(1, sequence_length // 12)
+    encoded = tokenizer(
+        [calibration_text] * batch_size,
+        truncation=True,
+        max_length=sequence_length,
+        padding="max_length",
+        return_tensors="pt",
+    )
+    device = torch.device("cuda" if use_gpu else "cpu")
+    batch = {key: value.to(device) for key, value in encoded.items()}
+    attention_mask = batch.get("attention_mask")
+    if attention_mask is None:
+        attention_mask = torch.ones_like(batch["input_ids"])
+        batch["attention_mask"] = attention_mask
+    batch["labels"] = batch["input_ids"].clone()
+    batch["labels"] = batch["labels"].masked_fill(attention_mask == 0, -100)
+    trainable = [
+        (name, parameter)
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    ]
+    if not trainable:
+        _fail("Calibration found no trainable parameters for the selected method.")
+    optimizer = torch.optim.AdamW(
+        [parameter for _, parameter in trainable], lr=float(config["learningRate"])
+    )
+    model.train()
+    observed_global_free_vram_bytes: list[int] = []
+
+    def record_global_free_vram() -> None:
+        try:
+            free_bytes, _ = torch.cuda.mem_get_info()
+        except Exception as error:
+            _fail(
+                "Calibration could not inspect global CUDA memory: "
+                f"{type(error).__name__}."
+            )
+        observed_global_free_vram_bytes.append(int(free_bytes))
+
+    if use_gpu:
+        torch.cuda.synchronize()
+        record_global_free_vram()
+
+    gradient_summary: dict[str, Any] | None = None
+
+    def check_finite_parameters() -> None:
+        for _, parameter in trainable:
+            if not bool(torch.isfinite(parameter.data).all().item()):
+                _fail("Calibration produced a non-finite parameter after the optimizer step.")
+
+    def optimizer_step() -> float:
+        optimizer.zero_grad(set_to_none=True)
+        if use_gpu:
+            torch.cuda.synchronize()
+        step_started = time.perf_counter()
+        for _ in range(gradient_accumulation):
+            autocast = (
+                torch.autocast(
+                    device_type="cuda",
+                    dtype=torch.bfloat16 if use_bf16 else torch.float16,
+                )
+                if use_gpu
+                else contextlib.nullcontext()
+            )
+            with autocast:
+                output = model(**batch)
+                loss = getattr(output, "loss", None)
+                if loss is None or not bool(torch.isfinite(loss).item()):
+                    _fail("Calibration produced a non-finite loss.")
+                (loss / gradient_accumulation).backward()
+        nonlocal gradient_summary
+        current_summary = _check_finite_gradients(torch, trainable)
+        if gradient_summary is None:
+            gradient_summary = current_summary
+        optimizer.step()
+        check_finite_parameters()
+        optimizer.zero_grad(set_to_none=True)
+        if use_gpu:
+            torch.cuda.synchronize()
+            record_global_free_vram()
+        return (time.perf_counter() - step_started) * 1000
+
+    if use_gpu:
+        torch.cuda.reset_peak_memory_stats()
+    for _ in range(CALIBRATION_WARMUP_STEPS):
+        optimizer_step()
+    if use_gpu:
+        torch.cuda.reset_peak_memory_stats()
+        record_global_free_vram()
+    measured_step_times = [
+        optimizer_step() for _ in range(CALIBRATION_MEASURED_STEPS)
+    ]
+    if use_gpu:
+        torch.cuda.synchronize()
+        peak_vram_mb = int(torch.cuda.max_memory_reserved() / (1024 * 1024))
+        total_vram_bytes = int(
+            torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
+        )
+        total_vram_mb = int(total_vram_bytes / (1024 * 1024))
+        vram_headroom_mb = _conservative_vram_headroom_mb(
+            total_vram_bytes,
+            int(torch.cuda.max_memory_reserved()),
+            observed_global_free_vram_bytes,
+        )
+        torch.cuda.empty_cache()
+    else:
+        peak_vram_mb = None
+        total_vram_mb = None
+        vram_headroom_mb = None
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    print(
+        json.dumps(
+            {
+                "protocol": PROTOCOL,
+                "localOnly": LOCAL_ONLY,
+                "qualified": True,
+                "modelId": request["modelId"],
+                "method": method,
+                "computeDevice": requested_device,
+                "device": device_name,
+                "precision": "bf16" if use_bf16 else "fp16" if use_gpu else "fp32",
+                "forwardBackward": True,
+                "optimizerStep": True,
+                "batchSize": batch_size,
+                "gradientAccumulation": gradient_accumulation,
+                "maxSequenceLength": sequence_length,
+                "warmupSteps": CALIBRATION_WARMUP_STEPS,
+                "measuredSteps": CALIBRATION_MEASURED_STEPS,
+                "stepTimeMs": int(round(statistics.median(measured_step_times))),
+                "stepTimeMsP95": int(round(_nearest_rank_p95(measured_step_times))),
+                "peakVramMb": peak_vram_mb,
+                "vramTotalMb": total_vram_mb,
+                "vramHeadroomMb": vram_headroom_mb,
+                "elapsedMs": elapsed_ms,
+                "reason": None,
+                **(
+                    gradient_summary
+                    or {
+                        "trainableParameterCount": len(trainable),
+                        "gradientParameterCount": 0,
+                        "nonzeroGradientParameterCount": 0,
+                        "missingGradientParameterNames": [],
+                    }
+                ),
+            },
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
 def _example_text(record: dict[str, Any]) -> str:
     text = record.get("text")
     if isinstance(text, str) and text.strip():
@@ -415,6 +949,26 @@ def completion_only_labels(input_ids: list[int], prompt_token_count: int) -> lis
         return list(input_ids)
     masked = min(int(prompt_token_count), len(input_ids))
     return [-100] * masked + list(input_ids[masked:])
+
+
+def training_labels(
+    input_ids: list[int],
+    prompt_token_count: int = 0,
+    attention_mask: list[int] | None = None,
+) -> list[int]:
+    """Build loss labels for every text row, masking prompt and pad positions.
+
+    Plain ``text`` records still need labels: otherwise the Transformers
+    collator omits ``labels`` and a causal model returns logits without a
+    supervised loss. Padding is masked here as well as in the collator so the
+    contract remains correct for both single rows and padded batches.
+    """
+    if attention_mask is not None and len(attention_mask) != len(input_ids):
+        raise ValueError("Attention mask must match the encoded input length.")
+    labels = completion_only_labels(input_ids, prompt_token_count)
+    if attention_mask is None:
+        return labels
+    return [label if int(mask) else -100 for label, mask in zip(labels, attention_mask)]
 
 
 def _load_media_frames(record: dict[str, Any]) -> list[Any]:
@@ -575,7 +1129,7 @@ def train(request_path: str) -> int:
                 lora_dropout=float(config["loraDropout"]),
                 bias="none",
                 task_type="CAUSAL_LM",
-                target_modules=request.get("targetModules") or ("all-linear" if multimodal else None),
+                target_modules=_target_modules_for_training(request, multimodal),
             ),
         )
 
@@ -613,9 +1167,12 @@ def train(request_path: str) -> int:
                 return_tensors="pt",
             )
             encoded = {key: value.squeeze(0) for key, value in encoded_batch.items()}
+            attention_mask = encoded.get("attention_mask")
             encoded["labels"] = torch.tensor(
-                completion_only_labels(
-                    encoded["input_ids"].tolist(), int(prompt_batch["input_ids"].shape[-1])
+                training_labels(
+                    encoded["input_ids"].tolist(),
+                    int(prompt_batch["input_ids"].shape[-1]),
+                    attention_mask.tolist() if attention_mask is not None else None,
                 ),
                 dtype=torch.long,
             )
@@ -626,13 +1183,19 @@ def train(request_path: str) -> int:
             max_length=max_length,
         )
         prompt_prefix = _example_prompt_prefix(record)
+        prompt_token_count = 0
         if prompt_prefix:
             prompt_ids = tokenizer(
                 prompt_prefix,
                 truncation=True,
                 max_length=max_length,
             )["input_ids"]
-            encoded["labels"] = completion_only_labels(encoded["input_ids"], len(prompt_ids))
+            prompt_token_count = len(prompt_ids)
+        encoded["labels"] = training_labels(
+            encoded["input_ids"],
+            prompt_token_count,
+            encoded.get("attention_mask"),
+        )
         return encoded
 
     tokenized = [tokenize(record) for record in dataset]
@@ -726,12 +1289,17 @@ def train(request_path: str) -> int:
             )
         ),
     )
-    training_result = trainer.train(resume_from_checkpoint=resume_checkpoint or None)
-    evaluation_metrics = trainer.evaluate()
-    trainer.save_model(str(output_dir))
-    tokenizer.save_pretrained(str(output_dir))
-    if processor is not None:
-        processor.save_pretrained(str(output_dir))
+    # Native Rust consumes stdout as one strict JSON completion receipt. The
+    # Transformers trainer writes progress and metric dictionaries to stdout,
+    # so keep the whole noisy lifecycle on stderr and reserve stdout for the
+    # final protocol object below.
+    training_result, evaluation_metrics = _run_training_lifecycle(
+        trainer,
+        resume_checkpoint,
+        output_dir,
+        tokenizer,
+        processor,
+    )
     (output_dir / "vibespace-training.json").write_text(
         json.dumps(
             {
@@ -787,6 +1355,24 @@ def validate_request(request_path: str) -> int:
     _, summary = _read_request(request_path)
     print(json.dumps(summary, separators=(",", ":")))
     return 0
+
+
+def _run_training_lifecycle(
+    trainer: Any,
+    resume_checkpoint: str | None,
+    output_dir: Path,
+    tokenizer: Any,
+    processor: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Run noisy Transformers work away from the stdout protocol channel."""
+    with contextlib.redirect_stdout(sys.stderr):
+        training_result = trainer.train(resume_from_checkpoint=resume_checkpoint or None)
+        evaluation_metrics = trainer.evaluate()
+        trainer.save_model(str(output_dir))
+        tokenizer.save_pretrained(str(output_dir))
+        if processor is not None:
+            processor.save_pretrained(str(output_dir))
+    return training_result, evaluation_metrics
 
 
 def _read_inference_request(request_path: str) -> dict[str, Any]:
@@ -1068,7 +1654,7 @@ def _sha256_file(path: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("command", choices=("probe", "validate", "train", "infer"))
+    parser.add_argument("command", choices=("probe", "validate", "calibrate", "train", "infer"))
     parser.add_argument("request", nargs="?")
     args = parser.parse_args()
     try:
@@ -1076,6 +1662,8 @@ def main() -> int:
             return probe()
         if args.command == "validate" and args.request:
             return validate_request(args.request)
+        if args.command == "calibrate" and args.request:
+            return calibrate(args.request)
         if args.command == "train" and args.request:
             return train(args.request)
         if args.command == "infer" and args.request:

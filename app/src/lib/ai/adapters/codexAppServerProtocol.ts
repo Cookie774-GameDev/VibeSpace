@@ -20,12 +20,19 @@ export type CodexExecutionMode =
         | { kind: 'danger-full-access' };
     };
 
+export interface CodexDynamicTool {
+  type: 'function';
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
 export interface CodexThreadRequestInput {
   requestId: string;
   identity: Readonly<CodexBackendIdentity>;
   mode: CodexExecutionMode;
   developerInstructions?: string;
-  dynamicTools?: readonly { type: 'function'; name: string; description: string; inputSchema: Record<string, unknown> }[];
+  dynamicTools?: readonly CodexDynamicTool[];
 }
 
 export interface CodexThreadResumeRequestInput extends CodexThreadRequestInput {

@@ -40,7 +40,7 @@ describe('reasoning controls', () => {
   });
   it('uses authoritative OpenCode Go variants for automatic modes without static provider guesses', () => {
     const selected = selection('opencode', 'opencode-go/deepseek-v4-flash-vision-exp', 'opencode-cli');
-    for (const [mode, effort] of [['token-saver', 'low'], ['token-final-boss', 'max']] as const) {
+    for (const [mode, effort] of [['token-saver', null], ['token-final-boss', 'max']] as const) {
       expect(resolveReasoningPolicy({selection: selected, preference: {mode, effortOverride: null}, liveVariants: ['low', 'high', 'max']})).toMatchObject({resolvedEffort: effort, providerOptions: {}});
     }
     expect(getReasoningCapabilities(selection('openai', 'gpt-5.6-sol', 'opencode-cli'), [], true).supportedEfforts).toEqual([]);
@@ -206,7 +206,7 @@ describe('reasoning controls', () => {
     ).toEqual({ reasoning_effort: 'medium' });
   });
 
-  it('maps modes to lowest, provider-default, and highest effort while preserving the model', () => {
+  it('preserves provider-default saver and normal effort while keeping Final Boss highest', () => {
     const selected = selection('openai', 'gpt-5.6-sol', 'openai-codex');
     expect(
       resolveReasoningPolicy({
@@ -215,9 +215,9 @@ describe('reasoning controls', () => {
       }),
     ).toMatchObject({
       selection: selected,
-      resolvedEffort: 'low',
-      providerOptions: { reasoning_effort: 'low' },
-      maxOutputTokens: 2048,
+      resolvedEffort: null,
+      providerOptions: {},
+      maxOutputTokens: undefined,
     });
     expect(
       resolveReasoningPolicy({
@@ -239,6 +239,21 @@ describe('reasoning controls', () => {
       selection: selected,
       resolvedEffort: 'max',
       providerOptions: { reasoning_effort: 'max' },
+      maxOutputTokens: undefined,
+    });
+  });
+
+  it('preserves an explicitly selected saver effort and caller output budget', () => {
+    const policy = resolveReasoningPolicy({
+      selection: selection('openai', 'gpt-5.6-sol', 'openai-codex'),
+      preference: { mode: 'token-saver', effortOverride: 'high' },
+    });
+
+    expect(policy).toMatchObject({
+      requestedEffort: 'high',
+      resolvedEffort: 'high',
+      providerEffort: 'high',
+      providerOptions: { reasoning_effort: 'high' },
       maxOutputTokens: undefined,
     });
   });
@@ -282,6 +297,8 @@ describe('reasoning controls', () => {
 
     expect(saver.executionInstructions).toContain('Token Saver');
     expect(saver.executionInstructions).toContain('mandatory security');
+    expect(saver.executionInstructions).not.toContain('Use low native reasoning');
+    expect(saver.executionInstructions).not.toContain('answer concisely');
     expect(normal.executionInstructions).toContain('Normal');
     expect(normal.executionInstructions).toContain('focused verification');
     expect(finalBoss.executionInstructions).toContain('Token Final Boss');

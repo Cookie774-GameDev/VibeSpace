@@ -52,10 +52,10 @@ export async function runDoctorSystemChecks(
 
 /** Read-only capability checks. Never place a call, send a message, or create/restore a backup. */
 export async function runDefaultDoctorSystemChecks(): Promise<VibeSpaceDoctorSubsystemCheck[]> {
-  const [{ getSupabaseClient }, { useAuthStore }, { useJarvisLearningStore }, calls] =
+  const [{ getSupabaseClient }, { telemetryConsentStore }, { useJarvisLearningStore }, calls] =
     await Promise.all([
       import('@/lib/supabase'),
-      import('@/stores/auth'),
+      import('@/features/telemetry/telemetryConsent'),
       import('@/features/jarvis-memory/learningStore'),
       import('@/features/call/config'),
     ]);
@@ -166,9 +166,9 @@ export async function runDefaultDoctorSystemChecks(): Promise<VibeSpaceDoctorSub
     {
       label: 'Privacy',
       run: () => {
-        const enabled = useAuthStore.getState().telemetryOptIn;
-        if (typeof enabled !== 'boolean') throw new Error();
-        return `Telemetry ${enabled ? 'enabled by preference' : 'disabled'}; no preference changed`;
+        const { consent } = telemetryConsentStore.getSnapshot();
+        const enabled = [consent.productUsage, consent.diagnostics, consent.toolOutcomes].filter(Boolean).length;
+        return `Optional telemetry ${enabled ? `${enabled} of 3 classes enabled` : 'disabled'}; local consent read, no preference changed`;
       },
     },
     {

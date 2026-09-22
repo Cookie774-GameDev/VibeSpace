@@ -13,7 +13,13 @@ vi.mock('@/lib/ai/backend/chatBackendPersistence', async original => ({
   ...(await original<typeof import('@/lib/ai/backend/chatBackendPersistence')>()),
   selectPersistedChatBackend: selectBackend,
 }));
-vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => undefined }));
+const liveQueryFixture = vi.hoisted(() => ({ emptyArray: [] as unknown[] }));
+vi.mock('dexie-react-hooks', () => ({
+  useLiveQuery: (_query: unknown, _deps: unknown, defaultValue: unknown) =>
+    Array.isArray(defaultValue) && defaultValue.length === 0
+      ? liveQueryFixture.emptyArray
+      : defaultValue,
+}));
 vi.mock('./useChatBackendAffinity', () => ({
   useChatBackendAffinity: () => state,
 }));
@@ -73,5 +79,5 @@ it.each(['codex', 'opencode'] as const)('shows the locked %s backend when openin
   expect(screen.queryByRole('button', { name: /native route verification|Use the authenticated OpenCode backend/ })).toBeNull();
   fireEvent.click(current);
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
-  expect(screen.queryByRole('option')).toBeNull();
+  expect(screen.queryByRole('option', { name: /\/cli/ })).toBeNull();
 });

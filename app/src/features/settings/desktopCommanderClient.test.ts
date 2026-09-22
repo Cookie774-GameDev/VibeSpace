@@ -57,3 +57,51 @@ describe('Desktop Commander connection', () => {
     );
   });
 });
+
+it('follows a verified gateway restart without reusing its old endpoint or bearer', async () => {
+  const connection = (endpoint: string, token: string) => ({
+    ok: true,
+    content: JSON.stringify({ version: 1, endpoint, token }),
+  });
+  mocks.read.mockResolvedValue(connection('http://127.0.0.1:52643', 'a'.repeat(64)));
+  mocks.fetch.mockImplementation(
+    async () => new Response(JSON.stringify({ config, availableShells: [] })),
+  );
+  const client = await connectDesktopCommander('connection.json');
+  await client.load();
+  mocks.read.mockResolvedValue(connection('http://127.0.0.1:59660', 'b'.repeat(64)));
+  await client.save('fileReadLineLimit', 12345, 10000);
+  expect(mocks.fetch).toHaveBeenLastCalledWith(
+    'http://127.0.0.1:59660/config',
+    expect.objectContaining({
+      headers: expect.objectContaining({ authorization: 'Bearer ' + 'b'.repeat(64) }),
+      allowRetry: false,
+    }),
+  );
+});
+it('revalidates a changed connection file before sending a settings mutation', async () => {
+  mocks.read.mockResolvedValue({
+    ok: true,
+    content: JSON.stringify({
+      version: 1,
+      endpoint: 'http://127.0.0.1:52643',
+      token: 'a'.repeat(64),
+    }),
+  });
+  mocks.fetch.mockImplementation(
+    async () => new Response(JSON.stringify({ config, availableShells: [] })),
+  );
+  const client = await connectDesktopCommander('connection.json');
+  mocks.read.mockResolvedValue({
+    ok: true,
+    content: JSON.stringify({
+      version: 1,
+      endpoint: 'https://untrusted.invalid',
+      token: 'b'.repeat(64),
+    }),
+  });
+  await expect(client.save('fileReadLineLimit', 12345, 10000)).rejects.toThrow(
+    'Select a connection file',
+  );
+  expect(mocks.fetch).not.toHaveBeenCalled();
+});

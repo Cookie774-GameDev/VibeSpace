@@ -1,4 +1,6 @@
 import { db, openDb, projectRepo } from '@/lib/db';
+import { invoke } from '@tauri-apps/api/core';
+import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
 import { useUIStore } from '@/stores/ui';
@@ -19,11 +21,18 @@ import { getDataDir } from '@/lib/tauri';
 import {
   TerminalCliRuntimeServiceError,
   type TerminalCliAgent,
+  type TerminalCliCaoIdentityInput,
   type TerminalCliContextEntity,
   type TerminalCliContextMap,
   type TerminalCliProject,
   type TerminalCliRuntimeDependencies,
 } from './terminalCliRuntime';
+import type { BackendTerminalInfo } from './restoreSession';
+import type { ExpectedTerminalProcessBinding } from './terminalRefs';
+import {
+  invalidateCaoTerminalExecutionIdentity,
+  observeCaoTerminalOpenCodeEvent,
+} from '@/features/cao/terminalExecutionIdentity';
 import {
   createTerminalCliContextContentService,
   TerminalCliContextContentError,
@@ -40,6 +49,132 @@ import {
 } from './terminalContextBridgeIdentity';
 
 const MAX_SEARCH_RESULTS = 50;
+
+export type TerminalCliProductionOptions = Readonly<{
+  readAccountId?: () => string | null;
+  authorizeProject?: (accountId: string, projectId: string) => Promise<boolean>;
+  listNativeTerminals?: () => Promise<readonly BackendTerminalInfo[]>;
+}>;
+
+async function defaultAuthorizeProject(accountId: string, projectId: string): Promise<boolean> {
+  const project = await projectRepo.getById(projectId as never);
+  if (!project || useAuthStore.getState().workspaceId !== project.workspace_id) return false;
+  const workspace = await db.workspaces.get(project.workspace_id);
+  return workspace?.owner_id === accountId;
+}
+
+function verifiedProcessBinding(
+  native: BackendTerminalInfo,
+  projectId: string,
+): ExpectedTerminalProcessBinding | null {
+  if (
+    native.projectId !== projectId ||
+    typeof native.processInstanceId !== 'string' ||
+    native.processInstanceId.trim() !== native.processInstanceId ||
+    native.processInstanceId.length === 0 ||
+    typeof native.runtimeGeneration !== 'string' ||
+    native.runtimeGeneration.trim() !== native.runtimeGeneration ||
+    native.runtimeGeneration.length === 0 ||
+    !Number.isSafeInteger(native.pid) ||
+    native.pid <= 0 ||
+    !Number.isSafeInteger(native.processStartedAt) ||
+    native.processStartedAt <= 0
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    projectId,
+    processInstanceId: native.processInstanceId,
+    pid: native.pid,
+    processStartedAt: native.processStartedAt,
+    runtimeGeneration: native.runtimeGeneration,
+  });
+}
+
+async function recordCaoTerminalIdentity(
+  input: TerminalCliCaoIdentityInput,
+  options: TerminalCliProductionOptions,
+): Promise<void> {
+  const accountId = (
+    options.readAccountId ?? (() => getActiveAccountIdentity()?.accountId ?? null)
+  )();
+  if (
+    !accountId ||
+    !(await (options.authorizeProject ?? defaultAuthorizeProject)(accountId, input.projectId))
+  ) {
+    throw new TerminalCliRuntimeServiceError(
+      'permission_denied',
+      'The OpenCode identity is outside the active account scope.',
+    );
+  }
+
+  const nativeTerminals = await (
+    options.listNativeTerminals ?? (() => invoke<BackendTerminalInfo[]>('terminal_list'))
+  )();
+  const native = nativeTerminals.find(
+    (candidate) => candidate.sessionId === input.terminalSessionId,
+  );
+  const process = native ? verifiedProcessBinding(native, input.projectId) : null;
+  if (!native || !process || process.processInstanceId !== input.identity.processInstanceId) {
+    throw new TerminalCliRuntimeServiceError(
+      'permission_denied',
+      'The OpenCode identity does not match the live terminal process.',
+    );
+  }
+
+  const accountAfterNativeLookup = options.readAccountId
+    ? options.readAccountId()
+    : (getActiveAccountIdentity()?.accountId ?? null);
+  if (accountAfterNativeLookup !== accountId) {
+    throw new TerminalCliRuntimeServiceError(
+      'permission_denied',
+      'The active account changed while the terminal identity was being verified.',
+    );
+  }
+
+  const binding = Object.freeze({
+    accountId,
+    projectId: input.projectId,
+    paneId: input.paneId,
+    sessionId: input.terminalSessionId,
+    process,
+  });
+  const event = Object.freeze({
+    type: 'message.updated' as const,
+    properties: Object.freeze({
+      sessionID: input.identity.opencodeSessionId,
+      info: Object.freeze({
+        role: 'assistant' as const,
+        providerID: input.identity.providerId,
+        modelID: input.identity.modelId,
+        variant: input.identity.variant,
+      }),
+    }),
+  });
+  const receipt = observeCaoTerminalOpenCodeEvent(
+    binding,
+    event,
+    Date.now(),
+    input.identity.opencodeSessionId,
+  );
+  if (!receipt) {
+    throw new TerminalCliRuntimeServiceError(
+      'invalid_request',
+      'The OpenCode identity event is invalid.',
+    );
+  }
+
+  const accountAfterReceipt = options.readAccountId
+    ? options.readAccountId()
+    : (getActiveAccountIdentity()?.accountId ?? null);
+  if (accountAfterReceipt !== accountId) {
+    invalidateCaoTerminalExecutionIdentity(binding);
+    throw new TerminalCliRuntimeServiceError(
+      'permission_denied',
+      'The active account changed while the terminal identity was recorded.',
+    );
+  }
+}
 
 function descriptor(map: ContextMapRecord): TerminalCliContextMap {
   const sourceLabel = map.github
@@ -301,9 +436,12 @@ async function sourceOperation<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-export function createProductionTerminalCliRuntimeDependencies(): TerminalCliRuntimeDependencies {
+export function createProductionTerminalCliRuntimeDependencies(
+  options: TerminalCliProductionOptions = {},
+): TerminalCliRuntimeDependencies {
   return {
     now: Date.now,
+    recordCaoTerminalIdentity: (input) => recordCaoTerminalIdentity(input, options),
     authorizeContextIdentity: authorizeTerminalContextBridgeIdentity,
     async askContext({ requestId, question, identity }) {
       const complete = registerTerminalContextBridgeRequest(identity.identityId, requestId, () => {

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { ChatActivityEvent } from '../activity/types';
 import type { Message } from '@/types';
 import {
-  MAX_DIFF_LINES,
   MAX_OUTPUT_CHARS,
   formatUnifiedDiffLines,
   projectAgenticTranscript,
@@ -468,7 +467,7 @@ describe('projectAgenticTranscript', () => {
     expect(clean.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS + 32);
     expect(hostile).toContain('\u001b');
 
-    const diff = Array.from({ length: MAX_DIFF_LINES + 20 }, (_, index) => `+line ${index}`).join(
+    const diff = Array.from({ length: 1_200 }, (_, index) => `+line ${index}`).join(
       '\n',
     );
     const blocks = projectAgenticTranscript(
@@ -488,8 +487,8 @@ describe('projectAgenticTranscript', () => {
     const projected = blocks[0];
     expect(projected?.kind).toBe('diff');
     if (projected?.kind !== 'diff') throw new Error('Expected a diff block.');
-    expect(projected.diff.split('\n').length).toBeLessThanOrEqual(MAX_DIFF_LINES + 1);
-    expect(diff.split('\n')).toHaveLength(MAX_DIFF_LINES + 20);
+    expect(projected.diff).toBe(diff);
+    expect(projected.diff).toContain('+line 1199');
   });
 
   it('redacts detected secrets from every visible console preview', () => {

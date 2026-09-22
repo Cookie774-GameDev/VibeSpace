@@ -14,7 +14,14 @@ const OUTPUT_NOUN =
 const OUTPUT_ASSERTION =
   /\b(?:available|copied|created|downloaded|exported|find it|generated|here it is|left|located|location is|moved|opened|placed|published|put|ready|rendered|saved|stored|uploaded|written)\b/i;
 const OUTPUT_ACCESS = /\b(?:access|download|find|open|view)\b/i;
-const DIRECT_PRODUCED_LOCATION = /\bproduced\s+(?:at|in|to)\s+[`\"'(]*$/i;
+const DIRECT_OUTPUT_ACTION =
+  /\b(?:available|access|cop(?:y|ied|ies|ying)|creat(?:e|ed|es|ing)|download(?:ed|s|ing)?|export(?:ed|s|ing)?|find(?:s|ing)?\s+it|generat(?:e|ed|es|ing)|here\s+it\s+is|left|locat(?:e|ed|es|ing)|location\s+is|mov(?:e|ed|es|ing)|open(?:ed|s|ing)?|place[ds]?|produced?|publish(?:ed|es|ing)?|put|read(?:y|ied)?|render(?:ed|s|ing)?|sav(?:e|ed|es|ing)|stor(?:e|ed|es|ing)|upload(?:ed|s|ing)?|view(?:ed|s|ing)?|writ(?:e|ten|es|ing))\s*$/i;
+const DIRECT_OUTPUT_NOUN_ACTION =
+  /\b(?:available|access|cop(?:y|ied|ies|ying)|creat(?:e|ed|es|ing)|download(?:ed|s|ing)?|export(?:ed|s|ing)?|generat(?:e|ed|es|ing)|locat(?:e|ed|es|ing)|mov(?:e|ed|es|ing)|open(?:ed|s|ing)?|place[ds]?|produced?|publish(?:ed|es|ing)?|put|render(?:ed|s|ing)?|sav(?:e|ed|es|ing)|stor(?:e|d|es|ing)|upload(?:ed|s|ing)?|writ(?:e|ten|es|ing))\s+(?:the\s+|a\s+|an\s+)?(?:new\s+|completed\s+|final\s+)?(?:file|output|report|result|artifact|document)\s*$/i;
+const DIRECT_LOCATION_CONNECTOR = /\b(?:at|in|into|to|under|inside|within)\s*$/i;
+const DIRECT_PRODUCED_LOCATION = /\bproduced\s+(?:at|in|to)\s+[`"'(]*$/i;
+const REVERSE_OUTPUT_ACTION =
+  /^\s+(?:(?:was|is|has\s+been|had\s+been|will\s+be)\s+)?(?:available|cop(?:y|ied|ies|ying)|creat(?:e|ed|es|ing)|download(?:ed|s|ing)?|export(?:ed|s|ing)?|generat(?:e|ed|es|ing)|left|locat(?:e|ed|es|ing)|mov(?:e|ed|es|ing)|open(?:ed|s|ing)?|place[ds]?|produced?|publish(?:ed|es|ing)?|put|read(?:y|ied)?|render(?:ed|s|ing)?|sav(?:e|ed|es|ing)|stor(?:e|d|es|ing)|upload(?:ed|s|ing)?|view(?:ed|s|ing)?|writ(?:e|ten|es|ing))\b/i;
 const SAFE_SOURCE_URI_PROTOCOLS = new Set([
   'app:',
   'asset:',
@@ -97,7 +104,12 @@ function isPermittedReference(
   return candidates.some((candidate) => permitted.has(canonicalReference(candidate)));
 }
 
-function isOutputLocationClaim(text: string, start: number, end: number): boolean {
+function isOutputLocationClaim(
+  text: string,
+  start: number,
+  end: number,
+  options: Readonly<{ preserveBroadAssertions?: boolean }> = {},
+): boolean {
   const before = text.slice(Math.max(0, start - 96), start);
   // A move/copy source is not a claim that the assistant produced this path.
   // Keep checking the destination independently, including within the same sentence.
@@ -110,12 +122,24 @@ function isOutputLocationClaim(text: string, start: number, end: number): boolea
   if (moveSource || copySource) {
     return false;
   }
+  // Quoted relative paths are passed here without their opening quote. Strip
+  // the wrapper before checking the immediate claim so a technical token such
+  // as `src/styles.css` is not treated as an output merely because `Created`
+  // appears earlier in the same sentence.
+  const prefix = text.slice(0, start);
+  const sentencePunctuation = [...prefix.matchAll(/[.!?](?=\s)/gu)].at(-1)?.index ?? -1;
+  const directBefore = text.slice(sentencePunctuation + 1, start);
+  const normalizedBefore = directBefore.replace(/[`"']\s*$/u, '');
+  const directClaim =
+    DIRECT_OUTPUT_ACTION.test(normalizedBefore) ||
+    DIRECT_OUTPUT_NOUN_ACTION.test(normalizedBefore) ||
+    DIRECT_PRODUCED_LOCATION.test(directBefore) ||
+    (DIRECT_LOCATION_CONNECTOR.test(normalizedBefore) && OUTPUT_ASSERTION.test(normalizedBefore)) ||
+    REVERSE_OUTPUT_ACTION.test(after);
+  if (directClaim) return true;
+  if (!options.preserveBroadAssertions) return false;
   const local = text.slice(Math.max(0, start - 96), Math.min(text.length, end + 96));
-  return (
-    DIRECT_PRODUCED_LOCATION.test(before) ||
-    OUTPUT_ASSERTION.test(local) ||
-    (OUTPUT_NOUN.test(local) && OUTPUT_ACCESS.test(local))
-  );
+  return OUTPUT_ASSERTION.test(local) || (OUTPUT_NOUN.test(local) && OUTPUT_ACCESS.test(local));
 }
 
 function replacementBounds(
@@ -128,6 +152,21 @@ function replacementBounds(
     return { start: start - 1, end: end + 1 };
   }
   return { start, end };
+}
+
+function preserveBroadRelativeOutputAssertions(candidate: string): boolean {
+  const normalized = candidate.replace(/\\/gu, '/');
+  if (/^\.{1,2}\//u.test(normalized) || candidate.includes('\\')) return true;
+
+  const segments = normalized.split('/');
+  const filename = segments.at(-1) ?? '';
+  if (/\.[A-Za-z0-9]{1,8}$/u.test(filename)) {
+    return true;
+  }
+
+  return /^(?:artifact|artifacts|download|downloads|export|exports|out|output|outputs|report|reports|result|results)(?:\/|$)/iu.test(
+    normalized,
+  );
 }
 
 function overlaps(
@@ -200,7 +239,11 @@ function filterDirectReferences(
     if (replacements.some((replacement) => overlaps(reference, replacement))) continue;
     const candidate = prose.slice(reference.start, reference.end);
     if (isPermittedReference([candidate], permitted)) continue;
-    if (!isOutputLocationClaim(prose, reference.start, reference.end)) {
+    if (
+      !isOutputLocationClaim(prose, reference.start, reference.end, {
+        preserveBroadAssertions: true,
+      })
+    ) {
       continue;
     }
     const bounds = replacementBounds(prose, reference.start, reference.end);
@@ -215,7 +258,13 @@ function filterDirectReferences(
     if (replacements.some((replacement) => overlaps(location, replacement))) continue;
     const candidate = prose.slice(location.start, location.end);
     if (isPermittedReference([candidate], permitted)) continue;
-    if (!isOutputLocationClaim(prose, location.start, location.end)) continue;
+    if (
+      !isOutputLocationClaim(prose, location.start, location.end, {
+        preserveBroadAssertions: preserveBroadRelativeOutputAssertions(candidate),
+      })
+    ) {
+      continue;
+    }
     const bounds = replacementBounds(prose, location.start, location.end);
     replacements.push({
       ...bounds,

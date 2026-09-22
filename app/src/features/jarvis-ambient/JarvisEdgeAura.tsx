@@ -25,9 +25,13 @@ export function normalizeAmbientSnapshot(value: unknown): JarvisAmbientSnapshot 
 export function JarvisEdgeAura({
   snapshot,
   reducedMotion,
+  warmRendererOnMount = false,
+  onRendererWarm,
 }: {
   snapshot: JarvisAmbientSnapshot;
   reducedMotion?: boolean;
+  warmRendererOnMount?: boolean;
+  onRendererWarm?: () => void;
 }) {
   const safeSnapshot = normalizeAmbientSnapshot(snapshot),
     snapshotRef = React.useRef(safeSnapshot),
@@ -37,9 +41,31 @@ export function JarvisEdgeAura({
   React.useEffect(() => {
     const canvas = canvasRef.current,
       context = canvas?.getContext('2d');
-    if (!canvas || !context) return;
+    if (!canvas || !context) {
+      onRendererWarm?.();
+      return;
+    }
     const renderer = createAuraRenderer(),
       query = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (warmRendererOnMount) {
+      const ratio = Math.min(1.5, Math.max(1, window.devicePixelRatio || 1)),
+        width = window.innerWidth,
+        height = window.innerHeight,
+        pixelWidth = Math.round(width * ratio),
+        pixelHeight = Math.round(height * ratio);
+      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+      }
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      try {
+        renderer.warm(context, width, height);
+      } catch (error) {
+        console.error('[jarvis-aura] renderer prewarm failed', error);
+        renderer.destroy();
+      }
+    }
+    onRendererWarm?.();
     let frame: number | null = null,
       disposed = false,
       last = 0,
@@ -57,7 +83,9 @@ export function JarvisEdgeAura({
         reduce = reducedMotion ?? query?.matches === true;
       if (!active) {
         context.clearRect(0, 0, canvas.width, canvas.height);
-        renderer.destroy();
+        if (!warmRendererOnMount) {
+          renderer.destroy();
+        }
         wasActive = false;
         energy = 0;
         return;
@@ -127,7 +155,7 @@ export function JarvisEdgeAura({
       query?.removeEventListener('change', repaint);
       context.clearRect(0, 0, canvas.width, canvas.height);
     };
-  }, [reducedMotion]);
+  }, [onRendererWarm, reducedMotion, warmRendererOnMount]);
   React.useEffect(() => {
     repaintRef.current?.();
   }, [safeSnapshot.state, safeSnapshot.active, safeSnapshot.energy]);

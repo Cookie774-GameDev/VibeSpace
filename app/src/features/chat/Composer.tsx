@@ -61,7 +61,14 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui';
-import { chatRepo, messageRepo, projectRepo, taskRepo, terminalSessionRepo, workspaceRepo } from '@/lib/db';
+import {
+  chatRepo,
+  messageRepo,
+  projectRepo,
+  taskRepo,
+  terminalSessionRepo,
+  workspaceRepo,
+} from '@/lib/db';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { getCurrentSyncQueueAuthorityScope } from '@/lib/cloudSyncQueueOwner';
 import { cn, isTauri, renderHotkey } from '@/lib/utils';
@@ -80,6 +87,14 @@ import { findProtectedJarvisAgent } from '@/lib/jarvis/identity';
 import { requestsReadOnlyContextTool } from '@/lib/jarvis/contextToolIntent';
 import { parseJarvisModelSwitchIntent } from '@/lib/jarvis/modelSwitchDecision';
 import { useAuthStore } from '@/stores/auth';
+import { captureToolGatewayAuthorityClaim } from '@/lib/harness/toolGatewayAuthority';
+import {
+  canRunLocalCommandWithoutModel,
+  requiresLocalCommandPreflight,
+  sharedLocalCommandPreModelBridge,
+} from '@/features/local-command-bridge/preModelBridge';
+import type { LocalBridgeResult } from '@/features/local-command-bridge/types';
+import { buildLocalTurnReceipt } from '@/features/local-command-bridge/localTurnReceipt';
 import { useUIStore } from '@/stores/ui';
 import { parseThemeCommandArgument, SELECTABLE_THEMES } from '@/features/appearance/themes';
 import {
@@ -136,9 +151,13 @@ export function slashComboboxOwnerAttributes(
   };
 }
 import {
-  COMPOSER_STT_STOP_EVENT, COMPOSER_STT_TOGGLE_EVENT,
-  getComposerSttProvider, getFasterWhisperModel,
-  sttVolumeRef, setSttVolumeLevel, resolveComposerSttTextarea,
+  COMPOSER_STT_STOP_EVENT,
+  COMPOSER_STT_TOGGLE_EVENT,
+  getComposerSttProvider,
+  getFasterWhisperModel,
+  sttVolumeRef,
+  setSttVolumeLevel,
+  resolveComposerSttTextarea,
 } from '@/features/composer-stt';
 import { readDeepgramSttOption } from '@/lib/deepgram';
 import { createComposerDictationController } from '@/features/composer-stt/composerDictationController';
@@ -150,6 +169,7 @@ import type {
   Chat,
   ChatId,
   Message,
+  Part,
   ProjectId,
   ProviderId,
   TerminalSessionId,
@@ -294,7 +314,11 @@ import {
 } from './chatHandoffProjection';
 import { ChatHandoffDraftCard } from './ChatHandoffDraftCard';
 import { InlineChatReferenceInput } from './InlineChatReferenceInput';
-import { chatReferenceToken, insertChatReference, readableReferenceText } from './inlineChatReference';
+import {
+  chatReferenceToken,
+  insertChatReference,
+  readableReferenceText,
+} from './inlineChatReference';
 import { ComposerMediaStrip } from './ComposerMediaStrip';
 import {
   MediaPreviewPanel,
@@ -339,6 +363,8 @@ import {
   useOllamaModelOptions,
 } from '@/lib/ai/models';
 import {
+  findBackendModelPickerRoute,
+  filterModelPickerGroupsForBackend,
   useAccessibleChatModels,
   type ModelPickerGroup,
   type ModelPickerOption,
@@ -369,10 +395,7 @@ import type {
   ReasoningSelection,
 } from '@/lib/ai/reasoningControls';
 import { CODEX_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
-import {
-  ChatBackendLockedError,
-  type ChatBackend,
-} from '@/lib/ai/backend/chatBackend';
+import { ChatBackendLockedError, type ChatBackend } from '@/lib/ai/backend/chatBackend';
 import {
   dexieChatBackendPersistence,
   selectPersistedChatBackend,
@@ -382,6 +405,9 @@ import { ModeIndicator } from '@/features/jarvis-interaction/ModeIndicator';
 import { cycleInteractionMode, PERMISSION_MODE_OPTIONS } from '@/features/jarvis-interaction/modes';
 import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
 import {
+  AGENT_APPROVAL_OPTIONS,
+  readAgentApprovalMode,
+  setAgentApprovalMode,
   formatPermissionPolicy,
   parsePermissionSlashArg,
   readPermissionAccess,
@@ -440,6 +466,7 @@ import {
   type EscapeCancelState,
 } from './composerEscapeCancel';
 import { getChatRunState } from './runtime/chatRunState';
+import { hydrateLatestTurn } from './runtime/turn/turnStore';
 import { CaoCommandPanel, type CaoCommandInput } from '@/features/cao/CaoCommandPanel';
 import { agentSelectorOptions } from './listLiveChatAgents';
 import { openNativeChildChat } from '@/features/jarvis-interaction/openNativeChildChat';
@@ -503,7 +530,7 @@ export function authoritativeLiveEffortsForSelection<T extends { mode: string }>
   if (
     !option ||
     option.available === false ||
-    option.catalogSource !== 'opencode-live' ||
+    (option.catalogSource !== 'opencode-live' && option.catalogSource !== 'provider-live') ||
     option.variants === undefined
   )
     return null;
@@ -587,10 +614,10 @@ export function tokenBossProviderForMode<T extends { mode: string }>(
 }
 
 const TOKEN_OPTIMIZATION_MODE_FOR_REASONING: Readonly<
-  Record<ReasoningMode, 'saver' | 'normal' | 'final_boss'>
+  Record<ReasoningMode, 'off' | 'saver' | 'final_boss'>
 > = {
   'token-saver': 'saver',
-  normal: 'normal',
+  normal: 'off',
   'token-final-boss': 'final_boss',
 };
 
@@ -717,7 +744,7 @@ export async function resolveComposerChatHandoffDraft(
     }>
 > {
   const accepted = await resolveAcceptedChatDrop(
-    { payload: input.payload, targetChatId: input.targetChatId, purpose:'reference' },
+    { payload: input.payload, targetChatId: input.targetChatId, purpose: 'reference' },
     {
       getChat: (id) => deps.getChat(String(id)),
       canAccess: deps.canAccess,
@@ -846,6 +873,53 @@ export function resolveComposerPersistedText(
 ): string {
   if (input.handoff) return input.sendText;
   return input.oversizedSummary ?? (input.sendText || 'Attached context.');
+}
+
+/**
+ * Keep command-only turns visible with the exact post-slash user text while
+ * retaining the same attachment parts the ordinary send path persists.
+ * Local command execution itself remains owned by the Instant Command
+ * executor; this helper only prepares the durable user row.
+ */
+export function buildLocalCommandPersistedParts(
+  input: Readonly<{
+    text: string;
+    images: readonly ChatImageAttachment[];
+    files: readonly string[];
+    terminals: readonly TerminalRef[];
+    contexts: readonly ContextChatAttachment[];
+    localReceipts?: readonly Readonly<{ commandId?: string; status?: string }>[];
+  }>,
+): Part[] {
+  return [
+    { kind: 'text', text: input.text || 'Attached context.' },
+    ...input.images.map((image) => ({
+      kind: 'image' as const,
+      url: `data:${image.mimeType};base64,${image.data}`,
+      alt: image.name,
+    })),
+    ...input.files.map((path) => ({
+      kind: 'file_ref' as const,
+      ref: { kind: 'file' as const, id: path },
+    })),
+    ...input.terminals.map((ref) => ({
+      kind: 'file_ref' as const,
+      ref: {
+        kind: 'memory' as const,
+        id: `terminal:${terminalRefKey(ref)}`,
+        excerpt: `Terminal reference: ${terminalRefLabel(ref)}`,
+      },
+    })),
+    ...input.contexts.map((context) => ({
+      kind: 'file_ref' as const,
+      ref: {
+        kind: 'memory' as const,
+        id: `context:${contextChatAttachmentKey(context)}`,
+        excerpt: `Context: ${context.title}`,
+      },
+    })),
+    ...buildLocalTurnReceipt(input.localReceipts ?? []),
+  ];
 }
 
 export function dispatchComposerSendWithAcceptance(
@@ -1315,6 +1389,11 @@ export function Composer({
 }: ComposerProps) {
   const noteScope = useNoteScope();
   const [caoCommandInput, setCaoCommandInput] = useState<CaoCommandInput>();
+  const [caoPanelOpen, setCaoPanelOpen] = useState(false);
+  const caoRequested = useUIStore((state) => state.chatMode === 'council');
+  useEffect(() => {
+    if (caoRequested) { setCaoPanelOpen(true); useUIStore.getState().setChatMode('chat'); }
+  }, [caoRequested]);
   const [text, setText] = useState(() => readNotesComposerDraft(noteScope, String(chatId)).text);
   const [notesCtx, setNotesCtx] = useState<NotesCommandSpan | null>(null);
   const [attachedNotes, setAttachedNotes] = useState<NoteReference[]>(
@@ -1381,6 +1460,12 @@ export function Composer({
   const [slashCtx, setSlashCtx] = useState<SlashContext | null>(null);
   const [selectedSlashCmd, setSelectedSlashCmd] = useState<string>('');
   const [optionPickerCtx, setOptionPickerCtx] = useState<OptionPickerContext | null>(null);
+  const [permissionAgentStep, setPermissionAgentStep] = useState(false);
+  useEffect(() => {
+    if (!optionPickerCtx || normalizeSlashCmd(optionPickerCtx.cmd.cmd) !== 'permissions') {
+      setPermissionAgentStep(false);
+    }
+  }, [optionPickerCtx]);
   const [selectedOptionId, setSelectedOptionId] = useState<string>('');
   const interactionMode = useJarvisInteractionStore((s) => s.modeForChat(chatId));
   const setInteractionMode = useJarvisInteractionStore((s) => s.setChatMode);
@@ -1410,9 +1495,14 @@ export function Composer({
   const [stoppedRequest, setStoppedRequest] = useState(
     () => getChatRunState(String(chatId))?.status === 'cancelled',
   );
-  const queueScope = useAuthStore((state) => JSON.stringify([
-    resolveAccountIdentity(state)?.accountId ?? '', state.workspaceId, state.projectId, String(chatId),
-  ]));
+  const queueScope = useAuthStore((state) =>
+    JSON.stringify([
+      resolveAccountIdentity(state)?.accountId ?? '',
+      state.workspaceId,
+      state.projectId,
+      String(chatId),
+    ]),
+  );
   const queueSession = useComposerQueueSession(queueScope);
   const { messages: queuedMessages, setMessages: setQueuedMessages } = queueSession;
   const escapeCancelRef = useRef<EscapeCancelState>(createEscapeCancelState());
@@ -1504,36 +1594,63 @@ export function Composer({
   const themePickerRef = useRef<ThemeSlashPickerRef>(null);
   const volumeRef = sttVolumeRef;
   const voiceReplyRequestedRef = useRef(false);
-  const sttController = useMemo(() => createComposerDictationController({
-    field: () => textareaRef.current,
-    scope: () => JSON.stringify([chatId, resolveAccountIdentity(useAuthStore.getState())?.accountId,
-      getComposerSttProvider(), getFasterWhisperModel(), readDeepgramSttOption()]),
-    onLevel: setSttVolumeLevel,
-    commit: (value, caret) => {
-      voiceReplyRequestedRef.current = true;
-      setText(value);
-      const field = textareaRef.current;
-      requestAnimationFrame(() => {
-        if (field && textareaRef.current === field && field.isConnected && field.value === value) {
-          field.focus(); field.setSelectionRange(caret, caret);
-        }
-      });
-    },
-  }), [chatId]);
+  const sttController = useMemo(
+    () =>
+      createComposerDictationController({
+        field: () => textareaRef.current,
+        scope: () =>
+          JSON.stringify([
+            chatId,
+            resolveAccountIdentity(useAuthStore.getState())?.accountId,
+            getComposerSttProvider(),
+            getFasterWhisperModel(),
+            readDeepgramSttOption(),
+          ]),
+        onLevel: setSttVolumeLevel,
+        commit: (value, caret) => {
+          voiceReplyRequestedRef.current = true;
+          setText(value);
+          const field = textareaRef.current;
+          requestAnimationFrame(() => {
+            if (
+              field &&
+              textareaRef.current === field &&
+              field.isConnected &&
+              field.value === value
+            ) {
+              field.focus();
+              field.setSelectionRange(caret, caret);
+            }
+          });
+        },
+      }),
+    [chatId],
+  );
   const sttView = useSyncExternalStore(sttController.subscribe, sttController.getSnapshot);
   const sttListening = sttView.phase === 'listening';
   const sttTranscribing = sttView.phase === 'transcribing';
   const sttInterim = sttView.text;
   useEffect(() => {
-    const route = () => JSON.stringify([resolveAccountIdentity(useAuthStore.getState())?.accountId,
-      getComposerSttProvider(), getFasterWhisperModel(), readDeepgramSttOption()]);
+    const route = () =>
+      JSON.stringify([
+        resolveAccountIdentity(useAuthStore.getState())?.accountId,
+        getComposerSttProvider(),
+        getFasterWhisperModel(),
+        readDeepgramSttOption(),
+      ]);
     let previous = route();
     const off = useAuthStore.subscribe(() => {
       const next = route();
-      if (next !== previous) { previous = next; sttController.cancel(); }
+      if (next !== previous) {
+        previous = next;
+        sttController.cancel();
+      }
     });
     // Cancel is replay-safe under React StrictMode; no old stream survives remount.
-    return () => { off(); sttController.cancel(); };
+    return () => {
+      off();
+      sttController.cancel();
+    };
   }, [sttController]);
 
   const queuedMessagesRef = useRef(queuedMessages);
@@ -1572,6 +1689,13 @@ export function Composer({
       const previousMode = useJarvisInteractionStore.getState().modeForChat(chatId);
       setPermissionAccess(String(chatId), nextMode === 'agent' ? 'full' : 'read');
       setApproveAllForRun(String(chatId), false);
+      setRuntimePolicy(
+        writeChatRuntimePolicyState(String(chatId), {
+          ...readChatRuntimePolicyState(String(chatId)),
+          access: nextMode === 'agent' ? 'full' : 'read-only',
+          approveAllForRun: false,
+        }),
+      );
       setInteractionMode(chatId, nextMode);
       const cancellationKey = activeCancellationKeyRef.current;
       if (
@@ -1596,6 +1720,8 @@ export function Composer({
 
   useEffect(() => {
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const account = resolveAccountIdentity(useAuthStore.getState());
+    if (account) hydrateLatestTurn(account.accountId, String(chatId));
     const retained = getChatRunState(String(chatId));
     setJarvisRunning(retained?.status === 'running');
     setStoppedRequest(retained?.status === 'cancelled');
@@ -1670,7 +1796,11 @@ export function Composer({
       draft,
       flushMode,
       handoff: pendingHandoff
-        ? { projection: pendingHandoff, additionalProjections:additionalHandoffs, instruction: handoffInstruction }
+        ? {
+            projection: pendingHandoff,
+            additionalProjections: additionalHandoffs,
+            instruction: handoffInstruction,
+          }
         : null,
     });
     if (!queued) return false;
@@ -1742,24 +1872,30 @@ export function Composer({
     chatBackendAffinity?.backend !== 'codex',
   );
   const dynamicOpenCodeCommands = useMemo<SlashCommandDef[]>(
-    () => chatBackendAffinity?.backend === 'codex' ? [] : openCodeCommandCatalog.commands.flatMap((live) => {
-      const staticDef = findSlashCommandDef(live.name);
-      if (staticDef && staticDef.backend !== 'codex') return [];
-      return [{
-        ...(staticDef ?? {
-          cmd: live.name,
-          description: live.description || `Run OpenCode /${live.name}`,
-          icon: Terminal,
-          takesArg: true,
-          argPlaceholder: '[arguments]',
-        }),
-        cmd: live.name,
-        description: live.description || staticDef?.description || `Run OpenCode /${live.name}`,
-        backend: 'opencode' as const,
-        takesArg: true,
-        argPlaceholder: staticDef?.argPlaceholder ?? '[arguments]',
-      }];
-    }),
+    () =>
+      chatBackendAffinity?.backend === 'codex'
+        ? []
+        : openCodeCommandCatalog.commands.flatMap((live) => {
+            const staticDef = findSlashCommandDef(live.name);
+            if (staticDef && staticDef.backend !== 'codex') return [];
+            return [
+              {
+                ...(staticDef ?? {
+                  cmd: live.name,
+                  description: live.description || `Run OpenCode /${live.name}`,
+                  icon: Terminal,
+                  takesArg: true,
+                  argPlaceholder: '[arguments]',
+                }),
+                cmd: live.name,
+                description:
+                  live.description || staticDef?.description || `Run OpenCode /${live.name}`,
+                backend: 'opencode' as const,
+                takesArg: true,
+                argPlaceholder: staticDef?.argPlaceholder ?? '[arguments]',
+              },
+            ];
+          }),
     [chatBackendAffinity?.backend, openCodeCommandCatalog.commands],
   );
   const backendRuntimeBlocked =
@@ -1818,12 +1954,64 @@ export function Composer({
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   const ollamaOptions = useOllamaModelOptions();
   const accessibleChatModels = useAccessibleChatModels();
+  const backendModelGroups = useMemo(
+    () =>
+      filterModelPickerGroupsForBackend(
+        accessibleChatModels.groups,
+        chatBackendAffinity?.backend,
+      ),
+    [accessibleChatModels.groups, chatBackendAffinity?.backend],
+  );
+  const backendFlatOptions = useMemo(
+    () =>
+      backendModelGroups.flatMap((group) =>
+        group.options.flatMap((option) => option.alternativeRoutes ?? [option]),
+      ),
+    [backendModelGroups],
+  );
+  const backendRouteForSelection = useMemo(
+    () =>
+      chatBackendAffinity?.backend
+        ? findBackendModelPickerRoute(
+            chatModelSelection,
+            backendFlatOptions,
+            chatBackendAffinity.backend,
+          )
+        : undefined,
+    [backendFlatOptions, chatBackendAffinity?.backend, chatModelSelection],
+  );
+  useEffect(() => {
+    if (!backendRouteForSelection || chatModelSelection.mode !== 'single') return;
+    const next = selectionFromOption(
+      backendRouteForSelection.provider,
+      backendRouteForSelection.modelId,
+      backendRouteForSelection.connection,
+    );
+    if (next.mode !== 'single') return;
+    setRetainedExactChatSelection(next);
+    setChatModelSelection(next);
+    if (!next.connectionId) return;
+    const descriptor = getProviderConnectionDescriptor(next.connectionId);
+    void chatRepo
+      .update(chatId as ChatId, {
+        connection: { ...descriptor, modelId: next.modelId },
+      })
+      .catch(() => {
+        // The in-memory selection remains exact even if the durable chat row
+        // cannot be updated until the user retries the picker.
+      });
+  }, [
+    backendRouteForSelection,
+    chatId,
+    chatModelSelection.mode,
+    setChatModelSelection,
+  ]);
   const optionLiveEfforts = useMemo(
     () =>
       modelSelectionReadyChatId === String(chatId)
-        ? authoritativeLiveEffortsForSelection(chatModelSelection, accessibleChatModels.flatOptions)
+        ? authoritativeLiveEffortsForSelection(chatModelSelection, backendFlatOptions)
         : null,
-    [accessibleChatModels.flatOptions, chatId, chatModelSelection, modelSelectionReadyChatId],
+    [backendFlatOptions, chatId, chatModelSelection, modelSelectionReadyChatId],
   );
   const selectionId = selectionOptionId(chatModelSelection);
   const [fetchedLiveEffortAuthority, setFetchedLiveEffortAuthority] = useState<{
@@ -1955,7 +2143,8 @@ export function Composer({
     let cancelled = false;
     setRetainedExactChatSelection(null);
     setModelSelectionReadyChatId('');
-    void chatRepo.getById(chatId as ChatId)
+    void chatRepo
+      .getById(chatId as ChatId)
       .then((chat) => {
         if (cancelled || !chat) return;
         if (!chat.connection) return;
@@ -2190,6 +2379,13 @@ export function Composer({
     }
 
     if (normalizeSlashCmd(cmd) === 'permissions') {
+      if (permissionAgentStep)
+        return AGENT_APPROVAL_OPTIONS.map((option) => ({
+          id: `agent ${option.id}`,
+          label: option.label,
+          description: option.description,
+          metadata: option.id === readAgentApprovalMode(String(chatId)) ? 'active' : undefined,
+        }));
       return PERMISSION_MODE_OPTIONS.map((option) => ({
         id: option.id,
         label: option.title,
@@ -2202,6 +2398,7 @@ export function Composer({
   }, [
     chatBackendAffinity,
     optionPickerCtx,
+    permissionAgentStep,
     terminalSessions,
     projectId,
     pluginAccountId,
@@ -2788,6 +2985,16 @@ export function Composer({
     // /permissions picker: set Agent / Plan / Ask mode only — never attach a chip.
     if (canonical === 'permissions') {
       const parsed = parsePermissionSlashArg(option.id);
+      if (parsed?.kind === 'mode' && parsed.value === 'agent') {
+        setPermissionAgentStep(true);
+        setOptionPickerCtx({ ...optionPickerCtx, query: '' });
+        setSelectedOptionId('');
+        return;
+      }
+      if (parsed?.kind === 'agent-profile') {
+        setAgentApprovalMode(String(chatId), parsed.value);
+        applyInteractionMode('agent');
+      }
       if (parsed?.kind === 'mode') {
         applyInteractionMode(parsed.value);
       }
@@ -2937,24 +3144,110 @@ export function Composer({
     });
   };
 
-  const handleSlashCommand = async (trimmed: string): Promise<boolean | string> => {
+  const handleSlashCommand = async (
+    trimmed: string,
+    originalUserText = trimmed,
+  ): Promise<boolean | string> => {
     if (isComposerInstantCommandSource(trimmed)) {
       if (instantCommandInFlightRef.current) return true;
       instantCommandInFlightRef.current = true;
-      setText('');
       setSlashCtx(null);
       try {
+        const instantPersistedChatId = chatId as ChatId;
+        const instantPersistedText = originalUserText;
+        const instantPersistedAttachments = {
+          images: [...attachedImages],
+          files: [...attachedFiles],
+          terminals: [...attachedTerminals],
+          contexts: [...attachedContexts],
+          notes: [...attachedNotes],
+        };
+        let instantPersistedContexts = instantPersistedAttachments.contexts;
+        if (instantPersistedAttachments.notes.length) {
+          notesSendingRef.current = true;
+          try {
+            const scope = currentNoteScope();
+            if (
+              !scope ||
+              instantPersistedAttachments.notes.some((ref) => !sameNoteScope(ref, scope))
+            ) {
+              throw new Error(
+                'Return to the referenced account/project or remove these note chips.',
+              );
+            }
+            const records = await getNotesWorkspace(scope).resolve(
+              instantPersistedAttachments.notes.map((ref) => ref.id),
+            );
+            const noteAttachments = await buildNoteContextAttachments(records, scope);
+            instantPersistedContexts = [...instantPersistedContexts, ...noteAttachments];
+            await verifyNotesContextCapacity(
+              noteAttachments,
+              instantPersistedContexts,
+              scope,
+              instantPersistedText,
+            );
+            if (!currentNoteScope() || !sameNoteScope(currentNoteScope()!, scope)) {
+              throw new Error('The account or project changed. Your message has not been sent.');
+            }
+          } catch (error) {
+            toast.error(
+              'Cannot send notes',
+              error instanceof Error
+                ? error.message
+                : 'Open Notes, retry saving, then send again.',
+            );
+            return true;
+          } finally {
+            notesSendingRef.current = false;
+          }
+        }
         const auth = useAuthStore.getState();
         const interactionId = `chat-${crypto.randomUUID()}`;
-        const result = await submitComposerInstantCommand({
+        const instantCommandResult = await submitComposerInstantCommand({
           source: trimmed,
           interactionId,
           accountId: resolveAccountIdentity(auth)?.accountId ?? 'local-account',
           workspaceId: String(workspaceId ?? auth.workspaceId ?? 'local-workspace'),
           projectId: String(projectId ?? auth.projectId ?? 'local-project'),
         });
-        if (!result.handled || !result.ok) {
-          toast.warning('Invalid command', result.handled ? result.message : 'Unknown command.');
+        if (instantCommandResult.handled && instantCommandResult.ok) {
+          // Whole-message navigation is a successful local user turn. Keep
+          // the original visible text and attachment parts on the submitted
+          // chat before the route change can unmount this Composer.
+          try {
+            await messageRepo.create({
+              chat_id: instantPersistedChatId,
+              role: 'user',
+              parts: buildLocalCommandPersistedParts({
+                text: instantPersistedText,
+                images: instantPersistedAttachments.images,
+                files: instantPersistedAttachments.files,
+                terminals: instantPersistedAttachments.terminals,
+                contexts: instantPersistedContexts,
+                localReceipts: [instantCommandResult],
+              }),
+            });
+          } catch (error) {
+            // Keep the submitted draft and attachments available for retry if
+            // the durable user row cannot be written after the local action.
+            // eslint-disable-next-line no-console
+            console.error('[Composer] instant command persistence failed:', error);
+            toast.error('Message not sent', formatComposerSendFailure());
+            return true;
+          }
+          setText('');
+          setAttachedFiles([]);
+          setAttachedImages([]);
+          setAttachedTerminals([]);
+          setAttachedContexts([]);
+          setAttachedNotes([]);
+        }
+        if (!instantCommandResult.handled || !instantCommandResult.ok) {
+          toast.warning(
+            'Invalid command',
+            instantCommandResult.handled ? instantCommandResult.message : 'Unknown command.',
+          );
+          setText('');
         }
       } finally {
         instantCommandInFlightRef.current = false;
@@ -2966,6 +3259,12 @@ export function Composer({
     const classification = classifySlashCommand(cmdRaw ?? '');
     const cmd = classification?.command ?? normalizeSlashCmd(cmdRaw ?? '');
     const rest = restParts.join(' ').trim();
+    if (cmd === 'cao') {
+      setCaoPanelOpen(true);
+      setSlashCtx(null);
+      setText('');
+      return true;
+    }
     const addSystem = async (msg: string) => {
       await messageRepo.create({
         chat_id: chatId as ChatId,
@@ -2983,6 +3282,7 @@ export function Composer({
       return true;
     }
     const openAttachPicker = (canonicalCmd: string) => {
+      if (canonicalCmd === 'permissions') setPermissionAgentStep(false);
       const def = findSlashCommandDef(canonicalCmd);
       if (!def) return false;
       const reasoningState =
@@ -3017,14 +3317,25 @@ export function Composer({
         return true;
       }
       const result = applyChatRuntimeCommand(runtimePolicy.settings, parsed);
-      if (parsed.kind === 'fast' && (parsed.value === 'on' || parsed.value === 'off') &&
-          chatBackendAffinity?.backend !== 'codex' && chatModelSelection.mode === 'single') {
-        const route = findFastModelRoute(chatModelSelection, accessibleChatModels.flatOptions, parsed.value === 'on');
+      if (
+        parsed.kind === 'fast' &&
+        (parsed.value === 'on' || parsed.value === 'off') &&
+        chatBackendAffinity?.backend !== 'codex' &&
+        chatModelSelection.mode === 'single'
+      ) {
+        const route = findFastModelRoute(
+          chatModelSelection,
+          accessibleChatModels.flatOptions,
+          parsed.value === 'on',
+        );
         if (route && route.modelId !== chatModelSelection.modelId) {
           const selection = selectionFromOption(route.provider, route.modelId, route.connection);
           if (selection.mode === 'single' && selection.connectionId) {
             await chatRepo.update(chatId as ChatId, {
-              connection: { ...getProviderConnectionDescriptor(selection.connectionId), modelId: selection.modelId },
+              connection: {
+                ...getProviderConnectionDescriptor(selection.connectionId),
+                modelId: selection.modelId,
+              },
             });
           }
           setRetainedExactChatSelection(selection.mode === 'single' ? selection : null);
@@ -3198,7 +3509,18 @@ export function Composer({
     }
     if (cmd === 'permissions' || cmd === 'permission' || cmd === 'perms') {
       const parsed = rest ? parsePermissionSlashArg(rest) : undefined;
+      if (parsed?.kind === 'agent-profile') {
+        setAgentApprovalMode(String(chatId), parsed.value);
+        applyInteractionMode('agent');
+        setText('');
+        return true;
+      }
       if (parsed?.kind === 'mode') {
+        if (parsed.value === 'agent') {
+          openAttachPicker('permissions');
+          setPermissionAgentStep(true);
+          return true;
+        }
         applyInteractionMode(parsed.value);
         // Mode change only — do not attach /permissions as a confirmed chip.
         setConfirmedCommands((cur) => cur.filter((c) => c.cmd !== 'permissions'));
@@ -3217,7 +3539,7 @@ export function Composer({
         return true;
       }
       if (rest && !parsed) {
-        await addSystem('Usage: /permissions agent | plan | ask');
+        await addSystem('Usage: /permissions agent [full|review] | plan | ask');
         return true;
       }
       openAttachPicker('permissions');
@@ -3274,9 +3596,17 @@ export function Composer({
         );
         return true;
       }
-      await requestNativeDelegation({ parentChatId: chatId, task: rest,
-        modelSelection: chatModelSelection, commandName: cmd, repos: { chatRepo, messageRepo } });
-      toast.info('Native delegation requested', 'The parent session will launch and coordinate its subagents at the next turn boundary.');
+      await requestNativeDelegation({
+        parentChatId: chatId,
+        task: rest,
+        modelSelection: chatModelSelection,
+        commandName: cmd,
+        repos: { chatRepo, messageRepo },
+      });
+      toast.info(
+        'Native delegation requested',
+        'The parent session will launch and coordinate its subagents at the next turn boundary.',
+      );
       setText('');
       return true;
     }
@@ -3330,7 +3660,7 @@ export function Composer({
     if (cmd === 'vibecheck') {
       const { openVibeCheck } = await import('./vibe-check/vibeCheckStore');
       openVibeCheck(String(chatId));
-      setText((current) => current.trim().toLowerCase() === '/vibecheck' ? '' : current);
+      setText((current) => (current.trim().toLowerCase() === '/vibecheck' ? '' : current));
       return true;
     }
     if (cmd === 'doctor') {
@@ -3717,10 +4047,14 @@ export function Composer({
       bypassQueue?: boolean;
       flushMode?: QueueFlushMode;
       promptForgeApproved?: boolean;
+      /** Stable interaction identity carried from queue enqueue to activation. */
+      localCommandInteractionId?: string;
       handoffPayload?: ReturnType<typeof buildComposerChatHandoffPayload> | null;
       submittedVisibleHandoffKey?: string | null;
     } = {},
   ): Promise<boolean> => {
+    // Persisting the message can yield while the user selects another project.
+    const toolGatewayAuthority = captureToolGatewayAuthorityClaim();
     const {
       files: attachedFiles,
       images: attachedImages,
@@ -3792,11 +4126,12 @@ export function Composer({
     );
 
     // Leading full-message slash (multitask, ask, plan, etc.)
-    const slashResult = await handleSlashCommand(afterInline);
+    const slashResult = await handleSlashCommand(afterInline, draftText);
     if (slashResult === true) return true;
     // When a route slash command has a remainder (e.g. "/terminals close 5 terminals"),
     // handleSlashCommand returns the remainder text so we send it as the message.
     let rawSendText = typeof slashResult === 'string' ? slashResult.trim() : afterInline;
+    const originalRawSendText = rawSendText;
 
     // Message was only utility slash tokens (e.g. just /clearfiles) — done.
     if (
@@ -3817,15 +4152,20 @@ export function Composer({
       return true;
     }
 
-    // Drafting and local slash commands remain available while the selected backend is down.
-    // Nothing provider-bound may queue or dispatch until its runtime is ready.
-    if (backendRuntimeBlocked) return false;
+    // Model readiness must not disable commands that need no model. This
+    // preflight is pure; the normal bridge below still owns execution.
+    if (backendRuntimeBlocked && !canRunLocalCommandWithoutModel(rawSendText)) return false;
 
-    const caoDecision = bootstrapCaoLearning({
+    let caoDecision = bootstrapCaoLearning({
       text: rawSendText,
       confirmedReferenceKeys: confirmedCatalogReferences.map((reference) => reference.key),
     });
-    if (!caoDecision?.control && jarvisRunning && !options.bypassQueue && (!overrideText || options.promptForgeApproved)) {
+    if (
+      !caoDecision?.control &&
+      jarvisRunning &&
+      !options.bypassQueue &&
+      (!overrideText || options.promptForgeApproved)
+    ) {
       // Send button defaults to after-run; Enter passes after-tool explicitly.
       if (!enqueueCurrentMessage(trimmed, options.flushMode ?? 'after-run')) return false;
       playUiSound('chat_message_send');
@@ -3835,17 +4175,119 @@ export function Composer({
     if (caoDecision?.control) {
       const accountId = resolveAccountIdentity(useAuthStore.getState())?.accountId ?? '';
       if (!accountId || !workspaceId || !projectId) {
-        toast.error('CAO control unavailable', 'An exact account, workspace, and project are required.');
+        toast.error(
+          'CAO control unavailable',
+          'An exact account, workspace, and project are required.',
+        );
         return false;
       }
-      const commandMessage = await messageRepo.create({ chat_id: chatId as ChatId, role: 'user', parts: [{ kind: 'text', text: rawSendText }] });
-      window.dispatchEvent(new CustomEvent('jarvis:user-command', { detail: {
-        origin: 'user', chatId: String(chatId), messageId: commandMessage.id, text: rawSendText,
-      } }));
+      const commandMessage = await messageRepo.create({
+        chat_id: chatId as ChatId,
+        role: 'user',
+        parts: [{ kind: 'text', text: rawSendText }],
+      });
+      window.dispatchEvent(
+        new CustomEvent('jarvis:user-command', {
+          detail: {
+            origin: 'user',
+            chatId: String(chatId),
+            messageId: commandMessage.id,
+            text: rawSendText,
+          },
+        }),
+      );
       setCaoCommandInput({ nonce: crypto.randomUUID(), command: caoDecision.control });
       setText('');
       return true;
     }
+
+    // The deterministic local bridge runs only after slash handling and the
+    // queue/CAO control exits above. Queue activation passes its stable item
+    // id through options, so enqueue itself has no local side effects.
+    const localCommandInteractionId =
+      options.localCommandInteractionId ?? `composer-${crypto.randomUUID()}`;
+    let localCommandResult: LocalBridgeResult | null = null;
+    let localCommandModelText = rawSendText;
+    try {
+      const localAuth = useAuthStore.getState();
+      localCommandResult = await sharedLocalCommandPreModelBridge.process({
+        text: rawSendText,
+        interactionId: localCommandInteractionId,
+        context: {
+          correlationId: localCommandInteractionId,
+          accountId: resolveAccountIdentity(localAuth)?.accountId ?? '',
+          workspaceId: String(workspaceId ?? ''),
+          projectId: String(projectId ?? ''),
+        },
+      });
+    } catch {
+      // A bridge failure is held closed. The bridge may have completed an
+      // action before a later bookkeeping step failed, so falling through
+      // would resend the original action to the model.
+      toast.warning(
+        'Local action unavailable',
+        'The request was held safely. Review the local action and retry.',
+      );
+      return false;
+    }
+    if (localCommandResult?.holdModel) {
+      const heldReceipt = localCommandResult.receipts.find(
+        (receipt) => receipt.status !== 'completed' && receipt.status !== 'queued',
+      );
+      toast.warning(
+        'Local action needs attention',
+        heldReceipt?.status === 'needs_confirmation'
+          ? 'Confirm the exact local action before continuing.'
+          : heldReceipt?.status === 'needs_clarification'
+            ? 'Clarify the exact local action before continuing.'
+            : 'The local action was not completed, so the model request was held.',
+      );
+      return false;
+    }
+    if (localCommandResult) {
+      localCommandModelText = localCommandResult.modelText;
+      rawSendText = localCommandModelText;
+      if (
+        localCommandResult.commandOnly &&
+        !pendingHandoff &&
+        !options.handoffPayload &&
+        attachedNotes.length === 0
+      ) {
+        clearRedoStack(String(chatId));
+        await messageRepo.create({
+          chat_id: chatId as ChatId,
+          role: 'user',
+          parts: buildLocalCommandPersistedParts({
+            text: originalRawSendText,
+            images: attachedImages,
+            files: attachedFiles,
+            terminals: attachedTerminals,
+            contexts: attachedContexts,
+            localReceipts: localCommandResult.receipts,
+          }),
+        });
+        setText('');
+        setAttachedFiles([]);
+        setAttachedImages([]);
+        setAttachedTerminals([]);
+        setAttachedPlugins([]);
+        setAttachedContexts([]);
+        setConfirmedCommands([]);
+        setConfirmedAgentMentions([]);
+        setConfirmedCatalogReferences([]);
+        setMentionCtx(null);
+        playUiSound('chat_message_send');
+        return true;
+      }
+      if (localCommandModelText !== originalRawSendText) {
+        caoDecision = bootstrapCaoLearning({
+          text: localCommandModelText,
+          confirmedReferenceKeys: confirmedCatalogReferences.map((reference) => reference.key),
+        });
+      }
+    }
+    // A readiness preflight never authorizes a model call while offline.
+    if (backendRuntimeBlocked) return false;
     const currentReasoning = readChatReasoningPreference(String(chatId));
     const currentRuntime = readChatRuntimePolicyState(String(chatId));
     const invalidEffort = [currentReasoning.effortOverride, currentRuntime.settings.effort].find(
@@ -3957,12 +4399,47 @@ export function Composer({
       .filter(Boolean)
       .join(' ')
       .trim();
+    const persistedSendText = [
+      mentionPrefix,
+      catalogReferencePrefix,
+      referenceText,
+      allAboutMeText,
+      handoffPayload
+        ? originalRawSendText
+        : localCommandResult?.localActionContext
+          ? originalRawSendText
+          : markdownInstruction || rawSendText,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
 
     let auth = useAuthStore.getState();
     let selectedForSend = restoreExactChatSelection(
       auth.chatModelSelection,
       retainedExactChatSelection,
     );
+    const resolveSelectionForBackend = (
+      selection: ChatModelSelection,
+    ): ChatModelSelection => {
+      const backend = chatBackendAffinity?.backend;
+      if (!backend) return selection;
+      const route = findBackendModelPickerRoute(selection, backendFlatOptions, backend);
+      if (!route) return selection;
+      const resolved = selectionFromOption(route.provider, route.modelId, route.connection);
+      if (resolved.mode !== 'single') return selection;
+      setRetainedExactChatSelection(resolved);
+      setChatModelSelection(resolved);
+      if (resolved.connectionId) {
+        const descriptor = getProviderConnectionDescriptor(resolved.connectionId);
+        void chatRepo
+          .update(chatId as ChatId, {
+            connection: { ...descriptor, modelId: resolved.modelId },
+          })
+          .catch(() => undefined);
+      }
+      return resolved;
+    };
     const confirmedSkillIdsForSend = confirmedCommands
       .filter((confirmed) => confirmed.cmd === 'skills' && confirmed.value)
       .map((confirmed) => confirmed.value!)
@@ -3973,6 +4450,10 @@ export function Composer({
       skillIds: confirmedSkillIdsForSend,
     });
     if (caoBootstrap) selectedForSend = caoBootstrap.modelSelection;
+    // Resolve the exact route in the same dispatch turn. The effect above
+    // keeps the UI durable, but it must not be the only protection against a
+    // stale Codex connection reaching an OpenCode provider request.
+    selectedForSend = resolveSelectionForBackend(selectedForSend);
     // Refresh Ollama discovery before gating local sends so a connected
     // daemon is not blocked by a stale empty catalog.
     if (
@@ -3990,6 +4471,7 @@ export function Composer({
         auth.chatModelSelection,
         retainedExactChatSelection,
       );
+      selectedForSend = resolveSelectionForBackend(selectedForSend);
     }
     const sendCheck = validateSendModelAccess(
       sendText,
@@ -4159,7 +4641,7 @@ export function Composer({
       let oversizedAttachment: Awaited<ReturnType<typeof createOversizedMessageAttachment>> = null;
       if (!handoffPayload) {
         try {
-          oversizedAttachment = await createOversizedMessageAttachment(sendText);
+          oversizedAttachment = await createOversizedMessageAttachment(persistedSendText);
         } catch {
           toast.warning(
             'Long-message attachment unavailable',
@@ -4168,23 +4650,23 @@ export function Composer({
         }
       }
       const persistedText = resolveComposerPersistedText({
-        sendText,
+        sendText: persistedSendText,
         handoff: Boolean(handoffPayload),
         oversizedSummary: oversizedAttachment ? oversizedMessageSummary(oversizedAttachment) : null,
       });
       const mentionedAgentIds = resolveMentionedAgentIdsForSend(
-        sendText,
+        persistedSendText,
         agents,
         confirmedMentionsForSend,
       );
-      const mentionedPluginIds = extractPluginMentions(sendText, PLUGIN_CATALOG);
+      const mentionedPluginIds = extractPluginMentions(persistedSendText, PLUGIN_CATALOG);
       const pluginIds = Array.from(new Set([...nextAttachedPlugins, ...mentionedPluginIds])).slice(
         0,
         8,
       );
       const messageFilePaths = resolveSendFilePaths({
         attachedFiles: nextAttachedFiles,
-        sendText,
+        sendText: persistedSendText,
         ...(oversizedAttachment ? { oversizedPath: oversizedAttachment.path } : {}),
         supportsFiles: connectionSupportsFileAttachments(selectedForSend),
       });
@@ -4209,7 +4691,7 @@ export function Composer({
           nextAttachedContexts.filter((context) => context.mapId.startsWith('notes:')),
           nextAttachedContexts,
           scope,
-          sendText,
+          persistedSendText,
         );
       }
       const persistUserMessage = () =>
@@ -4261,9 +4743,16 @@ export function Composer({
       const dispatchUserMessage = async (userMessage: Message, requireAcceptance: boolean) => {
         activeCancellationKeyRef.current = String(userMessage.id);
         const detail = {
+          toolGatewayAuthority,
           chatId,
           cancellationKey: userMessage.id,
           text: persistedText,
+          ...(localCommandResult?.localActionContext
+            ? {
+                modelText: sendText,
+                localCommandContext: localCommandResult.localActionContext,
+              }
+            : {}),
           mentionedAgentIds,
           filePaths: messageFilePaths,
           imageAttachments: visionAttachments,
@@ -4327,8 +4816,12 @@ export function Composer({
         setRuntimePolicy(cleared);
       }
       voiceReplyRequestedRef.current = false;
-      if ((!overrideText || options.promptForgeApproved) &&
-          (!handoffPayload || handoffDraftEditRevisionRef.current === directlySubmittedDraftEditRevision)) setText('');
+      if (
+        (!overrideText || options.promptForgeApproved) &&
+        (!handoffPayload ||
+          handoffDraftEditRevisionRef.current === directlySubmittedDraftEditRevision)
+      )
+        setText('');
       if (!options.attachments) {
         setAttachedFiles([]);
         setAttachedImages([]);
@@ -4365,7 +4858,8 @@ export function Composer({
       ) {
         pendingHandoffRef.current = null;
         setPendingHandoff(null);
-        additionalHandoffsRef.current=[];setAdditionalHandoffs([]);
+        additionalHandoffsRef.current = [];
+        setAdditionalHandoffs([]);
       }
       setMentionCtx(null);
       playUiSound('chat_message_send');
@@ -4395,6 +4889,7 @@ export function Composer({
     return registerQueueSideSender(String(chatId), (message, projection) =>
       queueSideSendRef.current(message.text, {
         bypassQueue: true,
+        localCommandInteractionId: message.id,
         attachments: message.attachments,
         handoffPayload: buildComposerChatHandoffPayload({
           projection,
@@ -4437,6 +4932,7 @@ export function Composer({
         const queuedHandoff = queuedHandoffsRef.current.get(queued.id);
         return handleSend(nextPayload, {
           bypassQueue: true,
+          localCommandInteractionId: queued.id,
           attachments: queued.attachments,
           handoffPayload: queuedHandoff?.payload ?? null,
           submittedVisibleHandoffKey: queuedHandoff?.visibleHandoffKey ?? null,
@@ -4477,7 +4973,13 @@ export function Composer({
       if (!jarvisRunning) dispatchQueuedMessage(queued);
       return;
     }
-    if (queued.attachments && Object.values(queued.attachments).some((items) => items.length > 0)) {
+    // Provider-native steering bypasses handleSend. Keep local or mixed actions
+    // queued across cancellation so the ordinary bridge executes them once,
+    // with the same queued interaction ID, before any residual model dispatch.
+    const needsLocalPreflight =
+      isComposerInstantCommandSource(queued.text) || requiresLocalCommandPreflight(queued.text);
+    if (needsLocalPreflight ||
+        (queued.attachments && Object.values(queued.attachments).some((items) => items.length > 0))) {
       const reordered = [
         queued,
         ...queuedMessagesRef.current.filter((message) => message.id !== id),
@@ -4569,11 +5071,24 @@ export function Composer({
   // A reply can finish while this view is unmounted. Once its exact model is
   // restored, drain the retained queue; an explicitly paused run stays paused.
   useEffect(() => {
-    if (modelSelectionReadyChatId !== String(chatId) || jarvisRunning || stoppedRequest ||
-        queuedMessages.length === 0 || getChatRunState(String(chatId))) return;
+    if (
+      modelSelectionReadyChatId !== String(chatId) ||
+      jarvisRunning ||
+      stoppedRequest ||
+      queuedMessages.length === 0 ||
+      getChatRunState(String(chatId))
+    )
+      return;
     const timer = setTimeout(() => flushNextQueuedRef.current(), 60);
     return () => clearTimeout(timer);
-  }, [chatId, queueScope, modelSelectionReadyChatId, jarvisRunning, stoppedRequest, queuedMessages.length]);
+  }, [
+    chatId,
+    queueScope,
+    modelSelectionReadyChatId,
+    jarvisRunning,
+    stoppedRequest,
+    queuedMessages.length,
+  ]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
@@ -5228,9 +5743,15 @@ export function Composer({
     return () => window.removeEventListener('keydown', onPromptForgeHotkey);
   }, [promptForge.disabledReason, promptForge.start]);
 
+  const localOnlyWithoutBackend = useMemo(
+    () => backendRuntimeBlocked && canRunLocalCommandWithoutModel(text),
+    [backendRuntimeBlocked, text],
+  );
   const canAttemptSlashWhileBackendBlocked =
     backendRuntimeBlocked &&
-    (text.trimStart().startsWith('/') || isComposerInstantCommandSource(text));
+    (text.trimStart().startsWith('/') ||
+      isComposerInstantCommandSource(text) ||
+      localOnlyWithoutBackend);
   const hasDraft =
     text.trim().length > 0 ||
     attachedFiles.length > 0 ||
@@ -5337,7 +5858,9 @@ export function Composer({
         const current = [pendingHandoffRef.current, ...additionalHandoffsRef.current].filter(
           (item): item is ChatHandoffProjectionV1 => !!item,
         );
-        const existing = current.findIndex((item) => item.source.chatId === projection.source.chatId);
+        const existing = current.findIndex(
+          (item) => item.source.chatId === projection.source.chatId,
+        );
         if (existing >= 0) current[existing] = projection;
         else current.push(projection);
         pendingHandoffRef.current = current[0]!;
@@ -5675,8 +6198,14 @@ export function Composer({
   }, [sttController, sttView.phase, sttView.error]);
   const toggleStt = useCallback(() => {
     const phase = sttController.getSnapshot().phase;
-    if (phase === 'starting' || phase === 'transcribing') { sttController.cancel(); return; }
-    if (phase === 'listening') { void sttController.finish(); return; }
+    if (phase === 'starting' || phase === 'transcribing') {
+      sttController.cancel();
+      return;
+    }
+    if (phase === 'listening') {
+      void sttController.finish();
+      return;
+    }
     if (composerSttEnabled) void sttController.start();
   }, [composerSttEnabled, sttController]);
   useEffect(() => {
@@ -5684,7 +6213,8 @@ export function Composer({
       if (!composerSttEnabled) return;
       const textarea = resolveComposerSttTextarea();
       if (!textarea || textarea !== textareaRef.current) return;
-      event.preventDefault(); toggleStt();
+      event.preventDefault();
+      toggleStt();
     };
     const onStop = () => {
       if (sttController.getSnapshot().phase === 'starting') sttController.cancel();
@@ -5694,8 +6224,16 @@ export function Composer({
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || sttController.getSnapshot().phase === 'idle') return;
       const field = textareaRef.current;
-      if (!field || !(event.target instanceof Node) || !field.closest('[data-tour="chat-composer"]')?.contains(event.target)) return;
-      event.preventDefault(); event.stopPropagation(); sttController.cancel(); field.focus();
+      if (
+        !field ||
+        !(event.target instanceof Node) ||
+        !field.closest('[data-tour="chat-composer"]')?.contains(event.target)
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      sttController.cancel();
+      field.focus();
     };
     window.addEventListener(COMPOSER_STT_TOGGLE_EVENT, onToggle);
     window.addEventListener(COMPOSER_STT_STOP_EVENT, onStop);
@@ -5709,7 +6247,9 @@ export function Composer({
       sttController.cancel();
     };
   }, [composerSttEnabled, sttController, toggleStt]);
-  useEffect(() => { if (!composerSttEnabled) sttController.cancel(); }, [composerSttEnabled, sttController]);
+  useEffect(() => {
+    if (!composerSttEnabled) sttController.cancel();
+  }, [composerSttEnabled, sttController]);
   // The Inspector's compact Composer must not own the main global indicator.
   useEffect(() => {
     if (compact) return;
@@ -5737,6 +6277,8 @@ export function Composer({
       />
 
       <CaoCommandPanel
+        open={caoPanelOpen}
+        onOpenChange={setCaoPanelOpen}
         chatId={String(chatId)}
         request={caoCommandInput}
         scope={{
@@ -6201,8 +6743,8 @@ export function Composer({
                     reasoningMode={reasoningPreference.mode}
                     pickerRef={modelPickerRef}
                     compact={compact}
-                    groups={accessibleChatModels.groups}
-                    flatOptions={accessibleChatModels.flatOptions}
+                    groups={backendModelGroups}
+                    flatOptions={backendFlatOptions}
                     onSelect={(next, effort) => {
                       if (effort && reasoningPreference.mode === 'normal') {
                         writeChatReasoningEffort(String(chatId), effort === 'auto' ? null : effort);
@@ -6329,7 +6871,15 @@ export function Composer({
                         variant={sttListening ? 'accent' : 'ghost'}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={toggleStt}
-                        aria-label={sttView.phase === 'starting' ? 'Cancel microphone request' : sttTranscribing ? 'Cancel transcription' : sttListening ? 'Stop dictation' : 'Start dictation'}
+                        aria-label={
+                          sttView.phase === 'starting'
+                            ? 'Cancel microphone request'
+                            : sttTranscribing
+                              ? 'Cancel transcription'
+                              : sttListening
+                                ? 'Stop dictation'
+                                : 'Start dictation'
+                        }
                         aria-pressed={sttListening}
                         className={cn(compact && 'h-6 w-6')}
                       >
@@ -6371,7 +6921,15 @@ export function Composer({
                           activeCancellationKeyRef.current = cancellationKey;
                           window.dispatchEvent(
                             new CustomEvent('jarvis:resume', {
-                              detail: { chatId: String(chatId), cancellationKey },
+                              detail: {
+                                chatId: String(chatId),
+                                cancellationKey,
+                                onUnavailable: () => {
+                                  void handleSend(
+                                    'Continue the interrupted task from the retained conversation and any progress in this persistent session. Check what is already complete before doing more work; do not repeat completed actions.',
+                                  );
+                                },
+                              },
                             }),
                           );
                         }}
@@ -6554,7 +7112,8 @@ function ModelPicker({
   const displayLabel = formatChatModelSelectionLabel(selection, modelCtx);
   const activeProvider = selection.mode === 'single' ? selection.providerId : undefined;
   const activeModel = selection.mode === 'single' ? selection.modelId : undefined;
-  const activeRoute = flatOptions.flatMap((option) => option.alternativeRoutes ?? [option])
+  const activeRoute = flatOptions
+    .flatMap((option) => option.alternativeRoutes ?? [option])
     .find((option) => option.id === selectionOptionId(selection));
   const effortOptions = listEffortOptions((activeRoute?.variants ?? []).map((id) => ({ id })));
   const initialEffort =
@@ -6669,17 +7228,19 @@ function ModelPicker({
           <span className={cn('truncate text-metadata leading-none', compact && 'text-[10px]')}>
             {displayLabel}
           </span>
-            <span
-              data-composer-effort={initialEffort}
-              style={initialEffort !== 'auto' ? undefined : { display: 'none' }}
-              className={cn(
-                'vibespace-composer-effort inline-flex shrink-0 items-center gap-1 rounded-full border border-accent-copper/35 bg-accent-copper/[0.08] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-accent-copper',
-                initialEffort === 'ultra' && 'vibespace-composer-effort-ultra',
-              )}
-            >
-              <span className="[&>svg]:size-5"><AxoMotion focusToken={axoFocusToken} /></span>
-              {effortLabel}
+          <span
+            data-composer-effort={initialEffort}
+            style={initialEffort !== 'auto' ? undefined : { display: 'none' }}
+            className={cn(
+              'vibespace-composer-effort inline-flex shrink-0 items-center gap-1 rounded-full border border-accent-copper/35 bg-accent-copper/[0.08] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-accent-copper',
+              initialEffort === 'ultra' && 'vibespace-composer-effort-ultra',
+            )}
+          >
+            <span className="[&>svg]:size-5">
+              <AxoMotion focusToken={axoFocusToken} />
             </span>
+            {effortLabel}
+          </span>
           <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 opacity-70', compact && 'h-3 w-3')} />
         </Button>
       </PopoverTrigger>

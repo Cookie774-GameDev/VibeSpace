@@ -23,6 +23,8 @@ export interface DiscoveredConnectionModel {
   label: string;
   /** Exact live upstream reasoning variant ids, when exposed by this connection. */
   variants?: readonly string[];
+  /** Exact live upstream provider default effort, when advertised among variants. */
+  defaultReasoningEffort?: string;
   source: ConnectionCatalogSource;
   lastVerifiedAt: number;
   unverified?: boolean;

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createChatTokenOptimizationRuntime } from './chatRuntimeBridge';
 
 describe('chat token optimization runtime tokenizers', () => {
-  it('keeps every context item because Ponytail changes instructions, not user context', async () => {
+  it('deduplicates optional context while preserving protected and conversation history', async () => {
     const runtime = createChatTokenOptimizationRuntime();
     const context = {
       kind: 'documentation' as const,
@@ -22,13 +22,41 @@ describe('chat token optimization runtime tokenizers', () => {
         { ...context, id: 'duplicate' },
         { ...context, id: 'explicit', protected: true },
       ],
-      messages: [{ role: 'user', content: 'Keep this exact request.' }],
+      requestedOutputTokens: 777,
+      messages: [
+        { role: 'user', content: 'same historical question' },
+        { role: 'assistant', content: 'same historical answer' },
+        { role: 'user', content: 'same historical question' },
+        { role: 'assistant', content: 'same historical answer' },
+        { role: 'user', content: 'previous exchange' },
+        { role: 'assistant', content: 'previous answer' },
+        { role: 'user', content: 'Keep this exact request.' },
+      ],
     });
-    expect(result.selectedContextIds).toEqual(['first', 'duplicate', 'explicit']);
-    expect(result.receipt.exclusions).toEqual([]);
-    expect(result.receipt.estimatedTokensSaved).toBe(0);
-    expect(result.messages[0]?.content).toBe('Keep this exact request.');
+    expect(result.selectedContextIds).toEqual(['first', 'explicit']);
+    expect(result.receipt.outputTokenLimit).toBe(777);
+    expect(result.receipt.exclusions).toHaveLength(1);
+    expect(result.receipt.exclusions[0]).toMatchObject({
+      kind: 'documentation',
+      reason: 'duplicate',
+    });
+    expect(result.messages).toHaveLength(7);
+    expect(result.messages.at(-1)?.content).toBe('Keep this exact request.');
     expect(result.receipt.modelId).toBe('selected-model');
+  });
+
+  it('leaves an omitted output allowance uncapped while retaining the estimate reservation', async () => {
+    const runtime = createChatTokenOptimizationRuntime();
+    const result = await runtime.optimizeMessages({
+      mode: 'normal',
+      providerId: 'unknown-provider',
+      modelId: 'unknown-model',
+      modelContextLimit: 20_000,
+      messages: [{ role: 'user', content: 'Use the provider default output allowance.' }],
+    });
+
+    expect(result.outputTokenLimit).toBeUndefined();
+    expect(result.receipt.outputTokenLimit).toBeGreaterThan(0);
   });
   it('uses the selected OpenAI family locally without changing provider or model', async () => {
     const encode = vi.fn((text: string) =>

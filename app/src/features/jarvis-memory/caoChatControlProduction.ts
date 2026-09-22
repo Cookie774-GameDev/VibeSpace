@@ -14,7 +14,13 @@ import { findProtectedJarvisAgent } from '@/lib/jarvis/identity';
 import { useJarvisLearningStore } from './learningStore';
 import { collectCaoLearningEvidence } from './caoLearningEvidence';
 import { caoGuidanceReady } from './caoGuidance';
-import { createCaoChatControl, type CaoSendMode } from './caoChatControl';
+import {
+  createCaoChatControl,
+  isCaoPendingProposal,
+  type CaoChatProposalPersistence,
+  type CaoPendingProposal,
+  type CaoSendMode,
+} from './caoChatControl';
 
 export const caoPermissionKey = (accountId: string) => `cao.chat.permissions.v1:${accountId}`;
 export interface CaoChatPermission {
@@ -23,6 +29,37 @@ export interface CaoChatPermission {
   revision?: string;
   learningEpoch?: string;
 }
+
+function caoPendingProposalKey(accountId: string, proposalId: string) {
+  return `cao.chat.approval.v1:${encodeURIComponent(accountId)}:${encodeURIComponent(proposalId)}`;
+}
+
+/** Existing settings storage is durable across renderer reloads; the transaction makes approval single-use. */
+export const caoChatProposalPersistence: CaoChatProposalPersistence = Object.freeze({
+  async save(entry: CaoPendingProposal) {
+    await db.settings.put({
+      key: caoPendingProposalKey(entry.proposal.accountId, entry.proposal.id),
+      value: entry,
+      updated_at: Date.now(),
+    });
+  },
+  async take(proposalId: string, accountId: string) {
+    if (!accountId) return undefined;
+    return db.transaction('rw', db.settings, async () => {
+      const key = caoPendingProposalKey(accountId, proposalId);
+      const row = await db.settings.get(key);
+      await db.settings.delete(key);
+      if (!row || !isCaoPendingProposal(row.value)) return undefined;
+      if (row.value.proposal.id !== proposalId || row.value.proposal.accountId !== accountId)
+        return undefined;
+      return row.value;
+    });
+  },
+  async remove(proposalId: string, accountId: string) {
+    if (accountId) await db.settings.delete(caoPendingProposalKey(accountId, proposalId));
+  },
+});
+
 function targetAuthority(chat: Awaited<ReturnType<typeof target>>, permission?: CaoChatPermission) {
   const profile = useJarvisLearningStore.getState().currentProfile();
   return JSON.stringify({
@@ -95,6 +132,8 @@ async function target(accountId: string, chatId: string) {
   };
 }
 export const caoChatControl = createCaoChatControl({
+  pending: caoChatProposalPersistence,
+  activeAccountId: () => getActiveAccountIdentity()?.accountId,
   async state(accountId, chatId) {
     const chat = await target(accountId, chatId);
     const raw = (await db.settings.get(caoPermissionKey(accountId)))?.value as

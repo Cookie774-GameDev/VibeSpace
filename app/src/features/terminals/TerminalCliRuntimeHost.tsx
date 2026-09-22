@@ -9,8 +9,10 @@ import {
   type TerminalCliRuntimeResponse,
 } from './terminalCliRuntime';
 import { createProductionTerminalCliRuntimeDependencies } from './terminalCliProduction';
+import { invalidateCaoTerminalExecutionIdentityOnExit } from '@/features/cao/terminalExecutionIdentity';
 
 const REQUEST_EVENT = 'jarvis:terminal-cli-request';
+const EXIT_EVENT = 'terminal://exit';
 const RESPONSE_COMMAND = 'terminal_cli_respond';
 const SAFE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/u;
 
@@ -67,6 +69,7 @@ export function TerminalCliRuntimeHost({ runtime: suppliedRuntime }: TerminalCli
   React.useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    let unlistenExit: (() => void) | undefined;
     const queues = new Map<string, Promise<void>>();
 
     const dispatch = async (request: TerminalCliFrontendRequest): Promise<void> => {
@@ -108,9 +111,23 @@ export function TerminalCliRuntimeHost({ runtime: suppliedRuntime }: TerminalCli
       })
       .catch(() => undefined);
 
+    void listen<unknown>(EXIT_EVENT, ({ payload }) => {
+      if (disposed) return;
+      invalidateCaoTerminalExecutionIdentityOnExit(payload);
+    })
+      .then((stop) => {
+        if (disposed) {
+          stop();
+        } else {
+          unlistenExit = stop;
+        }
+      })
+      .catch(() => undefined);
+
     return () => {
       disposed = true;
       unlisten?.();
+      unlistenExit?.();
       queues.clear();
     };
   }, [runtime]);

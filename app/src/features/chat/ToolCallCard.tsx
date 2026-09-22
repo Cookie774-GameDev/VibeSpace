@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui';
 import { useThemeLayoutTransition } from '@/features/appearance/themeMotion';
 import { cn } from '@/lib/utils';
 import type { Part } from '@/types';
+import { displayToolCallArgs } from './toolCallArguments';
 
 type ToolCallPart = Extract<Part, { kind: 'tool_call' }>;
 type ToolResultPart = Extract<Part, { kind: 'tool_result' }>;
@@ -104,7 +105,8 @@ export function ToolCallCard({ call, result }: ToolCallCardProps) {
   const expansionTransition = useThemeLayoutTransition(EXPANSION_TRANSITION);
   const status: Status = !result ? 'pending' : result.error ? 'error' : 'success';
   const meta = statusMeta[status];
-  const presentation = toolPresentation(call.tool, call.args ?? {});
+  const displayArgs = displayToolCallArgs(call);
+  const presentation = toolPresentation(call.tool, displayArgs);
   const isFileStyle = presentation.kind === 'edit' || presentation.kind === 'read';
 
   if (isFileStyle) {
@@ -185,7 +187,7 @@ export function ToolCallCard({ call, result }: ToolCallCardProps) {
                 ) : (
                   <Section label="Args">
                     <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-border bg-background p-2 font-mono text-metadata">
-                      {safeStringify(call.args)}
+                      {safeStringify(displayArgs)}
                     </pre>
                   </Section>
                 )}
@@ -254,7 +256,7 @@ export function ToolCallCard({ call, result }: ToolCallCardProps) {
             <div className="space-y-3 px-3 py-2.5">
               <Section label="Args">
                 <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-border bg-background p-2 font-mono text-metadata">
-                  {safeStringify(call.args)}
+                  {safeStringify(displayArgs)}
                 </pre>
               </Section>
 

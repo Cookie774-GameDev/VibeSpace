@@ -1,7 +1,7 @@
-import { CAO_LEARNER_IDENTITY, assertCaoLearnerExecutionIdentity } from '@/features/cao/bootstrap';
 import type { CaoLearningExecutionInput, CaoLearningExecutionResult } from './caoScheduledLearning';
+import type { CaoExecutionIdentity } from '@/features/cao/executionProfile';
 
-type Identity = Record<keyof typeof CAO_LEARNER_IDENTITY, string>;
+export type CaoLearningExecutionIdentity = CaoExecutionIdentity;
 export type CaoLearningFailureStage =
   | 'snapshot'
   | 'execute'
@@ -15,20 +15,26 @@ export interface CaoLearningReview {
   input: CaoLearningExecutionInput;
   summary: string;
   sourceIds: string[];
-  identity: Identity;
+  identity: CaoLearningExecutionIdentity;
   requestId: string;
   sessionId: string;
 }
 export interface CaoLearningExecutorDependencies {
+  resolveIdentity(input: CaoLearningExecutionInput): Promise<CaoLearningExecutionIdentity>;
   snapshot(
     input: CaoLearningExecutionInput,
   ): Promise<{ enabled: boolean; markdown: string; sourceIds: string[] }>;
   execute(input: {
     input: CaoLearningExecutionInput;
-    identity: Identity;
+    identity: CaoLearningExecutionIdentity;
     markdown: string;
     signal: AbortSignal;
-  }): Promise<{ text: string; identity: Identity; requestId: string; sessionId: string }>;
+  }): Promise<{
+    text: string;
+    identity: CaoLearningExecutionIdentity;
+    requestId: string;
+    sessionId: string;
+  }>;
   save(review: CaoLearningReview): Promise<void>;
   markEvaluated(input: CaoLearningExecutionInput): Promise<void>;
   onFailure?(stage: CaoLearningFailureStage): void;
@@ -49,19 +55,25 @@ export function createCaoLearningExecutor(dependencies: CaoLearningExecutorDepen
         snapshot.markdown.length > 128_000
       )
         throw new Error('cao_learning_evidence_invalid');
+      stage = 'identity';
+      const identity = await dependencies.resolveIdentity(input);
       stage = 'execute';
       const result = await dependencies.execute({
         input,
-        identity: CAO_LEARNER_IDENTITY,
+        identity,
         markdown: snapshot.markdown,
         signal,
       });
       signal.throwIfAborted();
       stage = 'identity';
-      assertCaoLearnerExecutionIdentity({
-        requested: CAO_LEARNER_IDENTITY,
-        observed: result.identity,
-      });
+      if (
+        result.identity.backend !== identity.backend ||
+        result.identity.providerId !== identity.providerId ||
+        result.identity.connectionId !== identity.connectionId ||
+        result.identity.modelId !== identity.modelId ||
+        result.identity.reasoningEffort !== identity.reasoningEffort
+      )
+        throw new Error('cao_learning_execution_identity_mismatch');
       stage = 'receipt';
       if (
         result.requestId !== input.requestId ||

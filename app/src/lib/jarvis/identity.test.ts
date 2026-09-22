@@ -107,7 +107,7 @@ const CANONICAL_SYSTEM_CONTRACT_START =
 const CANONICAL_SYSTEM_CONTRACT_END =
   'Never sacrifice tool syntax, action blocks, code, citations, file contents, URLs, or structured data for brevity.';
 const CANONICAL_SYSTEM_CONTRACT_SHA256 =
-  '2e24cd667b3fbdab7619cec0853b08a8ab618577f2f60d62877a81cecc8edf8b';
+  '0a5d18cea54d0fd48d523cb2261ae61c0341b55fba43ab3d0c57365619383a73';
 const CANONICAL_SYSTEM_CONTRACT_SECTIONS = [
   'IDENTITY',
   'ADDRESS',
@@ -315,7 +315,9 @@ describe('protected JARVIS identity contracts', () => {
     const voice = getJarvisDeliveryPolicy('voice');
 
     expect(canonicalStart).toBe(kernelIdentityCore.length + 1);
-    expect(canonicalSystemContract).toHaveLength(8_968);
+    expect(canonicalSystemContract).toContain('without a fixed sentence or word limit');
+    expect(canonicalSystemContract).not.toContain('Ordinary replies: 1–3 short sentences.');
+    expect(canonicalSystemContract).toContain('Voice delivery uses a brief spoken summary');
     expect(canonicalSystemContract.endsWith(CANONICAL_SYSTEM_CONTRACT_END)).toBe(true);
     await expect(hashJarvisText(canonicalSystemContract)).resolves.toBe(
       CANONICAL_SYSTEM_CONTRACT_SHA256,

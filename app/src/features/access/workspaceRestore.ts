@@ -1,5 +1,6 @@
 import { db as installedDatabase, type JarvisDexie } from '@/lib/db';
 import { getActiveAccountIdentity, type AccountIdentity } from '@/lib/accountIdentity';
+import type { ProjectId, WorkspaceId } from '@/types/common';
 import { WORKSPACE_BACKUP_FORMAT, WORKSPACE_BACKUP_VERSION } from './workspaceBackup';
 
 const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
@@ -75,6 +76,36 @@ export interface WorkspaceRestoreOptions {
   readonly database?: JarvisDexie;
   readonly getAccountIdentity?: () => AccountIdentity | null;
   readonly now?: () => number;
+}
+
+/**
+ * The minimum persisted scope needed to repair a local install whose durable
+ * workspace/project rows disappeared while its auth and chat rows survived.
+ * This is intentionally an explicit recovery operation; it is not part of
+ * normal first-launch seeding and never overwrites an existing row.
+ */
+export interface PersistedLocalScope {
+  readonly accountId: string;
+  readonly workspaceId: WorkspaceId;
+  readonly projectId: ProjectId;
+}
+
+export type PersistedLocalScopeRecoveryReason =
+  | 'invalid_scope'
+  | 'account_unavailable'
+  | 'cloud_identity'
+  | 'account_mismatch'
+  | 'scope_conflict'
+  | 'missing_chat_evidence';
+
+export interface PersistedLocalScopeRecoveryResult {
+  readonly status: 'recovered' | 'already_present' | 'not_recoverable';
+  readonly reason?: PersistedLocalScopeRecoveryReason;
+  readonly accountId: string;
+  readonly workspaceId: WorkspaceId;
+  readonly projectId: ProjectId;
+  readonly createdWorkspace: boolean;
+  readonly createdProject: boolean;
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -178,6 +209,122 @@ async function fingerprint(content: string): Promise<string> {
 function sameIdentity(expected: AccountIdentity, current: AccountIdentity | null): boolean {
   return Boolean(
     current && current.accountId === expected.accountId && current.source === expected.source,
+  );
+}
+
+function localScopeResult(
+  scope: PersistedLocalScope,
+  status: PersistedLocalScopeRecoveryResult['status'],
+  options: Pick<PersistedLocalScopeRecoveryResult, 'createdWorkspace' | 'createdProject'>,
+  reason?: PersistedLocalScopeRecoveryReason,
+): PersistedLocalScopeRecoveryResult {
+  return {
+    status,
+    ...(reason ? { reason } : {}),
+    accountId: scope.accountId,
+    workspaceId: scope.workspaceId,
+    projectId: scope.projectId,
+    ...options,
+  };
+}
+
+/**
+ * Reconstitute only a missing local workspace/project scope that is still
+ * referenced by surviving chats. The operation is deliberately narrow:
+ * cloud identities must use cloud/portable backup recovery, existing rows or
+ * partial scopes are never replaced, and no rows are created without chat
+ * evidence for the exact persisted IDs.
+ */
+export async function recoverMissingPersistedLocalScope(
+  scope: PersistedLocalScope,
+  options: WorkspaceRestoreOptions = {},
+): Promise<PersistedLocalScopeRecoveryResult> {
+  const database = options.database ?? installedDatabase;
+  const getIdentity = options.getAccountIdentity ?? getActiveAccountIdentity;
+  const base = { createdWorkspace: false, createdProject: false } as const;
+
+  if (!scope.accountId.trim() || !scope.workspaceId.trim() || !scope.projectId.trim()) {
+    return localScopeResult(scope, 'not_recoverable', base, 'invalid_scope');
+  }
+
+  const identity = getIdentity();
+  if (!identity) return localScopeResult(scope, 'not_recoverable', base, 'account_unavailable');
+  if (identity.source !== 'local') {
+    return localScopeResult(scope, 'not_recoverable', base, 'cloud_identity');
+  }
+  if (identity.accountId !== scope.accountId) {
+    return localScopeResult(scope, 'not_recoverable', base, 'account_mismatch');
+  }
+
+  return database.transaction(
+    'rw',
+    database.workspaces,
+    database.projects,
+    database.chats,
+    async () => {
+      if (!sameIdentity(identity, getIdentity())) {
+        throw new WorkspaceRestoreError('account_changed', 'The active account changed.');
+      }
+
+      const [workspace, project] = await Promise.all([
+        database.workspaces.get(scope.workspaceId),
+        database.projects.get(scope.projectId),
+      ]);
+
+      if (workspace && workspace.owner_id !== identity.accountId) {
+        return localScopeResult(scope, 'not_recoverable', base, 'scope_conflict');
+      }
+      if (project && project.workspace_id !== scope.workspaceId) {
+        return localScopeResult(scope, 'not_recoverable', base, 'scope_conflict');
+      }
+      if (workspace && project) {
+        return localScopeResult(scope, 'already_present', base);
+      }
+      // An orphaned project or a missing target workspace alongside other
+      // workspaces requires an explicit backup/UI recovery decision.
+      if (
+        project ||
+        (!workspace &&
+          ((await database.workspaces.count()) > 0 || (await database.projects.count()) > 0))
+      ) {
+        return localScopeResult(scope, 'not_recoverable', base, 'scope_conflict');
+      }
+
+      const chats = await database.chats.where('workspace_id').equals(scope.workspaceId).toArray();
+      const evidence = chats.some((chat) => chat.project_id === scope.projectId);
+      if (!evidence) {
+        return localScopeResult(scope, 'not_recoverable', base, 'missing_chat_evidence');
+      }
+
+      const timestamp = (options.now ?? Date.now)();
+      let createdWorkspace = false;
+      let createdProject = false;
+      if (!workspace) {
+        await database.workspaces.add({
+          id: scope.workspaceId,
+          name: 'Recovered workspace',
+          owner_id: identity.accountId,
+          created_at: timestamp,
+          updated_at: timestamp,
+        });
+        createdWorkspace = true;
+      }
+      if (!project) {
+        await database.projects.add({
+          id: scope.projectId,
+          workspace_id: scope.workspaceId,
+          name: 'Recovered project',
+          color_hue: 210,
+          created_at: timestamp,
+          updated_at: timestamp,
+        });
+        createdProject = true;
+      }
+      if (!sameIdentity(identity, getIdentity())) {
+        throw new WorkspaceRestoreError('account_changed', 'The active account changed.');
+      }
+      return localScopeResult(scope, 'recovered', { createdWorkspace, createdProject });
+    },
   );
 }
 

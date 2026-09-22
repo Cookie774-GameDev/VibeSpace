@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CHAT_RUNTIME_SETTINGS } from '@/features/chat/runtime/chatRuntimeCommandController';
 import type { RepositoryRetrievalResult } from '@/features/context/repositoryRetrieval';
+import { formatRepositoryRetrievalItem } from '@/features/context/repositoryRetrievalRuntime';
 import { prepareProductionRlmContext } from './contextRlmProduction';
 
 function result(path = 'src/example.ts', count = 1): RepositoryRetrievalResult {
@@ -74,6 +75,46 @@ describe('production Context/RLM adapter', () => {
       expect(value.evidence[0]?.text).toContain('export const answer = 42;');
     },
   );
+
+  it('truncates oversized multibyte evidence at a valid UTF-8 boundary', async () => {
+    const base = result();
+    const item = base.items[0]!;
+    const emptyFormatted = formatRepositoryRetrievalItem({ ...item, content: '' });
+    const contentMarker = '\n--- END PROJECT FILE DATA ---';
+    const contentStart = emptyFormatted.indexOf(contentMarker);
+    expect(contentStart).toBeGreaterThan(0);
+    const prefixBytes = new TextEncoder().encode(
+      emptyFormatted.slice(0, contentStart + 1),
+    ).byteLength;
+    const maxBytes = 256 * 1_024;
+    const leadingAsciiBytes = maxBytes - prefixBytes - 1;
+    const retrieved: RepositoryRetrievalResult = {
+      ...base,
+      items: [
+        {
+          ...item,
+          content: `${'a'.repeat(leadingAsciiBytes)}🙂tail`,
+        },
+      ],
+    };
+
+    const value = await prepareProductionRlmContext(
+      {
+        accountId: 'account-1',
+        projectId: 'project-1',
+        question: 'What was the previous decision?',
+        requestedRoute: 'focused',
+        settings: DEFAULT_CHAT_RUNTIME_SETTINGS,
+      },
+      dependencies(vi.fn(async () => retrieved)),
+    );
+
+    const evidence = value.evidence[0]?.text ?? '';
+    expect(value.truncated).toBe(true);
+    expect(evidence).not.toContain('\uFFFD');
+    expect(new TextEncoder().encode(evidence).byteLength).toBeLessThanOrEqual(maxBytes);
+    expect(evidence.endsWith('a')).toBe(true);
+  });
 
   it('keeps ordinary current-turn work direct with no repository read', async () => {
     const retrieveRepository = vi.fn(async () => result());

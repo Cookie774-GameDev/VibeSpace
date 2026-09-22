@@ -47,9 +47,9 @@ export function parseDesktopCommanderSnapshot(value: unknown): DesktopCommanderS
   return data;
 }
 
-export async function connectDesktopCommander(
+async function readDesktopCommanderConnection(
   connectionPath: string,
-): Promise<DesktopCommanderClient> {
+): Promise<{ endpoint: string; authorization: string }> {
   const file = await readTextFileSample(connectionPath, 16 * 1024);
   if (!file.ok)
     throw new Error(
@@ -73,7 +73,16 @@ export async function connectDesktopCommander(
   }
   const endpoint = connection.endpoint;
   const authorization = `Bearer ${connection.token}`;
+  return { endpoint, authorization };
+}
+
+export async function connectDesktopCommander(
+  connectionPath: string,
+): Promise<DesktopCommanderClient> {
+  await readDesktopCommanderConnection(connectionPath);
   async function request(method: 'GET' | 'PATCH', body?: unknown, signal?: AbortSignal) {
+    // A recovered gateway rotates its port and bearer. Validate the current file, never stale credentials.
+    const { endpoint, authorization } = await readDesktopCommanderConnection(connectionPath);
     const response = await nativeFetch(`${endpoint}/config`, {
       method,
       headers: { authorization, 'content-type': 'application/json' },

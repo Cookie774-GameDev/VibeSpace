@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JarvisEdgeAura, normalizeAmbientSnapshot } from './JarvisEdgeAura';
 import type { JarvisAmbientSnapshot } from './types';
 
-const mockRenderer = vi.hoisted(() => ({ draw: vi.fn(), destroy: vi.fn() }));
+const mockRenderer = vi.hoisted(() => ({ draw: vi.fn(), warm: vi.fn(), destroy: vi.fn() }));
 vi.mock('./auraRenderer', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./auraRenderer')>()),
   createAuraRenderer: () => mockRenderer,
@@ -40,6 +40,28 @@ describe('JarvisEdgeAura', () => {
       0,
       true,
     );
+  });
+
+  it('warms the native renderer before reporting readiness while idle remains hidden', () => {
+    const order: string[] = [];
+    const context = { clearRect: vi.fn(), setTransform: vi.fn() };
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(
+      context as unknown as ReturnType<HTMLCanvasElement['getContext']>,
+    );
+    mockRenderer.warm.mockImplementation(() => order.push('warm'));
+    const onRendererWarm = () => order.push('ready');
+
+    render(
+      <JarvisEdgeAura
+        snapshot={{ ...listening, state: 'idle', energy: 0, active: false, prewarm: true }}
+        warmRendererOnMount
+        onRendererWarm={onRendererWarm}
+      />,
+    );
+
+    expect(mockRenderer.warm).toHaveBeenCalledWith(context, window.innerWidth, window.innerHeight);
+    expect(order).toEqual(['warm', 'ready']);
+    expect(screen.getByTestId('jarvis-edge-aura').getAttribute('data-active')).toBe('false');
   });
   beforeEach(() => {
     vi.clearAllMocks();
@@ -144,6 +166,10 @@ describe('JarvisEdgeAura', () => {
 
   it('fails malformed snapshots closed to invisible idle', () => {
     expect(normalizeAmbientSnapshot({ ...listening, energy: 4 })).toMatchObject({
+      state: 'idle',
+      energy: 0,
+    });
+    expect(normalizeAmbientSnapshot({ ...listening, prewarm: 'yes' })).toMatchObject({
       state: 'idle',
       energy: 0,
     });

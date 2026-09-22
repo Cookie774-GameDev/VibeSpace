@@ -282,6 +282,7 @@ fn weight_training_requirements(method: &str, parameters_b: f64) -> WeightTraini
 
 fn validate_weight_hardware(
     method: &str,
+    compute_device: &str,
     hardware: &FoundryHardwareProfile,
     requirements: WeightTrainingRequirements,
 ) -> Result<(), String> {
@@ -294,17 +295,21 @@ fn validate_weight_hardware(
             requirements.storage_gb, hardware.free_storage_gb, hardware.storage_root
         ));
     }
-    if method == "qlora" && !vram_fits {
-        return Err(format!(
-            "QLoRA requires about {} GB verified CUDA VRAM; {:.1} GB is available.",
-            requirements.vram_gb, hardware.vram_gb
-        ));
-    }
-    if !vram_fits && !ram_fits {
-        return Err(format!(
-            "{method} training requires about {} GB VRAM or {} GB system RAM; this machine reports {:.1} GB VRAM and {:.1} GB RAM.",
-            requirements.vram_gb, requirements.ram_gb, hardware.vram_gb, hardware.ram_gb
-        ));
+    match compute_device {
+        "gpu" if !vram_fits => {
+            return Err(format!(
+                "{method} GPU-only training requires about {} GB verified CUDA VRAM; {:.1} GB is available.",
+                requirements.vram_gb, hardware.vram_gb
+            ));
+        }
+        "cpu" if !ram_fits => {
+            return Err(format!(
+                "{method} CPU-only training requires about {} GB system RAM; {:.1} GB is available.",
+                requirements.ram_gb, hardware.ram_gb
+            ));
+        }
+        "gpu" | "cpu" => {}
+        _ => return Err("Training compute device must be explicitly GPU or CPU.".into()),
     }
     Ok(())
 }
@@ -361,6 +366,24 @@ fn default_foundry_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map(|path| path.join("model-foundry"))
         .map_err(|error| format!("Model Foundry app-data directory unavailable: {error}"))
+}
+
+fn selected_foundry_storage_root(data_dir: &Path, configured_root: Option<PathBuf>) -> PathBuf {
+    configured_root.unwrap_or_else(|| data_dir.join("model-foundry"))
+}
+
+fn nearest_existing_storage_probe_path(path: &Path) -> PathBuf {
+    let mut candidate = path.to_path_buf();
+    while !candidate.exists() {
+        let Some(parent) = candidate.parent() else {
+            break;
+        };
+        if parent == candidate {
+            break;
+        }
+        candidate = parent.to_path_buf();
+    }
+    candidate
 }
 
 fn storage_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -513,9 +536,68 @@ fn collect_storage_files(
 fn copy_storage_files(source: &Path, prefix: &Path, target: &Path) -> Result<(), String> {
     let mut files = BTreeMap::new();
     collect_storage_files(source, prefix, &mut files)?;
+    let managed_runtime = target.join("training-runtime");
+    let preserve_managed_runtime = match fs::symlink_metadata(&managed_runtime) {
+        Ok(metadata) => {
+            reject_linked_path(&managed_runtime)?;
+            if !metadata.is_dir() {
+                return Err(
+                    "Model Foundry storage target conflicts with its training runtime.".into(),
+                );
+            }
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(format!(
+                "Could not inspect selected Model Foundry storage: {error}"
+            ));
+        }
+    };
+    let mut missing_files = Vec::new();
     for (relative, expected) in files {
+        if preserve_managed_runtime && relative.starts_with(Path::new("training-runtime")) {
+            // Python environments are an atomic managed unit. Never merge files from a
+            // different environment into an existing target runtime.
+            continue;
+        }
         let from = source.join(relative.strip_prefix(prefix).unwrap_or(&relative));
         let destination = target.join(&relative);
+        reject_linked_path(&destination)?;
+        match fs::symlink_metadata(&destination) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err("Model Foundry storage target contains an unsafe link.".into());
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    if metadata.file_attributes() & 0x400 != 0 {
+                        return Err("Model Foundry storage target contains a reparse point.".into());
+                    }
+                }
+                if !metadata.is_file() {
+                    return Err(
+                        "Model Foundry storage target conflicts with migrated file data.".into(),
+                    );
+                }
+                if sha256_file(&destination)? != expected {
+                    return Err(
+                        "Existing Model Foundry storage conflicts with migrated file data.".into(),
+                    );
+                }
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Could not inspect selected Model Foundry storage: {error}"
+                ));
+            }
+        }
+        missing_files.push((from, destination, expected));
+    }
+    for (from, destination, expected) in missing_files {
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent).map_err(|error| {
                 format!("Could not prepare selected Model Foundry storage: {error}")
@@ -778,7 +860,9 @@ fn detect_hardware(app: &tauri::AppHandle) -> Result<FoundryHardwareProfile, Str
         .path()
         .app_data_dir()
         .map_err(|error| format!("Could not resolve app-data storage: {error}"))?;
-    let directory = HSTRING::from(data_dir.to_string_lossy().as_ref());
+    let storage_root = selected_foundry_storage_root(&data_dir, configured_foundry_root(app)?);
+    let probe_directory = nearest_existing_storage_probe_path(&storage_root);
+    let directory = HSTRING::from(probe_directory.to_string_lossy().as_ref());
     let mut free_bytes = 0_u64;
     unsafe { GetDiskFreeSpaceExW(&directory, Some(&mut free_bytes), None, None) }
         .map_err(|error| format!("Could not inspect free storage: {error}"))?;
@@ -806,10 +890,7 @@ fn detect_hardware(app: &tauri::AppHandle) -> Result<FoundryHardwareProfile, Str
         accelerators: accelerator
             .map(|_| vec!["NVIDIA CUDA (runtime verification required)".into()])
             .unwrap_or_default(),
-        storage_root: data_dir
-            .join("model-foundry")
-            .to_string_lossy()
-            .into_owned(),
+        storage_root: storage_root.to_string_lossy().into_owned(),
         recommended_storage_root,
     })
 }
@@ -1755,7 +1836,17 @@ pub fn model_foundry_start_training(
         let parameters_b =
             crate::model_foundry_training::training_model_parameters_b(&request.base_model_id)?;
         let requirements = weight_training_requirements(&request.method, parameters_b);
-        validate_weight_hardware(&request.method, &detect_hardware(&app)?, requirements)?;
+        let compute_device = request
+            .training_config
+            .as_ref()
+            .map(|config| config.compute_device.as_str())
+            .unwrap_or("gpu");
+        validate_weight_hardware(
+            &request.method,
+            compute_device,
+            &detect_hardware(&app)?,
+            requirements,
+        )?;
     }
     let inline_dataset = request
         .dataset_jsonl
@@ -2257,6 +2348,44 @@ fn restart_job(
     model_foundry_start_training(app, request)
 }
 
+fn validate_resume_dataset_path(path: &Path) -> Result<PathBuf, String> {
+    reject_linked_path(path)?;
+    let sources = validated_sources(&[path.to_string_lossy().into_owned()])?;
+    if sources.len() != 1
+        || sources[0]
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_none_or(|value| !value.eq_ignore_ascii_case("jsonl"))
+    {
+        return Err("The private resume dataset is unavailable or invalid.".into());
+    }
+    Ok(sources
+        .into_iter()
+        .next()
+        .expect("resume validation requires exactly one dataset"))
+}
+
+fn resume_dataset_path(job_dir: &Path, source_paths: &[String]) -> Result<PathBuf, String> {
+    let private_dataset = job_dir.join("dataset.jsonl");
+    if private_dataset.exists() {
+        return validate_resume_dataset_path(&private_dataset);
+    }
+
+    if source_paths.is_empty() {
+        return Err("The private resume dataset is unavailable or invalid.".into());
+    }
+    let sources = validated_sources(source_paths)?;
+    if sources.len() != 1
+        || sources[0]
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_none_or(|value| !value.eq_ignore_ascii_case("jsonl"))
+    {
+        return Err("The private resume dataset is unavailable or invalid.".into());
+    }
+    Ok(sources.into_iter().next().expect("validated source exists"))
+}
+
 #[tauri::command]
 pub fn model_foundry_retry_job(
     app: tauri::AppHandle,
@@ -2297,19 +2426,7 @@ pub fn model_foundry_resume_job(
     {
         return Err("The private resume record does not match this verified local job.".into());
     }
-    let sources = if request.source_paths.is_empty() {
-        vec![job_dir.join("dataset.jsonl")]
-    } else {
-        validated_sources(&request.source_paths)?
-    };
-    if sources.len() != 1
-        || sources[0]
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_none_or(|value| !value.eq_ignore_ascii_case("jsonl"))
-    {
-        return Err("The private resume dataset is unavailable or invalid.".into());
-    }
+    let dataset = resume_dataset_path(&job_dir, &request.source_paths)?;
     let mut active = active_jobs()
         .lock()
         .map_err(|_| "Model Foundry active-job registry is unavailable.".to_string())?;
@@ -2329,10 +2446,6 @@ pub fn model_foundry_resume_job(
         return Err(error);
     }
     let worker_job = job.clone();
-    let dataset = sources
-        .into_iter()
-        .next()
-        .expect("resume validation requires exactly one dataset");
     let validation_dataset = if job_dir.join("validation-dataset.jsonl").is_file() {
         job_dir.join("validation-dataset.jsonl")
     } else {
@@ -2531,6 +2644,80 @@ pub fn model_foundry_export_artifact(
 mod tests {
     use super::*;
 
+    #[test]
+    fn hardware_probe_uses_configured_storage_root_for_disk_measurement() {
+        let data_dir = PathBuf::from(r"C:\Users\test\AppData");
+        let configured_root = PathBuf::from(r"D:\VibeSpace-Model-Foundry");
+
+        assert_eq!(
+            selected_foundry_storage_root(&data_dir, Some(configured_root.clone())),
+            configured_root
+        );
+        assert_eq!(
+            selected_foundry_storage_root(&data_dir, None),
+            data_dir.join("model-foundry")
+        );
+    }
+
+    #[test]
+    fn disk_probe_walks_to_an_existing_ancestor_for_a_new_storage_root() {
+        let existing_root =
+            std::env::temp_dir().join(format!("vibespace-foundry-probe-{}", nanoid::nanoid!()));
+        fs::create_dir_all(&existing_root).unwrap();
+        let planned_root = existing_root.join("planned").join("nested");
+
+        assert_eq!(
+            nearest_existing_storage_probe_path(&planned_root),
+            existing_root
+        );
+        assert!(!planned_root.exists());
+        let _ = fs::remove_dir_all(existing_root);
+    }
+
+    #[test]
+    fn resume_prefers_private_prepared_dataset_for_raw_source_requests() {
+        let root =
+            std::env::temp_dir().join(format!("vibespace-foundry-resume-{}", nanoid::nanoid!()));
+        fs::create_dir_all(&root).unwrap();
+        let dataset = root.join("dataset.jsonl");
+        let raw_source = root.join("source.txt");
+        fs::write(&dataset, b"{\"text\":\"prepared\"}\n").unwrap();
+        fs::write(&raw_source, b"raw source").unwrap();
+
+        let resumed =
+            resume_dataset_path(&root, &[raw_source.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(resumed, fs::canonicalize(dataset).unwrap());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resume_rejects_non_jsonl_source_when_private_dataset_is_missing() {
+        let root =
+            std::env::temp_dir().join(format!("vibespace-foundry-resume-{}", nanoid::nanoid!()));
+        fs::create_dir_all(&root).unwrap();
+        let raw_source = root.join("source.txt");
+        fs::write(&raw_source, b"raw source").unwrap();
+
+        let error =
+            resume_dataset_path(&root, &[raw_source.to_string_lossy().into_owned()]).unwrap_err();
+        assert_eq!(
+            error,
+            "The private resume dataset is unavailable or invalid."
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resume_rejects_private_dataset_that_is_not_a_regular_file() {
+        let root =
+            std::env::temp_dir().join(format!("vibespace-foundry-resume-{}", nanoid::nanoid!()));
+        fs::create_dir_all(root.join("dataset.jsonl")).unwrap();
+
+        let error = resume_dataset_path(&root, &[]).unwrap_err();
+        assert!(error.contains("not a regular file"));
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn minimal_pdf_with_text(text: &str) -> Vec<u8> {
         let stream = format!("BT /F1 18 Tf 72 720 Td ({text}) Tj ET");
         let objects = [
@@ -2654,6 +2841,78 @@ mod tests {
     }
 
     #[test]
+    fn storage_copy_preserves_existing_managed_runtime_bytes() {
+        let root = std::env::temp_dir().join(format!(
+            "vibespace-foundry-storage-preserve-{}",
+            nanoid::nanoid!()
+        ));
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(source.join("training-runtime")).unwrap();
+        fs::create_dir_all(target.join("training-runtime")).unwrap();
+        fs::write(
+            source.join("training-runtime").join("worker.py"),
+            b"embedded-worker-source",
+        )
+        .unwrap();
+        fs::write(
+            source
+                .join("training-runtime")
+                .join("source-only-package.dist-info"),
+            b"incompatible-source-environment",
+        )
+        .unwrap();
+        fs::write(
+            target.join("training-runtime").join("worker.py"),
+            b"verified-gpu-runtime",
+        )
+        .unwrap();
+
+        copy_storage_files(&source, Path::new(""), &target).unwrap();
+
+        assert_eq!(
+            fs::read(target.join("training-runtime").join("worker.py")).unwrap(),
+            b"verified-gpu-runtime"
+        );
+        assert!(!target
+            .join("training-runtime")
+            .join("source-only-package.dist-info")
+            .exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn storage_copy_rejects_conflicting_existing_artifact_bytes() {
+        let root = std::env::temp_dir().join(format!(
+            "vibespace-foundry-storage-conflict-{}",
+            nanoid::nanoid!()
+        ));
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(source.join("base-models")).unwrap();
+        fs::create_dir_all(target.join("base-models")).unwrap();
+        fs::write(
+            source.join("base-models").join("model.safetensors"),
+            b"source-artifact",
+        )
+        .unwrap();
+        fs::write(
+            target.join("base-models").join("model.safetensors"),
+            b"verified-target-artifact",
+        )
+        .unwrap();
+
+        let error = copy_storage_files(&source, Path::new(""), &target).unwrap_err();
+
+        assert!(error.contains("conflicts"));
+        assert_eq!(
+            fs::read(target.join("base-models").join("model.safetensors")).unwrap(),
+            b"verified-target-artifact"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn parses_nvidia_smi_memory_without_trusting_wmi_adapter_ram() {
         let parsed = parse_nvidia_smi_csv("NVIDIA GeForce RTX 4050 Laptop GPU, 6141\r\n")
             .expect("valid nvidia-smi output");
@@ -2679,16 +2938,16 @@ mod tests {
             storage_root: "C:\\Foundry".into(),
             recommended_storage_root: Some("D:\\Foundry".into()),
         };
-        assert!(validate_weight_hardware("qlora", &hardware, qlora)
+        assert!(validate_weight_hardware("qlora", "gpu", &hardware, qlora)
             .unwrap_err()
             .contains("CUDA VRAM"));
         hardware.vram_gb = 5.997;
         hardware.free_storage_gb = 11.9;
-        assert!(validate_weight_hardware("qlora", &hardware, qlora)
+        assert!(validate_weight_hardware("qlora", "gpu", &hardware, qlora)
             .unwrap_err()
             .contains("managed storage"));
         hardware.free_storage_gb = 12.0;
-        validate_weight_hardware("qlora", &hardware, qlora).unwrap();
+        validate_weight_hardware("qlora", "gpu", &hardware, qlora).unwrap();
     }
 
     #[test]
@@ -2696,19 +2955,45 @@ mod tests {
         let small = weight_training_requirements("full", 0.135);
         assert_eq!(small.ram_gb, 8.0);
         let mut hardware = FoundryHardwareProfile {
-            cpu: "test".into(), gpu: None, ram_gb: 16.0, vram_gb: 0.0,
-            free_storage_gb: 6.0, os: "test".into(), accelerators: vec![],
-            storage_root: "D:\\Foundry".into(), recommended_storage_root: None,
+            cpu: "test".into(),
+            gpu: None,
+            ram_gb: 16.0,
+            vram_gb: 0.0,
+            free_storage_gb: 6.0,
+            os: "test".into(),
+            accelerators: vec![],
+            storage_root: "D:\\Foundry".into(),
+            recommended_storage_root: None,
         };
-        validate_weight_hardware("full", &hardware, small).unwrap();
+        validate_weight_hardware("full", "cpu", &hardware, small).unwrap();
         hardware.ram_gb = 7.0;
-        assert!(validate_weight_hardware("full", &hardware, small).is_err());
+        assert!(validate_weight_hardware("full", "cpu", &hardware, small).is_err());
         hardware.ram_gb = 16.0;
         hardware.free_storage_gb = 5.0;
-        assert!(validate_weight_hardware("full", &hardware, small).is_err());
+        assert!(validate_weight_hardware("full", "cpu", &hardware, small).is_err());
         let large = weight_training_requirements("full", 7.0);
         assert_eq!(large.ram_gb, 224.0);
         assert_eq!(large.storage_gb, 280.0);
+    }
+
+    #[test]
+    fn gpu_requests_never_use_system_ram_as_a_training_fallback() {
+        let requirements = weight_training_requirements("full", 0.135);
+        let hardware = FoundryHardwareProfile {
+            cpu: "test".into(),
+            gpu: None,
+            ram_gb: 64.0,
+            vram_gb: 0.0,
+            free_storage_gb: 100.0,
+            os: "test".into(),
+            accelerators: vec![],
+            storage_root: "D:\\Foundry".into(),
+            recommended_storage_root: None,
+        };
+        let error = validate_weight_hardware("full", "gpu", &hardware, requirements)
+            .expect_err("GPU-only requests must fail without CUDA VRAM");
+        assert!(error.contains("GPU-only"));
+        assert!(error.contains("VRAM"));
     }
 
     #[test]

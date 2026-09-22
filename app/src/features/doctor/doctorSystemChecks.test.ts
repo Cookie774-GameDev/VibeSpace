@@ -18,7 +18,7 @@ const cloud = vi.hoisted(() => ({
   learning: vi.fn(),
 }));
 vi.mock('@/lib/supabase', () => ({ getSupabaseClient: cloud.client }));
-vi.mock('@/stores/auth', () => ({ useAuthStore: { getState: cloud.privacy } }));
+vi.mock('@/features/telemetry/telemetryConsent', () => ({ telemetryConsentStore: { getSnapshot: cloud.privacy } }));
 vi.mock('@/features/jarvis-memory/learningStore', () => ({
   useJarvisLearningStore: { getState: cloud.learning },
 }));
@@ -53,12 +53,18 @@ describe('Doctor production system wiring', () => {
       functions: { invoke: cloud.invoke },
     });
     cloud.phone.mockResolvedValue({ state: 'missing' });
-    cloud.privacy.mockReturnValue({ telemetryOptIn: false });
+    cloud.privacy.mockReturnValue({ consent: { productUsage: false, diagnostics: false, toolOutcomes: false } });
     cloud.learning.mockReturnValue({
       activeAccountId: 'account-a',
       profiles: { 'account-a': { accountId: 'account-a', enabled: false } },
       lastError: null,
     });
+  });
+
+  it('reports canonical per-class telemetry consent', async () => {
+    cloud.privacy.mockReturnValue({ consent: { productUsage: true, diagnostics: false, toolOutcomes: true } });
+    const checks = await runDefaultDoctorSystemChecks();
+    expect(checks.find((check) => check.label === 'Privacy')?.detail).toContain('2 of 3 classes enabled');
   });
 
   it('uses only account-scoped metadata reads and never claims delivery or restore', async () => {

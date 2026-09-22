@@ -145,7 +145,14 @@ export type SyncQueueRow = {
 };
 
 export type StatusActivityCategory =
-  'surface' | 'ai' | 'chat' | 'terminal' | 'file' | 'agent' | 'context' | 'optimizer';
+  | 'surface'
+  | 'ai'
+  | 'chat'
+  | 'terminal'
+  | 'file'
+  | 'agent'
+  | 'context'
+  | 'optimizer';
 
 export type StatusCostType = 'actual' | 'estimated' | 'subscription' | 'local' | 'unknown';
 
@@ -184,7 +191,14 @@ export type StatusActivityEventRow = {
 };
 
 export type StatusRollupDimension =
-  'all' | 'surface' | 'provider' | 'model' | 'project' | 'agent' | 'action' | 'category';
+  | 'all'
+  | 'surface'
+  | 'provider'
+  | 'model'
+  | 'project'
+  | 'agent'
+  | 'action'
+  | 'category';
 
 /** Precomputed hourly/daily counters used by Account Status without rescans. */
 export type StatusActivityRollupRow = {
@@ -259,6 +273,50 @@ export type CaoControlRecordRow = {
   leaseId?: string;
   receiptId?: string;
   errorCode?: string;
+  updatedAt: number;
+};
+
+/** Durable account/workspace-scoped CAO mission envelope. Payload is versioned JSON. */
+export type CaoMissionRow = {
+  id: string;
+  schemaVersion: 1;
+  accountId: string;
+  workspaceId: string;
+  projectId: string | null;
+  status: 'planning' | 'running' | 'verifying' | 'completed' | 'failed' | 'cancelled';
+  serializedMission: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** Append-only local Jev usage observation; never contains state, prompts, or credentials. */
+export type JevUsageRecordRow = {
+  id: string;
+  accountId: string;
+  workspaceId: string;
+  projectId: string | null;
+  missionId: string | null;
+  targetId: string | null;
+  model: string;
+  version: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  latencyMs: number;
+  status: 'ok' | 'error' | 'unavailable';
+  reason: string;
+  event: 'event' | 'sweep' | 'pre-send-quality' | 'learning-gate' | 'wake';
+  recordedAt: number;
+  costUsd: number | null;
+  costProvenance: 'provider-reported' | 'estimated' | 'unavailable';
+};
+
+/** Persisted exact CAO execution identity plus the live-catalog receipt that authorized it. */
+export type CaoExecutionProfileRow = {
+  id: string;
+  schemaVersion: 1;
+  accountId: string;
+  workspaceId: string;
+  serializedProfile: string;
   updatedAt: number;
 };
 
@@ -338,7 +396,13 @@ export type JarvisRunRow = {
   chat_id?: string;
   parent_run_id?: string;
   source:
-    'typed_chat' | 'voice' | 'schedule' | 'hive_final' | 'phone' | 'browser_chat' | 'chatgpt_ade';
+    | 'typed_chat'
+    | 'voice'
+    | 'schedule'
+    | 'hive_final'
+    | 'phone'
+    | 'browser_chat'
+    | 'chatgpt_ade';
   status:
     | 'queued'
     | 'compiling'
@@ -801,8 +865,8 @@ export type BrowserChatPermissionProfileRow = {
 };
 
 export const DB_NAME = 'jarvis-v1';
-/** Current schema version — bumped to 15 for durable CAO control requests. */
-export const DB_VERSION = 15;
+/** Current schema version — bumped to 16 for durable CAO missions, Jev usage, and profiles. */
+export const DB_VERSION = 16;
 
 /**
  * Dexie store schema strings.
@@ -1021,6 +1085,18 @@ export const STORES_V15 = {
   cao_control_records: 'requestId, accountId, workspaceId, projectId, runId, status, [accountId+workspaceId+projectId], updatedAt',
 } as const;
 
-export const STORES = STORES_V15;
+/** V16 adds additive, account/workspace-scoped CAO missions, Jev usage, and execution profiles. */
+// prettier-ignore
+export const STORES_V16 = {
+  ...STORES_V15,
+  cao_missions:
+    'id, accountId, workspaceId, projectId, status, [accountId+workspaceId], [accountId+workspaceId+projectId], updatedAt',
+  jev_usage_records:
+    'id, accountId, workspaceId, projectId, missionId, targetId, status, recordedAt, [accountId+workspaceId], [accountId+workspaceId+recordedAt], [missionId+recordedAt], [accountId+workspaceId+projectId]',
+  cao_execution_profiles:
+    'id, accountId, workspaceId, &[accountId+workspaceId], updatedAt',
+} as const;
+
+export const STORES = STORES_V16;
 
 export type StoreName = keyof typeof STORES;

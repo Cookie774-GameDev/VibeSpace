@@ -15,6 +15,7 @@ import {
   readSiyuanIndexEntries,
   readSiyuanIndexFrontier,
   readSiyuanIndexJob,
+  repairEmptySiyuanDiscoveryCheckpoint,
   replaceSiyuanIndexJob,
   type SiyuanIndexDirectory,
   type SiyuanIndexJobRecord,
@@ -405,6 +406,17 @@ function legacySiyuanIndexPolicyFingerprint(
   );
 }
 
+function fingerprintWithCanonicalRoot(value: string): string | null {
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.root !== 'string') return null;
+    // Change only the spelling of the root, never summary scope or exclusions.
+    return JSON.stringify({ ...parsed, root: canonicalSiyuanAuthorityRoot(parsed.root) });
+  } catch {
+    return null;
+  }
+}
+
 function isEmptyMalformedVerbatimDiscoveryCheckpoint(
   job: SiyuanIndexJobRecord,
   root: string,
@@ -542,6 +554,7 @@ export async function scanSiyuanFilesystemIndex(
     durableJob?: Readonly<{ accountId: string | null; projectId: string; mapId: string }>;
   }> = {},
 ): Promise<SiyuanSafeIndex> {
+  if (options.signal?.aborted) throw new Error('siyuan_index_cancelled');
   const root = canonical(record.rootDir);
   const list = options.list ?? listDirectory;
   const listBatch = options.listBatch ?? (options.list ? null : listDirectoriesStrict);
@@ -575,18 +588,23 @@ export async function scanSiyuanFilesystemIndex(
     }
     if (
       existing &&
-      existing.policyFingerprint !== policyFingerprint &&
-      isEmptyMalformedVerbatimDiscoveryCheckpoint(existing, root)
+      existing.accountId === accountId &&
+      existing.projectId === projectId &&
+      existing.mapId === mapId &&
+      existing.status === 'running' &&
+      isEmptyMalformedVerbatimDiscoveryCheckpoint(existing, root) &&
+      [policyFingerprint, legacyPolicyFingerprint].includes(
+        fingerprintWithCanonicalRoot(existing.policyFingerprint) ?? '',
+      )
     ) {
-      existing = {
-        ...existing,
-        canonicalRoot: root,
+      // Re-read and compare inside one transaction; retain all identities and
+      // refuse cancellation, concurrent progress, or changed policy/authority.
+      existing = await repairEmptySiyuanDiscoveryCheckpoint(
+        existing,
+        root,
         policyFingerprint,
-        updatedAt: Date.now(),
-      };
-      // The malformed root was rejected before the first directory read, so
-      // replacing this single empty frontier cannot discard indexed evidence.
-      await replaceSiyuanIndexJob(existing, queue[0]!);
+        options.signal,
+      );
     }
     if (existing?.policyFingerprint === legacyPolicyFingerprint) {
       existing = { ...existing, policyFingerprint, updatedAt: Date.now() };

@@ -205,6 +205,7 @@ export function startTaskbarUsageController(): () => void {
                     inputTokens: usage.inputTokens,
                     outputTokens: usage.outputTokens,
                     cachedTokens: usage.cachedInputTokens,
+                    totalTokens: usage.totalTokens,
                     costUsd: usage.costUsd,
                     calls: usage.requests,
                     lastUsed: usage.lastRequestAt,

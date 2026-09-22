@@ -75,3 +75,34 @@ it('preserves real command failure, partial output, and collapsed output details
   expect(screen.getByLabelText('Tool output preview').textContent?.length).toBe(240);
   expect(screen.queryByText('x'.repeat(500))).toBeNull();
 });
+it('renders large provider write content in a labeled scrollable panel when no diff exists', () => {
+  const content = '<!doctype html>\n' + '<canvas id="game"></canvas>\n'.repeat(300);
+  render(
+    <ToolDetailsInspector
+      status="done"
+      details={{
+        changes: [{ path: 'game.html', kind: 'unknown', writtenContent: content, complete: true }],
+      }}
+    />,
+  );
+  expect(screen.queryByText('Per-call diff unavailable.')).toBeNull();
+  fireEvent.click(screen.getByText('Written content · previous file state unavailable'));
+  const pre = screen.getByLabelText('Written content for game.html');
+  expect(pre.textContent).toBe(content);
+  expect(pre.className).toContain('max-h-80');
+  expect(pre.className).toContain('overflow-auto');
+});
+it('recovers written content from persisted arguments for older receipts', () => {
+  const content = '<canvas id="legacy-game"></canvas>\n'.repeat(80);
+  render(
+    <ToolDetailsInspector
+      status="done"
+      details={{
+        arguments: { filePath: 'game.html', content },
+        changes: [{ path: 'game.html', kind: 'unknown', complete: true }],
+      }}
+    />,
+  );
+  fireEvent.click(screen.getByText('Written content · previous file state unavailable'));
+  expect(screen.getByLabelText('Written content for game.html').textContent).toBe(content);
+});

@@ -79,6 +79,64 @@ describe('SidebarContextTree navigation', () => {
     persistenceState.selectedMapId = activeMap.id;
   });
 
+  it('shows every sibling beyond the old eight-item cutoff', async () => {
+    const nodes = Array.from({ length: 12 }, (_, i) => ({
+      id: `file-${i}`,
+      title: `file-${i}.md`,
+      kind: 'file' as const,
+      path: `file-${i}.md`,
+      summary: '',
+    }));
+    persistenceState.maps.splice(0, 1, { ...activeMap, tree: { ...activeMap.tree, nodes } });
+    render(<SidebarContextTree navOpen onOpenContext={vi.fn()} />);
+    expect(await screen.findByRole('button', { name: 'file-11.md' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^file-\d+\.md$/ })).toHaveLength(12);
+  });
+
+  it('keeps all nested descendants reachable without flattening their hierarchy', async () => {
+    const files = Array.from({ length: 12 }, (_, i) => ({
+      id: `nested-${i}`,
+      title: `nested-${i}.ts`,
+      kind: 'file' as const,
+      path: `src/deep/nested-${i}.ts`,
+      summary: '',
+    }));
+    const nodes = [
+      {
+        id: 'src',
+        title: 'src',
+        kind: 'area' as const,
+        summary: '',
+        children: [
+          { id: 'deep', title: 'deep', kind: 'area' as const, summary: '', children: files },
+        ],
+      },
+    ];
+    persistenceState.maps.splice(0, 1, { ...activeMap, tree: { ...activeMap.tree, nodes } });
+    render(<SidebarContextTree navOpen onOpenContext={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand Context branch' }));
+    expect(screen.getByRole('button', { name: 'nested-11.ts' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^nested-\d+\.ts$/ })).toHaveLength(12);
+  });
+
+  it('provides bounded show-more paging instead of silently dropping wide folders', async () => {
+    const nodes = Array.from({ length: 130 }, (_, i) => ({
+      id: `wide-${i}`,
+      title: `wide-${i}.md`,
+      kind: 'file' as const,
+      path: `wide-${i}.md`,
+      summary: '',
+    }));
+    persistenceState.maps.splice(0, 1, { ...activeMap, tree: { ...activeMap.tree, nodes } });
+    render(<SidebarContextTree navOpen onOpenContext={vi.fn()} />);
+    await screen.findByRole('button', { name: 'wide-0.md' });
+    expect(document.querySelectorAll('[data-context-node-id]')).toHaveLength(64);
+    fireEvent.click(screen.getByText(/Show 64 more.*66 remaining/, { selector: 'button' }));
+    expect(document.querySelectorAll('[data-context-node-id]')).toHaveLength(128);
+    fireEvent.click(screen.getByText(/Show 2 more.*2 remaining/, { selector: 'button' }));
+    expect(screen.getByRole('button', { name: 'wide-129.md' })).toBeTruthy();
+  });
+
   it('opens the management overview from the aggregate active-map row', async () => {
     const onOpenContext = vi.fn();
     const intents: NavigationDetail[] = [];

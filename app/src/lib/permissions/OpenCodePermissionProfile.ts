@@ -1,6 +1,8 @@
 export type InteractionMode = 'ask' | 'plan' | 'agent';
 export type AccessLevel = 'read-only' | 'write' | 'full';
 export type PermissionDecision = 'allow' | 'ask' | 'deny';
+/** Persistent Agent profile captured for one provider run. */
+export type AgentApprovalMode = 'full' | 'review';
 export type OpenCodeExecutionAgentId =
   | 'vibespace-readonly'
   | 'vibespace-write'
@@ -16,6 +18,8 @@ export interface PermissionProfileInput {
   mode: InteractionMode;
   access: AccessLevel;
   approveAllForRun: boolean;
+  /** Optional for legacy callers; runtime sends the persisted profile explicitly. */
+  agentApprovalMode?: AgentApprovalMode;
   projectRoot: string;
 }
 
@@ -99,6 +103,15 @@ function agentDecision(approveAllForRun: boolean): PermissionDecision {
   return approveAllForRun ? 'allow' : 'ask';
 }
 
+function nativeApproveAllForRun(input: Readonly<PermissionProfileInput>): boolean {
+  // The persistent review profile must retain native asks even if an older
+  // caller still carries the transient approveAllForRun bit. Full is the only
+  // profile that selects the native never/allow routine policy.
+  if (input.agentApprovalMode === 'full') return true;
+  if (input.agentApprovalMode === 'review') return false;
+  return input.approveAllForRun;
+}
+
 function mutationAuthorityFor(mode: InteractionMode, access: AccessLevel): MutationAuthority {
   return mode === 'agent' && access !== 'read-only' ? 'autonomous' : 'none';
 }
@@ -151,22 +164,25 @@ export function buildEffectivePermissionProfile(
 ): EffectivePermissionProfile {
   const projectRoot = normalizeProjectRoot(input.projectRoot);
   const projectGlob = `${projectRoot}/**`;
+  const nativeApproveAll = nativeApproveAllForRun(input);
   const mutationAuthority = mutationAuthorityFor(input.mode, input.access);
   const terminalAuthority = terminalAuthorityFor(input.mode, input.access);
   const agent = input.mode === 'agent';
+  const nativeFullAccess =
+    input.agentApprovalMode === 'full' && input.mode === 'agent' && input.access === 'full';
   const canWrite = mutationAuthority !== 'none';
   const canUseTerminal = terminalAuthority !== 'none';
   const autonomous = mutationAuthority === 'autonomous';
   const autonomousFull = terminalAuthority === 'autonomous';
 
   const readRules: Record<string, PermissionDecision> = {
-    '*': 'deny',
+    '*': nativeFullAccess ? 'allow' : 'deny',
     [projectGlob]: 'allow',
   };
   for (const pattern of SENSITIVE_READ_DENIES) readRules[pattern] = 'deny';
 
-  const editDecision = editDecisionFor(mutationAuthority, input.approveAllForRun);
-  const bashDecision = bashDecisionFor(terminalAuthority, input.approveAllForRun);
+  const editDecision = editDecisionFor(mutationAuthority, nativeApproveAll);
+  const bashDecision = bashDecisionFor(terminalAuthority, nativeApproveAll);
   const planArtifactGlobs = Object.freeze([
     `${projectRoot}/.vibespace/plans/**`,
     `${projectRoot}/docs/plans/**`,
@@ -174,22 +190,23 @@ export function buildEffectivePermissionProfile(
   ]);
 
   return {
-    openCodeAgent: openCodeExecutionAgentFor(input.mode, input.access, input.approveAllForRun),
+    openCodeAgent: openCodeExecutionAgentFor(input.mode, input.access, nativeApproveAll),
     openCode: {
       read: Object.freeze(readRules),
       edit: Object.freeze({
-        '*': 'deny',
-        [projectGlob]: editDecision,
+        '*': nativeFullAccess ? 'allow' : 'deny',
+        [projectGlob]: nativeFullAccess ? 'allow' : editDecision,
       }),
       bash: bashDecision,
-      task: agent ? agentDecision(input.approveAllForRun) : 'deny',
+      task: agent ? agentDecision(nativeApproveAll) : 'deny',
       // Skills and web access are non-mutating by themselves. Their resulting
       // tool calls remain subject to the gateway and access profile.
       skill: 'allow',
       webfetch: 'allow',
       websearch: 'allow',
-      // Native tools request a scoped approval; gateway tools remain project-bound.
-      external_directory: 'ask',
+      // The explicit Full profile opts into native unrestricted routing. The
+      // outer gateway hard-deny fields below still govern VibeSpace tools.
+      external_directory: nativeFullAccess ? 'allow' : 'ask',
       doom_loop: 'deny',
     },
     gateway: {
@@ -206,10 +223,10 @@ export function buildEffectivePermissionProfile(
       allowBrowserMutation: input.access === 'full' && autonomousFull,
       allowDelete: autonomousFull,
       allowSubagents: agent,
-      approveAllForRun: input.approveAllForRun,
+      approveAllForRun: nativeApproveAll,
       autoApproveExactRequestedActions:
-        input.approveAllForRun && mutationAuthority === 'exact-request',
-      autoApproveAutonomousActions: input.approveAllForRun && autonomous,
+        nativeApproveAll && mutationAuthority === 'exact-request',
+      autoApproveAutonomousActions: nativeApproveAll && autonomous,
       planArtifactGlobs,
       hardDenySecrets: true,
       hardDenyExternalDirectory: true,

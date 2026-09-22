@@ -1,8 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const invoke = vi.fn();
+const session = vi.fn();
+const user = vi.fn();
 vi.mock('@/lib/supabase/client', () => ({
-  getSupabaseClient: () => ({ functions: { invoke } }),
+  getSupabaseClient: () => ({
+    functions: { invoke },
+    auth: { getSession: session, getUser: user },
+  }),
 }));
 
 import {
@@ -20,12 +25,47 @@ const response = {
 } as const;
 
 describe('account telemetry consent', () => {
-  beforeEach(() => invoke.mockReset());
+  afterEach(() => vi.useRealTimers());
+  beforeEach(() => {
+    invoke.mockReset();
+    session.mockReset();
+    user.mockReset();
+  });
+
+  it('never sends a saved withdrawal using a different signed-in account', async () => {
+    session.mockResolvedValue({
+      data: { session: { user: { id: 'b' }, access_token: 'test-token-b' } },
+      error: null,
+    });
+    await expect(updateAccountTelemetryConsent(false, response, 'a')).resolves.toEqual({
+      ok: false,
+      error: 'account_changed',
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('pins the verified account token for the request', async () => {
+    session.mockResolvedValue({
+      data: { session: { user: { id: 'a' }, access_token: 'test-token-a' } },
+      error: null,
+    });
+    user.mockResolvedValue({ data: { user: { id: 'a' } }, error: null });
+    invoke.mockResolvedValue({ data: response, error: null });
+    await updateAccountTelemetryConsent(false, response, 'a');
+    expect(user).toHaveBeenCalledWith('test-token-a');
+    expect(invoke).toHaveBeenCalledWith(
+      'telemetry-consent',
+      expect.objectContaining({ headers: { Authorization: 'Bearer test-token-a' } }),
+    );
+  });
 
   it('reads authoritative account state without assuming eligibility', async () => {
     invoke.mockResolvedValue({ data: response, error: null });
     await expect(getAccountTelemetryConsent()).resolves.toEqual({ ok: true, state: response });
-    expect(invoke).toHaveBeenCalledWith('telemetry-consent', { method: 'GET' });
+    expect(invoke).toHaveBeenCalledWith('telemetry-consent', {
+      method: 'GET',
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it('sends the exact disclosed classes only when enrolling', async () => {
@@ -33,6 +73,7 @@ describe('account telemetry consent', () => {
     await updateAccountTelemetryConsent(true, response);
     expect(invoke).toHaveBeenCalledWith('telemetry-consent', {
       method: 'PUT',
+      signal: expect.any(AbortSignal),
       body: {
         enabled: true,
         policyVersion: response.policyVersion,
@@ -48,11 +89,29 @@ describe('account telemetry consent', () => {
     await updateAccountTelemetryConsent(false, response);
     expect(invoke).toHaveBeenNthCalledWith(1, 'telemetry-consent', {
       method: 'PUT',
+      signal: expect.any(AbortSignal),
       body: { enabled: false, policyVersion: response.policyVersion, dataClasses: [] },
     });
     await expect(getAccountTelemetryConsent()).resolves.toEqual({
       ok: false,
       error: 'invalid_server_response',
     });
+  });
+
+  it('releases a stalled consent request and prevents late authentication from sending it', async () => {
+    vi.useFakeTimers();
+    let finish!: (value: unknown) => void;
+    session.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const result = getAccountTelemetryConsent('a');
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(result).resolves.toEqual({ ok: false, error: 'request_timeout' });
+    finish({ data: { session: { user: { id: 'a' }, access_token: 'test-token-a' } }, error: null });
+    await Promise.resolve();
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

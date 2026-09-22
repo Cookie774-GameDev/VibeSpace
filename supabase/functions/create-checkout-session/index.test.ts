@@ -78,6 +78,7 @@ describe('create plan checkout', () => {
     deps.getProfile = async () => ({
       stripe_customer_id: 'cus_123',
       telemetry_opt_in: true,
+      telemetry_data_classes: ['product_usage', 'diagnostics', 'tool_outcomes'],
       telemetry_policy_version: 'telemetry-reward-2026-08-03',
     });
 
@@ -105,6 +106,7 @@ describe('create plan checkout', () => {
     deps.getProfile = async () => ({
       stripe_customer_id: 'cus_123',
       telemetry_opt_in: true,
+      telemetry_data_classes: ['product_usage', 'diagnostics', 'tool_outcomes'],
       telemetry_policy_version: 'telemetry-reward-2026-08-03',
     });
     deps.retrieveCoupon = async () => ({
@@ -126,13 +128,14 @@ describe('create plan checkout', () => {
     assert.equal(deps.sessions.length, 0);
   });
 
-  it('allows only an authoritative family combined coupon to stack with telemetry', async () => {
+  it('keeps an existing family discount without stacking telemetry', async () => {
     const deps = makeDeps();
     deps.config.telemetryCouponId = 'coupon_telemetry_10';
     deps.config.telemetryPolicyVersion = 'telemetry-reward-2026-08-03';
     deps.getProfile = async () => ({
       stripe_customer_id: 'cus_123',
       telemetry_opt_in: true,
+      telemetry_data_classes: ['product_usage', 'diagnostics', 'tool_outcomes'],
       telemetry_policy_version: 'telemetry-reward-2026-08-03',
     });
     deps.getFamilyDiscount = async () => ({
@@ -157,8 +160,23 @@ describe('create plan checkout', () => {
     );
     assert.equal(response.status, 200);
     assert.deepEqual((deps.sessions[0] as any).params.discounts, [
-      { coupon: 'coupon_family20_telemetry10' },
+      { coupon: 'coupon_family_20' },
     ]);
+    assert.equal((deps.sessions[0] as any).params.metadata.telemetry_reward_percent, '0');
+    assert.equal((deps.sessions[0] as any).params.allow_promotion_codes, false);
+  });
+
+  it('does not reward missing, extra, duplicate, or stale consent classes', async () => {
+    for (const classes of [undefined, [], ['product_usage'], ['product_usage','diagnostics','tool_outcomes','private_content'], ['product_usage','diagnostics','diagnostics']]) {
+      const deps = makeDeps();
+      deps.config.telemetryCouponId = 'coupon_telemetry_10';
+      deps.config.telemetryPolicyVersion = 'current';
+      deps.getProfile = async () => ({stripe_customer_id:'cus_123', telemetry_opt_in:true, telemetry_policy_version:'current', telemetry_data_classes:classes});
+      const response = await handlePlanCheckout(new Request('https://edge.test', {method:'POST', headers:{authorization:'Bearer jwt','content-type':'application/json'}, body:JSON.stringify({plan:'pro'})}), deps);
+      assert.equal(response.status, 200);
+      assert.equal(deps.sessions[0].params.metadata.telemetry_reward_percent, '0');
+      assert.equal(deps.sessions[0].params.discounts, undefined);
+    }
   });
 
   it('authenticates before exposing configuration and never trusts a client idempotency key', async () => {

@@ -4,14 +4,19 @@ import { loadPersistedContextMaps } from '@/features/context';
 import { useAllAboutMeStore } from '@/features/all-about-me/store';
 import { useJarvisLearningStore } from '@/features/jarvis-memory/learningStore';
 import { APP_ROUTES, type Route } from '@/features/navigation/routeSchema';
-import { PLUGIN_CATALOG, isPluginActive } from '@/features/plugins';
+import {
+  PLUGIN_CATALOG,
+  isPluginActive,
+  selectPluginConnectionsForAccount,
+  usePluginStore,
+  type PluginConnection,
+} from '@/features/plugins';
 import { getAllCatalogSkills } from '@/features/skills';
 import { createTask, completeTask, reopenTask, updateTask } from '@/features/tasks/TaskService';
 import { enqueueTerminalCommand } from '@/features/terminals/terminalCommandQueue';
 import { useTerminalSchedulerStore } from '@/features/terminals/terminalScheduler';
 import { useTerminalTranscriptStore } from '@/features/terminals/transcriptStore';
 import { useAuthStore } from '@/stores/auth';
-import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import {
   getVibeSpaceMcpGateway,
   type VibeSpaceGatewayConnection,
@@ -41,6 +46,7 @@ import {
   grantToolGatewayMutation,
   readToolGatewayObservedExecutionAuthority,
   readToolGatewayRequestSignal,
+  readToolGatewaySessionAuthority,
 } from './toolGatewayAuthority';
 
 export { grantToolGatewayMutation } from './toolGatewayAuthority';
@@ -80,15 +86,7 @@ function publicPluginFailure(
   operation: string,
   failure: unknown,
 ): ToolGatewaySemanticError {
-  const message =
-    failure instanceof Error ? failure.message : typeof failure === 'string' ? failure : '';
-  const candidate =
-    /^Plugin credential authority denied the operation: ([a-z_0-9]+)\.$/.exec(message)?.[1] ?? message;
-  // Only fixed public codes cross this boundary, never provider bodies or credential errors.
-  const reason =
-    PUBLIC_PLUGIN_FAILURE_REASONS.has(candidate) || /^connection_rejected_[45]\d{2}$/.test(candidate)
-      ? candidate
-      : 'internal_plugin_failure';
+  const reason = publicPluginFailureReason(failure);
   const reconnect =
     reason.startsWith('credential_') || reason === 'connection_rejected_401'
       ? ` Reconnect ${plugin.name} in Plugins.`
@@ -97,6 +95,48 @@ function publicPluginFailure(
     code: 'plugin_operation_failed',
     message: `${plugin.name} ${operation} failed (${reason}).${reconnect}`,
     data: { pluginId: plugin.id, operation, reason },
+  });
+}
+
+function publicPluginFailureReason(failure: unknown): string {
+  const message =
+    failure instanceof Error ? failure.message : typeof failure === 'string' ? failure : '';
+  const candidate =
+    /^Plugin credential authority denied the operation: ([a-z_0-9]+)\.$/.exec(message)?.[1] ?? message;
+  // Only fixed public codes cross this boundary, never provider bodies or credential errors.
+  return PUBLIC_PLUGIN_FAILURE_REASONS.has(candidate) || /^connection_rejected_[45]\d{2}$/.test(candidate)
+    ? candidate
+    : 'internal_plugin_failure';
+}
+
+function markPluginConnectionForReauthorization(
+  accountId: string,
+  plugin: Readonly<{ id: string; name: string }>,
+  expectedConnection: PluginConnection | undefined,
+  safeFailureMessage: string,
+): void {
+  if (!expectedConnection) return;
+  const currentConnection = selectPluginConnectionsForAccount(usePluginStore.getState(), accountId)[
+    plugin.id
+  ];
+  // A reconnect or settings change may have completed while the provider request was in flight.
+  // Do not let the old 401 invalidate that newer connection.
+  if (
+    !currentConnection ||
+    currentConnection !== expectedConnection ||
+    currentConnection.state !== 'connected' ||
+    !currentConnection.enabled
+  ) {
+    return;
+  }
+  const now = Date.now();
+  usePluginStore.getState().upsertConnection({
+    ...currentConnection,
+    state: 'reauthorize',
+    enabled: false,
+    error: safeFailureMessage,
+    lastTestedAt: now,
+    updatedAt: now,
   });
 }
 
@@ -227,12 +267,24 @@ function stringArg(args: Record<string, unknown>, key: string): string {
   return args[key] as string;
 }
 
-function activeToolGatewayScope(): { accountId: string; projectId: string } {
-  const auth = useAuthStore.getState();
-  const identity = resolveAccountIdentity(auth);
-  const projectId = auth.projectId ? String(auth.projectId) : '';
-  if (!identity || !projectId) throw new Error('tool_gateway_scope_unavailable');
-  return { accountId: identity.accountId, projectId };
+function toolGatewaySessionScope(sessionId: string): {
+  accountId: string;
+  workspaceId: string;
+  projectId: string | null;
+} {
+  const authority = readToolGatewaySessionAuthority(sessionId);
+  if (!authority) throw new Error('tool_gateway_scope_unavailable');
+  return {
+    accountId: authority.scope.accountId,
+    workspaceId: authority.scope.workspaceId,
+    projectId: authority.scope.projectId,
+  };
+}
+
+function activeToolGatewayScope(sessionId: string): { accountId: string; projectId: string } {
+  const scope = toolGatewaySessionScope(sessionId);
+  if (!scope.projectId) throw new Error('tool_gateway_scope_unavailable');
+  return { accountId: scope.accountId, projectId: scope.projectId };
 }
 
 const SECRET_SCHEMA_KEY =
@@ -352,10 +404,9 @@ function findContextNode(
   return null;
 }
 
-async function readContext(contextId: string) {
-  for (const map of await loadPersistedContextMaps(
-    useAuthStore.getState().projectId ? String(useAuthStore.getState().projectId) : null,
-  )) {
+async function readContext(contextId: string, sessionId: string) {
+  const scope = toolGatewaySessionScope(sessionId);
+  for (const map of await loadPersistedContextMaps(scope.projectId)) {
     if (map.id === contextId) {
       return {
         id: map.id,
@@ -515,12 +566,8 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
       },
     },
     context: {
-      list: async (args) =>
-        (
-          await loadPersistedContextMaps(
-            useAuthStore.getState().projectId ? String(useAuthStore.getState().projectId) : null,
-          )
-        )
+      list: async (args, context) =>
+        (await loadPersistedContextMaps(toolGatewaySessionScope(context.sessionId).projectId))
           .slice(0, (args.limit as number | undefined) ?? 100)
           .map(({ id, name, status, updatedAt, sourceType }) => ({
             id,
@@ -529,23 +576,35 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
             updatedAt,
             sourceType,
           })),
-      read: (args) => readContext(stringArg(args, 'contextId')),
-      attach: async (args) => ({ attached: await readContext(stringArg(args, 'contextId')) }),
+      read: (args, context) => readContext(stringArg(args, 'contextId'), context.sessionId),
+      attach: async (args, context) => ({
+        attached: await readContext(stringArg(args, 'contextId'), context.sessionId),
+      }),
       rlm: (args, context) => {
         const auth = useAuthStore.getState();
         if (!auth.localUserId) throw new Error('rlm_context_authority_unavailable');
+        const observed =
+          args.operation === 'query' || args.operation === 'investigate'
+            ? readToolGatewayObservedExecutionAuthority(context.sessionId)
+            : null;
+        if ((args.operation === 'query' || args.operation === 'investigate') && !observed) {
+          throw new Error('gateway_execution_identity_unavailable');
+        }
+        const authority = readToolGatewaySessionAuthority(context.sessionId);
+        if (!authority) throw new Error('rlm_context_authority_unavailable');
+        const boundScope = authority.scope;
         const worktreeId = context.worktree?.trim() || context.directory?.trim();
         const baseLease = {
           sessionId: context.sessionId,
           accountId: auth.localUserId,
-          ...(auth.workspaceId ? { workspaceId: String(auth.workspaceId) } : {}),
-          ...(auth.projectId ? { projectId: String(auth.projectId) } : {}),
+          workspaceId: boundScope.workspaceId,
+          ...(boundScope.projectId ? { projectId: boundScope.projectId } : {}),
           ...(worktreeId ? { worktreeId } : {}),
           expiresAt: Date.now() + 30_000,
         } satisfies RlmContextLease;
         if (args.operation === 'query' || args.operation === 'investigate') {
-          const observed = readToolGatewayObservedExecutionAuthority(context.sessionId);
-          if (!observed) throw new Error('gateway_execution_identity_unavailable');
+          const observedAuthority = observed;
+          if (!observedAuthority) throw new Error('gateway_execution_identity_unavailable');
           if (!baseLease.workspaceId || !baseLease.projectId || !baseLease.worktreeId) {
             throw new Error('gateway_scope_unavailable');
           }
@@ -571,8 +630,8 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
                   ? { context: true, deep: true }
                   : { context: true },
               optionalEnrichmentEnabled: true,
-              executionIdentity: observed.executionIdentity,
-              performance: observed.performance,
+              executionIdentity: observedAuthority.executionIdentity,
+              performance: observedAuthority.performance,
               ...(context.directory ? { activePaths: [context.directory] } : {}),
             })
             .then((turn) => enrichAndRememberContextTurn(turn, context, gatewayScope))
@@ -630,8 +689,8 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         PLUGIN_CATALOG.find((plugin) => plugin.id === args.pluginId)?.tools.some(
           (tool) => tool.name === args.operation && tool.readOnly === true,
         ) === true,
-      list: (args) => {
-        const { accountId, projectId } = activeToolGatewayScope();
+      list: (args, context) => {
+        const { accountId, projectId } = activeToolGatewayScope(context.sessionId);
         return PLUGIN_CATALOG.filter((plugin) => isPluginActive(accountId, plugin.id, projectId))
           .slice(0, (args.limit as number | undefined) ?? 100)
           .map((plugin) => ({
@@ -647,7 +706,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           }));
       },
       run: async (args, context) => {
-        const { accountId, projectId } = activeToolGatewayScope();
+        const { accountId, projectId } = activeToolGatewayScope(context.sessionId);
         const pluginId = stringArg(args, 'pluginId');
         const operation = stringArg(args, 'operation');
         const manifest = PLUGIN_CATALOG.find((plugin) => plugin.id === pluginId);
@@ -658,6 +717,10 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         ) {
           throw new Error('plugin_operation_unavailable');
         }
+        const expectedConnection = selectPluginConnectionsForAccount(
+          usePluginStore.getState(),
+          accountId,
+        )[pluginId];
         const port = pluginReadPort;
         if (!port) throw publicPluginFailure(manifest, operation, 'plugin_operation_unavailable');
         const parsed = args.input ?? {};
@@ -678,15 +741,35 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
             context,
           });
         } catch (error) {
-          throw publicPluginFailure(manifest, operation, error);
+          const safeFailure = publicPluginFailure(manifest, operation, error);
+          if (publicPluginFailureReason(error) === 'connection_rejected_401') {
+            markPluginConnectionForReauthorization(
+              accountId,
+              manifest,
+              expectedConnection,
+              safeFailure.message,
+            );
+          }
+          throw safeFailure;
         }
-        if (!result.ok) throw publicPluginFailure(manifest, operation, result.error);
+        if (!result.ok) {
+          const safeFailure = publicPluginFailure(manifest, operation, result.error);
+          if (publicPluginFailureReason(result.error) === 'connection_rejected_401') {
+            markPluginConnectionForReauthorization(
+              accountId,
+              manifest,
+              expectedConnection,
+              safeFailure.message,
+            );
+          }
+          throw safeFailure;
+        }
         return { summary: result.summary, data: result.data };
       },
     },
     mcp: {
-      list: async (args) => {
-        const scope = activeToolGatewayScope();
+      list: async (args, context) => {
+        const scope = activeToolGatewayScope(context.sessionId);
         const gateway = getVibeSpaceMcpGateway(scope);
         await gateway.restoreApprovedConnections();
         return gateway
@@ -699,7 +782,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           .slice(0, (args.limit as number | undefined) ?? 100);
       },
       run: async (args, context) => {
-        const scope = activeToolGatewayScope();
+        const scope = activeToolGatewayScope(context.sessionId);
         const gateway = getVibeSpaceMcpGateway(scope);
         await gateway.restoreApprovedConnections();
         const connectionId = stringArg(args, 'connectionId');

@@ -905,6 +905,52 @@ describe('ModelPickerTypeahead smoke transports', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it('keeps provider groups collapsible while search is active', () => {
+    const onSelect = vi.fn();
+    render(
+      <ModelPickerTypeahead
+        groups={[
+          {
+            id: 'provider:openai',
+            provider: 'openai',
+            label: 'OpenAI',
+            options: [
+              {
+                id: 'openai-api:gpt-6-luna',
+                provider: 'openai',
+                modelId: 'gpt-6-luna',
+                label: 'GPT-6 Luna',
+                connection: connection('openai-api', 'native-api'),
+              },
+            ],
+          },
+        ]}
+        selectedId=""
+        onSelect={onSelect}
+      />,
+    );
+
+    const search = screen.getByRole('searchbox', { name: 'Search providers and models' });
+    fireEvent.change(search, { target: { value: 'Luna 6' } });
+
+    const expandedHeading = screen.getByRole('button', { name: 'Collapse OpenAI' });
+    const groupId = expandedHeading.getAttribute('aria-controls')!;
+    expect(screen.getByText('GPT-6 Luna')).not.toBeNull();
+    fireEvent.click(expandedHeading);
+
+    const collapsedHeading = screen.getByRole('button', { name: 'Expand OpenAI' });
+    expect(collapsedHeading.getAttribute('aria-expanded')).toBe('false');
+    expect(document.getElementById(groupId)?.hasAttribute('hidden')).toBe(true);
+    expect(screen.queryByText('GPT-6 Luna')).toBeNull();
+
+    fireEvent.click(collapsedHeading);
+    expect(
+      screen.getByRole('button', { name: 'Collapse OpenAI' }).getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(document.getElementById(groupId)?.hasAttribute('hidden')).toBe(false);
+    expect(screen.getByText('GPT-6 Luna')).not.toBeNull();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
   it('replaces automatic routing with search across providers, model names, and exact IDs', () => {
     render(
       <ModelPickerTypeahead
@@ -945,6 +991,7 @@ describe('ModelPickerTypeahead smoke transports', () => {
 
     expect(screen.queryByRole('switch', { name: 'Automatic routing' })).toBeNull();
     const search = screen.getByRole('searchbox', { name: 'Search providers and models' });
+    expect(search.className).toContain('rounded-2xl');
     const searchSurface = screen.getByRole('search');
     expect(searchSurface.className).toContain('bg-transparent');
     expect(searchSurface.className).not.toContain('bg-panel/90');

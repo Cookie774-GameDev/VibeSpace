@@ -8,8 +8,11 @@ import {
   bindToolGatewaySessionAuthority,
   captureToolGatewayAuthorityClaim,
   clearToolGatewayAuthorityForTests,
+  authorizeToolGatewayMutation,
+  grantToolGatewayMutationForRequest,
   readToolGatewayObservedExecutionAuthority,
   readToolGatewayRequestSignal,
+  readToolGatewaySessionAuthority,
   releaseToolGatewaySessionAuthority,
 } from './toolGatewayAuthority';
 
@@ -34,6 +37,23 @@ function readRequest(sessionId: string) {
     messageId: `message-${sessionId}`,
     tool: 'app.getState',
     args: {},
+  });
+}
+
+function writeRequest(
+  sessionId: string,
+  input: Readonly<{ requestId?: string; messageId?: string; terminal?: string; command?: string }> = {},
+) {
+  return parseToolGatewayRequest({
+    protocolVersion: 1,
+    requestId: input.requestId ?? `write-request-${sessionId}`,
+    sessionId,
+    messageId: input.messageId ?? `write-message-${sessionId}`,
+    tool: 'terminal.write',
+    args: {
+      terminal: input.terminal ?? 'tty-a',
+      command: input.command ?? 'echo safe',
+    },
   });
 }
 
@@ -62,6 +82,22 @@ describe('tool gateway session authority', () => {
     expect(authorizeToolGatewayRequest(readRequest('late-session'))).toBe(false);
   });
 
+  it('binds a captured project claim after project navigation without accepting forged claims', () => {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    useAuthStore.setState({ projectId: 'project-b' as ProjectId });
+
+    expect(bindToolGatewaySessionAuthority('cold-session', claim)).toBe(true);
+    expect(authorizeToolGatewayRequest(readRequest('cold-session'))).toBe(true);
+    expect(readToolGatewaySessionAuthority('cold-session')?.scope.projectId).toBe('project-a');
+
+    expect(
+      bindToolGatewaySessionAuthority('forged-session', {
+        ...claim,
+        scope: { ...claim.scope, projectId: 'project-b' },
+      }),
+    ).toBe(false);
+  });
+
   it('permanently retires a bound session after an authority transition', () => {
     expect(
       bindToolGatewaySessionAuthority('old-session', captureToolGatewayAuthorityClaim()!),
@@ -79,7 +115,7 @@ describe('tool gateway session authority', () => {
     expect(authorizeToolGatewayRequest(readRequest('new-session'))).toBe(true);
   });
 
-  it('does not reopen retired sessions after more than the former tombstone capacity', () => {
+  it('keeps project-bound sessions alive across project navigation', () => {
     const sessionIds = Array.from({ length: 300 }, (_, index) => `session-${index}`);
     for (const sessionId of sessionIds) {
       expect(bindToolGatewaySessionAuthority(sessionId, captureToolGatewayAuthorityClaim()!)).toBe(
@@ -90,8 +126,22 @@ describe('tool gateway session authority', () => {
     useAuthStore.setState({ projectId: 'project-b' as ProjectId });
 
     for (const sessionId of sessionIds) {
-      expect(authorizeToolGatewayRequest(readRequest(sessionId))).toBe(false);
+      expect(authorizeToolGatewayRequest(readRequest(sessionId))).toBe(true);
     }
+    expect(readToolGatewaySessionAuthority('session-0')?.scope.projectId).toBe('project-a');
+  });
+
+  it('does not reopen project-bound sessions after an account or workspace transition', () => {
+    expect(
+      bindToolGatewaySessionAuthority('stable-session', captureToolGatewayAuthorityClaim()!),
+    ).toBe(true);
+
+    useAuthStore.setState({ workspaceId: 'workspace-b' as WorkspaceId });
+    expect(authorizeToolGatewayRequest(readRequest('stable-session'))).toBe(false);
+    expect(readToolGatewaySessionAuthority('stable-session')).toBeNull();
+
+    useAuthStore.setState({ workspaceId: 'workspace-a' as WorkspaceId });
+    expect(authorizeToolGatewayRequest(readRequest('stable-session'))).toBe(false);
   });
 
   it('does not let another turn replace or remove a bound cancellation owner', () => {
@@ -109,6 +159,46 @@ describe('tool gateway session authority', () => {
     expect(captured?.aborted).toBe(true);
     expect(bindToolGatewaySessionAuthority('owned-session', claim, owner.signal)).toBe(false);
     expect(bindToolGatewaySessionAuthority('owned-session', claim, new AbortController().signal)).toBe(true);
+  });
+
+  it('binds a one-shot mutation grant to the exact terminal action and run call', () => {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    expect(bindToolGatewaySessionAuthority('mutation-session', claim)).toBe(true);
+    const expected = writeRequest('mutation-session');
+    const retargeted = writeRequest('mutation-session', { terminal: 'tty-b' });
+
+    grantToolGatewayMutationForRequest(expected);
+    expect(authorizeToolGatewayMutation(expected)).toBe(true);
+    grantToolGatewayMutationForRequest(expected);
+    expect(authorizeToolGatewayMutation(retargeted)).toBe(false);
+    expect(authorizeToolGatewayMutation(expected)).toBe(false);
+  });
+
+  it('revokes an exact mutation grant on account/workspace loss and session release', () => {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    expect(bindToolGatewaySessionAuthority('mutation-scope', claim)).toBe(true);
+    const expected = writeRequest('mutation-scope');
+    grantToolGatewayMutationForRequest(expected);
+
+    useAuthStore.setState({ projectId: 'project-b' as ProjectId });
+    expect(authorizeToolGatewayMutation(expected)).toBe(false);
+
+    useAuthStore.setState({ projectId: 'project-a' as ProjectId });
+    grantToolGatewayMutationForRequest(expected);
+    useAuthStore.setState({ workspaceId: 'workspace-b' as WorkspaceId });
+    expect(authorizeToolGatewayMutation(expected)).toBe(false);
+
+    useAuthStore.setState({ workspaceId: 'workspace-a' as WorkspaceId });
+    expect(authorizeToolGatewayMutation(expected)).toBe(false);
+
+    clearToolGatewayAuthorityForTests();
+    useAuthStore.setState({ workspaceId: 'workspace-a' as WorkspaceId });
+    const nextClaim = captureToolGatewayAuthorityClaim()!;
+    expect(bindToolGatewaySessionAuthority('mutation-release', nextClaim)).toBe(true);
+    const released = writeRequest('mutation-release');
+    grantToolGatewayMutationForRequest(released);
+    releaseToolGatewaySessionAuthority('mutation-release');
+    expect(authorizeToolGatewayMutation(released)).toBe(false);
   });
 
   it('keeps execution identity unavailable until the exact session records an observation', () => {
@@ -169,7 +259,7 @@ describe('tool gateway session authority', () => {
       }),
     ).toBe(true);
 
-    useAuthStore.setState({ projectId: 'project-b' as ProjectId });
+    useAuthStore.setState({ workspaceId: 'workspace-b' as WorkspaceId });
     expect(readToolGatewayObservedExecutionAuthority('first-session')).toBeNull();
 
     const secondClaim = captureToolGatewayAuthorityClaim()!;

@@ -30,3 +30,26 @@ test(
     );
   },
 );
+
+test(
+  'startup registration uses the bundled Windows helper, not a PowerShell dependency',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    const execute = (program, args, _options, done) => {
+      assert.ok(!/powershell/i.test(program));
+      assert.ok(args.some((arg) => String(arg).endsWith('windows-startup.py')));
+      done(null, 'false');
+    };
+    assert.equal(await computerStartup('C:/app', 'C:/fixture', undefined, execute), false);
+  },
+);
+
+test('packaged startup command fits Windows Run limit even with a hashed installation path', () => {
+  const base =
+    'C:/Users/example/AppData/Local/ai.jarvis.desktop/desktop-connector/' + 'a'.repeat(64);
+  const state = 'C:/Users/example/AppData/Local/ai.jarvis.desktop/desktop-connector/state';
+  const identity = startupIdentity(base, state, base + '/runtime/node.exe');
+  assert.ok(identity.launch.length <= 260, 'Windows Run command must not exceed 260 characters');
+  assert.match(identity.launch, /"runtime[\\/]node.exe" "supervisor.mjs" "\.\.[\\/]state"$/);
+  assert.throws(() => startupIdentity('C:/' + 'x'.repeat(300), state), /260|too long/i);
+});

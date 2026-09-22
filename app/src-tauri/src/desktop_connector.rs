@@ -76,7 +76,7 @@ fn read_status(app: &AppHandle) -> Result<Value, String> {
     let data: Value = response.json().map_err(|_| "Invalid connector status.")?;
     // Return only public status fields. Never forward arbitrary gateway data or credentials.
     Ok(
-        json!({ "packaged": true, "connectionDetected": true, "connectionFile": state_dir(app)?.join("connection.json").to_string_lossy(), "status": data["status"], "step": data["step"], "displayName": data["displayName"], "guideTab": data["guideTab"], "toolCount": data["toolCount"], "hasKey": data["hasKey"], "tunnelId": data["tunnelId"], "setupComplete": data["setupComplete"], "enabled": data["enabled"], "watchdog": data["watchdog"], "startOnComputer": data["startOnComputer"] }),
+        json!({ "packaged": true, "connectionDetected": true, "connectionFile": state_dir(app)?.join("connection.json").to_string_lossy(), "status": data["status"], "step": data["step"], "displayName": data["displayName"], "guideTab": data["guideTab"], "errorCode": public_setup_code(data["errorCode"].as_str()).unwrap_or(""), "toolCount": data["toolCount"], "hasKey": data["hasKey"], "tunnelId": data["tunnelId"], "setupComplete": data["setupComplete"], "enabled": data["enabled"], "watchdog": data["watchdog"], "startOnComputer": data["startOnComputer"] }),
     )
 }
 // Never forward arbitrary renderer payloads or echo credentials in error messages.
@@ -139,6 +139,24 @@ fn setup_draft_body(draft: Option<Value>) -> Result<Value, String> {
         return Err("Choose a valid tutorial tab.".into());
     }
     Ok(draft)
+}
+fn public_setup_code(code: Option<&str>) -> Option<&str> {
+    code.filter(|value| {
+        [
+            "CREDENTIAL_STORAGE_UNAVAILABLE",
+            "INVALID_PLUGIN_NAME",
+            "INVALID_TUNNEL_ID",
+            "INVALID_RUNTIME_KEY",
+            "TUNNEL_CONFIGURATION_REQUIRED",
+            "TUNNEL_CREDENTIALS_IN_USE",
+            "TUNNEL_START_FAILED",
+            "TUNNEL_AUTHENTICATION_FAILED",
+            "TUNNEL_PERMISSION_DENIED",
+            "TUNNEL_CONNECTION_FAILED",
+            "SETUP_REQUEST_FAILED",
+        ]
+        .contains(value)
+    })
 }
 fn setup_link(action: &str) -> Option<&'static str> {
     match action {
@@ -423,7 +441,8 @@ pub async fn desktop_connector_setup(
         }
         let (endpoint, token) = connection(&app)?;
         let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(20))
+            // Allow bounded secure-storage startup (30s) plus MCP status readback.
+            .timeout(Duration::from_secs(60))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| "Connector client unavailable.")?;
@@ -441,7 +460,10 @@ pub async fn desktop_connector_setup(
             .send()
             .map_err(|_| "Connector action could not be confirmed.")?;
         if !response.status().is_success() {
-            return Err("Connector rejected the change. Check its setup and retry.".into());
+            let failure: Value = response.json().unwrap_or(Value::Null);
+            return Err(public_setup_code(failure["code"].as_str())
+                .unwrap_or("SETUP_REQUEST_FAILED")
+                .to_owned());
         }
         Ok(())
     })
@@ -451,6 +473,19 @@ pub async fn desktop_connector_setup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn setup_error_codes_are_allowlisted_without_arbitrary_messages() {
+        assert_eq!(
+            public_setup_code(Some("CREDENTIAL_STORAGE_UNAVAILABLE")),
+            Some("CREDENTIAL_STORAGE_UNAVAILABLE")
+        );
+        assert_eq!(
+            public_setup_code(Some("TUNNEL_PERMISSION_DENIED")),
+            Some("TUNNEL_PERMISSION_DENIED")
+        );
+        assert_eq!(public_setup_code(Some("private-key-marker")), None);
+        assert_eq!(public_setup_code(None), None);
+    }
     #[test]
     fn in_app_draft_accepts_only_bounded_setup_fields() {
         let valid = json!({"displayName":"My WebMCP","tunnelId":"tunnel_test_12345678","guideTab":"api","step":1});

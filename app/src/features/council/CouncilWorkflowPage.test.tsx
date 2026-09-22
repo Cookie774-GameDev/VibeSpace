@@ -1,10 +1,10 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CouncilWorkflowPage } from './CouncilWorkflowPage';
+import { CouncilPerspectivesPanel } from './CouncilWorkflowPage';
 
 vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => undefined }));
 vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
-  useAccessibleChatModels: () => ({ flatOptions: [] }),
+  useAccessibleChatModels: () => ({ flatOptions: [], groups: [] }),
 }));
 vi.mock('@/features/context/contextPersistence', () => ({
   loadPersistedContextMaps: async () => [],
@@ -19,7 +19,7 @@ vi.mock('@/lib/db', () => ({ db: { chats: { get: vi.fn() }, settings: { get: vi.
 afterEach(cleanup);
 describe('Council workflow setup', () => {
   it('requires explicit context and two configured routes before enabling execution', () => {
-    render(<CouncilWorkflowPage chatId="chat-1" />);
+    render(<CouncilPerspectivesPanel chatId="chat-1" embedded />);
     expect(
       (screen.getByRole('button', { name: 'Run Council' }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -30,7 +30,7 @@ describe('Council workflow setup', () => {
       (screen.getByRole('button', { name: 'Run Council' }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(screen.getByLabelText('Context Map')).toBeTruthy();
-    expect(screen.getByLabelText('Perspective 1 model route')).toBeTruthy();
-    expect(screen.getByLabelText('Perspective 2 model route')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Perspective 1 model and effort' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Perspective 2 model and effort' })).toBeTruthy();
   });
 });

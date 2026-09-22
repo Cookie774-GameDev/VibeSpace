@@ -18,7 +18,7 @@ describe('PR31 OpenCode feature parity', () => {
     for (const expected of [
       "const pluginAccountId = resolveAccountIdentity(authState)?.accountId ?? '';",
       'getPluginContextBlock(pluginAccountId, projectId, detail.pluginIds)',
-      'getPluginStatusContextBlock(pluginAccountId, projectId, text)',
+      'getPluginStatusContextBlock(pluginAccountId, projectId, modelText)',
       'getSelectedSkillsBlock(detail.skillIds)',
       'buildAllAboutMeContextBlock(useAllAboutMeStore.getState().markdown)',
       'formatResolvedJarvisContext(resolvedRequestContext)',

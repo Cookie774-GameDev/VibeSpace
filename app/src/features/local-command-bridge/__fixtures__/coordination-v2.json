@@ -1,0 +1,138 @@
+[
+  {
+    "name": "contextual named group",
+    "text": "spawn 3 Claude terminals and tell all Claude terminals to use the project context map and RLM for a read-only audit",
+    "expected": [
+      {
+        "id": "terminal.open",
+        "slots": {
+          "provider": "claude",
+          "count": 3
+        }
+      }
+    ],
+    "residual": "tell all Claude terminals to use the project context map and RLM for a read-only audit"
+  },
+  {
+    "name": "contextual ordinal",
+    "text": "tell terminal 2 to use the relevant project skills and prepare a read-only audit",
+    "expected": [],
+    "residual": "tell terminal 2 to use the relevant project skills and prepare a read-only audit"
+  },
+  {
+    "name": "contextual single provider",
+    "text": "tell Claude to reference Downloads and the environment skills before planning the audit",
+    "expected": [],
+    "residual": "tell Claude to reference Downloads and the environment skills before planning the audit"
+  },
+  {
+    "name": "exact literal case",
+    "text": "tell terminal 2 exactly this message: \"Use RLM for MyProject. Keep READ_ONLY.\"",
+    "expected": [
+      {
+        "id": "terminal.message",
+        "slots": {
+          "target": {
+            "ordinal": 2,
+            "scope": "one"
+          },
+          "payload": "Use RLM for MyProject. Keep READ_ONLY."
+        }
+      }
+    ],
+    "residual": ""
+  },
+  {
+    "name": "quoted literal command",
+    "text": "tell all Claude terminals to \"run npm test -- --runInBand\"",
+    "expected": [
+      {
+        "id": "terminal.broadcast",
+        "slots": {
+          "target": {
+            "provider": "claude",
+            "scope": "all"
+          },
+          "payload": "run npm test -- --runInBand"
+        }
+      }
+    ],
+    "residual": ""
+  },
+  {
+    "name": "quoted literal connectors inert",
+    "text": "tell terminal 2 exactly: \"Audit RLM and open settings; NEVER write files.\"",
+    "expected": [
+      {
+        "id": "terminal.message",
+        "slots": {
+          "target": {
+            "ordinal": 2,
+            "scope": "one"
+          },
+          "payload": "Audit RLM and open settings; NEVER write files."
+        }
+      }
+    ],
+    "residual": ""
+  },
+  {
+    "name": "simple explicit command unchanged",
+    "text": "spawn 2 Claude terminals and tell all Claude terminals to run npm test",
+    "expected": [
+      {
+        "id": "terminal.open",
+        "slots": {
+          "provider": "claude",
+          "count": 2
+        }
+      },
+      {
+        "id": "terminal.broadcast",
+        "slots": {
+          "target": {
+            "provider": "claude",
+            "scope": "all"
+          },
+          "payload": "run npm test"
+        }
+      }
+    ],
+    "residual": ""
+  },
+  {
+    "name": "vague references untouched",
+    "text": "tell each of them to use RLM and the context map",
+    "expected": [],
+    "residual": "tell each of them to use RLM and the context map"
+  },
+  {
+    "name": "compound explanation untouched",
+    "text": "Please explain how to spawn 3 Claude terminals and tell all Claude terminals to use RLM without doing any of it.",
+    "expected": [],
+    "residual": "Please explain how to spawn 3 Claude terminals and tell all Claude terminals to use RLM without doing any of it."
+  },
+  {
+    "name": "escaped quote cannot release embedded command",
+    "text": "tell terminal 2 exactly: \"Keep an escaped quote \\\" and open settings.\"",
+    "expected": [
+      {
+        "id": "terminal.message",
+        "slots": {
+          "target": {
+            "ordinal": 2,
+            "scope": "one"
+          },
+          "payload": "Keep an escaped quote \\\" and open settings."
+        }
+      }
+    ],
+    "residual": ""
+  },
+  {
+    "name": "unfinished literal fails closed",
+    "text": "tell terminal 2 exactly: \"use RLM and open settings",
+    "expected": [],
+    "residual": "tell terminal 2 exactly: \"use RLM and open settings"
+  }
+]

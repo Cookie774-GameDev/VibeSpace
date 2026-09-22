@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { IDBKeyRange, indexedDB } from 'fake-indexeddb';
+import Dexie from 'dexie';
 import { createJarvisDb } from '@/lib/db';
-import { DB_NAME, DB_VERSION, STORES } from '@/lib/db/schema';
+import { DB_NAME, DB_VERSION, STORES, STORES_V15 } from '@/lib/db/schema';
 
 const TEST_INDEXED_DB = { indexedDB, IDBKeyRange };
 const openedNames: string[] = [];
@@ -27,8 +28,28 @@ describe('normal application update durability contract', () => {
       productName: 'VibeSpace',
     });
     expect(DB_NAME).toBe('jarvis-v1');
-    expect(DB_VERSION).toBe(15);
-    expect(Object.keys(STORES)).toHaveLength(55);
+    expect(DB_VERSION).toBe(16);
+    expect(Object.keys(STORES)).toHaveLength(58);
+  });
+
+  it('upgrades installed V15 data while adding the CAO and Jev stores', async () => {
+    const name = `update-v15-durability-${crypto.randomUUID()}`;
+    openedNames.push(name);
+    const previous = new Dexie(name, TEST_INDEXED_DB);
+    previous.version(15).stores(STORES_V15);
+    await previous.open();
+    const preference = { key: 'existing-preference', value: { enabled: false }, updated_at: 123 };
+    await previous.table('settings').put(preference);
+    previous.close();
+
+    const updated = createJarvisDb(name, TEST_INDEXED_DB);
+    await updated.open();
+    await expect(updated.settings.get(preference.key)).resolves.toEqual(preference);
+    expect(updated.verno).toBe(16);
+    expect(updated.tables.map((table) => table.name)).toEqual(
+      expect.arrayContaining(['cao_missions', 'jev_usage_records', 'cao_execution_profiles']),
+    );
+    updated.close();
   });
 
   it('reopens the same current database without changing rows or local preferences', async () => {

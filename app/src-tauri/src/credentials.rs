@@ -4,6 +4,11 @@ const SERVICE: &str = "ai.jarvis.desktop";
 const ACCOUNT_PREFIX: &str = "llm-api-key";
 const MAX_HARNESS_CREDENTIAL_BYTES: usize = 32 * 1024;
 
+/// Separate native-only credential namespace for the Jev decision capability.
+/// The generic renderer credential commands deliberately refuse this id so a
+/// Jev key can never be read back through the normal ProviderId-shaped API.
+pub(crate) const JEV_CREDENTIAL_PROVIDER: &str = "jev";
+
 pub(crate) const HARNESS_API_KEY_PROVIDERS: [&str; 17] = [
     "anthropic",
     "openai",
@@ -231,32 +236,59 @@ fn account_for(provider: &str) -> Result<String, String> {
     Ok(format!("{ACCOUNT_PREFIX}:{clean}"))
 }
 
-#[tauri::command]
-pub fn credential_set(provider: String, key: String) -> Result<(), String> {
+fn reject_renderer_jev_access(provider: &str) -> Result<(), String> {
+    if provider.trim().eq_ignore_ascii_case(JEV_CREDENTIAL_PROVIDER) {
+        return Err("jev credential is native-only".to_string());
+    }
+    Ok(())
+}
+
+/// Native-only write seam used by the fixed Jev transport. It returns no
+/// credential material and is intentionally not a Tauri command.
+pub(crate) fn credential_set_internal(provider: &str, key: &str) -> Result<(), String> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
-        return credential_delete(provider);
+        return credential_delete_internal(provider);
     }
     ensure_effect_allowed(EFFECT_KEYRING_ENTRY)?;
     ensure_effect_allowed(EFFECT_KEYRING_SET)?;
-    let account = account_for(&provider)?;
+    let account = account_for(provider)?;
     sink().set_password(SERVICE, &account, trimmed)
+}
+
+/// Native-only read seam used by the fixed Jev transport. The returned value
+/// must remain inside Rust and must never be serialized to the renderer.
+pub(crate) fn credential_get_internal(provider: &str) -> Result<Option<String>, String> {
+    ensure_effect_allowed(EFFECT_KEYRING_ENTRY)?;
+    ensure_effect_allowed(EFFECT_KEYRING_READ)?;
+    let account = account_for(provider)?;
+    sink().get_password(SERVICE, &account)
+}
+
+/// Native-only delete seam used by the fixed Jev transport.
+pub(crate) fn credential_delete_internal(provider: &str) -> Result<(), String> {
+    ensure_effect_allowed(EFFECT_KEYRING_ENTRY)?;
+    ensure_effect_allowed(EFFECT_KEYRING_DELETE)?;
+    let account = account_for(provider)?;
+    sink().delete_credential(SERVICE, &account)
+}
+
+#[tauri::command]
+pub fn credential_set(provider: String, key: String) -> Result<(), String> {
+    reject_renderer_jev_access(&provider)?;
+    credential_set_internal(&provider, &key)
 }
 
 #[tauri::command]
 pub fn credential_get(provider: String) -> Result<Option<String>, String> {
-    ensure_effect_allowed(EFFECT_KEYRING_ENTRY)?;
-    ensure_effect_allowed(EFFECT_KEYRING_READ)?;
-    let account = account_for(&provider)?;
-    sink().get_password(SERVICE, &account)
+    reject_renderer_jev_access(&provider)?;
+    credential_get_internal(&provider)
 }
 
 #[tauri::command]
 pub fn credential_delete(provider: String) -> Result<(), String> {
-    ensure_effect_allowed(EFFECT_KEYRING_ENTRY)?;
-    ensure_effect_allowed(EFFECT_KEYRING_DELETE)?;
-    let account = account_for(&provider)?;
-    sink().delete_credential(SERVICE, &account)
+    reject_renderer_jev_access(&provider)?;
+    credential_delete_internal(&provider)
 }
 
 pub(crate) fn harness_api_keys() -> Result<Vec<(String, String)>, String> {
@@ -479,6 +511,17 @@ mod tests {
             0,
             "invalid provider must not reach the effect seam"
         );
+    }
+
+    #[test]
+    fn renderer_provider_commands_cannot_read_or_write_jev_namespace() {
+        install_test_guard(ordinary_guard());
+        let sink = install_counting_sink();
+
+        assert!(credential_set("jev".into(), "private-jev-secret".into()).is_err());
+        assert!(credential_get("jev".into()).is_err());
+        assert!(credential_delete("jev".into()).is_err());
+        assert_eq!(sink.total(), 0, "renderer commands must not reach the Jev vault");
     }
 
     // -----------------------------------------------------------------

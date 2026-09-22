@@ -41,7 +41,7 @@ describe('chat activity store helpers', () => {
     expect(countUnifiedDiffLines(diff)).toEqual({ addedLines: 2, removedLines: 1 });
   });
 
-  it('caps stored detail and diff payloads', () => {
+  it('retains complete detail and diff payloads across updates', () => {
     useChatActivityStore.getState().record({
       id: 'event_large',
       chatId: 'chat_large',
@@ -54,10 +54,12 @@ describe('chat activity store helpers', () => {
     });
 
     const [event] = useChatActivityStore.getState().eventsByChat.chat_large ?? [];
-    expect(event?.detail?.length).toBeLessThan(4200);
-    expect(event?.detail).toContain('truncated by VibeSpace');
-    expect(event?.diff?.length).toBeLessThan(12300);
-    expect(event?.diff).toContain('truncated by VibeSpace');
+    expect(event?.detail).toBe('d'.repeat(5000));
+    expect(event?.diff).toBe('+line\n'.repeat(3000));
+    const detail = `${'output\n'.repeat(3000)}last output byte`;
+    const diff = `${'+line\n'.repeat(4000)}+last changed line`;
+    useChatActivityStore.getState().update('chat_large', 'event_large', { detail, diff });
+    expect(useChatActivityStore.getState().eventsByChat.chat_large?.[0]).toMatchObject({ detail, diff });
   });
 });
 

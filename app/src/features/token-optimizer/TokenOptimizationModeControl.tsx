@@ -10,7 +10,7 @@ const MODE_COPY: Readonly<
   }),
   saver: Object.freeze({
     label: 'Saver',
-    description: 'Apply Ponytail guidance and cap output tightly.',
+    description: 'Apply Ponytail guidance while preserving model and output behavior.',
   }),
   normal: Object.freeze({
     label: 'Normal',

@@ -97,6 +97,45 @@ describe('buildEffectivePermissionProfile', () => {
     expect(profile.gateway.allowDelete).toBe(true);
   });
 
+  it('uses native full access only for the persistent full profile', () => {
+    const full = buildEffectivePermissionProfile({
+      mode: 'agent',
+      access: 'full',
+      approveAllForRun: false,
+      agentApprovalMode: 'full',
+      projectRoot: '/project',
+    });
+    expect(full.openCodeAgent).toBe('vibespace-full-auto');
+    expect(full.openCode.read['*']).toBe('allow');
+    expect(full.openCode.read['**/.env']).toBe('deny');
+    expect(full.openCode.edit['*']).toBe('allow');
+    expect(full.openCode.edit['/project/**']).toBe('allow');
+    expect(full.openCode.bash).toBe('allow');
+    expect(full.openCode.external_directory).toBe('allow');
+    expect(full.gateway.approveAllForRun).toBe(true);
+    expect(full.gateway.autoApproveAutonomousActions).toBe(true);
+    expect(full.gateway.hardDenyExternalDirectory).toBe(true);
+    expect(full.gateway.hardDenyPrivilegeElevation).toBe(true);
+    expect(full.gateway.hardDenyProductionMutation).toBe(true);
+
+    const review = buildEffectivePermissionProfile({
+      mode: 'agent',
+      access: 'full',
+      // A stale legacy bit must not turn review into native blanket access.
+      approveAllForRun: true,
+      agentApprovalMode: 'review',
+      projectRoot: '/project',
+    });
+    expect(review.openCodeAgent).toBe('vibespace-full');
+    expect(review.openCode.read['*']).toBe('deny');
+    expect(review.openCode.edit['*']).toBe('deny');
+    expect(review.openCode.edit['/project/**']).toBe('ask');
+    expect(review.openCode.bash).toBe('ask');
+    expect(review.openCode.external_directory).toBe('ask');
+    expect(review.gateway.approveAllForRun).toBe(false);
+    expect(review.gateway.autoApproveAutonomousActions).toBe(false);
+  });
+
   it('preserves nested secret and external-directory denies in every mode', () => {
     const profile = buildEffectivePermissionProfile({
       mode: 'agent',

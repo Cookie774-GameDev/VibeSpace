@@ -40,4 +40,36 @@ describe('output location source operands', () => {
     expect(result.text).not.toContain('https://example.test/report');
     expect(result.violationCodes.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('preserves technical slash compounds beside an asserted output location', () => {
+    const text =
+      'Created `index.html` (532 lines, self-contained, inline CSS/JS, zero external/assets assets) in `case-01-neon-dodge/vibespace`.';
+    const result = assess(text);
+
+    expect(result.text).toContain('CSS/JS');
+    expect(result.text).toContain('external/assets');
+    expect(result.text).not.toContain('case-01-neon-dodge/vibespace');
+    expect(result.violationCodes).toEqual(['unverified_output_location:0']);
+  });
+
+  it('does not combine a descriptive produced claim with a relative source path', () => {
+    const text =
+      'The project has produced a broad feature surface: shared docs/Canvas.md content and connectors.';
+    expect(assess(text)).toMatchObject({ text, violationCodes: [] });
+  });
+
+  it('retains direct reverse and absolute output-location claims', () => {
+    const describedFile = assess('Created the new file output/report.txt.');
+    expect(describedFile.text).not.toContain('output/report.txt');
+    expect(describedFile.violationCodes).toEqual(['unverified_output_location:0']);
+
+    const relative = assess('reports/output was created.');
+    expect(relative.text).not.toContain('reports/output');
+    expect(relative.violationCodes).toEqual(['unverified_output_location:0']);
+
+    const absolutePath = 'C:\\workspace\\reports\\out.md';
+    const absolute = assess(`Created ${absolutePath}.`);
+    expect(absolute.text).not.toContain(absolutePath);
+    expect(absolute.violationCodes).toEqual(['unverified_output_location:0']);
+  });
 });

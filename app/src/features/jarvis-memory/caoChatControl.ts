@@ -10,6 +10,18 @@ export interface CaoChatProposal {
   authority?: string;
   authorization?: 'user-approval' | 'full-access';
 }
+export type CaoPendingProposal = Readonly<{
+  proposal: CaoChatProposal;
+  guidance: string;
+  authority?: string;
+  expiresAt: number;
+}>;
+export interface CaoChatProposalPersistence {
+  save(entry: CaoPendingProposal): Promise<void>;
+  /** Atomically claim and remove one exact proposal for this account. */
+  take(id: string, accountId: string): Promise<CaoPendingProposal | undefined>;
+  remove(id: string, accountId: string): Promise<void>;
+}
 export interface CaoChatControlDependencies {
   state(
     accountId: string,
@@ -23,12 +35,35 @@ export interface CaoChatControlDependencies {
     signal: AbortSignal;
   }): Promise<string>;
   send(proposal: CaoChatProposal, signal: AbortSignal): Promise<void>;
+  pending?: CaoChatProposalPersistence;
+  activeAccountId?: () => string | undefined;
 }
+export const CAO_PENDING_PROPOSAL_TTL_MS = 5 * 60 * 1000;
+
+function validPendingProposal(value: unknown): value is CaoPendingProposal {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const entry = value as Partial<CaoPendingProposal>;
+  const proposal = entry.proposal;
+  return (
+    typeof entry.guidance === 'string' &&
+    typeof entry.expiresAt === 'number' &&
+    Number.isSafeInteger(entry.expiresAt) &&
+    entry.expiresAt >= 0 &&
+    typeof proposal === 'object' &&
+    proposal !== null &&
+    !Array.isArray(proposal) &&
+    typeof proposal.id === 'string' &&
+    typeof proposal.accountId === 'string' &&
+    typeof proposal.chatId === 'string' &&
+    typeof proposal.text === 'string' &&
+    proposal.status === 'approval-required' &&
+    (proposal.authority === undefined || typeof proposal.authority === 'string') &&
+    proposal.authorization === undefined
+  );
+}
+
 export function createCaoChatControl(dependencies: CaoChatControlDependencies) {
-  const pending = new Map<
-    string,
-    { proposal: CaoChatProposal; guidance: string; authority?: string }
-  >();
+  const pending = new Map<string, CaoPendingProposal>();
   const check = async (accountId: string, chatId: string) => {
     const state = await dependencies.state(accountId, chatId);
     if (!state.enabled) throw new Error('cao_not_enabled');
@@ -75,19 +110,34 @@ export function createCaoChatControl(dependencies: CaoChatControlDependencies) {
         proposal.status = 'sent';
       } else {
         if (pending.size >= 20) throw new Error('cao_pending_limit');
-        pending.set(proposal.id, {
+        const entry: CaoPendingProposal = {
           proposal: structuredClone(proposal),
           guidance: JSON.stringify(current.guidance),
           authority: current.authority,
-        });
+          expiresAt: Date.now() + CAO_PENDING_PROPOSAL_TTL_MS,
+        };
+        if (dependencies.pending) await dependencies.pending.save(entry);
+        pending.set(proposal.id, entry);
       }
       return proposal;
     },
     async approve(id: string, signal = new AbortController().signal): Promise<void> {
-      const entry = pending.get(id);
-      if (!entry) throw new Error('cao_proposal_unavailable');
-      // Consume before awaiting to prevent concurrent approval clicks dispatching twice.
+      const inMemory = pending.get(id);
       pending.delete(id);
+      const activeAccountId = dependencies.activeAccountId?.();
+      if (dependencies.activeAccountId && !activeAccountId) throw new Error('cao_account_changed');
+      if (activeAccountId && inMemory && inMemory.proposal.accountId !== activeAccountId)
+        throw new Error('cao_account_changed');
+      const entry = dependencies.pending
+        ? await dependencies.pending.take(id, activeAccountId ?? inMemory?.proposal.accountId ?? '')
+        : inMemory;
+      if (!entry) throw new Error('cao_proposal_unavailable');
+      if (!validPendingProposal(entry)) throw new Error('cao_proposal_unavailable');
+      if (entry.expiresAt <= Date.now()) throw new Error('cao_proposal_expired');
+      if (activeAccountId && entry.proposal.accountId !== activeAccountId)
+        throw new Error('cao_account_changed');
+      // The durable take happens before revalidation and send, so approval is single-use even
+      // across renderer instances. A failed send therefore requires a new proposal.
       const state = await check(entry.proposal.accountId, entry.proposal.chatId);
       if (state.authority !== entry.authority) throw new Error('cao_target_changed');
       if (JSON.stringify(state.guidance) !== entry.guidance)
@@ -96,7 +146,13 @@ export function createCaoChatControl(dependencies: CaoChatControlDependencies) {
       await dependencies.send({ ...entry.proposal, authorization: 'user-approval' }, signal);
     },
     reject(id: string) {
+      const entry = pending.get(id);
       pending.delete(id);
+      const accountId = dependencies.activeAccountId?.() ?? entry?.proposal.accountId;
+      if (dependencies.pending && accountId)
+        void dependencies.pending.remove(id, accountId).catch(() => undefined);
     },
   };
 }
+
+export { validPendingProposal as isCaoPendingProposal };

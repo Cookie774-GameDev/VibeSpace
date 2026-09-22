@@ -45,6 +45,7 @@ const ROUTES = {
   file: { owner: 'vibespace-context', execution: 'attachment' },
   md: { owner: 'opencode-agent', execution: 'structured-agent-request' },
   model: { owner: 'vibespace-ui', execution: 'local' },
+  cao: { owner: 'vibespace-ui', execution: 'local' },
   effort: { owner: 'vibespace-ui', execution: 'local' },
   fast: { owner: 'vibespace-ui', execution: 'local' },
   performance: { owner: 'vibespace-ui', execution: 'local' },

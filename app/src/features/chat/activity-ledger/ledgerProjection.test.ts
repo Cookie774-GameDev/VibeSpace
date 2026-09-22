@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '@/types';
 import type { ChatActivityEvent } from '../activity/types';
-import { MAX_LEDGER_RECEIPTS, projectAssistantActivityLedger } from './ledgerProjection';
+import { projectAssistantActivityLedger } from './ledgerProjection';
 
 function assistant(parts: Message['parts'], usage?: Message['usage']): Message {
   return {
@@ -29,6 +29,33 @@ function event(
 }
 
 describe('projectAssistantActivityLedger', () => {
+  it('keeps a completed turn done when a failed tool attempt is followed by a successful retry', () => {
+    const ledger = projectAssistantActivityLedger(assistant([
+      { kind: 'tool_call', call_id: 'malformed-attempt', tool: 'verify.test', args: {} },
+      { kind: 'tool_result', call_id: 'malformed-attempt', error: 'malformed tool input' },
+      { kind: 'tool_call', call_id: 'successful-retry', tool: 'verify.test', args: {} },
+      { kind: 'tool_result', call_id: 'successful-retry', result: { exitCode: 0 } },
+      { kind: 'text', text: 'The retry completed successfully.' },
+    ]));
+
+    expect(ledger.status).toBe('done');
+    expect(ledger.receipts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ callId: 'malformed-attempt', status: 'error' }),
+      expect.objectContaining({ callId: 'successful-retry', status: 'done' }),
+    ]));
+  });
+
+  it('keeps an explicit provider error terminal while retaining failed receipts', () => {
+    const ledger = projectAssistantActivityLedger(assistant([
+      { kind: 'tool_call', call_id: 'failed-turn-tool', tool: 'verify.test', args: {} },
+      { kind: 'tool_result', call_id: 'failed-turn-tool', error: 'provider stopped the turn' },
+      { kind: 'provider_error', error: { code: 'provider_failed', message: 'Provider stopped the turn.' } },
+    ]));
+
+    expect(ledger.status).toBe('error');
+    expect(ledger.receipts[0]).toMatchObject({ callId: 'failed-turn-tool', status: 'error' });
+  });
+
   it('attributes native bridge calls whose public arguments are stored in details', () => {
     const ledger = projectAssistantActivityLedger(assistant([
       { kind: 'tool_call', call_id: 'plugin-native', tool: 'plugins_run', args: {},
@@ -42,6 +69,47 @@ describe('projectAssistantActivityLedger', () => {
       expect.objectContaining({ toolName: 'plugins_run', plugin: 'github', status: 'error' }),
       expect.objectContaining({ toolName: 'mcp_run', mcpServer: 'n4-qa-fixture', status: 'done' }),
     ]));
+  });
+
+  it('recovers historical tool details when persisted args are empty without changing current args', () => {
+    const ledger = projectAssistantActivityLedger(assistant([
+      {
+        kind: 'tool_call',
+        call_id: 'historical-read',
+        tool: 'files.read',
+        args: {},
+        details: {
+          arguments: {
+            filePath: 'C:\\Users\\viper\\secret\\game.html',
+            authorization: 'Bearer top-secret-value',
+          },
+        },
+      },
+      { kind: 'tool_result', call_id: 'historical-read', result: { ok: true } },
+      {
+        kind: 'tool_call',
+        call_id: 'current-read',
+        tool: 'files.read',
+        args: { path: 'already-safe.md', limit: 3 },
+        details: { arguments: { path: 'other.md', limit: 50 } },
+      },
+      { kind: 'tool_result', call_id: 'current-read', result: { ok: true } },
+    ]));
+
+    const historical = ledger.receipts.find((row) => row.callId === 'historical-read');
+    const current = ledger.receipts.find((row) => row.callId === 'current-read');
+    expect(historical?.toolDetails).toMatchObject({
+      arguments: {
+        path: 'game.html',
+        authorization: '[redacted: credentials]',
+      },
+    });
+    expect(JSON.stringify(historical)).not.toContain('C:\\Users\\viper\\secret\\game.html');
+    expect(JSON.stringify(historical)).not.toContain('top-secret-value');
+    expect(current?.toolDetails).toMatchObject({
+      arguments: { path: 'already-safe.md', limit: 3 },
+    });
+    expect(JSON.stringify(current)).not.toContain('other.md');
   });
 
   it('prefers explicit bridge arguments and ignores malformed public argument text', () => {
@@ -150,6 +218,27 @@ describe('projectAssistantActivityLedger', () => {
       expect.objectContaining({ kind: 'other', detail: 'mcp.cloudflare.deploy_worker' }),
     ]);
     expect(JSON.stringify(ledger)).not.toContain(providerSecret);
+  });
+
+  it.each(['completed', 'failed'] as const)('keeps stored tool evidence behind a synthetic %s receipt', (status) => {
+    const details = { arguments: { operation: 'describe' }, result: { ok: status === 'completed', data: { records: 125 } }, ...(status === 'failed' ? { error: 'Context source could not be read.' } : {}) };
+    const ledger = projectAssistantActivityLedger(assistant([
+      { kind: 'tool_call', call_id: 'context-evidence', tool: 'vibespace_context', args: {}, details },
+      status === 'completed'
+        ? { kind: 'tool_result', call_id: 'context-evidence', result: { status: 'completed' } }
+        : { kind: 'tool_result', call_id: 'context-evidence', error: 'Tool failed' },
+    ]));
+    expect(ledger.receipts[0].toolDetails?.result).toEqual(details.result);
+    if (status === 'failed') expect(ledger.receipts[0].toolDetails?.error).toBe(details.error);
+    expect(ledger.receipts[0].status).toBe(status === 'completed' ? 'done' : 'error');
+  });
+
+  it('uses a real terminal result instead of an earlier stored result', () => {
+    const ledger = projectAssistantActivityLedger(assistant([
+      { kind: 'tool_call', call_id: 'context-evidence', tool: 'vibespace_context', args: {}, details: { result: { records: 1 } } },
+      { kind: 'tool_result', call_id: 'context-evidence', result: { status: 'completed', records: 125 } },
+    ]));
+    expect(ledger.receipts[0].toolDetails?.result).toEqual({ status: 'completed', records: 125 });
   });
 
   it('attributes dot/underscore plugins and generic MCP bridge calls without guessing', () => {
@@ -596,8 +685,8 @@ describe('projectAssistantActivityLedger', () => {
     });
   });
 
-  it('bounds retained detail while preserving truthful aggregate totals', () => {
-    const events = Array.from({ length: MAX_LEDGER_RECEIPTS + 25 }, (_, index) =>
+  it('retains every receipt while preserving truthful aggregate totals', () => {
+    const events = Array.from({ length: 525 }, (_, index) =>
       event({
         id: `read-${index}`,
         kind: 'tool',
@@ -608,14 +697,16 @@ describe('projectAssistantActivityLedger', () => {
       }),
     );
     const ledger = projectAssistantActivityLedger(assistant([]), events);
-    expect(ledger.actionsTotal).toBe(MAX_LEDGER_RECEIPTS + 25);
-    expect(ledger.readsTotal).toBe(MAX_LEDGER_RECEIPTS + 25);
-    expect(ledger.receipts).toHaveLength(MAX_LEDGER_RECEIPTS);
-    expect(ledger.omittedReceipts).toBe(25);
+    expect(ledger.actionsTotal).toBe(525);
+    expect(ledger.readsTotal).toBe(525);
+    expect(ledger.receipts).toHaveLength(525);
+    expect(ledger.receipts[0]?.filePath).toBe('f-0.ts');
+    expect(ledger.receipts.at(-1)?.filePath).toBe('f-524.ts');
+    expect(ledger.omittedReceipts).toBe(0);
   });
 
-  it('projects a 250,000-event restored turn within the bounded render budget', () => {
-    const events = Array.from({ length: 250_000 }, (_, index) =>
+  it('projects a large restored turn while retaining every source receipt', () => {
+    const events = Array.from({ length: 25_000 }, (_, index) =>
       event({
         id: `large-read-${index}`,
         kind: 'file',
@@ -629,17 +720,17 @@ describe('projectAssistantActivityLedger', () => {
     const ledger = projectAssistantActivityLedger(assistant([]), events);
     const elapsedMs = performance.now() - startedAt;
 
-    expect(ledger.actionsTotal).toBe(250_000);
-    expect(ledger.readsTotal).toBe(250_000);
-    expect(ledger.receipts).toHaveLength(MAX_LEDGER_RECEIPTS);
-    expect(ledger.omittedReceipts).toBe(250_000 - MAX_LEDGER_RECEIPTS);
+    expect(ledger.actionsTotal).toBe(25_000);
+    expect(ledger.readsTotal).toBe(25_000);
+    expect(ledger.receipts).toHaveLength(25_000);
+    expect(ledger.omittedReceipts).toBe(0);
     expect(elapsedMs).toBeLessThan(750);
   });
 
-  it('preserves an omitted running receipt and the newest out-of-order detail truth', () => {
+  it('retains running receipts and the newest out-of-order detail truth', () => {
     const events = [
-      event({ id: 'running-old', status: 'running', ts: 1 }),
-      ...Array.from({ length: MAX_LEDGER_RECEIPTS + 20 }, (_, index) =>
+      event({ id: 'running-old', status: 'running', title: 'Jarvis tool activity', ts: 1 }),
+      ...Array.from({ length: 520 }, (_, index) =>
         event({ id: `done-${index}`, kind: 'file', status: 'done', ts: index + 10 }),
       ),
       event({ id: 'late-arriving-middle', kind: 'file', status: 'done', ts: 50 }),
@@ -650,7 +741,41 @@ describe('projectAssistantActivityLedger', () => {
     expect(ledger.status).toBe('running');
     expect(ledger.currentOperation).toBe('Activity running');
     expect(ledger.receipts.some((receipt) => receipt.id === 'activity:done-519')).toBe(true);
-    expect(ledger.receipts.some((receipt) => receipt.id === 'activity:running-old')).toBe(false);
+    expect(ledger.receipts.some((receipt) => receipt.id === 'activity:running-old')).toBe(true);
+    expect(ledger.receipts.some((receipt) => receipt.id === 'activity:late-arriving-middle')).toBe(true);
+  });
+
+  it('labels browser and Playwright activity by its canonical lifecycle', () => {
+    const ledger = projectAssistantActivityLedger(assistant([]), [
+      event({ id: 'browser-done', title: 'Used browser', subtitle: 'manual-browser', kind: 'tool' }),
+      event({ id: 'browser-error', title: 'Browser tool failed', subtitle: 'mcp__playwright__browser_navigate', status: 'error', kind: 'tool' }),
+    ]);
+
+    expect(ledger.receipts.map((receipt) => receipt.label)).toEqual(['Used browser', 'Browser tool failed']);
+  });
+
+  it('labels persisted browser tool calls after restart', () => {
+    const ledger = projectAssistantActivityLedger(assistant([
+      {
+        kind: 'tool_call',
+        call_id: 'browser-1',
+        tool: 'mcp__playwright__browser_navigate',
+        args: { url: 'https://example.com' },
+      },
+      {
+        kind: 'tool_result',
+        call_id: 'browser-1',
+        result: { ok: true },
+      },
+    ]));
+
+    expect(ledger.receipts).toEqual([
+      expect.objectContaining({
+        toolName: 'mcp__playwright__browser_navigate',
+        label: 'Used browser',
+        status: 'done',
+      }),
+    ]);
   });
 
   it('keeps an unknown persisted message tool as a safe generic action without exposing payloads', () => {

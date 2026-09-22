@@ -10,6 +10,7 @@ import { readLiveTargetSnapshot } from '@/features/instant-command/targetSnapsho
 import { useJarvisLearningStore } from '@/features/jarvis-memory/learningStore';
 import { caoGuidanceReady } from '@/features/jarvis-memory/caoGuidance';
 import {
+  caoChatProposalPersistence,
   caoPermissionKey,
   type CaoChatPermission,
 } from '@/features/jarvis-memory/caoChatControlProduction';
@@ -26,10 +27,13 @@ function assertAccount(accountId: string) {
   )
     throw Error('cao_account_changed');
 }
-export async function listCaoTerminals(accountId: string) {
+export async function listCaoTerminals(accountId: string, projectId?: string | null) {
   assertAccount(accountId);
   const native = await invoke<BackendTerminalInfo[]>('terminal_list');
-  const targets = await readLiveTargetSnapshot({ listNativeSessions: async () => native });
+  const targets = await readLiveTargetSnapshot({
+    projectId,
+    listNativeSessions: async () => native,
+  });
   const result = [];
   for (const target of targets) {
     if (!target.projectId) continue;
@@ -105,6 +109,8 @@ function evidence(target: Awaited<ReturnType<typeof state>>['target']) {
   });
 }
 export const caoTerminalControl = createCaoTerminalControl({
+  pending: caoChatProposalPersistence,
+  activeAccountId: () => getActiveAccountIdentity()?.accountId,
   state,
   async draft({ accountId, chatId, objective, guidance, signal }) {
     const current = await state(accountId, chatId);
@@ -186,6 +192,8 @@ export async function reviewCaoTerminal(
 
 function lifecycleControl(action: 'restart' | 'cancel') {
   return createCaoTerminalControl({
+    pending: caoChatProposalPersistence,
+    activeAccountId: () => getActiveAccountIdentity()?.accountId,
     state,
     async draft({ accountId, chatId, objective, guidance, signal }) {
       const current = await state(accountId, chatId);

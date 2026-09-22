@@ -7,6 +7,8 @@ import {
   readPermissionAccess,
   setApproveAllForRun,
   setPermissionAccess,
+  readAgentApprovalMode,
+  setAgentApprovalMode,
 } from './permissionAccessStore';
 
 class MemoryStorage implements Storage {
@@ -32,6 +34,19 @@ class MemoryStorage implements Storage {
 }
 
 describe('permission access store', () => {
+  it('persists the explicit Agent profile independently from a one-run approval', () => {
+    const storage = new MemoryStorage();
+    expect(readAgentApprovalMode('chat-profile', storage)).toBe('review');
+    setAgentApprovalMode('chat-profile', 'full', storage);
+    setApproveAllForRun('chat-profile', true, storage);
+    expireApproveAllForRun('chat-profile', storage);
+    expect(readAgentApprovalMode('chat-profile', storage)).toBe('full');
+    setAgentApprovalMode('chat-profile', 'review', storage);
+    expect(readAgentApprovalMode('chat-profile', storage)).toBe('review');
+    expect(readPermissionAccess('chat-profile', storage)).toEqual({ access: 'full', approveAll: false });
+    expect(parsePermissionSlashArg('agent full')).toEqual({ kind: 'agent-profile', value: 'full' });
+    expect(parsePermissionSlashArg('agent review')).toEqual({ kind: 'agent-profile', value: 'review' });
+  });
   it('defaults to Read Only and keeps access orthogonal to Approve All', () => {
     const storage = new MemoryStorage();
     expect(readPermissionAccess('chat-1', storage)).toEqual({ access: 'full', approveAll: false });

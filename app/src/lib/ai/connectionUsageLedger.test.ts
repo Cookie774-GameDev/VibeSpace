@@ -88,4 +88,26 @@ describe('connection usage ledger', () => {
     expect(detail).not.toHaveProperty('prompt');
     window.removeEventListener('jarvis:ai-connection-usage:changed', listener);
   });
+
+  it('keeps a provider total authoritative while cached input stays a separate subset', () => {
+    const now = 1_800_000_000_000;
+    recordConnectionUsage({
+      connectionId: 'openai-api',
+      providerId: 'openai',
+      modelId: 'gpt-5.6-sol',
+      timestamp: now,
+      inputTokens: 33_264,
+      cachedInputTokens: 65_280,
+      outputTokens: 381,
+      totalTokens: 98_925,
+      costUsd: 0,
+    });
+
+    expect(aggregateConnectionUsage('openai-api', now - 1)).toMatchObject({
+      inputTokens: 33_264,
+      cachedInputTokens: 65_280,
+      outputTokens: 381,
+      totalTokens: 98_925,
+    });
+  });
 });

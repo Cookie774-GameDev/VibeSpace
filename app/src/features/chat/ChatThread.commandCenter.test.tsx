@@ -15,6 +15,7 @@ import { useJarvisTaskRunStore } from '@/features/jarvis-runs/taskRunStore';
 import type { Message } from '@/types';
 import { ChatThread } from './ChatThread';
 import { useAuthStore } from '@/stores/auth';
+import { resetTurnStoreForTests } from './runtime/turn/turnStore';
 
 const hookState = vi.hoisted(() => ({ messages: [] as Message[] }));
 
@@ -166,6 +167,51 @@ describe('ChatThread Command Center routing', () => {
     } finally { useAuthStore.setState({ localUserId: auth.localUserId, cloudSession: auth.cloudSession }); }
   });
 
+  it('lets a durable provider error override a stale running session header', async () => {
+    const currentBinding = binding([canonicalRun({ status: 'running' })]);
+    hookState.messages = [
+      {
+        id: 'user-provider-error',
+        chat_id: 'chat-1',
+        role: 'user',
+        parts: [{ kind: 'text', text: 'Run the request' }],
+        created_at: 90,
+        updated_at: 90,
+      } as Message,
+      {
+        id: 'system-provider-error',
+        chat_id: 'chat-1',
+        role: 'system',
+        parts: [
+          { kind: 'text', text: 'The reply could not finish.' },
+          {
+            kind: 'provider_error',
+            error: {
+              message: 'Provider is temporarily busy.',
+              code: 'rate_limit',
+              providerId: 'openai',
+              modelId: 'gpt-test',
+              retryable: true,
+            },
+          },
+        ],
+        created_at: 110,
+        updated_at: 110,
+      } as Message,
+    ];
+
+    render(
+      <JarvisCommandCenterProvider value={currentBinding}>
+        <ChatThread chatId="chat-1" />
+      </JarvisCommandCenterProvider>,
+    );
+
+    const status = await screen.findByRole('status', { name: 'Session status' });
+    expect(status.textContent).toContain('Failed');
+    expect(screen.queryByText(/Jarvis is thinking/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Cancel run/i })).toBeNull();
+  });
+
   it('keeps the completed receipt model when the next composer selection changes', async () => {
     const previous = useAuthStore.getState().chatModelSelection;
     useAuthStore.setState({ chatModelSelection: { mode: 'single', providerId: 'openai', modelId: 'next-model' } });
@@ -214,11 +260,16 @@ describe('ChatThread Command Center routing', () => {
   beforeEach(() => {
     setReducedMotion(false);
     hookState.messages = [];
+    resetTurnStoreForTests();
+    localStorage.clear();
     useJarvisTaskRunStore.getState().clearForTests();
     useJarvisTaskRunStore.getState().setAccountScope('scope-1');
     resetJarvisApprovalNavigationForTests();
   });
-  afterEach(() => useJarvisTaskRunStore.getState().clearForTests());
+  afterEach(() => {
+    resetTurnStoreForTests();
+    useJarvisTaskRunStore.getState().clearForTests();
+  });
 
   it('keeps canonical execution without mounting Command Center or working media in chat', async () => {
     useJarvisTaskRunStore.getState().replaceCanonicalForAccount(

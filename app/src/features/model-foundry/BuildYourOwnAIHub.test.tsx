@@ -7,9 +7,11 @@ import type { LocalTrainingWorkerStatus, VerifiedTrainingModel } from './trainin
 const tauriInvoke = vi.hoisted(() => vi.fn());
 const getTrainingWorkerStatus = vi.hoisted(() => vi.fn());
 const installTrainingWorker = vi.hoisted(() => vi.fn());
+const calibrateTraining = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke: tauriInvoke }));
 vi.mock('./trainingRuntime', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./trainingRuntime')>()),
+  calibrateLocalTraining: calibrateTraining,
   getLocalTrainingWorkerStatus: getTrainingWorkerStatus,
   installLocalTrainingWorker: installTrainingWorker,
 }));
@@ -61,6 +63,7 @@ describe('BuildYourOwnAIHub', () => {
     });
     getTrainingWorkerStatus.mockReset();
     installTrainingWorker.mockReset();
+    calibrateTraining.mockReset();
     getTrainingWorkerStatus.mockResolvedValue({
       installed: false,
       attested: false,
@@ -195,7 +198,9 @@ describe('BuildYourOwnAIHub', () => {
 
   it('honors the method chosen on the overview without installing anything', async () => {
     render(<BuildYourOwnAIHub open initialMethod="full" onOpenChange={vi.fn()} />);
-    expect(await screen.findByRole('button', { name: /^Advanced full fine-tuning/i, pressed: true })).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: /^Advanced full fine-tuning/i, pressed: true }),
+    ).toBeTruthy();
     expect(installTrainingWorker).not.toHaveBeenCalled();
   });
 
@@ -272,9 +277,7 @@ describe('BuildYourOwnAIHub', () => {
     fireEvent.click(lora);
     expect(installTrainingWorker).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Set up LoRA, QLoRA, and Full/i }));
-    await waitFor(() =>
-      expect(installTrainingWorker).toHaveBeenCalledWith({ includeQlora: true }),
-    );
+    await waitFor(() => expect(installTrainingWorker).toHaveBeenCalledWith({ includeQlora: true }));
   });
 
   it('requires explicit setup before downloading QLoRA dependencies', async () => {
@@ -447,6 +450,88 @@ describe('BuildYourOwnAIHub', () => {
     expect(screen.getByText(/HuggingFaceTB\/SmolLM2-135M-Instruct/)).toBeTruthy();
     expect(screen.getByText(/LORA · QLORA · FULL/)).toBeTruthy();
     expect(screen.queryByText(/Q4_K_M \(4-bit inference\)/)).toBeNull();
+  });
+
+  it('requires and displays model-specific device calibration before weight training', async () => {
+    tauriInvoke.mockImplementation(async (command: string) => {
+      if (command === 'model_foundry_detect_hardware') {
+        return {
+          cpu: 'Test CPU',
+          gpu: 'RTX 4050 Laptop GPU',
+          ramGb: 16,
+          vramGb: 6,
+          freeStorageGb: 100,
+          os: 'Test OS',
+          accelerators: ['CUDA'],
+        };
+      }
+      if (command === 'model_foundry_list_jobs') return [];
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    calibrateTraining.mockResolvedValue({
+      qualified: true,
+      modelId: 'smollm2-135m-instruct',
+      method: 'lora',
+      computeDevice: 'gpu',
+      device: 'cuda:0',
+      precision: 'bf16',
+      forwardBackward: true,
+      optimizerStep: true,
+      batchSize: 1,
+      gradientAccumulation: 8,
+      maxSequenceLength: 1024,
+      warmupSteps: 3,
+      measuredSteps: 10,
+      stepTimeMs: 820,
+      stepTimeMsP95: 910,
+      peakVramMb: 1450,
+      vramTotalMb: 6141,
+      vramHeadroomMb: 4691,
+      elapsedMs: 900,
+      reason: null,
+    });
+    render(
+      <BuildYourOwnAIHub
+        open
+        onOpenChange={vi.fn()}
+        trainingWorker={{
+          installed: true,
+          attested: true,
+          localOnly: true,
+          protocol: 1,
+          sourceSha256: 'a'.repeat(64),
+          python: 'D:/foundry/python.exe',
+          methods: ['lora', 'qlora', 'full'],
+          modalities: ['text'],
+          precisions: ['bf16'],
+          reason: null,
+        }}
+        verifiedTrainingModels={[
+          { ...verifiedModel, installed: true, verified: true, status: 'ready' },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^LoRA fine-tuning/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(screen.getByText(/Calibration is required before Start Training/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Run calibration' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain('Qualified: LORA on cuda:0'),
+    );
+    expect(calibrateTraining).toHaveBeenCalledWith(
+      'smollm2-135m-instruct',
+      expect.objectContaining({
+        method: 'lora',
+        computeDevice: 'gpu',
+        gradientAccumulation: 8,
+        maxSequenceLength: 1024,
+      }),
+    );
   });
 
   it('exposes validated reproducible settings for weight training', () => {

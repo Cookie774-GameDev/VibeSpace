@@ -34,6 +34,7 @@ export type TelemetryReward = Readonly<{
 }>;
 
 export type TelemetrySnapshot = Readonly<{
+  storageError: boolean;
   consent: TelemetryConsent;
   audit: readonly TelemetryAuditRecord[];
   reward: TelemetryReward;
@@ -94,9 +95,21 @@ export function createTelemetryConsentStore(
 ) {
   const listeners = new Set<() => void>();
   const rewardLabel = rewardConfig.label?.trim() || null;
+  let storageError = false;
+  const read = (key: string) => {
+    try {
+      return storage.getItem(key);
+    } catch {
+      storageError = true;
+      return null;
+    }
+  };
+  const consent = parseConsent(read(TELEMETRY_CONSENT_KEY));
+  const audit = parseAudit(read(TELEMETRY_AUDIT_KEY));
   let snapshot: TelemetrySnapshot = Object.freeze({
-    consent: parseConsent(storage.getItem(TELEMETRY_CONSENT_KEY)),
-    audit: parseAudit(storage.getItem(TELEMETRY_AUDIT_KEY)),
+    storageError,
+    consent,
+    audit,
     reward: Object.freeze({
       configured: rewardLabel !== null,
       label: rewardLabel,
@@ -106,8 +119,13 @@ export function createTelemetryConsentStore(
 
   const publish = (consent: TelemetryConsent, audit: readonly TelemetryAuditRecord[]) => {
     snapshot = Object.freeze({ ...snapshot, consent, audit: Object.freeze([...audit]) });
-    storage.setItem(TELEMETRY_CONSENT_KEY, JSON.stringify(consent));
-    storage.setItem(TELEMETRY_AUDIT_KEY, JSON.stringify(audit));
+    try {
+      storage.setItem(TELEMETRY_CONSENT_KEY, JSON.stringify(consent));
+      storage.setItem(TELEMETRY_AUDIT_KEY, JSON.stringify(audit));
+      snapshot = Object.freeze({ ...snapshot, storageError: false });
+    } catch {
+      snapshot = Object.freeze({ ...snapshot, storageError: true });
+    }
     listeners.forEach((listener) => listener());
   };
 
@@ -165,10 +183,17 @@ export function createTelemetryConsentStore(
 
 const fallbackStorage: TelemetryStorage = {
   getItem: () => null,
-  setItem: () => undefined,
+  setItem: () => {
+    throw new Error('Storage unavailable');
+  },
   removeItem: () => undefined,
 };
 
-export const telemetryConsentStore = createTelemetryConsentStore(
-  typeof window === 'undefined' ? fallbackStorage : window.localStorage,
-);
+function browserStorage(): TelemetryStorage {
+  try {
+    return typeof window === 'undefined' ? fallbackStorage : window.localStorage;
+  } catch {
+    return fallbackStorage;
+  }
+}
+export const telemetryConsentStore = createTelemetryConsentStore(browserStorage());

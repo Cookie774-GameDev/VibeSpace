@@ -64,9 +64,9 @@ describe('mentionsMappedPath original-name chunk matching', () => {
   });
 
   it('does not match another file with a similar name', () => {
-    expect(mentionsMappedPath('Read folder/not-dependencies.txt.bak.', 'folder/dependencies.txt')).toBe(
-      false,
-    );
+    expect(
+      mentionsMappedPath('Read folder/not-dependencies.txt.bak.', 'folder/dependencies.txt'),
+    ).toBe(false);
   });
 
   it('matches an original source name against its physical chunk path', () => {
@@ -249,7 +249,6 @@ describe('production Context Map RLM repository multi-part logical sources', () 
     expect(finalHit, 'final-worded prompt must select the final part').toBeDefined();
     expect(finalHit!.preview).toContain('[SOURCE FILE: requirements.txt.part-023.txt]');
   });
-
 });
 
 function fixedRepository(input: {
@@ -919,21 +918,34 @@ describe('production Context Map RLM repository', () => {
   it('stops sizing a large map once the small-map fallback budget is exceeded', async () => {
     const map = maps()[0]!;
     const nodes = Array.from({ length: 58 }, (_, index) => ({
-      id: `chunk-${index}`, kind: 'file' as const, title: `chunk-${index}.txt`, summary: '',
+      id: `chunk-${index}`,
+      kind: 'file' as const,
+      title: `chunk-${index}.txt`,
+      summary: '',
       path: `C:\\repo\\chunk-${index}.txt`,
     }));
     const stat = vi.fn(async (path: string) => ({
-      ok: true as const, path, kind: 'file' as const, size: 1024 * 1024,
+      ok: true as const,
+      path,
+      kind: 'file' as const,
+      size: 1024 * 1024,
     }));
     const read = vi.fn();
     const indexStatus = vi.fn(async () => ({ documentCount: 58, needsRebuild: false }));
     const lexicalSearch = vi.fn(async () => []);
     const repository = createContextMapRlmRepository({
       loadMaps: async () => [{ ...map, tree: { nodes } }],
-      stat, read, indexStatus, lexicalSearch,
+      stat,
+      read,
+      indexStatus,
+      lexicalSearch,
     });
-    expect(await repository.search({ accountId: 'account-1', projectId: 'project-1' },
-      'R14_NONEXISTENT_6A84F2')).toEqual([]);
+    expect(
+      await repository.search(
+        { accountId: 'account-1', projectId: 'project-1' },
+        'R14_NONEXISTENT_6A84F2',
+      ),
+    ).toEqual([]);
     expect(stat.mock.calls.length).toBeLessThanOrEqual(16);
     expect(indexStatus).toHaveBeenCalledWith('account-1', map.id);
     expect(lexicalSearch).toHaveBeenCalled();
@@ -2990,4 +3002,28 @@ describe('production OpenCode RLM child runner', () => {
     ).rejects.toThrow('rlm_exact_variant_unavailable');
     expect(harness.createSession).not.toHaveBeenCalled();
   });
+
+  it.each(['codex-cli', 'codex-app-server'])(
+    'rejects %s before dispatch when native tool isolation is unavailable',
+    async (transportAdapterId) => {
+      const harness = {
+        createSession: vi.fn(), send: vi.fn(), deleteSession: vi.fn(), listModels: vi.fn(),
+      } as unknown as VibeSpaceHarness;
+      const childRunner = createOpenCodeRlmChildRunner(harness);
+      await expect(childRunner({
+        question: 'Investigate the marker', evidence: [], sourcePointers: [],
+        executionIdentity: {
+          transportConnectionId: 'openai-codex', transportAdapterId,
+          upstreamProviderId: 'openai', upstreamModelId: 'gpt-5.6-luna',
+          providerQualifiedModelId: 'openai/gpt-5.6-luna',
+          authBillingRoute: 'codex-cli-session', effort: 'low', fastVariant: 'standard',
+          catalogRevision: `sha256:${'e'.repeat(64)}`,
+        },
+        depth: 1, budget: {}, signal: new AbortController().signal,
+      })).rejects.toThrow('rlm_codex_tool_free_execution_unavailable');
+      expect(harness.createSession).not.toHaveBeenCalled();
+      expect(harness.send).not.toHaveBeenCalled();
+      expect(harness.listModels).not.toHaveBeenCalled();
+    },
+  );
 });

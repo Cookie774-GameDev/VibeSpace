@@ -1,3 +1,4 @@
+import { decodeCodexThreadCache, encodeCodexThreadCache } from './codexThreadCache';
 import { createCodexControlBridge } from './codexControlBridge';
 import { buildCodexGoalSetRequest, parseCodexGoalObjective, validateCodexGoalSetResult } from './codexGoalCommand';
 import { restoredConversationPrompt } from './restoredConversationPrompt';
@@ -43,6 +44,7 @@ import { redactHarnessText } from '@/lib/harness/errors';
 import {
   isProviderRuntimeError,
   providerErrorDetails,
+  richestProviderErrorDetails,
   ProviderRuntimeError,
 } from '../providerError';
 
@@ -180,10 +182,17 @@ function parseCodexModelListPage(
           .map((entry) => recordOf(entry)?.reasoningEffort)
           .filter((entry): entry is string => typeof entry === 'string' && CODEX_MODEL_ID.test(entry))
       : [];
+    const uniqueVariants = [...new Set(variants)];
+    const advertisedDefault = model?.defaultReasoningEffort;
+    const defaultReasoningEffort = typeof advertisedDefault === 'string' &&
+      CODEX_MODEL_ID.test(advertisedDefault) && uniqueVariants.includes(advertisedDefault)
+      ? advertisedDefault
+      : undefined;
     models.push({
       id,
       label: safeCodexModelText(model?.displayName ?? model?.name, id),
-      ...(variants.length > 0 ? { variants: [...new Set(variants)] } : {}),
+      ...(uniqueVariants.length > 0 ? { variants: uniqueVariants } : {}),
+      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     });
   }
   return {
@@ -247,8 +256,17 @@ function codexRequestError(fallbackMessage: string, value: unknown): Error {
 
 function codexFrameError(frame: NativeFrame, fallbackMessage: string): Error | undefined {
   if (recordOf(frame.error)) return codexRequestError(fallbackMessage, frame.error);
-  if (frame.method === 'error') return codexRequestError(fallbackMessage, frame);
+  if (frame.method === 'error') {
+    const params = recordOf(frame.params);
+    return codexRequestError(fallbackMessage, params?.error ?? params ?? frame);
+  }
   return undefined;
+}
+
+function codexFrameWillRetry(frame: NativeFrame): boolean {
+  if (frame.method !== 'error') return false;
+  const params = recordOf(frame.params);
+  return params?.willRetry === true || recordOf(params?.error)?.willRetry === true;
 }
 
 function promptText(request: Readonly<ProviderRequest>, newThread = false): string {
@@ -304,15 +322,30 @@ function createTurnUsageAccumulator() {
   };
 }
 
+export function codexApprovalPolicyForRequest(
+  request: Pick<ProviderRequest, 'agentApprovalMode' | 'approveAllForRun'>,
+): 'never' | 'on-request' {
+  if (request.agentApprovalMode === 'full') return 'never';
+  if (request.agentApprovalMode === 'review') return 'on-request';
+  return request.approveAllForRun ? 'never' : 'on-request';
+}
+
 function executionMode(request: Readonly<ProviderRequest>): CodexExecutionMode {
   const mode = request.interactionMode ?? 'agent';
   if (mode === 'ask' || mode === 'plan') return { kind: mode };
   const cwd = request.workingDirectory;
   if (!cwd) throw new Error('Codex Agent mode requires an exact working directory.');
   if (request.accessLevel === 'read-only') return { kind: 'ask' };
+  if (request.agentApprovalMode === 'full') {
+    return {
+      kind: 'agent',
+      approvalPolicy: codexApprovalPolicyForRequest(request),
+      sandbox: { kind: 'danger-full-access' },
+    };
+  }
   return {
     kind: 'agent',
-    approvalPolicy: request.approveAllForRun ? 'never' : 'on-request',
+    approvalPolicy: codexApprovalPolicyForRequest(request),
     sandbox: {
       kind: 'workspace-write',
       writableRoots: [cwd],
@@ -671,6 +704,14 @@ async function* sendCodexRequest(
     );
 
     const turnUsage = createTurnUsageAccumulator();
+    let priorProviderFailure: Readonly<ReturnType<typeof providerErrorDetails>> | undefined;
+    const providerFailureFallback = {
+      providerId: request.connection.providerId,
+      modelId: request.modelId,
+      connectionId: request.connection.id,
+      requestId: request.requestId,
+      ...(request.protectedAttempt?.runId ? { runId: request.protectedAttempt.runId } : {}),
+    } as const;
     const dynamicToolNames = new Set(
       (contextTool?.dynamicTools ?? (contextTool ? [CODEX_CONTEXT_TOOL] : []))
         .map((tool) => tool.name),
@@ -742,6 +783,22 @@ async function* sendCodexRequest(
           ...(turnId ? { turnId } : {}),
         },
       });
+      if (frame.method === 'error' && projection.events.some((event) => event.type === 'warning')) {
+        const rawProviderFailure = codexFrameError(
+          frame,
+          'Codex app-server reported an error.',
+        );
+        // A retry notification is progress, not terminal provider evidence.
+        // Do not let its transient "Reconnecting..." text outrank the later
+        // terminal turn failure if the app-server eventually gives up. The
+        // normalizer's warning is also the active thread/turn scope gate.
+        if (rawProviderFailure && !codexFrameWillRetry(frame)) {
+          priorProviderFailure = richestProviderErrorDetails(
+            [priorProviderFailure, rawProviderFailure],
+            providerFailureFallback,
+          );
+        }
+      }
       for (const control of projection.controls) {
         if (control.type === 'approval') {
           const approval = controls.approval(control, frame.id as string | number,
@@ -763,7 +820,32 @@ async function* sendCodexRequest(
         }
       }
       for (const event of projection.events) {
-        if (event.type === 'done' || event.type === 'error') terminal = true;
+        if (event.type === 'done') {
+          terminal = true;
+          yield event;
+          continue;
+        }
+        if (event.type === 'error') {
+          terminal = true;
+          const richest = richestProviderErrorDetails(
+            [priorProviderFailure, event],
+            providerFailureFallback,
+          );
+          yield {
+            type: 'error',
+            message: richest.message,
+            ...(richest.code ? { code: richest.code } : {}),
+            ...(richest.providerId ? { providerId: richest.providerId } : {}),
+            ...(richest.modelId ? { modelId: richest.modelId } : {}),
+            ...(richest.connectionId ? { connectionId: richest.connectionId } : {}),
+            ...(richest.retryable === undefined ? {} : { retryable: richest.retryable }),
+            ...(richest.retryAfterMs === undefined ? {} : { retryAfterMs: richest.retryAfterMs }),
+            ...(richest.resetAt === undefined ? {} : { resetAt: richest.resetAt }),
+            ...(richest.requestId ? { requestId: richest.requestId } : {}),
+            ...(richest.runId ? { runId: richest.runId } : {}),
+          };
+          continue;
+        }
         yield event.type === 'usage' ? { ...event, usage: turnUsage(event.usage, frame) } : event;
       }
       if (terminal) return;
@@ -849,21 +931,24 @@ export function createCodexPersistentAdapter(
           return stopped;
         },
       };
+      const dynamicManifest = contextTool ? contextTool.dynamicTools ?? [CODEX_CONTEXT_TOOL] : undefined;
       const key = request.accountId && request.chatId && request.workingDirectory
-        ? (contextTool ? 'vibespace.codex-context-thread.v1:' : 'vibespace.codex-thread.v1:') + JSON.stringify([request.accountId, request.workspaceId,
+        ? (contextTool ? 'vibespace.codex-context-thread.v2:' : 'vibespace.codex-thread.v1:') + JSON.stringify([request.accountId, request.workspaceId,
             request.projectId, request.chatId, request.workingDirectory]) : undefined;
       let sessionId = request.sessionId;
       if (!sessionId && key) {
         try {
           const stored = localStorage.getItem(key);
-          if (stored && /^[A-Za-z0-9._:-]{1,256}$/u.test(stored)) sessionId = stored;
+          sessionId = decodeCodexThreadCache(stored, dynamicManifest);
         } catch { /* Native startup still works when local persistence is unavailable. */ }
       }
       for await (const event of sendCodexRequest(
         { ...request, sessionId }, ownedDependencies, !request.sessionId && !request.expectedSessionId, contextTool,
       )) {
-        if (key && event.type === 'session') {
-          try { localStorage.setItem(key, event.sessionId); } catch { /* Current turn remains usable. */ }
+        if (key && event.type === 'session' && !(contextTool && request.sessionId)) {
+          // Never certify an explicitly resumed legacy thread as having newly
+          // requested tools: its server-owned manifest may be different.
+          try { localStorage.setItem(key, encodeCodexThreadCache(event.sessionId, dynamicManifest)); } catch { /* Current turn remains usable. */ }
         }
         yield event;
       }

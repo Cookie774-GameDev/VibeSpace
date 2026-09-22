@@ -487,6 +487,114 @@ export async function replaceSiyuanIndexJob(
   }
 }
 
+/** Repair only an unchanged, empty discovery checkpoint; never clear indexed evidence. */
+export async function repairEmptySiyuanDiscoveryCheckpoint(
+  expected: SiyuanIndexJobRecord,
+  canonicalRoot: string,
+  policyFingerprint: string,
+  signal?: AbortSignal,
+): Promise<SiyuanIndexJobRecord> {
+  if (signal?.aborted) throw new Error('siyuan_index_cancelled');
+  const scope = siyuanIndexJobScope(expected.projectId, expected.mapId);
+  if (
+    expected.scope !== scope ||
+    canonicalSiyuanAuthorityRoot(expected.canonicalRoot) !==
+      canonicalSiyuanAuthorityRoot(canonicalRoot)
+  ) {
+    throw new Error('siyuan_index_resume_authority_mismatch');
+  }
+  const database = await openDatabase();
+  if (!database) throw new Error('siyuan_index_job_storage_unavailable');
+  const transaction = database.transaction(
+    [JOB_STORE, ENTRY_STORE, FRONTIER_STORE, SUMMARY_USAGE_STORE],
+    'readwrite',
+  );
+  const done = transactionDone(transaction);
+  try {
+    const [stored, frontier, entryCount, usageCount] = await Promise.all([
+      requestResult(transaction.objectStore(JOB_STORE).get(scope)),
+      requestResult(transaction.objectStore(FRONTIER_STORE).index(SCOPE_INDEX).getAll(scope)),
+      requestResult(transaction.objectStore(ENTRY_STORE).index(SCOPE_INDEX).count(scope)),
+      requestResult(transaction.objectStore(SUMMARY_USAGE_STORE).index(SCOPE_INDEX).count(scope)),
+    ]);
+    if (signal?.aborted) throw new Error('siyuan_index_cancelled');
+    const current = stored as SiyuanIndexJobRecord | undefined;
+    const directories = frontier as StoredDirectory[];
+    const initial = directories[0];
+    const unchanged =
+      current &&
+      (
+        [
+          'schemaVersion',
+          'scope',
+          'accountId',
+          'projectId',
+          'mapId',
+          'canonicalRoot',
+          'policyFingerprint',
+          'updatedAt',
+          'status',
+        ] as const
+      ).every((key) => current[key] === expected[key]);
+    const empty =
+      current &&
+      (
+        [
+          'cursor',
+          'indexed',
+          'excluded',
+          'unreadable',
+          'createdNodes',
+          'summarized',
+          'summaryEligible',
+          'failed',
+          'skipped',
+          'inputTokens',
+          'outputTokens',
+          'totalTokens',
+        ] as const
+      ).every((key) => current[key] === 0);
+    if (
+      !unchanged ||
+      !empty ||
+      current.status !== 'running' ||
+      current.phase !== 'discovering' ||
+      current.frontierLength !== 1 ||
+      (current.pendingNativeNodeIds?.length ?? 0) !== 0 ||
+      entryCount !== 0 ||
+      usageCount !== 0 ||
+      directories.length !== 1 ||
+      !initial ||
+      initial.position !== 0 ||
+      initial.relativePath !== '' ||
+      initial.parentNodeId !== null ||
+      canonicalSiyuanAuthorityRoot(initial.path) !== canonicalSiyuanAuthorityRoot(canonicalRoot)
+    ) {
+      throw new Error('siyuan_index_checkpoint_changed');
+    }
+    const repaired = {
+      ...current,
+      canonicalRoot,
+      policyFingerprint,
+      updatedAt: Math.max(current.updatedAt, Date.now()),
+    };
+    transaction.objectStore(JOB_STORE).put(repaired);
+    transaction.objectStore(FRONTIER_STORE).put({ ...initial, path: canonicalRoot });
+    await done;
+    return repaired;
+  } catch (error) {
+    try {
+      transaction.abort();
+    } catch {
+      /* The transaction may already have completed. */
+    }
+    await done.catch(() => undefined);
+    throw error;
+  } finally {
+    database.close();
+  }
+}
+
 export async function archiveAndReplaceSiyuanIndexJob(
   job: SiyuanIndexJobRecord,
   initialDirectory: SiyuanIndexDirectory,

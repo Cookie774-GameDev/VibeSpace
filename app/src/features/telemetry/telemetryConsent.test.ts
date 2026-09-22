@@ -47,6 +47,31 @@ describe('telemetry consent', () => {
     expect(store.getSnapshot().audit.at(-1)?.action).toBe('consent_revoked');
   });
 
+  it('stops local collection and notifies listeners even when persistence fails', () => {
+    const store = createTelemetryConsentStore(storage);
+    store.updateConsent({ productUsage: true, diagnostics: true, toolOutcomes: true });
+    storage.setItem = () => {
+      throw new Error('quota');
+    };
+    let notifications = 0;
+    store.subscribe(() => {
+      notifications += 1;
+    });
+    expect(() => store.revoke()).not.toThrow();
+    expect(store.getSnapshot().consent).toEqual(DEFAULT_TELEMETRY_CONSENT);
+    expect(store.getSnapshot().storageError).toBe(true);
+    expect(notifications).toBe(1);
+  });
+
+  it('fails closed without crashing when persisted consent cannot be read', () => {
+    storage.getItem = () => {
+      throw new Error('storage blocked');
+    };
+    const store = createTelemetryConsentStore(storage);
+    expect(store.getSnapshot().consent).toEqual(DEFAULT_TELEMETRY_CONSENT);
+    expect(store.getSnapshot().storageError).toBe(true);
+  });
+
   it('exports a content-free audit and supports local deletion', () => {
     const store = createTelemetryConsentStore(storage, () => 3_000);
     store.updateConsent({ toolOutcomes: true });

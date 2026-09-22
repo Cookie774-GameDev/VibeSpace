@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { nativeOpenCodeEvents, nativeOpenCodeRequest } from './openCodeNativeTransport';
 
+const nativeEvent = (data: string, sequence = 1) => ({
+  kind: 'event' as const,
+  data,
+  sequence,
+  nativeHandoffWallUs: 1_789_300_000_000_000 + sequence,
+  nativeHandoffMonotonicUs: 1_000 + sequence,
+});
+
 describe('native OpenCode transport', () => {
   it('bounds unresolved distinct native reads without evicting or replaying them', async () => {
     const completions: ((value: unknown) => void)[] = [];
@@ -306,10 +314,10 @@ describe('native OpenCode transport', () => {
     const invoke = vi.fn(async (command: string, _args: Record<string, unknown>) => {
       if (command === 'opencode_server_event_stream') {
         queueMicrotask(() => {
-          onmessage?.({
-            kind: 'event',
-            data: JSON.stringify({ type: 'message.part.updated', properties: { delta: 'hello' } }),
-          });
+          onmessage?.(nativeEvent(
+            JSON.stringify({ type: 'message.part.updated', properties: { delta: 'hello' } }),
+            7,
+          ));
           onmessage?.({ kind: 'done' });
         });
       }
@@ -333,7 +341,19 @@ describe('native OpenCode transport', () => {
       received.push(event);
     }
 
-    expect(received).toEqual([{ type: 'message.part.updated', properties: { delta: 'hello' } }]);
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      type: 'message.part.updated',
+      properties: { delta: 'hello' },
+      nativeTiming: {
+        generation: 'opencode-server-generation',
+        sequence: 7,
+        nativeHandoffWallUs: 1_789_300_000_000_007,
+        nativeHandoffMonotonicUs: 1_007,
+        rendererReceivedAt: expect.any(Number),
+        rendererReceivedMonotonicMs: expect.any(Number),
+      },
+    });
     const start = invoke.mock.calls.find(([command]) => command === 'opencode_server_event_stream');
     const cancel = invoke.mock.calls.find(
       ([command]) => command === 'opencode_server_event_cancel',
@@ -360,7 +380,7 @@ describe('native OpenCode transport', () => {
     let onmessage: ((message: unknown) => void) | undefined;
     const invoke = vi.fn(async (command: string) => {
       if (command === 'opencode_server_event_stream') {
-        for (const item of data) onmessage?.({ kind: 'event', data: item });
+        for (const [index, item] of data.entries()) onmessage?.(nativeEvent(item, index + 1));
       }
       return command === 'opencode_server_event_cancel' ? true : undefined;
     });

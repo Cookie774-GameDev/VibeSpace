@@ -1,5 +1,6 @@
 import { isTauri } from '@/lib/utils';
 import type {
+  FoundryTrainingConfiguration,
   TrainableModel,
   TrainingMethod,
   TrainingModality,
@@ -19,6 +20,30 @@ export interface LocalTrainingWorkerStatus {
   modalities: TrainingModality[];
   precisions: TrainingPrecision[];
   reason: string | null;
+  calibration?: TrainingCalibrationEvidence | null;
+}
+
+export interface TrainingCalibrationEvidence {
+  qualified: boolean;
+  modelId: string;
+  method: WeightTrainingMethod;
+  computeDevice: 'gpu' | 'cpu';
+  device: string;
+  precision: TrainingPrecision;
+  forwardBackward: boolean;
+  optimizerStep: boolean;
+  batchSize: number;
+  gradientAccumulation: number;
+  maxSequenceLength: number;
+  warmupSteps: number;
+  measuredSteps: number;
+  stepTimeMs: number;
+  stepTimeMsP95: number;
+  peakVramMb: number | null;
+  vramTotalMb: number | null;
+  vramHeadroomMb: number | null;
+  elapsedMs: number;
+  reason: string | null;
 }
 
 interface NativeTrainingWorkerStatus {
@@ -31,6 +56,7 @@ interface NativeTrainingWorkerStatus {
   modalities: string[];
   precisions: string[];
   reason: string | null;
+  calibration?: unknown;
 }
 
 export interface VerifiedTrainingModel {
@@ -104,10 +130,64 @@ const WEB_STATUS: LocalTrainingWorkerStatus = {
   modalities: [],
   precisions: [],
   reason: 'Local weight training is available only in the VibeSpace desktop app.',
+  calibration: null,
 };
 
 function filterValues<T extends string>(values: readonly string[], allowed: Set<T>): T[] {
   return values.filter((value): value is T => allowed.has(value as T));
+}
+
+function normalizeCalibration(value: unknown): TrainingCalibrationEvidence | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Record<string, unknown>;
+  const method = candidate.method;
+  const computeDevice = candidate.computeDevice;
+  const precision = candidate.precision;
+  if (
+    typeof candidate.qualified !== 'boolean' ||
+    typeof candidate.modelId !== 'string' ||
+    !WEIGHT_METHODS.has(method as WeightTrainingMethod) ||
+    !['gpu', 'cpu'].includes(String(computeDevice)) ||
+    !PRECISIONS.has(precision as TrainingPrecision) ||
+    typeof candidate.device !== 'string' ||
+    typeof candidate.forwardBackward !== 'boolean' ||
+    typeof candidate.optimizerStep !== 'boolean' ||
+    typeof candidate.batchSize !== 'number' ||
+    typeof candidate.gradientAccumulation !== 'number' ||
+    typeof candidate.maxSequenceLength !== 'number' ||
+    typeof candidate.warmupSteps !== 'number' ||
+    typeof candidate.measuredSteps !== 'number' ||
+    typeof candidate.stepTimeMs !== 'number' ||
+    typeof candidate.stepTimeMsP95 !== 'number' ||
+    (candidate.peakVramMb !== null && typeof candidate.peakVramMb !== 'number') ||
+    (candidate.vramTotalMb !== null && typeof candidate.vramTotalMb !== 'number') ||
+    (candidate.vramHeadroomMb !== null && typeof candidate.vramHeadroomMb !== 'number') ||
+    typeof candidate.elapsedMs !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    qualified: candidate.qualified,
+    modelId: candidate.modelId,
+    method: method as WeightTrainingMethod,
+    computeDevice: computeDevice as 'gpu' | 'cpu',
+    device: candidate.device,
+    precision: precision as TrainingPrecision,
+    forwardBackward: candidate.forwardBackward,
+    optimizerStep: candidate.optimizerStep,
+    batchSize: Math.max(1, Math.round(candidate.batchSize)),
+    gradientAccumulation: Math.max(1, Math.round(candidate.gradientAccumulation)),
+    maxSequenceLength: Math.max(1, Math.round(candidate.maxSequenceLength)),
+    warmupSteps: Math.max(0, Math.round(candidate.warmupSteps)),
+    measuredSteps: Math.max(0, Math.round(candidate.measuredSteps)),
+    stepTimeMs: Math.max(0, Math.round(candidate.stepTimeMs)),
+    stepTimeMsP95: Math.max(0, Math.round(candidate.stepTimeMsP95)),
+    peakVramMb: candidate.peakVramMb as number | null,
+    vramTotalMb: candidate.vramTotalMb as number | null,
+    vramHeadroomMb: candidate.vramHeadroomMb as number | null,
+    elapsedMs: Math.max(0, Math.round(candidate.elapsedMs)),
+    reason: typeof candidate.reason === 'string' ? candidate.reason : null,
+  };
 }
 
 function normalizeStatus(status: NativeTrainingWorkerStatus): LocalTrainingWorkerStatus {
@@ -122,6 +202,7 @@ function normalizeStatus(status: NativeTrainingWorkerStatus): LocalTrainingWorke
     modalities: filterValues(Array.isArray(status.modalities) ? status.modalities : [], MODALITIES),
     precisions: filterValues(Array.isArray(status.precisions) ? status.precisions : [], PRECISIONS),
     reason: typeof status.reason === 'string' ? status.reason : null,
+    calibration: normalizeCalibration(status.calibration),
   };
 }
 
@@ -147,6 +228,52 @@ export async function getLocalTrainingWorkerStatus(
     pendingInspections.set(invoke, pending);
   }
   return pending;
+}
+
+export async function calibrateLocalTraining(
+  modelId: string,
+  configuration: FoundryTrainingConfiguration,
+  options: TrainingRuntimeOptions = {},
+): Promise<TrainingCalibrationEvidence> {
+  const native = options.native ?? isTauri;
+  const failure = (reason: string): TrainingCalibrationEvidence => ({
+    qualified: false,
+    modelId,
+    method: configuration.method,
+    computeDevice: configuration.computeDevice,
+    device: 'unknown',
+    precision: 'fp32',
+    forwardBackward: false,
+    optimizerStep: false,
+    batchSize: configuration.batchSize,
+    gradientAccumulation: configuration.gradientAccumulation,
+    maxSequenceLength: configuration.maxSequenceLength,
+    warmupSteps: 0,
+    measuredSteps: 0,
+    stepTimeMs: 0,
+    stepTimeMsP95: 0,
+    peakVramMb: null,
+    vramTotalMb: null,
+    vramHeadroomMb: null,
+    elapsedMs: 0,
+    reason,
+  });
+  if (!native)
+    return failure('GPU/CPU calibration is available only in the VibeSpace desktop app.');
+  const invoke = await nativeInvoke(options);
+  try {
+    const status = normalizeStatus(
+      (await invoke('model_foundry_training_worker_status', {
+        calibration: { modelId, trainingConfig: configuration },
+      })) as NativeTrainingWorkerStatus,
+    );
+    return (
+      status.calibration ??
+      failure(status.reason ?? 'The native worker returned no calibration evidence.')
+    );
+  } catch (error) {
+    return failure(error instanceof Error ? error.message : 'Training calibration failed.');
+  }
 }
 
 export async function installLocalTrainingWorker(

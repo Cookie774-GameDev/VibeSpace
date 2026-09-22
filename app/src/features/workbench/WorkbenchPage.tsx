@@ -53,6 +53,7 @@ import { DEFAULT_WORKBENCH_NAME } from './workbenchName';
 import { jarvisArtifactRepo } from '@/lib/db/jarvisRepositories';
 import { projectJarvisArtifactReference } from '@/features/jarvis-command-center/artifactAccess';
 import './workbench.css';
+import { WorkbenchFabric } from './WorkbenchFabric';
 
 const WORKBENCH_PALETTE_REVEAL_PX = 72;
 const ARTIFACT_DIGEST = /^[a-f0-9]{64}$/u;
@@ -365,6 +366,7 @@ export function WorkbenchPage() {
           </div>
         </div>
         <div className="workbench-toolbar-actions">
+          <WorkbenchFabric />
           <Button
             type="button"
             size="sm"

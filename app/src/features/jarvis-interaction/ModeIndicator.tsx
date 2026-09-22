@@ -12,7 +12,7 @@ import {
   type PermissionModeOption,
 } from './modes';
 import type { JarvisInteractionMode } from './types';
-import { setApproveAllForRun, setPermissionAccess } from './permissionAccessStore';
+import { AGENT_APPROVAL_OPTIONS, readAgentApprovalMode, setAgentApprovalMode, setApproveAllForRun, setPermissionAccess, type AgentApprovalMode } from './permissionAccessStore';
 
 export interface ModeIndicatorProps {
   mode: JarvisInteractionMode;
@@ -69,6 +69,7 @@ export function ModeIndicator({
   onCycle,
 }: ModeIndicatorProps) {
   const [open, setOpen] = React.useState(false);
+  const [agentStep, setAgentStep] = React.useState(false);
   const [focusedOptionId, setFocusedOptionId] = React.useState<string>(mode);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const optionSetRef = React.useRef<HTMLDivElement>(null);
@@ -82,12 +83,17 @@ export function ModeIndicator({
     window.setTimeout(() => triggerRef.current?.focus(), 0);
   }, []);
 
-  const pick = (next: JarvisInteractionMode) => {
+  const pick = (next: JarvisInteractionMode, approvalMode?: AgentApprovalMode) => {
+    if (next === 'agent' && !approvalMode) {
+      setAgentStep(true);
+      return;
+    }
     if (chatId) {
+      if (approvalMode) setAgentApprovalMode(chatId, approvalMode);
       setPermissionAccess(chatId, next === 'agent' ? 'full' : 'read');
       setApproveAllForRun(chatId, false);
     }
-    if (next !== mode) {
+    if (next !== mode || approvalMode) {
       onSelectMode?.(next);
       if (!onSelectMode) onCycle?.();
     }
@@ -96,7 +102,7 @@ export function ModeIndicator({
 
   React.useEffect(() => {
     if (!open) return;
-    const nextFocusedId = mode;
+    const nextFocusedId = agentStep ? readAgentApprovalMode(chatId ?? '') : mode;
     setFocusedOptionId(nextFocusedId);
     const timeout = window.setTimeout(() => {
       optionSetRef.current
@@ -104,7 +110,7 @@ export function ModeIndicator({
         ?.focus();
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [mode, open]);
+  }, [mode, open, agentStep, chatId]);
 
   const handleOptionSetKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const options = Array.from(
@@ -137,7 +143,7 @@ export function ModeIndicator({
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={(next) => { setOpen(next); setAgentStep(false); }}>
       <PopoverTrigger asChild>
         <button
           ref={triggerRef}
@@ -202,9 +208,9 @@ export function ModeIndicator({
               <Icon className={cn('h-4 w-4', accent.icon)} />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-semibold tracking-tight text-foreground">Chat mode</p>
+              <p className="text-[13px] font-semibold tracking-tight text-foreground">{agentStep ? 'Agent access' : 'Chat mode'}</p>
               <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                Agent can act. Plan and Ask are read-only.
+                {agentStep ? 'Choose when this chat should pause for approval.' : 'Agent can act. Plan and Ask are read-only.'}
               </p>
             </div>
           </div>
@@ -214,11 +220,22 @@ export function ModeIndicator({
           ref={optionSetRef}
           className="space-y-1 p-2"
           role="listbox"
-          aria-label="Chat modes"
+          aria-label={agentStep ? 'Agent access' : 'Chat modes'}
           onKeyDown={handleOptionSetKeyDown}
         >
           <AnimatePresence initial={false}>
-            {PERMISSION_MODE_OPTIONS.map((option) => {
+            {agentStep ? AGENT_APPROVAL_OPTIONS.map((option) => (
+              <button key={option.id} type="button" role="option"
+                aria-selected={readAgentApprovalMode(chatId ?? '') === option.id}
+                data-option-id={option.id}
+                tabIndex={focusedOptionId === option.id ? 0 : -1}
+                onFocus={() => setFocusedOptionId(option.id)}
+                onClick={() => pick('agent', option.id)}
+                className="block w-full rounded-xl border border-transparent px-2.5 py-2 text-left hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                <span className="block text-[12px] font-semibold">{option.label}</span>
+                <span className="mt-0.5 block text-[11px] text-muted-foreground">{option.description}</span>
+              </button>
+            )) : PERMISSION_MODE_OPTIONS.map((option) => {
               const OptionIcon = MODE_ICONS[option.id];
               const optionAccent = ACCENT[option.accent];
               const selected = option.id === mode;

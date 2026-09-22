@@ -101,6 +101,31 @@ function JsonDetail({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+function writtenContentFromArguments(
+  details: Readonly<PublicToolDetails>,
+  change: Readonly<NonNullable<PublicToolDetails['changes']>[number]>,
+): string | undefined {
+  if (change.diff !== undefined || change.writtenContent !== undefined)
+    return change.writtenContent;
+  const args = details.arguments;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return undefined;
+  const value = args as Readonly<Record<string, unknown>>;
+  const content =
+    typeof value.content === 'string'
+      ? value.content
+      : typeof value.contents === 'string'
+        ? value.contents
+        : undefined;
+  if (content === undefined) return undefined;
+  const argumentPath =
+    typeof value.path === 'string'
+      ? value.path
+      : typeof value.filePath === 'string'
+        ? value.filePath
+        : undefined;
+  return argumentPath === undefined || argumentPath === change.path ? content : undefined;
+}
+
 /** Public, bounded provider data only. These fields never grant execution authority. */
 export function ToolDetailsInspector({
   details,
@@ -166,28 +191,45 @@ export function ToolDetailsInspector({
       {details.truncated ? (
         <p role="note">Details are bounded; omitted content is not represented as complete.</p>
       ) : null}
-      {details.changes?.map((change, index) => (
-        <div key={index} className="my-2" data-tool-file-change={change.path}>
-          <div className="break-all">
-            {change.kind}: <ToolFileLink path={change.path} projectRoot={projectRoot} />
-            {change.destinationPath ? (
-              <>
-                {' '}
-                → <ToolFileLink path={change.destinationPath} projectRoot={projectRoot} />
-              </>
-            ) : null}
+      {details.changes?.map((change, index) => {
+        const writtenContent = writtenContentFromArguments(details, change);
+        return (
+          <div key={index} className="my-2" data-tool-file-change={change.path}>
+            <div className="break-all">
+              {change.kind}: <ToolFileLink path={change.path} projectRoot={projectRoot} />
+              {change.destinationPath ? (
+                <>
+                  {' '}
+                  → <ToolFileLink path={change.destinationPath} projectRoot={projectRoot} />
+                </>
+              ) : null}
+            </div>
+            {change.diff !== undefined ? (
+              <div className="max-h-80 overflow-auto" data-tool-change-scroll="diff">
+                <DiffView
+                  block={{ title: change.path, filePath: change.path, diff: change.diff, status }}
+                  compact
+                />
+              </div>
+            ) : writtenContent !== undefined ? (
+              <details className="my-1" data-tool-change-scroll="written-content">
+                <summary className="cursor-pointer">
+                  Written content · previous file state unavailable
+                </summary>
+                <pre
+                  className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px]"
+                  aria-label={`Written content for ${change.path}`}
+                >
+                  {writtenContent}
+                </pre>
+              </details>
+            ) : (
+              <p>Per-call diff unavailable.</p>
+            )}
+            {!change.complete ? <p role="note">Change details are incomplete.</p> : null}
           </div>
-          {change.diff !== undefined ? (
-            <DiffView
-              block={{ title: change.path, filePath: change.path, diff: change.diff, status }}
-              compact
-            />
-          ) : (
-            <p>Per-call diff unavailable.</p>
-          )}
-          {!change.complete ? <p role="note">Change details are incomplete.</p> : null}
-        </div>
-      ))}
+        );
+      })}
       {details.omittedChanges ? (
         <p role="note">{details.omittedChanges} additional changes omitted.</p>
       ) : null}

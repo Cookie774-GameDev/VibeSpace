@@ -115,7 +115,15 @@ export async function executeInstantCommand(
   }
   if (command.kind === 'legacy') {
     const result = await dependencies.executeLegacy(command.intent);
-    return { ok: result.ok, code: result.ok ? 'legacy' : 'legacy_failed', message: result.message };
+    return {
+      ok: result.ok,
+      code: result.ok
+        ? command.intent.kind === 'open_terminals'
+          ? 'queued'
+          : 'legacy'
+        : 'legacy_failed',
+      message: result.message,
+    };
   }
   if (command.kind === 'catalog') {
     if (command.family === 'navigation') {
@@ -208,10 +216,12 @@ export async function executeInstantCommand(
           message: 'An exact OpenCode model and a valid optional message are required.',
         };
       dependencies.enqueueBatch(
-        Array.from({ length: command.count }, (_, index) => ({
+        Array.from({ length: command.count }, () => ({
           command: startupText,
           ...(configured ? { preserveExisting: true } : {}),
-          label: index === 0 ? command.provider : `${command.provider} ${index + 1}`,
+          // This queue label becomes the pane's agentSlug, not its display title.
+          // Keep a canonical identifier; pane/session IDs distinguish siblings.
+          label: command.provider,
           target: 'new' as const,
         })),
       );

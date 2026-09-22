@@ -21,12 +21,13 @@ vi.mock('@/stores/auth', () => {
   return { useAuthStore };
 });
 
-vi.mock('@/stores/ui', () => {
+vi.mock('@/stores/ui', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/stores/ui')>();
   const useUIStore = Object.assign(
     (selector: (state: typeof uiState) => unknown) => selector(uiState),
     { getState: () => uiState },
   );
-  return { useUIStore };
+  return { ...actual, useUIStore };
 });
 
 vi.mock('@/lib/accountIdentity', () => ({

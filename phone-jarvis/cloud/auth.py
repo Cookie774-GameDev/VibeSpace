@@ -25,7 +25,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import httpx
-from jose import jwt, JWTError
+import jwt
+from jwt.exceptions import InvalidTokenError, PyJWKError
 
 from .config import get_settings
 
@@ -33,6 +34,9 @@ log = logging.getLogger(__name__)
 
 PIN_ITERATIONS = 100_000
 PIN_HASH_LEN = 32
+SUPPORTED_JWT_ALGORITHMS = frozenset(
+    {"RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "EdDSA"}
+)
 
 
 # ============================================================================
@@ -174,10 +178,13 @@ class JwtVerifier:
         jwks = await self._fetch_jwks()
         try:
             unverified_header = jwt.get_unverified_header(token)
-        except JWTError as e:
-            raise PermissionError(f"malformed_token: {e}")
+        except InvalidTokenError as exc:
+            raise PermissionError("malformed_token") from exc
 
         kid = unverified_header.get("kid")
+        algorithm = unverified_header.get("alg")
+        if algorithm not in SUPPORTED_JWT_ALGORITHMS:
+            raise PermissionError("unsupported_jwt_algorithm")
         key = None
         for k in jwks.get("keys", []):
             if k.get("kid") == kid:
@@ -187,15 +194,20 @@ class JwtVerifier:
             raise PermissionError("unknown_kid")
 
         try:
+            signing_key = jwt.PyJWK.from_dict(key)
+            if signing_key.algorithm_name != algorithm:
+                raise PermissionError("jwt_algorithm_mismatch")
             claims = jwt.decode(
                 token,
-                key,
-                algorithms=[unverified_header.get("alg", "RS256")],
+                signing_key.key,
+                algorithms=[algorithm],
                 audience=self.audience,
-                options={"verify_aud": True, "verify_exp": True},
+                options={"verify_aud": True, "verify_exp": True, "require": ["exp", "sub", "aud"]},
             )
-        except JWTError as e:
-            raise PermissionError(f"jwt_invalid: {e}")
+        except PermissionError:
+            raise
+        except (InvalidTokenError, PyJWKError) as exc:
+            raise PermissionError("jwt_invalid") from exc
 
         return claims
 

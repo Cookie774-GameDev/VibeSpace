@@ -243,6 +243,28 @@ function leaseExecutionIdentity(lease: RlmContextLease): Readonly<ExecutionIdent
   return lease.executionIdentity;
 }
 
+async function executeRouted<T>(
+  route: 'retrieval' | 'rlm',
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    const result = await operation();
+    try {
+      recordRlmRoute(route, 'ok');
+    } catch {
+      // A diagnostic status write must never turn a successful retrieval into an error.
+    }
+    return result;
+  } catch (error) {
+    try {
+      recordRlmRoute(route, 'failed');
+    } catch {
+      // A diagnostic status write must never replace the provider/retrieval error.
+    }
+    throw error;
+  }
+}
+
 export function createRlmOpenCodeTool(dependencies: {
   queryService: QueryPort;
   rlmRuntime: RlmPort;
@@ -290,18 +312,24 @@ export function createRlmOpenCodeTool(dependencies: {
         const question = text(args.query);
         const rlmEnabled = resolveRlmEnabled({ workspaceId: lease.workspaceId }).enabled;
         const decision = routeDefaultContextQuery(question, { rlmAvailable: rlmEnabled });
-        recordRlmRoute(decision.mode, 'ok');
         if (decision.mode === 'rlm') {
-          return dependencies.rlmRuntime.investigate({
-            question,
-            scope,
-            executionIdentity: leaseExecutionIdentity(lease),
-            budget: rlmBudget,
-            signal,
-            decision,
-          });
+          return executeRouted('rlm', () =>
+            dependencies.rlmRuntime.investigate({
+              question,
+              scope,
+              executionIdentity: leaseExecutionIdentity(lease),
+              budget: rlmBudget,
+              signal,
+              decision,
+            }),
+          );
         }
         if (decision.mode === 'direct') {
+          try {
+            recordRlmRoute('direct', 'ok');
+          } catch {
+            // A diagnostic status write must never turn a successful direct route into an error.
+          }
           return {
             mode: decision.mode,
             reasons: decision.reasons,
@@ -309,14 +337,16 @@ export function createRlmOpenCodeTool(dependencies: {
             evidence: [],
           };
         }
-        return dependencies.queryService.search({
-          scope,
-          query: question,
-          ...(optionalPositiveInteger(args.limit, 100) === undefined
-            ? {}
-            : { limit: optionalPositiveInteger(args.limit, 100) }),
-          signal,
-        });
+        return executeRouted('retrieval', () =>
+          dependencies.queryService.search({
+            scope,
+            query: question,
+            ...(optionalPositiveInteger(args.limit, 100) === undefined
+              ? {}
+              : { limit: optionalPositiveInteger(args.limit, 100) }),
+            signal,
+          }),
+        );
       }
       case 'describe': {
         exactKeys(rawInput, ['operation']);
@@ -404,21 +434,23 @@ export function createRlmOpenCodeTool(dependencies: {
       case 'investigate': {
         const args = exactKeys(rawInput, ['operation', 'query']);
         if (!resolveRlmEnabled({ workspaceId: lease.workspaceId }).enabled) {
-          recordRlmRoute('retrieval', 'ok');
-          return dependencies.queryService.search({
-            scope,
-            query: text(args.query),
-            signal,
-          });
+          return executeRouted('retrieval', () =>
+            dependencies.queryService.search({
+              scope,
+              query: text(args.query),
+              signal,
+            }),
+          );
         }
-        recordRlmRoute('rlm', 'ok');
-        return dependencies.rlmRuntime.investigate({
-          question: text(args.query),
-          scope,
-          executionIdentity: leaseExecutionIdentity(lease),
-          budget: rlmBudget,
-          signal,
-        });
+        return executeRouted('rlm', () =>
+          dependencies.rlmRuntime.investigate({
+            question: text(args.query),
+            scope,
+            executionIdentity: leaseExecutionIdentity(lease),
+            budget: rlmBudget,
+            signal,
+          }),
+        );
       }
     }
   };

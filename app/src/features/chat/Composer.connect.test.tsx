@@ -1,15 +1,23 @@
+import 'fake-indexeddb/auto';
+
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui';
 import { toast } from '@/components/ui/toast';
-import { messageRepo } from '@/lib/db';
+import { db, messageRepo } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { getChatActivityEvents } from './activity/activityStore';
 import { Composer } from './Composer';
 
-vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => undefined }));
+const liveQueryFixture = vi.hoisted(() => ({ emptyArray: [] as unknown[] }));
+vi.mock('dexie-react-hooks', () => ({
+  useLiveQuery: (_query: unknown, _deps: unknown, defaultValue: unknown) =>
+    Array.isArray(defaultValue) && defaultValue.length === 0
+      ? liveQueryFixture.emptyArray
+      : defaultValue,
+}));
 vi.mock('./HarnessReadinessGate', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./HarnessReadinessGate')>();
   return {
@@ -33,7 +41,7 @@ function renderComposer() {
 }
 
 describe('Composer secure /connect integration', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     vi.stubGlobal(
       'ResizeObserver',
@@ -53,6 +61,10 @@ describe('Composer secure /connect integration', () => {
       projectId: 'project-1' as never,
     });
     useUIStore.setState({ settingsOpen: false, activeChatId: 'chat-connect' as never });
+    await db.messages
+      .where('chat_id')
+      .equals('chat-connect' as never)
+      .delete();
   });
 
   afterEach(() => {
@@ -83,7 +95,16 @@ describe('Composer secure /connect integration', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => expect(useUIStore.getState().settingsOpen).toBe(true));
-    expect(create).not.toHaveBeenCalled();
+    await waitFor(async () => {
+      const rows = await messageRepo.list({ chat_id: 'chat-connect' as never });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.role).toBe('user');
+      expect(rows[0]?.parts).toEqual([
+        { kind: 'text', text: '/connect' },
+        { kind: 'local_command_receipt', version: 1, modelDispatch: 'skipped', receipts: [{ commandId: expect.any(String), status: 'completed' }] },
+      ]);
+    });
+    expect(create).toHaveBeenCalledTimes(1);
     expect(modelSend).not.toHaveBeenCalled();
     expect(getChatActivityEvents('chat-connect')).toHaveLength(activityBefore);
     window.removeEventListener('jarvis:send', modelSend);
@@ -102,14 +123,27 @@ describe('Composer secure /connect integration', () => {
     create.mockClear();
 
     const input = screen.getByRole('textbox', { name: 'Message' });
-    fireEvent.change(input, { target: { value: '/connect openrouter' } });
+    fireEvent.change(input, { target: { value: '  /connect openrouter  ' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => expect(useUIStore.getState().settingsOpen).toBe(true));
     expect(sessionStorage.getItem('vibespace.settings.provider-focus.v1')).toBe('openrouter');
     await waitFor(() => expect(providerEvents).toEqual(['openrouter']));
-    expect((input as HTMLTextAreaElement).value).toBe('');
-    expect(create).not.toHaveBeenCalled();
+    await waitFor(async () => {
+      const rows = await messageRepo.list({ chat_id: 'chat-connect' as never });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.role).toBe('user');
+      expect(rows[0]?.parts).toEqual([
+        { kind: 'text', text: '  /connect openrouter  ' },
+        { kind: 'local_command_receipt', version: 1, modelDispatch: 'skipped', receipts: [{ commandId: expect.any(String), status: 'completed' }] },
+      ]);
+    });
+    await waitFor(() =>
+      expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe(
+        '',
+      ),
+    );
+    expect(create).toHaveBeenCalledTimes(1);
     window.removeEventListener('jarvis:settings:provider', onFocus);
   });
 

@@ -1,7 +1,7 @@
 import { llmContentToText, type LLMMessage } from '@/lib/ai/types';
 import type { ContextBudgetKind, TokenOptimizationMode } from './contracts';
 import type { TokenOptimizationReceipt } from './optimizationReport';
-import { optimizationModePolicy } from './optimizationPolicy';
+import { isProtectedContext } from './protectedContent';
 import {
   createProductionTokenizers,
   type ProductionTokenizerOptions,
@@ -45,7 +45,8 @@ export interface ChatTokenOptimizationResult {
   readonly selectedContextIds: readonly string[];
   readonly messages: LLMMessage[];
   readonly systemPrompt: string;
-  readonly outputTokenLimit: number;
+  /** Caller allowance for the provider; undefined means no explicit cap. */
+  readonly outputTokenLimit: number | undefined;
   readonly receipt: TokenOptimizationReceipt;
 }
 
@@ -123,17 +124,26 @@ async function optimizeWith(
       reason: 'Protected system authority',
     });
   }
-  const optionalContext = new Map<string, { id: string; relevance: number }>();
+  const optionalContext = new Map<string, string>();
   for (const context of request.contextSegments ?? []) {
-    if (context.protected) continue;
-    const key = JSON.stringify([context.kind, context.text]);
-    if (!optionalContext.has(key) || optionalContext.get(key)!.relevance < context.relevance) {
-      optionalContext.set(key, { id: context.id, relevance: context.relevance });
+    if (
+      context.protected ||
+      isProtectedContext(context.kind) ||
+      context.kind === 'conversation_history'
+    ) {
+      continue;
     }
+    const key = JSON.stringify([context.kind, context.text]);
+    if (!optionalContext.has(key)) optionalContext.set(key, context.id);
   }
   for (const context of request.contextSegments ?? []) {
     const duplicateKey = JSON.stringify([context.kind, context.text]);
-    const retainedId = context.protected ? undefined : optionalContext.get(duplicateKey)?.id;
+    const retainedId =
+      context.protected ||
+      isProtectedContext(context.kind) ||
+      context.kind === 'conversation_history'
+        ? undefined
+        : optionalContext.get(duplicateKey);
     const duplicateOf =
       retainedId && retainedId !== context.id ? `runtime-${retainedId}` : undefined;
     segments.push({
@@ -159,20 +169,20 @@ async function optimizeWith(
     });
   }
 
-  // Ponytail is an instruction skill, not a lossy context compressor. The
-  // accounting service measures every selected context segment for a
-  // transparent estimate while preserving every segment in the transport
-  // path. Provider-reported usage remains authoritative for the serialized
-  // request sent to the model.
+  // Ponytail is an instruction skill. The accounting service only removes
+  // exact optional duplicates; protected content and conversation history
+  // remain in order. Provider-reported usage remains authoritative for the
+  // serialized request sent to the model.
+  const outputAllowance =
+    Number.isSafeInteger(request.requestedOutputTokens) && request.requestedOutputTokens! >= 0
+      ? request.requestedOutputTokens
+      : undefined;
   const measured = await optimizer.optimize({
     mode: request.mode,
     providerId: request.providerId,
     modelId: request.modelId,
     modelContextLimit: safeLimit(request.modelContextLimit, FALLBACK_CONTEXT_WINDOW_TOKENS),
-    requestedOutputTokens: Math.min(
-      safeLimit(request.requestedOutputTokens, DEFAULT_REQUESTED_OUTPUT_TOKENS),
-      optimizationModePolicy(request.mode).outputTokenCeiling ?? Number.MAX_SAFE_INTEGER,
-    ),
+    requestedOutputTokens: outputAllowance ?? DEFAULT_REQUESTED_OUTPUT_TOKENS,
     segments,
     allowProviderTokenCountTransport: request.allowProviderTokenCountTransport === true,
     ...(request.signal ? { signal: request.signal } : {}),
@@ -191,7 +201,7 @@ async function optimizeWith(
     systemPrompt: [...selectedRuntimeContext, request.systemPrompt ?? '']
       .filter((text) => text.trim().length > 0)
       .join('\n\n'),
-    outputTokenLimit: measured.receipt.outputTokenLimit,
+    outputTokenLimit: outputAllowance,
     receipt: measured.receipt,
   });
 }

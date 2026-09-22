@@ -18,7 +18,7 @@
 import type { Agent, AgentId, Chat, EventId, Message, MessageId, Part } from '@/types';
 import { flushSync } from 'react-dom';
 import { providerPartialUsage } from './providerPartialUsage';
-import type { ChatId } from '@/types/common';
+import type { ChatId, ProjectId } from '@/types/common';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
 import { useUIStore } from '@/stores/ui';
@@ -33,7 +33,7 @@ import {
   type CaoLearnerExecutionIdentity,
   type CaoPublicStatus,
 } from '@/features/cao/bootstrap';
-import type { AccessLevel } from '@/lib/permissions/OpenCodePermissionProfile';
+import type { AccessLevel, AgentApprovalMode } from '@/lib/permissions/OpenCodePermissionProfile';
 import {
   acknowledgeConnectionRouteDisclosure,
   buildConnectionRouteDisclosure,
@@ -49,7 +49,7 @@ import {
   dexieChatBackendPersistence,
   lockChatBackendForDispatch,
 } from './backend/chatBackendPersistence';
-import { resolveChatBackendAffinity } from './backend/chatBackend';
+import { resolveChatBackendAffinity, type ChatBackend } from './backend/chatBackend';
 import {
   runBoundedLocalFinalBossRevision,
   shouldRunLocalFinalBossRevision,
@@ -70,6 +70,7 @@ import type { LLMContentPart, LLMMessage, LLMResponse, LLMStreamChunk } from './
 import { llmContentToText } from './types';
 import {
   isProviderRuntimeError,
+  ProviderRuntimeError,
   providerErrorDetails,
   type ProviderErrorDetails,
 } from './providerError';
@@ -93,9 +94,11 @@ import {
 } from '@/lib/actions/fallbackActions';
 import { routeDefaultContextQuery } from '@/features/context/adaptiveContextRouter';
 import { resolveRlmEnabled } from '@/features/context/rlmPreferenceStore';
+import { contextTerminalCoordinationIntent, COORDINATION_READ_TOOLS } from '@/features/local-command-bridge/modelCoordinationPolicy';
 import {
   accessAllowsTool,
   expireApproveAllForRun,
+  readAgentApprovalMode,
   readPermissionAccess,
 } from '@/features/jarvis-interaction/permissionAccessStore';
 import {
@@ -104,10 +107,18 @@ import {
   respondToPersistentOpenCodeApproval,
 } from '@/lib/ai/adapters/opencodePersistent';
 import { openCodeChecklistParts } from '@/lib/ai/openCodeChecklist';
-import { grantToolGatewayMutation } from '@/lib/harness/toolGatewayAuthority';
+import {
+  captureToolGatewayAuthorityClaim,
+  grantToolGatewayMutation,
+  type ToolGatewayAuthorityClaim,
+} from '@/lib/harness/toolGatewayAuthority';
 import { recordOpenCodeApprovalStatus } from '@/lib/harness/openCodeApprovalState';
 import { buildAgentTerminalContext } from '@/features/terminals/agentContext';
-import { getPluginContextBlock, getPluginStatusContextBlock } from '@/features/plugins';
+import {
+  getPluginContextBlock,
+  getPluginStatusContextBlock,
+  PLUGIN_CATALOG,
+} from '@/features/plugins';
 import type { CanonicalPluginArtifactCapability } from '@/features/plugins/runtime';
 import { devConsole } from '@/features/dev-console';
 import { toast } from '@/components/ui/toast';
@@ -162,7 +173,11 @@ import {
   createJarvisHiveWorkerExecutor,
 } from './stacks/hiveWorkerExecutor';
 import type { StackStepSpec } from './stacks/types';
-import { CONNECTION_MODEL_OPTIONS, PROVIDER_CONNECTIONS } from './adapters/catalog';
+import {
+  CODEX_CLI_CONNECTION,
+  CONNECTION_MODEL_OPTIONS,
+  PROVIDER_CONNECTIONS,
+} from './adapters/catalog';
 import {
   applyChatModelSelectionToAgent,
   gateChatModelSelection,
@@ -247,7 +262,7 @@ import {
 } from '@/features/chat/oversizedMessageAttachment';
 import { resolveReasoningPolicy, type ReasoningPreference } from './reasoningControls';
 import { getLiveOpenCodeProviders, liveVariantsForSelection } from './openCodeProductionTransport';
-import { classifyOpenCodeAuthFailure, HarnessError } from '@/lib/harness/errors';
+import { classifyOpenCodeAuthFailure, HarnessError, redactHarnessText } from '@/lib/harness/errors';
 import { parseJarvisPlanBlocks } from '@/features/jarvis-interaction/planParser';
 import { parseJarvisPermissionBlocks } from '@/features/jarvis-interaction/permissionParser';
 import {
@@ -310,7 +325,12 @@ import type { JarvisKernelTurnInput } from '@/lib/jarvis/kernel';
 import type { JarvisArtifactDraft } from '@/lib/jarvis/contracts';
 import type { RawProviderResponse } from '@/lib/jarvis/response/pipeline';
 import { createPublicStreamProjection } from '@/lib/jarvis/response/publicStreamProjection';
-import { clearPreview, setPreview, previewIdentityForPlaceholder, type StreamingPreviewSegment } from '@/features/chat/streamingPreviewStore';
+import {
+  clearPreview,
+  setPreview,
+  previewIdentityForPlaceholder,
+  type StreamingPreviewSegment,
+} from '@/features/chat/streamingPreviewStore';
 import type { VibeSpaceApproval } from '@/lib/harness/types';
 import {
   MUTATING_TOOL_GATEWAY_TOOLS,
@@ -333,7 +353,12 @@ import {
   type TokenOptimizationMode,
 } from '@/features/token-optimizer';
 import { getModelOptions } from './models';
-import { optimizeKernelRuntimeContext, isProtectedTokenOptimizationContext, tokenOptimizationContextKind, tokenOptimizationContextRelevance } from './runtimeTokenOptimization';
+import {
+  optimizeKernelRuntimeContext,
+  isProtectedTokenOptimizationContext,
+  tokenOptimizationContextKind,
+  tokenOptimizationContextRelevance,
+} from './runtimeTokenOptimization';
 import { localIntelligenceTelemetryRuntime } from './intelligenceTelemetryRuntime';
 import { browserGoalLaunchRuntime } from '@/features/browser/browserGoalLaunchRuntime';
 import { projectOpenCodeLiveToolActivity } from './openCodeLiveToolActivity';
@@ -361,6 +386,30 @@ export function liveVariantLookupForChatSelection(selection: {
     providerId: selection.providerId,
     runtimeProviderId,
     modelId: runtimeModelId,
+  });
+}
+
+/**
+ * Keep an explicit backend/connection mismatch from falling through to a
+ * provider adapter. An OpenCode chat may not silently consume the Codex
+ * subscription connection; Codex-backed custom routes (such as opencode-cli)
+ * remain valid and are still checked by the router's native capability gate.
+ */
+export function assertRuntimeBackendConnectionCompatibility(
+  input: Readonly<{
+    backend: ChatBackend;
+    connectionId?: string;
+    providerId?: string;
+    modelId?: string;
+  }>,
+): void {
+  if (input.backend !== 'opencode' || input.connectionId !== CODEX_CLI_CONNECTION.id) return;
+  throw new ProviderRuntimeError({
+    message: 'The selected OpenCode backend cannot use the Codex subscription connection.',
+    code: 'chat_backend_connection_mismatch',
+    providerId: input.providerId,
+    modelId: input.modelId,
+    connectionId: input.connectionId,
   });
 }
 
@@ -394,22 +443,32 @@ export function resolveRuntimeReasoningPolicy(
 export async function resolveCapturedRuntimeReasoningPolicy(
   selection: Readonly<{ providerId: string; modelId: string; connectionId?: string }>,
   preference: Readonly<ReasoningPreference>,
-  listModels: () => Promise<readonly import('./adapters/types').ProviderDiscoveredModel[]> = async () => {
+  listModels: () => Promise<
+    readonly import('./adapters/types').ProviderDiscoveredModel[]
+  > = async () => {
     const { openCodePersistentAdapter } = await import('./adapters/opencodePersistent');
-    return await openCodePersistentAdapter.listModels?.() ?? [];
+    return (await openCodePersistentAdapter.listModels?.()) ?? [];
   },
   backend?: 'codex' | 'opencode',
 ): Promise<ReturnType<typeof resolveReasoningPolicy>> {
   // The picker describes the upstream provider; chat affinity owns the CLI.
   // Codex validates the exact model/effort with its own model/list before
   // turn/start. Do not start an unrelated OpenCode runtime to prepare it.
-  if (backend === 'codex' || selection.connectionId !== 'opencode-cli' ||
-      (preference.mode === 'normal' && preference.effortOverride === null)) {
+  if (
+    backend === 'codex' ||
+    selection.connectionId !== 'opencode-cli' ||
+    (preference.mode === 'normal' && preference.effortOverride === null)
+  ) {
     return resolveRuntimeReasoningPolicy(selection, preference);
   }
-  const model = (await listModels()).find(item => item.id === selection.modelId);
+  const model = (await listModels()).find((item) => item.id === selection.modelId);
   if (!model) throw new Error('The selected OpenCode model is unavailable in the live catalog.');
-  return resolveReasoningPolicy({ selection, preference, liveVariants: model.variants ?? [], liveVariantsAuthoritative: true });
+  return resolveReasoningPolicy({
+    selection,
+    preference,
+    liveVariants: model.variants ?? [],
+    liveVariantsAuthoritative: true,
+  });
 }
 
 /** @internal Re-reads canonical provider results without exposing the result store. */
@@ -499,21 +558,34 @@ export function prependOpenCodePublicTimeline(
       return [structuredClone(part)];
     }
     const parsed = parseJarvisPlanBlocks(part.text);
-    if (!parsed.hasPlanBlocks || parsed.parts.some((item) =>
-      item.kind === 'plan_review' && !item.plan.id.startsWith('codex_plan_'))) {
+    if (
+      !parsed.hasPlanBlocks ||
+      parsed.parts.some(
+        (item) => item.kind === 'plan_review' && !item.plan.id.startsWith('codex_plan_'),
+      )
+    ) {
       return [structuredClone(part)];
     }
     // Native intermediate plans are chronology, not an additional approval.
     // Keep their readable content; only the validated final envelope owns actions.
-    return parsed.parts.map((item): Part => item.kind === 'plan_review' ? {
-      kind: 'text',
-      text: [
-        item.plan.title,
-        item.plan.summary,
-        item.plan.steps.map((step, index) => `${index + 1}. ${step}`).join('\n'),
-        item.plan.risks?.length ? `Risks:\n${item.plan.risks.map((risk) => `- ${risk}`).join('\n')}` : '',
-      ].filter(Boolean).join('\n\n'),
-    } : structuredClone(item));
+    return parsed.parts.map(
+      (item): Part =>
+        item.kind === 'plan_review'
+          ? {
+              kind: 'text',
+              text: [
+                item.plan.title,
+                item.plan.summary,
+                item.plan.steps.map((step, index) => `${index + 1}. ${step}`).join('\n'),
+                item.plan.risks?.length
+                  ? `Risks:\n${item.plan.risks.map((risk) => `- ${risk}`).join('\n')}`
+                  : '',
+              ]
+                .filter(Boolean)
+                .join('\n\n'),
+            }
+          : structuredClone(item),
+    );
   });
   const preservedEnvelopeParts = envelope.parts.filter(
     (part) => !isSupersededOpenCodeEnvelopePart(part),
@@ -713,11 +785,34 @@ function stablePhaseId(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+type ReportedUsageField = 'total_tokens' | 'cache_read_tokens' | 'cache_write_tokens';
+
+function aggregateReportedUsageDetails(
+  responses: readonly LLMResponse[],
+): Pick<LLMResponse['usage'], ReportedUsageField> {
+  const details: Pick<LLMResponse['usage'], ReportedUsageField> = {};
+  for (const field of ['total_tokens', 'cache_read_tokens', 'cache_write_tokens'] as const) {
+    const values = responses.map((response) => response.usage[field]);
+    const safeValues = values.filter(
+      (value): value is number =>
+        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0,
+    );
+    if (values.length > 0 && safeValues.length === values.length) {
+      details[field] = safeValues.reduce((total, value) => total + value, 0);
+    }
+  }
+  return details;
+}
+
 function addResponseUsage(...responses: readonly LLMResponse[]): LLMResponse['usage'] {
-  const provenance = responses.some(response => response.usage.provenance === 'unavailable')
-    ? 'unavailable' : responses.some(response => response.usage.provenance === 'estimated') ? 'estimated' : undefined;
+  const provenance = responses.some((response) => response.usage.provenance === 'unavailable')
+    ? 'unavailable'
+    : responses.some((response) => response.usage.provenance === 'estimated')
+      ? 'estimated'
+      : undefined;
   return Object.freeze({
     ...(provenance ? { provenance } : {}),
+    ...aggregateReportedUsageDetails(responses),
     input_tokens: responses.reduce((total, response) => total + response.usage.input_tokens, 0),
     output_tokens: responses.reduce((total, response) => total + response.usage.output_tokens, 0),
     cost_usd: responses.reduce((total, response) => total + response.usage.cost_usd, 0),
@@ -1696,8 +1791,10 @@ export async function installJarvisKernelRuntimeHost(
               const currentPreviewScope = () => {
                 if (signal.aborted || resolvedDisposed || preparedDisposed) return undefined;
                 const scope = activeTurnScopes.get(providerInput.runId);
-                return scope?.accountId === providerInput.accountId && scope.requestId === providerInput.requestId
-                  ? scope : undefined;
+                return scope?.accountId === providerInput.accountId &&
+                  scope.requestId === providerInput.requestId
+                  ? scope
+                  : undefined;
               };
               const publishPreview = () => {
                 const scope = currentPreviewScope();
@@ -1707,7 +1804,14 @@ export async function installJarvisKernelRuntimeHost(
                 // share this canonical ordered projection and immutable values.
                 // Provider callbacks run outside React lifecycle work. Commit
                 // public activity before subsequent activity-store updates.
-                flushSync(() => setPreview({ ...scope, ...snapshot, updatedAt: now(), projectRoot: providerInput.workingDirectory }));
+                flushSync(() =>
+                  setPreview({
+                    ...scope,
+                    ...snapshot,
+                    updatedAt: now(),
+                    projectRoot: providerInput.workingDirectory,
+                  }),
+                );
               };
               const lastUserText = llmContentToText(
                 [...providerInput.messages].reverse().find((message) => message.role === 'user')
@@ -1736,14 +1840,20 @@ export async function installJarvisKernelRuntimeHost(
               let thinkingRecorded = false;
               let liveReasoning = '';
               const finishThinking = (status: 'done' | 'error' | 'cancelled') => {
-                if (thinkingRecorded) useChatActivityStore.getState().update(providerChatId, thinkingActivityId, { status, endedAt: now() });
+                if (thinkingRecorded)
+                  useChatActivityStore
+                    .getState()
+                    .update(providerChatId, thinkingActivityId, { status, endedAt: now() });
               };
               const settlePendingToolActivities = (status: 'cancelled' | 'error') => {
                 const state = useChatActivityStore.getState();
                 const ownedIds = new Set(liveToolActivityIds.values());
                 const endedAt = now();
                 for (const event of state.eventsByChat[providerChatId] ?? []) {
-                  if (ownedIds.has(event.id) && (event.status === 'pending' || event.status === 'running')) {
+                  if (
+                    ownedIds.has(event.id) &&
+                    (event.status === 'pending' || event.status === 'running')
+                  ) {
                     state.update(providerChatId, event.id, { status, endedAt });
                   }
                 }
@@ -1801,10 +1911,15 @@ export async function installJarvisKernelRuntimeHost(
                 }
                 const segment = preview.getTool(callId);
                 // Recovery cannot resurrect an already terminal tool call.
-                if (segment && segment.status !== 'started' && activity.status === 'started') return;
-                preview.updateTool({ id: callId, name, status: activity.status,
+                if (segment && segment.status !== 'started' && activity.status === 'started')
+                  return;
+                preview.updateTool({
+                  id: callId,
+                  name,
+                  status: activity.status,
                   fileLabel: activity.fileLabel,
-                  ...(activity.details ? { details: activity.details } : {}) });
+                  ...(activity.details ? { details: activity.details } : {}),
+                });
                 const toolDetails = preview.getTool(callId)?.details;
                 publishPreview();
                 let activityId = liveToolActivityIds.get(callId);
@@ -1856,6 +1971,9 @@ export async function installJarvisKernelRuntimeHost(
                   runtimeSettings: providerInput.runtimeSettings
                     ? { ...providerInput.runtimeSettings }
                     : undefined,
+                  accessLevel: providerInput.accessLevel,
+                  agentApprovalMode: providerInput.agentApprovalMode,
+                  approveAllForRun: providerInput.approveAllForRun,
                   tools: openCodeToolsForInteractionMode(
                     providerInput.interactionMode,
                     providerInput.messages,
@@ -1871,15 +1989,30 @@ export async function installJarvisKernelRuntimeHost(
                     attemptNumber: providerInput.attemptNumber,
                   },
                   signal,
+                  onProviderWarning: (message) => {
+                    if (signal.aborted || !currentPreviewScope()) return;
+                    setLiveAgentActivityRunPhase(providerInput.runId, {
+                      category: 'response',
+                      title: message,
+                      detail: message,
+                    });
+                  },
                   onProviderUsage: (evidence) => {
-                    if (resolvedDisposed || preparedDisposed ||
-                        evidence.requestId !== providerInput.requestId ||
-                        evidence.connectionId !== providerInput.model.connectionId ||
-                        evidence.providerId !== providerInput.model.providerId ||
-                        evidence.modelId !== providerInput.model.modelId) return;
-                    partialProviderUsage = providerPartialUsage(evidence.usage,
-                      providerInput.model.providerId as NonNullable<Message['usage']>['provider'] & string,
-                      evidence.modelId);
+                    if (
+                      resolvedDisposed ||
+                      preparedDisposed ||
+                      evidence.requestId !== providerInput.requestId ||
+                      evidence.connectionId !== providerInput.model.connectionId ||
+                      evidence.providerId !== providerInput.model.providerId ||
+                      evidence.modelId !== providerInput.model.modelId
+                    )
+                      return;
+                    partialProviderUsage = providerPartialUsage(
+                      evidence.usage,
+                      providerInput.model.providerId as NonNullable<Message['usage']>['provider'] &
+                        string,
+                      evidence.modelId,
+                    );
                   },
                   onHarnessSessionBound: (binding) => {
                     if (
@@ -1893,18 +2026,48 @@ export async function installJarvisKernelRuntimeHost(
                   onApprovalRequested: async (approval) => {
                     signal.throwIfAborted();
                     const port = activeKernelQuestionProjectionPorts.get(providerInput.runId);
-                    if (!port || port.accountId !== providerInput.accountId ||
-                        port.requestId !== providerInput.requestId ||
-                        !contextCitationSessionId ||
-                        (approval.sessionId !== contextCitationSessionId &&
-                          !isActiveOpenCodeChildApproval(contextCitationSessionId, approval))) {
+                    if (
+                      !port ||
+                      port.accountId !== providerInput.accountId ||
+                      port.requestId !== providerInput.requestId ||
+                      !contextCitationSessionId ||
+                      (approval.sessionId !== contextCitationSessionId &&
+                        !isActiveOpenCodeChildApproval(contextCitationSessionId, approval))
+                    ) {
                       throw new Error('kernel_provider_approval_scope_unavailable');
                     }
-                    await port.project({ kind: 'permission_request', request: openCodePermissionRequest(approval, {
-                      chatId: providerChatId, accountId: providerInput.accountId,
-                      workspaceId: providerInput.workspaceId, projectId: providerInput.projectId,
+                    const permissionRequest = openCodePermissionRequest(approval, {
+                      chatId: providerChatId,
+                      accountId: providerInput.accountId,
+                      workspaceId: providerInput.workspaceId,
+                      projectId: providerInput.projectId,
                       workingDirectory: providerInput.workingDirectory,
-                    }) });
+                    });
+                    if (
+                      mayAutoApproveOpenCodeRequest({
+                        approveAllForRun: providerInput.approveAllForRun === true,
+                        agentApprovalMode: providerInput.agentApprovalMode,
+                        interactionMode: providerInput.interactionMode,
+                        accessLevel:
+                          providerInput.accessLevel ??
+                          (providerInput.interactionMode === 'agent' ? 'full' : 'read-only'),
+                        capability: approval.capability,
+                        risk: permissionRequest.risk,
+                        pluginOperation: approval.pluginOperation,
+                      })
+                    ) {
+                      if (!isReadOnlyPluginApproval(approval)) {
+                        grantToolGatewayMutation(approval.sessionId, approval.capability, 'once');
+                      }
+                      recordOpenCodeApprovalStatus(approval.sessionId, approval.id, 'approved');
+                      await respondToPersistentOpenCodeApproval({
+                        sessionId: approval.sessionId,
+                        approvalId: approval.id,
+                        response: 'once',
+                      });
+                      return;
+                    }
+                    await port.project({ kind: 'permission_request', request: permissionRequest });
                     signal.throwIfAborted();
                   },
                   onQuestionRequested: async (projection) => {
@@ -1927,14 +2090,32 @@ export async function installJarvisKernelRuntimeHost(
                   },
                   onReasoning: (delta, mode) => {
                     const scope = activeTurnScopes.get(providerInput.runId);
-                    if (signal.aborted || suppressProviderPreview || !scope || scope.requestId !== providerInput.requestId) return;
+                    if (
+                      signal.aborted ||
+                      suppressProviderPreview ||
+                      !scope ||
+                      scope.requestId !== providerInput.requestId
+                    )
+                      return;
                     if (preview.pushReasoning({ delta, mode })) publishPreview();
                     liveReasoning = mode === 'replace' ? delta : liveReasoning + delta;
-                    if (thinkingRecorded) useChatActivityStore.getState().update(scope.chatId, thinkingActivityId, { detail: liveReasoning });
+                    if (thinkingRecorded)
+                      useChatActivityStore
+                        .getState()
+                        .update(scope.chatId, thinkingActivityId, { detail: liveReasoning });
                     else {
-                      useChatActivityStore.getState().record({ id: thinkingActivityId, chatId: scope.chatId,
-                        messageId: `msg_${providerInput.requestId}`, kind: 'agent', category: 'thinking',
-                        title: 'Thinking', detail: liveReasoning, status: 'running', ts: startedAt, startedAt });
+                      useChatActivityStore.getState().record({
+                        id: thinkingActivityId,
+                        chatId: scope.chatId,
+                        messageId: `msg_${providerInput.requestId}`,
+                        kind: 'agent',
+                        category: 'thinking',
+                        title: 'Thinking',
+                        detail: liveReasoning,
+                        status: 'running',
+                        ts: startedAt,
+                        startedAt,
+                      });
                       thinkingRecorded = true;
                     }
                   },
@@ -1968,39 +2149,78 @@ export async function installJarvisKernelRuntimeHost(
                       const activityId = liveToolActivityIds.get(part.call_id);
                       const diff = resultPart?.result?.diff;
                       const nativeTask = part.args.nativeTask;
-                      if (scope?.accountId === providerInput.accountId && scope.requestId === providerInput.requestId && activityId && part.tool === 'task' && nativeTask && typeof nativeTask === 'object') {
+                      if (
+                        scope?.accountId === providerInput.accountId &&
+                        scope.requestId === providerInput.requestId &&
+                        activityId &&
+                        part.tool === 'task' &&
+                        nativeTask &&
+                        typeof nativeTask === 'object'
+                      ) {
                         useChatActivityStore.getState().update(scope.chatId, activityId, {
-                          nativeTask: nativeTask as import('./openCodeNativeActivity').NativeTaskActivity,
+                          nativeTask:
+                            nativeTask as import('./openCodeNativeActivity').NativeTaskActivity,
                         });
                       }
-                      if (scope?.accountId === providerInput.accountId && scope.requestId === providerInput.requestId &&
-                          activityId && resultPart?.result?.status === 'completed' && !resultPart.error &&
-                          typeof diff === 'string' && /^(edit|write|apply_patch)$/.test(part.tool)) {
+                      if (
+                        scope?.accountId === providerInput.accountId &&
+                        scope.requestId === providerInput.requestId &&
+                        activityId &&
+                        resultPart?.result?.status === 'completed' &&
+                        !resultPart.error &&
+                        typeof diff === 'string' &&
+                        /^(edit|write|apply_patch)$/.test(part.tool)
+                      ) {
                         useChatActivityStore.getState().update(scope.chatId, activityId, {
                           diff,
-                          addedLines: diff.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).length,
-                          removedLines: diff.split('\n').filter(line => line.startsWith('-') && !line.startsWith('---')).length,
+                          addedLines: diff
+                            .split('\n')
+                            .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+                            .length,
+                          removedLines: diff
+                            .split('\n')
+                            .filter((line) => line.startsWith('-') && !line.startsWith('---'))
+                            .length,
                         });
                       }
                     }
                     const thinkingScope = activeTurnScopes.get(providerInput.runId);
-                    if (thinking.length > 0 && thinkingScope?.accountId === providerInput.accountId &&
-                        thinkingScope.requestId === providerInput.requestId && !suppressProviderPreview) {
+                    if (
+                      thinking.length > 0 &&
+                      thinkingScope?.accountId === providerInput.accountId &&
+                      thinkingScope.requestId === providerInput.requestId &&
+                      !suppressProviderPreview
+                    ) {
                       const detail = thinking.map((part) => part.text).join('\n\n');
                       liveReasoning = detail;
                       if (thinkingRecorded) {
-                        useChatActivityStore.getState().update(thinkingScope.chatId, thinkingActivityId, { detail });
+                        useChatActivityStore
+                          .getState()
+                          .update(thinkingScope.chatId, thinkingActivityId, { detail });
                       } else {
-                        useChatActivityStore.getState().record({ id: thinkingActivityId, chatId: thinkingScope.chatId,
-                          messageId: `msg_${providerInput.requestId}`, kind: 'agent', category: 'thinking',
-                          title: 'Thinking', detail, status: 'running', ts: startedAt, startedAt });
+                        useChatActivityStore.getState().record({
+                          id: thinkingActivityId,
+                          chatId: thinkingScope.chatId,
+                          messageId: `msg_${providerInput.requestId}`,
+                          kind: 'agent',
+                          category: 'thinking',
+                          title: 'Thinking',
+                          detail,
+                          status: 'running',
+                          ts: startedAt,
+                          startedAt,
+                        });
                         thinkingRecorded = true;
                       }
                     }
                     const checkpoint = [...snapshot.timeline]
                       .reverse()
                       .find((part) => part.kind === 'text');
-                    if (thinking.length === 0 && checkpoint?.kind === 'text' && checkpoint.text.trim()) {
+                    if (
+                      thinking.length === 0 &&
+                      checkpoint?.kind === 'text' &&
+                      checkpoint.text.trim()
+                    ) {
                       setLiveAgentActivityRunPhase(providerInput.runId, {
                         category: 'thinking',
                         title: 'Jarvis is auditing the request',
@@ -2012,107 +2232,115 @@ export async function installJarvisKernelRuntimeHost(
                     // Revoke effects before reading or retaining late callbacks.
                     if (!currentPreviewScope() || suppressProviderPreview) return;
                     if (!preview.pushText(chunk)) return;
-                    if (chunk.delta) setLiveAgentActivityRunPhase(providerInput.runId, {
-                      category: 'response', title: 'Jarvis is responding',
-                      subtitle: providerInput.agent.model.provider + '/' + providerInput.agent.model.model,
-                    });
+                    if (chunk.delta)
+                      setLiveAgentActivityRunPhase(providerInput.runId, {
+                        category: 'response',
+                        title: 'Jarvis is responding',
+                        subtitle:
+                          providerInput.agent.model.provider +
+                          '/' +
+                          providerInput.agent.model.model,
+                      });
                     publishPreview();
                   },
                 },
                 parseExplicitResponseContract(lastUserText),
-              ).then((result): Readonly<RawProviderResponse> => {
-                const completedAt = now();
-                if (
-                  String(result.provider) !== providerInput.model.providerId ||
-                  result.model !== providerInput.model.modelId
-                ) {
-                  throw new Error('kernel_provider_result_binding_mismatch');
-                }
-                const partial = providerResponseWasTruncated(result.finish_reason);
-                const raw = Object.freeze({
-                  text: result.text,
-                  provider: providerInput.model,
-                  usage: Object.freeze({ ...result.usage }),
-                  verifiedFacts: Object.freeze({
-                    ...(partial
-                      ? {
-                          executionState: Object.freeze({
-                            status: 'partial' as const,
-                            verifiedBy: 'provider' as const,
-                            lastEventSeq: 0,
-                          }),
-                        }
-                      : {}),
-                    modelState: 'authenticated' as const,
-                    plugins: Object.freeze([]),
-                    mcps: Object.freeze([]),
-                  }),
-                  completedAt,
-                });
-                providerArtifactDrafts.set(raw, Object.freeze([]));
-                providerContextCitationItems.set(
-                  raw,
-                  contextCitationSessionId
-                    ? consumeToolGatewayContextCitationItems(contextCitationSessionId)
-                    : Object.freeze([]),
-                );
-                if (result.public_timeline !== undefined)
-                  providerPublicTimeline.set(raw, Object.freeze([...result.public_timeline]));
-                providerChecklistEvidence.set(
-                  raw,
-                  Object.freeze([...(result.checklist_evidence ?? [])]),
-                );
-                providerControlEvidence.set(
-                  raw,
-                  Object.freeze({
-                    connectionId: providerInput.model.connectionId,
-                    effort: providerInput.runtimeSettings?.effort,
-                    performance: providerInput.runtimeSettings?.performance,
-                    completedReadOnlyFilesystem:
-                      result.tool_evidence?.completedReadOnlyFilesystem === true,
-                    explicitRootAuditComplete: result.explicit_root_audit?.complete,
-                    explicitRootAuditIssueCount: result.explicit_root_audit?.issueCount,
-                  }),
-                );
-                rememberProviderEvidence(
-                  Object.freeze({
-                    producerId: 'provider_response',
-                    accountId: providerInput.accountId,
-                    runId: providerInput.runId,
-                    requestId: providerInput.requestId,
-                    attemptNumber: providerInput.attemptNumber,
-                    resultRef: `jresult_${providerInput.requestId}`,
-                    state: partial ? 'partial' : 'completed',
-                    verifiedAt: completedAt,
-                    providerId: providerInput.model.providerId,
-                    modelId: providerInput.model.modelId,
-                    modelSnapshotRef,
-                  }),
-                );
-                finishThinking('done');
-                return raw;
-              }).catch((error: unknown) => {
-                const status = signal.aborted ? 'cancelled' : 'error';
-                finishThinking(status);
-                settlePendingToolActivities(status);
-                if (!signal.aborted) {
-                  failCanonicalTurn(
-                    { accountId: providerInput.accountId, runId: providerInput.runId },
-                    providerErrorDetails(error, {
+              )
+                .then((result): Readonly<RawProviderResponse> => {
+                  const completedAt = now();
+                  if (
+                    String(result.provider) !== providerInput.model.providerId ||
+                    result.model !== providerInput.model.modelId
+                  ) {
+                    throw new Error('kernel_provider_result_binding_mismatch');
+                  }
+                  const partial = providerResponseWasTruncated(result.finish_reason);
+                  const raw = Object.freeze({
+                    text: result.text,
+                    provider: providerInput.model,
+                    usage: Object.freeze({ ...result.usage }),
+                    verifiedFacts: Object.freeze({
+                      ...(partial
+                        ? {
+                            executionState: Object.freeze({
+                              status: 'partial' as const,
+                              verifiedBy: 'provider' as const,
+                              lastEventSeq: 0,
+                            }),
+                          }
+                        : {}),
+                      modelState: 'authenticated' as const,
+                      plugins: Object.freeze([]),
+                      mcps: Object.freeze([]),
+                    }),
+                    completedAt,
+                  });
+                  providerArtifactDrafts.set(raw, Object.freeze([]));
+                  providerContextCitationItems.set(
+                    raw,
+                    contextCitationSessionId
+                      ? consumeToolGatewayContextCitationItems(contextCitationSessionId)
+                      : Object.freeze([]),
+                  );
+                  if (result.public_timeline !== undefined)
+                    providerPublicTimeline.set(raw, Object.freeze([...result.public_timeline]));
+                  providerChecklistEvidence.set(
+                    raw,
+                    Object.freeze([...(result.checklist_evidence ?? [])]),
+                  );
+                  providerControlEvidence.set(
+                    raw,
+                    Object.freeze({
+                      connectionId: providerInput.model.connectionId,
+                      effort: providerInput.runtimeSettings?.effort,
+                      performance: providerInput.runtimeSettings?.performance,
+                      completedReadOnlyFilesystem:
+                        result.tool_evidence?.completedReadOnlyFilesystem === true,
+                      explicitRootAuditComplete: result.explicit_root_audit?.complete,
+                      explicitRootAuditIssueCount: result.explicit_root_audit?.issueCount,
+                    }),
+                  );
+                  rememberProviderEvidence(
+                    Object.freeze({
+                      producerId: 'provider_response',
+                      accountId: providerInput.accountId,
+                      runId: providerInput.runId,
+                      requestId: providerInput.requestId,
+                      attemptNumber: providerInput.attemptNumber,
+                      resultRef: `jresult_${providerInput.requestId}`,
+                      state: partial ? 'partial' : 'completed',
+                      verifiedAt: completedAt,
                       providerId: providerInput.model.providerId,
                       modelId: providerInput.model.modelId,
-                      connectionId: providerInput.model.connectionId,
-                      requestId: providerInput.requestId,
-                      runId: providerInput.runId,
+                      modelSnapshotRef,
                     }),
-                    now(),
                   );
-                }
-                throw error;
-              }).finally(() => {
-                preview.seal();
-                signal.removeEventListener('abort', onProviderAbort);
-              });
+                  finishThinking('done');
+                  return raw;
+                })
+                .catch((error: unknown) => {
+                  const status = signal.aborted ? 'cancelled' : 'error';
+                  finishThinking(status);
+                  settlePendingToolActivities(status);
+                  if (!signal.aborted) {
+                    failCanonicalTurn(
+                      { accountId: providerInput.accountId, runId: providerInput.runId },
+                      providerErrorDetails(error, {
+                        providerId: providerInput.model.providerId,
+                        modelId: providerInput.model.modelId,
+                        connectionId: providerInput.model.connectionId,
+                        requestId: providerInput.requestId,
+                        runId: providerInput.runId,
+                      }),
+                      now(),
+                    );
+                  }
+                  throw error;
+                })
+                .finally(() => {
+                  preview.seal();
+                  signal.removeEventListener('abort', onProviderAbort);
+                });
               return Object.freeze({
                 receipt: Object.freeze({
                   providerId: providerInput.model.providerId,
@@ -2165,7 +2393,10 @@ export async function installJarvisKernelRuntimeHost(
       // Native tool/approval events own actions. Inferring legacy cards here
       // changes a refusal into approval narration whose card is then discarded.
       const responseRequest = hasNativeTimeline
-        ? { ...citedRequest, outputContract: { ...citedRequest.outputContract, allowActionBlocks: false } }
+        ? {
+            ...citedRequest,
+            outputContract: { ...citedRequest.outputContract, allowActionBlocks: false },
+          }
         : citedRequest;
       const processedEnvelope = await responseModule.processJarvisResponse(raw, responseRequest, {
         async repair() {
@@ -2632,7 +2863,8 @@ export async function installJarvisKernelRuntimeHost(
       disposed = true;
       const retiredScopes = [...activeTurnScopes.values()];
       activeTurnScopes.clear();
-      for (const scope of retiredScopes) clearPreview(scope.accountId, scope.runId, { terminal: true });
+      for (const scope of retiredScopes)
+        clearPreview(scope.accountId, scope.runId, { terminal: true });
       providerEvidence.clear();
       composition.liveEvidenceHost.dispose();
       voiceVerifier.dispose();
@@ -2750,7 +2982,8 @@ export interface RuntimeBindings {
  */
 function canonicalizeCodexAgentModel(agent: Agent): Agent {
   const modelId = agent.model.model.trim();
-  if ((agent.model.provider as string) !== 'opencode' || !modelId.startsWith('openai/')) return agent;
+  if ((agent.model.provider as string) !== 'opencode' || !modelId.startsWith('openai/'))
+    return agent;
   return {
     ...agent,
     model: { ...agent.model, provider: 'openai', model: modelId.slice('openai/'.length) },
@@ -2783,6 +3016,8 @@ export function hasPriorPersistedTurn(
 
 /** The shape of the `jarvis:send` event detail. */
 export interface SendDetail {
+  /** Process-local authority captured at submission, before message persistence. */
+  toolGatewayAuthority?: ToolGatewayAuthorityClaim | null;
   /** Runtime-captured resolved agent; retained only for exact CAO resume checks. */
   resumeAgentAuthority?: { agentId: string; revision: number };
   queueIfBusy?: boolean;
@@ -2796,6 +3031,10 @@ export interface SendDetail {
   voiceSessionId?: string;
   /** Raw user text. */
   text: string;
+  /** Model-only residual after successful local command spans are removed. */
+  modelText?: string;
+  /** Bounded hidden receipts for local actions completed before model dispatch. */
+  localCommandContext?: string;
   /** Stable original task carried only by hidden stop/resume continuations. */
   resumeOriginalText?: string;
   /** Exact settled approval that authorizes one hidden post-action continuation turn. */
@@ -2844,6 +3083,8 @@ export interface SendDetail {
   runtimeSettings?: ChatRuntimeSettings;
   /** Independent tool access ceiling for this turn. */
   accessLevel?: AccessLevel;
+  /** Persistent Agent approval profile captured for this exact run. */
+  agentApprovalMode?: AgentApprovalMode;
   /** One scoped run only; never a durable blanket permission grant. */
   approveAllForRun?: boolean;
   /** Captured Token Optimize mode. Off preserves the legacy request path exactly. */
@@ -3039,6 +3280,8 @@ export interface ResumeDetail {
   cancellationKey: MessageId;
   /** CAO binding to the selected model and actual resolved agent. */
   caoExpectedAuthority?: string;
+  /** A Composer can revalidate a normal continuation after the runtime restarted. */
+  onUnavailable?: () => void;
 }
 
 /** The shape of a live `jarvis:steer` instruction. */
@@ -3161,7 +3404,7 @@ function getSelectedSkillsBlock(skillIds: string[] | undefined): string {
     .join('\n');
 }
 
-const JARVIS_CHAT_ACTION_OVERLAY = [
+const JARVIS_CHAT_STYLE_OVERLAY = [
   '## Jarvis chat interface',
   '',
   'You are Jarvis inside the VibeSpace chat UI, not a terminal CLI.',
@@ -3169,19 +3412,28 @@ const JARVIS_CHAT_ACTION_OVERLAY = [
   'Scale response depth to the task: use 1-3 short sentences for simple questions, but give complete structured reasoning, implementation detail, and verification evidence for complex coding, research, or multi-step work.',
   'Never sacrifice correctness, a requested deliverable, or material verification merely to stay brief.',
   'Name the relevant file, agent, terminal, context map, or page when it matters.',
+].join('\n');
+
+const JARVIS_CHAT_SAFETY_OVERLAY = [
+  '## Jarvis chat safety',
+  '',
+  '- For long multi-agent tasks or “keep them talking until I say stop”: stay awake as supervisor — keep checking status, waiting, and sending follow-ups until the user says stop. Do not end early with “done” while children are still running.',
+  '- Users open a worker thread with `/agent` (selector). Do not instruct them to leave the parent chat unless they ask.',
+  '- Never ask for passwords, API keys, tokens, recovery codes, credit cards, or credentials. Direct users to the trusted settings or provider connection UI instead.',
+  '- Use any provided terminal coordination summary as read-only awareness of active agents, locks, and recent work.',
+].join('\n');
+
+const JARVIS_CHAT_ACTION_OVERLAY = [
+  '## Jarvis app actions',
   '',
   'Rules:',
   '- If the user asks you to change the app, navigate, open terminals, run commands, or create schedules, say the result briefly and emit a fenced `action` block when an action exists.',
-  '- For long multi-agent tasks or “keep them talking until I say stop”: stay awake as supervisor — keep checking status, waiting, and sending follow-ups until the user says stop. Do not end early with “done” while children are still running.',
-  '- Users open a worker thread with `/agent` (selector). Do not instruct them to leave the parent chat unless they ask.',
   '- You can inspect and change code through the listed `files.read`, `files.create`, `files.edit`, and terminal actions. Do not broadly claim that you cannot code, read files, edit files, run tests, or use terminals when those actions are present.',
   '- For coding work, inspect the relevant file first, propose only the required approval-gated mutations, then verify the result with an appropriate focused command and report the exact files and evidence. Never claim an action ran before its approved result exists.',
   '- Never answer app-control requests with JavaScript, shell snippets, pseudocode, or instructions for the user to run manually.',
   '- Never emit raw `{action}` macros. Use fenced JSON action blocks only.',
   '- Mutating app actions do not run until the user clicks Approve, so never claim they already happened.',
   '- For "open N terminals", use `terminal.bulkOpen` with `{"count":N}`. If they say "with opencode", add `"command":"opencode"`.',
-  '- Never ask for passwords, API keys, tokens, recovery codes, credit cards, or credentials. Direct users to the trusted settings or provider connection UI instead.',
-  '- Use any provided terminal coordination summary as read-only awareness of active agents, locks, and recent work.',
   isHiveProductEnabled()
     ? '- /agents references the Agents page/editor. /agent opens a live subagent thread selector. /terminals references the terminal surface. /hive references Hive Balanced.'
     : '- /agents references the Agents page/editor. /agent opens a live subagent thread selector. /terminals references the terminal surface.',
@@ -3189,10 +3441,10 @@ const JARVIS_CHAT_ACTION_OVERLAY = [
 
 const CHAT_RESPONSE_STYLE_OVERLAY = [
   '## VibeSpace chat response style',
-  'Answer directly, with Jarvis-like brevity and no generic filler.',
+  'Answer directly in Jarvis’s calm, capable voice, without generic filler.',
   'Address the user by their Settings display name in every reply when a name is set.',
   'On command acknowledgements, include the name and one "sir" (for example: "Yes, Alex — I can create that file, sir.").',
-  'Ordinary replies: 1–3 short sentences. Simple confirmations: 2–12 words.',
+  'Match written detail to the task without a fixed sentence or word limit. Voice delivery has its own brief summary.',
   'Match the answer length to the real complexity. Keep simple answers short; make complicated answers complete, structured, and evidence-backed.',
   'Use bullets only when they make the answer easier to scan.',
   'Reference the relevant file, @agent, terminal, context map, plugin, or page when that context is present.',
@@ -3253,6 +3505,7 @@ export function openCodeToolsForInteractionMode(
   const requestsSemanticMcp = requestsMcpList || requestsMcpRun;
   const requestsContextMapTool =
     !requestsSemanticMcp && userText.length > 0 && requestsReadOnlyContextTool(userText);
+  const coordinationIntent = requestsContextMapTool ? contextTerminalCoordinationIntent(userText) : undefined;
   const ordinaryDirectAsk =
     mode !== 'agent' &&
     userText.length > 0 &&
@@ -3273,7 +3526,10 @@ export function openCodeToolsForInteractionMode(
               ? (tool === 'mcp.list' && requestsMcpList) ||
                 (tool === 'mcp.run' && requestsMcpRun && mode === 'agent')
               : requestsContextMapTool
-                ? tool === 'vibespace_context'
+                ? coordinationIntent
+                  ? COORDINATION_READ_TOOLS.has(tool) || (mode === 'agent' &&
+                    (tool === 'skills.load' || (coordinationIntent === 'deliver' && tool === 'terminal.write')))
+                  : tool === 'vibespace_context'
                 : mode === 'agent' || !mutating;
         return [tool, modeAllows && accessAllowsTool(access, tool, mutating)];
       }),
@@ -3281,22 +3537,38 @@ export function openCodeToolsForInteractionMode(
   );
 }
 
+function isReadOnlyPluginApproval(
+  input: Pick<VibeSpaceApproval, 'capability' | 'pluginOperation'>,
+): boolean {
+  return (
+    input.capability === 'plugins.run' &&
+    input.pluginOperation !== undefined &&
+    PLUGIN_CATALOG.find((plugin) => plugin.id === input.pluginOperation?.pluginId)?.tools.some(
+      (tool) => tool.name === input.pluginOperation?.operation && tool.readOnly === true,
+    ) === true
+  );
+}
+
 export function mayAutoApproveOpenCodeRequest(input: {
   approveAllForRun: boolean;
+  agentApprovalMode?: AgentApprovalMode;
   interactionMode: JarvisInteractionMode;
   accessLevel: AccessLevel;
   capability: string;
   risk: 'low' | 'medium' | 'high';
+  pluginOperation?: VibeSpaceApproval['pluginOperation'];
 }): boolean {
   const terminalLike = /^(?:terminal\.|command\.)/u.test(input.capability);
   const subagentLike = /^(?:agent\.|task\.)/u.test(input.capability);
+  const profileAllowsSafeAutoApproval =
+    input.agentApprovalMode === 'full' || input.agentApprovalMode === 'review';
   return (
-    input.approveAllForRun &&
+    (input.approveAllForRun || profileAllowsSafeAutoApproval || isReadOnlyPluginApproval(input)) &&
     input.interactionMode === 'agent' &&
     input.accessLevel !== 'read-only' &&
     (!terminalLike || input.accessLevel === 'full') &&
     (!subagentLike || input.interactionMode === 'agent') &&
-    input.risk !== 'high'
+    (input.agentApprovalMode === 'full' || input.risk !== 'high')
   );
 }
 
@@ -3334,6 +3606,9 @@ export function prepareOpenCodeMessagesForInteractionMode(
     return messages;
   }
   if (!requestsReadOnlyContextTool(userText)) return messages;
+  // A coordinator also needs live targets and skills. Do not replace its task
+  // with a Context-only investigation or claim it is not a delegated workflow.
+  if (contextTerminalCoordinationIntent(userText)) return messages;
   // The investigation convenience wrapper must not override a user's narrower
   // retrieval workflow, including a single search or an explicit tool budget.
   if (/\b(?:do not|don't|never)\s+(?:call\s+)?(?:an?\s+)?investigat(?:e|ion)\b/iu.test(userText)) {
@@ -3431,6 +3706,39 @@ export function appendToolGatewayContextCitations(
   });
 }
 
+/** Unknown capabilities and shell syntax stay at the native review gate. */
+export function openCodeApprovalRisk(approval: VibeSpaceApproval): JarvisPermissionRequest['risk'] {
+  if (/delete|destroy|publish|deploy|purchase|payment/iu.test(approval.capability)) return 'high';
+  if (approval.capability === 'plugins.run')
+    return isReadOnlyPluginApproval(approval) ? 'low' : 'high';
+  // Generic MCP calls have no trusted read-only classification on this receipt.
+  if (approval.capability === 'mcp.run') return 'high';
+  if (/^(?:terminal\.|command\.)/u.test(approval.capability)) {
+    const commands = typeof approval.pattern === 'string' ? [approval.pattern] : approval.pattern;
+    if (!commands?.length) return 'high';
+    const safe = commands.every((raw) => {
+      const command = raw.trim();
+      // No command chaining, substitution, redirects, multiline scripts, or wildcards
+      // representing an unknown command. The native CLI still enforces its policy.
+      if (
+        !command ||
+        /[;&|`$<>\r\n]/u.test(command) ||
+        command === '*' ||
+        /--pre(?:\s|=|$)/u.test(command)
+      )
+        return false;
+      return /^(?:git\s+(?:status|diff|log|show|ls-files)\b|(?:npm|pnpm|yarn)(?:\.cmd)?\s+(?:run\s+)?(?:test|build|typecheck|lint|check)\b|cargo\s+(?:check|test|build|fmt|clippy)\b|(?:pwd|ls|dir|cat|head|tail|rg|findstr|Get-Location|Get-ChildItem|Get-Content|Test-Path)\b)/iu.test(
+        command,
+      );
+    });
+    return safe ? 'medium' : 'high';
+  }
+  if (['files.write', 'files.edit', 'files.patch'].includes(approval.capability)) return 'medium';
+  if (['files.read', 'files.list', 'files.search'].includes(approval.capability)) return 'low';
+  if (!TOOL_GATEWAY_CATALOG.includes(approval.capability as never)) return 'high';
+  return MUTATING_TOOL_GATEWAY_TOOLS.has(approval.capability as never) ? 'medium' : 'low';
+}
+
 function openCodePermissionRequest(
   approval: VibeSpaceApproval,
   authority: Readonly<{
@@ -3459,11 +3767,7 @@ function openCodePermissionRequest(
       : approval.capability === 'app.navigate'
         ? 'change_project'
         : 'apply_changes';
-  const risk: JarvisPermissionRequest['risk'] = approval.capability.includes('delete')
-    ? 'high'
-    : MUTATING_TOOL_GATEWAY_TOOLS.has(approval.capability as never)
-      ? 'medium'
-      : 'low';
+  const risk = openCodeApprovalRisk(approval);
   return {
     id: approval.id,
     title: approval.title,
@@ -3503,6 +3807,24 @@ function applyChatResponseStyleOverlay(agent: Agent): Agent {
   return {
     ...agent,
     system_prompt: (agent.system_prompt ?? '') + '\n\n' + CHAT_RESPONSE_STYLE_OVERLAY,
+  };
+}
+
+function shouldInjectJarvisAppActionInstructions(backend: ChatBackend | undefined): boolean {
+  // Native CLI sessions own their tool declarations and approval protocol.
+  // Keep the app-action catalogue for legacy/direct provider callers that do
+  // not carry a CLI backend affinity.
+  return backend === undefined;
+}
+
+function applyJarvisChatStyleAndSafetyOverlay(agent: Agent): Agent {
+  return {
+    ...agent,
+    system_prompt: [
+      agent.system_prompt ?? '',
+      JARVIS_CHAT_STYLE_OVERLAY,
+      JARVIS_CHAT_SAFETY_OVERLAY,
+    ].join('\n\n'),
   };
 }
 
@@ -3924,8 +4246,10 @@ function toLLMMessages(
   excludeId?: MessageId,
   includeImages = true,
   currentTurnText?: string,
+  replaceCurrentTextId?: MessageId | string | null,
 ): LLMMessage[] {
   const out: LLMMessage[] = [];
+  const replacementId = replaceCurrentTextId == null ? '' : String(replaceCurrentTextId);
   let lastIncludedMessage: Message | undefined;
   const lastUserIndex = history.reduce(
     (last, message, index) =>
@@ -3936,21 +4260,23 @@ function toLLMMessages(
     const m = history[index]!;
     if (excludeId && m.id === excludeId) continue;
     if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'agent') continue;
+    const replaceText =
+      replacementId.length > 0 && String(m.id) === replacementId && currentTurnText !== undefined;
     const contentParts: LLMContentPart[] = [];
     const submittedAnswers: string[] = [];
     for (const p of m.parts) {
       if (p.kind === 'text' && p.text.trim()) {
-        contentParts.push({ type: 'text', text: p.text });
+        if (!replaceText) contentParts.push({ type: 'text', text: p.text });
       } else if (p.kind === 'action_proposal') {
         contentParts.push({ type: 'text', text: actionPartToLlmText(p) });
       } else if (p.kind === 'question_block' && p.harness && p.block.status === 'answered') {
         // Native replies are stored on the question, without a duplicate user bubble.
         for (const answer of p.block.answers ?? []) {
-          const question = p.block.questions.find(item => item.id === answer.questionId);
+          const question = p.block.questions.find((item) => item.id === answer.questionId);
           if (!question || answer.skipped) continue;
           const values = [
-            ...(answer.selectedOptionIds ?? []).flatMap(id => {
-              const option = question.options?.find(item => item.id === id);
+            ...(answer.selectedOptionIds ?? []).flatMap((id) => {
+              const option = question.options?.find((item) => item.id === id);
               return option ? [option.label] : [];
             }),
             answer.text?.trim(),
@@ -3966,18 +4292,24 @@ function toLLMMessages(
         }
       }
     }
+    if (replaceText && currentTurnText.trim()) {
+      contentParts.unshift({ type: 'text', text: currentTurnText.trim() });
+    }
     if (contentParts.length === 0 && submittedAnswers.length === 0) continue;
     const content =
       contentParts.length === 1 && contentParts[0]?.type === 'text'
         ? contentParts[0].text.trim()
         : contentParts;
-    if (contentParts.length) out.push({
-      role: m.role === 'user' ? 'user' : 'assistant',
-      content,
-    });
-    if (submittedAnswers.length) out.push({
-      role: 'user', content: `Submitted question answers:\n${submittedAnswers.join('\n')}`,
-    });
+    if (contentParts.length)
+      out.push({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content,
+      });
+    if (submittedAnswers.length)
+      out.push({
+        role: 'user',
+        content: `Submitted question answers:\n${submittedAnswers.join('\n')}`,
+      });
     lastIncludedMessage = m;
   }
   // Approval and resume dispatches intentionally have no persisted user bubble.
@@ -3988,6 +4320,7 @@ function toLLMMessages(
     .trim();
   if (
     currentTurnText?.trim() &&
+    (!replacementId || String(lastIncludedMessage?.id ?? '') !== replacementId) &&
     (lastIncludedMessage?.role !== 'user' || lastUserText !== currentTurnText.trim())
   ) {
     out.push({ role: 'user', content: currentTurnText.trim() });
@@ -4389,6 +4722,9 @@ async function createRuntimeKernelTurn(input: {
   userMessageId: string;
   messages: readonly LLMMessage[];
   interactionMode: JarvisInteractionMode;
+  accessLevel: AccessLevel;
+  agentApprovalMode: AgentApprovalMode;
+  approveAllForRun: boolean;
   speakReply: boolean;
   surface?: 'hive_final';
   execution?: JarvisKernelTurnInput['execution'];
@@ -4396,7 +4732,12 @@ async function createRuntimeKernelTurn(input: {
   model: import('@/lib/jarvis/contracts').JarvisModelSnapshot;
   providerOptions?: Readonly<Record<string, unknown>>;
   runtimeSettings?: Readonly<ChatRuntimeSettings>;
-  tokenOptimization?: { mode: TokenOptimizationMode; outputTokens?: number; signal: AbortSignal; onReceipt(receipt: TokenOptimizationReceipt): void };
+  tokenOptimization?: {
+    mode: TokenOptimizationMode;
+    outputTokens?: number;
+    signal: AbortSignal;
+    onReceipt(receipt: TokenOptimizationReceipt): void;
+  };
 }): Promise<JarvisKernelTurnInput> {
   const account = resolveAccountIdentity(useAuthStore.getState());
   if (!account) throw new Error('canonical_account_identity_unavailable');
@@ -4446,25 +4787,49 @@ async function createRuntimeKernelTurn(input: {
       mode: input.tokenOptimization.mode,
       providerId: input.model.providerId,
       modelId: input.model.modelId,
-      systemPrompt: [JARVIS_IDENTITY_POLICY.responseContract, JARVIS_IDENTITY_POLICY.identityCore].join('\n\n'),
-      blocks: context.items.map(item => ({
-        key: item.conflict || item.source.trust === 'user_direct' ||
+      systemPrompt: [
+        JARVIS_IDENTITY_POLICY.responseContract,
+        JARVIS_IDENTITY_POLICY.identityCore,
+      ].join('\n\n'),
+      blocks: context.items.map((item) => ({
+        key:
+          item.conflict ||
+          item.source.trust === 'user_direct' ||
           ['execution', 'capability', 'preference'].includes(item.purpose) ||
-          contextCandidates.some(candidate => candidate.source.id === item.source.id && candidate.explicitlyAttached)
-          ? 'explicit_context' : 'resolved_context',
-        text: item.excerpt, source: item.source, score: item.score,
+          contextCandidates.some(
+            (candidate) => candidate.source.id === item.source.id && candidate.explicitlyAttached,
+          )
+            ? 'explicit_context'
+            : 'resolved_context',
+        text: item.excerpt,
+        source: item.source,
+        score: item.score,
       })),
       messages,
-      modelContextLimit: getModelOptions(input.agent.model.provider).find(({ id }) => id === input.model.modelId)?.contextWindowTokens,
-      requestedOutputTokens: resolveOptimizedOutputLimit(input.tokenOptimization.mode, input.tokenOptimization.outputTokens),
+      modelContextLimit: getModelOptions(input.agent.model.provider).find(
+        ({ id }) => id === input.model.modelId,
+      )?.contextWindowTokens,
+      requestedOutputTokens: resolveOptimizedOutputLimit(
+        input.tokenOptimization.mode,
+        input.tokenOptimization.outputTokens,
+      ),
       signal: input.tokenOptimization.signal,
     });
-    const kept = new Set(optimized.blocks.map(block => block.source!.id));
-    const items = context.items.filter(item => kept.has(item.source.id));
+    const kept = new Set(optimized.blocks.map((block) => block.source!.id));
+    const items = context.items.filter((item) => kept.has(item.source.id));
     context = {
-      ...context, items,
-      budget: { ...context.budget, usedChars: items.reduce((total, item) => total + item.excerpt.length, 0) },
-      exclusions: [...context.exclusions, ...context.items.filter(item => !kept.has(item.source.id)).map(item => ({ source: item.source, reason: 'token_optimization' }))],
+      ...context,
+      items,
+      budget: {
+        ...context.budget,
+        usedChars: items.reduce((total, item) => total + item.excerpt.length, 0),
+      },
+      exclusions: [
+        ...context.exclusions,
+        ...context.items
+          .filter((item) => !kept.has(item.source.id))
+          .map((item) => ({ source: item.source, reason: 'token_optimization' })),
+      ],
     };
     messages = optimized.messages;
     if (optimized.receipt) input.tokenOptimization.onReceipt(optimized.receipt);
@@ -4512,6 +4877,9 @@ async function createRuntimeKernelTurn(input: {
     surface,
     ...(input.execution ? { execution: { ...input.execution } } : {}),
     interactionMode: input.interactionMode,
+    accessLevel: input.accessLevel,
+    agentApprovalMode: input.agentApprovalMode,
+    approveAllForRun: input.approveAllForRun,
     userText: input.providerUserText ?? input.text,
     messageHistory: [...messages],
     model: input.model,
@@ -4574,8 +4942,11 @@ function isAbortError(error: unknown): boolean {
 
 function safeErrorMessage(error: unknown, fallback = 'unknown'): string {
   try {
-    const message = (error as { message?: unknown } | null)?.message;
-    return typeof message === 'string' && message.length > 0 ? message : fallback;
+    const message =
+      typeof error === 'string' ? error : (error as { message?: unknown } | null)?.message;
+    return typeof message === 'string' && message.length > 0
+      ? redactHarnessText(message.slice(0, 16_384)).slice(0, 2_048)
+      : fallback;
   } catch {
     return fallback;
   }
@@ -5098,6 +5469,9 @@ export function startRuntimeListener(
     const detail = (e as CustomEvent<SendDetail>).detail;
     if (!detail || !detail.chatId || typeof detail.text !== 'string') return;
     const { chatId, text } = detail;
+    const modelText = detail.modelText ?? text;
+    const replaceCurrentTurnText =
+      detail.modelText !== undefined && detail.modelText.trim() !== text.trim();
     if (detail.queueIfBusy && (controllersByChatId.get(String(chatId))?.size ?? 0) > 0) {
       const queued = queuedNativeDelegations.get(String(chatId)) ?? [];
       if (queued.length >= 100) throw new Error('Native delegation queue is full.');
@@ -5133,6 +5507,14 @@ export function startRuntimeListener(
       return;
     }
     const controller = new AbortController();
+    // Bind the authority to this request before any asynchronous repository,
+    // context, or model-resolution work can observe a changed active scope.
+    // A null claim is an intentional fail-closed snapshot; undefined remains
+    // reserved for legacy callers that do not provide the field.
+    const toolGatewayAuthority =
+      detail.toolGatewayAuthority !== undefined
+        ? detail.toolGatewayAuthority
+        : captureToolGatewayAuthorityClaim();
     activeControllers.add(controller);
     activeSendDetails.set(controller, { ...detail });
     const chatControllers = controllersByChatId.get(String(chatId)) ?? new Set<AbortController>();
@@ -5152,7 +5534,10 @@ export function startRuntimeListener(
         const queued = queuedNativeDelegations.get(releasedChatId);
         const next = queued?.shift();
         if (!queued?.length) queuedNativeDelegations.delete(releasedChatId);
-        if (next) queueMicrotask(() => window.dispatchEvent(new CustomEvent(sendEventName, { detail: next })));
+        if (next)
+          queueMicrotask(() =>
+            window.dispatchEvent(new CustomEvent(sendEventName, { detail: next })),
+          );
         else void dispatchAcceptedSteer(releasedChatId);
       }
     };
@@ -5160,7 +5545,10 @@ export function startRuntimeListener(
     dispatchCurrentRunState('running');
     dispatchKernelSmokeRuntimeStage('accepted');
     let preparationActivity: { id: string; agentSlug: string } | undefined;
-    const failEarlySetup = async (stage: 'agent' | 'context' | 'model', error: unknown): Promise<void> => {
+    const failEarlySetup = async (
+      stage: 'agent' | 'context' | 'model',
+      error: unknown,
+    ): Promise<void> => {
       if (preparationActivity) {
         useChatActivityStore.getState().update(chatId, preparationActivity.id, {
           status: 'error',
@@ -5181,12 +5569,20 @@ export function startRuntimeListener(
       toast.error('Cannot send', 'The requested AI turn could not be prepared safely.');
       try {
         const accountId = resolveAccountIdentity(authState)?.accountId;
-        if (!controller.signal.aborted && accountId &&
-            accountId === resolveAccountIdentity(useAuthStore.getState())?.accountId) {
+        if (
+          !controller.signal.aborted &&
+          accountId &&
+          accountId === resolveAccountIdentity(useAuthStore.getState())?.accountId
+        ) {
           await bindings.appendMessage({
             chat_id: chatId as ChatId,
             role: 'system',
-            parts: [{ kind: 'text', text: 'The reply could not start. Check the selected model and request settings, then try again.' }],
+            parts: [
+              {
+                kind: 'text',
+                text: 'The reply could not start. Check the selected model and request settings, then try again.',
+              },
+            ],
           });
         }
       } catch {
@@ -5209,7 +5605,7 @@ export function startRuntimeListener(
       releaseOperationTracking();
       return true;
     };
-    const awaitPreparation = <T,>(pending: Promise<T>): Promise<T> => {
+    const awaitPreparation = <T>(pending: Promise<T>): Promise<T> => {
       const signal = controller.signal;
       return new Promise<T>((resolve, reject) => {
         const abort = () => reject(new DOMException('AI preparation cancelled', 'AbortError'));
@@ -5320,6 +5716,14 @@ export function startRuntimeListener(
     dispatchKernelSmokeRuntimeStage('chat');
     const interactionMode =
       detail.interactionMode ?? useJarvisInteractionStore.getState().modeForChat(chatId);
+    // Capture the persistent profile and transient run grant once. Both the
+    // legacy adapter path and the protected kernel path must use this exact
+    // snapshot instead of re-reading mutable UI state mid-run.
+    const agentApprovalMode = detail.agentApprovalMode ?? readAgentApprovalMode(String(chatId));
+    const approveAllForRun =
+      detail.approveAllForRun === true || readPermissionAccess(String(chatId)).approveAll;
+    const runAccessLevel =
+      detail.accessLevel ?? (interactionMode === 'agent' ? 'full' : 'read-only');
 
     const mentionedAgents = resolveMentionedAgents(detail, text, bindings);
 
@@ -5347,7 +5751,10 @@ export function startRuntimeListener(
       return;
     }
     dispatchKernelSmokeRuntimeStage('agent');
-    activeSendDetails.set(controller, { ...detail, resumeAgentAuthority: { agentId: agent.id, revision: agent.updated_at } });
+    activeSendDetails.set(controller, {
+      ...detail,
+      resumeAgentAuthority: { agentId: agent.id, revision: agent.updated_at },
+    });
     const isProtectedJarvis = isProtectedJarvisAgent(agent);
 
     const modelCtx = modelSelectionContextFromAuth(authState);
@@ -5370,8 +5777,8 @@ export function startRuntimeListener(
     );
     // Ignore /hive|/stack slash overrides while the product is gated off.
     const stackSlash = isHiveProductEnabled()
-      ? parseStackSlashCommand(text)
-      : { matched: false as const, text };
+      ? parseStackSlashCommand(modelText)
+      : { matched: false as const, text: modelText };
     const automaticRoutingAllowed =
       isProtectedJarvis &&
       authState.automaticModelRoutingEnabled &&
@@ -5400,7 +5807,7 @@ export function startRuntimeListener(
     }
     if (!automaticRoutingAllowed) {
       const sendValidation = validateSendModelAccess(
-        text,
+        modelText,
         chatModelSelection,
         modelSelectionContextFromAuth(useAuthStore.getState()),
         authState.stackCustomSteps,
@@ -5423,10 +5830,19 @@ export function startRuntimeListener(
     // When the product is gated, resolveActiveStackPreset forces 'off'.
     const stackPreset =
       detail.speakReply === true ? 'off' : resolveActiveStackPreset(chatModelSelection, stackSlash);
-    const stackText = stackSlash.matched ? stackSlash.text : text;
+    const stackText = stackSlash.matched ? stackSlash.text : modelText;
     const stackTaskType = stackSlash.taskType ?? classifyStackTask(stackText);
 
-    const projectId = chatRecord?.project_id ?? authState.projectId;
+    // An unbound chat has no persisted project to anchor this turn. If the
+    // Composer captured an authority before its persistence/dispatch awaits,
+    // keep that project as the request origin even when the active project
+    // changed before this listener resumed. Account/workspace remain sourced
+    // from the runtime snapshot so their epoch revocation stays fail-closed.
+    const projectId =
+      chatRecord?.project_id ??
+      (toolGatewayAuthority
+        ? (toolGatewayAuthority.scope.projectId as ProjectId | null)
+        : authState.projectId);
     const pluginAccountId = resolveAccountIdentity(authState)?.accountId ?? '';
     const requestedOptimizationMode = detail.tokenOptimizationMode ?? 'off';
     const baseReasoningPreference =
@@ -5474,12 +5890,12 @@ export function startRuntimeListener(
           : undefined,
     });
     setLiveAgentActivityPhase(chatId, agentActivityId, initialActivityPhase);
-    const explicitReadRoot = extractExplicitReadRoot(text);
-    const explicitResponseContract = parseExplicitResponseContract(text);
-    const requestsContextTool = !explicitReadRoot && requestsReadOnlyContextTool(text);
+    const explicitReadRoot = extractExplicitReadRoot(modelText);
+    const explicitResponseContract = parseExplicitResponseContract(modelText);
+    const requestsContextTool = !explicitReadRoot && requestsReadOnlyContextTool(modelText);
     let resolvedRequestContext: Awaited<ReturnType<typeof resolveJarvisContext>>;
     try {
-      if (!explicitReadRoot) rememberConversationDestination(chatId, text);
+      if (!explicitReadRoot) rememberConversationDestination(chatId, modelText);
       const enabledCapabilities = Array.from(
         new Set([...agent.capabilities, ...agent.tools_allowed, ...(agent.skills ?? [])]),
       ).slice(0, 32);
@@ -5510,7 +5926,7 @@ export function startRuntimeListener(
           resolveJarvisContext({
             projectId,
             chatId,
-            currentText: text,
+            currentText: modelText,
             enabledCapabilities,
           }),
         );
@@ -5533,7 +5949,7 @@ export function startRuntimeListener(
     }
     dispatchKernelSmokeRuntimeStage('context');
     const requestIntent = classifyJarvisIntent({
-      text,
+      text: modelText,
       destination: resolvedRequestContext.preferredDestination,
       hasResolvedDestination: Boolean(resolvedRequestContext.preferredDestination),
     });
@@ -5590,8 +6006,12 @@ export function startRuntimeListener(
       }),
     );
     if (isProtectedJarvis && !(explicitReadRoot && interactionMode === 'ask')) {
-      runnable = applyAvailableActions(runnable);
-      runnable = applyJarvisChatActionOverlay(runnable);
+      const injectAppActionInstructions = shouldInjectJarvisAppActionInstructions(
+        chatBackendAffinity.backend,
+      );
+      if (injectAppActionInstructions) runnable = applyAvailableActions(runnable);
+      runnable = applyJarvisChatStyleAndSafetyOverlay(runnable);
+      if (injectAppActionInstructions) runnable = applyJarvisChatActionOverlay(runnable);
     }
     const stackStepsEarly = stepsForPreset(stackPreset, stackTaskType, authState.stackCustomSteps);
 
@@ -5669,7 +6089,7 @@ export function startRuntimeListener(
       !explicitReadRoot &&
       !requestsContextTool &&
       shouldAutoRetrieveProjectKnowledge({
-        text,
+        text: modelText,
         intent: requestIntent,
         hasExplicitAttachments:
           (detail.contextNodes?.length ?? 0) > 0 ||
@@ -5713,7 +6133,7 @@ export function startRuntimeListener(
           const rlm = await prepareProductionRlmContext({
             accountId: identity.accountId,
             projectId,
-            question: text,
+            question: modelText,
             settings: runtimeSettings,
             explicitEntityIds: (detail.contextNodes ?? []).map(({ nodeId }) => nodeId),
             signal: controller.signal,
@@ -5787,7 +6207,7 @@ export function startRuntimeListener(
           consumer: 'chat',
           projectId: projectId ? String(projectId) : null,
           chatId,
-          userText: text,
+          userText: modelText,
           attachments: attachedContext,
         });
         explicitContext = formatContextRetrievalForPrompt(retrievedResponseContext);
@@ -5882,7 +6302,7 @@ export function startRuntimeListener(
         const localKnowledge = autoRetrieveProjectKnowledge
           ? await retrieveApprovedLocalKnowledge({
               projectId: projectId ? String(projectId) : null,
-              query: text,
+              query: modelText,
             })
           : [];
         localKnowledgeContext = localKnowledge.map((chunk) => {
@@ -5958,7 +6378,10 @@ export function startRuntimeListener(
       }
       // Selection and selected skills already travel with the turn. The entire
       // connectivity catalog is useful only when the user asks about it.
-      if (!explicitReadRoot && /\b(?:models?|providers?|skills?|connections?)\b/iu.test(text)) {
+      if (
+        !explicitReadRoot &&
+        /\b(?:models?|providers?|skills?|connections?)\b/iu.test(modelText)
+      ) {
         try {
           modelSkillInventoryContext = getJarvisConnectivityInventoryBlock(
             authState,
@@ -5993,7 +6416,7 @@ export function startRuntimeListener(
       });
     }
     try {
-      pluginStatusContext = getPluginStatusContextBlock(pluginAccountId, projectId, text);
+      pluginStatusContext = getPluginStatusContextBlock(pluginAccountId, projectId, modelText);
     } catch (err) {
       devConsole.log({
         channel: 'ai',
@@ -6015,6 +6438,13 @@ export function startRuntimeListener(
       });
     }
 
+    const localCommandContext =
+      typeof detail.localCommandContext === 'string'
+        ? detail.localCommandContext.slice(0, 800)
+        : '';
+    const completionInstruction = [getAiCompletionInstruction(), localCommandContext]
+      .filter(Boolean)
+      .join('\n\n');
     const runtimeContextBlocks = (
       [
         { key: 'project', text: projectContext },
@@ -6043,7 +6473,7 @@ export function startRuntimeListener(
         { key: 'terminal_operating', text: jarvisTerminalOperatingContext },
         { key: 'connected_files', text: connectedFilesContext },
         { key: 'terminal_transcript', text: terminalContext },
-        { key: 'completion_instruction', text: getAiCompletionInstruction() },
+        { key: 'completion_instruction', text: completionInstruction },
       ] satisfies JarvisRuntimeContextBlock[]
     )
       .filter((block) => block.text.length > 0)
@@ -6082,7 +6512,7 @@ export function startRuntimeListener(
       const lastHistoryMessage = providerBoundHistory.at(-1);
       if (
         lastHistoryMessage?.role === 'user' &&
-        llmContentToText(lastHistoryMessage.content).trim() === text.trim()
+        llmContentToText(lastHistoryMessage.content).trim() === modelText.trim()
       ) {
         providerBoundHistory.pop();
       }
@@ -6094,7 +6524,7 @@ export function startRuntimeListener(
         .join('\n\n');
       const resolvedPromptTokens = estimateAutomaticRoutingContextTokens(resolvedSystemPrompt, [
         ...providerBoundHistory,
-        { role: 'user', content: text },
+        { role: 'user', content: modelText },
       ]);
       const estimatedContextTokens =
         resolvedPromptTokens >= 32_000 ? resolvedPromptTokens : undefined;
@@ -6148,10 +6578,28 @@ export function startRuntimeListener(
       dispatchKernelSmokeRuntimeStage('validated');
       useAllAboutMeStore.getState().recordUserMessage();
     }
-    const effectiveReasoningPreference = reasoningPreferenceForOptimization(
-      baseReasoningPreference.mode === 'token-final-boss' ? 'final_boss' : requestedOptimizationMode,
-      baseReasoningPreference,
-    );
+    // Capture the route the provider branches will actually receive. A chat
+    // selection can omit its connection while an existing chat record still
+    // carries the persisted route, so checking only connectionId here would
+    // allow an OpenCode/Codex mismatch to reach the kernel or legacy adapter.
+    const effectiveChatConnectionId =
+      chatModelSelection.mode === 'single'
+        ? (chatModelSelection.connectionId ??
+          (persistedConnection?.providerId === chatModelSelection.providerId &&
+          (!persistedConnection.modelId ||
+            persistedConnection.modelId === chatModelSelection.modelId)
+            ? persistedConnection.id
+            : undefined))
+        : undefined;
+    const effectiveReasoningPreference =
+      detail.tokenOptimizationMode === undefined && detail.reasoningPreference
+        ? baseReasoningPreference // Explicit legacy callers can request Saver without an optimizer control.
+        : reasoningPreferenceForOptimization(
+            baseReasoningPreference.mode === 'token-final-boss'
+              ? 'final_boss'
+              : requestedOptimizationMode,
+            baseReasoningPreference,
+          );
     let reasoningPolicy: ReturnType<typeof resolveReasoningPolicy> | null = null;
     try {
       reasoningPolicy =
@@ -6220,10 +6668,7 @@ export function startRuntimeListener(
     // already retains them in chat context, so re-injecting them only inflates
     // per-turn prompt cost without changing behavior. Inject on the first
     // logical turn and skip only when a prior persisted turn exists.
-    const isContinuationTurn = hasPriorPersistedTurn(
-      historyBeforeDispatch,
-      detail.cancellationKey,
-    );
+    const isContinuationTurn = hasPriorPersistedTurn(historyBeforeDispatch, detail.cancellationKey);
     if (reasoningPolicy?.executionInstructions && !isContinuationTurn) {
       runnable = {
         ...runnable,
@@ -6355,13 +6800,26 @@ export function startRuntimeListener(
       );
     const liveOpenCodeChronology: Part[] = [];
     let partialOrdinaryUsage: Message['usage'];
-    const ordinaryPreview = { scope: null as ReturnType<typeof previewIdentityForPlaceholder> | null };
+    const ordinaryPreview = {
+      scope: null as ReturnType<typeof previewIdentityForPlaceholder> | null,
+    };
     let ordinaryPreviewReconciled = false;
     const publishOrdinaryPreview = () => {
-      if (!placeholderId || controller.signal.aborted || detail.caoAuthority || bufferExactLiteralStreaming) return;
+      if (
+        !placeholderId ||
+        controller.signal.aborted ||
+        detail.caoAuthority ||
+        bufferExactLiteralStreaming
+      )
+        return;
       const accountId = resolveAccountIdentity(authState)?.accountId;
-      if (!accountId || accountId !== resolveAccountIdentity(useAuthStore.getState())?.accountId) return;
-      ordinaryPreview.scope ??= previewIdentityForPlaceholder({ accountId, chatId: String(chatId), placeholderId: String(placeholderId) });
+      if (!accountId || accountId !== resolveAccountIdentity(useAuthStore.getState())?.accountId)
+        return;
+      ordinaryPreview.scope ??= previewIdentityForPlaceholder({
+        accountId,
+        chatId: String(chatId),
+        placeholderId: String(placeholderId),
+      });
       const previewScope = ordinaryPreview.scope;
       const segments: StreamingPreviewSegment[] = [];
       liveOpenCodeChronology.forEach((part, index) => {
@@ -6369,15 +6827,27 @@ export function startRuntimeListener(
           segments.push({ kind: part.kind, id: `part-${index}`, text: part.text });
         } else if (part.kind === 'tool_call') {
           const result = liveOpenCodeTools.get(part.call_id)?.result;
-          segments.push({ kind: 'tool', id: part.call_id, name: part.tool,
+          segments.push({
+            kind: 'tool',
+            id: part.call_id,
+            name: part.tool,
             status: result?.error ? 'failed' : result ? 'completed' : 'started',
             ...(typeof part.args.path === 'string' ? { fileLabel: part.args.path } : {}),
             ...(part.details ? { details: part.details } : {}),
           });
         }
       });
-      flushSync(() => setPreview({ ...previewScope, text: acc, segments, updatedAt: Date.now(),
-        projectRoot: explicitReadRoot ?? (projectId ? getStoredProjectRoot(projectId)?.trim() || undefined : undefined) }));
+      flushSync(() =>
+        setPreview({
+          ...previewScope,
+          text: acc,
+          segments,
+          updatedAt: Date.now(),
+          projectRoot:
+            explicitReadRoot ??
+            (projectId ? getStoredProjectRoot(projectId)?.trim() || undefined : undefined),
+        }),
+      );
     };
     const liveOpenCodeTextIndexes = new Map<string, number>();
     const liveOpenCodeToolIndexes = new Map<string, { call: number; result?: number }>();
@@ -6504,10 +6974,9 @@ export function startRuntimeListener(
       providerError?: Readonly<ProviderErrorDetails>,
     ): Part[] => {
       const withProviderError = (parts: Part[]): Part[] =>
-        providerError
-          ? [...parts, { kind: 'provider_error', error: providerError }]
-          : parts;
-      if (detail.caoAuthority) return withProviderError(suffix ? [{ kind: 'text', text: suffix }] : []);
+        providerError ? [...parts, { kind: 'provider_error', error: providerError }] : parts;
+      if (detail.caoAuthority)
+        return withProviderError(suffix ? [{ kind: 'text', text: suffix }] : []);
       if (!hasNativeOpenCodeTextIdentity && liveOpenCodeChronology.length === 0) {
         const sep = acc.length > 0 ? '\n\n' : '';
         return withProviderError([
@@ -6650,6 +7119,16 @@ export function startRuntimeListener(
     try {
       dispatchKernelSmokeRuntimeStage('execution');
       controller.signal.throwIfAborted();
+      // Validate once at the common branch boundary. This runs before the
+      // canonical Hive/single kernel paths and before the ordinary provider
+      // path, so no provider adapter can observe an incompatible route.
+      assertRuntimeBackendConnectionCompatibility({
+        backend: chatBackendAffinity.backend,
+        connectionId: effectiveChatConnectionId,
+        providerId:
+          chatModelSelection.mode === 'single' ? chatModelSelection.providerId : undefined,
+        modelId: chatModelSelection.mode === 'single' ? chatModelSelection.modelId : undefined,
+      });
       setLiveAgentActivityPhase(chatId, agentActivityId, {
         category: stackSteps.length > 0 ? 'coordination' : 'thinking',
         title:
@@ -6716,7 +7195,13 @@ export function startRuntimeListener(
           if (!userMessage) throw new Error('kernel_user_message_missing');
           const includeImages = modelSupportsVision(runnable.model.provider, runnable.model.model);
           let kernelTokenReceipt: TokenOptimizationReceipt | null = null;
-          const llmMessages = toLLMMessages(history, undefined, includeImages, text);
+          const llmMessages = toLLMMessages(
+            history,
+            undefined,
+            includeImages,
+            modelText,
+            replaceCurrentTurnText ? cancellationKey : undefined,
+          );
           useAgentStore.getState().setRunState(agent.id, 'streaming');
           useAgentStore.getState().setVerb(agent.id, 'thinking');
           dispatchCurrentRunState('running');
@@ -6739,6 +7224,12 @@ export function startRuntimeListener(
             const finalStep = stackSteps.at(-1)!;
             const finalConnection = hiveConnectionForProvider(String(finalStep.provider));
             if (!finalConnection) throw new Error('kernel_hive_final_connection_unavailable');
+            assertRuntimeBackendConnectionCompatibility({
+              backend: chatBackendAffinity.backend,
+              connectionId: finalConnection.id,
+              providerId: String(finalStep.provider),
+              modelId: finalStep.model,
+            });
             const capturedAt = Date.now();
             const finalAgent: Agent = {
               ...runnable,
@@ -6751,7 +7242,7 @@ export function startRuntimeListener(
               const isTrailingSameUser =
                 index === all.length - 1 &&
                 message.role === 'user' &&
-                llmContentToText(message.content).trim() === text.trim();
+                llmContentToText(message.content).trim() === modelText.trim();
               return !isTrailingSameUser;
             });
             const turn = await createRuntimeKernelTurn({
@@ -6765,6 +7256,9 @@ export function startRuntimeListener(
               userMessageId: userMessage.id,
               messages: [...hiveHistory, { role: 'user', content: stackText }],
               interactionMode,
+              accessLevel: runAccessLevel,
+              agentApprovalMode,
+              approveAllForRun,
               speakReply: false,
               surface: 'hive_final',
               contextBlocks: runtimeContextBlocks,
@@ -6847,6 +7341,12 @@ export function startRuntimeListener(
             if (!selected) throw new Error('kernel_single_model_selection_required');
             const capturedAt = Date.now();
             const selectedConnectionId = selected.connectionId;
+            assertRuntimeBackendConnectionCompatibility({
+              backend: chatBackendAffinity.backend,
+              connectionId: selectedConnectionId,
+              providerId: String(runnable.model.provider),
+              modelId: runnable.model.model,
+            });
             const selectedConnection = selectedConnectionId
               ? PROVIDER_CONNECTIONS.find((connection) => connection.id === selectedConnectionId)
               : undefined;
@@ -6855,7 +7355,8 @@ export function startRuntimeListener(
               providerId: String(runnable.model.provider),
               modelId: runnable.model.model,
               connectionMode:
-                selectedConnection?.mode ?? selected.connectionMode ??
+                selectedConnection?.mode ??
+                selected.connectionMode ??
                 connectionModeForProvider(String(runnable.model.provider)),
               capabilities: selectedConnection
                 ? { ...selectedConnection.capabilities }
@@ -6893,13 +7394,29 @@ export function startRuntimeListener(
               userMessageId: userMessage.id,
               messages: kernelMessages,
               interactionMode,
+              accessLevel: runAccessLevel,
+              agentApprovalMode,
+              approveAllForRun,
               speakReply: detail.speakReply === true,
               contextBlocks: runtimeContextBlocks,
               model,
               providerOptions: reasoningPolicy?.providerOptions,
               runtimeSettings,
-              execution: { mode: reasoningPolicy?.mode ?? 'normal', effort: reasoningPolicy?.providerEffort ?? reasoningPolicy?.resolvedEffort ?? runtimeSettings.effort },
-              tokenOptimization: { mode: tokenOptimizationMode, outputTokens: detail.tokenOptimizationOutputLimit, signal: controller.signal, onReceipt: receipt => { kernelTokenReceipt = receipt; } },
+              execution: {
+                mode: reasoningPolicy?.mode ?? 'normal',
+                effort:
+                  reasoningPolicy?.providerEffort ??
+                  reasoningPolicy?.resolvedEffort ??
+                  runtimeSettings.effort,
+              },
+              tokenOptimization: {
+                mode: tokenOptimizationMode,
+                outputTokens: detail.tokenOptimizationOutputLimit,
+                signal: controller.signal,
+                onReceipt: (receipt) => {
+                  kernelTokenReceipt = receipt;
+                },
+              },
             });
             kernelRequestId = turn.attempt.requestId;
             kernelAttemptNumber = turn.attempt.attemptNumber;
@@ -6923,7 +7440,10 @@ export function startRuntimeListener(
               requestId: turn.attempt.requestId,
               async project(part) {
                 controller.signal.throwIfAborted();
-                const projectionId = part.kind === 'question_block' ? `question:${part.block.id}` : `approval:${part.request.id}`;
+                const projectionId =
+                  part.kind === 'question_block'
+                    ? `question:${part.block.id}`
+                    : `approval:${part.request.id}`;
                 if (projectedQuestionBlockIds.has(projectionId)) {
                   throw new Error('kernel_provider_question_duplicate');
                 }
@@ -7095,7 +7615,17 @@ export function startRuntimeListener(
               attemptNumber: kernelAttemptNumber,
               messages: kernelAssistantMessages,
             });
-            devConsole.log({ channel: 'ai', level: 'info', message: 'Kernel token optimization applied', detail: { mode: receipt.mode, provider: receipt.providerId, model: receipt.modelId, estimatedTokensSaved: receipt.estimatedTokensSaved } });
+            devConsole.log({
+              channel: 'ai',
+              level: 'info',
+              message: 'Kernel token optimization applied',
+              detail: {
+                mode: receipt.mode,
+                provider: receipt.providerId,
+                model: receipt.modelId,
+                estimatedTokensSaved: receipt.estimatedTokensSaved,
+              },
+            });
             if (detail.showTokenOptimizationReport !== false) {
               try {
                 await bindings.appendMessage({
@@ -7110,7 +7640,11 @@ export function startRuntimeListener(
                   ],
                 });
               } catch {
-                devConsole.log({ channel: 'ai', level: 'warn', message: 'Kernel token optimization receipt could not be saved' });
+                devConsole.log({
+                  channel: 'ai',
+                  level: 'warn',
+                  message: 'Kernel token optimization receipt could not be saved',
+                });
               }
             }
           }
@@ -7273,7 +7807,13 @@ export function startRuntimeListener(
         stackStepsEarly.length > 0
           ? stackStepsEarly.every((step) => modelSupportsVision(step.provider, step.model))
           : modelSupportsVision(runnable.model.provider, runnable.model.model);
-      const llmMessages = toLLMMessages(history, placeholder.id, includeImages, text);
+      const llmMessages = toLLMMessages(
+        history,
+        placeholder.id,
+        includeImages,
+        modelText,
+        replaceCurrentTurnText ? cancellationKey : undefined,
+      );
       let requestMessages = llmMessages;
       let tokenOptimizationReceipt: TokenOptimizationReceipt | null = null;
       const userOptimizationOutputLimit =
@@ -7414,8 +7954,7 @@ export function startRuntimeListener(
           agent: agent.slug,
           provider: runnable.model.provider,
           model: runnable.model.model,
-          connectionId:
-            chatModelSelection.mode === 'single' ? chatModelSelection.connectionId : undefined,
+          connectionId: effectiveChatConnectionId,
           reasoningMode: reasoningPolicy?.mode,
           reasoningEffort: reasoningPolicy?.resolvedEffort,
           providerVariant:
@@ -7445,10 +7984,6 @@ export function startRuntimeListener(
       controller.signal.throwIfAborted();
       let responseCompositionVisible = false;
       const structuredAgent = structuredAgentTarget(detail.structuredContext);
-      const approveAllForRun =
-        detail.approveAllForRun === true || readPermissionAccess(String(chatId)).approveAll;
-      const runAccessLevel =
-        detail.accessLevel ?? (interactionMode === 'agent' ? 'full' : 'read-only');
       const providerTools = openCodeToolsForInteractionMode(interactionMode, llmMessages, {
         chatId: String(chatId),
         explicitReadRoot: Boolean(explicitReadRoot),
@@ -7470,15 +8005,7 @@ export function startRuntimeListener(
         ],
         max_output_tokens: optimizedOutputTokenLimit,
         provider_options: reasoningPolicy?.providerOptions,
-        connectionId:
-          chatModelSelection.mode === 'single'
-            ? (chatModelSelection.connectionId ??
-              (persistedConnection?.providerId === chatModelSelection.providerId &&
-              (!persistedConnection.modelId ||
-                persistedConnection.modelId === chatModelSelection.modelId)
-                ? persistedConnection.id
-                : undefined))
-            : undefined,
+        connectionId: effectiveChatConnectionId,
         connectionRequirements: {
           images: (detail.imageAttachments?.length ?? 0) > 0,
           files: (detail.filePaths?.length ?? 0) > 0,
@@ -7489,15 +8016,25 @@ export function startRuntimeListener(
           (chatRecord?.workspace_id ? String(chatRecord.workspace_id) : authState.workspaceId) ??
           undefined,
         projectId: projectId ? String(projectId) : undefined,
+        toolGatewayAuthority,
         runtimeSettings,
         interactionMode,
         accessLevel: runAccessLevel,
+        agentApprovalMode,
         approveAllForRun,
         workingDirectory:
           explicitReadRoot ??
           (projectId ? getStoredProjectRoot(projectId)?.trim() || undefined : undefined),
         explicitReadRoot: Boolean(explicitReadRoot),
         signal: controller.signal,
+        onProviderWarning: (message: string) => {
+          if (controller.signal.aborted) return;
+          setLiveAgentActivityPhase(chatId, agentActivityId, {
+            category: 'response',
+            title: message,
+            detail: message,
+          });
+        },
         onChunk: (chunk: LLMStreamChunk) => {
           if (controller.signal.aborted) return;
           if (chunk.delta && chunk.delta.length > 0) {
@@ -7532,7 +8069,8 @@ export function startRuntimeListener(
               const previous = liveOpenCodeChronology.at(-1);
               if (previous?.kind === 'text') {
                 liveOpenCodeChronology[liveOpenCodeChronology.length - 1] = {
-                  kind: 'text', text: chunk.mode === 'replace' ? chunk.delta : previous.text + chunk.delta,
+                  kind: 'text',
+                  text: chunk.mode === 'replace' ? chunk.delta : previous.text + chunk.delta,
                 };
               } else liveOpenCodeChronology.push({ kind: 'text', text: chunk.delta });
             }
@@ -7549,26 +8087,36 @@ export function startRuntimeListener(
         },
         tools: providerTools,
         onProviderUsage: (evidence) => {
-          if (detail.caoAuthority || evidence.requestId !== String(placeholder.id) ||
-              evidence.connectionId !== providerRequest.connectionId ||
-              evidence.providerId !== runnable.model.provider ||
-              evidence.modelId !== runnable.model.model) return;
-          partialOrdinaryUsage = providerPartialUsage(evidence.usage,
-            evidence.providerId as NonNullable<Message['usage']>['provider'] & string, evidence.modelId);
+          if (
+            detail.caoAuthority ||
+            evidence.requestId !== String(placeholder.id) ||
+            evidence.connectionId !== providerRequest.connectionId ||
+            evidence.providerId !== runnable.model.provider ||
+            evidence.modelId !== runnable.model.model
+          )
+            return;
+          partialOrdinaryUsage = providerPartialUsage(
+            evidence.usage,
+            evidence.providerId as NonNullable<Message['usage']>['provider'] & string,
+            evidence.modelId,
+          );
         },
         onReasoning: (delta, mode) => {
           if (controller.signal.aborted || detail.caoAuthority || !delta) return;
           const previous = liveOpenCodeChronology.at(-1);
-          const reasoningText = mode === 'replace' || previous?.kind !== 'reasoning'
-            ? delta
-            : previous.text + delta;
+          const reasoningText =
+            mode === 'replace' || previous?.kind !== 'reasoning' ? delta : previous.text + delta;
           const part: Part = { kind: 'reasoning', text: reasoningText };
-          if (previous?.kind === 'reasoning') liveOpenCodeChronology[liveOpenCodeChronology.length - 1] = part;
+          if (previous?.kind === 'reasoning')
+            liveOpenCodeChronology[liveOpenCodeChronology.length - 1] = part;
           else liveOpenCodeChronology.push(part);
           publishOrdinaryPreview();
           responseCompositionVisible = false;
           useChatActivityStore.getState().update(chatId, agentActivityId, {
-            category: 'thinking', status: 'running', title: 'Thinking', detail: reasoningText,
+            category: 'thinking',
+            status: 'running',
+            title: 'Thinking',
+            detail: reasoningText,
             ts: Date.now(),
           });
           if (!bufferExactLiteralStreaming) scheduleFlush();
@@ -7627,13 +8175,18 @@ export function startRuntimeListener(
           if (
             mayAutoApproveOpenCodeRequest({
               approveAllForRun,
+              agentApprovalMode,
               interactionMode,
               accessLevel: runAccessLevel,
               capability: approval.capability,
               risk: request.risk,
+              pluginOperation: approval.pluginOperation,
             })
           ) {
-            grantToolGatewayMutation(approval.sessionId, approval.capability, 'once');
+            // A read-only approval must not leave a mutation grant for a later plugin call.
+            if (!isReadOnlyPluginApproval(approval)) {
+              grantToolGatewayMutation(approval.sessionId, approval.capability, 'once');
+            }
             recordOpenCodeApprovalStatus(approval.sessionId, approval.id, 'approved');
             await respondToPersistentOpenCodeApproval({
               sessionId: approval.sessionId,
@@ -7685,11 +8238,17 @@ export function startRuntimeListener(
             kind: 'tool_call',
             tool: toolActivity.name,
             call_id: callId,
-            args: { ...existing?.call.args, ...(toolActivity.fileLabel ? { path: toolActivity.fileLabel } : {}), ...(toolActivity.nativeTask ? { nativeTask: toolActivity.nativeTask } : {}) },
+            args: {
+              ...existing?.call.args,
+              ...(toolActivity.fileLabel ? { path: toolActivity.fileLabel } : {}),
+              ...(toolActivity.nativeTask ? { nativeTask: toolActivity.nativeTask } : {}),
+            },
             ...(toolActivity.details || existing?.call.details
-              ? { details: toolActivity.details
-                  ? mergePublicToolDetails(existing?.call.details, toolActivity.details)
-                  : existing!.call.details }
+              ? {
+                  details: toolActivity.details
+                    ? mergePublicToolDetails(existing?.call.details, toolActivity.details)
+                    : existing!.call.details,
+                }
               : {}),
           };
           const result: Extract<Part, { kind: 'tool_result' }> | undefined =
@@ -7862,27 +8421,28 @@ export function startRuntimeListener(
             retrievedResponseContext,
           )
         : null;
-      const reconciledTokenUsage = tokenOptimizationReceipt && !response.usage.provenance
-        ? reconcileTokenUsage(
-            {
-              providerId: tokenOptimizationReceipt.providerId,
-              modelId: tokenOptimizationReceipt.modelId,
-              requestId: String(placeholder.id),
-              attemptNumber: 1,
-              estimatedInputTokens: tokenOptimizationReceipt.estimatedInputTokensAfter,
-              estimatedOutputTokens: tokenOptimizationReceipt.outputTokenLimit,
-              tokenizerSource: tokenOptimizationReceipt.tokenizerSource,
-            },
-            {
-              providerId: response.provider,
-              modelId: response.model,
-              requestId: String(placeholder.id),
-              attemptNumber: 1,
-              inputTokens: response.usage.input_tokens,
-              outputTokens: response.usage.output_tokens,
-            },
-          )
-        : null;
+      const reconciledTokenUsage =
+        tokenOptimizationReceipt && !response.usage.provenance
+          ? reconcileTokenUsage(
+              {
+                providerId: tokenOptimizationReceipt.providerId,
+                modelId: tokenOptimizationReceipt.modelId,
+                requestId: String(placeholder.id),
+                attemptNumber: 1,
+                estimatedInputTokens: tokenOptimizationReceipt.estimatedInputTokensAfter,
+                estimatedOutputTokens: tokenOptimizationReceipt.outputTokenLimit,
+                tokenizerSource: tokenOptimizationReceipt.tokenizerSource,
+              },
+              {
+                providerId: response.provider,
+                modelId: response.model,
+                requestId: String(placeholder.id),
+                attemptNumber: 1,
+                inputTokens: response.usage.input_tokens,
+                outputTokens: response.usage.output_tokens,
+              },
+            )
+          : null;
       const telemetryIdentity = resolveAccountIdentity(authState);
       if (tokenOptimizationReceipt && telemetryIdentity) {
         await recordTokenOptimizationTelemetry({
@@ -7966,8 +8526,15 @@ export function startRuntimeListener(
       await bindings.updateMessage(placeholder.id, {
         parts: finalParts,
         usage: {
-          execution: { mode: reasoningPolicy?.mode ?? 'normal', effort: reasoningPolicy?.providerEffort ?? reasoningPolicy?.resolvedEffort ?? runtimeSettings.effort },
+          execution: {
+            mode: reasoningPolicy?.mode ?? 'normal',
+            effort:
+              reasoningPolicy?.providerEffort ??
+              reasoningPolicy?.resolvedEffort ??
+              runtimeSettings.effort,
+          },
           ...(response.usage.provenance ? { provenance: response.usage.provenance } : {}),
+          ...aggregateReportedUsageDetails([response]),
           input_tokens: response.usage.input_tokens,
           output_tokens: response.usage.output_tokens,
           cost_usd: response.usage.cost_usd,
@@ -8113,9 +8680,10 @@ export function startRuntimeListener(
       useChatActivityStore.getState().update(chatId, agentActivityId, {
         status: 'done',
         title: `@${agent.slug} finished`,
-        subtitle: response.usage.provenance === 'unavailable'
-          ? `${response.provider}/${response.model} · Token usage unavailable`
-          : `${response.provider}/${response.model} · ${response.usage.provenance === 'estimated' ? 'Estimated ' : ''}${response.usage.input_tokens}+${response.usage.output_tokens} tokens`,
+        subtitle:
+          response.usage.provenance === 'unavailable'
+            ? `${response.provider}/${response.model} · Token usage unavailable`
+            : `${response.provider}/${response.model} · ${response.usage.provenance === 'estimated' ? 'Estimated ' : ''}${response.usage.input_tokens}+${response.usage.output_tokens} tokens`,
         ts: Date.now(),
       });
       dispatchCurrentRunState('done');
@@ -8147,17 +8715,15 @@ export function startRuntimeListener(
       await settleStreamingWrites();
 
       const aborted = controller.signal.aborted || isAbortError(err);
-      const providerError = !aborted && isProviderRuntimeError(err)
-        ? providerErrorDetails(err, {
-            providerId: runnable.model.provider,
-            modelId: runnable.model.model,
-            connectionId:
-              chatModelSelection.mode === 'single'
-                ? chatModelSelection.connectionId
-                : undefined,
-            ...(placeholderId ? { requestId: String(placeholderId) } : {}),
-          })
-        : undefined;
+      const providerError =
+        !aborted && isProviderRuntimeError(err)
+          ? providerErrorDetails(err, {
+              providerId: runnable.model.provider,
+              modelId: runnable.model.model,
+              connectionId: effectiveChatConnectionId,
+              ...(placeholderId ? { requestId: String(placeholderId) } : {}),
+            })
+          : undefined;
 
       await mirrorShadowOutcome(aborted ? 'cancelled' : 'failed', true);
 
@@ -8173,10 +8739,13 @@ export function startRuntimeListener(
             ...(partialOrdinaryUsage ? { usage: partialOrdinaryUsage } : {}),
           });
           ordinaryPreviewReconciled = true;
-        } else if (!aborted && isProtectedJarvis &&
-            resolveAccountIdentity(authState)?.accountId &&
-            resolveAccountIdentity(authState)?.accountId ===
-              resolveAccountIdentity(useAuthStore.getState())?.accountId) {
+        } else if (
+          !aborted &&
+          (isProtectedJarvis || providerError) &&
+          resolveAccountIdentity(authState)?.accountId &&
+          resolveAccountIdentity(authState)?.accountId ===
+            resolveAccountIdentity(useAuthStore.getState())?.accountId
+        ) {
           // Canonical execution owns its answer messages and has no legacy
           // placeholder. Retain the failure in the conversation without
           // fabricating an assistant answer. Provider diagnostics have already
@@ -8186,7 +8755,10 @@ export function startRuntimeListener(
             chat_id: chatId as ChatId,
             role: 'system',
             parts: [
-              { kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' },
+              {
+                kind: 'text',
+                text: 'The reply could not finish. Check the selected model and request settings, then try again.',
+              },
               ...(providerError ? [{ kind: 'provider_error' as const, error: providerError }] : []),
             ],
           });
@@ -8216,12 +8788,12 @@ export function startRuntimeListener(
             : `@${agent.slug} failed`,
         subtitle: aborted
           ? 'Cancelled by user'
-          : providerError?.message ?? safeErrorMessage(err, 'Unknown error'),
+          : (providerError?.message ?? safeErrorMessage(err, 'Unknown error')),
         ts: Date.now(),
       });
       dispatchCurrentRunState(
         aborted ? 'cancelled' : 'error',
-        aborted ? undefined : providerError?.code ?? safeKernelRuntimeErrorCode(err),
+        aborted ? undefined : (providerError?.code ?? safeKernelRuntimeErrorCode(err)),
       );
       updateStructuredAgentStatus(
         detail.structuredContext,
@@ -8247,7 +8819,9 @@ export function startRuntimeListener(
     } finally {
       controller.signal.removeEventListener('abort', cancelScheduledStreamingEffects);
       if (ordinaryPreview.scope && ordinaryPreviewReconciled) {
-        clearPreview(ordinaryPreview.scope.accountId, ordinaryPreview.scope.runId, { terminal: true });
+        clearPreview(ordinaryPreview.scope.accountId, ordinaryPreview.scope.runId, {
+          terminal: true,
+        });
       }
       removeOpenCodeQuestionResolutionListener?.();
       if (placeholderId && inFlight.get(placeholderId) === controller) {
@@ -8322,6 +8896,16 @@ export function startRuntimeListener(
     if (!chatId || !detail?.cancellationKey) return;
     const suspended = suspendedSendDetails.get(chatId);
     if (!suspended) {
+      // A durable cancelled checkpoint can outlive this listener's in-memory
+      // envelope. Let Composer use its ordinary account/context/model checks.
+      if (
+        !detail.caoExpectedAuthority &&
+        (controllersByChatId.get(chatId)?.size ?? 0) === 0 &&
+        detail.onUnavailable
+      ) {
+        detail.onUnavailable();
+        return;
+      }
       devConsole.log({
         channel: 'ai',
         level: 'warn',
@@ -8333,10 +8917,19 @@ export function startRuntimeListener(
     let currentCaoPolicy: ReturnType<typeof caoResumePolicy> | undefined;
     if (detail.caoExpectedAuthority) {
       try {
-        currentCaoPolicy = caoResumePolicy(suspended, detail.caoExpectedAuthority,
-          useJarvisInteractionStore.getState().modeForChat(chatId), readPermissionAccess(chatId).access);
+        currentCaoPolicy = caoResumePolicy(
+          suspended,
+          detail.caoExpectedAuthority,
+          useJarvisInteractionStore.getState().modeForChat(chatId),
+          readPermissionAccess(chatId).access,
+        );
       } catch {
-        publishChatRunState({ chatId, cancellationKey: detail.cancellationKey, status: 'error', errorCode: 'cao_control_resume_authority_changed' });
+        publishChatRunState({
+          chatId,
+          cancellationKey: detail.cancellationKey,
+          status: 'error',
+          errorCode: 'cao_control_resume_authority_changed',
+        });
         return;
       }
     }

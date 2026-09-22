@@ -25,6 +25,10 @@ import { productionContextGateway } from '@/features/context/gateway/productionC
 import { ContextRequiredUnavailableError } from '@/features/context/gateway/ContextGateway';
 import type { ContextReceipt } from '@/features/context/gateway/contextGatewayContracts';
 
+vi.mock('@/lib/sync', () => ({
+  enqueueMutation: vi.fn(async () => 'sync-test'),
+}));
+
 const observedIdentity = Object.freeze({
   transportConnectionId: 'opencode-cli',
   transportAdapterId: 'opencode-persistent',
@@ -111,10 +115,10 @@ describe('production tool gateway dependencies', () => {
   });
 
   it.each([
-    ['account', () => useAuthStore.setState({ localUserId: 'account-b' })],
-    ['workspace', () => useAuthStore.setState({ workspaceId: 'workspace-b' as WorkspaceId })],
-    ['project', () => useAuthStore.setState({ projectId: 'project-b' as ProjectId })],
-  ])('revokes an approval when the %s authority changes', async (_label, transition) => {
+    ['account', () => useAuthStore.setState({ localUserId: 'account-b' }), false],
+    ['workspace', () => useAuthStore.setState({ workspaceId: 'workspace-b' as WorkspaceId }), false],
+    ['project', () => useAuthStore.setState({ projectId: 'project-b' as ProjectId }), true],
+  ])('handles an approval when the %s authority changes', async (_label, transition, expected) => {
     const deps = createProductionToolGatewayDependencies();
     const navigation = mutation();
 
@@ -122,7 +126,7 @@ describe('production tool gateway dependencies', () => {
     await expect(Promise.resolve(deps.authorizeMutation(navigation))).resolves.toBe(true);
 
     transition();
-    await expect(Promise.resolve(deps.authorizeMutation(navigation))).resolves.toBe(false);
+    await expect(Promise.resolve(deps.authorizeMutation(navigation))).resolves.toBe(expected);
   });
 
   it('binds reads to one scope and rejects the session after a scope transition', async () => {
@@ -168,6 +172,7 @@ describe('production tool gateway dependencies', () => {
     }));
     const dispose = installToolGatewayPluginReadPort({ run });
     const deps = createProductionToolGatewayDependencies();
+    useAuthStore.setState({ projectId: 'project-b' as ProjectId });
     const context = {
       requestId: 'request-1',
       sessionId: 'session-1',
@@ -202,6 +207,74 @@ describe('production tool gateway dependencies', () => {
         deps.plugins.run({ pluginId: 'github', operation: 'identity', input: {} }, context),
       ),
     ).rejects.toThrow('plugin_operation_unavailable');
+  });
+
+  it('marks the still-current plugin connection for reauthorization after a provider 401', async () => {
+    const dispose = installToolGatewayPluginReadPort({
+      run: vi.fn().mockRejectedValue(new Error('connection_rejected_401')),
+    });
+    try {
+      await expect(
+        createProductionToolGatewayDependencies().plugins.run(
+          { pluginId: 'github', operation: 'identity', input: {} },
+          { requestId: 'request-401', sessionId: 'session-1', messageId: 'message-401', mutationApproved: false },
+        ),
+      ).rejects.toMatchObject({
+        code: 'plugin_operation_failed',
+        data: { pluginId: 'github', reason: 'connection_rejected_401' },
+      });
+    } finally {
+      dispose();
+    }
+
+    expect(usePluginStore.getState().connectionsByAccount['account-a'].github).toMatchObject({
+      state: 'reauthorize',
+      enabled: false,
+      enabledProjectIds: ['project-a'],
+      error: 'GitHub identity failed (connection_rejected_401). Reconnect GitHub in Plugins.',
+      lastTestedAt: expect.any(Number),
+      updatedAt: expect.any(Number),
+    });
+  });
+
+  it('does not let an old provider 401 invalidate a connection reauthorized in flight', async () => {
+    const run = vi.fn(async () => {
+      const current = usePluginStore.getState().connectionsByAccount['account-a'].github;
+      usePluginStore.setState({
+        connectionsByAccount: {
+          ...usePluginStore.getState().connectionsByAccount,
+          'account-a': {
+            ...usePluginStore.getState().connectionsByAccount['account-a'],
+            github: {
+              ...current,
+              state: 'connected',
+              enabled: true,
+              accountLabel: 'Reauthorized account',
+              updatedAt: 2,
+            },
+          },
+        },
+      });
+      throw new Error('connection_rejected_401');
+    });
+    const dispose = installToolGatewayPluginReadPort({ run });
+    try {
+      await expect(
+        createProductionToolGatewayDependencies().plugins.run(
+          { pluginId: 'github', operation: 'identity', input: {} },
+          { requestId: 'request-stale-401', sessionId: 'session-1', messageId: 'message-stale-401', mutationApproved: false },
+        ),
+      ).rejects.toMatchObject({ data: { reason: 'connection_rejected_401' } });
+    } finally {
+      dispose();
+    }
+
+    expect(usePluginStore.getState().connectionsByAccount['account-a'].github).toMatchObject({
+      state: 'connected',
+      enabled: true,
+      accountLabel: 'Reauthorized account',
+      updatedAt: 2,
+    });
   });
 
   it('classifies only declared read-only plugin operations from trusted metadata', () => {
@@ -273,7 +346,12 @@ describe('production tool gateway dependencies', () => {
     });
 
     const listed = await Promise.resolve(
-      createProductionToolGatewayDependencies().plugins.list({}, {} as never),
+      createProductionToolGatewayDependencies().plugins.list({}, {
+        requestId: 'request-list-plugins',
+        sessionId: 'session-1',
+        messageId: 'message-list-plugins',
+        mutationApproved: false,
+      }),
     );
     expect(listed).toEqual([expect.objectContaining({ id: 'github', connected: true })]);
   });
@@ -336,7 +414,12 @@ describe('production tool gateway dependencies', () => {
     } as never);
 
     const result = await Promise.resolve(
-      createProductionToolGatewayDependencies().mcp.list({}, {} as never),
+      createProductionToolGatewayDependencies().mcp.list({}, {
+        requestId: 'request-list-mcp',
+        sessionId: 'session-1',
+        messageId: 'message-list-mcp',
+        mutationApproved: false,
+      }),
     );
 
     expect(restoreApprovedConnections).toHaveBeenCalledOnce();
@@ -399,6 +482,7 @@ describe('production tool gateway dependencies', () => {
       mutationApproved: true,
       signal: new AbortController().signal,
     };
+    useAuthStore.setState({ projectId: 'project-b' as ProjectId });
 
     await expect(
       Promise.resolve(
@@ -432,6 +516,9 @@ describe('production tool gateway dependencies', () => {
   });
 
   it('does not let a stale plugin-port disposer revoke a newer host', async () => {
+    expect(
+      bindToolGatewaySessionAuthority('session-2', captureToolGatewayAuthorityClaim()!),
+    ).toBe(true);
     const first = installToolGatewayPluginReadPort({
       run: vi.fn(async () => ({ ok: true as const, data: 'first' })),
     });
@@ -456,7 +543,7 @@ describe('production tool gateway dependencies', () => {
     second();
   });
 
-  it('binds the RLM context port to the current account, project, worktree, and session', async () => {
+  it('binds the RLM context port to the session account, project, worktree, and session', async () => {
     const execute = vi.fn(async () => ({ mode: 'rlm', bounded: true }));
     const dispose = installToolGatewayRlmContextPort({ execute });
     const deps = createProductionToolGatewayDependencies();
@@ -468,6 +555,7 @@ describe('production tool gateway dependencies', () => {
       worktree: 'C:\\work\\project\\.worktrees\\feature',
       mutationApproved: false,
     };
+    useAuthStore.setState({ projectId: 'project-b' as ProjectId });
 
     await expect(
       Promise.resolve(deps.context.rlm({ operation: 'describe' }, context)),

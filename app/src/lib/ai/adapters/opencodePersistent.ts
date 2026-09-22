@@ -42,10 +42,17 @@ import {
   type OpenCodeRequestControls,
 } from '@/lib/harness/OpenCodeRequestControls';
 import { normalizeOpenCodeEvent } from '@/lib/harness/eventNormalizer';
+import { redactHarnessText } from '@/lib/harness/errors';
 import { OpenCodeApprovalAcknowledgements } from '@/lib/harness/OpenCodeApprovalAcknowledgement';
 import { recordOpenCodeApprovalStatus } from '@/lib/harness/openCodeApprovalState';
 import { nativeShellFailure, projectNativeTaskActivity } from '../openCodeNativeActivity';
-import { providerErrorDetails, ProviderRuntimeError } from '../providerError';
+import {
+  isProviderRateLimitError,
+  isProviderUsageLimitError,
+  presentProviderError,
+  providerErrorDetails,
+  ProviderRuntimeError,
+} from '../providerError';
 import {
   bindToolGatewayObservedExecutionAuthority,
   bindToolGatewaySessionAuthority,
@@ -102,6 +109,18 @@ const TURN_IDLE_POLL_MS = 500;
 const TURN_NO_EVIDENCE_GRACE_MS = 2_000;
 const TURN_IDLE_FAILED_TOOL_GRACE_MS = 5_000;
 const TURN_MAX_WALL_MS = 30 * 60_000;
+export const OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS = 60_000;
+
+export function shouldStopOpenCodeRateLimitRetry(
+  rateLimitStartedAt: number | undefined,
+  now = Date.now(),
+  windowMs = OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS,
+): boolean {
+  return rateLimitStartedAt !== undefined &&
+    Number.isFinite(rateLimitStartedAt) &&
+    Number.isFinite(now) &&
+    now - rateLimitStartedAt >= Math.max(0, windowMs);
+}
 
 type PersistentTurnFailureStage =
   | 'request_identity'
@@ -912,12 +931,16 @@ function upstreamProviderId(modelId: string): string {
 
 function variantFrom(value: unknown, fallbackId?: string): LiveModelVariant | undefined {
   const record = recordOf(value);
-  const id = cleanIdentifier(record?.id ?? fallbackId, 256);
+  const declaredEffort = cleanIdentifier(
+    record?.reasoningEffort ?? record?.reasoning_effort,
+    32,
+  );
+  const id = cleanIdentifier(record?.id ?? fallbackId ?? declaredEffort, 256);
   if (!id) return undefined;
   const normalized = id.toLocaleLowerCase('en-US');
   const tokens = normalized.split(/[-+_/:.]+/u).filter(Boolean);
   const effort =
-    cleanIdentifier(record?.reasoningEffort ?? record?.reasoning_effort, 32) ??
+    declaredEffort ??
     tokens.find((token) =>
       ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(token),
     );
@@ -964,7 +987,16 @@ function serviceTiersFrom(model: Record<string, unknown>): readonly string[] {
 }
 
 function variantsFrom(model: Record<string, unknown>): readonly LiveModelVariant[] {
-  const source = model.variants ?? model.variant;
+  // OpenCode releases have used all of these names for the same live
+  // capability. Keep the exact route while accepting the Codex-shaped
+  // `supportedReasoningEfforts` response used by newer bridges.
+  const source =
+    model.variants ??
+    model.variant ??
+    model.reasoningEfforts ??
+    model.reasoning_efforts ??
+    model.supportedReasoningEfforts ??
+    model.supported_reasoning_efforts;
   const variants: LiveModelVariant[] = [];
   if (Array.isArray(source)) {
     for (const item of source) {
@@ -1222,6 +1254,70 @@ export function persistentOpenCodeSessionErrorDetails(
     });
   }
   return Object.freeze({ message: 'OpenCode reported a provider session error.' });
+}
+
+function openCodeRateLimitRetryTimeout(
+  details: Readonly<ReturnType<typeof persistentOpenCodeSessionErrorDetails>> | undefined,
+): Extract<ProviderEvent, { type: 'error' }> {
+  const usageLimit = details ? isProviderUsageLimitError(details) : false;
+  return {
+    type: 'error',
+    message:
+      usageLimit
+        ? 'OpenCode stopped retrying after 60 seconds because the provider usage limit remained active.'
+        : 'OpenCode stopped retrying after 60 seconds because the provider remained temporarily rate limited.',
+    code: details?.code ?? 'opencode_rate_limit_timeout',
+    ...(details?.providerId ? { providerId: details.providerId } : {}),
+    ...(details?.modelId ? { modelId: details.modelId } : {}),
+    retryable: true,
+    ...(details?.retryAfterMs === undefined ? {} : { retryAfterMs: details.retryAfterMs }),
+    ...(details?.resetAt === undefined ? {} : { resetAt: details.resetAt }),
+  };
+}
+
+function openCodeRateLimitRetryNotice(
+  details: Readonly<ReturnType<typeof persistentOpenCodeSessionErrorDetails>>,
+  verifiedRoute: Readonly<{ providerId: string; modelId: string }>,
+): Extract<ProviderEvent, { type: 'warning' }> {
+  const presentation = presentProviderError(details);
+  const route = [verifiedRoute.providerId, verifiedRoute.modelId]
+    .map((value) => redactHarnessText(value))
+    .join('/');
+  return {
+    type: 'warning',
+    message:
+      `${presentation.title}${route ? ` for ${route}` : ''}. ` +
+      `${presentation.message} OpenCode is retrying for up to 60 seconds before stopping.`,
+  };
+}
+
+const OPENCODE_RATE_LIMIT_ABORT_TIMEOUT_MS = 1_000;
+
+export const OPENCODE_FAILURE_ABORT_TIMEOUT_MS = 1_000;
+
+async function boundedOpenCodeFailureAbort(cancel: () => Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    cancel().catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, OPENCODE_FAILURE_ABORT_TIMEOUT_MS);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
+async function abortOpenCodeRateLimitSession(
+  client: { abort: (sessionId: string) => Promise<unknown> },
+  sessionId: string,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    client.abort(sessionId).catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, OPENCODE_RATE_LIMIT_ABORT_TIMEOUT_MS);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
 }
 
 export function classifyExplicitRootInventoryScope(
@@ -1888,7 +1984,12 @@ function captureRequestGatewayAuthority(
   request: Readonly<ProviderRequest>,
 ): ToolGatewayAuthorityClaim | undefined {
   if (enabledGatewayTools(request).length === 0) return undefined;
-  const claim = captureToolGatewayAuthorityClaim();
+  // Runtime sends carry the exact claim captured before asynchronous context
+  // preparation. Preserve `null` as an intentional fail-closed result; only
+  // omitted claims use the legacy direct-adapter fallback.
+  const claim = request.toolGatewayAuthority !== undefined
+    ? request.toolGatewayAuthority
+    : captureToolGatewayAuthorityClaim();
   const accountId = cleanIdentifier(request.accountId, 512);
   const workspaceId = cleanIdentifier(request.workspaceId, 512);
   const projectId = cleanIdentifier(request.projectId, 512) ?? null;
@@ -2108,6 +2209,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
   const abortEvents = new AbortController();
   let boundSessionId: string | undefined;
   let retireCommand: (() => Promise<unknown>) | undefined;
+  let rateLimitDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
   const boundChildSessions = new Set<string>();
   const abort = () => {
     turnGate.cancel(chatId);
@@ -2175,6 +2277,49 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         return { done: true, value: undefined };
       });
     let pendingEvent = nextEventOrEof();
+    let rateLimitStartedAt: number | undefined;
+    let latestRateLimitDetails: Readonly<ReturnType<typeof persistentOpenCodeSessionErrorDetails>> | undefined;
+    let rateLimitNoticeEmitted = false;
+    let rateLimitDeadline:
+      | { promise: Promise<void>; timer: ReturnType<typeof setTimeout> }
+      | undefined;
+    const armRateLimitDeadline = (): void => {
+      if (rateLimitDeadline) return;
+      let resolveDeadline!: () => void;
+      const promise = new Promise<void>((resolve) => {
+        resolveDeadline = resolve;
+      });
+      const timer = setTimeout(resolveDeadline, OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS);
+      rateLimitDeadlineTimer = timer;
+      rateLimitDeadline = {
+        promise,
+        timer,
+      };
+    };
+    const observeRateLimit = (
+      details: Readonly<ReturnType<typeof persistentOpenCodeSessionErrorDetails>>,
+    ): boolean => {
+      if (!isProviderRateLimitError(details) || details.retryable === false) return false;
+      if (rateLimitStartedAt === undefined) {
+        rateLimitStartedAt = Date.now();
+        armRateLimitDeadline();
+      }
+      latestRateLimitDetails = details;
+      return true;
+    };
+    const takeRateLimitNotice = (): boolean => {
+      if (rateLimitNoticeEmitted) return false;
+      rateLimitNoticeEmitted = true;
+      return true;
+    };
+    const clearRateLimitRetry = (): void => {
+      if (rateLimitDeadline) clearTimeout(rateLimitDeadline.timer);
+      rateLimitDeadlineTimer = undefined;
+      rateLimitDeadline = undefined;
+      rateLimitStartedAt = undefined;
+      latestRateLimitDetails = undefined;
+      rateLimitNoticeEmitted = false;
+    };
     const settings = defaultRuntimeSettings(request);
     failureStage = 'runtime_controls';
     assertAuthoritativeOpenCodeRuntimeControls(settings, liveModel, request.connection.id);
@@ -2212,6 +2357,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       policy: {
         mode,
         access,
+        agentApprovalMode: request.agentApprovalMode,
         approveAllForRun: request.approveAllForRun === true,
         projectRoot: scope.workingDirectory ?? request.workingDirectory ?? '.',
       },
@@ -2408,7 +2554,13 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
               recovered.push(started);
             }
           }
-          if (shouldEmitTool(tool)) recovered.push(tool);
+          if (shouldEmitTool(tool)) {
+            // Only the original current-turn tool state proves progress. A
+            // synthetic started receipt for a persisted failed tool must not
+            // clear the provider's active retry deadline.
+            if (tool.status !== 'failed') clearRateLimitRetry();
+            recovered.push(tool);
+          }
         }
       }
       emittedText = accumulator.fullText('text');
@@ -2562,6 +2714,12 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         throw new DOMException('The OpenCode turn was superseded.', 'AbortError');
       if (request.signal?.aborted)
         throw new DOMException('The OpenCode turn was aborted.', 'AbortError');
+      if (shouldStopOpenCodeRateLimitRetry(rateLimitStartedAt)) {
+        await abortOpenCodeRateLimitSession(client, dispatch.sessionId);
+        finishReason = 'error';
+        yield openCodeRateLimitRetryTimeout(latestRateLimitDetails);
+        return;
+      }
       if (Date.now() - startedAt > TURN_MAX_WALL_MS) {
         await client.abort(dispatch.sessionId).catch(() => undefined);
         throw new Error('OpenCode turn exceeded the maximum wall time.');
@@ -2571,7 +2729,16 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         pendingPoll,
         pendingEvent.then((value) => ({ kind: 'event' as const, value })),
         ...(pendingCommand ? [pendingCommand] : []),
+        ...(rateLimitDeadline
+          ? [rateLimitDeadline.promise.then(() => ({ kind: 'rate-limit-timeout' as const }))]
+          : []),
       ]);
+      if (next.kind === 'rate-limit-timeout') {
+        await abortOpenCodeRateLimitSession(client, dispatch.sessionId);
+        finishReason = 'error';
+        yield openCodeRateLimitRetryTimeout(latestRateLimitDetails);
+        return;
+      }
       if (next.kind === 'command') {
         pendingCommand = undefined;
         if (!next.outcome.ok) {
@@ -2621,6 +2788,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         if (messageIdentity) {
           observedModelId = observeAuthoritativeIdentity(messageIdentity) ?? observedModelId;
         }
+        let canonicalProgress = false;
         if (canonical && canonical !== emittedText) {
           const delta = canonicalOpenCodeTextSuffix(emittedText, canonical);
           if (delta) {
@@ -2631,11 +2799,12 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
             });
             yield { type: 'text', delta, streamPartId: latestTextStreamPartId };
             emittedText = canonical;
+            canonicalProgress = true;
           }
         }
+        if (rateLimitStartedAt !== undefined && canonicalProgress) clearRateLimitRetry();
         if (status === 'error') {
           finishReason = 'error';
-          reportPersistentTurnFailure('provider_reported');
           const statusEvent: OpenCodeRawEvent = {
             type: 'session.status',
             properties: {
@@ -2653,6 +2822,16 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
             isGenericPersistentOpenCodeSessionError(statusDetails.message)
             ? eventStreamFailure
             : statusDetails;
+          if (observeRateLimit(errorDetails)) {
+            if (takeRateLimitNotice()) {
+              yield openCodeRateLimitRetryNotice(errorDetails, {
+                providerId,
+                modelId: liveModel.upstreamModelId,
+              });
+            }
+            continue;
+          }
+          reportPersistentTurnFailure('provider_reported');
           yield {
             type: 'error',
             message: errorDetails.message,
@@ -2793,6 +2972,9 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
           : extractOpenCodeTextPartUpdate(event);
       if (update) {
         const emission = accumulator.ingest(update);
+        if (emission.channel === 'text' && emission.kind !== 'noop' && emission.text) {
+          clearRateLimitRetry();
+        }
         if (emission.channel === 'reasoning' && emission.kind !== 'noop') {
           yield { type: 'reasoning', delta: emission.kind === 'replace'
             ? accumulator.fullText('reasoning') : emission.text,
@@ -2826,7 +3008,9 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       const tool = requestLocalTool(normalizeToolEvent(event, request));
       if (tool) {
         const firstStart = tool.type === 'tool' && tool.status === 'started' && !emittedToolStates.has(toolStateKey(tool));
-        if (tool.type === 'tool' && !shouldEmitTool(tool)) continue;
+        const isNovelTool = tool.type === 'tool' && shouldEmitTool(tool);
+        if (tool.type === 'tool' && !isNovelTool) continue;
+        if (isNovelTool && tool.status !== 'failed') clearRateLimitRetry();
         if (firstStart) {
           request.onActionDispatch?.({ observedAt: Date.now() });
         }
@@ -2843,8 +3027,17 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       const usage = normalizePersistentOpenCodeUsage(event);
       if (usage) yield { type: 'usage', usage };
       if (event.type === 'session.error') {
-        reportPersistentTurnFailure('provider_reported');
         const errorDetails = persistentOpenCodeSessionErrorDetails(event, dispatch.sessionId);
+        if (observeRateLimit(errorDetails)) {
+          if (takeRateLimitNotice()) {
+            yield openCodeRateLimitRetryNotice(errorDetails, {
+              providerId,
+              modelId: liveModel.upstreamModelId,
+            });
+          }
+          continue;
+        }
+        reportPersistentTurnFailure('provider_reported');
         yield {
           type: 'error',
           ...errorDetails,
@@ -2857,10 +3050,20 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         if (status === 'idle') pendingPoll = schedulePoll(0);
         if (status === 'error') {
           finishReason = 'error';
+          const errorDetails = persistentOpenCodeSessionErrorDetails(event, dispatch.sessionId);
+          if (observeRateLimit(errorDetails)) {
+            if (takeRateLimitNotice()) {
+              yield openCodeRateLimitRetryNotice(errorDetails, {
+                providerId,
+                modelId: liveModel.upstreamModelId,
+              });
+            }
+            continue;
+          }
           reportPersistentTurnFailure('provider_reported');
           yield {
             type: 'error',
-            ...persistentOpenCodeSessionErrorDetails(event, dispatch.sessionId),
+            ...errorDetails,
           };
           return;
         }
@@ -2944,10 +3147,17 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     yield { type: 'done', finishReason };
   } catch (error) {
     if (shouldReportPersistentTurnFailure(error)) reportPersistentTurnFailure(failureStage);
+    // A failed renderer turn must not leave the native agent editing in the
+    // background. Commands and caller cancellation have their own abort path.
+    if (boundSessionId && !retireCommand && !request.signal?.aborted) {
+      await boundedOpenCodeFailureAbort(() => sessions.cancelChat(scope, chatId));
+    }
     throw error;
   } finally {
     request.signal?.removeEventListener('abort', abort);
     abortEvents.abort();
+    if (rateLimitDeadlineTimer) clearTimeout(rateLimitDeadlineTimer);
+    rateLimitDeadlineTimer = undefined;
     if (retireCommand && !request.signal?.aborted) await retireCommand();
     for (const child of boundChildSessions) {
       if (activeApprovalSessions.get(child)?.requestId === request.requestId) activeApprovalSessions.delete(child);

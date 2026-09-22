@@ -23,7 +23,7 @@
 }
 
 .jarvis-edge-aura[data-active='true'] .jarvis-edge-aura__canvas {
-  animation: jarvis-aura-enter 450ms ease-out both;
+  animation: jarvis-aura-enter 120ms ease-out both;
 }
 
 @keyframes jarvis-aura-enter {

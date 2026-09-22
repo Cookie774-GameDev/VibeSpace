@@ -66,15 +66,18 @@ import {
   openCodeCatalogRevision,
   openCodeChecklistSnapshotsFromMessages,
   openCodePersistentAdapter,
+  OPENCODE_FAILURE_ABORT_TIMEOUT_MS,
   parseOpenCodeLiveModels,
   parseConnectedOpenCodeProviderIds,
   publicTextFromTurnMessages,
+  OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS,
   persistentOpenCodeSessionErrorDetails,
   persistentOpenCodeSessionErrorMessage,
   requireAuthoritativeOpenCodeModel,
   respondToPersistentOpenCodeApproval,
   respondToPersistentOpenCodeQuestion,
   shouldReportPersistentTurnFailure,
+  shouldStopOpenCodeRateLimitRetry,
   shouldFailOpenCodeTurnWithoutEvidence,
   shouldReconcileOpenCodeSessionCompletion,
   toolsForPolicy,
@@ -89,6 +92,7 @@ import {
 import type { ProviderEvent, ProviderRequest } from './types';
 import {
   authorizeToolGatewayRequest,
+  captureToolGatewayAuthorityClaim,
   readToolGatewayObservedExecutionAuthority,
 } from '@/lib/harness/toolGatewayAuthority';
 import { useAuthStore } from '@/stores/auth';
@@ -336,6 +340,12 @@ async function drain(iterator: AsyncIterator<ProviderEvent>): Promise<void> {
 }
 
 describe('persistent OpenCode question transport authority', () => {
+  it('uses a bounded one-minute retry window for retryable rate limits', () => {
+    expect(shouldStopOpenCodeRateLimitRetry(10_000, 10_000 + OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS - 1)).toBe(false);
+    expect(shouldStopOpenCodeRateLimitRetry(10_000, 10_000 + OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS)).toBe(true);
+    expect(shouldStopOpenCodeRateLimitRetry(undefined, 10_000 + OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS)).toBe(false);
+  });
+
   it.each([
     { error: { code: 'rate_limit_exceeded', message: 'Retry later. api_key=synthetic-secret-value', retryable: true, retryAfterMs: 12000, resetAt: 1789828217000 } },
     { name: 'APIError', data: { code: 'rate_limit_exceeded', message: 'Retry later. api_key=synthetic-secret-value', isRetryable: true, retryAfterMs: 12000, resetAt: 1789828217000 } },
@@ -351,6 +361,34 @@ describe('persistent OpenCode question transport authority', () => {
       message: 'Retry later. api_key=[REDACTED]',
       details: { code: 'rate_limit_exceeded', retryable: true, retryAfterMs: 12000, resetAt: 1789828217000 },
     });
+  });
+
+  it.each([
+    ['full', 'vibespace-full-auto'],
+    ['review', 'vibespace-full'],
+  ] as const)('forwards the persisted %s approval profile to the native coordinator', async (profile, expectedAgent) => {
+    configureManagedQuestionTransport([]);
+    const request = {
+      ...questionProviderRequest(`request-agent-profile-${profile}`),
+      interactionMode: 'agent' as const,
+      accessLevel: 'full' as const,
+      agentApprovalMode: profile,
+      // Review must win over this intentionally stale transient grant.
+      approveAllForRun: profile === 'review',
+    };
+    const iterator = openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]();
+    try {
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'session', sessionId: 'ses_question_exact' },
+      });
+      const sent = nativeOpenCodeMocks.request.mock.calls.find(([, path]) =>
+        path.includes('/prompt_async'),
+      );
+      expect(JSON.parse(String(sent?.[2]?.body))).toMatchObject({ agent: expectedAgent });
+    } finally {
+      await iterator.return?.();
+    }
   });
 
   it('allows a sixteen-second cold health handshake before dispatching exactly once', async () => {
@@ -1042,6 +1080,101 @@ describe('persistent OpenCode question transport authority', () => {
     expect(authorizeToolGatewayRequest(toolRequest)).toBe(false);
   });
 
+  it('uses an early captured gateway claim after project navigation before adapter capture', async () => {
+    const original = useAuthStore.getState();
+    useAuthStore.setState({
+      cloudSession: null,
+      localUserId: 'account-question-test',
+      workspaceId: 'workspace-question-test' as WorkspaceId,
+      projectId: 'project-question-test' as ProjectId,
+    });
+    const claim = captureToolGatewayAuthorityClaim();
+    expect(claim).not.toBeNull();
+    useAuthStore.setState({ projectId: 'project-question-test-after-navigation' as ProjectId });
+    configureManagedQuestionTransport([{ type: 'session.idle' }]);
+    const iterator = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('request-early-captured-project'),
+      projectId: 'project-question-test',
+      tools: { vibespace_context: true },
+      toolGatewayAuthority: claim,
+    })[Symbol.asyncIterator]();
+    try {
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'session', sessionId: 'ses_question_exact' },
+      });
+    } finally {
+      await iterator.return?.();
+      useAuthStore.setState({
+        cloudSession: original.cloudSession,
+        localUserId: original.localUserId,
+        workspaceId: original.workspaceId,
+        projectId: original.projectId,
+      });
+    }
+  });
+
+  it('fails closed when early gateway capture explicitly returned null', async () => {
+    const original = useAuthStore.getState();
+    useAuthStore.setState({
+      cloudSession: null,
+      localUserId: 'account-question-test',
+      workspaceId: 'workspace-question-test' as WorkspaceId,
+      projectId: 'project-question-test-after-navigation' as ProjectId,
+    });
+    const iterator = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('request-early-capture-null'),
+      projectId: 'project-question-test',
+      tools: { vibespace_context: true },
+      toolGatewayAuthority: null,
+    })[Symbol.asyncIterator]();
+    try {
+      await expect(iterator.next()).rejects.toThrow(/authority does not match/i);
+      expect(nativeOpenCodeMocks.request).not.toHaveBeenCalled();
+    } finally {
+      await iterator.return?.();
+      useAuthStore.setState({
+        cloudSession: original.cloudSession,
+        localUserId: original.localUserId,
+        workspaceId: original.workspaceId,
+        projectId: original.projectId,
+      });
+    }
+  });
+
+  it('rejects an early gateway claim whose project does not match the request snapshot', async () => {
+    const original = useAuthStore.getState();
+    useAuthStore.setState({
+      cloudSession: null,
+      localUserId: 'account-question-test',
+      workspaceId: 'workspace-question-test' as WorkspaceId,
+      projectId: 'project-question-test' as ProjectId,
+    });
+    const claim = captureToolGatewayAuthorityClaim()!;
+    const mismatchedClaim = Object.freeze({
+      ...claim,
+      scope: Object.freeze({ ...claim.scope, projectId: 'foreign-project' }),
+    });
+    const iterator = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('request-early-capture-mismatch'),
+      projectId: 'project-question-test',
+      tools: { vibespace_context: true },
+      toolGatewayAuthority: mismatchedClaim,
+    })[Symbol.asyncIterator]();
+    try {
+      await expect(iterator.next()).rejects.toThrow(/authority does not match/i);
+      expect(nativeOpenCodeMocks.request).not.toHaveBeenCalled();
+    } finally {
+      await iterator.return?.();
+      useAuthStore.setState({
+        cloudSession: original.cloudSession,
+        localUserId: original.localUserId,
+        workspaceId: original.workspaceId,
+        projectId: original.projectId,
+      });
+    }
+  });
+
   it('publishes validated observed execution identity to the exact Tool Gateway session and releases it', async () => {
     useAuthStore.setState({
       localUserId: 'account-question-test',
@@ -1095,6 +1228,74 @@ describe('persistent OpenCode question transport authority', () => {
 
     await drain(iterator);
     expect(readToolGatewayObservedExecutionAuthority('ses_question_exact')).toBeNull();
+  });
+
+  it('aborts the native session when observed model identity rejects an active turn', async () => {
+    configureManagedQuestionTransport([
+      {
+        type: 'message.updated',
+        properties: {
+          sessionID: 'ses_question_exact',
+          info: {
+            role: 'assistant',
+            sessionID: 'ses_question_exact',
+            providerID: 'openai',
+            modelID: 'unexpected-model',
+          },
+        },
+      },
+    ]);
+    const iterator = openCodePersistentAdapter.send!(
+      questionProviderRequest('request-failed-identity-abort'),
+    )[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'session' } });
+    await expect(iterator.next()).rejects.toThrow(/identity|model/i);
+    expect(nativeOpenCodeMocks.request.mock.calls).toContainEqual([
+      'opencode-server-question-test',
+      '/session/ses_question_exact/abort?directory=C%3A%5Cworkspace',
+      expect.objectContaining({ method: 'POST', body: '{}' }),
+      30_000,
+    ]);
+  });
+
+  it('bounds a hung native failure abort and preserves the original renderer error', async () => {
+    vi.useFakeTimers();
+    try {
+      configureManagedQuestionTransport([
+        {
+          type: 'message.updated',
+          properties: {
+            sessionID: 'ses_question_exact',
+            info: {
+              role: 'assistant',
+              sessionID: 'ses_question_exact',
+              providerID: 'openai',
+              modelID: 'unexpected-model',
+            },
+          },
+        },
+      ]);
+      const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+      nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+        if (path.includes('/abort')) return new Promise<Response>(() => {});
+        return original(generation, path, init, timeout);
+      });
+      const iterator = openCodePersistentAdapter.send!(
+        questionProviderRequest('request-hung-failure-abort'),
+      )[Symbol.asyncIterator]();
+      await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'session' } });
+      const failure = expect(iterator.next()).rejects.toThrow(/identity|model/i);
+      await vi.advanceTimersByTimeAsync(OPENCODE_FAILURE_ABORT_TIMEOUT_MS);
+      await failure;
+      expect(nativeOpenCodeMocks.request.mock.calls).toContainEqual([
+        'opencode-server-question-test',
+        '/session/ses_question_exact/abort?directory=C%3A%5Cworkspace',
+        expect.objectContaining({ method: 'POST', body: '{}' }),
+        30_000,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sends official reject without a body and consumes the exact authority once', async () => {
@@ -1868,6 +2069,31 @@ describe('persistent OpenCode live authority', () => {
         },
       ],
     });
+  });
+
+  it('normalizes Codex-shaped live reasoning capability metadata for the OpenCode picker', () => {
+    const [model] = parseOpenCodeLiveModels({
+      providers: [
+        {
+          id: 'openai',
+          models: {
+            'gpt-5.6-luna': {
+              supportedReasoningEfforts: [
+                { reasoningEffort: 'low' },
+                { reasoningEffort: 'medium' },
+                { reasoningEffort: 'high' },
+              ],
+            },
+          },
+        },
+      ],
+    });
+
+    expect(model.variants).toEqual([
+      { id: 'low', reasoningEffort: 'low', kind: 'reasoning' },
+      { id: 'medium', reasoningEffort: 'medium', kind: 'reasoning' },
+      { id: 'high', reasoningEffort: 'high', kind: 'reasoning' },
+    ]);
   });
 
   it('rejects malformed live capability claims and does not infer Fast from partial words', () => {
@@ -2878,7 +3104,7 @@ describe('persistent OpenCode live authority', () => {
                 kind: 'tool_call',
                 tool: 'vibespace_context',
                 call_id: 'opencode-tool-1',
-                args: {},
+                args: { operation: 'investigate', query: 'private project question' },
                 details: expect.objectContaining({
                   output: expect.objectContaining({ complete: true }),
                 }),
@@ -2968,7 +3194,7 @@ describe('persistent OpenCode live authority', () => {
             kind: 'tool_call',
             tool: 'vibespace_context',
             call_id: 'opencode-tool-1',
-            args: {},
+            args: { operation: 'investigate', query: 'private project question' },
           },
           {
             kind: 'tool_result',
@@ -3049,7 +3275,7 @@ describe('persistent OpenCode live authority', () => {
           status: {
             type: 'error',
             error: {
-              code: 'rate_limited',
+              code: 'provider_busy',
               providerID: 'openai',
               modelID: 'gpt-question-test',
               retryable: true,
@@ -3072,13 +3298,203 @@ describe('persistent OpenCode live authority', () => {
     expect(events).toContainEqual({
       type: 'error',
       message: 'Provider is temporarily busy.',
-      code: 'rate_limited',
+      code: 'provider_busy',
       providerId: 'openai',
       modelId: 'gpt-question-test',
       retryable: true,
       retryAfterMs: 4_000,
       resetAt: 1_800_000_000_000,
     });
+  });
+
+  it('aborts a retryable OpenCode rate-limit loop after one minute and preserves provider metadata', async () => {
+    vi.useFakeTimers();
+    try {
+      configureManagedQuestionTransport([], {
+        sessionStatuses: ['error'],
+        sessionStatusError: {
+          code: '429',
+          providerID: 'opencode-go',
+          modelID: 'deepseek-v4-flash-vision-exp',
+          retryable: true,
+          retryAfterMs: 5_000,
+          resetAt: 1_800_000_000_000,
+          message: 'HTTP 429 Too Many Requests.',
+        },
+        persistedMessages: [],
+      });
+      const iterator = openCodePersistentAdapter.send!(
+        questionProviderRequest('request-rate-limit-timeout'),
+      )[Symbol.asyncIterator]();
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'session', sessionId: 'ses_question_exact' },
+      });
+
+      const terminal = iterator.next();
+      // Let the first recovery poll observe the provider limit before
+      // advancing the bounded retry deadline.
+      await vi.advanceTimersByTimeAsync(500);
+      const notice = await terminal;
+      expect(notice).toMatchObject({
+        done: false,
+        value: {
+          type: 'warning',
+          message:
+            'Too many requests for openai/gpt-question-test. The provider is temporarily rate limited. Wait a moment and try again, or switch to another available model or credential. OpenCode is retrying for up to 60 seconds before stopping.',
+        },
+      });
+      const final = iterator.next();
+      await vi.advanceTimersByTimeAsync(OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS + 1);
+      const result = await final;
+      expect(result).toMatchObject({
+        done: false,
+        value: {
+          type: 'error',
+          message: 'OpenCode stopped retrying after 60 seconds because the provider remained temporarily rate limited.',
+          code: '429',
+          providerId: 'opencode-go',
+          modelId: 'deepseek-v4-flash-vision-exp',
+          retryable: true,
+          retryAfterMs: 5_000,
+          resetAt: 1_800_000_000_000,
+        },
+      });
+      expect(
+        nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/abort')),
+      ).toBe(true);
+      await iterator.next();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the verified catalog route for a rate-limit warning when event identity is adversarial', async () => {
+    vi.useFakeTimers();
+    try {
+      configureManagedQuestionTransport([], {
+        sessionStatuses: ['error'],
+        sessionStatusError: {
+          code: '429',
+          providerID: 'event-provider api_key=event-secret',
+          modelID: 'event-model token=event-secret',
+          retryable: true,
+          message: 'HTTP 429 Too Many Requests. Bearer event-secret',
+        },
+        persistedMessages: [],
+      });
+      const iterator = openCodePersistentAdapter.send!(
+        questionProviderRequest('request-rate-limit-adversarial-identity'),
+      )[Symbol.asyncIterator]();
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'session', sessionId: 'ses_question_exact' },
+      });
+
+      const warning = iterator.next();
+      await vi.advanceTimersByTimeAsync(500);
+      const result = await warning;
+      expect(result).toMatchObject({
+        done: false,
+        value: {
+          type: 'warning',
+          message:
+            'Too many requests for openai/gpt-question-test. The provider is temporarily rate limited. Wait a moment and try again, or switch to another available model or credential. OpenCode is retrying for up to 60 seconds before stopping.',
+        },
+      });
+      expect(String((result as { value?: { message?: string } }).value?.message)).not.toMatch(
+        /event-provider|event-model|event-secret|api_key|token=/iu,
+      );
+      await iterator.return?.();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the rate-limit deadline on novel current-turn tool recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      configureManagedQuestionTransport([
+        {
+          type: 'session.status',
+          properties: {
+            sessionID: 'ses_question_exact',
+            status: {
+              type: 'error',
+              error: {
+                code: '429',
+                providerID: 'opencode-go',
+                modelID: 'deepseek-v4-flash-vision-exp',
+                retryable: true,
+                retryAfterMs: 5_000,
+                message: 'HTTP 429 Too Many Requests.',
+              },
+            },
+          },
+        },
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'part-rate-recovery',
+              sessionID: 'ses_question_exact',
+              messageID: 'msg-rate-recovery',
+              type: 'tool',
+              tool: 'bash',
+              callID: 'call-rate-recovery',
+              state: {
+                status: 'completed',
+                input: { command: 'node verify.cjs' },
+                output: 'verified',
+              },
+            },
+          },
+        },
+      ], {
+        // Repeated busy snapshots are deliberately not recovery evidence.
+        sessionStatuses: ['busy'],
+        persistedMessages: [],
+      });
+      const abort = new AbortController();
+      const iterator = openCodePersistentAdapter.send!(
+        questionProviderRequest('request-rate-limit-tool-recovery', abort.signal),
+      )[Symbol.asyncIterator]();
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'session', sessionId: 'ses_question_exact' },
+      });
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: {
+          type: 'warning',
+          message:
+            'Too many requests for openai/gpt-question-test. The provider is temporarily rate limited. Wait a moment and try again, or switch to another available model or credential. OpenCode is retrying for up to 60 seconds before stopping.',
+        },
+      });
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'tool', name: 'bash', status: 'completed', callId: 'opencode-tool-1' },
+      });
+      const abortCallsBeforeWait = nativeOpenCodeMocks.request.mock.calls.filter(([, path]) =>
+        path.includes('/abort'),
+      ).length;
+
+      let settled = false;
+      const pending = iterator.next();
+      void pending.then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS + 1);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(
+        nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/abort')),
+      ).toHaveLength(abortCallsBeforeWait);
+
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(pending).rejects.toThrow(/aborted|recovery stopped/iu);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('terminates truthfully when polling observes an error after the event iterator rejects', async () => {

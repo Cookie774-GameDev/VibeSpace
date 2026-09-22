@@ -50,6 +50,81 @@ async function selectTwo() {
   fireEvent.click(screen.getByRole('button', { name: 'Connect Shell 2 2' }));
 }
 describe('native Fabric pane selection', () => {
+  it('tracks Workbench translation and excludes panes outside its surface', async () => {
+    let shift = 0;
+    const root = document.createElement('div');
+    root.className = 'workbench-canvas';
+    document.body.append(root);
+    targets.slice(0, 2).forEach((target, i) => {
+      const pane = document.createElement('section');
+      pane.className = 'workbench-panel';
+      pane.dataset.panelId = target.paneId;
+      pane.getBoundingClientRect = () =>
+        ({ x: i * 320 + shift, y: 160, width: 300, height: 600 }) as DOMRect;
+      root.append(pane);
+    });
+    render(
+      <TerminalFabricOverlay
+        visible
+        projectId="project"
+        paneSelector=".workbench-canvas .workbench-panel"
+        readTargets={mocks.read}
+      />,
+    );
+    await selectTwo();
+    expect(screen.queryByRole('button', { name: 'Connect Shell 3 3' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm connection' }));
+    await screen.findByLabelText('2 connected terminals');
+    const path = document.querySelector('.vs-fabric-line')!.getAttribute('d');
+    act(() => {
+      shift = 50;
+      root.style.transform = 'translateX(50px)';
+    });
+    await waitFor(() =>
+      expect(document.querySelector('.vs-fabric-line')!.getAttribute('d')).not.toBe(path),
+    );
+  });
+  it('connects ten panes and displays a bridge for every member', async () => {
+    document.querySelectorAll('[data-terminal-drop-pane-id]').forEach((pane) => pane.remove());
+    const ten = Array.from({ length: 10 }, (_, i) => ({
+      ...targets[0],
+      sessionId: `ten-${i}`,
+      paneId: `ten-pane-${i}`,
+      ordinal: i + 1,
+      label: `Ten ${i}`,
+    }));
+    ten.forEach((target, i) => {
+      const pane = document.createElement('div');
+      pane.dataset.terminalDropPaneId = target.paneId;
+      pane.getBoundingClientRect = () =>
+        ({
+          x: (i % 5) * 220,
+          y: 160 + Math.floor(i / 5) * 220,
+          width: 200,
+          height: 200,
+        }) as DOMRect;
+      document.body.append(pane);
+    });
+    mocks.read.mockResolvedValue(ten);
+    mocks.connect.mockResolvedValue({
+      status: 'completed',
+      targetIds: ten.map((t) => t.sessionId),
+    });
+    mocks.command.mockResolvedValue({
+      status: 'completed',
+      targetIds: ten.map((t) => t.sessionId),
+    });
+    render(<TerminalFabricOverlay visible projectId="project" />);
+    for (const target of ten)
+      fireEvent.click(
+        await screen.findByRole('button', { name: `Connect ${target.label} ${target.ordinal}` }),
+      );
+    expect(screen.getByText('10 / 10')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm connection' }));
+    await screen.findByLabelText('10 connected terminals');
+    expect(mocks.connect.mock.calls[0][0].peerRefs).toHaveLength(10);
+    expect(document.querySelectorAll('.vs-fabric-line')).toHaveLength(9);
+  });
   it('avoids an offline pane and reroutes when it resizes or is removed', async () => {
     mocks.read.mockResolvedValue(targets.slice(0, 2));
     const targetPane = document.querySelector<HTMLElement>(

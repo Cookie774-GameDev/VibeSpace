@@ -50,7 +50,8 @@ function recordInScope(record: ContextRecord, scope: ContextScope): boolean {
   return (
     record.accountId === scope.accountId &&
     (scope.workspaceId === undefined || record.workspaceId === scope.workspaceId) &&
-    (scope.projectId === undefined || record.projectId === scope.projectId)
+    (scope.projectId === undefined || record.projectId === scope.projectId) &&
+    (scope.worktreeId === undefined || record.worktreeId === scope.worktreeId)
   );
 }
 
@@ -58,6 +59,20 @@ function normalizedQuery(query: string): string {
   return (query.startsWith('"') && query.endsWith('"') ? query.slice(1, -1) : query)
     .trim()
     .toLocaleLowerCase('en-US');
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.byteLength <= maxBytes) return value;
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  for (let end = Math.max(0, Math.floor(maxBytes)); end >= 0; end -= 1) {
+    try {
+      return decoder.decode(bytes.slice(0, end));
+    } catch {
+      // Back up over the final UTF-8 code point when the byte cap splits it.
+    }
+  }
+  return '';
 }
 
 async function sha256(value: Uint8Array): Promise<string> {
@@ -74,9 +89,21 @@ export function createHistoryRlmRepository(dependencies: {
     if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
     const evidence = await dependencies.load(scope, signal);
     const loaded: HistoryAuthority[] = [];
+    const scopeBinding = scope.worktreeId
+      ? await sha256(
+          new TextEncoder().encode(
+            JSON.stringify([
+              scope.accountId,
+              scope.workspaceId ?? null,
+              scope.projectId ?? null,
+              scope.worktreeId,
+            ]),
+          ),
+        )
+      : '';
     for (const item of evidence.slice(0, MAX_HISTORY_RECORDS)) {
       if (!inScope(item, scope)) continue;
-      const content = item.content.slice(0, MAX_HISTORY_BYTES);
+      const content = truncateUtf8(item.content, MAX_HISTORY_BYTES);
       if (!content.trim()) continue;
       const path = `vibespace://${item.sourceKind}/${encodeURIComponent(item.sourceId)}`;
       const policy = classifyJarvisSource({
@@ -91,10 +118,13 @@ export function createHistoryRlmRepository(dependencies: {
       let record: Readonly<ContextRecord>;
       try {
         record = createContextRecord({
-          id: `rlm:history:${item.sourceKind}:${item.id}:${contentHash.slice(0, 16)}`,
+          id: `rlm:history:${item.sourceKind}:${item.id}:${
+            scopeBinding ? `${scopeBinding.slice(0, 16)}:` : ''
+          }${contentHash.slice(0, 16)}`,
           accountId: item.accountId,
           ...(item.workspaceId ? { workspaceId: item.workspaceId } : {}),
           ...(item.projectId ? { projectId: item.projectId } : {}),
+          ...(scope.worktreeId ? { worktreeId: scope.worktreeId } : {}),
           sourceKind: item.sourceKind,
           sourceId: item.sourceId,
           createdAt: item.createdAt,
@@ -174,8 +204,7 @@ function messageText(parts: readonly Part[]): string {
       if (part.kind === 'tool_result' && part.error) return [`Tool error: ${part.error}`];
       return [];
     })
-    .join('\n')
-    .slice(0, MAX_HISTORY_BYTES);
+    .join('\n');
 }
 
 export async function loadProductionRlmHistory(

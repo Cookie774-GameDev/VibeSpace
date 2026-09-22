@@ -33,6 +33,7 @@ import { applyThemeSyncToApplication, startThemeSync } from './features/appearan
 import { resolveDevelopmentSurface } from './developmentSurface';
 import { TaskbarUsageWindow } from './features/taskbar-usage/TaskbarUsageWindow';
 import { startTaskbarUsageController } from './features/taskbar-usage/taskbarUsageController';
+import { startCaoProductionLifecycle } from './features/cao/productionLifecycle';
 import { startRendererHeartbeat } from './rendererHeartbeat';
 import { startActivityLogPersistence } from './lib/diagnostics/activityLogLifecycle';
 import { startResourcePressureMonitor } from './stability/resourcePressure';
@@ -98,6 +99,9 @@ export function mountApp(rootEl: HTMLElement): void {
   const stopTaskbarUsageController = regularWindow
     ? startTaskbarUsageController()
     : () => undefined;
+  const stopCaoProductionLifecycle = regularWindow
+    ? startCaoProductionLifecycle()
+    : () => undefined;
   let rendererLifecycleStopped = false;
   const stopRendererLifecycle = () => {
     if (rendererLifecycleStopped) return;
@@ -106,6 +110,7 @@ export function mountApp(rootEl: HTMLElement): void {
     void stopActivityLogPersistence();
     stopResourcePressureMonitor();
     stopTaskbarUsageController();
+    stopCaoProductionLifecycle();
   };
   window.addEventListener('pagehide', stopRendererLifecycle, { once: true });
 

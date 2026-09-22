@@ -29,6 +29,6 @@ describe('Composer live mode restriction integration', () => {
     expect(source).not.toContain('permissionPickerStep');
     expect(source).not.toContain("parsed?.kind === 'access'");
     expect(source).not.toContain("parsed?.kind === 'approve-all'");
-    expect(source).toContain('Usage: /permissions agent | plan | ask');
+    expect(source).toContain('Usage: /permissions agent [full|review] | plan | ask');
   });
 });

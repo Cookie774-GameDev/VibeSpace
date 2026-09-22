@@ -149,8 +149,8 @@ export function defaultFoundryTrainingConfiguration(
     seed: 7,
     epochs: 1,
     batchSize: 1,
-    gradientAccumulation: 4,
-    maxSequenceLength: 2_048,
+    gradientAccumulation: 8,
+    maxSequenceLength: 1_024,
     learningRate: method === 'full' ? 0.000_02 : 0.000_2,
     loraRank: 16,
     loraAlpha: 32,
@@ -254,7 +254,7 @@ export function estimateFoundryTrainingDuration(input: {
     optimizationSteps,
     basis: `${examples} measured example${examples === 1 ? '' : 's'}, ${measuredTextTokens.toLocaleString()} measured text tokens${visualBasis}, ${optimizationSteps.toLocaleString()} optimization steps, and the selected ${useGpu ? 'GPU' : 'CPU'}.`,
     disclaimer:
-      'Calibrated prediction from the selected data and requested settings. It tightens after real training telemetry exists; cooling, drivers, and other computer activity can still change the result.',
+      'Planning estimate from the selected data and settings. It becomes calibrated only after a verified training telemetry receipt; cooling, drivers, and other computer activity can still change the result.',
   };
 }
 
@@ -274,8 +274,8 @@ export function validateFoundryTrainingConfiguration(
       ['batchSize', 'Batch size', 1, 128],
       ['gradientAccumulation', 'Gradient accumulation', 1, 1_024],
       ['maxSequenceLength', 'Sequence length', 64, 131_072],
-      ['loraRank', 'LoRA rank', 1, 1_024],
-      ['loraAlpha', 'LoRA alpha', 1, 8_192],
+      ['loraRank', 'LoRA rank', 1, 512],
+      ['loraAlpha', 'LoRA alpha', 1, 1_024],
     ];
   for (const [key, label, minimum, maximum] of integerBounds) {
     const value = configuration[key];
@@ -383,9 +383,17 @@ export function planLocalTrainingMethod(input: {
     workload: requirements.workload,
   };
 
-  if ([input.hardware.ramGb, input.hardware.vramGb, input.hardware.freeStorageGb]
-    .some((value) => !Number.isFinite(value) || value < 0)) {
-    return { ...base, available: false, reason: 'Hardware capacity could not be verified. Refresh hardware detection before training.' };
+  if (
+    [input.hardware.ramGb, input.hardware.vramGb, input.hardware.freeStorageGb].some(
+      (value) => !Number.isFinite(value) || value < 0,
+    )
+  ) {
+    return {
+      ...base,
+      available: false,
+      reason:
+        'Hardware capacity could not be verified. Refresh hardware detection before training.',
+    };
   }
 
   if (input.method !== 'knowledge') {
@@ -432,11 +440,11 @@ export function planLocalTrainingMethod(input: {
     input.method === 'knowledge'
       ? reportedMemoryMeets(input.hardware.ramGb, requiredRamGb)
       : input.computeDevice === 'gpu'
-      ? reportedMemoryMeets(input.hardware.vramGb, requiredVramGb)
-      : input.computeDevice === 'cpu'
-        ? reportedMemoryMeets(input.hardware.ramGb, requiredRamGb)
-        : reportedMemoryMeets(input.hardware.vramGb, requiredVramGb) ||
-          reportedMemoryMeets(input.hardware.ramGb, requiredRamGb);
+        ? reportedMemoryMeets(input.hardware.vramGb, requiredVramGb)
+        : input.computeDevice === 'cpu'
+          ? reportedMemoryMeets(input.hardware.ramGb, requiredRamGb)
+          : reportedMemoryMeets(input.hardware.vramGb, requiredVramGb) ||
+            reportedMemoryMeets(input.hardware.ramGb, requiredRamGb);
   if (!memoryFits) {
     return {
       ...base,

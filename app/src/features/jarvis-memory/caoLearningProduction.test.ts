@@ -10,7 +10,57 @@ const mocks = vi.hoisted(() => ({
   file: vi.fn(),
   put: vi.fn(),
   dispatch: vi.fn(),
+  resolveProfile: vi.fn(),
+  profile: {
+    schemaVersion: 1 as const,
+    accountId: 'account',
+    workspaceId: 'workspace',
+    backend: 'codex' as const,
+    providerId: 'openai',
+    connectionId: 'openai-codex',
+    modelId: 'gpt-5.6-luna',
+    reasoningEffort: 'high',
+    catalogReceipt: {
+      source: 'live' as const,
+      accountId: 'account',
+      workspaceId: 'workspace',
+      catalogGeneration: 'test-generation',
+      catalogHash: 'c'.repeat(64),
+      verifiedAt: 1,
+      entries: [
+        {
+          backend: 'codex' as const,
+          providerId: 'openai',
+          connectionId: 'openai-codex',
+          modelId: 'gpt-5.6-luna',
+          reasoningEffort: 'high',
+        },
+      ],
+    },
+    updatedAt: 1,
+  },
   messages: [] as unknown[],
+}));
+vi.mock('@/features/cao/bootstrap', () => ({
+  resolveCaoMainBrainProfile: (scope: { accountId: string; workspaceId: string }) =>
+    mocks.resolveProfile(scope),
+  assertConfiguredCaoExecutionIdentity: ({
+    requested,
+    observed,
+  }: {
+    requested: typeof mocks.profile;
+    observed: Record<string, string>;
+  }) => {
+    if (
+      observed.backend !== requested.backend ||
+      observed.providerId !== requested.providerId ||
+      observed.connectionId !== requested.connectionId ||
+      observed.modelId !== requested.modelId ||
+      observed.reasoningEffort !== requested.reasoningEffort
+    )
+      throw new Error('cao_execution_identity_mismatch');
+    return requested;
+  },
 }));
 vi.mock('@/lib/accountIdentity', () => ({
   getActiveAccountIdentity: () => ({ accountId: mocks.account }),
@@ -71,6 +121,7 @@ beforeEach(() => {
   mocks.file.mockReset().mockResolvedValue({});
   mocks.put.mockReset().mockResolvedValue({});
   mocks.dispatch.mockReset();
+  mocks.resolveProfile.mockReset().mockResolvedValue(mocks.profile);
   const store = useJarvisLearningStore.getState();
   store.clearForTests();
   store.setAccount('account');
@@ -93,7 +144,7 @@ beforeEach(() => {
       sessionId: 'session',
       providerId: 'openai',
       connectionId: 'openai-codex',
-      modelId: 'gpt-5.6-terra',
+      modelId: 'gpt-5.6-luna',
       reasoningEffort: 'high',
       observedAt: 100,
       usage: { capturedAt: 100 },
@@ -122,8 +173,11 @@ it('feeds both ten-message chats to the pinned learner and writes source-backed 
   expect(request.messages[0]?.content).toContain('opencode-9');
   expect(request.messages[0]?.content).toContain('codex-9');
   expect(request).toMatchObject({
-    backend: 'codex',
-    connectionId: 'openai-codex',
+    backend: mocks.profile.backend,
+    connectionId: mocks.profile.connectionId,
+    workspaceId: mocks.profile.workspaceId,
+    agent: { model: { provider: mocks.profile.providerId, model: mocks.profile.modelId } },
+    provider_options: { reasoning_effort: mocks.profile.reasoningEffort },
     accessLevel: 'read-only',
   });
   expect(mocks.file.mock.calls[0]?.[1]).toContain('## CAO — How to handle my chats and agents');
@@ -153,17 +207,35 @@ it('rejects an account switch during model extraction', async () => {
 });
 
 it('retains established source-backed areas omitted by a later partial project review', async () => {
- await executeProductionCaoLearning(input,new AbortController().signal);
- const prior=useJarvisLearningStore.getState().currentProfile().caoGuidance!.sections.corrections;
- const dispatch=mocks.dispatch.getMockImplementation()!;
- mocks.dispatch.mockImplementation(async request=>{const result=await dispatch(request);const value=JSON.parse(result.text);delete value.sections.corrections;return {text:JSON.stringify(value)}});
- expect((await executeProductionCaoLearning({...input,trigger:'manual_force'},new AbortController().signal)).status).toBe('completed');
- expect(useJarvisLearningStore.getState().currentProfile().caoGuidance!.sections.corrections).toEqual(prior);
+  await executeProductionCaoLearning(input, new AbortController().signal);
+  const prior = useJarvisLearningStore.getState().currentProfile().caoGuidance!.sections
+    .corrections;
+  const dispatch = mocks.dispatch.getMockImplementation()!;
+  mocks.dispatch.mockImplementation(async (request) => {
+    const result = await dispatch(request);
+    const value = JSON.parse(result.text);
+    delete value.sections.corrections;
+    return { text: JSON.stringify(value) };
+  });
+  expect(
+    (
+      await executeProductionCaoLearning(
+        { ...input, trigger: 'manual_force' },
+        new AbortController().signal,
+      )
+    ).status,
+  ).toBe('completed');
+  expect(
+    useJarvisLearningStore.getState().currentProfile().caoGuidance!.sections.corrections,
+  ).toEqual(prior);
 });
 
 it('does not re-evaluate old account messages merely because the active project changes', async () => {
- useJarvisLearningStore.getState().markEvaluated(20);
- useJarvisLearningStore.getState().recordUserMessage({text:'New project setup: work only in this assigned directory and wait for details.',chatId:'new-chat'});
- await reviewCaoChatLearning('account','new-chat',new AbortController().signal);
- expect(mocks.dispatch).not.toHaveBeenCalled();
+  useJarvisLearningStore.getState().markEvaluated(20);
+  useJarvisLearningStore.getState().recordUserMessage({
+    text: 'New project setup: work only in this assigned directory and wait for details.',
+    chatId: 'new-chat',
+  });
+  await reviewCaoChatLearning('account', 'new-chat', new AbortController().signal);
+  expect(mocks.dispatch).not.toHaveBeenCalled();
 });

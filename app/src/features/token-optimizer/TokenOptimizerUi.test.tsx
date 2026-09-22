@@ -23,7 +23,9 @@ describe('Token Optimize standalone UI', () => {
     expect(screen.getAllByRole('radio', { name: /^saver/i })).toHaveLength(2);
     expect(screen.getAllByRole('radio', { name: /^normal/i })).toHaveLength(2);
     expect(screen.getAllByRole('radio', { name: /^final boss/i })).toHaveLength(2);
-    expect(screen.getAllByText(/Apply Ponytail guidance and cap output tightly/i)).toHaveLength(2);
+    expect(
+      screen.getAllByText(/Apply Ponytail guidance while preserving model and output behavior\./i),
+    ).toHaveLength(2);
     expect(screen.queryByText(/Keep only high-value context/i)).toBeNull();
     expect(screen.queryByText(/Keep broader context/i)).toBeNull();
     expect(

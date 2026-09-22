@@ -69,7 +69,7 @@ function durableMemory(options: { failSaveCall?: number } = {}) {
 }
 
 function authorizedExecution(
-  verify: ReturnType<typeof vi.fn>,
+  verify: Parameters<typeof createCaoScheduledTargetExecution>[0]['authority']['verify'],
   execute: (input: CaoLearningExecutionInput) => Promise<{
     status: 'completed' | 'failed' | 'cancelled';
     receiptId?: string;

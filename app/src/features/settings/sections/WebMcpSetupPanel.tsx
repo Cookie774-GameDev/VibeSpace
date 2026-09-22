@@ -2,6 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Check,
   CheckCircle2,
+  Monitor,
+  Cloud,
+  MessageSquare,
+  ArrowRight,
+  Unplug,
+  AlertTriangle,
   ExternalLink,
   KeyRound,
   Link2,
@@ -17,6 +23,9 @@ import apiVideo from '@/assets/webmcp/api-key-setup.mp4?url';
 import tunnelPoster from '@/assets/webmcp/tunnel-setup.jpg';
 import apiPoster from '@/assets/webmcp/api-key-setup.jpg';
 import {
+  describeSetupError,
+  pluginName,
+  setupErrorMessages,
   draftFromStatus,
   readWebMcpStatus,
   saveWebMcpDraft,
@@ -91,7 +100,8 @@ export function WebMcpSetupPanel({
   const saveTail = useRef<Promise<unknown>>(Promise.resolve());
   const savingCount = useRef(0);
   const pendingSave = useRef<{ revision: number; promise: Promise<WebMcpStatus> }>();
-  const acknowledgedKey = useRef('');
+  const keyRevision = useRef(0);
+  const acknowledgedKeyRevision = useRef(-1);
   const changeStatus = useRef(onStatus);
   changeStatus.current = onStatus;
   const applyStatus = useCallback((value: WebMcpStatus) => {
@@ -119,7 +129,7 @@ export function WebMcpSetupPanel({
       mounted.current = false;
       clearTimeout(timer.current);
       latestKey.current = '';
-      acknowledgedKey.current = '';
+      acknowledgedKeyRevision.current = -1;
     };
   }, [applyStatus]);
   const save = useCallback(async () => {
@@ -127,6 +137,7 @@ export function WebMcpSetupPanel({
     const current = { ...latestDraft.current };
     const key = latestKey.current.trim();
     const version = revision.current;
+    const keyVersion = keyRevision.current;
     if (pendingSave.current?.revision === version) return pendingSave.current.promise;
     const problem = validateSetupDraft(current, key);
     if (problem) {
@@ -137,12 +148,12 @@ export function WebMcpSetupPanel({
     savingCount.current++;
     setSaveState('saving');
     const operation = saveTail.current.then(() =>
-      saveWebMcpDraft(current, key === acknowledgedKey.current ? '' : key),
+      saveWebMcpDraft(current, keyVersion === acknowledgedKeyRevision.current ? '' : key),
     );
     saveTail.current = operation.catch(() => {});
     const completion = operation
       .then((confirmed) => {
-        if (key) acknowledgedKey.current = key;
+        if (key) acknowledgedKeyRevision.current = keyVersion;
         if (mounted.current) {
           if (version === revision.current) {
             applyStatus(confirmed);
@@ -157,12 +168,16 @@ export function WebMcpSetupPanel({
         }
         return confirmed;
       })
-      .catch(() => {
+      .catch((cause) => {
+        const message = describeSetupError(
+          cause,
+          'Setup progress could not be saved and verified. Please retry.',
+        );
         if (mounted.current) {
           setSaveState('error');
-          setError('Progress could not be saved. Check the fields and retry.');
+          setError(message);
         }
-        throw new Error('Setup save failed.');
+        throw new Error(message);
       })
       .finally(() => {
         savingCount.current--;
@@ -181,6 +196,7 @@ export function WebMcpSetupPanel({
   };
   const updateDraft = (patch: Partial<SetupDraft>) => {
     revision.current++;
+    setError('');
     latestDraft.current = { ...latestDraft.current, ...patch };
     setDraft(latestDraft.current);
     scheduleSave();
@@ -232,8 +248,13 @@ export function WebMcpSetupPanel({
       await save();
       await setupAction('connect');
       applyStatus(await readWebMcpStatus());
-    } catch {
-      setError('Connection could not be confirmed. Check your tunnel and its key permissions.');
+    } catch (cause) {
+      setError(
+        describeSetupError(
+          cause,
+          'The local connection could not be confirmed. Check the saved setup and retry.',
+        ),
+      );
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -266,6 +287,11 @@ export function WebMcpSetupPanel({
   const active = status?.status === 'ready' || status?.status === 'connecting';
   const tunnelSaved = Boolean(status?.tunnelId && status.tunnelId === draft.tunnelId.trim());
   const credentialStep = draft.step !== 3;
+  const displayedError =
+    error ||
+    (status?.errorCode && Object.hasOwn(setupErrorMessages, status.errorCode)
+      ? setupErrorMessages[status.errorCode]
+      : '');
   return (
     <Dialog
       open
@@ -311,7 +337,10 @@ export function WebMcpSetupPanel({
             disabled={loading || busy}
             onClick={() => updateDraft({ step: 3 })}
           >
-            <span>2</span>Add to ChatGPT
+            <span>
+              <MessageSquare size={13} aria-hidden="true" />
+            </span>
+            Add to ChatGPT
           </button>
         </nav>
         <div className="webmcp-body" aria-busy={loading}>
@@ -321,6 +350,32 @@ export function WebMcpSetupPanel({
             </p>
           ) : (
             <>
+              <div className="webmcp-checks" aria-label="Connection checks">
+                <div data-verified={status?.connectionDetected && (status?.toolCount ?? 0) > 0}>
+                  <Monitor size={16} aria-hidden="true" />
+                  <span>
+                    Local tools
+                    <small>
+                      {status?.toolCount ? status.toolCount + ' available' : 'Not ready'}
+                    </small>
+                  </span>
+                </div>
+                <ArrowRight size={13} aria-hidden="true" />
+                <div data-verified={status?.hasKey === true}>
+                  <ShieldCheck size={16} aria-hidden="true" />
+                  <span>
+                    Secure key<small>{status?.hasKey ? 'Saved on this PC' : 'Not saved yet'}</small>
+                  </span>
+                </div>
+                <ArrowRight size={13} aria-hidden="true" />
+                <div data-verified={ready}>
+                  <Cloud size={16} aria-hidden="true" />
+                  <span>
+                    OpenAI tunnel
+                    <small>{ready ? 'Connected' : active ? 'Connecting…' : 'Not connected'}</small>
+                  </span>
+                </div>
+              </div>
               <div className="webmcp-guide-tabs" role="tablist" aria-label="Setup tutorial">
                 {(['tunnel', 'api'] as const).map((tab) => (
                   <button
@@ -372,16 +427,6 @@ export function WebMcpSetupPanel({
                     void connect();
                   }}
                 >
-                  <label className="webmcp-name">
-                    App name
-                    <Input
-                      aria-label="WebMCP app name"
-                      value={draft.displayName}
-                      maxLength={64}
-                      onChange={(event) => updateDraft({ displayName: event.target.value })}
-                      disabled={busy}
-                    />
-                  </label>
                   <div className="webmcp-fields">
                     <label>
                       Tunnel ID
@@ -432,6 +477,8 @@ export function WebMcpSetupPanel({
                           disabled={busy || active}
                           onChange={(event) => {
                             revision.current++;
+                            keyRevision.current++;
+                            setError('');
                             latestKey.current = event.target.value;
                             setApiKey(event.target.value);
                             scheduleSave();
@@ -443,6 +490,23 @@ export function WebMcpSetupPanel({
                       </p>
                     </div>
                   </div>
+                  <label className="webmcp-name webmcp-optional-name">
+                    <span>
+                      <MessageSquare size={13} aria-hidden="true" /> ChatGPT plugin name{' '}
+                      <small>optional</small>
+                    </span>
+                    <Input
+                      aria-label="WebMCP app name"
+                      placeholder="VibeSpace Desktop"
+                      value={draft.displayName}
+                      maxLength={64}
+                      onChange={(event) => updateDraft({ displayName: event.target.value })}
+                      disabled={busy}
+                    />
+                    <span className="webmcp-hint">
+                      Only the label you use in ChatGPT. Leave blank to use VibeSpace Desktop.
+                    </span>
+                  </label>
                   <p className="webmcp-hint">
                     The tunnel ID identifies the connection. The runtime key authenticates it.
                   </p>
@@ -454,7 +518,7 @@ export function WebMcpSetupPanel({
                 <section className="webmcp-chatgpt">
                   <h3>One last step in ChatGPT</h3>
                   <p>
-                    Create an app named <strong>{draft.displayName}</strong>, choose{' '}
+                    Create an app named <strong>{pluginName(draft.displayName)}</strong>, choose{' '}
                     <strong>Connection: Tunnel</strong>, select your tunnel, and review its tools.
                   </p>
                   <div className="webmcp-connection-receipt">
@@ -476,9 +540,10 @@ export function WebMcpSetupPanel({
                   </p>
                 </section>
               )}
-              {error && (
+              {displayedError && (
                 <p role="alert" className="webmcp-error">
-                  {error}
+                  <AlertTriangle size={16} aria-hidden="true" />
+                  {displayedError}
                 </p>
               )}
             </>
@@ -510,12 +575,24 @@ export function WebMcpSetupPanel({
                   Disconnect
                 </Button>
                 {credentialStep && (
-                  <Button onClick={() => updateDraft({ step: 3 })}>Add to ChatGPT →</Button>
+                  <Button onClick={() => updateDraft({ step: 3 })}>
+                    Add to ChatGPT <ArrowRight size={14} aria-hidden="true" />
+                  </Button>
                 )}
               </>
+            ) : active ? (
+              <Button disabled={busy} onClick={() => void disconnect()}>
+                <Unplug size={14} aria-hidden="true" />
+                Stop connection
+              </Button>
             ) : (
-              <Button disabled={loading || busy || active} onClick={() => void connect()}>
-                {busy || active ? 'Connecting…' : 'Connect tunnel'}
+              <Button disabled={loading || busy} onClick={() => void connect()}>
+                {busy ? (
+                  <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <Link2 size={14} aria-hidden="true" />
+                )}
+                {busy ? 'Connecting…' : 'Connect tunnel'}
               </Button>
             )}
           </div>

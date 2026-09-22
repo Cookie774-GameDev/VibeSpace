@@ -59,6 +59,7 @@ mod fsread;
 mod harness;
 mod jarvis_ambient_overlay;
 mod jarvis_voice;
+mod jev_http;
 mod kernel_host;
 mod launcher;
 mod local_ai;
@@ -845,6 +846,11 @@ fn run_ordinary(
             credentials::credential_set,
             credentials::credential_get,
             credentials::credential_delete,
+            jev_http::jev_credential_set,
+            jev_http::jev_credential_status,
+            jev_http::jev_credential_delete,
+            jev_http::jev_http_models,
+            jev_http::jev_http_systemone,
             dictation::dictation_paste_text,
             dictation::dictation_cancel,
             dictation::trigger_os_dictation,
@@ -1192,6 +1198,11 @@ agent_coordination::agent_coordination_append_event
 credentials::credential_set
 credentials::credential_get
 credentials::credential_delete
+jev_http::jev_credential_set
+jev_http::jev_credential_status
+jev_http::jev_credential_delete
+jev_http::jev_http_models
+jev_http::jev_http_systemone
 dictation::dictation_paste_text
 dictation::dictation_cancel
 dictation::trigger_os_dictation

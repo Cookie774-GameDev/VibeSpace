@@ -40,6 +40,9 @@ export type {
   BrowserChatSnapshotRow,
   BrowserChatProvider,
   ProviderProjectLinkRow,
+  CaoMissionRow,
+  JevUsageRecordRow,
+  CaoExecutionProfileRow,
 } from './schema';
 export * from './repositories';
 export { seedIfEmpty } from './seed';

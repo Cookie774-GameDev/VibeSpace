@@ -1,0 +1,51 @@
+{
+  "source": "Local-Command-Router-Lab",
+  "createdAt": "2026-09-21T20:21:59.328Z",
+  "files": [
+    {
+      "name": "router.mjs",
+      "bytes": 37646,
+      "sha256": "682259bc991f215b5c55c40f59481942db90ec02148bf855627ce2320eb8ada0"
+    },
+    {
+      "name": "registry.mjs",
+      "bytes": 16762,
+      "sha256": "148156c20989cc650fed0a121970d763f0626bb9f66b8c81333acd50a03cc468"
+    },
+    {
+      "name": "corpus.mjs",
+      "bytes": 16552,
+      "sha256": "12c5c4985d011c8047815770a92cac8e6c57368691e14ba856d33e37e8eecdfb"
+    },
+    {
+      "name": "safety-corpus.mjs",
+      "bytes": 9650,
+      "sha256": "c5fea741db2f6bdc9ccfb57a99cbd16bb41fa8c784271acfb11e7433d025a9fb"
+    },
+    {
+      "name": "tiered-corpus.mjs",
+      "bytes": 6191,
+      "sha256": "dd8dd22084940fd08cc2ed81c2185791eaf926af7a3eb11aeb5a1029519fd278"
+    },
+    {
+      "name": "COMPACT_NIGHTMARE.txt",
+      "bytes": 4024,
+      "sha256": "8d5750694b2376608bd37bafdcf016af3851455e0d78ebf0c345bb92064bed90"
+    },
+    {
+      "name": "COMPACT_NIGHTMARE_KEY.json",
+      "bytes": 714,
+      "sha256": "e5b65905c51a4de36dad16bc3386a81abaa48e460493d7d06550fe08a260333e"
+    },
+    {
+      "name": "HARD_PROMPT_2.txt",
+      "bytes": 10657,
+      "sha256": "2c101e5449dac62549956a491848e3c8317946933a2e0e26b0405b0af846c8f4"
+    },
+    {
+      "name": "HARD_PROMPT_2_ANSWER_KEY.json",
+      "bytes": 794,
+      "sha256": "34fad3f9931bf3d7ec3ab85d9ab63ccfacdaada4311dd9ffa29f12f8d857e425"
+    }
+  ]
+}

@@ -57,6 +57,22 @@ function recordOf(value: unknown): Readonly<Record<string, unknown>> | undefined
     : undefined;
 }
 
+function publicToolCallArguments(
+  details: Readonly<PublicToolDetails> | undefined,
+  fileLabel: string | undefined,
+  nativeTask: NativeTaskActivity | undefined,
+): Readonly<Record<string, unknown>> {
+  const source = recordOf(details?.arguments);
+  const args: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source ?? {})) {
+    if (key === 'path' || key === 'filePath' || key === 'file_path' || key === 'filepath') continue;
+    args[key] = value;
+  }
+  if (fileLabel) args.path = fileLabel;
+  if (nativeTask) args.nativeTask = nativeTask;
+  return args;
+}
+
 function boundedIdentifier(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== 'string') return undefined;
   const clean = value.trim();
@@ -208,9 +224,11 @@ function freezePart(part: OpenCodePublicTimelinePart): OpenCodePublicTimelinePar
 /**
  * Deterministically projects persisted OpenCode messages into the only public
  * Chat UI state we retain: checkpoint text, safe tool lifecycle, and one final
- * answer. It never exposes provider message/part/call identity, tool input,
- * tool output, absolute paths, hidden reasoning, or workflow metadata. Reasoning
- * explicitly exposed in the provider message stream is retained separately.
+ * answer. It never exposes provider message/part/call identity, raw tool input,
+ * raw tool output, absolute paths, hidden reasoning, or workflow metadata. Tool
+ * arguments come only from the bounded, redacted public details projection.
+ * Reasoning explicitly exposed in the provider message stream is retained
+ * separately.
  */
 export function projectOpenCodePublicTimeline(
   messages: readonly OpenCodePublicMessageRecord[],
@@ -309,7 +327,7 @@ export function projectOpenCodePublicTimeline(
       tool: entry.tool,
       call_id: entry.callId,
       ...(entry.details ? { details: entry.details } : {}),
-      args: { ...(entry.fileLabel ? { path: entry.fileLabel } : {}), ...(entry.nativeTask ? { nativeTask: entry.nativeTask } : {}) },
+      args: publicToolCallArguments(entry.details, entry.fileLabel, entry.nativeTask),
     };
     if (entry.status === 'completed') {
       return [

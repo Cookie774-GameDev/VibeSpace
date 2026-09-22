@@ -25,8 +25,10 @@ const TERMINAL_SESSION_ENV: &str = "VIBESPACE_TERMINAL_SESSION_ID";
 const TERMINAL_PANE_ENV: &str = "VIBESPACE_PANE_ID";
 const TERMINAL_PROJECT_ENV: &str = "VIBESPACE_PROJECT_ID";
 const TERMINAL_RUN_IDENTITY_ENV: &str = "VIBESPACE_CONTEXT_RUN_IDENTITY";
+const TERMINAL_PROCESS_INSTANCE_ENV: &str = "VIBESPACE_TERMINAL_PROCESS_INSTANCE_ID";
 const MAX_WIRE_BYTES: u64 = 65_536;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
+const IDENTITY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(1);
 const LONG_RUNNING_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const SAFE_NONCE_LENGTH: usize = 64;
@@ -34,6 +36,10 @@ const MAX_PARAM_DEPTH: usize = 4;
 const MAX_PARAM_KEYS: usize = 32;
 const MAX_PARAM_ARRAY: usize = 32;
 const MAX_PARAM_STRING: usize = 4_096;
+const MAX_OPENCODE_SESSION_ID: usize = 512;
+const MAX_PROVIDER_ID: usize = 128;
+const MAX_MODEL_ID: usize = 512;
+const MAX_VARIANT_ID: usize = 128;
 const MAX_RESPONSE_DEPTH: usize = 6;
 const MAX_RESPONSE_KEYS: usize = 128;
 const MAX_RESPONSE_ARRAY: usize = 512;
@@ -186,6 +192,7 @@ fn take_test_effect_events() -> Vec<&'static str> {
 pub fn terminal_cli_response_timeout(method: &str) -> Duration {
     match method {
         "context.create" | "context.refresh" | "context.ask" => LONG_RUNNING_RESPONSE_TIMEOUT,
+        "cao.identity.publish" => IDENTITY_RESPONSE_TIMEOUT,
         _ => RESPONSE_TIMEOUT,
     }
 }
@@ -222,6 +229,7 @@ const METHODS: &[&str] = &[
     "daily.add",
     "project.current",
     "project.switch",
+    "cao.identity.publish",
     "status",
     "help",
 ];
@@ -272,6 +280,7 @@ pub struct TerminalCliRequestScope {
     pub pane_id: Option<String>,
     pub project_id: Option<String>,
     pub run_identity: Option<String>,
+    pub process_instance_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -436,6 +445,17 @@ fn safe_atom(value: &str) -> bool {
         })
 }
 
+fn safe_identity_value(value: &str, maximum: usize, allow_slash: bool) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value.chars().enumerate().all(|(index, ch)| {
+            ch.is_ascii_alphanumeric()
+                || (index > 0
+                    && (matches!(ch, '.' | '_' | ':' | '@' | '+' | '-')
+                        || (allow_slash && ch == '/')))
+        })
+}
+
 fn safe_text(value: &str, maximum: usize) -> bool {
     !value.is_empty()
         && value.len() <= maximum
@@ -531,6 +551,58 @@ fn parse_context(args: &[String]) -> Result<(String, Value), String> {
         _ => return Err("unknown context command".into()),
     };
     Ok((method, params))
+}
+
+fn parse_cao(args: &[String]) -> Result<(String, Value), String> {
+    let expected = [
+        "identity",
+        "publish",
+        "--opencode-session",
+        "--provider",
+        "--model",
+        "--variant",
+        "--process-instance",
+    ];
+    if args.len() != 12
+        || args[0] != expected[0]
+        || args[1] != expected[1]
+        || args[2] != expected[2]
+        || args[4] != expected[3]
+        || args[6] != expected[4]
+        || args[8] != expected[5]
+        || args[10] != expected[6]
+    {
+        return Err(
+            "cao identity publish requires exact session, provider, model, variant, and process-instance arguments"
+                .into(),
+        );
+    }
+    let session_id = &args[3];
+    let provider_id = &args[5];
+    let model_id = &args[7];
+    let variant = &args[9];
+    let process_instance_id = &args[11];
+    if !safe_identity_value(session_id, MAX_OPENCODE_SESSION_ID, true)
+        || !safe_identity_value(provider_id, MAX_PROVIDER_ID, false)
+        || !safe_identity_value(model_id, MAX_MODEL_ID, true)
+        || !safe_identity_value(variant, MAX_VARIANT_ID, true)
+        || !safe_atom(process_instance_id)
+    {
+        return Err("cao identity publish contains an invalid identity value".into());
+    }
+    Ok((
+        "cao.identity.publish".into(),
+        closed_params([
+            ("opencodeSessionId", Value::String(session_id.clone())),
+            ("providerId", Value::String(provider_id.clone())),
+            ("modelId", Value::String(model_id.clone())),
+            ("variant", Value::String(variant.clone())),
+            (
+                "processInstanceId",
+                Value::String(process_instance_id.clone()),
+            ),
+        ]),
+    ))
 }
 
 fn parse_named_family(
@@ -660,6 +732,7 @@ pub fn parse_terminal_cli_args(args: &[String]) -> Result<TerminalCliInvocation,
         "note" => parse_note(rest)?,
         "daily" => parse_daily(rest)?,
         "project" => parse_named_family("project", rest, &["current"], &[("switch", "projectId")])?,
+        "cao" => parse_cao(rest)?,
         _ => return Err("unknown VibeSpace command".into()),
     };
     if !METHODS.contains(&method.as_str()) {
@@ -767,6 +840,7 @@ fn terminal_cli_scope_from_environment() -> Result<TerminalCliRequestScope, Stri
         pane_id: optional_scope_environment(TERMINAL_PANE_ENV)?,
         project_id: optional_scope_environment(TERMINAL_PROJECT_ENV)?,
         run_identity: optional_scope_environment(TERMINAL_RUN_IDENTITY_ENV)?,
+        process_instance_id: optional_scope_environment(TERMINAL_PROCESS_INSTANCE_ENV)?,
     })
 }
 
@@ -776,6 +850,7 @@ pub fn build_scoped_terminal_cli_request(
     request_id: &str,
     scope: TerminalCliRequestScope,
 ) -> Result<TerminalCliRequest, String> {
+    let process_instance_id = scope.process_instance_id.clone();
     let request = TerminalCliRequest {
         protocol_version: PROTOCOL_VERSION,
         request_id: request_id.into(),
@@ -787,6 +862,15 @@ pub fn build_scoped_terminal_cli_request(
         method: invocation.method.clone(),
         params: invocation.params.clone(),
     };
+    if invocation.method == "cao.identity.publish"
+        && process_instance_id.as_deref()
+            != request
+                .params
+                .get("processInstanceId")
+                .and_then(Value::as_str)
+    {
+        return Err("invalid_request".into());
+    }
     validate_terminal_cli_request(&request, nonce)?;
     Ok(request)
 }
@@ -880,6 +964,38 @@ fn valid_method_params(method: &str, params: &Value) -> bool {
         }
         "project.switch" => exact_object(params, &["projectId"])
             .is_some_and(|values| bounded_string(values.get("projectId"))),
+        "cao.identity.publish" => exact_object(
+            params,
+            &[
+                "opencodeSessionId",
+                "providerId",
+                "modelId",
+                "variant",
+                "processInstanceId",
+            ],
+        )
+        .is_some_and(|values| {
+            values
+                .get("opencodeSessionId")
+                .and_then(Value::as_str)
+                .is_some_and(|value| safe_identity_value(value, MAX_OPENCODE_SESSION_ID, true))
+                && values
+                    .get("providerId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| safe_identity_value(value, MAX_PROVIDER_ID, false))
+                && values
+                    .get("modelId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| safe_identity_value(value, MAX_MODEL_ID, true))
+                && values
+                    .get("variant")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| safe_identity_value(value, MAX_VARIANT_ID, true))
+                && values
+                    .get("processInstanceId")
+                    .and_then(Value::as_str)
+                    .is_some_and(safe_atom)
+        }),
         _ => false,
     }
 }
@@ -915,6 +1031,10 @@ pub fn terminal_cli_request_error_code(
             .as_deref()
             .is_some_and(|value| !safe_atom(value))
         || (request.method == "context.ask" && request.run_identity.is_none())
+        || (request.method == "cao.identity.publish"
+            && (request.terminal_session_id.is_none()
+                || request.pane_id.is_none()
+                || request.project_id.is_none()))
         || !METHODS.contains(&request.method.as_str())
         || !valid_json(&request.params, 0)
         || !valid_method_params(&request.method, &request.params)
@@ -1553,7 +1673,7 @@ fn handle_connection(
                 &request.request_id,
                 true,
                 "ok",
-                "Commands: vibespace-context ask, context, skills, agent, note, daily, project, status, help.",
+                "Commands: vibespace-context ask, context, skills, agent, note, daily, project, cao identity publish, status, help.",
                 Some(json!({ "methods": METHODS })),
             ),
         );
@@ -2366,6 +2486,148 @@ pub fn terminal_cli_respond(
     sender
         .send(response)
         .map_err(|_| "terminal CLI request receiver is unavailable".to_string())
+}
+
+#[cfg(test)]
+mod identity_cli_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn identity_args() -> Vec<String> {
+        [
+            "--endpoint",
+            "C:\\vibespace\\terminal-cli\\endpoint.json",
+            "--json",
+            "cao",
+            "identity",
+            "publish",
+            "--opencode-session",
+            "ses_identity_1",
+            "--provider",
+            "openrouter",
+            "--model",
+            "deepseek/deepseek-v4-flash",
+            "--variant",
+            "high",
+            "--process-instance",
+            "ptyproc_identity_1",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
+
+    fn scope(process_instance_id: Option<&str>) -> TerminalCliRequestScope {
+        TerminalCliRequestScope {
+            terminal_session_id: Some("tty_identity_1".into()),
+            pane_id: Some("pane_identity_1".into()),
+            project_id: Some("project_identity_1".into()),
+            run_identity: None,
+            process_instance_id: process_instance_id.map(String::from),
+        }
+    }
+
+    fn invocation(process_instance_id: &str) -> TerminalCliInvocation {
+        TerminalCliInvocation {
+            endpoint: PathBuf::from("C:\\vibespace\\terminal-cli\\endpoint.json"),
+            json: true,
+            color: false,
+            method: "cao.identity.publish".into(),
+            params: json!({
+                "opencodeSessionId": "ses_identity_1",
+                "providerId": "openrouter",
+                "modelId": "deepseek/deepseek-v4-flash",
+                "variant": "high",
+                "processInstanceId": process_instance_id,
+            }),
+        }
+    }
+
+    #[test]
+    fn parses_authentic_opencode_identity_payload_with_namespaced_model() {
+        let parsed = parse_terminal_cli_args(&identity_args()).expect("identity command parses");
+        assert_eq!(parsed.method, "cao.identity.publish");
+        assert_eq!(parsed.params["providerId"], "openrouter");
+        assert_eq!(parsed.params["modelId"], "deepseek/deepseek-v4-flash");
+        assert_eq!(parsed.params["variant"], "high");
+        assert!(valid_method_params(&parsed.method, &parsed.params));
+    }
+
+    #[test]
+    fn rejects_reordered_or_unbounded_identity_cli_arguments() {
+        let mut reordered = identity_args();
+        reordered.swap(8, 10);
+        assert!(parse_terminal_cli_args(&reordered).is_err());
+
+        let mut unbounded = identity_args();
+        unbounded[9] = "high?forged".into();
+        assert!(parse_terminal_cli_args(&unbounded).is_err());
+    }
+
+    #[test]
+    fn authenticated_identity_request_requires_exact_process_and_terminal_scope() {
+        let nonce = "a".repeat(SAFE_NONCE_LENGTH);
+        let request = build_scoped_terminal_cli_request(
+            &invocation("ptyproc_identity_1"),
+            &nonce,
+            "request_identity_1",
+            scope(Some("ptyproc_identity_1")),
+        )
+        .expect("matching process scope");
+        assert!(terminal_cli_request_error_code(&request, &nonce).is_none());
+
+        assert_eq!(
+            build_scoped_terminal_cli_request(
+                &invocation("ptyproc_forged"),
+                &nonce,
+                "request_identity_2",
+                scope(Some("ptyproc_identity_1")),
+            )
+            .expect_err("forged process must be rejected"),
+            "invalid_request"
+        );
+
+        let mut missing_scope = request.clone();
+        missing_scope.project_id = None;
+        assert_eq!(
+            terminal_cli_request_error_code(&missing_scope, &nonce),
+            Some("invalid_request")
+        );
+    }
+
+    #[test]
+    fn identity_request_rejects_unknown_fields_and_missing_auth_nonce() {
+        let nonce = "a".repeat(SAFE_NONCE_LENGTH);
+        let mut request = build_scoped_terminal_cli_request(
+            &invocation("ptyproc_identity_1"),
+            &nonce,
+            "request_identity_3",
+            scope(Some("ptyproc_identity_1")),
+        )
+        .unwrap();
+        request.params["extra"] = json!(true);
+        assert_eq!(
+            terminal_cli_request_error_code(&request, &nonce),
+            Some("invalid_request")
+        );
+
+        let mut unauthenticated = request;
+        unauthenticated.params = invocation("ptyproc_identity_1").params;
+        unauthenticated.nonce = "wrong".into();
+        assert_eq!(
+            terminal_cli_request_error_code(&unauthenticated, &nonce),
+            Some("authentication_failed")
+        );
+    }
+    #[test]
+    fn identity_publish_uses_a_bounded_response_timeout() {
+        assert_eq!(
+            terminal_cli_response_timeout("cao.identity.publish"),
+            Duration::from_secs(1)
+        );
+        assert_eq!(terminal_cli_response_timeout("status"), RESPONSE_TIMEOUT);
+    }
 }
 
 #[cfg(test)]

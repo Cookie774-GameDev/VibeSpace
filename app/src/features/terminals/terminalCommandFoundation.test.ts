@@ -216,3 +216,34 @@ describe('VibeSpace terminal command foundation', () => {
     ).toThrow(/CLI response/i);
   });
 });
+
+it('drops invalid historical pane-role labels without weakening context identity validation', async () => {
+  const { normalizeTerminalContextAgentSlug } = await import('./terminalCommandFoundation');
+  expect(normalizeTerminalContextAgentSlug('claude')).toBe('claude');
+  expect(normalizeTerminalContextAgentSlug('reviewer-2')).toBe('reviewer-2');
+  expect(normalizeTerminalContextAgentSlug('claude 2')).toBeNull();
+  expect(normalizeTerminalContextAgentSlug('')).toBeNull();
+  expect(normalizeTerminalContextAgentSlug(undefined)).toBeNull();
+  expect(normalizeTerminalContextAgentSlug({ toString: () => 'claude' })).toBeNull();
+  const base = {
+    version: 1,
+    terminalSessionId: 'terminal-2',
+    paneId: 'pane-2',
+    projectId: 'project-a',
+    activeMapIds: [],
+    pinnedEntityIds: [],
+    activeSkillIds: [],
+    mode: 'persistent',
+    updatedAt: 1,
+    contextRevision: 0,
+  };
+  expect(() => createTerminalContextSession({ ...base, agentSlug: 'claude 2' })).toThrow(
+    'Invalid terminal context session',
+  );
+  expect(
+    createTerminalContextSession({
+      ...base,
+      agentSlug: normalizeTerminalContextAgentSlug('claude 2'),
+    }).agentSlug,
+  ).toBeNull();
+});

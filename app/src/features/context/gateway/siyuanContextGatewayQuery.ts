@@ -414,6 +414,62 @@ function deepQueries(value: string): readonly string[] {
   ]);
 }
 
+function lexicalFallbackQueries(value: string): readonly string[] {
+  const words = value.match(/[A-Za-z0-9][A-Za-z0-9._:@/-]{3,}/gu) ?? [];
+  const candidates = [...new Set(words)]
+    .map((word, index) => ({
+      word: word.replace(/[.,:;!?]+$/u, ''),
+      index,
+      distinctive: /[_:@/-]|\d/u.test(word),
+    }))
+    .filter(({ word, distinctive }) => distinctive || word.length >= 8)
+    .sort((left, right) =>
+      Number(right.distinctive) - Number(left.distinctive) ||
+      right.word.length - left.word.length ||
+      left.index - right.index,
+    )
+    .slice(0, 2)
+    .sort((left, right) => left.index - right.index)
+    .map(({ word }) => word);
+  return Object.freeze(candidates);
+}
+
+function isHistoryCandidate(candidate: Readonly<SearchCandidate>): boolean {
+  return candidate.record.sourceKind === 'chat_message' || candidate.record.sourceKind === 'agent_trace';
+}
+
+function prioritizeMixedSourceCandidates(
+  candidates: readonly Readonly<SearchCandidate>[],
+  facetPointerIds: ReadonlySet<string>,
+  primaryHistoryRecordIds: ReadonlySet<string>,
+): readonly Readonly<SearchCandidate>[] {
+  if (facetPointerIds.size === 0) return candidates;
+  const facetNonHistory = candidates
+    .filter(
+      (candidate) => facetPointerIds.has(candidate.pointer.id) && !isHistoryCandidate(candidate),
+    )
+    .slice(0, 4);
+  const history = candidates
+    .filter(isHistoryCandidate)
+    .slice()
+    .sort((left, right) => right.record.createdAt - left.record.createdAt);
+  const preferredHistory = [
+    ...history.filter((candidate) => !primaryHistoryRecordIds.has(candidate.record.id)),
+    ...history.filter((candidate) => primaryHistoryRecordIds.has(candidate.record.id)),
+  ];
+  const reservedHistory = preferredHistory[0];
+  const prioritizedIds = new Set(
+    [...facetNonHistory, ...(reservedHistory ? [reservedHistory] : [])].map(
+      (candidate) => candidate.pointer.id,
+    ),
+  );
+  return Object.freeze([
+    ...facetNonHistory,
+    ...(reservedHistory ? [reservedHistory] : []),
+    ...candidates.filter((candidate) => !prioritizedIds.has(candidate.pointer.id)),
+  ]);
+}
+
 async function concurrentMap<Input, Output>(
   inputs: readonly Input[],
   signal: AbortSignal | undefined,
@@ -540,23 +596,56 @@ export function createSiyuanContextGatewayQuery(
     parseDescribe(rawDescription, input);
 
     const queries = route === 'deep' ? deepQueries(exactQuestion) : Object.freeze([exactQuestion]);
+    let childCalls = queries.length;
     const searchStartedAt = safeClock(dependencies);
     const rawPages = await concurrentMap(queries, input.signal, (searchQuery) =>
       execute({ operation: 'search', query: searchQuery, limit: MAX_SEARCH_RESULTS }),
     );
-    const search = elapsed(dependencies, searchStartedAt);
+    let search = 0;
     throwIfAborted(input.signal);
-    const pages = rawPages.map((page) => parseSearch(page, input));
-    const candidates = mergeCandidates(pages);
+    let pages = rawPages.map((page) => parseSearch(page, input));
+    let candidates = mergeCandidates(pages);
+    const primaryCandidatesAreHistory =
+      candidates.length > 0 && candidates.every(isHistoryCandidate);
+    const primaryHistoryRecordIds = new Set(
+      candidates.filter(isHistoryCandidate).map((candidate) => candidate.record.id),
+    );
+    let facetPointerIds = new Set<string>();
+    if (route === 'deep' && (candidates.length === 0 || primaryCandidatesAreHistory)) {
+      const fallbackQueries = lexicalFallbackQueries(exactQuestion).filter(
+        (query) => !queries.includes(query),
+      );
+      if (fallbackQueries.length > 0) {
+        const rawFallbackPages = await concurrentMap(fallbackQueries, input.signal, (searchQuery) =>
+          execute({ operation: 'search', query: searchQuery, limit: MAX_SEARCH_RESULTS }),
+        );
+        childCalls += fallbackQueries.length;
+        throwIfAborted(input.signal);
+        const fallbackPages = rawFallbackPages.map((page) => parseSearch(page, input));
+        const fallbackCandidates = mergeCandidates(fallbackPages);
+        facetPointerIds = new Set(fallbackCandidates.map((candidate) => candidate.pointer.id));
+        pages = [...pages, ...fallbackPages];
+        candidates = mergeCandidates(pages);
+      }
+    }
+    search = elapsed(dependencies, searchStartedAt);
     if (candidates.length === 0) fail('empty_result');
 
-    const hydrationCandidates =
+    const distinctCandidates =
       route === 'deep'
         ? candidates.filter(
             (candidate, index) =>
               candidates.findIndex((other) => other.record.id === candidate.record.id) === index,
           )
         : candidates;
+    const hydrationCandidates =
+      route === 'deep'
+        ? prioritizeMixedSourceCandidates(
+            distinctCandidates,
+            facetPointerIds,
+            primaryHistoryRecordIds,
+          )
+        : distinctCandidates;
     const selected = hydrationCandidates.slice(0, MAX_EVIDENCE_ITEMS);
     const hydrationOperation = route === 'deep' ? 'expand' : 'open';
     const hydrationStartedAt = safeClock(dependencies);
@@ -615,7 +704,7 @@ export function createSiyuanContextGatewayQuery(
       evidenceCount: evidence.length,
       candidateCount: candidates.length,
       hydratedCount: evidence.length,
-      childCalls: queries.length,
+      childCalls,
       maxDepth: route === 'deep' ? 1 : 0,
       truncated:
         pages.some(({ truncated }) => truncated) ||

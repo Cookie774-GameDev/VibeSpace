@@ -290,6 +290,261 @@ describe('SiYuan Context Gateway query', () => {
     ]);
   });
 
+  it('keeps deep retrieval alive when native search requires marker facets', async () => {
+    const question =
+      'Find EARLY_FACT_01_N5_A7Q and matching SiYuan SIYUAN_FACT_01_N5_NATIVE_NOTEONLY_Q1K; resolve the latest contradiction';
+    const markerResults = new Map([
+      ['EARLY_FACT_01_N5_A7Q', searchResult(1)],
+      ['SIYUAN_FACT_01_N5_NATIVE_NOTEONLY_Q1K', searchResult(2)],
+    ]);
+    const execute = vi.fn(async (args: Record<string, unknown>) => {
+      if (args.operation === 'describe') return describeResult();
+      if (args.operation === 'search') {
+        return (
+          markerResults.get(String(args.query)) ?? {
+            items: [],
+            truncated: false,
+            indexAvailable: true,
+            stale: false,
+          }
+        );
+      }
+      if (args.operation === 'expand') {
+        const pointer = args.pointer as { recordId: string };
+        return expandResult(Number(pointer.recordId.slice(-1)));
+      }
+      throw new Error('unexpected operation');
+    });
+    const query = createSiyuanContextGatewayQuery({
+      tool: { execute },
+      now: () => 100,
+      createLeaseId: () => 'gateway-marker-facets',
+    });
+
+    const result = await query({ ...queryInput('deep'), question });
+    const searchQueries = execute.mock.calls
+      .map(([args]) => args)
+      .filter(({ operation }) => operation === 'search')
+      .map(({ query: searchQuery }) => String(searchQuery));
+
+    expect(result).toMatchObject({ evidenceCount: 2, childCalls: 5 });
+    expect(searchQueries).toContain('EARLY_FACT_01_N5_A7Q');
+    expect(searchQueries).toContain('SIYUAN_FACT_01_N5_NATIVE_NOTEONLY_Q1K');
+  });
+
+  it('adds note facets when primary deep hits are only history echoes', async () => {
+    const question = 'Resolve current state against EARLY_DECISION_42 and NOTE_MARKER_42';
+    const makeRecord = (
+      sourceKind: 'chat_message' | 'context_note',
+      sourceId: string,
+      createdAt: number,
+    ) => createContextRecord({
+      id: `record-${sourceId}`,
+      accountId: 'account-1',
+      workspaceId: 'workspace-1',
+      projectId: 'project-1',
+      worktreeId: 'worktree-1',
+      sourceKind,
+      sourceId,
+      createdAt,
+      contentHash: HASH_A,
+      contentRef: sourceKind === 'context_note'
+        ? `siyuan://notebook-1/${sourceId}`
+        : `vibespace://chat_message/${sourceId}`,
+      title: sourceId,
+      path: `/${sourceId}.source`,
+      trustLevel: 'app_verified',
+      sensitivity: 'project_private',
+    });
+    const records = [
+      makeRecord('chat_message', 'chat-current', 30),
+      makeRecord('chat_message', 'chat-earlier', 20),
+      makeRecord('context_note', 'note-linked', 10),
+    ];
+    const pointers = records.map((record, index) => createContextPointer({
+      id: `ptr:${record.id}:0:64`,
+      recordId: record.id,
+      byteStart: 0,
+      byteEnd: 1,
+      sourceVersion: record.sourceKind === 'context_note' ? SOURCE_VERSION : `sha256:${HASH_A}`,
+      contentHash: HASH_A,
+    }));
+    const pageFor = (index: number) => ({
+      items: [{ record: records[index]!, pointer: pointers[index]!, preview: records[index]!.title, score: 20 - index }],
+      truncated: false,
+      indexAvailable: true,
+      stale: false,
+    });
+    const expandedFor = (index: number) => {
+      const record = records[index]!;
+      const pointer = pointers[index]!;
+      const text = `${record.sourceId} evidence`;
+      const bytes = new TextEncoder().encode(text).byteLength;
+      return {
+        status: 'current',
+        record,
+        pointer: createContextPointer({
+          ...pointer,
+          id: `${pointer.id}:expand:6144:6144`,
+          byteEnd: bytes,
+        }),
+        text,
+        byteStart: 0,
+        byteEnd: bytes,
+        lineStart: 1,
+        lineEnd: 1,
+        truncated: false,
+      };
+    };
+    const execute = vi.fn(async (args: Record<string, unknown>) => {
+      if (args.operation === 'describe') return describeResult();
+      if (args.operation === 'search') {
+        if (args.query === 'EARLY_DECISION_42') return pageFor(1);
+        if (args.query === 'NOTE_MARKER_42') return pageFor(2);
+        return pageFor(0);
+      }
+      if (args.operation === 'expand') {
+        const recordId = (args.pointer as { recordId: string }).recordId;
+        const index = records.findIndex((record) => record.id === recordId);
+        return expandedFor(index);
+      }
+      throw new Error('unexpected operation');
+    });
+    const query = createSiyuanContextGatewayQuery({
+      tool: { execute },
+      now: () => 100,
+      createLeaseId: () => 'gateway-history-echo',
+    });
+
+    const result = await query({ ...queryInput('deep'), question });
+
+    expect(result).toMatchObject({
+      candidateCount: 3,
+      evidenceCount: 3,
+      childCalls: 5,
+    });
+    expect(result.evidence.map(({ sourceId }) => sourceId)).toEqual([
+      'note-linked',
+      'chat-earlier',
+      'chat-current',
+    ]);
+  });
+
+  it('reserves one evidence slot for history when facets contain more than four notes', async () => {
+    const question = 'Resolve current state against EARLY_DECISION_42 and NOTE_MARKER_42';
+    const records = [
+      createContextRecord({
+        id: 'record-chat-current',
+        accountId: 'account-1',
+        workspaceId: 'workspace-1',
+        projectId: 'project-1',
+        worktreeId: 'worktree-1',
+        sourceKind: 'chat_message',
+        sourceId: 'chat-current',
+        createdAt: 30,
+        contentHash: HASH_A,
+        contentRef: 'vibespace://chat_message/chat-current',
+        title: 'chat-current',
+        path: '/chat-current.source',
+        trustLevel: 'app_verified',
+        sensitivity: 'project_private',
+      }),
+      ...Array.from({ length: 5 }, (_, index) =>
+        createContextRecord({
+          id: `record-note-${index + 1}`,
+          accountId: 'account-1',
+          workspaceId: 'workspace-1',
+          projectId: 'project-1',
+          worktreeId: 'worktree-1',
+          sourceKind: 'context_note',
+          sourceId: `note-${index + 1}`,
+          createdAt: 10 + index,
+          contentHash: HASH_A,
+          contentRef: `siyuan://notebook-1/note-${index + 1}`,
+          title: `note-${index + 1}`,
+          path: `/note-${index + 1}.source`,
+          trustLevel: 'app_verified',
+          sensitivity: 'project_private',
+        }),
+      ),
+    ];
+    const pointers = records.map((record) =>
+      createContextPointer({
+        id: `ptr:${record.id}:0:64`,
+        recordId: record.id,
+        byteStart: 0,
+        byteEnd: 1,
+        sourceVersion: record.sourceKind === 'context_note' ? SOURCE_VERSION : `sha256:${HASH_A}`,
+        contentHash: HASH_A,
+      }),
+    );
+    const pageFor = (indices: readonly number[]) => ({
+      items: indices.map((index) => ({
+        record: records[index]!,
+        pointer: pointers[index]!,
+        preview: records[index]!.title,
+        score: 20 - index,
+      })),
+      truncated: false,
+      indexAvailable: true,
+      stale: false,
+    });
+    const execute = vi.fn(async (args: Record<string, unknown>) => {
+      if (args.operation === 'describe') return describeResult();
+      if (args.operation === 'search') {
+        if (args.query === 'NOTE_MARKER_42') return pageFor([1, 2, 3, 4, 5]);
+        if (args.query === 'EARLY_DECISION_42') {
+          return { items: [], truncated: false, indexAvailable: true, stale: false };
+        }
+        return pageFor([0]);
+      }
+      if (args.operation === 'expand') {
+        const recordId = (args.pointer as { recordId: string }).recordId;
+        const index = records.findIndex((record) => record.id === recordId);
+        const record = records[index]!;
+        const pointer = pointers[index]!;
+        const text = `${record.sourceId} evidence`;
+        const bytes = new TextEncoder().encode(text).byteLength;
+        return {
+          status: 'current',
+          record,
+          pointer: createContextPointer({
+            ...pointer,
+            id: `${pointer.id}:expand:6144:6144`,
+            byteEnd: bytes,
+          }),
+          text,
+          byteStart: 0,
+          byteEnd: bytes,
+          lineStart: 1,
+          lineEnd: 1,
+          truncated: false,
+        };
+      }
+      throw new Error('unexpected operation');
+    });
+    const query = createSiyuanContextGatewayQuery({
+      tool: { execute },
+      now: () => 100,
+      createLeaseId: () => 'gateway-history-cap',
+    });
+
+    const result = await query({ ...queryInput('deep'), question });
+
+    expect(result).toMatchObject({
+      candidateCount: 6,
+      evidenceCount: 5,
+      childCalls: 5,
+    });
+    expect(result.evidence.map(({ sourceId }) => sourceId)).toEqual([
+      'note-1',
+      'note-2',
+      'note-3',
+      'note-4',
+      'chat-current',
+    ]);
+  });
+
   it('derives business retrieval facets without injecting native-testing vocabulary', async () => {
     const execute = vi.fn(async (args: Record<string, unknown>) => {
       if (args.operation === 'describe') return describeResult();
@@ -316,13 +571,15 @@ describe('SiYuan Context Gateway query', () => {
       .map(([args]) => args)
       .filter(({ operation }) => operation === 'search')
       .map(({ query: searchQuery }) => String(searchQuery));
-    expect(queries).toHaveLength(3);
+    expect(queries).toHaveLength(5);
     expect(queries[0]).toBe(topic + '\n\n' + instructions);
-    expect(queries.slice(1).join(' ')).toBe(topic + ' ' + instructions);
+    expect(queries.slice(1, 3).join(' ')).toBe(topic + ' ' + instructions);
+    expect(queries.slice(3)).toHaveLength(2);
+    expect(queries.slice(3).join(' ')).toMatch(/acceptance|citations/u);
     expect(queries.join(' ')).not.toMatch(/WebView|Ollama|msedgewebview|canaries/u);
-    expect(queries.slice(1).join(' ')).toContain(
-      'current region, retention days, archive capacity',
-    );
+    expect(queries.slice(3).join(' ').split(/\s+/u).every((word) =>
+      topic.includes(word.replace(/[.,:]/gu, '')) || instructions.includes(word.replace(/[.,:]/gu, '')),
+    )).toBe(true);
   });
 
   it('executes through the real tool protocol without invoking its RLM runtime', async () => {

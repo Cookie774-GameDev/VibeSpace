@@ -109,6 +109,43 @@ describe('OpenCodeTurnCoordinator', () => {
     );
   });
 
+  it('keeps the persistent review profile on native asks despite a stale run grant', async () => {
+    const sendAsync = vi.fn(async () => undefined);
+    const sessions = {
+      sessionForChat: vi.fn(async () => ({
+        sessionId: 'session-review',
+        runtimeGeneration: 'generation',
+        client: { createSession: vi.fn(), abort: vi.fn(), sendAsync },
+      })),
+    } as unknown as OpenCodeSessionPool;
+    const result = await new OpenCodeTurnCoordinator(sessions).dispatch({
+      scope: { accountId: 'account', projectId: 'project' },
+      chatId: 'chat',
+      text: 'Review the requested change.',
+      selection: {
+        connectionId: 'openai-codex',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-sol',
+        metadata,
+      },
+      policy: {
+        mode: 'agent',
+        access: 'full',
+        approveAllForRun: true,
+        agentApprovalMode: 'review',
+        projectRoot: 'C:/project',
+      },
+    });
+    expect(result).toMatchObject({
+      kind: 'dispatched',
+      permissions: {
+        openCodeAgent: 'vibespace-full',
+        openCode: { edit: { 'C:/project/**': 'ask' }, bash: 'ask' },
+      },
+    });
+    expect(sendAsync).toHaveBeenCalledWith(expect.objectContaining({ agent: 'vibespace-full' }));
+  });
+
   it('routes /goal through the official registered OpenCode command endpoint', async () => {
     const sendAsync = vi.fn(async () => undefined);
     const sendCommandAsync = vi.fn(async () => undefined);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { ProviderId } from '@/types';
 import { useAuthStore } from '@/stores/auth';
+import type { ChatBackend } from './backend/chatBackend';
 import {
   getProviderDisplayName,
   getProviderRegistryEntry,
@@ -14,6 +15,7 @@ import { listPromotedAdapters } from '@/features/model-foundry/adapterRegistry';
 import { getAccessibleModelOptions, getAccessibleProviders, useOllamaModelOptions } from './models';
 import type { ProviderConnection, ProviderDiscoveredModel } from './adapters/types';
 import {
+  CODEX_CLI_CONNECTION,
   OPENCODE_CLI_CONNECTION,
   CONNECTION_MODEL_OPTIONS,
   PROVIDER_CONNECTIONS,
@@ -101,6 +103,148 @@ export interface ModelPickerGroup {
   options: ModelPickerOption[];
 }
 
+/**
+ * Keep picker routes aligned with the backend's implemented connection
+ * surface. The managed OpenCodex bridge currently accepts the exact
+ * `opencode-cli` connection; its native resolver still revalidates the
+ * selected provider/model and semantic capability before dispatch. Other
+ * connections remain available to OpenCode and are not presented as Codex
+ * routes merely because they share a model heading.
+ */
+export function isModelPickerRouteCompatibleWithBackend(
+  route: Pick<ModelPickerOption, 'connectionId'>,
+  backend: ChatBackend,
+): boolean {
+  const isOfficialCodexRoute = route.connectionId === CODEX_CLI_CONNECTION.id;
+  const isManagedCodexBridgeRoute = route.connectionId === OPENCODE_CLI_CONNECTION.id;
+  return backend === 'codex'
+    ? isOfficialCodexRoute || isManagedCodexBridgeRoute
+    : !isOfficialCodexRoute;
+}
+
+function filterModelPickerOptionForBackend(
+  option: ModelPickerOption,
+  backend: ChatBackend,
+): ModelPickerOption | undefined {
+  const alternativeRoutes = option.alternativeRoutes;
+  const routes = (alternativeRoutes ?? [option]).filter((route) =>
+    isModelPickerRouteCompatibleWithBackend(route, backend),
+  );
+  if (routes.length === 0) return undefined;
+  if (!alternativeRoutes) return option;
+
+  const logicalLabel = option.label.split(' · ')[0]?.trim() || option.label;
+  if (routes.length === 1) {
+    return { ...routes[0]!, label: logicalLabel };
+  }
+
+  const preferred = routes[0]!;
+  const allFree = routes.every((route) => route.isFree === true);
+  return {
+    ...preferred,
+    label: logicalLabel,
+    pricingStatus: allFree ? 'free' : 'unknown',
+    isFree: allFree,
+    alternativeRoutes: routes.map((route) => ({
+      ...route,
+      label: modelRouteLabel(logicalLabel, route.modeLabel, routes.length),
+    })),
+  };
+}
+
+/**
+ * Filter merged picker rows to the backend locked for the current chat. This
+ * keeps exact connection metadata intact so the caller cannot silently rename
+ * an OpenCode route to Codex or send a Codex route through OpenCode.
+ */
+export function filterModelPickerGroupsForBackend(
+  groups: readonly ModelPickerGroup[],
+  backend: ChatBackend | undefined,
+): ModelPickerGroup[] {
+  if (!backend) return groups.map((group) => ({ ...group, options: [...group.options] }));
+
+  return groups.flatMap((group) => {
+    const options = group.options
+      .map((option) => filterModelPickerOptionForBackend(option, backend))
+      .filter((option): option is ModelPickerOption => option !== undefined);
+    return options.length > 0 ? [{ ...group, options }] : [];
+  });
+}
+
+function modelRouteLeaf(modelId: string): string {
+  const normalized = modelId.trim().toLocaleLowerCase('en-US');
+  const slash = normalized.lastIndexOf('/');
+  return slash >= 0 ? normalized.slice(slash + 1) : normalized;
+}
+
+function modelRouteOwner(modelId: string, providerId: unknown): string | undefined {
+  const normalized = modelId.trim().toLocaleLowerCase('en-US');
+  if (!normalized) return undefined;
+  const slash = normalized.indexOf('/');
+  if (slash > 0) return normalized.slice(0, slash);
+  if (typeof providerId !== 'string' || providerId === 'opencode') return undefined;
+  return providerId.trim().toLocaleLowerCase('en-US') || undefined;
+}
+
+/**
+ * Resolve a stale exact selection to the same logical model on the selected
+ * chat backend. The picker deliberately keeps connection identity exact, so a
+ * Codex route such as `gpt-5.6-luna` must become the live OpenCode route
+ * `openai/gpt-5.6-luna` before dispatch rather than being sent through the
+ * wrong connection and rejected later by the runtime guard.
+ */
+export function findBackendModelPickerRoute(
+  selection: Readonly<{
+    mode: string;
+    providerId?: unknown;
+    modelId?: unknown;
+    connectionId?: unknown;
+  }>,
+  options: readonly ModelPickerOption[],
+  backend: ChatBackend,
+): ModelPickerOption | undefined {
+  if (
+    selection.mode !== 'single' ||
+    typeof selection.modelId !== 'string' ||
+    !selection.modelId.trim()
+  ) {
+    return undefined;
+  }
+
+  const currentConnectionId =
+    typeof selection.connectionId === 'string' ? selection.connectionId : undefined;
+  if (
+    currentConnectionId &&
+    isModelPickerRouteCompatibleWithBackend({ connectionId: currentConnectionId }, backend)
+  ) {
+    return undefined;
+  }
+
+  const compatible = options.filter(
+    (option) =>
+      option.available !== false &&
+      isModelPickerRouteCompatibleWithBackend(option, backend),
+  );
+  const selectionOwner = modelRouteOwner(selection.modelId, selection.providerId);
+  if (!selectionOwner) return undefined;
+  const exact = compatible.filter(
+    (option) =>
+      option.modelId === selection.modelId &&
+      modelRouteOwner(option.modelId, option.provider) === selectionOwner,
+  );
+  if (exact.length === 1) return exact[0];
+  const leaf = modelRouteLeaf(selection.modelId);
+  const matches = compatible.filter(
+    (option) =>
+      modelRouteLeaf(option.modelId) === leaf &&
+      modelRouteOwner(option.modelId, option.provider) === selectionOwner,
+  );
+  const unique = new Map(
+    matches.map((option) => [`${option.connectionId}:${option.modelId}`, option]),
+  );
+  return unique.size === 1 ? unique.values().next().value : undefined;
+}
+
 export interface PickerCatalogModel extends SimpleModelCatalogRecord {
   id: string;
   label: string;
@@ -152,7 +296,7 @@ function upstreamProviderLabel(owner: string): string {
 
 function managedProviderRouteLabel(modelId: string): string {
   const owner = upstreamProviderId(modelId);
-  if (owner === 'openai') return 'Codex / ChatGPT subscription';
+  if (owner === 'openai') return 'OpenAI provider connection';
   if (owner === 'google') return 'Gemini CLI subscription';
   if (owner === 'qwen' || owner === 'qwen-coding-plan') return 'Qwen Code subscription';
   if (owner === 'azure') return 'Azure subscription';
@@ -1137,12 +1281,17 @@ export function useAccessibleChatModels() {
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const loadCodexModels = codexPersistentAdapter.listModels;
     if (!loadCodexModels) return undefined;
+    const scheduleRefresh = (delay: number) => {
+      retryTimer = setTimeout(() => {
+        if (cancelled) return;
+        invalidateCodexPersistentModelCache();
+        setCodexCatalogRevision((value) => value + 1);
+      }, delay);
+    };
     void loadCodexModels().then((models) => {
       if (cancelled) return;
       if (models.length === 0) {
-        retryTimer = setTimeout(() => {
-          if (!cancelled) setCodexCatalogRevision((value) => value + 1);
-        }, CODEX_MODEL_FAILURE_RETRY_MS);
+        scheduleRefresh(CODEX_MODEL_FAILURE_RETRY_MS);
         return;
       }
       const verifiedAt = Date.now();
@@ -1152,10 +1301,16 @@ export function useAccessibleChatModels() {
           id: model.id,
           label: model.label,
           ...(model.variants ? { variants: model.variants } : {}),
+          ...(model.defaultReasoningEffort
+            ? { defaultReasoningEffort: model.defaultReasoningEffort }
+            : {}),
           source: 'cli_model' as const,
           lastVerifiedAt: verifiedAt,
         })),
       );
+      scheduleRefresh(MODEL_CATALOG_REFRESH_INTERVAL_MS);
+    }).catch(() => {
+      if (!cancelled) scheduleRefresh(CODEX_MODEL_FAILURE_RETRY_MS);
     });
     return () => {
       cancelled = true;

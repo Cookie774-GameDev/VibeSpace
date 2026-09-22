@@ -172,31 +172,8 @@ export function lintJarvisProse(
   if ((prose.match(/\b(?:sorry|apologi[sz]e|apologies)\b/gi) ?? []).length > 1) {
     violations.push(violation('excessive_apology', 'repairable', 'Excessive apology.'));
   }
-  if (mode !== 'long_form_delivery' && /^\s*#{1,6}\s+/m.test(prose)) {
-    violations.push(violation('excessive_headings', 'repairable', 'Unnecessary heading.'));
-  }
-  const responsePolicy = getJarvisResponsePolicy(mode);
-  const maxSentences = responsePolicy.maxSentences;
-  const sentenceCount = prose
-    .split(/[.!?]+(?:\s+|$)/)
-    .map((item) => item.trim())
-    .filter(Boolean).length;
-  if (maxSentences !== null && sentenceCount > maxSentences) {
-    violations.push(
-      violation('response_mode_budget', 'repairable', 'Too many sentences for the response mode.'),
-    );
-  }
-  const wordCount = prose.trim().match(/\S+/gu)?.length ?? 0;
-  const maximumTargetWords = responsePolicy.targetWords?.[1];
-  if (maximumTargetWords !== undefined && wordCount > maximumTargetWords) {
-    violations.push(
-      violation(
-        'response_mode_word_budget',
-        'repairable',
-        'Prose exceeds the response mode word target.',
-      ),
-    );
-  }
+  // This pipeline validates written answers. Spoken delivery has its own
+  // summary limits; voice cadence must not trigger a rewrite of useful prose.
   if (/^\s*\{action\}/im.test(prose)) {
     violations.push(
       violation('unsupported_action_macro', 'deterministic', 'Unsupported action macro.'),

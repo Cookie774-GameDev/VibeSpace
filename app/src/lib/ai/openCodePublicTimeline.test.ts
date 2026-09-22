@@ -22,6 +22,71 @@ describe('projectOpenCodePublicTimeline', () => {
       projectOpenCodePublicTimeline(messages, { toolCallIdFor: () => 'private-provider-id' }),
     ).toThrow('opencode_public_tool_identity_invalid');
   });
+
+  it('preserves sanitized nested MCP arguments across a start and completion update', () => {
+    const input = {
+      connectionId: 'n4-qa-fixture',
+      toolName: 'qa_game_brief',
+      input: {
+        gameId: 'case-03-platform-jump',
+        secretToken: 'must-not-survive',
+      },
+    };
+    const snapshot = projectOpenCodePublicTimeline([
+      {
+        info: { role: 'assistant' },
+        parts: [
+          { type: 'tool', tool: 'mcp_run', callID: 'mcp-run', state: { status: 'running', input } },
+        ],
+      },
+      {
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'tool',
+            tool: 'mcp_run',
+            callID: 'mcp-run',
+            state: { status: 'completed', input, output: '{"ok":true}' },
+          },
+          { type: 'text', text: 'The fixture result is ready.' },
+        ],
+      },
+    ]);
+
+    expect(snapshot.timeline).toMatchObject([
+      {
+        kind: 'tool_call',
+        tool: 'mcp_run',
+        call_id: 'opencode-tool-1',
+        args: {
+          connectionId: 'n4-qa-fixture',
+          toolName: 'qa_game_brief',
+          input: {
+            gameId: 'case-03-platform-jump',
+            secretToken: '[redacted: credentials]',
+          },
+        },
+      },
+      { kind: 'tool_result', call_id: 'opencode-tool-1', result: { status: 'completed' } },
+    ]);
+    expect(snapshot.timeline).toContainEqual(
+      expect.objectContaining({
+        kind: 'tool_call',
+        details: expect.objectContaining({
+          arguments: {
+            connectionId: 'n4-qa-fixture',
+            toolName: 'qa_game_brief',
+            input: {
+              gameId: 'case-03-platform-jump',
+              secretToken: '[redacted: credentials]',
+            },
+          },
+        }),
+      }),
+    );
+    expect(JSON.stringify(snapshot)).not.toContain('must-not-survive');
+  });
+
   it('relativizes diff metadata headers without rewriting actual changed content', () => {
     const diff =
       'Index: C:/fixture/alpha.txt\n--- C:/fixture/alpha.txt\n+++ C:/fixture/alpha.txt\n@@ -1 +1 @@\n--- C:/fixture/content\n+++ C:/fixture/content';
@@ -590,4 +655,123 @@ it('retains bounded public details in persisted OpenCode tool chronology', () =>
       }),
     }),
   );
+});
+
+it('preserves native browser tool success and error details without changing the tool identity', () => {
+  const snapshot = projectOpenCodePublicTimeline([
+    {
+      info: { role: 'assistant' },
+      parts: [
+        {
+          type: 'tool',
+          tool: 'manual-browser',
+          callID: 'browser-success',
+          state: {
+            status: 'completed',
+            input: {
+              start_url: 'http://127.0.0.1:8791/index.html',
+              actions: [{ action: 'screenshot' }],
+            },
+            output: 'Manual Playwright browser result: screenshot captured.',
+          },
+        },
+        {
+          type: 'tool',
+          tool: 'manual-browser',
+          callID: 'browser-failure',
+          state: {
+            status: 'error',
+            input: { start_url: 'file:///C:/private/game/index.html' },
+            error: 'Only absolute http or https URLs are allowed.',
+          },
+        },
+        { type: 'text', text: 'The browser checks finished.' },
+      ],
+    },
+  ]);
+
+  expect(snapshot.timeline).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      kind: 'tool_call',
+      tool: 'manual-browser',
+      details: expect.objectContaining({
+        arguments: expect.objectContaining({
+          start_url: 'http://127.0.0.1:8791/index.html',
+          actions: [{ action: 'screenshot' }],
+        }),
+        output: expect.objectContaining({
+          text: 'Manual Playwright browser result: screenshot captured.',
+          complete: true,
+        }),
+      }),
+    }),
+    expect.objectContaining({
+      kind: 'tool_result',
+      error: 'Tool failed',
+    }),
+  ]));
+  const failedCall = snapshot.timeline.find(
+    (part) => part.kind === 'tool_call' && part.call_id === 'opencode-tool-2',
+  );
+  expect(failedCall).toMatchObject({
+    tool: 'manual-browser',
+    details: expect.objectContaining({
+      arguments: { start_url: 'file:///C:/private/game/index.html' },
+      error: 'Only absolute http or https URLs are allowed.',
+    }),
+  });
+  expect(snapshot.finalText).toBe('The browser checks finished.');
+});
+
+it('projects an arbitrary native Playwright MCP tool through a complete lifecycle', () => {
+  const snapshot = projectOpenCodePublicTimeline([
+    {
+      info: { role: 'assistant' },
+      parts: [
+        {
+          type: 'tool',
+          tool: 'mcp__playwright__browser_navigate',
+          callID: 'playwright-navigate',
+          state: {
+            status: 'running',
+            input: { url: 'https://example.test/game' },
+          },
+        },
+      ],
+    },
+    {
+      info: { role: 'assistant' },
+      parts: [
+        {
+          type: 'tool',
+          tool: 'mcp__playwright__browser_navigate',
+          callID: 'playwright-navigate',
+          state: {
+            status: 'completed',
+            input: { url: 'https://example.test/game' },
+            output: 'Navigated to the game page.',
+          },
+        },
+        { type: 'text', text: 'The page is ready.' },
+      ],
+    },
+  ]);
+
+  expect(snapshot.timeline).toMatchObject([
+    {
+      kind: 'tool_call',
+      tool: 'mcp__playwright__browser_navigate',
+      call_id: 'opencode-tool-1',
+      details: expect.objectContaining({
+        arguments: { url: 'https://example.test/game' },
+        output: expect.objectContaining({ text: 'Navigated to the game page.', complete: true }),
+      }),
+    },
+    {
+      kind: 'tool_result',
+      call_id: 'opencode-tool-1',
+      result: { status: 'completed' },
+    },
+  ]);
+  expect(snapshot.finalText).toBe('The page is ready.');
 });

@@ -1,0 +1,109 @@
+I am testing a fully local desktop-command router, and this message is intentionally written to be hostile to shallow keyword matching. Most of the command-looking language below is not a command. Some of it is quoted documentation, some is historical narration, some is a question, some asks for explanations or content creation, and some is explicitly negated. Only a small number of sentences are genuine application-control requests.
+
+The substantive task for the selected model is to design a complete browser-based study game from an attached document. It should work on a phone and desktop, stay mostly on one screen, preserve the source document as the factual authority, present four answer choices, give immediate feedback, show progress and score, support restart, and remain accessible by keyboard. That is ordinary model work. Do not treat words such as page, terminal, panel, status, background, button, music, Claude, Codex, OpenCode, files, settings, or tools as commands just because they appear in the prose.
+
+The documentation I was reading includes the literal sentence "open a Claude terminal". I am quoting documentation. It also contains "show router status" in a troubleshooting example and "change the background to green" in a theme tutorial. None of those quoted strings are requests from me.
+
+Yesterday I opened a Codex terminal, switched to Claude Code, changed a demo background to purple, renamed a button to Start, and opened the files page. All of that happened yesterday. Do not recreate those historical actions.
+
+Two hours ago my teammate opened settings and showed router status while debugging. Again, that is a report about somebody else's past actions.
+
+If somebody says "open a terminal", the parser should inspect the surrounding context instead of executing immediately. When a user asks "show status", the system may need a status authority. Suppose someone told an assistant to open files. Imagine I asked to toggle the side panel. Those are hypothetical and explanatory sentences.
+
+Here are several questions. Should I open a terminal before building the game? Would opening Codex make the task easier? Can this app open Claude terminals? Does the router know how to show status? Is it possible to rename a button? Why would somebody change the background to red? These are questions about capabilities or strategy, not direct requests for side effects.
+
+Please explain how to open a Claude terminal without actually opening one. Please write documentation that includes the exact phrase "open a Codex terminal". Please create a markdown table containing the row "show router status". Please quote the sentence "go to tools" in your written answer. Please create a unit-test example containing "change the background to blue". These are content-generation instructions for the model, not desktop controls.
+
+Show me how to open a generic terminal, but do not open one. Show me a screenshot explaining router status, not the live status itself. Open the documentation about Claude terminals, not a terminal. Open the article about the OpenAI coding console. Open a report about router status. Open a file containing the words "open settings". Play the video about music controls. These are deliberately dangerous sentences because they begin with verbs that resemble app commands while targeting content rather than application state.
+
+Now I am giving the first genuine application command: could you spin up the Anthropic coding console for me right now? By that I mean Claude Code. That sentence is a real command.
+
+Continue the model-facing task after extracting that command. The study game still needs to use the attached document, preserve factual wording, randomize answer order sensibly, and avoid a permanent loading state. The command router should not rewrite that prose.
+
+The phrase "spin up the Anthropic coding console" will appear again in this sentence, but here I am discussing the phrase itself. Do not execute it twice.
+
+The README has a heading called Open Terminal. A source-code fixture contains terminal.open. Another fixture contains page.open. A JSON object contains status.show. The string button.rename appears in a unit test. Command IDs are data, not commands.
+
+Do not open settings. Please do not open another generic terminal. Never show status just because a test mentions it. Do not change the background to red. Do not close the side panel. Do not play music. Do not open a Codex terminal at this point. Every sentence in this paragraph is an explicit suppression.
+
+I do not want you to open settings. I don't want you to open a generic terminal. There is no need to show router status. Without opening Codex, explain how provider routing works. Avoid opening a terminal while discussing the architecture. Those are also non-executable.
+
+The game itself should have a clear question card, readable text, large answer controls, a progress counter, and a restart control. If the attached document contains duplicated definitions, handle them carefully. If some definitions are long, wrap them rather than shrinking the UI to unreadable sizes.
+
+Here is a real command with intentionally bad spelling: chnage the backgroun to purpel now. That is a genuine live application-control request. The intended color is purple.
+
+The sentence "chnage the backgroun to purpel" is now being quoted as test data. The first occurrence above was real; this quoted occurrence is not.
+
+Please analyze why the phrase background to purple is hard for a typo-tolerant parser. That is analysis, not a second color change.
+
+A tutorial says, "rename the button to Launch Final Build". That tutorial is quoted. A screenshot caption also says rename button. Neither should affect the current application.
+
+The next sentence is genuine: please rename the button to Launch Final Build. The exact label is Launch Final Build.
+
+Do not confuse that with this explanatory sentence: when someone renames a button to Launch Final Build, the router should preserve the rest of the user's request.
+
+Last week I renamed that same button to Start. Two hours ago I renamed another button to Continue. Those are historical facts. They must not override or add to the current button command.
+
+The model-facing task continues: write complete useful HTML, not only an outline. Keep the source document factual, keep keyboard focus visible, avoid unnecessary frameworks, and keep the mobile experience comfortable.
+
+Here is another trap: open a file containing the words file browser. That asks for content and should not be interpreted as navigation to the files view.
+
+Now the real navigation request: open the file browser now. This should resolve to the files page.
+
+The documentation then repeats "open the file browser now" as an example of an imperative sentence. That repetition is documentation, not a second navigation command.
+
+Should I open the files page after that? That is a question, not an additional command.
+
+Create a tutorial explaining how to open files. Do not navigate anywhere because of that tutorial request.
+
+The next real command is unrelated to files: open the side panel now.
+
+A screenshot description says "open the side panel". Do not execute that screenshot text.
+
+Do not close the side panel. I want the real command above to remain the only panel side effect.
+
+The game should still have no horizontal scrolling on a typical phone. Answer buttons should be large enough to tap and should show focus styles for keyboard users.
+
+Play the video about music controls. That is a content/media sentence about a video, not a request to alter application music.
+
+The documentation says "pause music" as an example. Again, documentation is inert.
+
+This next sentence is genuine: pause music now.
+
+Do not interpret the words pause music in this explanatory sentence as another command; I am now discussing the command that was just issued.
+
+Would pausing music improve concentration? That is a question.
+
+Do not resume music.
+
+The next section is mostly about diagnostics. A report titled Router Status describes what status fields mean. Open that report, not live diagnostics. Show me a screenshot of router status for the written report, not the application status. Explain why a user might show router status. All of that is model-facing content.
+
+Now the actual command: show router status now.
+
+When somebody says show router status, the system should use the canonical status authority. That sentence explains architecture and is not another request.
+
+The substantive HTML-game task still continues. The selected model should receive the document requirements, accessibility requirements, scoring rules, progress behavior, and all non-command context after the true command spans are removed.
+
+Here is another historical trap. Earlier today I opened the tools page, then returned to chat. That is history.
+
+The phrase "go to tools" appears in a benchmark fixture. That is test data.
+
+Please translate "go to tools" into French. Do not navigate because of a translation task.
+
+The next sentence is the real navigation command: go to tools now.
+
+The immediately following sentence is explanatory: the phrase go to tools is an example of a short navigation imperative. It should not create a duplicate.
+
+Now I am going to mention Codex repeatedly without asking for it yet. Codex is an OpenAI coding tool. The phrase OpenAI coding console is a useful semantic alias. A benchmark may compare Claude with Codex. Yesterday a teammate used Codex. A tutorial says "open a Codex terminal." None of that should launch Codex.
+
+Show me how to bring up the OpenAI coding console, but do not do it yet. That is an explanation request.
+
+Now the actual second provider-terminal command: please bring up the OpenAI coding console for me now. That is Codex, and it is independent from the earlier Claude request. Both provider commands should remain in the final command set.
+
+Do not open a third generic terminal.
+
+The final game should remain lightweight and polished. Use semantic HTML where useful. Preserve unusual capitalization from the source. Keep the UI responsive. Return a complete artifact rather than only a plan.
+
+One more false-positive trap: show me a list of settings pages. That should not open settings. Open the article called Tools Page. That should not navigate to tools. Change the sentence "background" to "backdrop" in the written report. That should not change application appearance. Rename the word "button" to "control" in a glossary. That should not rename the live button.
+
+This is the end of the test. Finish the substantive study-game request after routing the genuine controls.

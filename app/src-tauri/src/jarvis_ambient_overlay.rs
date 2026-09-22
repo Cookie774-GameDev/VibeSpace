@@ -11,6 +11,10 @@ use tauri::{
 const AMBIENT_EVENT: &str = "jarvis://ambient-snapshot";
 const AMBIENT_PREFIX: &str = "jarvis-ambient-";
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JarvisAmbientState {
@@ -34,6 +38,8 @@ pub struct JarvisAmbientSnapshot {
     pub transient_until: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<bool>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub prewarm: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
 }
@@ -57,6 +63,7 @@ impl Default for JarvisAmbientOverlayState {
                     energy: 0.0,
                     transient_until: None,
                     active: Some(false),
+                    prewarm: false,
                     session_id: None,
                 },
                 ready: HashSet::new(),
@@ -107,6 +114,11 @@ fn validate_snapshot(
         || !(0.0..=1.0).contains(&snapshot.energy)
     {
         return Err("jarvis_ambient_snapshot_invalid".to_owned());
+    }
+    if snapshot.prewarm
+        && (snapshot.state != JarvisAmbientState::Idle || snapshot_active(snapshot))
+    {
+        return Err("jarvis_ambient_prewarm_invalid".to_owned());
     }
     if !matches!(
         snapshot.source.as_str(),
@@ -202,7 +214,8 @@ fn ensure_windows(
         .webview_windows()
         .keys()
         .any(|label| label.starts_with(AMBIENT_PREFIX));
-    if !snapshot_active(snapshot) {
+    let prewarming = snapshot_prewarming(snapshot);
+    if !snapshot_active(snapshot) && !prewarming {
         for (label, window) in app.webview_windows() {
             if label.starts_with(AMBIENT_PREFIX) {
                 window
@@ -220,6 +233,7 @@ fn ensure_windows(
     }
     if !should_reconcile_windows(snapshot.state, has_existing_window)
         && snapshot.active != Some(true)
+        && !prewarming
     {
         return Ok(());
     }
@@ -277,17 +291,20 @@ fn ensure_windows(
                 .0
                 .lock()
                 .map_err(|_| "jarvis_ambient_state_poisoned".to_owned())?;
-            inner.snapshot.revision == snapshot.revision && snapshot_active(&inner.snapshot)
+            inner.snapshot.revision == snapshot.revision
+                && (snapshot_active(&inner.snapshot) || snapshot_prewarming(&inner.snapshot))
         };
         if !still_current {
             return Ok(());
         }
         let _ = app.emit_to(&label, AMBIENT_EVENT, snapshot);
-        if ready.contains(&label)
-            && (snapshot.active == Some(true) || classify_visibility(snapshot.state, true))
-        {
-            configure_window(&window, position, size);
-            let _ = window.show();
+        if ready.contains(&label) {
+            if snapshot.active == Some(true) || classify_visibility(snapshot.state, true) {
+                configure_window(&window, position, size);
+                let _ = window.show();
+            } else if prewarming {
+                let _ = window.hide();
+            }
         }
         // Until renderer readiness, keep the transparent host offscreen and
         // materialized; hiding it here can suspend WebView2 initialization.
@@ -349,6 +366,10 @@ fn schedule_reconcile(app: &AppHandle) -> Result<(), String> {
         })
 }
 
+fn snapshot_prewarming(snapshot: &JarvisAmbientSnapshot) -> bool {
+    snapshot.prewarm && snapshot.state == JarvisAmbientState::Idle && !snapshot_active(snapshot)
+}
+
 #[tauri::command]
 pub async fn set_jarvis_ambient_snapshot(
     window: WebviewWindow,
@@ -407,6 +428,7 @@ mod tests {
             energy: 0.5,
             transient_until: None,
             active: None,
+            prewarm: false,
             session_id: None,
         }
     }
@@ -437,6 +459,18 @@ mod tests {
     }
 
     #[test]
+    fn ambient_ipc_round_trips_native_prewarm_intent() {
+        let value = serde_json::json!({
+            "revision": 2, "state": "idle", "source": "voice",
+            "observedAt": 100, "energy": 0.0, "active": false, "prewarm": true,
+        });
+        let decoded: JarvisAmbientSnapshot = serde_json::from_value(value).unwrap();
+        assert!(validate_snapshot(&decoded, 1).is_ok());
+        let encoded = serde_json::to_value(decoded).unwrap();
+        assert_eq!(encoded.get("prewarm"), Some(&serde_json::Value::Bool(true)));
+    }
+
+    #[test]
     fn validates_bounded_monotonic_snapshots() {
         assert!(validate_snapshot(&snapshot(2, JarvisAmbientState::Listening), 1).is_ok());
         assert!(validate_snapshot(&snapshot(1, JarvisAmbientState::Listening), 1).is_err());
@@ -446,6 +480,19 @@ mod tests {
         invalid.energy = 0.5;
         invalid.observed_at = -1;
         assert!(validate_snapshot(&invalid, 1).is_err());
+    }
+
+    #[test]
+    fn prewarm_is_valid_only_for_an_inactive_idle_snapshot() {
+        let mut idle = snapshot(2, JarvisAmbientState::Idle);
+        idle.prewarm = true;
+        assert!(validate_snapshot(&idle, 1).is_ok());
+        assert!(super::snapshot_prewarming(&idle));
+
+        idle.state = JarvisAmbientState::Listening;
+        idle.active = Some(true);
+        assert!(validate_snapshot(&idle, 1).is_err());
+        assert!(!super::snapshot_prewarming(&idle));
     }
 
     #[test]

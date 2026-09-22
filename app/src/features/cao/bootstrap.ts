@@ -131,3 +131,64 @@ export function projectCaoPublicStatus(_decision: CaoBootstrapDecision): CaoPubl
   return Object.freeze({ identity: 'Jarvis CAO', status: 'queued' });
 }
 import { parseCaoControlCommand, type CaoControlCommand } from './controlCommand';
+import { db } from '@/lib/db';
+import {
+  assertCaoExecutionIdentity,
+  loadCaoExecutionProfile,
+  selectCaoExecutionProfile,
+  type CaoExecutionIdentity,
+  type CaoExecutionProfile,
+} from './executionProfile';
+import type { CaoProductionScope } from './productionLifecycle';
+
+export type CaoMainBrainProfileReader = (scope: CaoProductionScope) => Promise<CaoExecutionProfile>;
+
+async function defaultMainBrainProfileReader(
+  scope: CaoProductionScope,
+): Promise<CaoExecutionProfile> {
+  const persisted = await loadCaoExecutionProfile(db, scope);
+  if (!persisted) throw new Error('cao_main_brain_profile_unavailable');
+  const { readLiveCaoExecutionCatalog } = await import('./productionLifecycle');
+  const catalog = await readLiveCaoExecutionCatalog(scope);
+  return selectCaoExecutionProfile({
+    accountId: scope.accountId,
+    workspaceId: scope.workspaceId,
+    catalog,
+    backend: persisted.backend,
+    connectionId: persisted.connectionId,
+    modelId: persisted.modelId,
+    reasoningEffort: persisted.reasoningEffort,
+  });
+}
+
+let mainBrainProfileReader: CaoMainBrainProfileReader = defaultMainBrainProfileReader;
+
+/** Resolve the durable main CAO profile against the current live catalog. */
+export function resolveCaoMainBrainProfile(
+  scope: CaoProductionScope,
+): Promise<CaoExecutionProfile> {
+  return mainBrainProfileReader(scope);
+}
+
+/** Test/native harness seam; it accepts a typed profile reader only. */
+export function configureCaoMainBrainProfileReader(next: CaoMainBrainProfileReader): () => void {
+  if (typeof next !== 'function') throw new Error('cao_main_brain_profile_reader_invalid');
+  const previous = mainBrainProfileReader;
+  mainBrainProfileReader = next;
+  return () => {
+    if (mainBrainProfileReader === next) mainBrainProfileReader = previous;
+  };
+}
+
+export async function resolveCaoMainBrainIdentity(
+  scope: CaoProductionScope,
+): Promise<CaoExecutionIdentity> {
+  return resolveCaoMainBrainProfile(scope);
+}
+
+export function assertConfiguredCaoExecutionIdentity(input: {
+  requested: CaoExecutionIdentity;
+  observed: Partial<CaoExecutionIdentity>;
+}): CaoExecutionIdentity {
+  return assertCaoExecutionIdentity(input.requested, input.observed);
+}

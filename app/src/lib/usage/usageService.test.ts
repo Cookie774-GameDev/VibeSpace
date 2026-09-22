@@ -85,6 +85,39 @@ describe('truthful usage service', () => {
     expect(usage.currentChat.requests.value).toBeUndefined();
   });
 
+  it('uses a provider-reported total without adding its cached-input subset', async () => {
+    vi.mocked(messageRepo.listByChat).mockResolvedValue([
+      {
+        id: 'm-opencode',
+        chat_id: 'chat-opencode',
+        role: 'assistant',
+        parts: [],
+        created_at: 1,
+        updated_at: 1,
+        usage: {
+          provider: 'openai',
+          model: 'openai/gpt-5.6-luna',
+          input_tokens: 33_264,
+          output_tokens: 381,
+          cache_read_tokens: 65_280,
+          total_tokens: 98_925,
+        },
+      },
+    ] as never);
+
+    const usage = await getUsage(
+      { ...OPENCODE_CLI_CONNECTION, modelId: 'openai/gpt-5.6-luna' },
+      'chat-opencode' as never,
+    );
+
+    expect(usage.currentChat).toMatchObject({
+      inputTokens: { value: 33_264 },
+      cachedInputTokens: { value: 65_280 },
+      outputTokens: { value: 381 },
+      totalTokens: { value: 98_925, provenance: 'response-metadata' },
+    });
+  });
+
   it('loads the chat once for an all-connection summary', async () => {
     vi.mocked(messageRepo.listByChat).mockResolvedValue([]);
     const usage = await getAllUsage(
@@ -128,7 +161,7 @@ describe('truthful usage service', () => {
       label: 'Current app session',
       availability: 'available',
       models: ['openai/gpt-5.6-luna'],
-      totalTokens: { value: 16, provenance: 'local-exact' },
+      totalTokens: { value: 14, provenance: 'local-exact' },
       costUsd: { value: 0, provenance: 'local-exact' },
       requests: { value: 1, provenance: 'local-exact' },
     });

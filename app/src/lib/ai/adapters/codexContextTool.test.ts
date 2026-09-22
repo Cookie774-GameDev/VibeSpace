@@ -4,15 +4,21 @@ import type { ProviderRequest } from './types';
 
 const state = vi.hoisted(() => ({
   enabled: true, authorized: true,
+  capture: vi.fn(() => ({
+    scope: { accountId: 'account', workspaceId: 'workspace', projectId: 'project' },
+    generation: 1,
+  })),
   execute: vi.fn(async () => ({ ok: true, data: { evidence: 'verified' } })),
   release: vi.fn(), observed: vi.fn(() => true),
+  grantMutation: vi.fn(() => vi.fn()),
 }));
 vi.mock('@/features/context/rlmPreferenceStore', () => ({ resolveRlmEnabled: () => ({ enabled: state.enabled }) }));
 vi.mock('@/lib/harness/toolGatewayAuthority', () => ({
-  captureToolGatewayAuthorityClaim: () => ({ scope: { accountId: 'account', workspaceId: 'workspace', projectId: 'project' }, generation: 1 }),
+  captureToolGatewayAuthorityClaim: state.capture,
   bindToolGatewaySessionAuthority: () => state.authorized,
   bindToolGatewayObservedExecutionAuthority: state.observed,
   authorizeToolGatewayRequest: () => state.authorized,
+  grantToolGatewayMutationForRequest: state.grantMutation,
   releaseToolGatewaySessionAuthority: state.release,
 }));
 vi.mock('@/lib/harness/toolGatewayProduction', () => ({ createProductionToolGatewayDependencies: () => ({}) }));
@@ -24,7 +30,7 @@ const request = {
   connection: { id: 'openai-codex', adapterId: 'codex-app-server', authSource: 'subscription' },
 } as ProviderRequest;
 const identity = { modelProvider: 'openai', model: 'opencode-go/deepseek-v4-flash-vision-exp', effort: null, serviceTier: null, cwd: 'C:\\project' };
-beforeEach(() => { state.enabled = true; state.authorized = true; vi.clearAllMocks(); });
+beforeEach(() => { state.enabled = true; state.authorized = true; state.capture.mockReset(); state.capture.mockReturnValue({ scope: { accountId: 'account', workspaceId: 'workspace', projectId: 'project' }, generation: 1 }); vi.clearAllMocks(); });
 
 it('uses the existing validated gateway envelope and releases its exact session', async () => {
   // The native adapter may resolve the working directory after tool preparation.
@@ -43,6 +49,27 @@ it('does not advertise Context for disabled RLM, explicit disk reads or foreign 
   expect(await createCodexContextTool({ ...request, projectId: 'foreign' })).toBeNull();
   state.enabled = false;
   expect(await createCodexContextTool(request)).toBeNull();
+});
+
+it('uses an early claim after project navigation instead of recapturing the active project', async () => {
+  const earlyClaim = Object.freeze({
+    scope: Object.freeze({ accountId: 'account', accountSource: 'local' as const, workspaceId: 'workspace', projectId: 'project' }),
+    generation: 1,
+  });
+  state.capture.mockReturnValue({
+    scope: { accountId: 'account', workspaceId: 'workspace', projectId: 'project-b' },
+    generation: 2,
+  });
+  const bridge = await createCodexContextTool({ ...request, toolGatewayAuthority: earlyClaim });
+  expect(bridge).not.toBeNull();
+  expect(state.capture).not.toHaveBeenCalled();
+  bridge?.dispose();
+});
+
+it('fails closed when early authority capture explicitly returned null', async () => {
+  const bridge = await createCodexContextTool({ ...request, toolGatewayAuthority: null });
+  expect(bridge).toBeNull();
+  expect(state.capture).not.toHaveBeenCalled();
 });
 
 it('rejects malformed operations, cancellation and revoked authority before delivery', async () => {
@@ -106,4 +133,72 @@ it('does not advertise or dispatch plugin mutation tools when the request disabl
   await expect(bridge.executeTool?.('plugins_run', { pluginId: 'github', operation: 'list_repositories' }, 'plugin-run')).rejects.toThrow('not enabled');
   expect(state.execute).not.toHaveBeenCalled();
   bridge.dispose();
+});
+
+it('exposes requested terminal and skill tools through the existing Codex gateway', async () => {
+  const bridge = await createCodexToolGateway({ ...request,
+    interactionMode: 'agent', accessLevel: 'full', agentApprovalMode: 'full',
+    tools: {
+    vibespace_context: false, 'terminal.list': true, 'terminal.read': true,
+    'terminal.write': true, 'skills.list': true, 'skills.load': true,
+    'context.list': true, 'context.read': true,
+  } });
+  expect(bridge).not.toBeNull();
+  expect(bridge!.toolNames).toEqual(['terminal_list', 'terminal_read', 'terminal_write', 'skills_list', 'skills_load', 'context_list', 'context_read']);
+  bridge!.bind('coord-thread', identity, 'coord-generation');
+  await bridge!.executeTool!('terminal_list', { limit: 10 }, 'list-call');
+  expect(state.execute).toHaveBeenLastCalledWith(expect.objectContaining({ tool: 'terminal.list', sessionId: 'coord-thread', args: { limit: 10 } }));
+  const command = 'Use RLM for MyProject; READ_ONLY.';
+  await bridge!.executeTool!('terminal_write', { terminal: 'tty_verified', command }, 'write-call');
+  expect(state.execute).toHaveBeenLastCalledWith(expect.objectContaining({ tool: 'terminal.write', args: { terminal: 'tty_verified', command } }));
+  expect(state.grantMutation).toHaveBeenCalledWith(expect.objectContaining({
+    requestId: 'write-call', sessionId: 'coord-thread', tool: 'terminal.write',
+    args: { terminal: 'tty_verified', command },
+  }), 'once');
+  bridge!.dispose();
+});
+
+it('does not auto-grant terminal mutations for the reviewed Agent profile', async () => {
+  const bridge = await createCodexToolGateway({ ...request,
+    interactionMode: 'agent', accessLevel: 'full', agentApprovalMode: 'review',
+    tools: { vibespace_context: false, 'terminal.write': true },
+  });
+  bridge!.bind('review-thread', identity, 'review-generation');
+  await bridge!.executeTool!('terminal_write', { terminal: 'tty_verified', command: 'echo review' }, 'review-call');
+  expect(state.grantMutation).not.toHaveBeenCalled();
+  bridge!.dispose();
+});
+
+it('never grants unrequested writes or accepts malformed terminal selectors', async () => {
+  const bridge = (await createCodexToolGateway({ ...request, tools: { vibespace_context: false, 'terminal.list': true, 'terminal.write': false } }))!;
+  expect(bridge).not.toBeNull();
+  bridge.bind('readonly-thread', identity, 'generation');
+  await expect(bridge.executeTool!('terminal_write', { terminal: 'tty_verified', command: 'do work' }, 'denied')).rejects.toThrow('not enabled');
+  expect(state.execute).not.toHaveBeenCalled();
+  bridge.dispose();
+});
+
+it('keeps terminal gateway validation, cancellation and revocation before execution', async () => {
+  const controller = new AbortController();
+  state.enabled = false;
+  const bridge = (await createCodexToolGateway({ ...request, signal: controller.signal,
+    tools: { vibespace_context: false, 'terminal.write': true },
+  }))!;
+  expect(bridge).not.toBeNull();
+  bridge.bind('write-thread', identity, 'generation');
+  await expect(bridge.executeTool!('terminal_write', { terminal: { sessionId: 'wrong-shape' }, command: 'work' }, 'malformed')).rejects.toThrow();
+  expect(state.execute).not.toHaveBeenCalled();
+  state.authorized = false;
+  await expect(bridge.executeTool!('terminal_write', { terminal: 'tty_verified', command: 'work' }, 'revoked')).rejects.toThrow('authority changed');
+  expect(state.execute).not.toHaveBeenCalled();
+  controller.abort();
+  await expect(bridge.executeTool!('terminal_write', { terminal: 'tty_verified', command: 'work' }, 'cancelled')).rejects.toThrow('inactive');
+  expect(state.execute).not.toHaveBeenCalled();
+  bridge.dispose();
+});
+
+it('does not create a terminal bridge for a foreign project or a missing early authority', async () => {
+  const tools = { vibespace_context: false, 'terminal.list': true };
+  expect(await createCodexToolGateway({ ...request, tools, projectId: 'foreign' })).toBeNull();
+  expect(await createCodexToolGateway({ ...request, tools, toolGatewayAuthority: null })).toBeNull();
 });

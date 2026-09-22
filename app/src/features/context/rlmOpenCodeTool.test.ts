@@ -63,6 +63,130 @@ function dependencies() {
 }
 
 describe('OpenCode RLM context tool adapter', () => {
+  it('records a failed retrieval route when high-level query search rejects', async () => {
+    const storage = {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+    };
+    vi.stubGlobal('localStorage', storage);
+    try {
+      const failure = new Error('retrieval failed');
+      const deps = dependencies();
+      deps.queryService.search = vi.fn(async () => {
+        throw failure;
+      });
+      const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
+
+      await expect(
+        tool.execute({ operation: 'query', query: 'Search the previous decision' }, lease),
+      ).rejects.toBe(failure);
+
+      const lastWrite = storage.setItem.mock.calls.at(-1);
+      expect(lastWrite?.[0]).toBe('vibespace.rlm-preference.v1');
+      expect(JSON.parse(lastWrite?.[1] ?? '{}')).toMatchObject({
+        lastRoute: 'retrieval',
+        lastRunStatus: 'failed',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('records a failed RLM route when investigation rejects', async () => {
+    const storage = {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+    };
+    vi.stubGlobal('localStorage', storage);
+    try {
+      const failure = new Error('investigation failed');
+      const deps = dependencies();
+      deps.rlmRuntime.investigate = vi.fn(async () => {
+        throw failure;
+      });
+      const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
+
+      await expect(
+        tool.execute(
+          { operation: 'investigate', query: 'Investigate the entire project history for the leak' },
+          lease,
+        ),
+      ).rejects.toBe(failure);
+
+      const lastWrite = storage.setItem.mock.calls.at(-1);
+      expect(lastWrite?.[0]).toBe('vibespace.rlm-preference.v1');
+      expect(JSON.parse(lastWrite?.[1] ?? '{}')).toMatchObject({
+        lastRoute: 'rlm',
+        lastRunStatus: 'failed',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('records a successful retrieval route only after the operation resolves', async () => {
+    const storage = {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(),
+    };
+    vi.stubGlobal('localStorage', storage);
+    try {
+      let release!: (value: any) => void;
+      const deps = dependencies();
+      deps.queryService.search = vi.fn(
+        (_input: any) =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      );
+      const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
+
+      const pending = tool.execute(
+        { operation: 'query', query: 'Search the previous decision' },
+        lease,
+      );
+      await vi.waitFor(() => expect(deps.queryService.search).toHaveBeenCalled());
+      expect(storage.setItem).not.toHaveBeenCalled();
+
+      release({ scope: lease, query: 'Search the previous decision', items: [], truncated: false });
+      await expect(pending).resolves.toMatchObject({ items: [], truncated: false });
+
+      const lastWrite = storage.setItem.mock.calls.at(-1);
+      expect(JSON.parse(lastWrite?.[1] ?? '{}')).toMatchObject({
+        lastRoute: 'retrieval',
+        lastRunStatus: 'ok',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not replace a successful retrieval when its status write fails', async () => {
+    const storage = {
+      getItem: vi.fn(() => null),
+      setItem: vi.fn(() => {
+        throw new Error('storage unavailable');
+      }),
+    };
+    vi.stubGlobal('localStorage', storage);
+    try {
+      const deps = dependencies();
+      deps.queryService.search = vi.fn(async ({ scope, query }: any) => ({
+        scope,
+        query,
+        items: [],
+        truncated: false,
+      }));
+      const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
+
+      await expect(
+        tool.execute({ operation: 'query', query: 'Search the previous decision' }, lease),
+      ).resolves.toMatchObject({ items: [], truncated: false });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('registers fallback search/open/expand citations for final-answer validation', async () => {
     clearToolGatewayContextCitationItems();
     const pointer = {

@@ -7,21 +7,32 @@ import {
   buildLiveOpenCodePickerModels,
   buildModelPickerGroups,
   connectionRouteProviderLabel,
+  findBackendModelPickerRoute,
+  filterModelPickerGroupsForBackend,
+  isModelPickerRouteCompatibleWithBackend,
   OPEN_CODE_CATALOG_EVIDENCE_ATTRIBUTE,
   readOpenCodeCatalogEvidence,
   requestOpenCodeModelCatalogRefresh,
   useAccessibleChatModels,
 } from './useAccessibleChatModels';
+import type { ModelPickerOption } from './useAccessibleChatModels';
 import {
   CODEX_CLI_CONNECTION,
   CONNECTION_MODEL_OPTIONS,
   OPENCODE_CLI_CONNECTION,
 } from './adapters/catalog';
-import { OPENAI_API_CONNECTION, QWEN_API_CONNECTION } from './adapters/nativeCatalog';
+import {
+  OPENAI_API_CONNECTION,
+  OPENROUTER_API_CONNECTION,
+  QWEN_API_CONNECTION,
+} from './adapters/nativeCatalog';
 import { LocalAdapterRegistry } from '@/features/model-foundry/adapterRegistry';
 import * as canonicalCatalog from './catalog/canonicalModelCatalog';
 import type { ProviderDiscoveredModel } from './adapters/types';
-import { resetDiscoveredConnectionModelsForTests } from './connectionCatalog';
+import {
+  getDiscoveredConnectionModels,
+  resetDiscoveredConnectionModelsForTests,
+} from './connectionCatalog';
 import {
   AI_CONNECTION_STATE_EVENT,
   markConnectionSessionChecked,
@@ -200,6 +211,187 @@ describe('useAccessibleChatModels', () => {
       'gpt-5.6',
       'gpt-5.6-sol',
     ]);
+  });
+
+  it('filters merged OpenAI routes to the chat backend without renaming the connection', () => {
+    const groups = buildConnectionPickerGroups({
+      connections: [CODEX_CLI_CONNECTION, OPENCODE_CLI_CONNECTION],
+      modelsByProvider: {},
+      modelsByConnection: {
+        [CODEX_CLI_CONNECTION.id]: [
+          { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', source: 'provider-live' },
+        ],
+        [OPENCODE_CLI_CONNECTION.id]: [
+          { id: 'openai/gpt-5.6-luna', label: 'GPT-5.6 Luna', source: 'opencode-live' },
+        ],
+      },
+      stateByConnection: {
+        [CODEX_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' },
+        [OPENCODE_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' },
+      },
+    });
+
+    const merged = groups.find((group) => group.id === 'provider:openai');
+    const mergedRoutes = merged?.options.flatMap((option) => option.alternativeRoutes ?? [option]);
+    expect(mergedRoutes?.map((route) => route.connectionId)).toEqual(
+      expect.arrayContaining([CODEX_CLI_CONNECTION.id, OPENCODE_CLI_CONNECTION.id]),
+    );
+
+    const codexGroups = filterModelPickerGroupsForBackend(groups, 'codex');
+    const codexRoutes = codexGroups.flatMap((group) =>
+      group.options.flatMap((option) => option.alternativeRoutes ?? [option]),
+    );
+    expect(codexRoutes.map((route) => route.connectionId)).toEqual(
+      expect.arrayContaining([CODEX_CLI_CONNECTION.id, OPENCODE_CLI_CONNECTION.id]),
+    );
+    expect(codexRoutes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          modelId: 'gpt-5.6-luna',
+          connectionId: CODEX_CLI_CONNECTION.id,
+        }),
+        expect.objectContaining({
+          modelId: 'openai/gpt-5.6-luna',
+          connectionId: OPENCODE_CLI_CONNECTION.id,
+        }),
+      ]),
+    );
+
+    const openCodeGroups = filterModelPickerGroupsForBackend(groups, 'opencode');
+    const openCodeRoutes = openCodeGroups.flatMap((group) =>
+      group.options.flatMap((option) => option.alternativeRoutes ?? [option]),
+    );
+    expect(openCodeRoutes.map((route) => route.connectionId)).toEqual([OPENCODE_CLI_CONNECTION.id]);
+    expect(openCodeRoutes[0]).toMatchObject({
+      modelId: 'openai/gpt-5.6-luna',
+      connectionId: OPENCODE_CLI_CONNECTION.id,
+    });
+    expect(openCodeRoutes[0]?.modeLabel).toBe('OpenAI provider connection');
+    expect(
+      isModelPickerRouteCompatibleWithBackend(
+        { connectionId: CODEX_CLI_CONNECTION.id },
+        'opencode',
+      ),
+    ).toBe(false);
+    expect(
+      isModelPickerRouteCompatibleWithBackend(
+        { connectionId: OPENROUTER_API_CONNECTION.id },
+        'codex',
+      ),
+    ).toBe(false);
+  });
+
+  it('maps a stale exact Codex selection to the qualified live OpenCode route', () => {
+    const options: ModelPickerOption[] = [
+      {
+        id: 'openai-codex:gpt-5.6-luna',
+        provider: 'openai',
+        modelId: 'gpt-5.6-luna',
+        label: 'GPT-5.6 Luna',
+        connectionId: CODEX_CLI_CONNECTION.id,
+        connection: CODEX_CLI_CONNECTION,
+        available: true,
+        catalogSource: 'provider-live' as const,
+      },
+      {
+        id: 'opencode-cli:openai/gpt-5.6-luna',
+        provider: OPENCODE_CLI_CONNECTION.providerId as ModelPickerOption['provider'],
+        modelId: 'openai/gpt-5.6-luna',
+        label: 'GPT-5.6 Luna',
+        connectionId: OPENCODE_CLI_CONNECTION.id,
+        connection: OPENCODE_CLI_CONNECTION,
+        available: true,
+        catalogSource: 'opencode-live' as const,
+      },
+    ];
+
+    expect(
+      findBackendModelPickerRoute(
+        {
+          mode: 'single',
+          providerId: 'openai',
+          modelId: 'gpt-5.6-luna',
+          connectionId: CODEX_CLI_CONNECTION.id,
+        },
+        options,
+        'opencode',
+      ),
+    ).toMatchObject({
+      connectionId: OPENCODE_CLI_CONNECTION.id,
+      modelId: 'openai/gpt-5.6-luna',
+    });
+    expect(
+      findBackendModelPickerRoute(
+        {
+          mode: 'single',
+          providerId: 'opencode',
+          modelId: 'openai/gpt-5.6-luna',
+          connectionId: OPENCODE_CLI_CONNECTION.id,
+        },
+        options,
+        'opencode',
+      ),
+    ).toBeUndefined();
+  });
+
+  it('does not cross provider boundaries or choose an ambiguous same-leaf route', () => {
+    const routes: ModelPickerOption[] = [
+      {
+        id: 'opencode-cli:openai/gpt-5.6-luna',
+        provider: OPENCODE_CLI_CONNECTION.providerId as ModelPickerOption['provider'],
+        modelId: 'openai/gpt-5.6-luna',
+        label: 'GPT-5.6 Luna',
+        connectionId: OPENCODE_CLI_CONNECTION.id,
+        connection: OPENCODE_CLI_CONNECTION,
+        available: true,
+        catalogSource: 'opencode-live' as const,
+      },
+      {
+        id: 'opencode-cli:anthropic/gpt-5.6-luna',
+        provider: OPENCODE_CLI_CONNECTION.providerId as ModelPickerOption['provider'],
+        modelId: 'anthropic/gpt-5.6-luna',
+        label: 'GPT-5.6 Luna',
+        connectionId: OPENCODE_CLI_CONNECTION.id,
+        connection: OPENCODE_CLI_CONNECTION,
+        available: true,
+        catalogSource: 'opencode-live' as const,
+      },
+      {
+        id: 'opencode-cli:openai/alias/gpt-5.6-luna',
+        provider: OPENCODE_CLI_CONNECTION.providerId as ModelPickerOption['provider'],
+        modelId: 'openai/alias/gpt-5.6-luna',
+        label: 'GPT-5.6 Luna alias',
+        connectionId: OPENCODE_CLI_CONNECTION.id,
+        connection: OPENCODE_CLI_CONNECTION,
+        available: true,
+        catalogSource: 'opencode-live' as const,
+      },
+    ];
+
+    expect(
+      findBackendModelPickerRoute(
+        {
+          mode: 'single',
+          providerId: 'google',
+          modelId: 'gpt-5.6-luna',
+          connectionId: CODEX_CLI_CONNECTION.id,
+        },
+        routes,
+        'opencode',
+      ),
+    ).toBeUndefined();
+    expect(
+      findBackendModelPickerRoute(
+        {
+          mode: 'single',
+          providerId: 'openai',
+          modelId: 'gpt-5.6-luna',
+          connectionId: CODEX_CLI_CONNECTION.id,
+        },
+        routes,
+        'opencode',
+      ),
+    ).toBeUndefined();
   });
 
   it('reacts when Ollama discovery updates', () => {
@@ -585,7 +777,7 @@ describe('useAccessibleChatModels', () => {
       ).toBe(false);
       expect(subscription.find((option) => option.modelId.endsWith('codex-spark'))).toMatchObject({
         id: 'opencode-cli:openai/gpt-5.3-codex-spark',
-        provider: 'opencode',
+        provider: OPENCODE_CLI_CONNECTION.providerId as ModelPickerOption['provider'],
         variants: ['medium'],
         available: true,
       });
@@ -986,10 +1178,43 @@ describe('useAccessibleChatModels', () => {
     expect(document.documentElement.getAttribute(OPEN_CODE_CATALOG_EVIDENCE_ATTRIBUTE)).toBeNull();
   });
 
+  it('refreshes the live Codex catalog every five minutes and immediately on connection changes', async () => {
+    vi.useFakeTimers();
+    try {
+      isConnectionSessionChecked.mockImplementation((id) => id === 'openai-codex');
+      listPersistentCodexModels.mockResolvedValue([
+        { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', variants: ['low', 'high'] },
+      ]);
+      writeConnectionMetadata({
+        'openai-codex': { installation: 'installed', auth: 'authenticated', lastCheckedAt: 1 },
+      });
+      const { unmount } = renderHook(() => useAccessibleChatModels());
+      await act(async () => Promise.resolve());
+      expect(listPersistentCodexModels).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTimeAsync(5 * 60 * 1000 - 1));
+      expect(listPersistentCodexModels).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+      expect(listPersistentCodexModels).toHaveBeenCalledTimes(2);
+      await act(async () => window.dispatchEvent(new Event(AI_CONNECTION_STATE_EVENT)));
+      expect(listPersistentCodexModels).toHaveBeenCalledTimes(3);
+      expect(invalidatePersistentCodexModelCache).toHaveBeenCalled();
+      unmount();
+      await act(async () => vi.advanceTimersByTimeAsync(5 * 60 * 1000));
+      expect(listPersistentCodexModels).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('discovers exact authenticated Codex models for the openai-codex connection', async () => {
     isConnectionSessionChecked.mockImplementation((id) => id === 'openai-codex');
     listPersistentCodexModels.mockResolvedValue([
-      { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', variants: ['low', 'high'] },
+      {
+        id: 'gpt-5.6-luna',
+        label: 'GPT-5.6 Luna',
+        variants: ['low', 'high'],
+        defaultReasoningEffort: 'low',
+      },
     ]);
     writeConnectionMetadata({
       'openai-codex': {
@@ -1002,6 +1227,9 @@ describe('useAccessibleChatModels', () => {
     const { result } = renderHook(() => useAccessibleChatModels());
 
     await waitFor(() => expect(listPersistentCodexModels).toHaveBeenCalledOnce());
+    expect(getDiscoveredConnectionModels('openai-codex')).toEqual([
+      expect.objectContaining({ defaultReasoningEffort: 'low' }),
+    ]);
     const routes = result.current.flatOptions.flatMap((option) => option.alternativeRoutes ?? [option]);
     expect(routes).toEqual([
       expect.objectContaining({
@@ -1009,6 +1237,7 @@ describe('useAccessibleChatModels', () => {
         modelId: 'gpt-5.6-luna',
         available: true,
         variants: ['low', 'high'],
+        catalogSource: 'provider-live',
       }),
     ]);
   });
@@ -1146,7 +1375,7 @@ describe('useAccessibleChatModels', () => {
     expect(groups.find((group) => group.label === 'OpenAI')?.options).toEqual([
       expect.objectContaining({
         modelId: 'openai/gpt-live',
-        modeLabel: 'Codex / ChatGPT subscription',
+        modeLabel: 'OpenAI provider connection',
       }),
     ]);
     expect(groups.find((group) => group.label === 'Azure Models')?.options).toEqual([

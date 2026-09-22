@@ -71,6 +71,7 @@ describe('Workbench TerminalPanel scope', () => {
   });
   it('binds the stable panel and active project identity into TerminalView', () => {
     render(<TerminalPanel panel={panel()} onUpdate={vi.fn()} />);
+    expect(terminalView.mock.lastCall?.[0].preserveExisting).toBe(true);
 
     expect(screen.getByTestId('terminal-scope').textContent).toBe(
       JSON.stringify({

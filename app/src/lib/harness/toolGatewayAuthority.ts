@@ -2,7 +2,10 @@ import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
 import type { PerformanceProfile } from '@/features/chat/runtime/performanceProfile';
 import type { ExecutionIdentity } from '@/features/context/gateway/contextGatewayContracts';
-import type { ToolGatewayRequest } from './toolGatewayProtocol';
+import {
+  MUTATING_TOOL_GATEWAY_TOOLS,
+  type ToolGatewayRequest,
+} from './toolGatewayProtocol';
 
 type AuthorityScope = Readonly<{
   accountId: string;
@@ -18,6 +21,7 @@ export type ToolGatewayAuthorityClaim = Readonly<{
 
 const sessionAuthorities = new Map<string, ToolGatewayAuthorityClaim>();
 const sessionSignals = new Map<string, AbortSignal>();
+const capturedAuthorityClaims = new WeakSet<object>();
 export type ToolGatewayObservedExecutionAuthority = Readonly<{
   executionIdentity: Readonly<ExecutionIdentity>;
   performance: PerformanceProfile;
@@ -34,6 +38,11 @@ type MutationGrant = {
   mode: 'once' | 'always';
   expiresAt: number;
   authority: ToolGatewayAuthorityClaim;
+  binding?: Readonly<{
+    requestId: string;
+    messageId: string;
+    fingerprint: string;
+  }>;
 };
 const grants = new Map<string, Map<string, MutationGrant>>();
 const ONCE_GRANT_TTL_MS = 2 * 60_000;
@@ -41,6 +50,37 @@ const ALWAYS_GRANT_TTL_MS = 30 * 60_000;
 const MAX_GRANT_SESSIONS = 128;
 const MAX_GRANTS_PER_SESSION = 32;
 let generation = 0;
+
+function canonicalMutationValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalMutationValue);
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort()
+      .map((key) => [key, canonicalMutationValue(record[key])]),
+  );
+}
+
+function mutationRequestFingerprint(request: ToolGatewayRequest): string | null {
+  try {
+    const serialized = JSON.stringify([
+      request.tool,
+      request.requestId,
+      request.messageId,
+      request.directory ?? null,
+      request.worktree ?? null,
+      canonicalMutationValue(request.args),
+    ]);
+    return typeof serialized === 'string' ? serialized : null;
+  } catch {
+    return null;
+  }
+}
+
+function requestGrantKey(request: Pick<ToolGatewayRequest, 'tool' | 'requestId'>): string {
+  return `request:${request.tool}:${request.requestId}`;
+}
 
 function activeScope(): AuthorityScope | null {
   const auth = useAuthStore.getState();
@@ -54,7 +94,10 @@ function activeScope(): AuthorityScope | null {
   };
 }
 
-function sameScope(left: AuthorityScope, right: AuthorityScope): boolean {
+function sameScope(
+  left: AuthorityScope,
+  right: AuthorityScope,
+): boolean {
   return (
     left.accountId === right.accountId &&
     left.accountSource === right.accountSource &&
@@ -74,7 +117,11 @@ function ensureScopeObserver(): void {
     const next = activeScope();
     if (
       (observedScope === null) !== (next === null) ||
-      (observedScope !== null && next !== null && !sameScope(observedScope, next))
+      (observedScope !== null &&
+        next !== null &&
+        (observedScope.accountId !== next.accountId ||
+          observedScope.accountSource !== next.accountSource ||
+          observedScope.workspaceId !== next.workspaceId))
     ) {
       generation += 1;
     }
@@ -90,6 +137,18 @@ function currentAuthority(): ToolGatewayAuthorityClaim | null {
 
 function sameAuthority(left: ToolGatewayAuthorityClaim, right: ToolGatewayAuthorityClaim): boolean {
   return left.generation === right.generation && sameScope(left.scope, right.scope);
+}
+
+function sameStableAuthority(
+  left: ToolGatewayAuthorityClaim,
+  right: ToolGatewayAuthorityClaim,
+): boolean {
+  return (
+    left.generation === right.generation &&
+    left.scope.accountId === right.scope.accountId &&
+    left.scope.accountSource === right.scope.accountSource &&
+    left.scope.workspaceId === right.scope.workspaceId
+  );
 }
 
 const EXECUTION_IDENTITY_REQUIRED_FIELDS = Object.freeze([
@@ -149,7 +208,14 @@ function sameExecutionIdentity(
 }
 
 export function captureToolGatewayAuthorityClaim(): ToolGatewayAuthorityClaim | null {
-  return currentAuthority();
+  const current = currentAuthority();
+  if (!current) return null;
+  const claim = Object.freeze({
+    scope: Object.freeze({ ...current.scope }),
+    generation: current.generation,
+  });
+  capturedAuthorityClaims.add(claim);
+  return claim;
 }
 
 export function bindToolGatewaySessionAuthority(
@@ -158,7 +224,14 @@ export function bindToolGatewaySessionAuthority(
   signal?: AbortSignal,
 ): boolean {
   const current = currentAuthority();
-  if (!current || !sameAuthority(expected, current) || signal?.aborted) return false;
+  if (
+    !current ||
+    !capturedAuthorityClaims.has(expected) ||
+    !sameStableAuthority(expected, current) ||
+    signal?.aborted
+  ) {
+    return false;
+  }
   const existing = sessionAuthorities.get(sessionId);
   if (existing) {
     return sameAuthority(existing, expected) && sessionSignals.get(sessionId) === signal;
@@ -186,8 +259,8 @@ export function bindToolGatewayObservedExecutionAuthority(
   if (
     !current ||
     !bound ||
-    !sameAuthority(current, expected) ||
     !sameAuthority(bound, expected) ||
+    !sameStableAuthority(current, bound) ||
     !identity ||
     !['responsive', 'balanced', 'quality'].includes(input.performance)
   ) {
@@ -222,10 +295,18 @@ export function readToolGatewayObservedExecutionAuthority(
   return current &&
     bound &&
     observed &&
-    sameAuthority(current, bound) &&
+    sameStableAuthority(current, bound) &&
     sameAuthority(bound, observed.authority)
     ? observed.value
     : null;
+}
+
+export function readToolGatewaySessionAuthority(
+  sessionId: string,
+): ToolGatewayAuthorityClaim | null {
+  const current = currentAuthority();
+  const bound = sessionAuthorities.get(sessionId);
+  return current && bound && sameStableAuthority(current, bound) ? bound : null;
 }
 
 export function releaseToolGatewaySessionAuthority(sessionId: string): void {
@@ -238,7 +319,7 @@ export function releaseToolGatewaySessionAuthority(sessionId: string): void {
 export function authorizeToolGatewayRequest(request: ToolGatewayRequest): boolean {
   const current = currentAuthority();
   const bound = sessionAuthorities.get(request.sessionId);
-  return Boolean(current && bound && sameAuthority(bound, current));
+  return Boolean(current && bound && sameStableAuthority(current, bound));
 }
 
 export function grantToolGatewayMutation(
@@ -248,7 +329,7 @@ export function grantToolGatewayMutation(
 ): () => void {
   const current = currentAuthority();
   const bound = sessionAuthorities.get(sessionId);
-  if (!current || !bound || !sameAuthority(bound, current)) {
+  if (!current || !bound || !sameStableAuthority(bound, current)) {
     throw new Error('tool_gateway_authority_unavailable');
   }
   let session = grants.get(sessionId);
@@ -278,28 +359,103 @@ export function grantToolGatewayMutation(
   };
 }
 
+/**
+ * Create a one-shot mutation grant bound to one already-parsed gateway call.
+ * The session authority supplies account/workspace/project binding; the request
+ * binding additionally prevents replay against another action or terminal.
+ */
+export function grantToolGatewayMutationForRequest(
+  request: ToolGatewayRequest,
+  mode: 'once' | 'always' = 'once',
+): () => void {
+  if (!MUTATING_TOOL_GATEWAY_TOOLS.has(request.tool)) {
+    throw new Error('tool_gateway_mutation_not_required');
+  }
+  const current = currentAuthority();
+  const bound = sessionAuthorities.get(request.sessionId);
+  const fingerprint = mutationRequestFingerprint(request);
+  if (
+    !fingerprint ||
+    !current ||
+    !bound ||
+    !authorizeToolGatewayRequest(request) ||
+    !sameStableAuthority(bound, current)
+  ) {
+    throw new Error('tool_gateway_authority_unavailable');
+  }
+  const key = requestGrantKey(request);
+  let session = grants.get(request.sessionId);
+  if (!session) {
+    session = new Map();
+    grants.set(request.sessionId, session);
+  }
+  session.set(key, {
+    mode,
+    expiresAt: Date.now() + (mode === 'always' ? ALWAYS_GRANT_TTL_MS : ONCE_GRANT_TTL_MS),
+    authority: bound,
+    binding: Object.freeze({
+      requestId: request.requestId,
+      messageId: request.messageId,
+      fingerprint,
+    }),
+  });
+  while (session.size > MAX_GRANTS_PER_SESSION) {
+    const oldest = session.keys().next().value as string | undefined;
+    if (!oldest) break;
+    session.delete(oldest);
+  }
+  while (grants.size > MAX_GRANT_SESSIONS) {
+    const oldest = grants.keys().next().value as string | undefined;
+    if (!oldest || oldest === request.sessionId) break;
+    grants.delete(oldest);
+  }
+  return () => {
+    const currentSession = grants.get(request.sessionId);
+    currentSession?.delete(key);
+    if (currentSession?.size === 0) grants.delete(request.sessionId);
+  };
+}
+
 export function authorizeToolGatewayMutation(request: ToolGatewayRequest): boolean {
   if (!authorizeToolGatewayRequest(request)) return false;
   const session = grants.get(request.sessionId);
+  const exactKey = requestGrantKey(request);
+  const exactGrant = session?.get(exactKey);
   const capability = session?.has(request.tool) ? request.tool : '*';
-  const grant = session?.get(capability);
+  const grantKey = exactGrant ? exactKey : capability;
+  const grant = exactGrant ?? session?.get(capability);
   const current = currentAuthority();
   const bound = sessionAuthorities.get(request.sessionId);
+  const fingerprint = grant?.binding ? mutationRequestFingerprint(request) : null;
+  const grantAuthorityMatchesCurrent = Boolean(
+    current &&
+      grant &&
+      (grant.binding
+        ? sameAuthority(grant.authority, current)
+        : sameStableAuthority(grant.authority, current)),
+  );
+  const bindingMatches =
+    !grant?.binding ||
+    (grant.binding.requestId === request.requestId &&
+      grant.binding.messageId === request.messageId &&
+      fingerprint !== null &&
+      grant.binding.fingerprint === fingerprint);
   if (
     !session ||
     !grant ||
     !current ||
     !bound ||
-    !sameAuthority(grant.authority, current) ||
+    !grantAuthorityMatchesCurrent ||
     !sameAuthority(grant.authority, bound) ||
+    !bindingMatches ||
     grant.expiresAt < Date.now()
   ) {
-    session?.delete(capability);
+    session?.delete(grantKey);
     if (session?.size === 0) grants.delete(request.sessionId);
     return false;
   }
   if (grant.mode === 'once') {
-    session.delete(capability);
+    session.delete(grantKey);
     if (session.size === 0) grants.delete(request.sessionId);
   } else {
     grant.expiresAt = Date.now() + ALWAYS_GRANT_TTL_MS;

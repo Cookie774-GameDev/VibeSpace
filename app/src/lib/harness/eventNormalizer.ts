@@ -198,6 +198,12 @@ export function normalizeOpenCodeEvent(
       TOOL_GATEWAY_CATALOG.find((name) => name.replaceAll('.', '_') === nativeCapability) ??
       nativeCapability;
     const metadata = asRecord(properties.metadata);
+    const args = capability === 'plugins.run' && metadata ? asRecord(metadata.args) : undefined;
+    const safeIdentity = (value: unknown, limit: number): value is string =>
+      typeof value === 'string' && value.length <= limit && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(value);
+    const pluginOperation = args && safeIdentity(args.pluginId, 512) && safeIdentity(args.operation, 128)
+      ? { pluginId: args.pluginId, operation: args.operation }
+      : undefined;
     const title =
       asBoundedString(properties.title, 512) ??
       (metadata && asBoundedString(metadata.title, 512)) ??
@@ -212,6 +218,7 @@ export function normalizeOpenCodeEvent(
           sessionId: expectedSessionId,
           title,
           capability,
+          ...(pluginOperation ? { pluginOperation } : {}),
           ...(patterns ? { pattern: patterns } : singlePattern ? { pattern: singlePattern } : {}),
         },
       },

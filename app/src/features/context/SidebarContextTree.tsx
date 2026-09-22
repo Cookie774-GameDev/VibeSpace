@@ -230,18 +230,57 @@ function SidebarContextMap({
       </div>
       {open && hasChildren ? (
         <div className="mt-0.5">
-          {map.tree.nodes.slice(0, 8).map((node) => (
-            <SidebarContextNode
-              key={node.id}
-              tree={map.tree}
-              node={node}
-              depth={0}
-              onOpenContext={onOpenContext}
-            />
-          ))}
+          <SidebarContextNodes
+            tree={map.tree}
+            nodes={map.tree.nodes}
+            depth={0}
+            onOpenContext={onOpenContext}
+          />
         </div>
       ) : null}
     </div>
+  );
+}
+
+const CONTEXT_SIBLING_PAGE_SIZE = 64;
+
+// Mount only expanded branches and a bounded sibling page. Every remaining
+// item stays reachable; rendering limits must never become hidden data limits.
+function SidebarContextNodes({
+  tree,
+  nodes,
+  depth,
+  onOpenContext,
+}: {
+  tree: ProjectContextTree;
+  nodes: readonly ContextTreeNode[];
+  depth: number;
+  onOpenContext: () => void;
+}) {
+  const [visibleCount, setVisibleCount] = React.useState(CONTEXT_SIBLING_PAGE_SIZE);
+  const remaining = Math.max(0, nodes.length - visibleCount);
+  return (
+    <>
+      {nodes.slice(0, visibleCount).map((node) => (
+        <SidebarContextNode
+          key={node.id}
+          tree={tree}
+          node={node}
+          depth={depth}
+          onOpenContext={onOpenContext}
+        />
+      ))}
+      {remaining > 0 ? (
+        <button
+          type="button"
+          onClick={() => setVisibleCount((count) => count + CONTEXT_SIBLING_PAGE_SIZE)}
+          className="h-7 w-full rounded-md pr-2 text-left text-metadata text-muted-foreground hover:bg-muted hover:text-foreground"
+          style={{ paddingLeft: 14 + depth * 12 }}
+        >
+          Show {Math.min(CONTEXT_SIBLING_PAGE_SIZE, remaining)} more ({remaining} remaining)
+        </button>
+      ) : null}
+    </>
   );
 }
 
@@ -283,7 +322,7 @@ function SidebarContextNode({
     }
   };
   return (
-    <div>
+    <div data-context-node-id={node.id}>
       <div
         className={cn(
           'flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-secondary text-foreground transition-colors',
@@ -300,6 +339,7 @@ function SidebarContextNode({
             }}
             className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-paper-soft hover:text-foreground focus-visible:outline-none"
             aria-label={open ? 'Collapse Context branch' : 'Expand Context branch'}
+            aria-expanded={open}
           >
             <ChevronRight className={cn('h-3 w-3 transition-transform', open && 'rotate-90')} />
           </button>
@@ -329,19 +369,14 @@ function SidebarContextNode({
           <span className="min-w-0 flex-1 truncate">{node.title}</span>
         </button>
       </div>
-      {open &&
-        hasChildren &&
-        node
-          .children!.slice(0, 8)
-          .map((child) => (
-            <SidebarContextNode
-              key={child.id}
-              tree={tree}
-              node={child}
-              depth={depth + 1}
-              onOpenContext={onOpenContext}
-            />
-          ))}
+      {open && hasChildren ? (
+        <SidebarContextNodes
+          tree={tree}
+          nodes={node.children!}
+          depth={depth + 1}
+          onOpenContext={onOpenContext}
+        />
+      ) : null}
     </div>
   );
 }

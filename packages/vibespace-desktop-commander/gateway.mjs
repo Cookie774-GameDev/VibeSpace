@@ -14,7 +14,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { editableConfig, validateSetting } from './config.mjs';
 import { browserTool, runBrowserTool } from './browser/tool.mjs';
-import { createSetupRuntime } from './setup-runtime.mjs';
+import { createSetupRuntime, publicSetupError } from './setup-runtime.mjs';
 import { computerStartup } from './startup.mjs';
 
 const base = path.dirname(fileURLToPath(import.meta.url));
@@ -259,9 +259,18 @@ export async function startGateway({
       await entry.transport.handleRequest(req, res, body);
     } catch (error) {
       if (!res.headersSent)
-        json(res, 400, {
-          error: req.url === '/config' ? String(error.message).slice(0, 200) : 'MCP request failed',
-        });
+        json(
+          res,
+          400,
+          req.url.startsWith('/setup/')
+            ? publicSetupError(error)
+            : {
+                error:
+                  req.url === '/config'
+                    ? String(error.message).slice(0, 200)
+                    : 'MCP request failed',
+              },
+        );
       else res.end();
     } finally {
       active--;

@@ -3,8 +3,7 @@ import { mergePublicToolDetails, publicToolDetails } from '@/lib/ai/publicToolDe
 import type { PublicToolDetails } from '@/lib/ai/adapters/types';
 import type { Message } from '@/types';
 import type { ChatActivityEvent, ChatActivityStatus } from '../activity/types';
-
-export const MAX_LEDGER_RECEIPTS = 500;
+import { displayToolCallArgs } from '../toolCallArguments';
 
 export type LedgerReceiptKind =
   | 'read'
@@ -165,10 +164,20 @@ function messageToolDetails(
   existing: Readonly<PublicToolDetails> | undefined,
 ): Readonly<PublicToolDetails> {
   const evidence = result ? resultEvidence(result.result) : undefined;
+  // Runtime completion markers carry status only. They must not replace the
+  // public payload already persisted with the call (including older chats).
+  const rawResult = result?.result;
+  const completionMarker = rawResult !== null && typeof rawResult === 'object' &&
+    !Array.isArray(rawResult) && Object.keys(rawResult).length === 1 &&
+    (rawResult as Record<string, unknown>).status === 'completed';
+  const resultValue = completionMarker && existing?.result !== undefined
+    ? existing.result : rawResult;
+  const errorValue = result?.error === 'Tool failed' && existing?.error !== undefined
+    ? existing.error : result?.error;
   const generated = publicToolDetails({
     arguments: args,
-    ...(result?.result === undefined ? {} : { result: result.result }),
-    ...(result?.error === undefined ? {} : { error: result.error }),
+    ...(resultValue === undefined ? {} : { result: resultValue }),
+    ...(errorValue === undefined ? {} : { error: errorValue }),
     ...(evidence?.durationMs === undefined ? {} : { durationMs: evidence.durationMs }),
   });
   return existing ? mergePublicToolDetails(existing, generated) : generated;
@@ -261,7 +270,33 @@ function receiptLabel(kind: LedgerReceiptKind, status: ChatActivityStatus): stri
   });
 }
 
+const BROWSER_TOOL_NAME = /(?:^|[._:/-])(?:browser|playwright)(?:$|[._:/-])/iu;
+
+function browserReceiptLabel(toolName: string, status: ChatActivityStatus): string | undefined {
+  if (!BROWSER_TOOL_NAME.test(toolName)) return undefined;
+  return {
+    pending: 'Browser action queued',
+    running: 'Using browser',
+    done: 'Used browser',
+    cancelled: 'Browser action cancelled',
+    error: 'Browser tool failed',
+  }[status];
+}
+
 function eventReceiptLabel(event: ChatActivityEvent, kind: LedgerReceiptKind): string {
+  if (kind === 'other') {
+    const browserLabel = browserReceiptLabel(event.subtitle ?? '', event.status);
+    if (browserLabel) return browserLabel;
+    if (/\b(?:browser|playwright)\b/iu.test(event.title)) {
+      return {
+        pending: 'Browser action queued',
+        running: 'Using browser',
+        done: 'Used browser',
+        cancelled: 'Browser action cancelled',
+        error: 'Browser tool failed',
+      }[event.status];
+    }
+  }
   if (kind !== 'edit') return receiptLabel(kind, event.status);
   const creating = /\b(?:creat(?:e|ed|ing)|new file)\b/i.test(event.title);
   if (!creating) return receiptLabel(kind, event.status);
@@ -329,7 +364,7 @@ function messageReceipts(message: Message): AssistantActivityReceipt[] {
         {
           id: `message:${String(message.id)}:action:${part.call_id}`,
           kind,
-          label: receiptLabel(kind, status),
+          label: browserReceiptLabel(part.action_id, status) ?? receiptLabel(kind, status),
           status,
           ts: message.created_at + index / 1000,
           toolName: safeText(part.action_id, 256) || undefined,
@@ -346,6 +381,7 @@ function messageReceipts(message: Message): AssistantActivityReceipt[] {
     if (seenCallIds.has(part.call_id)) return [];
     seenCallIds.add(part.call_id);
     const canonicalPart = latestToolCalls.get(part.call_id) ?? part;
+    const displayArgs = displayToolCallArgs(canonicalPart);
     const kind = toolKind(canonicalPart.tool);
     const result = results.get(part.call_id);
     const evidence = result
@@ -353,23 +389,25 @@ function messageReceipts(message: Message): AssistantActivityReceipt[] {
         ? { status: 'error' as const }
         : resultEvidence(result.result)
       : { status: 'running' as const };
-    const fileLabel = correlatedToolFileLabel(kind, canonicalPart.args);
+    const fileLabel = correlatedToolFileLabel(kind, displayArgs);
     const detail =
       toolCallCounts.get(part.call_id) === 1
-        ? messageReceiptDetail(kind, canonicalPart.tool, canonicalPart.args)
+        ? messageReceiptDetail(kind, canonicalPart.tool, displayArgs)
         : undefined;
     return [
       {
         id: `message:${String(message.id)}:tool:${part.call_id}`,
         kind,
-        label: receiptLabel(kind, evidence.status),
+        label:
+          browserReceiptLabel(canonicalPart.tool, evidence.status) ??
+          receiptLabel(kind, evidence.status),
         toolName: safeText(canonicalPart.tool, 256) || undefined,
         callId: safeText(part.call_id, 256) || undefined,
         ...pluginAttribution(canonicalPart.tool, {
           ...publicAttributionArguments(canonicalPart.details),
-          ...canonicalPart.args,
+          ...displayArgs,
         }),
-        toolDetails: messageToolDetails(canonicalPart.args, result, canonicalPart.details),
+        toolDetails: messageToolDetails(displayArgs, result, canonicalPart.details),
         status: evidence.status,
         ts: message.created_at + index / 1000,
         ...(evidence.durationMs === undefined ? {} : { durationMs: evidence.durationMs }),
@@ -423,33 +461,6 @@ function latestEvents(events: readonly ChatActivityEvent[]): LatestEventCollecti
 
 function compareEvents(left: ChatActivityEvent, right: ChatActivityEvent): number {
   return left.ts - right.ts || left.id.localeCompare(right.id);
-}
-
-function pushRecentEvent(heap: ChatActivityEvent[], event: ChatActivityEvent): void {
-  if (heap.length < MAX_LEDGER_RECEIPTS) {
-    heap.push(event);
-    let index = heap.length - 1;
-    while (index > 0) {
-      const parent = Math.floor((index - 1) / 2);
-      if (compareEvents(heap[parent], heap[index]) <= 0) break;
-      [heap[parent], heap[index]] = [heap[index], heap[parent]];
-      index = parent;
-    }
-    return;
-  }
-  if (compareEvents(event, heap[0]) <= 0) return;
-  heap[0] = event;
-  let index = 0;
-  while (true) {
-    const left = index * 2 + 1;
-    const right = left + 1;
-    let smallest = index;
-    if (left < heap.length && compareEvents(heap[left], heap[smallest]) < 0) smallest = left;
-    if (right < heap.length && compareEvents(heap[right], heap[smallest]) < 0) smallest = right;
-    if (smallest === index) break;
-    [heap[index], heap[smallest]] = [heap[smallest], heap[index]];
-    index = smallest;
-  }
 }
 
 function eventReceipt(event: ChatActivityEvent): AssistantActivityReceipt {
@@ -544,9 +555,7 @@ export function projectAssistantActivityLedger(
   const fromMessage = messageReceipts(message);
   const messageHasCommand = fromMessage.some((receipt) => receipt.kind === 'command');
   const eventsById = latestEvents(explicitlyCorrelatedEvents);
-  let recentEvents: ChatActivityEvent[] = [];
-  let eventsAreChronological = true;
-  let previousEvent: ChatActivityEvent | undefined;
+  const recentEvents: ChatActivityEvent[] = [];
   const editedFiles = new Set<string>();
   const subagents = new Set<string>();
   const completedReads = new Set<string>();
@@ -555,11 +564,9 @@ export function projectAssistantActivityLedger(
   let commandsTotal = 0;
   let verifiedChecksTotal = 0;
   let failedChecksTotal = 0;
-  let eventReceiptCount = 0;
   let startedAt = message.created_at;
   let latestEvidenceEnd: number | undefined;
   let latestRunningEvent: ChatActivityEvent | undefined;
-  let hasEventError = false;
   let hasEventCancelled = false;
   for (const event of eventsById.values) {
     const kind = activityKind(event);
@@ -571,7 +578,6 @@ export function projectAssistantActivityLedger(
           event.title === 'Jarvis tool activity' ||
           event.title === 'Jarvis terminal activity'));
     if (actionable) {
-      eventReceiptCount += 1;
       actionsTotal += 1;
     }
     if (kind === 'read' && event.status === 'done') completedReads.add(event.filePath ?? event.id);
@@ -588,7 +594,6 @@ export function projectAssistantActivityLedger(
     ) {
       latestRunningEvent = event;
     }
-    hasEventError ||= event.status === 'error';
     hasEventCancelled ||= event.status === 'cancelled';
     startedAt = Math.min(startedAt, event.startedAt ?? event.ts);
     const eventEnd =
@@ -600,27 +605,7 @@ export function projectAssistantActivityLedger(
       latestEvidenceEnd = Math.max(latestEvidenceEnd ?? eventEnd, eventEnd);
     }
     if (actionable) {
-      if (eventsById.newestFirst) {
-        if (recentEvents.length < MAX_LEDGER_RECEIPTS) recentEvents.push(event);
-      } else if (
-        eventsAreChronological &&
-        (!previousEvent || compareEvents(previousEvent, event) <= 0)
-      ) {
-        recentEvents.push(event);
-        if (recentEvents.length >= MAX_LEDGER_RECEIPTS * 2) {
-          recentEvents = recentEvents.slice(-MAX_LEDGER_RECEIPTS);
-        }
-      } else {
-        if (eventsAreChronological) {
-          const chronologicalTail = recentEvents.slice(-MAX_LEDGER_RECEIPTS);
-          recentEvents = [];
-          for (const retainedEvent of chronologicalTail)
-            pushRecentEvent(recentEvents, retainedEvent);
-          eventsAreChronological = false;
-        }
-        pushRecentEvent(recentEvents, event);
-      }
-      previousEvent = event;
+      recentEvents.push(event);
     }
   }
   for (const receipt of fromMessage) {
@@ -636,23 +621,29 @@ export function projectAssistantActivityLedger(
     if (receipt.kind === 'subagent' && (receipt.status === 'running' || receipt.status === 'done'))
       subagents.add(receipt.id);
   }
-  const allReceipts = [
-    ...fromMessage,
-    ...(eventsById.newestFirst
-      ? recentEvents
-      : eventsAreChronological
-        ? recentEvents.slice(-MAX_LEDGER_RECEIPTS)
-        : recentEvents
-    )
-      .sort(compareEvents)
-      .map(eventReceipt),
-  ]
-    .sort((left, right) => left.ts - right.ts || left.id.localeCompare(right.id))
-    .slice(-MAX_LEDGER_RECEIPTS);
-  const running = allReceipts
-    .filter((receipt) => receipt.status === 'running' || receipt.status === 'pending')
-    .at(-1);
-  const hasError = hasEventError || fromMessage.some((receipt) => receipt.status === 'error');
+  // Ordered restores were traversed newest first for de-duplication. Reversing
+  // that retained subsequence restores chronology without sorting it twice.
+  if (eventsById.newestFirst) recentEvents.reverse();
+  else recentEvents.sort(compareEvents);
+  const eventReceipts = recentEvents.map(eventReceipt);
+  const allReceipts = fromMessage.length
+    ? [...fromMessage, ...eventReceipts].sort(
+        (left, right) => left.ts - right.ts || left.id.localeCompare(right.id),
+      )
+    : eventReceipts;
+  let running: AssistantActivityReceipt | undefined;
+  for (let index = allReceipts.length - 1; index >= 0; index -= 1) {
+    const receipt = allReceipts[index];
+    if (receipt.status === 'running' || receipt.status === 'pending') {
+      running = receipt;
+      break;
+    }
+  }
+  // A failed tool/action is receipt-level evidence and may be recovered by a
+  // later retry in the same completed turn. Only an explicit provider error is
+  // terminal evidence for the assistant response itself; the owning live run
+  // can still override this with responseStatus in AssistantActivityLedger.
+  const hasError = message.parts.some((part) => part.kind === 'provider_error');
   const hasCancelled =
     hasEventCancelled || fromMessage.some((receipt) => receipt.status === 'cancelled');
   const hasAnswer = message.parts.some(
@@ -698,6 +689,6 @@ export function projectAssistantActivityLedger(
       ? {}
       : { endedAt: terminalEndedAt, durationMs: Math.max(0, terminalEndedAt - startedAt) }),
     receipts: allReceipts,
-    omittedReceipts: Math.max(0, fromMessage.length + eventReceiptCount - allReceipts.length),
+    omittedReceipts: 0,
   };
 }

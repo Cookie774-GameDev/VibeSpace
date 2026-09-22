@@ -84,6 +84,41 @@ describe('AgenticConsole', () => {
     expect(screen.getByText('I will check both fixture files.')).toBeTruthy();
     expect(screen.getByText('Both files were checked.')).toBeTruthy();
   });
+
+  it('renders durable provider failures as a wide left-aligned diagnostic panel', () => {
+    const rendered = renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('provider-layout-user', 'user', 1, [{ kind: 'text', text: 'Run the request.' }]),
+        message('provider-layout-error', 'system', 2, [
+          { kind: 'text', text: 'The reply could not finish. Check the selected model and request settings, then try again.' },
+          {
+            kind: 'provider_error',
+            error: {
+              message: 'Tool Gateway authority does not match the active account/workspace scope.',
+              code: 'gateway_authority_mismatch',
+              providerId: 'opencode',
+              modelId: 'opencode/muse-spark-1.3-contributor-free',
+              connectionId: 'opencode-cli',
+              requestId: 'request-layout',
+              runId: 'run-layout',
+            },
+          },
+        ]),
+      ],
+      activity: [],
+      sessionEvidence: { status: 'error' },
+    });
+
+    const shell = rendered.container.querySelector('[data-provider-error-message="true"]');
+    expect(shell).not.toBeNull();
+    expect(shell?.className).toContain('justify-start');
+    expect(shell?.className).toContain('w-full');
+    expect(shell?.querySelector('[data-testid="provider-error"]')?.getAttribute('data-provider-error-layout')).toBe('wide');
+    expect(shell?.querySelector('[data-provider-error-diagnostics="true"]')?.className).toContain('sm:grid-cols-3');
+    expect(screen.getByText('request-layout')).toBeTruthy();
+    expect(screen.getByText('run-layout')).toBeTruthy();
+  });
   it('keeps the warm prompt band while response phases read as one continuous transcript', () => {
     const stylesheet = readFileSync(
       resolve(process.cwd(), 'src/features/chat/agentic-console/agentic-console.css'),
@@ -1250,6 +1285,58 @@ describe('AgenticConsole', () => {
     expect(rendered.container.textContent).not.toContain('Final response');
     expect(rendered.container.textContent).not.toContain('Assistant');
     expect(rendered.container.textContent).not.toContain('C:\\');
+  });
+
+  it('renders completed native checkpoint prose through the shared rich-text renderer', () => {
+    const rendered = renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('user-native-rich', 'user', 1, [
+          { kind: 'text', text: 'Review the completed work.' },
+        ]),
+        message(
+          'assistant-native-rich',
+          'assistant',
+          2,
+          [
+            {
+              kind: 'text',
+              text: '# Completed\n\n- Read the file\n- Verified the result\n\nThe answer is **ready**.',
+            },
+            { kind: 'tool_call', call_id: 'read-completed', tool: 'read', args: { path: 'index.html' } },
+            { kind: 'tool_result', call_id: 'read-completed', result: { status: 'completed' } },
+          ],
+          { model: 'opencode-go/deepseek-v4-flash-vision-exp' },
+        ),
+      ],
+      activity: [],
+      sessionEvidence: { status: 'completed' },
+    });
+
+    const checkpoint = rendered.container.querySelector('[data-native-assistant-checkpoint="final"]');
+    expect(checkpoint?.querySelector('[data-assistant-rich-text="true"]')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Completed' })).toBeTruthy();
+    expect(screen.getByText('Read the file')).toBeTruthy();
+    expect(screen.getByText('ready')).toBeTruthy();
+  });
+
+  it('renders non-native final answer prose through the shared rich-text renderer', () => {
+    const rendered = renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('user-final-rich', 'user', 1, [{ kind: 'text', text: 'Summarize the result.' }]),
+        message('assistant-final-rich', 'assistant', 2, [
+          { kind: 'text', text: '## Result\n\n- Stable\n- Verified\n\nReady to ship.' },
+        ]),
+      ],
+      activity: [],
+      sessionEvidence: { status: 'completed' },
+    });
+
+    const answer = rendered.container.querySelector('.agentic-answer__text');
+    expect(answer?.getAttribute('data-assistant-rich-text')).toBe('true');
+    expect(screen.getByRole('heading', { name: 'Result' })).toBeTruthy();
+    expect(screen.getByText('Stable')).toBeTruthy();
   });
 
   it('keeps tool-first work visible without inventing a factual checkpoint', () => {

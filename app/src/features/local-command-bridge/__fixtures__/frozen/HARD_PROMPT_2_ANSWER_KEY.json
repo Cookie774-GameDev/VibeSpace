@@ -1,0 +1,53 @@
+{
+  "expected": [
+    {
+      "id": "terminal.open",
+      "slots": {
+        "provider": "claude"
+      }
+    },
+    {
+      "id": "appearance.background.set",
+      "slots": {
+        "color": "purple"
+      }
+    },
+    {
+      "id": "button.rename",
+      "slots": {
+        "label": "Launch Final Build"
+      }
+    },
+    {
+      "id": "page.open",
+      "slots": {
+        "route": "files"
+      }
+    },
+    {
+      "id": "panel.open",
+      "slots": {}
+    },
+    {
+      "id": "music.pause",
+      "slots": {}
+    },
+    {
+      "id": "status.show",
+      "slots": {}
+    },
+    {
+      "id": "page.open",
+      "slots": {
+        "route": "tools"
+      }
+    },
+    {
+      "id": "terminal.open",
+      "slots": {
+        "provider": "codex"
+      }
+    }
+  ],
+  "expectedCount": 9
+}

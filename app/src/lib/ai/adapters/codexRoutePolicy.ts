@@ -1,7 +1,7 @@
 import type { ProviderConnection } from './types';
 
 export type CodexRouteKind = 'official-codex' | 'direct-responses' | 'opencodex-translation';
-export type CodexTranslationAdapter = 'openai-chat' | 'anthropic' | 'google' | 'azure-openai';
+export type CodexTranslationAdapter = 'openai-chat' | 'openai-responses' | 'anthropic' | 'google' | 'azure-openai';
 
 /** Non-secret native evidence. The native launcher must revalidate its opaque
  * handle; constructing this object in JavaScript never grants credentials. */
@@ -125,6 +125,7 @@ export function resolveCodexRoute(input: Readonly<CodexRouteInput>): CodexRouteD
   const translated = capability.route === 'opencodex-translation'
     && capability.contract === 'reviewed-opencodex-v1' && capability.translatorVerified === true
     && (capability.adapter === 'openai-chat' && capability.wireProtocol === 'chat-completions'
+      || capability.adapter === 'openai-responses' && capability.wireProtocol === 'responses'
       || capability.adapter === 'anthropic' && capability.wireProtocol === 'anthropic'
       || capability.adapter === 'google' && capability.wireProtocol === 'google'
       || capability.adapter === 'azure-openai' && capability.wireProtocol === 'azure-openai');

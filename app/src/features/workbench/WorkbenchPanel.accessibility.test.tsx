@@ -53,6 +53,10 @@ afterEach(() => {
 });
 
 describe('WorkbenchPanel accessibility', () => {
+  it('offers resize handles on every edge and corner', () => {
+    renderPanel();
+    expect(document.querySelectorAll('[data-resize-direction]')).toHaveLength(8);
+  });
   it('resizes from the keyboard with coarse and fine steps and ignores unrelated keys', () => {
     const { onUpdate } = renderPanel();
     const resize = screen.getByRole('button', { name: 'Resize Console' });

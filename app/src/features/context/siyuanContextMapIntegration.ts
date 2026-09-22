@@ -1,4 +1,11 @@
 import { devConsole } from '@/features/dev-console';
+import { withSiyuanGraphNavigation } from './siyuan/siyuanGraphNavigation';
+import { canonicalSiyuanAuthorityRoot } from './siyuan/siyuanPathAuthority';
+import { isLocalProvider, PROVIDER_REGISTRY } from '@/lib/ai/providerRegistry';
+import {
+  matchesSiyuanSummaryRoutePreference,
+  readSiyuanSummaryRoutePreference,
+} from './siyuan/siyuanSummaryRoutePreference';
 import {
   createProductionSiyuanRlmPort,
   getProductionSiyuanRlmPort,
@@ -1384,12 +1391,37 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
       };
       await checkpointSiyuanIndexJob({ job: durableJob });
     }
+    // Retry/startup must honor a persisted explicit cloud choice just as initial
+    // creation does. A preference is not consent: pause before any model runs,
+    // and leave the existing exact-route approval validator authoritative.
+    const savedRoute =
+      typeof window === 'undefined'
+        ? null
+        : readSiyuanSummaryRoutePreference(
+            window.localStorage,
+            options.accountId ?? null,
+            projectId,
+            record.id,
+          );
+    const savedProviderId =
+      savedRoute?.mode === 'route'
+        ? PROVIDER_REGISTRY.find((entry) => entry.id === savedRoute.providerId)?.id
+        : undefined;
+    const savedCloudRouteNeedsApproval =
+      savedRoute?.mode === 'route' &&
+      (!savedProviderId || !isLocalProvider(savedProviderId)) &&
+      !matchesSiyuanSummaryRoutePreference(savedRoute, {
+        providerId: durableJob?.summaryProviderId ?? '',
+        connectionId: durableJob?.summaryConnectionId ?? '',
+        modelId: durableJob?.summaryModelId ?? '',
+        effort: durableJob?.summaryEffort ?? 'auto',
+      });
+    const approvalPreflight = options.approvalPreflight === true || savedCloudRouteNeedsApproval;
     if (
       durableJob &&
       manifest.summaryPolicy.mode !== 'none' &&
-      (options.approvalPreflight === true || options.pauseBeforeSummaries === true)
+      (approvalPreflight || options.pauseBeforeSummaries === true)
     ) {
-      const approvalPreflight = options.approvalPreflight === true;
       durableJob = {
         ...durableJob,
         phase: 'summarizing',
@@ -1569,6 +1601,71 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
     };
   };
 
+  const connectCompletedNativeGraph = async (
+    projectId: string,
+    record: ContextMapRecord,
+    document: SiyuanManagedDocument,
+  ): Promise<SiyuanManagedDocument> => {
+    if (!SIYUAN_NATIVE_DOCUMENT_ID.test(document.id) || record.projectId !== projectId)
+      return document;
+    const job = await readSiyuanIndexJob(projectId, record.id);
+    if (!job || job.status !== 'completed' || job.phase !== 'completed') return document;
+    const manifest = readSiyuanMapManifest(projectId, record.id);
+    if (
+      !manifest ||
+      manifest.status !== 'ready' ||
+      manifest.projectId !== projectId ||
+      manifest.mapId !== record.id ||
+      manifest.rootDocumentId !== document.id ||
+      manifest.notebookId !== document.notebookId ||
+      canonicalSiyuanAuthorityRoot(job.canonicalRoot) !==
+        canonicalSiyuanAuthorityRoot(record.rootDir)
+    ) {
+      return document;
+    }
+    const [entries, bindings] = await Promise.all([
+      readSiyuanIndexEntries(projectId, record.id),
+      readSiyuanNodeBindings(projectId, record.id),
+    ]);
+    if (entries.length !== job.indexed) throw new Error('siyuan_index_checkpoint_inconsistent');
+    let markdown: string;
+    try {
+      markdown = withSiyuanGraphNavigation(document.markdown, entries, bindings);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== 'siyuan_context_map_requires_sharding')
+        throw error;
+      // Do not make a previously readable large map unavailable for a visual repair.
+      devConsole.log({
+        channel: 'ai',
+        level: 'warn',
+        message: 'SiYuan graph navigation needs sharding',
+        detail: { mapId: record.id, indexedItems: entries.length },
+      });
+      return document;
+    }
+    if (markdown === document.markdown) return document;
+    const latest = await readSiyuanIndexJob(projectId, record.id);
+    if (latest?.status !== 'completed' || latest.updatedAt !== job.updatedAt) return document;
+    try {
+      return await port.updateManagedDocument(
+        projectId,
+        document.id,
+        document.markdown,
+        markdown,
+        document.id,
+      );
+    } catch (error) {
+      if (siyuanErrorCode(error) !== 'siyuan_conflict') throw error;
+      const current = await port.getBlock(projectId, document.id);
+      if (
+        current.notebookId !== document.notebookId ||
+        withSiyuanGraphNavigation(current.markdown, entries, bindings) !== current.markdown
+      )
+        throw error;
+      return current;
+    }
+  };
+
   const readKnownDocument = async (
     projectId: string,
     record: ContextMapRecord,
@@ -1676,10 +1773,16 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
               )
                 throw error;
             }
-            return parseContextMapMarkdown(updated, record);
+            return parseContextMapMarkdown(
+              await connectCompletedNativeGraph(exactProjectId, record, updated),
+              record,
+            );
           }
         }
-        return parseContextMapMarkdown(document, record);
+        return parseContextMapMarkdown(
+          await connectCompletedNativeGraph(exactProjectId, record, document),
+          record,
+        );
       } catch (error) {
         if (
           error &&
@@ -1827,6 +1930,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
           );
           throw error;
         }
+        document = await connectCompletedNativeGraph(exactProjectId, record, document);
         const snapshot = { ...parseContextMapMarkdown(document, record), manifest };
         devConsole.log({
           channel: 'ai',

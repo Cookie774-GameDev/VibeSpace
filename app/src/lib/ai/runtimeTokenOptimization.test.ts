@@ -28,19 +28,28 @@ describe('kernel token optimization admission', () => {
   });
 
   it.each(['saver', 'normal', 'final_boss'] as const)(
-    'keeps all kernel inputs for %s while Ponytail supplies behavior instructions',
+    'deduplicates optional exact context for %s while preserving protected inputs',
     async (mode) => {
       const result = await optimizeKernelRuntimeContext({ ...base, mode });
-      expect(result.blocks).toEqual(base.blocks);
+      expect(result.blocks).toEqual(base.blocks.slice(0, 4));
       expect(result.messages).toEqual(base.messages);
       expect(result.receipt).toMatchObject({
         mode,
         providerId: base.providerId,
         modelId: base.modelId,
         modelChanged: false,
-        estimatedTokensSaved: 0,
+        estimatedTokensSaved: 18,
+        selectedCount: 6,
+        excludedCount: 1,
       });
-      expect(result.receipt!.exclusions).toEqual([]);
+      expect(result.receipt!.exclusions).toEqual([
+        {
+          segmentRef: 'segment-6',
+          kind: 'repository_file',
+          reason: 'duplicate',
+          tokens: 18,
+        },
+      ]);
     },
   );
 
@@ -49,7 +58,12 @@ describe('kernel token optimization admission', () => {
       optimizeKernelRuntimeContext({ ...base, mode: 'saver', modelContextLimit: 1 }),
     ).rejects.toMatchObject({
       name: 'TokenOptimizationOverflowError',
-      receipt: expect.objectContaining({ fitsContext: false, estimatedTokensSaved: 0 }),
+      receipt: expect.objectContaining({
+        fitsContext: false,
+        estimatedTokensSaved: 18,
+        selectedCount: 6,
+        excludedCount: 1,
+      }),
     });
     await expect(
       optimizeKernelRuntimeContext({ ...base, mode: 'saver', signal: AbortSignal.abort() }),

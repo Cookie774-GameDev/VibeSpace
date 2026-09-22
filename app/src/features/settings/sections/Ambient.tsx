@@ -1,3 +1,4 @@
+import { CaoIdleScreenSetting } from '@/features/cao/CaoIdleScreenSetting';
 import { useEffect, useRef, useState } from 'react';
 import { Moon, Play, Pause, Music, SlidersHorizontal } from 'lucide-react';
 import { useUIStore } from '@/stores/ui';
@@ -154,6 +155,7 @@ export function Ambient() {
           A calm idle screen with a breathing orb, clock, and your next event. Wakes on any input.
         </p>
       </header>
+      <CaoIdleScreenSetting />
 
       <section className="flex items-start justify-between gap-3 max-w-md">
         <div>

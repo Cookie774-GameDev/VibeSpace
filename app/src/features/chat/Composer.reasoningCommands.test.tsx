@@ -41,6 +41,20 @@ describe('Composer reasoning command selection', () => {
     });
   });
 
+  it('uses the authenticated Codex catalog for the same picker and slash effort choices', () => {
+    const selection = { ...deepSeekSelection, providerId: 'openai' as ProviderId,
+      connectionId: 'openai-codex', modelId: 'gpt-5.6-luna' };
+    const allowed = authoritativeLiveEffortsForSelection(selection, [{
+      ...deepSeekOption, id: 'openai-codex:gpt-5.6-luna', provider: 'openai' as ProviderId,
+      connectionId: 'openai-codex', modelId: 'gpt-5.6-luna', catalogSource: 'provider-live',
+      variants: ['low', 'high'],
+    }]);
+    expect(allowed).toEqual(['auto', 'low', 'high']);
+    expect(liveEffortPickerState(allowed!, 'medium').options.map(({ id }) => id))
+      .toEqual(['auto', 'low', 'high']);
+    expect(liveAuthorityRejectsEffort('medium', allowed)).toBe(true);
+  });
+
   it.each([
     ['missing row', []],
     ['cold offline row', [{ ...deepSeekOption, catalogSource: 'offline-cache' as const }]],
@@ -170,6 +184,6 @@ describe('Composer reasoning command selection', () => {
     expect(browserTokenOptimizationPreferences.resolveMode('chat-saver')).toBe('saver');
 
     applyChatReasoningMode('chat-normal', 'normal');
-    expect(browserTokenOptimizationPreferences.resolveMode('chat-normal')).toBe('normal');
+    expect(browserTokenOptimizationPreferences.resolveMode('chat-normal')).toBe('off');
   });
 });

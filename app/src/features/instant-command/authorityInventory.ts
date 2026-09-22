@@ -17,6 +17,7 @@ function authority(
 
 export const AUTHORITY_INVENTORY: readonly AuthorityInventoryEntry[] = Object.freeze([
   authority('ui.route', 'navigation route schema and UI store'),
+  authority('router.status', 'read-only local command router status snapshot'),
   authority('terminal.queue', 'terminal command queue'),
   authority('terminal.pane', 'terminal pane tree'),
   authority('terminal.snapshot', 'verified live target snapshot'),

@@ -31,6 +31,8 @@ import { UsageCard } from './UsageCard';
 import { ContextInspectorCard } from './ContextInspectorCard';
 import { TokenOptimizationReceiptView } from '@/features/token-optimizer';
 import { PluginUsageCard, resolvePluginActionEvidence } from './PluginUsageCard';
+import { presentProviderError } from '@/lib/ai/providerError';
+import { AssistantRichText } from './AssistantRichText';
 
 function textForDisplay(text: string): string {
   if (!text.includes('```')) return text;
@@ -266,6 +268,8 @@ export interface MessagePartProps {
   compactAttachments?: boolean;
   /** Enables Make-with-Jarvis apply/push controls for the matching creator thread only. */
   creatorDraftKind?: JarvisCreatorKind;
+  /** Uses the shared safe Markdown presentation for assistant prose. */
+  richText?: boolean;
 }
 
 /**
@@ -280,6 +284,7 @@ export function MessagePart({
   hiveWords,
   compactAttachments,
   creatorDraftKind,
+  richText = false,
 }: MessagePartProps) {
   switch (part.kind) {
     case 'text': {
@@ -300,15 +305,22 @@ export function MessagePart({
       }
       return (
         <div className="flex flex-col">
-          <div
-            className={
-              hiveWords
-                ? 'hive-words text-body font-medium whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed'
-                : 'text-body text-foreground whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed'
-            }
-          >
-            {display || part.text}
-          </div>
+          {richText ? (
+            <AssistantRichText
+              text={display || part.text}
+              className={hiveWords ? 'hive-words text-body font-medium' : 'text-body'}
+            />
+          ) : (
+            <div
+              className={
+                hiveWords
+                  ? 'hive-words text-body font-medium whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed'
+                  : 'text-body text-foreground whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed'
+              }
+            >
+              {display || part.text}
+            </div>
+          )}
           <CreatorDraftApply text={part.text} kind={creatorDraftKind} />
         </div>
       );
@@ -367,6 +379,7 @@ export function MessagePart({
 
     case 'provider_error': {
       const error = part.error;
+      const presentation = presentProviderError(error);
       const route = [error.providerId, error.modelId].filter(Boolean).join('/');
       const retry = error.retryable === undefined
         ? undefined
@@ -380,24 +393,47 @@ export function MessagePart({
         <div
           role="alert"
           data-testid="provider-error"
-          className="rounded-md border border-destructive/45 bg-destructive/10 px-3 py-2"
+          data-provider-error-layout="wide"
+          className="w-full max-w-none rounded-lg border border-destructive/45 bg-destructive/10 px-3 py-2.5"
         >
           <div className="text-metadata font-semibold uppercase tracking-wide text-destructive">
-            Provider error
+            {presentation.title}
           </div>
           <p className="mt-1 text-body whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-            {error.message}
+            {presentation.message}
           </p>
-          {error.code || route || retry || retryAfter || error.resetAt !== undefined || error.requestId || error.runId ? (
-            <dl className="mt-2 grid gap-1 text-metadata text-muted-foreground sm:grid-cols-2">
-              {error.code ? <div><dt className="inline font-medium">Code: </dt><dd className="inline">{error.code}</dd></div> : null}
-              {route ? <div><dt className="inline font-medium">Route: </dt><dd className="inline">{route}</dd></div> : null}
-              {retry ? <div><dt className="inline font-medium">Retry: </dt><dd className="inline">{retry}</dd></div> : null}
-              {retryAfter ? <div><dt className="inline font-medium">Timing: </dt><dd className="inline">{retryAfter}</dd></div> : null}
-              {error.resetAt !== undefined ? <div><dt className="inline font-medium">Reset at: </dt><dd className="inline">{error.resetAt}</dd></div> : null}
-              {error.requestId ? <div><dt className="inline font-medium">Request: </dt><dd className="inline break-all">{error.requestId}</dd></div> : null}
-              {error.runId ? <div><dt className="inline font-medium">Run: </dt><dd className="inline break-all">{error.runId}</dd></div> : null}
+          {error.code || route || error.connectionId || retry || retryAfter || error.resetAt !== undefined || error.requestId || error.runId ? (
+            <dl data-provider-error-diagnostics="true" className="mt-2.5 grid min-w-0 gap-x-6 gap-y-1 text-metadata text-muted-foreground sm:grid-cols-3">
+              {error.code && !presentation.usageLimit ? <div className="min-w-0"><dt className="inline font-medium">Code: </dt><dd className="inline break-all">{error.code}</dd></div> : null}
+              {route ? <div className="min-w-0"><dt className="inline font-medium">Route: </dt><dd className="inline break-all">{route}</dd></div> : null}
+              {error.connectionId ? <div className="min-w-0"><dt className="inline font-medium">Connection: </dt><dd className="inline break-all">{error.connectionId}</dd></div> : null}
+              {retry ? <div className="min-w-0"><dt className="inline font-medium">Retry: </dt><dd className="inline">{retry}</dd></div> : null}
+              {retryAfter ? <div className="min-w-0"><dt className="inline font-medium">Timing: </dt><dd className="inline">{retryAfter}</dd></div> : null}
+              {error.resetAt !== undefined ? <div className="min-w-0"><dt className="inline font-medium">Reset at: </dt><dd className="inline break-all">{error.resetAt}</dd></div> : null}
+              {error.requestId ? <div className="min-w-0"><dt className="inline font-medium">Request: </dt><dd className="inline break-all">{error.requestId}</dd></div> : null}
+              {error.runId ? <div className="min-w-0"><dt className="inline font-medium">Run: </dt><dd className="inline break-all">{error.runId}</dd></div> : null}
             </dl>
+          ) : null}
+          {presentation.usageLimit && (error.message || error.code) ? (
+            <details className="mt-2 rounded-md border border-border/60 bg-background/25 px-3 py-1.5 text-metadata">
+              <summary className="cursor-pointer select-none font-medium text-muted-foreground">
+                Technical details
+              </summary>
+              <dl className="mt-2 grid gap-y-1 text-muted-foreground sm:grid-cols-[max-content_minmax(0,1fr)] sm:gap-x-4">
+                {error.message ? (
+                  <div className="contents">
+                    <dt className="font-medium">Provider message</dt>
+                    <dd className="break-words [overflow-wrap:anywhere]">{error.message}</dd>
+                  </div>
+                ) : null}
+                {error.code ? (
+                  <div className="contents">
+                    <dt className="font-medium">Code</dt>
+                    <dd className="break-all font-mono">{error.code}</dd>
+                  </div>
+                ) : null}
+              </dl>
+            </details>
           ) : null}
         </div>
       );
@@ -600,6 +636,10 @@ export function MessagePart({
         </section>
       );
     }
+
+    case 'local_command_receipt':
+      // Application metadata belongs to the session status, not user prose.
+      return null;
 
     default: {
       // Exhaustive check - new Part kinds will surface here at compile time.

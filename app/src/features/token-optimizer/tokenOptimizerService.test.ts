@@ -110,6 +110,225 @@ describe('Token Optimizer service', () => {
     expect(JSON.stringify(result.receipt)).not.toContain('latest request');
   });
 
+  it('deduplicates only optional exact matches while retaining protected and history content', async () => {
+    const service = createTokenOptimizerService(createTokenizerRegistry([exactTokenizer]));
+    const optionalText = 'optional evidence '.repeat(8);
+    const historyText = 'same historical exchange';
+    const result = await service.optimize({
+      mode: 'saver',
+      providerId: 'openai',
+      modelId: 'gpt-test',
+      modelContextLimit: 4_000,
+      requestedOutputTokens: 777,
+      segments: [
+        {
+          id: 'protected-a',
+          kind: 'system_instruction',
+          text: 'protected authority',
+          relevance: 1,
+          protected: true,
+          reason: 'Protected authority',
+        },
+        {
+          id: 'protected-b',
+          kind: 'system_instruction',
+          text: 'protected authority',
+          relevance: 1,
+          protected: true,
+          reason: 'Protected authority duplicate',
+        },
+        {
+          id: 'optional-a',
+          kind: 'documentation',
+          text: optionalText,
+          relevance: 0.8,
+          protected: false,
+          reason: 'Retrieved documentation',
+        },
+        {
+          id: 'optional-b',
+          kind: 'documentation',
+          text: optionalText,
+          relevance: 0.2,
+          protected: false,
+          reason: 'Repeated retrieved documentation',
+        },
+        {
+          id: 'history-a',
+          kind: 'conversation_history',
+          text: historyText,
+          relevance: 0.3,
+          protected: false,
+          reason: 'Older conversation history',
+        },
+        {
+          id: 'history-b',
+          kind: 'conversation_history',
+          text: historyText,
+          relevance: 0.4,
+          protected: false,
+          reason: 'Repeated conversation history',
+        },
+        {
+          id: 'superseded-a',
+          kind: 'repository_file',
+          text: 'older source text',
+          relevance: 0.2,
+          protected: false,
+          reason: 'Older source',
+          supersededBy: 'superseded-b',
+        },
+        {
+          id: 'superseded-b',
+          kind: 'repository_file',
+          text: 'newer source text',
+          relevance: 0.8,
+          protected: false,
+          reason: 'Newer source',
+        },
+      ],
+    });
+
+    expect(result.selectedSegments.map(({ id }) => id)).toEqual([
+      'protected-a',
+      'protected-b',
+      'optional-a',
+      'history-a',
+      'history-b',
+      'superseded-a',
+      'superseded-b',
+    ]);
+    expect(result.receipt).toMatchObject({
+      outputTokenLimit: 777,
+      selectedCount: 7,
+      excludedCount: 1,
+      estimatedTokensSaved: optionalText.length,
+    });
+    expect(result.receipt.estimatedTokensSaved).toBeGreaterThanOrEqual(
+      result.receipt.estimatedInputTokensBefore * 0.05,
+    );
+    expect(result.receipt.exclusions).toEqual([
+      {
+        segmentRef: 'segment-4',
+        kind: 'documentation',
+        reason: 'duplicate',
+        tokens: optionalText.length,
+      },
+    ]);
+  });
+
+  it('leaves exact duplicates untouched in Off mode', async () => {
+    const service = createTokenOptimizerService(createTokenizerRegistry([exactTokenizer]));
+    const result = await service.optimize({
+      mode: 'off',
+      providerId: 'openai',
+      modelId: 'gpt-test',
+      modelContextLimit: 4_000,
+      requestedOutputTokens: 777,
+      segments: [
+        {
+          id: 'optional-a',
+          kind: 'documentation',
+          text: 'same evidence',
+          relevance: 0.8,
+          protected: false,
+          reason: 'Retrieved documentation',
+        },
+        {
+          id: 'optional-b',
+          kind: 'documentation',
+          text: 'same evidence',
+          relevance: 0.2,
+          protected: false,
+          reason: 'Repeated retrieved documentation',
+        },
+      ],
+    });
+
+    expect(result.selectedSegments.map(({ id }) => id)).toEqual(['optional-a', 'optional-b']);
+    expect(result.receipt).toMatchObject({
+      outputTokenLimit: 777,
+      estimatedTokensSaved: 0,
+      selectedCount: 2,
+      excludedCount: 0,
+    });
+    expect(result.receipt.exclusions).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: 'missing duplicate target',
+      segments: [
+        {
+          id: 'optional',
+          kind: 'documentation' as const,
+          text: 'evidence',
+          relevance: 1,
+          protected: false,
+          reason: 'Evidence',
+          duplicateOf: 'missing',
+        },
+      ],
+    },
+    {
+      name: 'duplicate segment id',
+      segments: [
+        {
+          id: 'same',
+          kind: 'documentation' as const,
+          text: 'one',
+          relevance: 1,
+          protected: false,
+          reason: 'Evidence',
+        },
+        {
+          id: 'same',
+          kind: 'documentation' as const,
+          text: 'two',
+          relevance: 1,
+          protected: false,
+          reason: 'Evidence',
+        },
+      ],
+    },
+    {
+      name: 'duplicate reference cycle',
+      segments: [
+        {
+          id: 'a',
+          kind: 'documentation' as const,
+          text: 'same',
+          relevance: 1,
+          protected: false,
+          reason: 'Evidence',
+          duplicateOf: 'b',
+        },
+        {
+          id: 'b',
+          kind: 'documentation' as const,
+          text: 'same',
+          relevance: 1,
+          protected: false,
+          reason: 'Evidence',
+          duplicateOf: 'a',
+        },
+      ],
+    },
+  ])('fails closed for malformed $name references', async ({ segments }) => {
+    const service = createTokenOptimizerService(createTokenizerRegistry([exactTokenizer]));
+
+    await expect(
+      service.optimize({
+        mode: 'saver',
+        providerId: 'openai',
+        modelId: 'gpt-test',
+        modelContextLimit: 4_000,
+        requestedOutputTokens: 100,
+        segments,
+      }),
+    ).rejects.toThrow(/token optimization/i);
+  });
+
   it('reconciles estimates with provider-reported usage without rewriting history', () => {
     expect(
       reconcileTokenUsage(

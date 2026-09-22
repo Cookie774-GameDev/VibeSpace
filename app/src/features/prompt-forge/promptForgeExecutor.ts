@@ -6,6 +6,7 @@ import type { ChatImageAttachment } from '@/lib/ai/vision';
 import { TOOL_GATEWAY_CATALOG } from '@/lib/harness/toolGatewayProtocol';
 import { hasDetectedSecret } from '@/lib/security/secretDetector';
 import type { PromptForgeJob } from './contracts';
+import { resolvePromptForgeExecutionScope } from './promptForgeExecutionScope';
 import { preparePromptForgeImageParts } from './promptForgeImages';
 import type { ResolvedPromptForgeModel } from './modelSelection';
 import {
@@ -61,7 +62,16 @@ export type PromptForgeExecutionResult = Readonly<{
 }>;
 
 export type PromptForgeExecutionInput = Readonly<{
-  job: Pick<PromptForgeJob, 'id' | 'originalDraft' | 'regenerationInstructions' | 'createdAt'>;
+  job: Pick<
+    PromptForgeJob,
+    | 'id'
+    | 'originalDraft'
+    | 'regenerationInstructions'
+    | 'createdAt'
+    | 'accountId'
+    | 'chatId'
+    | 'projectId'
+  >;
   model: ResolvedPromptForgeModel;
   sourcePack: PromptForgeSourcePack;
   preservation: PromptPreservationContract;
@@ -156,10 +166,12 @@ function providerMatches(selected: ProviderId, actual: ProviderId): boolean {
 export function createPromptForgeExecutor(
   dependencies: Readonly<{
     runModel?: PromptForgeModelRunner;
+    resolveScope?: typeof resolvePromptForgeExecutionScope;
     now?: () => number;
   }> = {},
 ) {
   const runModel = dependencies.runModel ?? runAgent;
+  const resolveScope = dependencies.resolveScope ?? resolvePromptForgeExecutionScope;
   const now = dependencies.now ?? Date.now;
 
   return Object.freeze({
@@ -176,7 +188,12 @@ export function createPromptForgeExecutor(
       const agent = createExecutionAgent(input.model, input.job.createdAt);
       const prompt = buildUpgradeMessage(input);
       const imageParts = preparePromptForgeImageParts(input.imageAttachments ?? [], input.model);
+      const scope = await resolveScope(input.job);
+      abortIfRequested(input.signal);
       const response = await runModel({
+        accountId: scope.accountId,
+        workspaceId: scope.workspaceId,
+        ...(scope.projectId === undefined ? {} : { projectId: scope.projectId }),
         purpose: 'prompt_forge',
         agent,
         messages: [

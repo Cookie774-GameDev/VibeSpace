@@ -6,6 +6,11 @@ import { CAO_GUIDANCE_AREAS, parseCaoGuidance } from './caoGuidance';
 vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => undefined }));
 vi.mock('./caoChatControlProduction', () => ({
   caoPermissionKey: (id: string) => id,
+  caoChatProposalPersistence: {
+    save: vi.fn(async () => undefined),
+    take: vi.fn(async () => undefined),
+    remove: vi.fn(async () => undefined),
+  },
   setCaoChatPermission: vi.fn(),
   caoChatControl: { reject: vi.fn() },
 }));

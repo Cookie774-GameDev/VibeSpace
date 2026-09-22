@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModeIndicator } from './ModeIndicator';
 import {
+  readAgentApprovalMode,
   readPermissionAccess,
   setApproveAllForRun,
   setPermissionAccess,
@@ -10,6 +11,20 @@ import {
 describe('ModeIndicator', () => {
   beforeEach(() => {
     localStorage.clear();
+  });
+
+  it('waits for an explicit Agent profile and persists Full access', async () => {
+    const onSelectMode = vi.fn();
+    render(<ModeIndicator mode="agent" chatId="chat-full" onSelectMode={onSelectMode} />);
+    fireEvent.click(screen.getByRole('button', { name: /Agent Mode/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Agent Mode/i }));
+    expect(onSelectMode).not.toHaveBeenCalled();
+    expect(screen.getByRole('listbox', { name: /Agent access/i })).toBeTruthy();
+    expect(screen.getAllByRole('option')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('option', { name: /Full access/i }));
+    expect(readAgentApprovalMode('chat-full')).toBe('full');
+    expect(onSelectMode).toHaveBeenCalledWith('agent');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
   it('offers only Agent, Plan, and Ask, then applies Plan read-only access and closes', async () => {
@@ -55,6 +70,7 @@ describe('ModeIndicator', () => {
     render(<ModeIndicator mode="plan" chatId="chat-agent" onSelectMode={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /Plan Mode/i }));
     fireEvent.click(screen.getByRole('option', { name: /Agent Mode/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Review risky actions/i }));
 
     expect(readPermissionAccess('chat-agent')).toEqual({ access: 'full', approveAll: false });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());

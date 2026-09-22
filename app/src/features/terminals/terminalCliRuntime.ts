@@ -76,6 +76,21 @@ export type TerminalCliAgent = Readonly<{
   status: string;
 }>;
 
+export type TerminalCliCaoIdentityParams = Readonly<{
+  opencodeSessionId: string;
+  providerId: string;
+  modelId: string;
+  variant: string;
+  processInstanceId: string;
+}>;
+
+export type TerminalCliCaoIdentityInput = Readonly<{
+  terminalSessionId: string;
+  paneId: string;
+  projectId: string;
+  identity: TerminalCliCaoIdentityParams;
+}>;
+
 export interface TerminalCliRuntimeDependencies {
   now(): number;
   currentProject(): TerminalCliProject | null | Promise<TerminalCliProject | null>;
@@ -153,9 +168,14 @@ export interface TerminalCliRuntimeDependencies {
       minimumRoute: 'focused' | 'deep';
     }>,
   ): boolean;
+  recordCaoTerminalIdentity(input: TerminalCliCaoIdentityInput): Promise<void>;
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/u;
+const SAFE_OPENCODE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}$/u;
+const SAFE_PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/u;
+const SAFE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,511}$/u;
+const SAFE_VARIANT_ID = /^[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,127}$/u;
 const MAX_TEXT = 4_096;
 const MAX_PARAM_KEYS = 32;
 const MAX_PARAM_DEPTH = 4;
@@ -190,6 +210,10 @@ function safeText(value: unknown): value is string {
     value.length <= MAX_TEXT &&
     !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value)
   );
+}
+
+function safeIdentityValue(value: unknown, pattern: RegExp): value is string {
+  return typeof value === 'string' && pattern.test(value) && safeText(value);
 }
 
 function descriptorValue(record: Record<string, unknown>, key: string): unknown {
@@ -462,6 +486,57 @@ export function createTerminalCliRuntime(dependencies: TerminalCliRuntimeDepende
       const now = dependencies.now();
 
       switch (request.method) {
+        case 'cao.identity.publish': {
+          if (
+            !request.terminalSessionId ||
+            !request.paneId ||
+            !request.projectId ||
+            !project ||
+            project.id !== request.projectId
+          ) {
+            throw new TerminalCliRuntimeError(
+              'permission_denied',
+              'The OpenCode identity is outside this terminal scope.',
+            );
+          }
+          const params = exactParams(request, [
+            'opencodeSessionId',
+            'providerId',
+            'modelId',
+            'variant',
+            'processInstanceId',
+          ]);
+          const opencodeSessionId = params.opencodeSessionId;
+          const providerId = params.providerId;
+          const modelId = params.modelId;
+          const variant = params.variant;
+          const processInstanceId = params.processInstanceId;
+          if (
+            !safeIdentityValue(opencodeSessionId, SAFE_OPENCODE_SESSION_ID) ||
+            !safeIdentityValue(providerId, SAFE_PROVIDER_ID) ||
+            !safeIdentityValue(modelId, SAFE_MODEL_ID) ||
+            !safeIdentityValue(variant, SAFE_VARIANT_ID) ||
+            !safeIdentityValue(processInstanceId, SAFE_ID)
+          ) {
+            throw new TerminalCliRuntimeError(
+              'invalid_request',
+              'The terminal CLI request is invalid.',
+            );
+          }
+          await dependencies.recordCaoTerminalIdentity({
+            terminalSessionId: request.terminalSessionId,
+            paneId: request.paneId,
+            projectId: request.projectId,
+            identity: {
+              opencodeSessionId,
+              providerId,
+              modelId,
+              variant,
+              processInstanceId,
+            },
+          });
+          return ok(request, 'OpenCode terminal identity observed.');
+        }
         case 'context.list': {
           exactParams(request, []);
           const maps = (await dependencies.listContextMaps(projectId))

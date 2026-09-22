@@ -19,7 +19,10 @@ export function DiffView({
 }) {
   const [expanded, setExpanded] = React.useState(false);
   const detailId = React.useId();
-  const lines = React.useMemo(() => formatUnifiedDiffLines(block.diff), [block.diff]);
+  const lines = React.useMemo(
+    () => expanded ? formatUnifiedDiffLines(block.diff) : [],
+    [block.diff, expanded],
+  );
   const label = block.status === 'done' ? 'Edited files'
     : block.status === 'error' ? 'Edit failed'
       : block.status === 'cancelled' ? 'Edit cancelled'

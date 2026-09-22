@@ -60,6 +60,7 @@ function combinedSource(sources: readonly TokenEstimateSource[]): TokenizerSourc
 
 function assertSafeSelectionIdentity(label: string, value: string): void {
   if (
+    typeof value !== 'string' ||
     !value.trim() ||
     value.length > 256 ||
     /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value)
@@ -68,12 +69,64 @@ function assertSafeSelectionIdentity(label: string, value: string): void {
   }
 }
 
+function validateSegmentReferences(segments: readonly TokenOptimizationSegment[]): void {
+  const indexesById = new Map<string, number>();
+  for (const [index, segment] of segments.entries()) {
+    if (!segment || typeof segment !== 'object') {
+      throw new Error('Invalid token optimization segment.');
+    }
+    assertSafeSelectionIdentity('segment', segment.id);
+    if (indexesById.has(segment.id)) {
+      throw new Error('Duplicate token optimization segment id.');
+    }
+    indexesById.set(segment.id, index);
+  }
+
+  for (const [index, segment] of segments.entries()) {
+    for (const field of ['duplicateOf', 'supersededBy'] as const) {
+      const targetId = segment[field];
+      if (targetId === undefined) continue;
+      assertSafeSelectionIdentity(`${field} target`, targetId);
+      const targetIndex = indexesById.get(targetId);
+      if (targetIndex === undefined || targetIndex === index) {
+        throw new Error(`Invalid token optimization ${field} reference.`);
+      }
+    }
+  }
+
+  for (const field of ['duplicateOf', 'supersededBy'] as const) {
+    const visiting = new Set<number>();
+    const visited = new Set<number>();
+    const visit = (index: number): void => {
+      if (visiting.has(index)) {
+        throw new Error(`Cyclic token optimization ${field} references.`);
+      }
+      if (visited.has(index)) return;
+      visiting.add(index);
+      const targetId = segments[index]![field];
+      if (targetId !== undefined) visit(indexesById.get(targetId)!);
+      visiting.delete(index);
+      visited.add(index);
+    };
+    for (let index = 0; index < segments.length; index += 1) visit(index);
+  }
+}
+
+function canDeduplicate(segment: TokenOptimizationSegment): boolean {
+  return !segment.protected && !isProtectedContext(segment.kind) && segment.kind !== 'conversation_history';
+}
+
+function segmentKey(segment: TokenOptimizationSegment): string {
+  return JSON.stringify([segment.kind, segment.text]);
+}
+
 export function createTokenOptimizerService(tokenizers: TokenizerRegistry): TokenOptimizerService {
   return {
     async optimize(request) {
       throwIfAborted(request.signal);
       assertSafeSelectionIdentity('provider', request.providerId);
       assertSafeSelectionIdentity('model', request.modelId);
+      validateSegmentReferences(request.segments);
 
       const estimated = await Promise.all(
         request.segments.map(async (segment) => ({
@@ -97,11 +150,33 @@ export function createTokenOptimizerService(tokenizers: TokenizerRegistry): Toke
         (total, { estimate }) => checkedTokenAdd(total, estimate.tokens),
         0,
       );
+      const canonicalByKey = new Map<string, number>();
+      const selectedIndexes: number[] = [];
+      const excludedIndexes: number[] = [];
+      for (const [index, segment] of request.segments.entries()) {
+        const key = segmentKey(segment);
+        if (
+          request.mode !== 'off' &&
+          canDeduplicate(segment) &&
+          canonicalByKey.has(key)
+        ) {
+          excludedIndexes.push(index);
+          continue;
+        }
+        selectedIndexes.push(index);
+        if (request.mode !== 'off' && canDeduplicate(segment)) {
+          canonicalByKey.set(key, index);
+        }
+      }
+      const estimatedInputTokensAfter = selectedIndexes.reduce(
+        (total, index) => checkedTokenAdd(total, estimated[index]!.estimate.tokens),
+        0,
+      );
       const outputTokenLimit = safeNonNegativeInteger(request.requestedOutputTokens);
       const modelContextLimit = safeNonNegativeInteger(request.modelContextLimit);
       const overflowTokens = Math.max(
         0,
-        checkedTokenAdd(estimatedInputTokens, outputTokenLimit) - modelContextLimit,
+        checkedTokenAdd(estimatedInputTokensAfter, outputTokenLimit) - modelContextLimit,
       );
       const fitsContext = overflowTokens === 0;
       const segmentRefs = new Map(
@@ -115,15 +190,16 @@ export function createTokenOptimizerService(tokenizers: TokenizerRegistry): Toke
         tokenizerSource: combinedSource(estimated.map(({ estimate }) => estimate.source)),
         outputTokenLimit,
         estimatedInputTokensBefore: estimatedInputTokens,
-        estimatedInputTokensAfter: estimatedInputTokens,
-        estimatedTokensSaved: 0,
-        selectedCount: request.segments.length,
-        excludedCount: 0,
+        estimatedInputTokensAfter,
+        estimatedTokensSaved: estimatedInputTokens - estimatedInputTokensAfter,
+        selectedCount: selectedIndexes.length,
+        excludedCount: excludedIndexes.length,
         fitsContext,
         overflowTokens,
         inclusions: Object.freeze(
-          estimated.map(({ segment, estimate }) =>
-            Object.freeze({
+          selectedIndexes.map((index) => {
+            const { segment, estimate } = estimated[index]!;
+            return Object.freeze({
               segmentRef: segmentRefs.get(segment.id)!,
               kind: segment.kind,
               reason:
@@ -131,10 +207,20 @@ export function createTokenOptimizerService(tokenizers: TokenizerRegistry): Toke
                   ? ('protected' as const)
                   : ('relevant' as const),
               tokens: estimate.tokens,
-            }),
-          ),
+            });
+          }),
         ),
-        exclusions: Object.freeze([]),
+        exclusions: Object.freeze(
+          excludedIndexes.map((index) => {
+            const { segment, estimate } = estimated[index]!;
+            return Object.freeze({
+              segmentRef: segmentRefs.get(segment.id)!,
+              kind: segment.kind,
+              reason: 'duplicate' as const,
+              tokens: estimate.tokens,
+            });
+          }),
+        ),
       });
 
       if (!fitsContext && request.mode !== 'off') {
@@ -144,7 +230,7 @@ export function createTokenOptimizerService(tokenizers: TokenizerRegistry): Toke
       return {
         providerId: request.providerId,
         modelId: request.modelId,
-        selectedSegments: request.segments,
+        selectedSegments: Object.freeze(selectedIndexes.map((index) => request.segments[index]!)),
         receipt,
       };
     },

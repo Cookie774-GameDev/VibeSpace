@@ -169,7 +169,8 @@ export function buildReasoningSlashPickerState({
         {
           id: 'token-saver',
           label: 'Token Saver',
-          description: 'Use the lightest supported reasoning and a compact response budget.',
+          description:
+            'Remove exact optional duplicate context while preserving the selected model, effort, and output allowance.',
         },
         {
           id: 'normal',

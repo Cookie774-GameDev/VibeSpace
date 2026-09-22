@@ -70,6 +70,15 @@ describe('explicit Codex routing policy', () => {
     expect(resolveCodexRoute({ ...connected, capability: translated })).toMatchObject({
       kind: 'opencodex-translation', providerId: 'provider', modelId: 'provider/model-selected',
       adapter: 'openai-chat', routeHandle: capability.routeHandle });
+    const responsesTranslated: CodexRouteCapability = {
+      ...translated,
+      wireProtocol: 'responses',
+      adapter: 'openai-responses',
+    };
+    expect(resolveCodexRoute({ ...connected, capability: responsesTranslated })).toMatchObject({
+      kind: 'opencodex-translation', adapter: 'openai-responses',
+      routeHandle: capability.routeHandle,
+    });
     expect(resolveCodexRoute({ ...connected, capability: { ...translated, translatorVerified: false } }).kind)
       .toBe('unavailable');
   });

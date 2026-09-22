@@ -55,6 +55,42 @@ describe('native Codex app-server transport', () => {
       request: { accountId: 'account-1', connectionId: 'opencode-cli', modelId: 'provider/model' },
     });
   });
+  it('accepts the pinned OpenCodex Responses translation capability', async () => {
+    const invoke = vi.fn(async () => ({
+      authority: 'native-owned',
+      accountId: 'account-1',
+      connectionId: 'opencode-cli',
+      modelId: 'opencode-go/gpt-5.6-luna',
+      providerId: 'opencode-go',
+      upstreamModelId: 'gpt-5.6-luna',
+      routeHandle: 'codex-route-responses',
+      configurationGeneration: 'generation-responses',
+      expiresAt: Date.now() + 60_000,
+      authenticated: true,
+      route: 'opencodex-translation',
+      wireProtocol: 'responses',
+      contract: 'reviewed-opencodex-v1',
+      adapter: 'openai-responses',
+      translatorVerified: true,
+      supportedEfforts: ['low', 'high'],
+      supportedServiceTiers: [],
+      supports: { tools: true, cancellation: true, streaming: true, usage: true, reasoning: true },
+    }));
+    await expect(
+      resolveNativeCodexRoute(
+        'account-1',
+        'opencode-cli',
+        'opencode-go/gpt-5.6-luna',
+        async () => ({ invoke, channel: vi.fn() as never }),
+      ),
+    ).resolves.toMatchObject({
+      route: 'opencodex-translation',
+      wireProtocol: 'responses',
+      adapter: 'openai-responses',
+      translatorVerified: true,
+    });
+  });
+
   it('retains burst command output in order without overflowing the event queue', async () => {
     let receive!: (value: unknown) => void;
     const chunks = Array.from({ length: 257 }, (_, index) => `line ${index}\n`);

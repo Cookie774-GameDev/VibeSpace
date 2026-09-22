@@ -1,6 +1,6 @@
 import { requestsNoProjectRetrieval } from '@/lib/ai/intent';
 
-const EXPLICIT_CONTEXT_TOOL = /\b(?:vibespace_context|context map)\b/i;
+const EXPLICIT_CONTEXT_TOOL = /\b(?:vibespace_context|context map|rlm)\b/i;
 const MUTATING_REQUEST =
   /\b(?:write|create|make|build|generate|save|delete|remove|rename|move|edit|modify|change|run|execute|launch|start|command|terminal)\b/i;
 const EXPLICIT_CONTEXT_MUTATION =
@@ -10,6 +10,11 @@ const NEGATED_MUTATING_SEGMENT =
 const READ_OR_EVIDENCE_REQUEST =
   /\b(?:read|search|find|look\s+up|answer|quote|cite|citation|source|where\s+(?:you|u)\s+found)\b/i;
 const FILE_LIKE_SOURCE = /\b(?:files?|documents?|corpus|records?|sources?|literature)\b/i;
+const BOUNDED_CONTEXT_SOURCE = /\b(?:indexed|mapped|corpus|records?|context\s+authority)\b/i;
+const NATIVE_WORKSPACE_OR_MCP_REQUEST =
+  /\b(?:current\s+(?:workspace|working\s+directory|project)|working\s+directory|mcp|plugin)\b|\b(?:project|workspace|repository|repo|codebase|code)\s+(?:files?|code)\b|(?:^|[\s"'`])(?:[A-Za-z0-9_-]+\.)+(?:html?|css|js|jsx|ts|tsx|json|md|yaml|yml|toml|py|rs|go|java|sql|txt)\b/iu;
+const NATIVE_READ_OR_REVIEW_OPERATION =
+  /\b(?:read|review|inspect|open|check|call|invoke|use)\b/i;
 const BOUND_PROJECT_SCOPE =
   /\b(?:in|from|within)\s+the\s+(?:currently\s+)?bound\b[^\r\n]{0,160}\bproject\b/iu;
 const BOUND_PROJECT_FACT_LOOKUP =
@@ -507,6 +512,14 @@ export function requestsReadOnlyContextTool(userText: string): boolean {
   if (EXPLICIT_CONTEXT_TOOL.test(contextIntent)) {
     return !EXPLICIT_CONTEXT_MUTATION.test(affirmativeText);
   }
+  // Local code/workspace reviews and MCP/plugin calls need the native catalog.
+  // The explicit Context/RLM branch above and the mapped-source branch below
+  // remain authoritative for bounded retrieval requests.
+  if (
+    NATIVE_WORKSPACE_OR_MCP_REQUEST.test(contextIntent) &&
+    NATIVE_READ_OR_REVIEW_OPERATION.test(affirmativeText) &&
+    !/\b(?:indexed|mapped)\b/iu.test(contextIntent)
+  ) return false;
   // Working-file follow-ups need the native reader, even without a repeated path.
   if (
     !/\b(?:indexed|mapped)\b/iu.test(contextIntent) &&
@@ -527,7 +540,9 @@ export function requestsReadOnlyContextTool(userText: string): boolean {
     if (relativeLeafNames.size === 1 && everyReferenceIsAStandaloneLeaf) return false;
   }
   return (
-    (READ_OR_EVIDENCE_REQUEST.test(contextIntent) && FILE_LIKE_SOURCE.test(contextIntent)) ||
+    (READ_OR_EVIDENCE_REQUEST.test(contextIntent) &&
+      FILE_LIKE_SOURCE.test(contextIntent) &&
+      BOUNDED_CONTEXT_SOURCE.test(contextIntent)) ||
     (BOUND_PROJECT_SCOPE.test(contextIntent) && BOUND_PROJECT_FACT_LOOKUP.test(contextIntent)) ||
     (boundedDirectContextText(userText) &&
       STRUCTURED_PROJECT_CONTEXT_ID.test(contextIntent) &&

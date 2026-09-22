@@ -71,3 +71,26 @@ it('does not claim a failed change succeeded', async () => {
     screen.getByRole('switch', { name: 'Enable Desktop Link MCP' }).getAttribute('aria-checked'),
   ).toBe('true');
 });
+
+it('does not describe a Windows startup failure as a tunnel setup failure', async () => {
+  invoke.mockImplementation(async (command) => {
+    if (command === 'desktop_connector_setup') throw new Error('fixture Windows registry denial');
+    return {
+      packaged: true,
+      setupComplete: true,
+      status: 'ready',
+      toolCount: 54,
+      enabled: true,
+      hasKey: true,
+      startOnComputer: false,
+    };
+  });
+  render(<DesktopConnectorSetup />);
+  fireEvent.click(await screen.findByRole('switch', { name: 'Start with computer' }));
+  const message = await screen.findByRole('alert');
+  expect(message.textContent).toMatch(/Windows.+startup.+permissions/i);
+  expect(
+    screen.getByRole('switch', { name: 'Start with computer' }).getAttribute('aria-checked'),
+  ).toBe('false');
+  expect(screen.getByText('Tunnel ready · 54 tools detected')).toBeTruthy();
+});

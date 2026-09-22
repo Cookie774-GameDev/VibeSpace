@@ -687,6 +687,10 @@ export function AgentManager() {
     setSaveState('saving');
     setSaveError(null);
     const customAgentBeingSaved = !selectedAgent.builtin;
+    const activatedLocalModel = activatedFoundryJob && currentDraft.provider === 'foundry'
+      ? foundryAgentModelSelection(activatedFoundryJob)
+      : null;
+    const localArtifactSelected = activatedLocalModel?.model === currentDraft.model;
     const patch: Partial<Agent> = {
       name: currentDraft.name,
       description: currentDraft.description,
@@ -700,7 +704,9 @@ export function AgentManager() {
       emoji: currentDraft.emoji,
       persona: currentDraft.persona,
       ...(customAgentBeingSaved
-        ? {}
+        ? localArtifactSelected
+          ? { model: { ...selectedAgent.model, provider: currentDraft.provider, model: currentDraft.model } }
+          : {}
         : {
             model: {
               ...selectedAgent.model,
@@ -851,7 +857,7 @@ export function AgentManager() {
     } finally {
       savingRef.current = false;
     }
-  }, [registerAgent, selectedAgent, validationError]);
+  }, [activatedFoundryJob, registerAgent, selectedAgent, validationError]);
 
   React.useEffect(() => {
     const handleKeyboardSave = (event: KeyboardEvent) => {
@@ -1299,12 +1305,14 @@ export function AgentManager() {
                   >
                     <h3 className="font-medium text-foreground">Run model</h3>
                     <p className="mt-1 text-muted-foreground">
-                      This editor does not set a provider, model, or reasoning effort. The current
-                      authenticated route is resolved when this agent runs.
+                      {draft.provider === 'foundry'
+                        ? 'A trained local model is selected for this agent. Save to keep this selection.'
+                        : 'This editor does not set a provider, model, or reasoning effort. The current authenticated route is resolved when this agent runs.'}
                     </p>
                     <p className="mt-1 text-metadata text-muted-foreground">
-                      Any saved route and effort stay as historical metadata until runtime discloses
-                      the active route.
+                      {draft.provider === 'foundry'
+                        ? (activatedFoundryJob?.name ?? draft.model)
+                        : 'Any saved route and effort stay as historical metadata until runtime discloses the active route.'}
                     </p>
                   </section>
                 ) : (

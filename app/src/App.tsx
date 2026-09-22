@@ -68,6 +68,7 @@ import { CallModal, startOutboundTrigger } from '@/features/call';
 import { useBridgeLifecycle } from '@/lib/bridge/useBridgeLifecycle';
 import { VibeSpaceMcpRuntimeHost } from '@/lib/bridge/VibeSpaceMcpRuntimeHost';
 import { useIdleDetection, AmbientAudioHost } from '@/features/ambient';
+import { TelemetryRuntime } from '@/features/telemetry/TelemetryRuntime';
 import { useLinkHotkeys } from '@/features/launcher';
 import { startWorkspaceAnalyticsClock } from '@/features/inspector/workspaceAnalytics';
 import { GlobalSttHost } from '@/features/composer-stt';
@@ -558,9 +559,6 @@ export async function startJarvisLegacyLifecycleAccountSession(input: {
  * generic spinner would.
  */
 const ChatView = React.lazy(() => import('@/features/chat').then((m) => ({ default: m.ChatView })));
-const CouncilWorkflowPage = React.lazy(() =>
-  import('@/features/council/CouncilWorkflowPage').then((m) => ({ default: m.CouncilWorkflowPage })),
-);
 import { getLastSettingsTab } from '@/features/settings/settingsTabMemory';
 
 type SettingsTabMemoryValue = ReturnType<typeof getLastSettingsTab>;
@@ -673,7 +671,6 @@ async function syncPlanFromProfile(userId: string, requestGeneration: number): P
  */
 function ActiveCanvas() {
   const route = useUIStore((s) => s.route);
-  const chatMode = useUIStore((s) => s.chatMode);
   const activeChatId = useUIStore((s) => s.activeChatId);
 
   // V3 — non-chat routes go through the lazy PageRouter.
@@ -681,13 +678,6 @@ function ActiveCanvas() {
     return <PageRouter />;
   }
 
-  if (chatMode === 'council') {
-    return (
-      <React.Suspense fallback={null}>
-        <CouncilWorkflowPage key={activeChatId} chatId={activeChatId} />
-      </React.Suspense>
-    );
-  }
   // doc / code modes are placeholders in V1 - render the chat as a fallback.
   return (
     <React.Suspense fallback={null}>
@@ -2342,6 +2332,7 @@ function WorkspaceRoot() {
         <AmbientHome />
       </React.Suspense>
       {plan.backgroundServicesEnabled ? <AmbientAudioHost /> : null}
+      <TelemetryRuntime />
 
       {/* Pixel Pet — video-driven atlas animations + mini-panel on click. */}
       {plan.petEnabled ? (

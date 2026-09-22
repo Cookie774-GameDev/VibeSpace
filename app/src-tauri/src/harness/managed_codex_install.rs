@@ -4,10 +4,24 @@ use crate::harness::managed_cli_runtime::{inspect_managed_runtime, ManagedCliRea
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const EVENT_NAME: &str = "vibespace://managed-codex-install-state";
+const RUNTIME_DETECTION_TIMEOUT: Duration = Duration::from_secs(30);
+
+type DetectionResult = Result<ManagedCodexRuntimeDetection, String>;
+
+struct DetectionFlight {
+    result: tokio::sync::watch::Receiver<Option<DetectionResult>>,
+}
+
+// Several renderer windows can ask for readiness at startup. Share one
+// in-progress verification and its result across all windows. The verifier
+// remains the authority for every result; no cached readiness is used for CLI
+// execution or executable registration.
+static RUNTIME_DETECTION_FLIGHT: OnceLock<Mutex<Option<Arc<DetectionFlight>>>> = OnceLock::new();
 
 #[derive(Default)]
 pub struct ManagedCodexInstallState {
@@ -161,17 +175,100 @@ fn emit(app: &AppHandle, event: InstallEvent) {
     let _ = app.emit(EVENT_NAME, event);
 }
 
+fn clear_detection_flight(flight: &Arc<DetectionFlight>) {
+    if let Ok(mut active) = RUNTIME_DETECTION_FLIGHT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        if active
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, flight))
+        {
+            *active = None;
+        }
+    }
+}
+
+struct DetectionFlightCleanup(Arc<DetectionFlight>);
+
+impl Drop for DetectionFlightCleanup {
+    fn drop(&mut self) {
+        clear_detection_flight(&self.0);
+    }
+}
+
+fn start_or_join_detection(app: AppHandle) -> Result<Arc<DetectionFlight>, String> {
+    let flights = RUNTIME_DETECTION_FLIGHT.get_or_init(|| Mutex::new(None));
+    let mut active = flights
+        .lock()
+        .map_err(|_| "Managed Codex detection state is unavailable.".to_string())?;
+    if let Some(flight) = active.as_ref() {
+        return Ok(flight.clone());
+    }
+
+    let (sender, receiver) = tokio::sync::watch::channel(None);
+    let flight = Arc::new(DetectionFlight { result: receiver });
+    *active = Some(flight.clone());
+    drop(active);
+
+    let worker_app = app;
+    let worker_flight = flight.clone();
+    let _worker = tauri::async_runtime::spawn_blocking(move || {
+        let _cleanup = DetectionFlightCleanup(worker_flight);
+        let result: DetectionResult =
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let cli = worker_app.state::<CliBridgeState>();
+                inspect_and_register(&managed_base(&worker_app)?, &cli)
+            })) {
+                Ok(result) => result,
+                Err(_) => Err("Managed Codex detection worker panicked.".to_string()),
+            };
+        if let Ok(ManagedCodexRuntimeDetection::Ready {
+            codex_version,
+            open_codex_version,
+            executable_id,
+        }) = &result
+        {
+            emit(
+                &worker_app,
+                InstallEvent::Ready {
+                    codex_version: codex_version.clone(),
+                    open_codex_version: open_codex_version.clone(),
+                    executable_id: executable_id.clone(),
+                },
+            );
+        }
+        let _ = sender.send(Some(result));
+    });
+    Ok(flight)
+}
+
+async fn await_detection(
+    mut receiver: tokio::sync::watch::Receiver<Option<DetectionResult>>,
+) -> DetectionResult {
+    loop {
+        if let Some(result) = receiver.borrow().clone() {
+            return result;
+        }
+        receiver.changed().await.map_err(|_| {
+            "Managed Codex detection worker ended before reporting readiness.".to_string()
+        })?;
+    }
+}
+
 #[tauri::command]
 pub async fn managed_codex_runtime_detect(
     app: AppHandle,
 ) -> Result<ManagedCodexRuntimeDetection, String> {
-    let worker_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let cli = worker_app.state::<CliBridgeState>();
-        inspect_and_register(&managed_base(&worker_app)?, &cli)
-    })
+    let flight = start_or_join_detection(app)?;
+    tokio::time::timeout(
+        RUNTIME_DETECTION_TIMEOUT,
+        await_detection(flight.result.clone()),
+    )
     .await
-    .map_err(|_| "Managed Codex detection worker failed.".to_string())?
+    .map_err(|_| {
+        "Managed Codex detection timed out; runtime verification is still required.".to_string()
+    })?
 }
 
 #[tauri::command]
@@ -280,9 +377,13 @@ pub fn managed_codex_runtime_install_cancel(
 #[cfg(test)]
 mod tests {
     use super::{
+        await_detection, DetectionFlight, DetectionFlightCleanup, DetectionResult,
         InstallComponent, InstallEvent, ManagedCodexInstallState, ManagedCodexRuntimeDetection,
+        RUNTIME_DETECTION_FLIGHT,
     };
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn managed_detection_yields_the_ipc_handler_while_probing() {
@@ -299,7 +400,57 @@ mod tests {
         let command = &production[detect_start..install_start];
 
         assert!(command.contains("pub async fn managed_codex_runtime_detect"));
-        assert!(command.contains("tauri::async_runtime::spawn_blocking"));
+        assert!(command.contains("start_or_join_detection"));
+        assert!(command.contains("RUNTIME_DETECTION_TIMEOUT"));
+        assert!(production.contains("tauri::async_runtime::spawn_blocking"));
+        assert!(production.contains("tokio::sync::watch"));
+        assert!(production.contains("Arc::ptr_eq"));
+        assert!(production.contains("catch_unwind"));
+        assert!(production.contains("InstallEvent::Ready"));
+    }
+
+    #[test]
+    fn detection_waiters_share_completion_and_late_completion_survives_timeout() {
+        let (sender, receiver) = tokio::sync::watch::channel(None::<DetectionResult>);
+        let second_receiver = receiver.clone();
+        let timed_out = tauri::async_runtime::block_on(async {
+            tokio::time::timeout(Duration::from_millis(1), await_detection(receiver)).await
+        });
+        assert!(
+            timed_out.is_err(),
+            "waiter should time out while work is pending"
+        );
+
+        sender
+            .send(Some(Ok(ManagedCodexRuntimeDetection::Missing)))
+            .expect("late worker completion should reach the shared result");
+        let first = tauri::async_runtime::block_on(await_detection(second_receiver))
+            .expect("shared result");
+        assert_eq!(first, ManagedCodexRuntimeDetection::Missing);
+    }
+
+    #[test]
+    fn detection_cleanup_releases_failed_flight_for_a_fresh_retry() {
+        let (sender, receiver) = tokio::sync::watch::channel(None::<DetectionResult>);
+        let flight = Arc::new(DetectionFlight { result: receiver });
+        let receiver_for_failure = flight.result.clone();
+        {
+            let mut active = RUNTIME_DETECTION_FLIGHT
+                .get_or_init(|| std::sync::Mutex::new(None))
+                .lock()
+                .expect("detection state");
+            assert!(active.is_none(), "test flight must start empty");
+            *active = Some(flight.clone());
+        }
+        drop(DetectionFlightCleanup(flight));
+        assert!(RUNTIME_DETECTION_FLIGHT
+            .get_or_init(|| std::sync::Mutex::new(None))
+            .lock()
+            .expect("detection state")
+            .is_none());
+        drop(sender);
+        let failed = tauri::async_runtime::block_on(await_detection(receiver_for_failure));
+        assert!(failed.is_err());
     }
 
     #[test]

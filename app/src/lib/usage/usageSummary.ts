@@ -11,6 +11,7 @@ export interface LocalUsageTotals {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  totalTokens: number;
   costUsd: number;
   calls: number;
   lastUsed: number | null;
@@ -46,6 +47,7 @@ const EMPTY_USAGE: LocalUsageTotals = {
   inputTokens: 0,
   outputTokens: 0,
   cachedTokens: 0,
+  totalTokens: 0,
   costUsd: 0,
   calls: 0,
   lastUsed: null,
@@ -53,6 +55,13 @@ const EMPTY_USAGE: LocalUsageTotals = {
 
 function emptyUsageTotals(): LocalUsageTotals {
   return { ...EMPTY_USAGE };
+}
+
+function reportedTotalOrInputOutput(usage: NonNullable<UsageMessage['usage']>): number {
+  const reportedTotal = usage.total_tokens;
+  return typeof reportedTotal === 'number' && Number.isSafeInteger(reportedTotal) && reportedTotal >= 0
+    ? reportedTotal
+    : (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
 }
 
 function monthStartSeconds(): number {
@@ -68,6 +77,7 @@ type UsageMessage = {
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
+    total_tokens?: number;
     cache_read_tokens?: number;
     cache_write_tokens?: number;
     cost_usd?: number;
@@ -135,6 +145,7 @@ function accumulateUsageTotals(
   totals.inputTokens += usage.input_tokens ?? 0;
   totals.outputTokens += usage.output_tokens ?? 0;
   totals.cachedTokens += (usage.cache_read_tokens ?? 0) + (usage.cache_write_tokens ?? 0);
+  totals.totalTokens += reportedTotalOrInputOutput(usage);
   totals.costUsd += usage.cost_usd ?? 0;
   totals.calls += 1;
   totals.lastUsed = Math.max(totals.lastUsed ?? 0, message.created_at);
@@ -172,6 +183,7 @@ export function summarizeAllLocalProviderUsage(
     bucket.inputTokens += usage.input_tokens ?? 0;
     bucket.outputTokens += usage.output_tokens ?? 0;
     bucket.cachedTokens += (usage.cache_read_tokens ?? 0) + (usage.cache_write_tokens ?? 0);
+    bucket.totalTokens += reportedTotalOrInputOutput(usage);
     bucket.costUsd += usage.cost_usd ?? 0;
     bucket.calls += 1;
     bucket.lastUsed = Math.max(bucket.lastUsed ?? 0, message.created_at);

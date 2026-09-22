@@ -47,6 +47,13 @@ describe('production exact-local tokenizer engines', () => {
     expect(loadO200k).toHaveBeenCalledTimes(1);
     expect(loadCl100k).not.toHaveBeenCalled();
 
+    for (const modelId of ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1-2025-04-14']) {
+      await expect(registry.estimateText('openai', modelId, 'hello world')).resolves.toMatchObject({
+        source: 'exact_local',
+        tokenizerId: 'gpt-tokenizer:o200k_base',
+      });
+    }
+
     await expect(registry.estimateText('openai', 'gpt-4', 'hello world')).resolves.toMatchObject({
       source: 'exact_local',
       tokenizerId: 'gpt-tokenizer:cl100k_base',
@@ -63,6 +70,68 @@ describe('production exact-local tokenizer engines', () => {
       source: 'conservative_estimate',
       tokenizerId: 'builtin:utf8-conservative-estimate',
     });
+  });
+
+  it('uses the exact local o200k tokenizer for dotted GPT-5.6 model ids', async () => {
+    const loadO200k = vi.fn(async () => ({ encode: () => [1, 2, 3] }));
+    const registry = createTokenizerRegistry(
+      createProductionTokenizers({ loadOpenAiO200k: loadO200k }),
+    );
+
+    for (const modelId of ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra']) {
+      await expect(registry.estimateText('openai', modelId, 'same prompt')).resolves.toMatchObject({
+        tokens: 3,
+        source: 'exact_local',
+        tokenizerId: 'gpt-tokenizer:o200k_base',
+      });
+    }
+
+    for (const modelId of ['gpt-5.999.123', 'gpt-5.6-unknown', 'gpt-5.6-luna-unknown']) {
+      await expect(registry.estimateText('openai', modelId, 'same prompt')).resolves.toMatchObject({
+        source: 'conservative_estimate',
+        tokenizerId: 'builtin:utf8-conservative-estimate',
+      });
+    }
+
+    expect(loadO200k).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts only catalog-reviewed qualified OpenCode OpenAI IDs', async () => {
+    const loadO200k = vi.fn(async () => ({ encode: () => [1, 2, 3] }));
+    const registry = createTokenizerRegistry(
+      createProductionTokenizers({ loadOpenAiO200k: loadO200k }),
+    );
+
+    for (const modelId of [
+      'openai/gpt-5.6-luna',
+      'openai/gpt-5.6-sol',
+      'openai/gpt-5.6-terra',
+      'openai/gpt-5.6-luna-fast',
+    ]) {
+      await expect(
+        registry.estimateText('opencode', modelId, 'same prompt'),
+      ).resolves.toMatchObject({
+        tokens: 3,
+        source: 'exact_local',
+        tokenizerId: 'gpt-tokenizer:o200k_base:opencode-openai-catalog',
+      });
+    }
+
+    for (const [providerId, modelId] of [
+      ['opencode', 'openai/gpt-5.6-unknown'],
+      ['opencode', 'openai/gpt-5.999.123'],
+      ['opencode', 'openai/gpt-5.6-luna-unknown'],
+      ['openrouter', 'openai/gpt-5.6-luna'],
+    ] as const) {
+      await expect(
+        registry.estimateText(providerId, modelId, 'same prompt'),
+      ).resolves.toMatchObject({
+        source: 'conservative_estimate',
+        tokenizerId: 'builtin:utf8-conservative-estimate',
+      });
+    }
+
+    expect(loadO200k).toHaveBeenCalledTimes(1);
   });
 
   it('loads only injected local Qwen, DeepSeek, Llama, and Mistral assets without fetching', async () => {

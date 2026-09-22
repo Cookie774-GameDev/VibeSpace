@@ -29,8 +29,8 @@ describe('ordinary file and HTML work', () => {
     expect(requestsReadOnlyContextTool(prompt)).toBe(false);
   });
 
-  it('retains Context research for a read-only question', () => {
-    expect(requestsReadOnlyContextTool('Read the documents and quote the opening sentence.')).toBe(true);
+  it('retains the full catalog for an unnamed read-only file question', () => {
+    expect(requestsReadOnlyContextTool('Read the documents and quote the opening sentence.')).toBe(false);
   });
 
   it.each([

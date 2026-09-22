@@ -8,30 +8,8 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   put: vi.fn(),
   model: vi.fn(),
-  profile: {} as Record<string, unknown>,
-  input: '',
-}));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
-vi.mock('@/lib/accountIdentity', () => ({
-  getActiveAccountIdentity: () => ({ accountId: mocks.account }),
-}));
-vi.mock('@/lib/db', () => ({
-  db: {
-    projects: { get: async () => ({ workspace_id: 'workspace' }) },
-    workspaces: { get: async () => ({ owner_id: mocks.owner }) },
-    settings: { get: async () => ({ value: mocks.permission }), put: mocks.put },
-  },
-}));
-vi.mock('@/features/jarvis-memory/learningStore', () => ({
-  useJarvisLearningStore: {
-    getState: () => ({ activeAccountId: mocks.account, currentProfile: () => mocks.profile }),
-  },
-}));
-vi.mock('@/features/jarvis-memory/caoChatControlProduction', () => ({
-  caoPermissionKey: (id: string) => id,
-}));
-vi.mock('@/features/instant-command/targetSnapshot', () => ({
-  readLiveTargetSnapshot: async () => [
+  pendingRows: new Map<string, unknown>(),
+  readLiveTargetSnapshot: vi.fn(async () => [
     {
       sessionId: 'tty',
       paneId: 'pane',
@@ -45,7 +23,48 @@ vi.mock('@/features/instant-command/targetSnapshot', () => ({
         runtimeGeneration: mocks.generation,
       },
     },
-  ],
+  ]),
+  profile: {} as Record<string, unknown>,
+  input: '',
+}));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
+vi.mock('@/lib/accountIdentity', () => ({
+  getActiveAccountIdentity: () => ({ accountId: mocks.account }),
+}));
+vi.mock('@/lib/db', () => ({
+  db: {
+    projects: { get: async () => ({ workspace_id: 'workspace' }) },
+    workspaces: { get: async () => ({ owner_id: mocks.owner }) },
+    settings: {
+      get: async () => ({ value: mocks.permission }),
+      put: mocks.put,
+      delete: async () => undefined,
+    },
+  },
+}));
+vi.mock('@/features/jarvis-memory/learningStore', () => ({
+  useJarvisLearningStore: {
+    getState: () => ({ activeAccountId: mocks.account, currentProfile: () => mocks.profile }),
+  },
+}));
+vi.mock('@/features/jarvis-memory/caoChatControlProduction', () => ({
+  caoPermissionKey: (id: string) => id,
+  caoChatProposalPersistence: {
+    save: async (entry: { proposal: { id: string } }) => {
+      mocks.pendingRows.set(entry.proposal.id, entry);
+    },
+    take: async (id: string) => {
+      const entry = mocks.pendingRows.get(id);
+      mocks.pendingRows.delete(id);
+      return entry;
+    },
+    remove: async (id: string) => {
+      mocks.pendingRows.delete(id);
+    },
+  },
+}));
+vi.mock('@/features/instant-command/targetSnapshot', () => ({
+  readLiveTargetSnapshot: mocks.readLiveTargetSnapshot,
 }));
 vi.mock('@/features/terminals/transcriptStore', () => ({
   useTerminalTranscriptStore: {
@@ -70,6 +89,7 @@ import {
 } from './terminalControlProduction';
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.pendingRows.clear();
   mocks.account = 'account';
   mocks.owner = 'account';
   mocks.generation = 'generation';
@@ -148,6 +168,12 @@ it.each(['generation', 'owner', 'input', 'permission'] as const)(
 it('excludes another account’s terminals', async () => {
   mocks.owner = 'other';
   expect(await listCaoTerminals('account')).toEqual([]);
+});
+it('forwards an explicit project scope to live terminal discovery', async () => {
+  await listCaoTerminals('account', 'project');
+  expect(mocks.readLiveTargetSnapshot).toHaveBeenCalledWith(
+    expect.objectContaining({ projectId: 'project' }),
+  );
 });
 it('persists a model review without sending terminal input', async () => {
   await reviewCaoTerminal('account', 'tty', 'Check quality', 'grade', new AbortController().signal);

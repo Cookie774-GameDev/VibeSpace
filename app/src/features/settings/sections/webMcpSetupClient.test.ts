@@ -1,0 +1,38 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { saveWebMcpDraft, validateSetupDraft } from './webMcpSetupClient';
+const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+afterEach(() => invoke.mockReset());
+const draft = {
+  displayName: '',
+  tunnelId: 'tunnel_123456789',
+  guideTab: 'tunnel' as const,
+  step: 1,
+};
+it('uses a default ChatGPT plugin label when the optional name is blank', async () => {
+  expect(validateSetupDraft(draft, '')).toBeUndefined();
+  invoke.mockImplementation(async (command) =>
+    command === 'desktop_connector_status'
+      ? { ...draft, displayName: 'VibeSpace Desktop', hasKey: false }
+      : undefined,
+  );
+  await expect(saveWebMcpDraft(draft, '')).resolves.toMatchObject({
+    displayName: 'VibeSpace Desktop',
+  });
+  expect(invoke).toHaveBeenCalledWith('desktop_connector_setup', {
+    action: 'save',
+    draft: { ...draft, displayName: 'VibeSpace Desktop' },
+  });
+});
+it('reports secure-storage failure without blaming remote tunnel permissions', async () => {
+  invoke.mockRejectedValue('CREDENTIAL_STORAGE_UNAVAILABLE');
+  await expect(
+    saveWebMcpDraft({ ...draft, displayName: 'Test' }, 'synthetic-test-runtime-key'),
+  ).rejects.toThrow(/secure.*storage/i);
+});
+it('never includes arbitrary native error text or credentials in the displayed error', async () => {
+  invoke.mockRejectedValue('unexpected diagnostic secret-marker-123');
+  await expect(saveWebMcpDraft({ ...draft, displayName: 'Test' }, '')).rejects.not.toThrow(
+    /secret-marker/,
+  );
+});

@@ -362,3 +362,19 @@ it('maps native custom-tool permission names to exact gateway grants', () => {
     },
   ]);
 });
+
+it('retains only bounded plugin operation identity for native approval', () => {
+  const normalize = (args: unknown) => normalizeOpenCodeEvent({
+    type: 'permission.asked',
+    properties: { sessionID: 's', id: 'p', permission: 'plugins_run',
+      metadata: { args } },
+  }, 's')[0];
+  expect(normalize({ pluginId: 'github', operation: 'identity', input: { token: 'private-value' } }))
+    .toMatchObject({ approval: { pluginOperation: { pluginId: 'github', operation: 'identity' } } });
+  expect(JSON.stringify(normalize({ pluginId: 'github', operation: 'identity', input: { token: 'private-value' } })))
+    .not.toContain('private-value');
+  for (const args of [{ pluginId: 'github', operation: 'identity'.repeat(100) },
+    { pluginId: 'github\n', operation: 'identity' }, { pluginId: 'github', operation: ' identity' }]) {
+    expect(normalize(args)).not.toHaveProperty('approval.pluginOperation');
+  }
+});

@@ -1,3 +1,4 @@
+import { CaoIdleScreenSetting } from '@/features/cao/CaoIdleScreenSetting';
 import { Bird, Cpu, Flower2, Moon, Sparkles, Sunrise, Terminal } from 'lucide-react';
 import { useUIStore } from '@/stores/ui';
 import { Label } from '@/components/ui/label';
@@ -63,6 +64,7 @@ export function Appearance() {
           Pick the app skin without replacing the existing themes.
         </p>
       </header>
+      <CaoIdleScreenSetting />
 
       <section className="flex flex-col gap-3">
         <Label>Theme</Label>

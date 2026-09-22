@@ -207,7 +207,7 @@ function phaseProjection(
     startedAt,
     ...(endedAt === undefined ? {} : { endedAt, durationMs: Math.max(0, endedAt - startedAt) }),
     receipts,
-    omittedReceipts: 0,
+    omittedReceipts: terminalPhase ? base.omittedReceipts : 0,
   };
 }
 
@@ -288,6 +288,9 @@ function chronologyTitle(ledger: AssistantActivityLedgerProjection, active: bool
   if (ledger.status === 'error') return `${actionLabel(ledger.actionsTotal)} · failed`;
   if (ledger.status === 'cancelled') return `${actionLabel(ledger.actionsTotal)} · cancelled`;
   if (active) return `Working · ${actionLabel(ledger.actionsTotal)}`;
+  if (ledger.receipts.some((receipt) => receipt.status === 'error')) {
+    return actionLabel(ledger.actionsTotal);
+  }
   const kinds = new Set(ledger.receipts.map((receipt) => receipt.kind));
   if (kinds.size !== 1) return actionLabel(ledger.actionsTotal);
   const kind = [...kinds][0];
@@ -308,6 +311,9 @@ function chronologyTitle(ledger: AssistantActivityLedgerProjection, active: bool
 }
 
 function chronologyReceiptText(receipt: AssistantActivityReceipt): string {
+  if (receipt.kind === 'other' && /\b(?:browser|playwright)\b/iu.test(receipt.label)) {
+    return receipt.label;
+  }
   const target = receipt.fileLabel ? ` ${receipt.fileLabel}` : '';
   const verbs: Record<LedgerReceiptKind, Readonly<[string, string]>> = {
     read: ['Read', 'Reading'],
@@ -326,6 +332,14 @@ function chronologyReceiptText(receipt: AssistantActivityReceipt): string {
   if (receipt.status === 'running' || receipt.status === 'pending') return `${running}${target}`;
   return `${settled}${target}`;
 }
+
+const RECEIPT_IDENTITY_STYLE: React.CSSProperties = {
+  gridColumn: '1 / -1',
+  minWidth: 0,
+  overflow: 'visible',
+  overflowWrap: 'anywhere',
+  whiteSpace: 'normal',
+};
 
 export function AssistantActivityLedger({
   message,
@@ -649,6 +663,7 @@ function ReceiptRow({
       {receipt.toolName ? (
         <span
           className="assistant-activity-ledger__receipt-detail"
+          style={RECEIPT_IDENTITY_STYLE}
           data-receipt-tool={receipt.toolName}
         >
           Tool: {receipt.toolName}
@@ -657,6 +672,7 @@ function ReceiptRow({
       {receipt.plugin ? (
         <span
           className="assistant-activity-ledger__receipt-detail"
+          style={RECEIPT_IDENTITY_STYLE}
           data-receipt-plugin={receipt.plugin}
         >
           Used plugin: {receipt.plugin}
@@ -665,6 +681,7 @@ function ReceiptRow({
       {receipt.mcpServer ? (
         <span
           className="assistant-activity-ledger__receipt-detail"
+          style={RECEIPT_IDENTITY_STYLE}
           data-receipt-mcp-server={receipt.mcpServer}
         >
           Used MCP server: {receipt.mcpServer}
@@ -673,6 +690,7 @@ function ReceiptRow({
       {receipt.callId ? (
         <span
           className="assistant-activity-ledger__receipt-detail"
+          style={RECEIPT_IDENTITY_STYLE}
           data-receipt-call-id={receipt.callId}
         >
           Call: {receipt.callId}

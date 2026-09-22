@@ -7,13 +7,22 @@ import { Composer } from './Composer';
 import { chatRepo, messageRepo } from '@/lib/db';
 import { OPENCODE_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
 import { publishChatRunState } from './runtime/chatRunState';
+import { reduceTurn } from './runtime/turn/turnReducer';
+import { writeTurnCheckpoint } from './runtime/turn/turnCheckpointStore';
+import { resetTurnStoreForTests } from './runtime/turn/turnStore';
 const backendState = vi.hoisted(() => ({ locked: false }));
 vi.mock('./useChatBackendAffinity', () => ({
   useChatBackendAffinity: () => backendState.locked
     ? { version: 1, backend: 'codex', locked: true, selectedAt: 1, lockedAt: 2 }
     : undefined,
 }));
-vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => undefined }));
+const liveQueryFixture = vi.hoisted(() => ({ emptyArray: [] as unknown[] }));
+vi.mock('dexie-react-hooks', () => ({
+  useLiveQuery: (_query: unknown, _deps: unknown, defaultValue: unknown) =>
+    Array.isArray(defaultValue) && defaultValue.length === 0
+      ? liveQueryFixture.emptyArray
+      : defaultValue,
+}));
 vi.mock('./HarnessReadinessGate', async (original) => ({
   ...(await original<typeof import('./HarnessReadinessGate')>()),
   useHarnessRuntimeState: () => ({ kind: 'ready', source: 'managed', version: 'test' }),
@@ -68,6 +77,24 @@ describe('Composer follow-up after user cancellation', () => {
     mount();
     expect(screen.queryByRole('button', { name: 'Resume current request' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Stop current request' })).toBeNull();
+  });
+  it('restores the play button from a days-old cancelled checkpoint after a cold mount', async () => {
+    const prior = useAuthStore.getState();
+    useAuthStore.setState({ localUserId: 'resume-owner' as never, cloudSession: null });
+    resetTurnStoreForTests();
+    const at = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    const accepted = reduceTurn(undefined, { type: 'turn.accepted', at,
+      identity: { accountId: 'resume-owner', workspaceId: 'workspace-followup',
+        chatId: 'chat-followup', runId: 'old-paused-run', requestId: 'old-request', attempt: 1 } });
+    writeTurnCheckpoint(reduceTurn(accepted, { type: 'turn.cancelled', at: at + 1000 }));
+    try {
+      render(<TooltipProvider><Composer chatId={'chat-followup' as never} /></TooltipProvider>);
+      expect(await screen.findByRole('button', { name: 'Resume current request' })).toBeTruthy();
+    } finally {
+      useAuthStore.setState({ localUserId: prior.localUserId, cloudSession: prior.cloudSession });
+      localStorage.removeItem('vibespace.chat.turn.v1:12:resume-owner:chat-followup');
+      resetTurnStoreForTests();
+    }
   });
   it('restores the upstream model separately from the Codex backend after reload', async () => {
     backendState.locked = true;

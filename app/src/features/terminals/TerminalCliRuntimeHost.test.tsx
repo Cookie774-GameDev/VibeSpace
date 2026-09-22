@@ -2,17 +2,26 @@ import * as React from 'react';
 import { act, render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalCliRuntimeResponse } from './terminalCliRuntime';
+import {
+  observeCaoTerminalOpenCodeEvent,
+  readCaoTerminalExecutionIdentity,
+  resetCaoTerminalExecutionIdentityForTests,
+} from '@/features/cao/terminalExecutionIdentity';
+import type { CaoTerminalExecutionBinding } from '@/features/cao/terminalExecutionIdentity';
+import type { ExpectedTerminalProcessBinding } from './terminalRefs';
 
 const tauriMocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   listener: null as null | ((event: { payload: unknown }) => void),
+  exitListener: null as null | ((event: { payload: unknown }) => void),
   unlisten: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: tauriMocks.invoke }));
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(async (_event: string, listener: (event: { payload: unknown }) => void) => {
-    tauriMocks.listener = listener;
+  listen: vi.fn(async (event: string, listener: (event: { payload: unknown }) => void) => {
+    if (event === 'terminal://exit') tauriMocks.exitListener = listener;
+    else tauriMocks.listener = listener;
     return tauriMocks.unlisten;
   }),
 }));
@@ -31,6 +40,22 @@ function request(requestId = 'request-status', terminalSessionId = 'tty-a') {
   };
 }
 
+const process: ExpectedTerminalProcessBinding = {
+  projectId: 'project-a',
+  processInstanceId: 'ptyproc-a',
+  pid: 42,
+  processStartedAt: 1_780_000_000_000,
+  runtimeGeneration: 'runtime-a',
+};
+
+const binding: CaoTerminalExecutionBinding = {
+  accountId: 'account-a',
+  projectId: 'project-a',
+  paneId: 'pane-a',
+  sessionId: 'tty-a',
+  process,
+};
+
 async function emit(payload: unknown): Promise<void> {
   await act(async () => {
     tauriMocks.listener?.({ payload });
@@ -40,11 +65,20 @@ async function emit(payload: unknown): Promise<void> {
   });
 }
 
+async function emitExit(payload: unknown): Promise<void> {
+  await act(async () => {
+    tauriMocks.exitListener?.({ payload });
+    await Promise.resolve();
+  });
+}
+
 describe('TerminalCliRuntimeHost', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     tauriMocks.listener = null;
+    tauriMocks.exitListener = null;
     tauriMocks.invoke.mockResolvedValue(undefined);
+    resetCaoTerminalExecutionIdentityForTests();
   });
 
   it('routes a native event through the runtime and returns the exact bounded response', async () => {
@@ -131,6 +165,34 @@ describe('TerminalCliRuntimeHost', () => {
     expect(execute).toHaveBeenCalledTimes(2);
 
     mounted.unmount();
-    expect(tauriMocks.unlisten).toHaveBeenCalledOnce();
+    expect(tauriMocks.unlisten).toHaveBeenCalledTimes(2);
+  });
+
+  it('retires an exact CAO identity receipt when the native PTY exits', async () => {
+    observeCaoTerminalOpenCodeEvent(
+      binding,
+      {
+        type: 'step_start',
+        sessionID: 'tty-a',
+        part: { type: 'step-start', modelID: 'openai/gpt-5.6-luna', variant: 'high' },
+      },
+      100,
+    );
+    expect(readCaoTerminalExecutionIdentity(binding)).toBeDefined();
+
+    const mounted = render(<TerminalCliRuntimeHost runtime={{ execute: vi.fn() }} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await emitExit({
+      sessionId: 'tty-a',
+      processInstanceId: 'ptyproc-a',
+      pid: 42,
+      processStartedAt: 1_780_000_000_000,
+      runtimeGeneration: 'runtime-a',
+    });
+
+    expect(readCaoTerminalExecutionIdentity(binding)).toBeUndefined();
+    mounted.unmount();
   });
 });

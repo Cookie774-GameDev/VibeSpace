@@ -85,6 +85,8 @@ export interface VibeSpaceApproval {
   title: string;
   capability: string;
   pattern?: string | readonly string[];
+  /** Operation identity only; the gateway still validates connection and execution authority. */
+  pluginOperation?: Readonly<{ pluginId: string; operation: string }>;
 }
 
 export type HarnessEvent =

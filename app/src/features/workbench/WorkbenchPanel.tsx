@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Copy, GripHorizontal, Minus, X } from 'lucide-react';
+import { RESIZE_DIRECTIONS, resizeWorkbenchBounds, type ResizeDirection } from './workbenchResize';
 import { BrowserPanel } from './BrowserPanel';
 import { ReferencePanel } from './ReferencePanel';
 import { TerminalPanel } from './TerminalPanel';
@@ -97,40 +98,56 @@ function WorkbenchPanelComponent({
     }
   };
 
-  const beginResize = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const resizeCleanup = React.useRef<(() => void) | null>(null);
+  React.useEffect(() => () => resizeCleanup.current?.(), []);
+  const beginResize = (
+    event: React.PointerEvent<HTMLButtonElement>,
+    direction: ResizeDirection,
+  ) => {
+    if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    const start = {
-      clientX: event.clientX,
-      clientY: event.clientY,
-      width: draft.width,
-      height: draft.height,
+    resizeCleanup.current?.();
+    onSelect(false);
+    onBringToFront();
+    const handle = event.currentTarget;
+    const pointerId = event.pointerId;
+    const start = { ...draft };
+    const origin = { x: event.clientX, y: event.clientY };
+    handle.setPointerCapture?.(pointerId);
+    const bounds = (e: PointerEvent) =>
+      resizeWorkbenchBounds(start, direction, e.clientX - origin.x, e.clientY - origin.y, zoom);
+    const move = (e: PointerEvent) => {
+      if (e.pointerId === pointerId) setDraft(bounds(e));
     };
-    const move = (moveEvent: PointerEvent) => {
-      setDraft((current) => ({
-        ...current,
-        width: Math.max(240, Math.round(start.width + (moveEvent.clientX - start.clientX) / zoom)),
-        height: Math.max(
-          160,
-          Math.round(start.height + (moveEvent.clientY - start.clientY) / zoom),
-        ),
-      }));
-    };
-    const up = (upEvent: PointerEvent) => {
-      const width = Math.max(
-        240,
-        Math.round(start.width + (upEvent.clientX - start.clientX) / zoom),
-      );
-      const height = Math.max(
-        160,
-        Math.round(start.height + (upEvent.clientY - start.clientY) / zoom),
-      );
+    const cleanup = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      onUpdate({ width, height });
+      window.removeEventListener('pointercancel', cancel);
+      handle.removeEventListener('lostpointercapture', cancel);
+      resizeCleanup.current = null;
+      if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
     };
+    const up = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      const next = bounds(e);
+      cleanup();
+      setDraft(next);
+      onUpdate(
+        direction.includes('n') || direction.includes('w')
+          ? next
+          : { width: next.width, height: next.height },
+      );
+    };
+    const cancel = () => {
+      cleanup();
+      setDraft(start);
+    };
+    resizeCleanup.current = cleanup;
     window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up, { once: true });
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
+    handle.addEventListener('lostpointercapture', cancel);
   };
 
   return (
@@ -141,13 +158,17 @@ function WorkbenchPanelComponent({
       data-selected={selected ? 'true' : 'false'}
       data-minimized={panel.minimized ? 'true' : 'false'}
       aria-label={`${panel.title} panel`}
-      style={{
-        left: draft.x,
-        top: draft.y,
-        width: draft.width,
-        height: panel.minimized ? 42 : draft.height,
-        zIndex: panel.z,
-      }}
+      style={
+        {
+          left: draft.x,
+          top: draft.y,
+          width: draft.width,
+          height: panel.minimized ? 42 : draft.height,
+          zIndex: panel.z,
+          '--wb-resize-corner': `${32 / zoom}px`,
+          '--wb-resize-edge': `${12 / zoom}px`,
+        } as React.CSSProperties
+      }
       onPointerDown={(event) => {
         onSelect(event.shiftKey);
         onBringToFront();
@@ -197,27 +218,32 @@ function WorkbenchPanelComponent({
           <ReferencePanel panel={panel} onUpdate={updateRuntime} />
         )}
       </div>
-      <button
-        type="button"
-        className="workbench-panel-resize"
-        aria-label={`Resize ${panel.title}`}
-        title="Resize with arrow keys; hold Shift for one-pixel steps"
-        onPointerDown={beginResize}
-        onKeyDown={(event) => {
-          if (event.altKey || event.ctrlKey || event.metaKey) return;
-          const step = event.shiftKey ? 1 : 10;
-          const dx = event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0;
-          const dy = event.key === 'ArrowDown' ? step : event.key === 'ArrowUp' ? -step : 0;
-          if (!dx && !dy) return;
-          event.preventDefault();
-          event.stopPropagation();
-          onBringToFront();
-          onUpdate({
-            width: Math.max(240, draft.width + dx),
-            height: Math.max(160, draft.height + dy),
-          });
-        }}
-      />
+      {RESIZE_DIRECTIONS.map((direction) => (
+        <button
+          key={direction}
+          type="button"
+          data-resize-direction={direction}
+          tabIndex={direction === 'se' ? 0 : -1}
+          className="workbench-panel-resize"
+          aria-label={`Resize ${panel.title}${direction === 'se' ? '' : `: ${direction}`}`}
+          title="Resize with arrow keys; hold Shift for one-pixel steps"
+          onPointerDown={(event) => beginResize(event, direction)}
+          onKeyDown={(event) => {
+            if (event.altKey || event.ctrlKey || event.metaKey) return;
+            const step = event.shiftKey ? 1 : 10;
+            const dx = event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0;
+            const dy = event.key === 'ArrowDown' ? step : event.key === 'ArrowUp' ? -step : 0;
+            if (!dx && !dy) return;
+            event.preventDefault();
+            event.stopPropagation();
+            onBringToFront();
+            onUpdate({
+              width: Math.max(240, draft.width + dx),
+              height: Math.max(160, draft.height + dy),
+            });
+          }}
+        />
+      ))}
     </section>
   );
 }

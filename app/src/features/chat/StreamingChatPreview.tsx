@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { AssistantActivityLedger } from './activity-ledger/AssistantActivityLedger';
 import { ThinkingDisclosure } from './ThinkingDisclosure';
+import { AssistantRichText } from './AssistantRichText';
 import type { Message } from '@/types';
 import { useAuthStore } from '@/stores/auth';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
@@ -221,18 +222,22 @@ const StreamingPreviewStructure = memo(
         !segments.some((segment) => segment.kind === 'text' && segment.text) ? (
           <div className="agentic-native-checkpoint">
             <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
-            <div className="agentic-native-checkpoint__text" style={{ whiteSpace: 'pre-wrap' }}>
-              {preview.text}
-            </div>
+            <AssistantRichText
+              className="agentic-native-checkpoint__text"
+              text={preview.text}
+              live
+            />
           </div>
         ) : null}
         {segments.map((segment, index) =>
           index === fastTailIndex ? null : segment.kind === 'text' ? (
             <div key={`text:${segment.id}`} className="agentic-native-checkpoint">
               <span className="agentic-native-checkpoint__dot" aria-hidden="true" />
-              <div className="agentic-native-checkpoint__text" style={{ whiteSpace: 'pre-wrap' }}>
-                {segment.text}
-              </div>
+              <AssistantRichText
+                className="agentic-native-checkpoint__text"
+                text={segment.text}
+                live
+              />
             </div>
           ) : segment.kind === 'reasoning' ? (
             <StreamingReasoningPreview

@@ -47,10 +47,10 @@ describe('connection route disclosure', () => {
       providerId: 'opencode',
       modelLabel: 'openai/gpt-5.6-sol',
     });
-    expect(managedOpenAi).toContain('Codex / ChatGPT subscription');
-    expect(managedOpenAi).toContain('not your OpenAI API key');
-    expect(managedOpenAi).not.toContain('OpenCode');
-    expect(managedOpenAi).not.toContain('managed provider');
+    expect(managedOpenAi).toContain('OpenCode managed provider connection');
+    expect(managedOpenAi).toContain('authentication selected in OpenCode');
+    expect(managedOpenAi).not.toContain('ChatGPT subscription');
+    expect(managedOpenAi).not.toContain('not your OpenAI API key');
     expect(
       buildConnectionRouteDisclosure({
         ...codex,

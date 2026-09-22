@@ -12,6 +12,8 @@ export interface ConnectionUsageEntry {
   inputTokens: number;
   cachedInputTokens: number;
   outputTokens: number;
+  /** Provider-reported turn total when available; cache remains a separate subset. */
+  totalTokens?: number;
   costUsd: number;
   costType?: 'actual' | 'estimated' | 'subscription' | 'local' | 'unknown';
 }
@@ -20,6 +22,7 @@ export interface ConnectionUsageWindow {
   inputTokens: number;
   cachedInputTokens: number;
   outputTokens: number;
+  totalTokens: number;
   requests: number;
   costUsd: number;
   models: string[];
@@ -60,6 +63,9 @@ function normalizeEntry(value: unknown): ConnectionUsageEntry | null {
     outputTokens: boundedNumber(entry.outputTokens ?? 0),
     costUsd: boundedNumber(entry.costUsd ?? 0),
   };
+  if (Number.isSafeInteger(entry.totalTokens) && entry.totalTokens! >= 0) {
+    normalized.totalTokens = entry.totalTokens;
+  }
   if (
     entry.costType === 'actual' ||
     entry.costType === 'estimated' ||
@@ -115,6 +121,10 @@ export function aggregateConnectionUsage(
     inputTokens: entries.reduce((sum, entry) => sum + entry.inputTokens, 0),
     cachedInputTokens: entries.reduce((sum, entry) => sum + entry.cachedInputTokens, 0),
     outputTokens: entries.reduce((sum, entry) => sum + entry.outputTokens, 0),
+    totalTokens: entries.reduce(
+      (sum, entry) => sum + (entry.totalTokens ?? entry.inputTokens + entry.outputTokens),
+      0,
+    ),
     requests: entries.length,
     costUsd: entries.reduce((sum, entry) => sum + entry.costUsd, 0),
     models: [...new Set(entries.map((entry) => entry.modelId))],

@@ -4,6 +4,7 @@ import { createJarvisDb, type JarvisDexie } from '@/lib/db';
 import type { AccountIdentity } from '@/lib/accountIdentity';
 import {
   previewWorkspaceRestore,
+  recoverMissingPersistedLocalScope,
   readPortableBackupHistory,
   recordPortableBackupHistory,
   restoreWorkspaceBackup,
@@ -11,6 +12,7 @@ import {
 
 const TEST_INDEXED_DB = { indexedDB, IDBKeyRange };
 const identity: AccountIdentity = { accountId: 'account-a', source: 'supabase' };
+const localIdentity: AccountIdentity = { accountId: 'local-account', source: 'local' };
 
 function artifact(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -83,6 +85,170 @@ describe('portable workspace restore', () => {
   afterEach(async () => {
     database.close();
     await database.delete();
+  });
+
+  it('recovers a missing local scope only when surviving chats prove both IDs', async () => {
+    await database.chats.add({
+      id: 'chat-1' as never,
+      workspace_id: 'workspace-stale' as never,
+      project_id: 'project-stale' as never,
+      title: 'Surviving chat',
+      mode: 'chat',
+      active_agent_ids: [],
+      created_at: 1,
+      updated_at: 2,
+    });
+
+    const result = await recoverMissingPersistedLocalScope(
+      {
+        accountId: 'local-account',
+        workspaceId: 'workspace-stale' as never,
+        projectId: 'project-stale' as never,
+      },
+      { database, getAccountIdentity: () => localIdentity, now: () => 42 },
+    );
+
+    expect(result).toEqual({
+      status: 'recovered',
+      accountId: 'local-account',
+      workspaceId: 'workspace-stale',
+      projectId: 'project-stale',
+      createdWorkspace: true,
+      createdProject: true,
+    });
+    expect(await database.workspaces.get('workspace-stale' as never)).toMatchObject({
+      owner_id: 'local-account',
+      name: 'Recovered workspace',
+    });
+    expect(await database.projects.get('project-stale' as never)).toMatchObject({
+      workspace_id: 'workspace-stale',
+      name: 'Recovered project',
+    });
+    expect(await database.chats.get('chat-1' as never)).toMatchObject({
+      workspace_id: 'workspace-stale',
+      project_id: 'project-stale',
+    });
+  });
+
+  it('fails closed without matching chat evidence or for cloud identities', async () => {
+    await expect(
+      recoverMissingPersistedLocalScope(
+        {
+          accountId: 'local-account',
+          workspaceId: 'workspace-stale' as never,
+          projectId: 'project-stale' as never,
+        },
+        { database, getAccountIdentity: () => localIdentity },
+      ),
+    ).resolves.toMatchObject({ status: 'not_recoverable', reason: 'missing_chat_evidence' });
+    expect(await database.workspaces.count()).toBe(0);
+    expect(await database.projects.count()).toBe(0);
+
+    await database.chats.add({
+      id: 'chat-other-local' as never,
+      workspace_id: 'workspace-other-local' as never,
+      project_id: 'project-other-local' as never,
+      title: 'Other local account chat',
+      mode: 'chat',
+      active_agent_ids: [],
+      created_at: 1,
+      updated_at: 2,
+    });
+    await expect(
+      recoverMissingPersistedLocalScope(
+        {
+          accountId: 'other-local-account',
+          workspaceId: 'workspace-other-local' as never,
+          projectId: 'project-other-local' as never,
+        },
+        { database, getAccountIdentity: () => localIdentity },
+      ),
+    ).resolves.toMatchObject({ status: 'not_recoverable', reason: 'account_mismatch' });
+    expect(await database.workspaces.count()).toBe(0);
+    expect(await database.projects.count()).toBe(0);
+
+    await database.chats.add({
+      id: 'chat-cloud' as never,
+      workspace_id: 'workspace-cloud' as never,
+      project_id: 'project-cloud' as never,
+      title: 'Cloud chat',
+      mode: 'chat',
+      active_agent_ids: [],
+      created_at: 1,
+      updated_at: 2,
+    });
+    await expect(
+      recoverMissingPersistedLocalScope(
+        {
+          accountId: 'account-a',
+          workspaceId: 'workspace-cloud' as never,
+          projectId: 'project-cloud' as never,
+        },
+        { database, getAccountIdentity: () => identity },
+      ),
+    ).resolves.toMatchObject({ status: 'not_recoverable', reason: 'cloud_identity' });
+    expect(await database.workspaces.count()).toBe(0);
+    expect(await database.projects.count()).toBe(0);
+  });
+
+  it('does not repair an owner conflict or an orphaned partial scope', async () => {
+    await database.workspaces.add({
+      id: 'workspace-conflict' as never,
+      name: 'Other owner',
+      owner_id: 'other-account',
+      created_at: 1,
+      updated_at: 2,
+    });
+    await database.chats.add({
+      id: 'chat-conflict' as never,
+      workspace_id: 'workspace-conflict' as never,
+      project_id: 'project-conflict' as never,
+      title: 'Conflict chat',
+      mode: 'chat',
+      active_agent_ids: [],
+      created_at: 1,
+      updated_at: 2,
+    });
+
+    await expect(
+      recoverMissingPersistedLocalScope(
+        {
+          accountId: 'local-account',
+          workspaceId: 'workspace-conflict' as never,
+          projectId: 'project-conflict' as never,
+        },
+        { database, getAccountIdentity: () => localIdentity },
+      ),
+    ).resolves.toMatchObject({ status: 'not_recoverable', reason: 'scope_conflict' });
+    expect(await database.projects.get('project-conflict' as never)).toBeUndefined();
+
+    await database.projects.add({
+      id: 'project-orphan' as never,
+      workspace_id: 'workspace-orphan' as never,
+      name: 'Orphan project',
+      created_at: 1,
+      updated_at: 1,
+    });
+    await database.chats.add({
+      id: 'chat-orphan' as never,
+      workspace_id: 'workspace-orphan' as never,
+      project_id: 'project-orphan' as never,
+      title: 'Orphan chat',
+      mode: 'chat',
+      active_agent_ids: [],
+      created_at: 1,
+      updated_at: 2,
+    });
+    await expect(
+      recoverMissingPersistedLocalScope(
+        {
+          accountId: 'local-account',
+          workspaceId: 'workspace-new' as never,
+          projectId: 'project-new' as never,
+        },
+        { database, getAccountIdentity: () => localIdentity },
+      ),
+    ).resolves.toMatchObject({ status: 'not_recoverable', reason: 'scope_conflict' });
   });
 
   it('previews and restores only missing rows after explicit caller confirmation', async () => {

@@ -56,6 +56,10 @@ import type {
   KernelTurnTerminalStatus,
 } from './kernelTurnCommit';
 import type { ChatRuntimeSettings } from '@/features/chat/runtime/chatRuntimeCommandController';
+import type {
+  AccessLevel,
+  AgentApprovalMode,
+} from '@/lib/permissions/OpenCodePermissionProfile';
 
 export interface JarvisKernelTurnInput {
   /** Receipt of bound controls; only its closed mode enum selects the compiled application policy. */
@@ -71,6 +75,9 @@ export interface JarvisKernelTurnInput {
   agent: Agent;
   surface: JarvisRequestEnvelope['surface'];
   interactionMode: JarvisRequestEnvelope['interactionMode'];
+  accessLevel?: AccessLevel;
+  agentApprovalMode?: AgentApprovalMode;
+  approveAllForRun?: boolean;
   userText: string;
   messageHistory: readonly LLMMessage[];
   model: JarvisModelSnapshot;
@@ -139,6 +146,9 @@ export type JarvisKernelPrepareProvider = (input: {
   requestId: string;
   attemptNumber: number;
   interactionMode: JarvisRequestEnvelope['interactionMode'];
+  accessLevel?: AccessLevel;
+  agentApprovalMode?: AgentApprovalMode;
+  approveAllForRun?: boolean;
   compiledPrompt: Readonly<CompiledJarvisPrompt>;
   agent: Agent;
   model: Readonly<JarvisModelSnapshot>;
@@ -674,6 +684,13 @@ async function runJarvisKernelExecution(
           requestId: input.attempt.requestId,
           attemptNumber: input.attempt.attemptNumber,
           interactionMode: input.interactionMode,
+          ...(input.accessLevel === undefined ? {} : { accessLevel: input.accessLevel }),
+          ...(input.agentApprovalMode === undefined
+            ? {}
+            : { agentApprovalMode: input.agentApprovalMode }),
+          ...(input.approveAllForRun === undefined
+            ? {}
+            : { approveAllForRun: input.approveAllForRun }),
           compiledPrompt: compiled,
           agent: input.agent,
           model: input.model,

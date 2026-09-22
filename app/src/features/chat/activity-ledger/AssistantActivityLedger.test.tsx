@@ -333,6 +333,72 @@ describe('AssistantActivityLedger', () => {
     expect(document.body.textContent).not.toMatch(/Read file|C:\\private/iu);
   });
 
+  it('keeps browser chronology labels and expanded tool identities readable', () => {
+    const rendered = render(
+      <AssistantActivityLedger
+        presentation="opencode-chronology"
+        message={assistant([
+          {
+            kind: 'tool_call',
+            call_id: 'browser-call-123456789',
+            tool: 'manual-browser',
+            args: {},
+          },
+          {
+            kind: 'tool_result',
+            call_id: 'browser-call-123456789',
+            result: { status: 'completed' },
+          },
+          {
+            kind: 'tool_call',
+            call_id: 'plugin-call-123456789',
+            tool: 'plugins_run',
+            args: {},
+            details: { arguments: { pluginId: 'github', operation: 'identity', input: {} } },
+          },
+          {
+            kind: 'tool_result',
+            call_id: 'plugin-call-123456789',
+            result: { ok: true },
+          },
+          {
+            kind: 'tool_call',
+            call_id: 'mcp-call-123456789',
+            tool: 'mcp_run',
+            args: {},
+            details: {
+              arguments: { connectionId: 'n4-qa-fixture', toolName: 'qa_game_brief' },
+            },
+          },
+          {
+            kind: 'tool_result',
+            call_id: 'mcp-call-123456789',
+            result: { ok: true },
+          },
+        ])}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /show activity details/i }));
+    expect(screen.getByText('Used browser')).toBeTruthy();
+    expect(screen.getAllByText('Used tool')).toHaveLength(2);
+    expect(screen.getByText('Tool: manual-browser')).toBeTruthy();
+    expect(screen.getByText('Call: browser-call-123456789')).toBeTruthy();
+    expect(screen.getByText('Used plugin: github')).toBeTruthy();
+    expect(screen.getByText('Used MCP server: n4-qa-fixture')).toBeTruthy();
+
+    const identitySpans = rendered.container.querySelectorAll<HTMLElement>(
+      '[data-receipt-tool], [data-receipt-call-id], [data-receipt-plugin], [data-receipt-mcp-server]',
+    );
+    expect(identitySpans).toHaveLength(8);
+    for (const span of identitySpans) {
+      expect(span.style.gridColumn).toBe('1 / -1');
+      expect(span.style.whiteSpace).toBe('normal');
+      expect(span.style.overflow).toBe('visible');
+      expect(span.style.overflowWrap).toBe('anywhere');
+    }
+  });
+
   it('keeps OpenCode chronology failures truthful without success language', () => {
     render(
       <AssistantActivityLedger
@@ -349,7 +415,7 @@ describe('AssistantActivityLedger', () => {
       />,
     );
 
-    expect(screen.getByText('1 action · failed')).toBeTruthy();
+    expect(screen.getByText('1 action')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /show activity details/i }));
     expect(screen.getByText('Failed: verifying check')).toBeTruthy();
     expect(document.body.textContent).not.toContain('Verified');
@@ -429,6 +495,29 @@ describe('AssistantActivityLedger', () => {
     expect(screen.getByRole('region', { name: 'Assistant activity details' }).style.height).toBe(
       '',
     );
+  });
+
+  it('pages every retained receipt beyond the former projection cap', () => {
+    const events: ChatActivityEvent[] = Array.from({ length: 525 }, (_, index) => ({
+      id: `read-all-${index}`,
+      chatId: 'chat-ledger-ui',
+      kind: 'tool',
+      category: 'file',
+      status: 'done',
+      title: 'Read file',
+      filePath: `all-${index}.ts`,
+      ts: index,
+    }));
+    render(<AssistantActivityLedger message={assistant([])} correlatedEvents={events} />);
+    fireEvent.click(screen.getByRole('button', { name: /activity details/i }));
+
+    expect(screen.getAllByTestId('activity-ledger-receipt')).toHaveLength(DETAIL_PAGE_SIZE);
+    let more = screen.queryByRole('button', { name: /show .* more activity receipts/i });
+    while (more) {
+      fireEvent.click(more);
+      more = screen.queryByRole('button', { name: /show .* more activity receipts/i });
+    }
+    expect(screen.getAllByTestId('activity-ledger-receipt')).toHaveLength(525);
   });
 
   it('shows estimated and unavailable usage without mixing provenance', () => {

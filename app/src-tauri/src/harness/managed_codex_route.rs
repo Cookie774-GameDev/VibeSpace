@@ -103,10 +103,11 @@ fn reviewed_translation_adapter(adapter: &str) -> Option<&'static str> {
         "anthropic" => Some("anthropic"),
         "google" => Some("google"),
         "azure-openai" => Some("azure-openai"),
-        // An SDK/package label is not semantic proof that a provider implements
-        // Codex Responses correctly. Keep direct Responses fail-closed until its
-        // exact streaming/tool/cancellation contract has native fixture evidence.
-        "openai-responses" => None,
+        // The pinned OpenCodex runtime registers openai-responses as a
+        // Codex-owned adapter and owns the Responses request/stream translation.
+        // VibeSpace still revalidates the exact connected provider and route
+        // generation at launch; this is not generic direct-provider passthrough.
+        "openai-responses" => Some("responses"),
         _ => None,
     }
 }
@@ -162,6 +163,7 @@ fn build_route(
         contract: "reviewed-opencodex-v1",
         adapter: match provider.adapter_id() {
             "openai-chat" => "openai-chat",
+            "openai-responses" => "openai-responses",
             "anthropic" => "anthropic",
             "google" => "google",
             "azure-openai" => "azure-openai",
@@ -278,10 +280,10 @@ mod tests {
     #[test]
     fn only_reviewed_translation_protocols_are_advertised() {
         assert_eq!(reviewed_translation_adapter("openai-chat"), Some("chat-completions"));
+        assert_eq!(reviewed_translation_adapter("openai-responses"), Some("responses"));
         assert_eq!(reviewed_translation_adapter("anthropic"), Some("anthropic"));
         assert_eq!(reviewed_translation_adapter("google"), Some("google"));
         assert_eq!(reviewed_translation_adapter("azure-openai"), Some("azure-openai"));
-        assert_eq!(reviewed_translation_adapter("openai-responses"), None);
     }
 
     #[test]

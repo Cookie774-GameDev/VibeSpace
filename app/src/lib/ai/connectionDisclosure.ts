@@ -1,6 +1,6 @@
 import type { ConnectionMode } from './adapters/types';
 
-const DISCLOSURE_VERSION = 1;
+const DISCLOSURE_VERSION = 2;
 const STORAGE_KEY = 'vibespace.ai-route-disclosures.v1';
 
 const SUBSCRIPTION_BRIDGE_LABELS: Readonly<Record<string, string>> = Object.freeze({
@@ -74,6 +74,9 @@ function readAcknowledgements(): Set<string> {
 
 export function buildConnectionRouteDisclosure(input: RouteDisclosureInput): string {
   if (input.connectionMode === 'external-cli') {
+    if (input.connectionId === 'opencode-cli') {
+      return `Using ${input.modelLabel} through your OpenCode managed provider connection. Billing follows the authentication selected in OpenCode.`;
+    }
     const { bridge, apiProvider } = subscriptionRoute(input);
     return `Using ${input.modelLabel} through your ${bridge} subscription. This route uses that authenticated subscription session, not your ${apiProvider} API key.`;
   }

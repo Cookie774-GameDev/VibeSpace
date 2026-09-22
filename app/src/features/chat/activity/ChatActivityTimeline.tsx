@@ -590,7 +590,7 @@ export function ActivityRow({
           >
             <div className="space-y-2 px-3 py-2.5">
               {event.detail ? (
-                <p className="whitespace-pre-wrap text-secondary text-muted-foreground">
+                <p className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-secondary text-muted-foreground">
                   {event.detail}
                 </p>
               ) : null}
@@ -604,7 +604,7 @@ export function ActivityRow({
 }
 
 function DiffPreview({ diff }: { diff: string }) {
-  const lines = diff.split('\n').slice(0, 200);
+  const lines = React.useMemo(() => diff.split('\n'), [diff]);
   return (
     <pre className="max-h-80 overflow-auto rounded-md border border-border bg-background p-2 font-mono text-[11px] leading-relaxed">
       {lines.map((line, i) => {

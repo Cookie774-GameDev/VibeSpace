@@ -25,7 +25,7 @@ const codex: LiveTerminalTarget = {
 
 function dependencies(targets: LiveTerminalTarget[] = [codex]) {
   const executeLegacy = vi.fn(async () => ({ ok: true, message: 'legacy ok' }));
-  const enqueueBatch = vi.fn(() => ['jterm_1']);
+  const enqueueBatch = vi.fn<InstantCommandDependencies['enqueueBatch']>(() => ['jterm_1']);
   const routeToTerminal = vi.fn();
   const openModelPicker = vi.fn();
   const readTargets = vi.fn(async () => targets);
@@ -86,7 +86,7 @@ describe('executeInstantCommand', () => {
     ).resolves.toMatchObject({ ok: true, code: 'queued' });
     expect(h.enqueueBatch).toHaveBeenCalledWith([
       { command: 'codex', label: 'codex', target: 'new' },
-      { command: 'codex', label: 'codex 2', target: 'new' },
+      { command: 'codex', label: 'codex', target: 'new' },
     ]);
     expect(h.routeToTerminal).toHaveBeenCalledOnce();
   });
@@ -412,4 +412,48 @@ describe('executeInstantCommandWithReceipt', () => {
       followUp: { kind: 'confirmation', prompt: 'Confirm closing this exact terminal.' },
     });
   });
+});
+
+it('reports a generic shell launch as queued, not ready, after existing legacy enqueue succeeds', async () => {
+  const h = dependencies();
+  const command: InstantCommand = { kind: 'legacy', intent: { kind: 'open_terminals', count: 2 } };
+  const receipt = await executeInstantCommandWithReceipt(
+    command,
+    {
+      correlationId: 'shell-two-queue-proof',
+      accountId: 'account-a',
+      workspaceId: 'workspace-a',
+      projectId: 'project-a',
+    },
+    h.deps,
+    new InstantCommandLedger(),
+  );
+  expect(h.executeLegacy).toHaveBeenCalledWith(command.intent);
+  expect(receipt.status).toBe('queued');
+});
+
+it('uses valid canonical agent identifiers for every terminal in a multi-CLI batch', async () => {
+  const { createTerminalContextSession } =
+    await import('@/features/terminals/terminalCommandFoundation');
+  const h = dependencies();
+  await executeInstantCommand({ kind: 'open-agent-cli', provider: 'claude', count: 2 }, h.deps);
+  const batch = h.enqueueBatch.mock.calls[0]![0];
+  expect(batch).toHaveLength(2);
+  for (const [index, item] of batch.entries()) {
+    expect(() =>
+      createTerminalContextSession({
+        version: 1,
+        terminalSessionId: `terminal-${index}`,
+        paneId: `pane-${index}`,
+        projectId: 'project-a',
+        activeMapIds: [],
+        pinnedEntityIds: [],
+        activeSkillIds: [],
+        agentSlug: item.label,
+        mode: 'persistent',
+        updatedAt: 1,
+        contextRevision: 0,
+      }),
+    ).not.toThrow();
+  }
 });

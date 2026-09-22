@@ -64,7 +64,11 @@ export function DesktopConnectorSetup({
       )
         setError('The change could not be confirmed. Check the connection and retry.');
     } catch {
-      setError('The connector change could not be confirmed. Check setup and retry.');
+      setError(
+        action.startsWith('startup-')
+          ? 'Windows could not apply the startup setting. Check Windows startup permissions. Your tunnel connection is separate.'
+          : 'The connector change could not be confirmed. Check setup and retry.',
+      );
     } finally {
       changing.current = false;
       setBusy(false);

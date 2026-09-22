@@ -512,7 +512,11 @@
   gap: 7px;
   border-bottom: 1px solid hsl(var(--border) / 0.8);
   background:
-    linear-gradient(90deg, hsl(var(--paper-soft, var(--muted)) / 0.98), hsl(var(--paper, var(--background)) / 0.96)),
+    linear-gradient(
+      90deg,
+      hsl(var(--paper-soft, var(--muted)) / 0.98),
+      hsl(var(--paper, var(--background)) / 0.96)
+    ),
     hsl(var(--paper, var(--background)));
   padding: 0 7px 0 10px;
   cursor: grab;
@@ -603,8 +607,9 @@
   right: 0;
   bottom: 0;
   z-index: 5;
-  width: 32px;
-  height: 32px;
+  width: var(--wb-resize-corner, 32px);
+  height: var(--wb-resize-corner, 32px);
+  touch-action: none;
   border: 0;
   background: linear-gradient(
     135deg,
@@ -627,7 +632,11 @@
   border: 1px solid hsl(var(--accent-copper) / 0.38);
   border-radius: 12px 4px 12px 4px;
   background:
-    linear-gradient(165deg, hsl(var(--paper-soft, var(--muted)) / 0.98), hsl(var(--paper, var(--background)) / 0.97)),
+    linear-gradient(
+      165deg,
+      hsl(var(--paper-soft, var(--muted)) / 0.98),
+      hsl(var(--paper, var(--background)) / 0.97)
+    ),
     hsl(var(--paper, var(--background)));
   box-shadow:
     0 18px 48px hsl(220 54% 2% / 0.55),
@@ -1016,7 +1025,11 @@
   border: 1px solid hsl(var(--accent-copper) / 0.28);
   border-bottom: 0;
   border-radius: 20px 6px 0 0;
-  background: linear-gradient(155deg, hsl(var(--paper, var(--background))), hsl(var(--paper-soft, var(--muted))));
+  background: linear-gradient(
+    155deg,
+    hsl(var(--paper, var(--background))),
+    hsl(var(--paper-soft, var(--muted)))
+  );
   box-shadow: 0 -30px 90px hsl(220 55% 2% / 0.56);
   padding: 20px;
 }
@@ -2318,7 +2331,6 @@ html[data-theme='sakura']
   }
 }
 
-
 /* Workbench native desktop app surfaces */
 .workbench-native-app {
   position: relative;
@@ -2359,9 +2371,85 @@ html[data-theme='sakura']
 }
 
 /* The toolbar stays dark in light themes, so its ghost controls use light ink. */
-html:not([data-theme='monochrome']):not([data-theme='sakura']) .workbench-toolbar-actions > button:not([aria-label='Save Workbench']) {
+html:not([data-theme='monochrome']):not([data-theme='sakura'])
+  .workbench-toolbar-actions
+  > button:not([aria-label='Save Workbench']) {
   color: hsl(var(--cream));
 }
-html:not([data-theme='monochrome']):not([data-theme='sakura']) .workbench-toolbar-actions > button:not([aria-label='Save Workbench']):hover {
+html:not([data-theme='monochrome']):not([data-theme='sakura'])
+  .workbench-toolbar-actions
+  > button:not([aria-label='Save Workbench']):hover {
   background: hsl(var(--cream) / 0.12);
+}
+
+/* Resize targets stay outside embedded native content and constant in screen pixels. */
+.workbench-panel:not(.wb-creative-item) {
+  overflow: visible;
+}
+.workbench-panel:not(.wb-creative-item) > .workbench-panel-header {
+  border-radius: 12px 3px 0 0;
+}
+.workbench-panel:not(.wb-creative-item) > .workbench-panel-body {
+  border-radius: 0 0 12px 3px;
+}
+.workbench-panel-resize[data-resize-direction] {
+  right: auto;
+  bottom: auto;
+  padding: 0;
+  background: transparent;
+}
+.workbench-panel-resize[data-resize-direction='se']::after {
+  content: '';
+  position: absolute;
+  inset: 25%;
+  border-right: 2px solid hsl(var(--accent-copper) / 0.7);
+  border-bottom: 2px solid hsl(var(--accent-copper) / 0.7);
+  border-radius: 0 0 3px 0;
+  pointer-events: none;
+}
+.workbench-panel-resize[data-resize-direction='se'],
+.workbench-panel-resize[data-resize-direction='ne'] {
+  right: calc(var(--wb-resize-corner) / -2);
+}
+.workbench-panel-resize[data-resize-direction='sw'],
+.workbench-panel-resize[data-resize-direction='nw'] {
+  left: calc(var(--wb-resize-corner) / -2);
+}
+.workbench-panel-resize[data-resize-direction='se'],
+.workbench-panel-resize[data-resize-direction='sw'] {
+  bottom: calc(var(--wb-resize-corner) / -2);
+}
+.workbench-panel-resize[data-resize-direction='ne'],
+.workbench-panel-resize[data-resize-direction='nw'] {
+  top: calc(var(--wb-resize-corner) / -2);
+}
+.workbench-panel-resize[data-resize-direction='ne'],
+.workbench-panel-resize[data-resize-direction='sw'] {
+  cursor: nesw-resize;
+}
+.workbench-panel-resize[data-resize-direction='n'],
+.workbench-panel-resize[data-resize-direction='s'] {
+  left: calc(var(--wb-resize-corner) / 2);
+  width: calc(100% - var(--wb-resize-corner));
+  height: var(--wb-resize-edge);
+  cursor: ns-resize;
+}
+.workbench-panel-resize[data-resize-direction='n'] {
+  top: calc(var(--wb-resize-edge) / -2);
+}
+.workbench-panel-resize[data-resize-direction='s'] {
+  bottom: calc(var(--wb-resize-edge) / -2);
+}
+.workbench-panel-resize[data-resize-direction='e'],
+.workbench-panel-resize[data-resize-direction='w'] {
+  top: calc(var(--wb-resize-corner) / 2);
+  height: calc(100% - var(--wb-resize-corner));
+  width: var(--wb-resize-edge);
+  cursor: ew-resize;
+}
+.workbench-panel-resize[data-resize-direction='e'] {
+  right: calc(var(--wb-resize-edge) / -2);
+}
+.workbench-panel-resize[data-resize-direction='w'] {
+  left: calc(var(--wb-resize-edge) / -2);
 }

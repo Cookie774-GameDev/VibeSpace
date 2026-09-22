@@ -815,16 +815,20 @@ describe('Codex public tool details', () => {
 
   it('bounds large output without splitting Unicode or claiming completeness', () => {
     const actual = event('item/completed', { id: 'large-details', type: 'commandExecution', status: 'completed',
-      command: 'node large.cjs', aggregatedOutput: '🙂'.repeat(100000), exitCode: 0 });
+      command: 'node large.cjs', aggregatedOutput: '🙂'.repeat(300000), exitCode: 0 });
     expect(actual).toMatchObject({ type: 'tool', details: { output: { complete: false } } });
     if (actual.type !== 'tool' || !actual.details?.output) throw new Error('Missing output');
-    expect(new TextEncoder().encode(actual.details.output.text).byteLength).toBeLessThanOrEqual(32768);
+    expect(new TextEncoder().encode(actual.details.output.text).byteLength).toBeLessThanOrEqual(1024 * 1024);
     expect(actual.details.output.omittedBytes).toBeGreaterThan(0);
     expect(actual.details.output.text).not.toContain('\ufffd');
   });
 
   it.each([
     { result: { isError: true } },
+    { result: { is_error: true } },
+    { result: { error: { code: 'tool_failed' } } },
+    { result: { success: false } },
+    { isError: true },
     { error: { message: 'Synthetic operation failed' } },
     { type: 'dynamicToolCall', success: false },
   ])('reports a completed tool operation that actually failed as failed: %j', (failure) => {

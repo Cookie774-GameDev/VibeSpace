@@ -1,4 +1,5 @@
 import type { Message, Part } from '@/types';
+import { localTurnOutcome } from '@/features/local-command-bridge/localTurnReceipt';
 import { applySecretPolicy } from '@/lib/security/secretDetector';
 import type {
   ChatActivityCategory,
@@ -9,7 +10,6 @@ import type {
 
 export const MAX_MOUNTED_BLOCKS = 400;
 export const TRANSCRIPT_PAGE_SIZE = 100;
-export const MAX_DIFF_LINES = 800;
 export const MAX_OUTPUT_CHARS = 1024 * 1024;
 
 type BaseBlock = {
@@ -258,10 +258,7 @@ function commandResultEvidence(result: unknown): {
 }
 
 function boundedDiff(diff: string): string {
-  const clean = sanitizeConsoleText(diff, MAX_OUTPUT_CHARS);
-  const lines = clean.split('\n');
-  if (lines.length <= MAX_DIFF_LINES) return clean;
-  return `${lines.slice(0, MAX_DIFF_LINES).join('\n')}\n… diff truncated`;
+  return sanitizeConsoleText(diff, MAX_OUTPUT_CHARS);
 }
 
 function projectMessage(message: Message, preserveAssistantMessages: boolean): TranscriptBlock[] {
@@ -369,7 +366,7 @@ function projectMessage(message: Message, preserveAssistantMessages: boolean): T
           id: `${sourceId}:tool:${part.call_id}`,
           kind: 'tool',
           tool: sanitizeConsoleText(part.tool, 512),
-          args: stringifyPayload(part.args, 128 * 1024) ?? '{}',
+          args: stringifyPayload(part.args) ?? '{}',
           output: stringifyPayload(result?.result),
           error: result?.error ? sanitizeConsoleText(result.error) : undefined,
           callId: part.call_id,
@@ -693,6 +690,7 @@ export function summarizeAgenticSession(
 
   let hasAssistantAnswer = false;
   let latestUserAt = -Infinity;
+  let latestLocalOutcome: 'completed' | 'queued' | undefined;
   let latestAnswerAt = -Infinity;
   let latestFailureNoticeAt = -Infinity;
   let hasTokenUsage = false;
@@ -701,7 +699,10 @@ export function summarizeAgenticSession(
   let hasEstimatedTokens = false;
   let model = '—';
   for (const message of messages) {
-    if (message.role === 'user') latestUserAt = Math.max(latestUserAt, message.created_at);
+    if (message.role === 'user' && message.created_at >= latestUserAt) {
+      latestUserAt = message.created_at;
+      latestLocalOutcome = localTurnOutcome(message);
+    }
     // Older saved turns have only this canonical application system notice.
     // Never interpret provider/user prose as a runtime terminal state.
     if (message.role === 'system' && message.parts.some(part => part.kind === 'text' &&
@@ -818,16 +819,25 @@ export function summarizeAgenticSession(
             : hasCompletedActivity || hasAssistantAnswer
               ? 'done'
               : 'idle';
-  const status = staleTerminalEvidence ? inferredStatus : (mappedStatus ?? inferredStatus);
-  const startedAt = staleTerminalEvidence
+  // A persisted local-only turn has no model request to recover. Do not infer
+  // this from its prose; only the app-written receipt on the latest user counts.
+  const localOutcome = !running && !['running', 'planning', 'queued', 'blocked'].includes(mappedStatus ?? '')
+    ? latestLocalOutcome : undefined;
+  const status = localOutcome
+    ? localOutcome === 'completed' ? 'done' : 'idle'
+    : staleTerminalEvidence ? inferredStatus : (mappedStatus ?? inferredStatus);
+  const localOperation = localOutcome === 'completed' ? 'Local actions completed'
+    : localOutcome === 'queued' ? 'Local actions queued' : undefined;
+  const startedAt = localOutcome ? latestUserAt : staleTerminalEvidence
     ? latestUserAt
     : typeof evidence.startedAt === 'number' ? evidence.startedAt : (earliestStartedAt ?? '—');
-  const endedAt = staleTerminalEvidence
+  const endedAt = localOutcome || staleTerminalEvidence
     ? '—'
     : typeof evidence.endedAt === 'number' ? evidence.endedAt : (latestEndedAt ?? '—');
   return {
     status,
     currentOperation:
+      localOperation ??
       (!staleTerminalEvidence && evidence.currentOperation
         ? sanitizeConsoleText(evidence.currentOperation, 4096)
         : undefined) ??

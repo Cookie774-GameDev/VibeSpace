@@ -508,6 +508,23 @@ describe('compileJarvisPrompt', () => {
     },
   );
 
+  it('keeps verified terminal capabilities and context for a contextual coordinator', async () => {
+    const source = contextItem('worker-context', 'COORDINATION_CONTEXT_PROOF: existing project facts');
+    const compiled = compileJarvisPrompt(await envelope({
+      interactionMode: 'agent',
+      userText: 'Tell each of them to use the Context Map and RLM, compose worker prompts, and send those prompts to the new Claude terminals after verifying live identities.',
+      capabilities: capabilitySnapshot({ tools: [
+        { id: 'terminal.list', state: 'authenticated', operations: ['list'], evidenceRef: 'evidence:terminal.list', lastVerifiedAt: 99 },
+        { id: 'vibespace_context', state: 'authenticated', operations: ['search'], evidenceRef: 'evidence:context', lastVerifiedAt: 99 },
+      ] }),
+      context: context([source]),
+    }));
+    expect(compiled.layers[2]!.content).toContain('terminal.list');
+    expect(compiled.layers[2]!.content).not.toContain('only provider tool enabled for this turn');
+    expect(compiled.layers[5]!.content).toContain('COORDINATION_CONTEXT_PROOF');
+    expect(compiled.diagnostics.warnings).not.toContain('context_deferred_to_live_tool');
+  });
+
   it('keeps explicit Context Map tool turns inside a small-model prompt budget', async () => {
     const exposed = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).listExposed();
     const source = contextItem(
@@ -564,7 +581,7 @@ describe('compileJarvisPrompt', () => {
     );
   });
 
-  it('uses the real OpenCode connection to omit unrelated schemas and duplicated Context', async () => {
+  it('keeps the native catalog for an ordinary project-file evidence request', async () => {
     const compiled = compileJarvisPrompt(
       await envelope({
         userText: 'Across project files, report the base price and service owner. Cite each file.',
@@ -582,22 +599,23 @@ describe('compileJarvisPrompt', () => {
             DEFAULT_JARVIS_ACTION_REGISTRATIONS,
           ).listExposed(),
         }),
-        context: context([contextItem('duplicated-context', 'Unrelated context '.repeat(200))]),
+        context: context([contextItem('duplicated-context', 'Unrelated context '.repeat(64))]),
       }),
     );
 
-    expect(compiled.layers[2]!.content).toContain('only provider tool enabled for this turn');
-    expect(compiled.layers[2]!.content).not.toContain('Model-visible action schemas:');
-    expect(compiled.layers[5]!.content).not.toContain('Unrelated context');
+    expect(compiled.layers[2]!.content).not.toContain('only provider tool enabled for this turn');
+    expect(compiled.layers[2]!.content).toContain('file.read');
+    expect(compiled.layers[2]!.content).not.toContain('vibespace_context');
+    expect(compiled.layers[5]!.content).toContain('Unrelated context');
     expect(compiled.systemText).toContain(JARVIS_IDENTITY_POLICY.responseContract);
     expect(compiled.systemText.length).toBeLessThan(16_000);
   });
 
-  it('keeps natural read-and-cite file questions inside the Context Map-only prompt budget', async () => {
+  it('keeps ordinary read-and-cite file questions on the full catalog', async () => {
     const exposed = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).listExposed();
     const source = contextItem(
       'large-unrelated-source',
-      'irrelevant attached context '.repeat(600),
+      'irrelevant attached context '.repeat(16),
     );
     const compiled = compileJarvisPrompt(
       await envelope({
@@ -613,14 +631,9 @@ describe('compileJarvisPrompt', () => {
     const capabilityLayer = compiled.layers[2]?.content ?? '';
     const contextLayer = compiled.layers[5]?.content ?? '';
 
-    expect(capabilityLayer).toContain('vibespace_context');
-    expect(capabilityLayer).toContain('only provider tool enabled for this turn');
-    expect(capabilityLayer).toContain('The function name is always `vibespace_context`');
-    expect(capabilityLayer).toContain('Never print or narrate a tool call as JSON');
-    expect(capabilityLayer).toContain('with `operation="investigate"`');
-    expect(capabilityLayer).toContain('complete user question');
-    expect(capabilityLayer).toContain('Gateway/RLM receipt');
-    expect(capabilityLayer).toContain('canonical `vibespace:context/...` provenance URI');
+    expect(capabilityLayer).not.toContain('vibespace_context');
+    expect(capabilityLayer).not.toContain('only provider tool enabled for this turn');
+    expect(capabilityLayer).toContain('file.read');
     expect(capabilityLayer).not.toContain(
       'For a single-question file research turn, first call `vibespace_context` with `operation="search"`',
     );
@@ -630,16 +643,12 @@ describe('compileJarvisPrompt', () => {
     expect(capabilityLayer).not.toContain(
       'For file research, first call `vibespace_context` with `operation="search"`, the complete user question',
     );
-    expect(capabilityLayer).toContain(
-      'This direct user chat is not a subagent assignment or delegation',
-    );
-    expect(capabilityLayer).toContain('Do not emit `BOOTSTRAP_OK` or `BOOTSTRAP_BLOCKED`');
     expect(capabilityLayer).not.toContain('"id":"terminal.run"');
-    expect(contextLayer).not.toContain('irrelevant attached context');
-    expect(compiled.diagnostics.omittedSourceRefs).toContainEqual(
+    expect(contextLayer).toContain('irrelevant attached context');
+    expect(compiled.diagnostics.omittedSourceRefs).not.toContainEqual(
       expect.objectContaining({ id: source.source.id }),
     );
-    expect(compiled.diagnostics.warnings).toContain('context_deferred_to_live_tool');
+    expect(compiled.diagnostics.warnings).not.toContain('context_deferred_to_live_tool');
     expect(compiled.systemText.length).toBeLessThan(16_000);
   });
 

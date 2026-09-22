@@ -11,7 +11,7 @@ describe('MessagePart provider errors', () => {
           kind: 'provider_error',
           error: {
             message: 'Provider rejected the request.',
-            code: 'quota_exhausted',
+            code: 'provider_rejected',
             providerId: 'opencode-go',
             modelId: 'deepseek-v4-flash-vision-exp',
             retryable: false,
@@ -26,8 +26,9 @@ describe('MessagePart provider errors', () => {
 
     expect(screen.getByRole('alert')).toBeTruthy();
     expect(screen.getByTestId('provider-error')).toBeTruthy();
+    expect(screen.getByTestId('provider-error').getAttribute('data-provider-error-layout')).toBe('wide');
     expect(screen.getByText('Provider rejected the request.')).toBeTruthy();
-    expect(screen.getByText('quota_exhausted')).toBeTruthy();
+    expect(screen.getByText('provider_rejected')).toBeTruthy();
     expect(screen.getByText('opencode-go/deepseek-v4-flash-vision-exp')).toBeTruthy();
     expect(screen.getByText('Retry is not available')).toBeTruthy();
     expect(screen.getByText('Retry after 2s')).toBeTruthy();
@@ -35,5 +36,35 @@ describe('MessagePart provider errors', () => {
     expect(screen.getByText('1700000000000')).toBeTruthy();
     expect(screen.getByText('request-1')).toBeTruthy();
     expect(screen.getByText('run-1')).toBeTruthy();
+  });
+
+  it('renders temporary rate limits as retry guidance while retaining diagnostics', () => {
+    render(
+      <MessagePart
+        allParts={[]}
+        part={{
+          kind: 'provider_error',
+          error: {
+            message: 'HTTP 429 Too Many Requests.',
+            code: '429',
+            providerId: 'opencode-go',
+            modelId: 'deepseek-v4-flash-vision-exp',
+            connectionId: 'opencode-cli',
+            retryable: true,
+            retryAfterMs: 60_000,
+            requestId: 'request-limit',
+            runId: 'run-limit',
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Too many requests')).toBeTruthy();
+    expect(screen.getByText(/temporarily rate limited/i)).toBeTruthy();
+    expect(screen.getByText('opencode-go/deepseek-v4-flash-vision-exp')).toBeTruthy();
+    expect(screen.getByText('opencode-cli')).toBeTruthy();
+    expect(screen.getByText('request-limit')).toBeTruthy();
+    expect(screen.getByText('run-limit')).toBeTruthy();
+    expect(screen.getByTestId('provider-error').querySelector('[data-provider-error-diagnostics="true"]')).toBeTruthy();
   });
 });

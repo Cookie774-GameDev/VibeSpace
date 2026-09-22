@@ -102,7 +102,7 @@ export async function resolveNativeCodexRoute(
     (route !== 'direct-responses' && route !== 'opencodex-translation') ||
     !['responses', 'chat-completions', 'anthropic', 'google', 'azure-openai'].includes(String(wireProtocol)) ||
     !['codex-responses-v1', 'reviewed-opencodex-v1'].includes(String(contract)) ||
-    !['openai-chat', 'anthropic', 'google', 'azure-openai'].includes(String(adapter)) ||
+    !['openai-chat', 'openai-responses', 'anthropic', 'google', 'azure-openai'].includes(String(adapter)) ||
     !supportedEfforts || !supportedServiceTiers ||
     typeof supports?.tools !== 'boolean' ||
     typeof supports.cancellation !== 'boolean' ||

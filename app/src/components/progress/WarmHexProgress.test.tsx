@@ -51,7 +51,7 @@ describe('WarmHexProgress', () => {
     });
     vi.stubGlobal('ResizeObserver', ResizeObserverMock);
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as never);
-    vi.spyOn(window, 'matchMedia').mockImplementation(() => matchMedia(false));
+    vi.stubGlobal('matchMedia', vi.fn(() => matchMedia(false)));
   });
 
   afterEach(() => {

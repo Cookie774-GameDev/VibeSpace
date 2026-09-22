@@ -85,7 +85,7 @@ function validIdentifier(value: unknown): value is string {
 }
 
 function validPeerRefs(peerRefs: readonly FabricPeerRef[]): boolean {
-  if (peerRefs.length < 2 || peerRefs.length > 8) return false;
+  if (peerRefs.length < 2 || peerRefs.length > 10) return false;
   const identities = new Set<string>();
   const paneGenerations = new Set<string>();
   return peerRefs.every((peer) => {

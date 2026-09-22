@@ -52,6 +52,12 @@ vi.mock('@tauri-apps/api/webview', () => ({
 
 vi.mock('dexie-react-hooks', () => ({ useLiveQuery: () => testState.liveChats }));
 
+// Chat handoff coverage does not exercise CAO mission behavior. Keep the
+// global live-chat fixture from being interpreted as CAO target rows.
+vi.mock('@/features/cao/CaoCommandPanel', () => ({
+  CaoCommandPanel: () => null,
+}));
+
 vi.mock('@/lib/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/db')>();
   return {
@@ -148,6 +154,14 @@ async function settleComposerEffects() {
     await Promise.resolve();
     await Promise.resolve();
   });
+}
+
+function workspaceAnnouncement() {
+  const announcement = screen
+    .getByTestId('chat-workspace')
+    .querySelector(':scope > p[role="status"]');
+  if (!announcement) throw new Error('ChatWorkspace announcement was not rendered.');
+  return announcement;
 }
 
 describe('ChatView handoff workspace integration', () => {
@@ -681,8 +695,8 @@ describe('ChatView handoff workspace integration', () => {
       }),
     );
     await screen.findByTestId('chat-pane-chat-2');
-    expect(screen.getByRole('status').textContent).toContain('Chat 2 opened beside Chat 1');
-    expect(screen.getByRole('status').textContent).not.toContain('Forged title');
+    expect(workspaceAnnouncement().textContent).toContain('Chat 2 opened beside Chat 1');
+    expect(workspaceAnnouncement().textContent).not.toContain('Forged title');
 
     fireEvent.click(screen.getByRole('button', { name: 'Focus Chat 1' }));
     testState.getChat.mockImplementation(async (id: string) =>
@@ -693,12 +707,12 @@ describe('ChatView handoff workspace integration', () => {
         detail: openBesideDetail('chat-2', 'Stale duplicate'),
       }),
     );
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('unavailable'));
+    await waitFor(() => expect(workspaceAnnouncement().textContent).toContain('unavailable'));
     expect(useUIStore.getState().activeChatId).toBe('chat-1');
-    expect(screen.getByRole('status').textContent).not.toContain('Stale duplicate');
+    expect(workspaceAnnouncement().textContent).not.toContain('Stale duplicate');
 
     window.dispatchEvent(new CustomEvent(CHAT_OPEN_BESIDE_EVENT, { detail: { title: 17 } }));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('unavailable'));
+    await waitFor(() => expect(workspaceAnnouncement().textContent).toContain('unavailable'));
     expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(2);
   });
 
@@ -714,7 +728,7 @@ describe('ChatView handoff workspace integration', () => {
     );
 
     await waitFor(() => expect(useUIStore.getState().activeChatId).toBe('chat-2'));
-    expect(screen.getByRole('status').textContent).toContain('Focused existing Chat 2');
+    expect(workspaceAnnouncement().textContent).toContain('Focused existing Chat 2');
     expect(screen.getAllByTestId(/^chat-pane-/)).toHaveLength(2);
   });
 
