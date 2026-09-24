@@ -13,6 +13,7 @@ import {
   createCanvasBlock,
   createCanvasDocument,
   parseCanvasDocument,
+  resolveEdgelessLayout,
   withBlockAdded,
   type CanvasBlock,
   type CanvasBlockContent,
@@ -1349,22 +1350,57 @@ function png(width: number, height: number, color: string, document: CanvasDocum
     y: number,
     rgba: readonly number[],
     maximumWidth: number,
+    maximumHeight: number,
+    requestedScale = 1,
   ): void => {
-    const normalized = value
-      .normalize('NFKD')
-      .replace(/[^\x20-\x7e]/gu, '?')
-      .toUpperCase();
-    let cursor = x;
-    for (const character of normalized) {
-      if (cursor + 5 > x + maximumWidth) break;
-      const glyph = FONT_5X7[character] ?? FONT_5X7['?'];
-      glyph.forEach((bits, row) => {
-        for (let column = 0; column < 5; column += 1) {
-          if ((bits & (1 << (4 - column))) !== 0) setPixel(cursor + column, y + row, rgba);
+    const glyphScale = Math.max(1, Math.min(4, Math.floor(requestedScale)));
+    const advance = 6 * glyphScale;
+    const lineHeight = 9 * glyphScale;
+    const maxCharacters = Math.max(1, Math.floor(maximumWidth / advance));
+    const maxLines = Math.max(0, Math.floor(maximumHeight / lineHeight));
+    if (maxLines === 0) return;
+
+    const lines: string[] = [];
+    for (const sourceLine of value.normalize('NFKD').split(/\r?\n/u)) {
+      const normalized = sourceLine.replace(/[^\x20-\x7e]/gu, '?').toUpperCase();
+      let line = '';
+      for (const word of normalized.split(/\s+/u)) {
+        if (!word) continue;
+        if (line && line.length + word.length + 1 <= maxCharacters) {
+          line += ` ${word}`;
+          continue;
         }
-      });
-      cursor += 6;
+        if (line) lines.push(line);
+        line = '';
+        for (let offset = 0; offset < word.length; offset += maxCharacters) {
+          const fragment = word.slice(offset, offset + maxCharacters);
+          if (fragment.length === maxCharacters) lines.push(fragment);
+          else line = fragment;
+        }
+      }
+      if (line) lines.push(line);
+      if (sourceLine.length === 0) lines.push('');
     }
+
+    lines.slice(0, maxLines).forEach((line, lineIndex) => {
+      const lineY = y + lineIndex * lineHeight;
+      [...line].forEach((character, characterIndex) => {
+        const glyph = FONT_5X7[character] ?? FONT_5X7['?'];
+        glyph.forEach((bits, row) => {
+          for (let column = 0; column < 5; column += 1) {
+            if ((bits & (1 << (4 - column))) !== 0) {
+              fillRect(
+                x + characterIndex * advance + column * glyphScale,
+                lineY + row * glyphScale,
+                glyphScale,
+                glyphScale,
+                rgba,
+              );
+            }
+          }
+        });
+      });
+    });
   };
 
   const luminance = background[0] * 0.299 + background[1] * 0.587 + background[2] * 0.114;
@@ -1373,29 +1409,83 @@ function png(width: number, height: number, color: string, document: CanvasDocum
   const border =
     luminance >= 128 ? ([113, 113, 122, 255] as const) : ([161, 161, 170, 255] as const);
   const accent = [59, 130, 246, 255] as const;
-  const titleHeight = height >= 18 ? 10 : 0;
-  if (titleHeight > 0) drawText(document.title, 2, 1, ink, Math.max(0, width - 4));
-
   const orderedBlocks = document.pageOrder.map(
     (id) => document.blocks.find((block) => block.id === id) as CanvasBlock,
   );
-  const availableHeight = Math.max(1, height - titleHeight);
-  const cardHeight = Math.max(1, Math.floor(availableHeight / Math.max(1, orderedBlocks.length)));
-  orderedBlocks.forEach((block, index) => {
-    const y = titleHeight + index * cardHeight;
-    const currentHeight =
-      index === orderedBlocks.length - 1 ? height - y : Math.max(1, cardHeight - 1);
-    const x = width >= 4 ? 1 : 0;
-    const currentWidth = width >= 4 ? width - 2 : width;
-    fillRect(x, y, currentWidth, currentHeight, card);
-    if (currentWidth >= 2 && currentHeight >= 2) {
-      strokeRect(x, y, currentWidth, currentHeight, border);
-      if (block.content.kind === 'heading') fillRect(x, y, 2, currentHeight, accent);
-    }
-    if (currentWidth >= 9 && currentHeight >= 9) {
-      drawText(blockText(block), x + 3, y + 1, ink, currentWidth - 5);
-    }
+  const placementById = resolveEdgelessLayout(document);
+  const placedBlocks = orderedBlocks.flatMap((block, index) => {
+    const placement = placementById.get(block.id);
+    return placement && !placement.hidden ? [{ block, placement, index }] : [];
   });
+  const bounds = placedBlocks.map(({ placement }) => {
+    const radians = (placement.rotation * Math.PI) / 180;
+    const halfWidth = Math.abs(Math.cos(radians)) * placement.width * 0.5;
+    const halfHeight = Math.abs(Math.sin(radians)) * placement.width * 0.5;
+    const rotatedHalfWidth = halfWidth + Math.abs(Math.sin(radians)) * placement.height * 0.5;
+    const rotatedHalfHeight = halfHeight + Math.abs(Math.cos(radians)) * placement.height * 0.5;
+    const centerX = placement.x + placement.width * 0.5;
+    const centerY = placement.y + placement.height * 0.5;
+    return {
+      left: centerX - rotatedHalfWidth,
+      top: centerY - rotatedHalfHeight,
+      right: centerX + rotatedHalfWidth,
+      bottom: centerY + rotatedHalfHeight,
+    };
+  });
+  const minX = bounds.length ? Math.min(...bounds.map(({ left }) => left)) : 0;
+  const minY = bounds.length ? Math.min(...bounds.map(({ top }) => top)) : 0;
+  const maxX = bounds.length ? Math.max(...bounds.map(({ right }) => right)) : 1;
+  const maxY = bounds.length ? Math.max(...bounds.map(({ bottom }) => bottom)) : 1;
+  const minimumDimension = Math.min(width, height);
+  const margin = Math.max(1, Math.min(48, Math.floor(minimumDimension * 0.06)));
+  const titleHeight = height >= 80 ? Math.min(60, Math.max(30, Math.round(height * 0.1))) : 0;
+  const safeWidth = Math.max(1, width - margin * 2);
+  const safeHeight = Math.max(1, height - titleHeight - margin * 2);
+  const layoutScale = Math.min(
+    safeWidth / Math.max(1, maxX - minX),
+    safeHeight / Math.max(1, maxY - minY),
+  );
+  const fontScale = Math.max(1, Math.min(4, Math.floor(layoutScale)));
+  const titleY = Math.max(1, Math.floor(margin * 0.5));
+  if (titleHeight > 0) {
+    drawText(
+      document.title,
+      margin,
+      titleY,
+      ink,
+      safeWidth,
+      titleHeight - titleY,
+      Math.max(1, Math.min(3, fontScale)),
+    );
+  }
+
+  placedBlocks
+    .sort((left, right) => left.placement.z - right.placement.z || left.index - right.index)
+    .forEach(({ block, placement }) => {
+      const x = margin + (placement.x - minX) * layoutScale;
+      const y = titleHeight + margin + (placement.y - minY) * layoutScale;
+      const currentWidth = placement.width * layoutScale;
+      const currentHeight = placement.height * layoutScale;
+      fillRect(x, y, currentWidth, currentHeight, card);
+      if (currentWidth >= 2 && currentHeight >= 2) {
+        strokeRect(x, y, currentWidth, currentHeight, border);
+        if (block.content.kind === 'heading') {
+          fillRect(x, y, Math.max(2, fontScale), currentHeight, accent);
+        }
+      }
+      const padding = Math.max(2, Math.min(18, fontScale * 4));
+      if (currentWidth > padding * 2 && currentHeight > padding * 2) {
+        drawText(
+          blockText(block),
+          x + padding,
+          y + padding,
+          ink,
+          currentWidth - padding * 2,
+          currentHeight - padding * 2,
+          fontScale,
+        );
+      }
+    });
 
   const description = [document.title, ...orderedBlocks.map(blockText)]
     .join('\n')

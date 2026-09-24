@@ -190,6 +190,7 @@ import {
   type CanvasShapeKind,
 } from './shapes';
 import './sakura-canvas.css';
+import './canvas-experience.css';
 
 type CanvasTool = 'select' | 'lasso' | 'hand' | 'note';
 type CanvasPlacementField = 'x' | 'y' | 'width' | 'height' | 'rotation';
@@ -3235,7 +3236,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
       data-monochrome-route="canvas"
       data-sakura-route="canvas"
       data-sakura-intensity="quiet"
-      className="mc7d-canvas flex h-full min-h-0 w-full flex-col bg-background text-foreground"
+      className="mc7d-canvas relative flex h-full min-h-0 w-full flex-col bg-background text-foreground"
     >
       <header
         data-monochrome-surface="canvas-header"

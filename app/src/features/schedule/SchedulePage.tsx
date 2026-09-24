@@ -45,7 +45,9 @@ const LEGACY_SCHEDULE_TIMELINE_TRANSITION = Object.freeze({
   stiffness: 240,
   damping: 28,
 } as const);
-import { useAccessibleChatModels } from '@/lib/ai/useAccessibleChatModels';
+import { useAccessibleChatModels, type ModelPickerOption } from '@/lib/ai/useAccessibleChatModels';
+import { CODEX_CLI_CONNECTION, OPENCODE_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
+import { ModelPickerTypeahead } from '@/features/chat/ModelPickerTypeahead';
 import { getProviderDisplayName } from '@/lib/ai/providerRegistry';
 import { cn } from '@/lib/utils';
 import { completeTask, useUpcomingTasks } from '@/features/tasks';
@@ -445,6 +447,15 @@ export function SchedulePage() {
         .filter((group) => group.options.length > 0),
     [jarvisModelGroups],
   );
+  const cliModelRoutes = React.useMemo(() => {
+    const routes = new Map<string, ModelPickerOption>();
+    for (const option of jarvisModelOptionsAll) {
+      for (const route of option.alternativeRoutes ?? [option]) {
+        if (route.available !== false) routes.set(route.id, route);
+      }
+    }
+    return [...routes.values()];
+  }, [jarvisModelOptionsAll]);
   const events = useUpcomingEvents(workspaceId, 14 * DAY_MS, 100);
   const tasks = useUpcomingTasks();
   const timeline = React.useMemo(() => buildTimeline(events, tasks), [events, tasks]);
@@ -515,6 +526,7 @@ export function SchedulePage() {
     initialScheduleDraft.intervalUnit,
   );
   const [modelPickerOpen, setModelPickerOpen] = React.useState(false);
+  const [cliFilter, setCliFilter] = React.useState<'all' | 'opencode' | 'codex'>('all');
   const [timelineView, setTimelineView] = React.useState<'timeline' | 'jarvis'>('timeline');
   const [openJarvisEventId, setOpenJarvisEventId] = React.useState<string | null>(null);
   const [kernelSmokeDispatching, setKernelSmokeDispatching] = React.useState(false);
@@ -567,6 +579,26 @@ export function SchedulePage() {
   const [jarvisModelOptionId, setJarvisModelOptionId] = React.useState(
     () => initialScheduleDraft.jarvisModelOptionId || selectionOptionId(chatModelSelection) || '',
   );
+  const modelPickerGroups = React.useMemo(() => {
+    if (cliFilter === 'all') return jarvisModelGroupsAvailable;
+    const connectionId = cliFilter === 'codex'
+      ? CODEX_CLI_CONNECTION.id
+      : OPENCODE_CLI_CONNECTION.id;
+    const options = cliModelRoutes.filter((route) => route.connectionId === connectionId);
+    return options.length > 0
+      ? [{ id: `schedule:${connectionId}`, provider: options[0]!.provider,
+          label: cliFilter === 'codex' ? 'Codex CLI' : 'OpenCode CLI', options }]
+      : [];
+  }, [cliFilter, cliModelRoutes, jarvisModelGroupsAvailable]);
+  const selectCliFilter = (next: 'all' | 'opencode' | 'codex') => {
+    setCliFilter(next);
+    if (next === 'all') return;
+    const connectionId = next === 'codex' ? CODEX_CLI_CONNECTION.id : OPENCODE_CLI_CONNECTION.id;
+    const matching = cliModelRoutes.filter((route) => route.connectionId === connectionId);
+    if (matching.length && !matching.some((route) => route.id === jarvisModelOptionId)) {
+      setJarvisModelOptionId(matching[0]!.id);
+    }
+  };
 
   React.useLayoutEffect(() => {
     if (draftWorkspaceRef.current === workspaceId) return;
@@ -676,7 +708,9 @@ export function SchedulePage() {
     setJarvisModelOptionId(selectionOptionId(metadata.modelSelection) ?? '');
   }, [editingToken, jarvisEvents]);
   const selectedJarvisModel = React.useMemo(() => {
-    const exact = jarvisModelOptions.find((option) => option.id === jarvisModelOptionId);
+    const exact = [...jarvisModelOptions, ...cliModelRoutes].find(
+      (option) => option.id === jarvisModelOptionId,
+    );
     if (exact) return exact;
 
     // Accept provider-qualified values persisted by older builds, then resolve
@@ -691,7 +725,7 @@ export function SchedulePage() {
           option.provider === provider && option.modelId === modelId && option.available !== false,
       ) ?? null
     );
-  }, [jarvisModelOptions, jarvisModelOptionId]);
+  }, [jarvisModelOptions, cliModelRoutes, jarvisModelOptionId]);
   const jarvisModelSelectionForSave = React.useMemo<ChatModelSelection | null>(() => {
     if (
       editingJarvisModelSelection &&
@@ -730,7 +764,11 @@ export function SchedulePage() {
       ) {
         return current;
       }
-      if (current && jarvisModelOptions.some((option) => option.id === current)) return current;
+      if (
+        current &&
+        [...jarvisModelOptions, ...cliModelRoutes].some((option) => option.id === current)
+      )
+        return current;
       if (activeId && jarvisModelOptions.some((option) => option.id === activeId)) return activeId;
       if (chatModelSelection.mode === 'single') {
         const compatible = jarvisModelOptions.find(
@@ -747,7 +785,7 @@ export function SchedulePage() {
         ''
       );
     });
-  }, [chatModelSelection, editingJarvisModelSelection, jarvisModelOptions]);
+  }, [chatModelSelection, editingJarvisModelSelection, jarvisModelOptions, cliModelRoutes]);
 
   // Pick a day from the mini-calendar: pre-fill the new-event form for 9–10am
   // that day and jump the timeline to it if anything is already scheduled.
@@ -1761,11 +1799,10 @@ export function SchedulePage() {
                   <div className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-accent-cyan/25 bg-background/45 p-3">
                     <div>
                       <Label htmlFor="cao-supervised-learning" className={SECTION_TITLE_CLASS}>
-                        CAO supervised learning
+                        Review project learning
                       </Label>
                       <p className={FIELD_HINT_CLASS}>
-                        Bind this action to the active project’s durable learning.md review using
-                        policy quarter-hour-v1.
+                        Optional: review the active project’s learning notes after this action.
                       </p>
                       {caoSupervisedLearning &&
                       (!getActiveAccountIdentity() ||
@@ -1781,7 +1818,7 @@ export function SchedulePage() {
                     </div>
                     <Switch
                       id="cao-supervised-learning"
-                      aria-label="CAO supervised learning"
+                      aria-label="Review project learning"
                       checked={caoSupervisedLearning}
                       onCheckedChange={setCaoSupervisedLearning}
                     />
@@ -1791,6 +1828,33 @@ export function SchedulePage() {
                   <Label htmlFor="jarvis-action-model" className={SECTION_TITLE_CLASS}>
                     Model
                   </Label>
+                  <div role="group" aria-label="Action CLI" className="mb-2 mt-1 flex flex-wrap gap-1.5">
+                    {([
+                      ['all', 'All connections'],
+                      ['opencode', 'OpenCode CLI'],
+                      ['codex', 'Codex CLI'],
+                    ] as const).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={cliFilter === value}
+                        onClick={() => selectCliFilter(value)}
+                        className={cn(
+                          'rounded-xl border px-2.5 py-1 text-metadata transition-colors',
+                          cliFilter === value
+                            ? 'border-accent-copper/60 bg-accent-copper/15 text-foreground'
+                            : 'border-border/70 bg-background/50 text-muted-foreground hover:bg-muted/60',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {cliFilter !== 'all' && modelPickerGroups.length === 0 ? (
+                    <p role="status" className={FIELD_HINT_CLASS}>
+                      No accessible {cliFilter === 'codex' ? 'Codex' : 'OpenCode'} CLI models are connected.
+                    </p>
+                  ) : null}
                   {jarvisModelOptions.length > 0 ? (
                     <Popover
                       open={modelPickerOpen && !editingToken?.caoSupervision}
@@ -1826,92 +1890,17 @@ export function SchedulePage() {
                       </PopoverTrigger>
                       <PopoverContent
                         align="start"
-                        className="w-[min(22rem,calc(100vw-2rem))] max-h-72 overflow-y-auto p-2"
+                        onOpenAutoFocus={(event) => event.preventDefault()}
+                        className="w-auto max-w-[calc(100vw-2rem)] rounded-2xl border border-border/60 bg-background/95 p-0 shadow-2xl"
                       >
-                        <div className="space-y-3" role="group" aria-label="Connected models">
-                          {jarvisModelGroupsAvailable.map((group) => (
-                            <div key={group.id ?? `${group.provider}:${group.label}`}>
-                              <div className="mb-1 px-1.5 text-metadata font-semibold uppercase tracking-wide text-muted-foreground">
-                                {group.label}
-                              </div>
-                              <div className="space-y-0.5">
-                                {group.options.map((option) => {
-                                  const selected =
-                                    option.id === jarvisModelOptionId ||
-                                    option.alternativeRoutes?.some(
-                                      (route) => route.id === jarvisModelOptionId,
-                                    ) === true;
-                                  return (
-                                    <div key={option.id}>
-                                      <button
-                                        type="button"
-                                        aria-label={`Select ${option.label}`}
-                                        aria-pressed={selected}
-                                        onClick={() => {
-                                          setJarvisModelOptionId(option.id);
-                                          setModelPickerOpen(false);
-                                        }}
-                                        className={cn(
-                                          'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-secondary transition-colors',
-                                          selected
-                                            ? 'bg-accent-violet/15 text-foreground ring-1 ring-accent-violet/40'
-                                            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                                        )}
-                                      >
-                                        <ProviderFallbackMark
-                                          provider={option.provider}
-                                          selected={selected}
-                                        />
-                                        <span className="min-w-0">
-                                          <span className="block truncate font-medium text-foreground">
-                                            {option.label}
-                                          </span>
-                                          <span className="block truncate text-metadata text-muted-foreground">
-                                            {option.modeLabel ??
-                                              getProviderDisplayName(option.provider)}
-                                            {option.authLabel ? ` · ${option.authLabel}` : ''}
-                                          </span>
-                                        </span>
-                                        {selected ? (
-                                          <Check className="ml-auto mt-1 h-3.5 w-3.5 shrink-0 text-accent-violet" />
-                                        ) : null}
-                                      </button>
-                                      {option.alternativeRoutes &&
-                                      option.alternativeRoutes.length > 1 ? (
-                                        <div
-                                          role="group"
-                                          aria-label={`${option.label} routes`}
-                                          className="mx-3 mb-1 flex flex-wrap gap-1.5 px-2"
-                                        >
-                                          {option.alternativeRoutes.map((route) => (
-                                            <button
-                                              key={route.id}
-                                              type="button"
-                                              disabled={route.available === false}
-                                              aria-label={`Use ${route.label}`}
-                                              aria-pressed={route.id === jarvisModelOptionId}
-                                              onClick={() => {
-                                                setJarvisModelOptionId(route.id);
-                                                setModelPickerOpen(false);
-                                              }}
-                                              className={cn(
-                                                'rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-55',
-                                                route.id === jarvisModelOptionId &&
-                                                  'border-accent-violet/60 text-accent-violet',
-                                              )}
-                                            >
-                                              {route.label}
-                                            </button>
-                                          ))}
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                        <ModelPickerTypeahead
+                          groups={modelPickerGroups}
+                          selectedId={jarvisModelOptionId}
+                          onSelect={(provider, modelId, connection) => {
+                            setJarvisModelOptionId(`${connection?.id ?? provider}:${modelId}`);
+                            setModelPickerOpen(false);
+                          }}
+                        />
                       </PopoverContent>
                     </Popover>
                   ) : savedJarvisRoute ? (
@@ -2084,26 +2073,29 @@ export function SchedulePage() {
                   )}
                 </div>
               )}
-              {scheduleMode === 'jarvis' && !editingEventId && !caoSupervisedLearning && (
+              {scheduleMode === 'jarvis' && !editingEventId && (
                 <div className="mt-3">
-                  <Label htmlFor="schedule-chat-destination">Run in chat</Label>
-                  <select
-                    id="schedule-chat-destination"
-                    value={targetChatId ? 'same' : 'new'}
-                    onChange={(event) =>
-                      setTargetChatId(
-                        event.target.value === 'same' ? (activeChatId ?? undefined) : undefined,
-                      )
-                    }
-                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
-                  >
-                    <option value="new">New chat</option>
-                    <option value="same" disabled={!activeChatId && !targetChatId}>
+                  <Label>Run in chat</Label>
+                  <div role="group" aria-label="Run in chat" className="mt-1 grid grid-cols-2 gap-2 rounded-xl border border-border/70 bg-background/45 p-1">
+                    <button type="button" aria-pressed={!targetChatId}
+                      disabled={caoSupervisedLearning}
+                      onClick={() => setTargetChatId(undefined)}
+                      className={cn('rounded-lg px-3 py-1.5 text-sm transition-colors',
+                        !targetChatId ? 'bg-accent-copper/20 text-foreground' : 'text-muted-foreground hover:bg-muted/60')}>
+                      New chat
+                    </button>
+                    <button type="button" aria-pressed={Boolean(targetChatId)}
+                      disabled={caoSupervisedLearning || (!activeChatId && !targetChatId)}
+                      onClick={() => setTargetChatId(activeChatId ?? undefined)}
+                      className={cn('rounded-lg px-3 py-1.5 text-sm transition-colors',
+                        targetChatId ? 'bg-accent-copper/20 text-foreground' : 'text-muted-foreground hover:bg-muted/60')}>
                       Same chat
-                    </option>
-                  </select>
+                    </button>
+                  </div>
                   <p className={FIELD_HINT_CLASS}>
-                    {targetChatId
+                    {caoSupervisedLearning
+                      ? 'Project learning reviews use their own supervised history.'
+                      : targetChatId
                       ? 'The result will appear in the chat selected when you saved this task.'
                       : 'A new chat will be created when this task runs.'}
                   </p>

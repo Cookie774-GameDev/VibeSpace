@@ -1,4 +1,5 @@
 import { Bot, FileText, Image as ImageIcon, Layers, Zap } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { ToolCallCard } from './ToolCallCard';
 import { ThinkingDisclosure } from './ThinkingDisclosure';
 import { ActionApprovalCard } from './ActionApprovalCard';
@@ -33,6 +34,23 @@ import { TokenOptimizationReceiptView } from '@/features/token-optimizer';
 import { PluginUsageCard, resolvePluginActionEvidence } from './PluginUsageCard';
 import { presentProviderError } from '@/lib/ai/providerError';
 import { AssistantRichText } from './AssistantRichText';
+import { ToolFileLink } from './activity-ledger/ToolDetailsInspector';
+import { resolveToolChatRoot } from './activity-ledger/toolFileActions';
+
+function ChatFileReference({ path, chatId }: { path: string; chatId?: string }) {
+  const [projectRoot, setProjectRoot] = useState<string>();
+  useEffect(() => {
+    let current = true;
+    setProjectRoot(undefined);
+    if (chatId) {
+      void resolveToolChatRoot(chatId)
+        .then((root) => { if (current) setProjectRoot(root); })
+        .catch(() => { if (current) setProjectRoot(undefined); });
+    }
+    return () => { current = false; };
+  }, [chatId]);
+  return <ToolFileLink path={path} projectRoot={projectRoot} />;
+}
 
 function textForDisplay(text: string): string {
   if (!text.includes('```')) return text;
@@ -535,7 +553,9 @@ export function MessagePart({
           <FileText className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="font-mono text-metadata">{ref.kind}</span>
           <span className="text-muted-foreground">·</span>
-          <span className="truncate max-w-[20ch]">{ref.id}</span>
+          <span className="truncate max-w-[20ch]">
+            {ref.kind === 'file' ? <ChatFileReference path={ref.id} chatId={chatId} /> : ref.id}
+          </span>
           {ref.excerpt && (
             <span className="text-muted-foreground truncate max-w-[24ch]">"{ref.excerpt}"</span>
           )}

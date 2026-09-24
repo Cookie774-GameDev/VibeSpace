@@ -107,12 +107,12 @@ interface StoredEventSource {
 const AI_RELEVANCE =
   /\b(ai|artificial intelligence|llm|language model|multimodal|reasoning|agent|inference|transformer|embedding|vision model|text-to-image|text-to-video|speech model|model weights|api|sdk|mcp)\b/i;
 const MAJOR_RELEASE =
-  /\b(launch(?:es|ed)?|releas(?:e|es|ed)|introduc(?:e|es|ed)|announce(?:s|d)?|available now|open weights|new model|preview)\b/i;
+  /\b(launch(?:es|ed|ing)?|releas(?:e|es|ed|ing)|introduc(?:e|es|ed|ing)|announc(?:e|es|ed|ing)|available now|open weights|new model|preview)\b/i;
 const PRICING_CHANGE = /\b(pricing|price|cost|rate limit|context window|token limit)\b/i;
 const BENCHMARK_NEWS = /\b(benchmark|leaderboard|evaluation|intelligence index|arena)\b/i;
 const MODEL_PATTERNS: readonly RegExp[] = [
   /\bGPT[-\s]?\d(?:\.\d+)?(?:[-\s][A-Za-z0-9.]+){0,3}\b/gi,
-  /\bClaude(?:\s+[A-Za-z0-9.]+){1,4}\b/gi,
+  /\bClaude(?:\s+[A-Za-z0-9.]+){1,2}\b/gi,
   /\bGemini(?:\s+[A-Za-z0-9.]+){1,4}\b/gi,
   /\bGrok(?:\s+[A-Za-z0-9.]+){0,3}\b/gi,
   /\bLlama(?:\s+[A-Za-z0-9.]+){0,3}\b/gi,
@@ -160,7 +160,7 @@ const STOP_WORDS = new Set([
 ]);
 
 const MODEL_NAME_TAIL =
-  /^(?:official|api|sdk|launch(?:es|ed)?|release(?:s|d)?|is|with|and|now|today)$/iu;
+  /^(?:official|api|sdk|launch(?:es|ed)?|release(?:s|d)?|is|with|and|now|today|perform(?:s|ed|ing)?|on|at|the|level|most|work|costs?|less|to|run|than|available|introducing)$/iu;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -222,12 +222,21 @@ export function extractModelNames(value: string): string[] {
   for (const pattern of MODEL_PATTERNS) {
     pattern.lastIndex = 0;
     for (const match of value.matchAll(pattern)) {
-      const parts = match[0]
+      const punctuationBoundary = /[!?;:]|\.(?=\s|$)/u.exec(match[0]);
+      const rawMatch = punctuationBoundary
+        ? match[0].slice(0, punctuationBoundary.index)
+        : match[0];
+      const parts = rawMatch
         .replace(/[),.;:]+$/, '')
         .trim()
         .split(/\s+/u);
       const tail = parts.findIndex((part, index) => index > 0 && MODEL_NAME_TAIL.test(part));
       const cleaned = parts.slice(0, tail < 0 ? undefined : tail).join(' ');
+      if (
+        /^Claude(?:\s|$)/iu.test(cleaned) &&
+        !/(?:\d|\b(?:opus|sonnet|haiku|fable|mythos|instant|thinking)\b)/iu.test(cleaned)
+      )
+        continue;
       if (cleaned.length >= 3) matches.push(cleaned);
     }
   }
@@ -239,6 +248,7 @@ export function extractModelNames(value: string): string[] {
 function categoryFor(value: string): string {
   if (PRICING_CHANGE.test(value)) return 'pricing-and-limits';
   if (BENCHMARK_NEWS.test(value)) return 'benchmarks';
+  if (MAJOR_RELEASE.test(value) && extractModelNames(value).length) return 'model-release';
   if (/\b(api|sdk|developer|tool|mcp|agent|coding)\b/i.test(value)) return 'developer-tools';
   if (/\b(research|paper|study|safety|alignment)\b/i.test(value)) return 'research';
   if (MAJOR_RELEASE.test(value) || /\bmodel\b/i.test(value)) return 'model-release';
@@ -305,6 +315,9 @@ export function parseOfficialFeed(
   const blocks = [...trimmed.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)].map(
     (match) => match[2] ?? '',
   );
+  if (!blocks.length && /<(?:rss|feed|rdf:rdf)\b[\s\S]*<\/(?:rss|feed|rdf:rdf)>/i.test(trimmed)) {
+    return [];
+  }
   if (!blocks.length)
     throw new PipelineError('SOURCE_FEED_MALFORMED', 'Feed contained no item or entry elements.');
 
@@ -350,6 +363,101 @@ export function parseOfficialFeed(
       importanceScore: importanceFor(source, combined, modelNames),
       ...media,
       ...(media.imageUrl ? { imageCredit: `${source.company} official source` } : {}),
+      metadata: { observedAt },
+    });
+  }
+  return candidates;
+}
+
+function parseEditorialTimestamp(value: string | undefined): string | null {
+  if (!value) return null;
+  const isoDateOnly = /^\d{4}-\d{2}-\d{2}$/u.test(value.trim()) ? value.trim() : null;
+  if (isoDateOnly) {
+    const parsed = new Date(`${isoDateOnly}T12:00:00.000Z`);
+    if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== isoDateOnly)
+      return null;
+    return parsed.toISOString();
+  }
+  const dateText =
+    /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b/i.exec(
+      value,
+    )?.[0];
+  if (dateText) {
+    const parsed = Date.parse(dateText);
+    if (!Number.isFinite(parsed)) return null;
+    const date = new Date(parsed);
+    return new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12),
+    ).toISOString();
+  }
+  return parseTimestamp(value);
+}
+
+/** Reads article cards from a public official newsroom that does not publish RSS. */
+export function parseOfficialNewsroom(
+  source: NewsSourceDefinition,
+  html: string,
+  observedAt = nowIso(),
+): NewsCandidate[] {
+  const trimmed = html.trim();
+  if (!/^<!doctype\s+html|^<html\b/i.test(trimmed)) {
+    throw new PipelineError(
+      'SOURCE_NEWSROOM_MALFORMED',
+      'Newsroom endpoint returned non-HTML content.',
+    );
+  }
+  const base = new URL(source.endpoint ?? source.officialSite ?? '');
+  const candidates: NewsCandidate[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const match of trimmed.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+    const attributes = match[1] ?? '';
+    const block = match[2] ?? '';
+    if (!/<h[1-4]\b/i.test(block) || !/<time\b/i.test(block)) continue;
+    const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(attributes)?.[1];
+    if (!href) continue;
+
+    let url: string;
+    try {
+      const parsedUrl = new URL(href, base);
+      if (parsedUrl.protocol !== 'https:' || parsedUrl.origin !== base.origin) continue;
+      if (
+        parsedUrl.pathname.replace(/\/+$/, '') ===
+        new URL(source.endpoint ?? base.href).pathname.replace(/\/+$/, '')
+      )
+        continue;
+      const canonical = canonicalUrl(parsedUrl.toString());
+      if (!canonical || seenUrls.has(canonical)) continue;
+      url = canonical;
+    } catch {
+      continue;
+    }
+
+    const rawTitle = /<h[1-4]\b[^>]*>([\s\S]*?)<\/h[1-4]>/i.exec(block)?.[1];
+    const title = truncate(stripHtml(rawTitle ?? ''), 240);
+    const time = xmlAttribute(block, 'time', 'datetime') ?? xmlTag(block, ['time']);
+    const publishedAt = parseEditorialTimestamp(time);
+    if (!title || !publishedAt) continue;
+
+    const summary = truncate(stripHtml(xmlTag(block, ['p']) ?? title), 480);
+    const combined = `${title} ${summary}`;
+    const modelNames = extractModelNames(combined);
+    if (!AI_RELEVANCE.test(combined) && !modelNames.length) continue;
+    seenUrls.add(url);
+    candidates.push({
+      sourceId: source.id,
+      sourcePlatform: 'rss',
+      company: source.company,
+      verification: source.verification,
+      externalId: url,
+      title,
+      summary,
+      url,
+      publishedAt,
+      category: categoryFor(combined),
+      modelNames,
+      importanceScore: importanceFor(source, combined, modelNames),
+      mediaType: 'none',
       metadata: { observedAt },
     });
   }
@@ -492,7 +600,10 @@ async function fetchOneSource(env: Env, source: NewsSourceDefinition): Promise<S
     return {
       source,
       status: 'healthy',
-      candidates: parseOfficialFeed(source, fetched.text),
+      candidates:
+        source.sourceType === 'official_site'
+          ? parseOfficialNewsroom(source, fetched.text)
+          : parseOfficialFeed(source, fetched.text),
     };
   } catch (error) {
     return {
@@ -1023,8 +1134,9 @@ export async function runNewsIngestion(env: Env, scheduledAt: string): Promise<P
     const at = nowIso();
     await seedSourceRegistry(env.DB, at);
     const selected = selectNewsSourcesForRun(scheduledAt, {
-      maxSources: envInteger(env.NEWS_MAX_SOURCES_PER_RUN, 24, 8, 30),
-      maxX: envInteger(env.NEWS_MAX_X_SOURCES_PER_RUN, 2, 0, 4),
+      maxSources: envInteger(env.NEWS_MAX_SOURCES_PER_RUN, 24, 20, 30),
+      // Keep the hourly feed free to operate; X API sources can require paid access.
+      maxX: 0,
     });
     const fetched = await mapWithConcurrency(selected, 6, (source) => fetchOneSource(env, source));
     await mapWithConcurrency(fetched, 6, (sourceResult) =>

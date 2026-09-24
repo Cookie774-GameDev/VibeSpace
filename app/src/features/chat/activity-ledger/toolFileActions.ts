@@ -125,3 +125,20 @@ export async function openToolFile(
     await invoke('fs_open_project_file_in_editor', { path, root: scope.root, editorId: action });
   }
 }
+
+/** Make a new project-scoped copy; the native command refuses links and overwrites. */
+export async function saveToolFileCopy(
+  filePath: string,
+  destinationPath: string,
+  scope: Readonly<ToolFileScope>,
+): Promise<string> {
+  assertCurrent(scope);
+  const path = resolveToolFilePath(scope.root, filePath);
+  const newPath = resolveToolFilePath(scope.root, destinationPath);
+  const checked = await statProjectPath(path, false, { root: scope.root });
+  assertCurrent(scope);
+  if (!checked.ok || checked.kind !== 'file') throw new Error('Source file is unavailable');
+  await invoke('fs_copy_file', { path, newPath, root: scope.root });
+  assertCurrent(scope);
+  return newPath;
+}

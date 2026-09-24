@@ -274,7 +274,7 @@ describe('SchedulePage Jarvis lifecycle', () => {
       expect(screen.getByRole('button', { name: 'Jarvis action model' })).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Every…' })).toBeNull();
       fireEvent.change(screen.getByLabelText('Wait (minutes)'), { target: { value: '3' } });
-      fireEvent.change(screen.getByLabelText('Run in chat'), { target: { value: destination } });
+      fireEvent.click(screen.getByRole('button', { name: destination === 'same' ? 'Same chat' : 'New chat' }));
       fireEvent.change(screen.getByLabelText(/action title/i), {
         target: { value: 'Delayed review' },
       });
@@ -297,7 +297,7 @@ describe('SchedulePage Jarvis lifecycle', () => {
     render(<SchedulePage />);
     fireEvent.click(screen.getByRole('button', { name: 'Jarvis Action' }));
     fireEvent.click(screen.getByRole('button', { name: 'Run in…' }));
-    fireEvent.change(screen.getByLabelText('Run in chat'), { target: { value: 'same' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Same chat' }));
     fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Delayed review' },
     });
@@ -312,7 +312,7 @@ describe('SchedulePage Jarvis lifecycle', () => {
     const view = render(<SchedulePage />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Jarvis Action' }));
-    fireEvent.click(screen.getByRole('switch', { name: 'CAO supervised learning' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Review project learning' }));
     fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Learning review' },
     });
@@ -374,7 +374,7 @@ describe('SchedulePage Jarvis lifecycle', () => {
     render(<SchedulePage />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Jarvis Action' }));
-    fireEvent.click(screen.getByRole('switch', { name: 'CAO supervised learning' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Review project learning' }));
     fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Learning review' },
     });

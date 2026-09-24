@@ -1,19 +1,22 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ read: vi.fn(), connect: vi.fn(), command: vi.fn() }));
+const mocks = vi.hoisted(() => ({ read: vi.fn(), connect: vi.fn(), command: vi.fn(), invoke: vi.fn() }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 vi.mock('@/features/instant-command/targetSnapshot', () => ({
   readLiveTargetSnapshot: mocks.read,
 }));
 vi.mock('./terminalPeerFabricTool', () => ({ terminalPeerFabricCommandPort: mocks }));
 import { fabricBridge, TerminalFabricOverlay } from './TerminalFabricOverlay';
 import { recordFabricDelivery, useFabricPresentationStore } from './fabricPresentationStore';
+import { useTerminalTranscriptStore } from '@/features/terminals/transcriptStore';
 const targets = [1, 2, 3].map((n) => ({
   sessionId: `tty-${n}`,
   paneId: `pane-${n}`,
   projectId: 'project',
   ordinal: n,
   label: `Shell ${n}`,
+  command: 'opencode.exe',
   processIdentity: { processInstanceId: `process-${n}`, runtimeGeneration: 'generation' },
 }));
 beforeEach(() => {
@@ -32,7 +35,9 @@ beforeEach(() => {
   mocks.command
     .mockReset()
     .mockResolvedValue({ status: 'completed', targetIds: ['tty-1', 'tty-2'] });
-  useFabricPresentationStore.setState({ selecting: true, peers: [], delivery: null });
+  mocks.invoke.mockReset().mockResolvedValue(undefined);
+  useFabricPresentationStore.setState({ selecting: true, managing: false, peers: [], delivery: null });
+  useTerminalTranscriptStore.setState({ sessions: {} });
   targets.forEach((t, i) => {
     const pane = document.createElement('div');
     pane.dataset.terminalDropPaneId = t.paneId;
@@ -176,6 +181,27 @@ describe('native Fabric pane selection', () => {
     view.rerender(<TerminalFabricOverlay visible projectId="different-project" />);
     expect(document.querySelector('.vs-fabric-bridges')).toBeNull();
   }, 15000);
+  it('manages confirmed peers and only relays captured output through bound native OpenCode write', async () => {
+    render(<TerminalFabricOverlay visible projectId="project" />);
+    await selectTwo();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm connection' }));
+    expect(await screen.findByLabelText('Terminal Peer Fabric manager')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Terminal Peer Fabric' }));
+    expect(screen.queryByLabelText('Terminal Peer Fabric manager')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Terminal Peer Fabric' }));
+    useTerminalTranscriptStore.setState({
+      sessions: { 'tty-1': { text: 'Hello from peer one' } } as unknown as ReturnType<typeof useTerminalTranscriptStore.getState>['sessions'],
+    });
+    fireEvent.change(screen.getByLabelText('Relay from terminal'), { target: { value: 'tty-1' } });
+    fireEvent.change(screen.getByLabelText('Relay to terminal'), { target: { value: 'tty-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Relay to peer' }));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledOnce());
+    expect(mocks.invoke).toHaveBeenCalledWith('terminal_write', {
+      sessionId: 'tty-2', expectedBinding: targets[1]!.processIdentity,
+      agentMessage: true, data: expect.stringContaining('Hello from peer one'),
+    });
+    expect(screen.getByText(/Shared files: none recorded/i)).toBeTruthy();
+  });
   it('cancels without connecting', async () => {
     render(<TerminalFabricOverlay visible projectId="project" />);
     await selectTwo();

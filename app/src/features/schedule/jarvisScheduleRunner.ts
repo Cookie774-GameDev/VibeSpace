@@ -581,6 +581,27 @@ export async function runDueJarvisSchedules(
       options.onStage?.('completed');
     } catch (error) {
       options.onStage?.('failed');
+      if (error instanceof Error && error.message === 'kernel_schedule_allocation_conflict') {
+        // The kernel already allocated this concrete occurrence. Retrying the
+        // same dueAt can never create another run, so advance the schedule.
+        const nextAfterConflict = computeNextJarvisRunAt(event, Math.max(dueAt, now));
+        try {
+          await deps.updateEvent(event.id, {
+            ...withJarvisScheduleMetadata(event, {
+              ...dispatchMetadata,
+              nextRunAt: nextAfterConflict ?? undefined,
+              errorHistory: [
+                ...dispatchMetadata.errorHistory,
+                { at: now, error: `Skipped already allocated run at ${formatUserDateTime(dueAt)}.` },
+              ],
+            }),
+            ...(nextAfterConflict === null ? { status: 'done' as const } : {}),
+          });
+          continue;
+        } catch {
+          // Persistence failure retains the same due occurrence for recovery.
+        }
+      }
       await recordRetryableRunnerFailure(
         event,
         dispatchMetadata,

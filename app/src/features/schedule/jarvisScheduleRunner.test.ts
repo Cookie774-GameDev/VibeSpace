@@ -670,6 +670,30 @@ describe('runDueJarvisSchedules', () => {
     expect(metadata.nextRunAt).toBeGreaterThan(BASE_NOW);
   });
 
+  it('skips an already allocated occurrence once and resumes the next recurring run', async () => {
+    const event = buildEvent({ startAt: BASE_NOW - 60_000, recurrence: 'daily' });
+    const { deps, dispatches } = buildDeps([event]);
+    const originalDispatch = deps.dispatchScheduledOccurrence;
+    let currentTime = BASE_NOW;
+    deps.now = () => currentTime;
+    deps.dispatchScheduledOccurrence = vi.fn(async (input) => {
+      if (input.dueAt === event.start_at) throw new Error('kernel_schedule_allocation_conflict');
+      return originalDispatch(input);
+    });
+
+    await runDueJarvisSchedules(ACCOUNT, WORKSPACE, deps);
+    const afterConflict = parseJarvisScheduleMetadata(event)!;
+    expect(afterConflict.nextRunAt).toBe(event.start_at + 24 * 60 * 60 * 1000);
+    expect(afterConflict.errorHistory.at(-1)?.error).toContain('already allocated');
+    await runDueJarvisSchedules(ACCOUNT, WORKSPACE, deps);
+    expect(dispatches).toHaveLength(0);
+
+    currentTime = afterConflict.nextRunAt!;
+    await runDueJarvisSchedules(ACCOUNT, WORKSPACE, deps);
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]?.dueAt).toBe(currentTime);
+  });
+
   it('reuses the stored output chat instead of creating duplicates', async () => {
     const event = buildEvent({
       startAt: BASE_NOW - 60_000,

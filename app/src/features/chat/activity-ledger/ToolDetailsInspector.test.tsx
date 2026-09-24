@@ -5,11 +5,13 @@ const files = vi.hoisted(() => ({
   capture: vi.fn(),
   open: vi.fn(),
   list: vi.fn(),
+  save: vi.fn(),
 }));
 vi.mock('./toolFileActions', () => ({
   captureToolFileScope: files.capture,
   openToolFile: files.open,
   listToolEditors: files.list,
+  saveToolFileCopy: files.save,
 }));
 import { ToolDetailsInspector } from './ToolDetailsInspector';
 beforeEach(() => {
@@ -17,6 +19,7 @@ beforeEach(() => {
   files.capture.mockReturnValue(files.scope);
   files.open.mockResolvedValue(undefined);
   files.list.mockResolvedValue([{ id: 'vscode', name: 'Visual Studio Code' }]);
+  files.save.mockResolvedValue('C:/project/src/invoice-copy.cjs');
 });
 const change = { path: 'src/invoice.cjs', kind: 'update' as const, complete: true };
 it('offers only detected editors from the file context menu', async () => {
@@ -27,7 +30,7 @@ it('offers only detected editors from the file context menu', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Open in Visual Studio Code' }));
   await waitFor(() => expect(files.open).toHaveBeenCalledWith(change.path, 'vscode', files.scope));
 });
-it('opens the changed file in the project editor, or reveals it on Ctrl-click', async () => {
+it('opens the changed file in VibeSpace Files on click and Ctrl-click', async () => {
   render(
     <ToolDetailsInspector projectRoot="C:/project" status="done" details={{ changes: [change] }} />,
   );
@@ -35,7 +38,19 @@ it('opens the changed file in the project editor, or reveals it on Ctrl-click', 
   fireEvent.click(link);
   await waitFor(() => expect(files.open).toHaveBeenCalledWith(change.path, 'editor', files.scope));
   fireEvent.click(link, { ctrlKey: true });
+  await waitFor(() => expect(files.open).toHaveBeenCalledTimes(2));
+  expect(files.open).toHaveBeenLastCalledWith(change.path, 'editor', files.scope);
+});
+it('offers File Explorer and a project-scoped Save a copy as action on right-click', async () => {
+  render(<ToolDetailsInspector projectRoot="C:/project" status="done" details={{ changes: [change] }} />);
+  fireEvent.contextMenu(screen.getByRole('button', { name: change.path }));
+  fireEvent.click(screen.getByRole('button', { name: 'Open in File Explorer' }));
   await waitFor(() => expect(files.open).toHaveBeenCalledWith(change.path, 'reveal', files.scope));
+  fireEvent.contextMenu(screen.getByRole('button', { name: change.path }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save a copy as…' }));
+  fireEvent.change(screen.getByLabelText('New project file path'), { target: { value: 'src/invoice-copy.cjs' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save copy' }));
+  await waitFor(() => expect(files.save).toHaveBeenCalledWith(change.path, 'src/invoice-copy.cjs', files.scope));
 });
 it('keeps a renamed destination actionable and reports missing files instead of inventing success', async () => {
   files.open.mockRejectedValue(new Error('File unavailable: not_found'));

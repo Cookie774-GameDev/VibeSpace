@@ -74,23 +74,43 @@
 }
 .vs-fabric-bridges path {
   fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
 }
+.vs-fabric-bridges .vs-fabric-aura {
+  stroke: hsl(var(--accent-copper) / 0.42);
+  stroke-width: 17;
+  filter: blur(7px);
+}
 .vs-fabric-bridges .vs-fabric-track {
-  stroke: hsl(var(--background));
-  stroke-width: 3.5;
+  stroke: hsl(var(--background) / 0.94);
+  stroke-width: 8;
 }
 .vs-fabric-bridges .vs-fabric-line {
-  opacity: 0.95;
+  stroke: url('#vs-fabric-gradient');
+  stroke-width: 3.5;
+  filter: drop-shadow(0 0 3px hsl(var(--accent-copper)));
+}
+.vs-fabric-bridges .vs-fabric-flow {
+  stroke: hsl(var(--foreground) / 0.95);
+  stroke-width: 1;
+  stroke-dasharray: 2 9;
+  animation: vs-fabric-flow 1.8s linear infinite;
+}
+@keyframes vs-fabric-flow {
+  to { stroke-dashoffset: -11; }
 }
 .vs-fabric-bridges circle {
-  fill: currentColor;
+  fill: hsl(var(--accent-copper));
   stroke: hsl(var(--background));
-  stroke-width: 0.75;
+  stroke-width: 1;
+}
+.vs-fabric-bridges .vs-fabric-port-halo {
+  fill: hsl(var(--accent-copper) / 0.18);
+  stroke: hsl(var(--accent-copper) / 0.68);
+  stroke-width: 1;
+  filter: drop-shadow(0 0 5px hsl(var(--accent-copper)));
 }
 .vs-fabric-bridges .vs-fabric-spark {
   fill: hsl(var(--foreground));
@@ -110,10 +130,106 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .vs-fabric-spark {
+  .vs-fabric-spark, .vs-fabric-flow {
     display: none;
   }
 }
+.vs-fabric-manage-trigger {
+  position: fixed;
+  z-index: 120;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  border: 1px solid hsl(var(--accent-copper) / .55);
+  border-radius: 999px;
+  padding: .65rem 1rem;
+  background: hsl(var(--background) / .94);
+  color: hsl(var(--foreground));
+  box-shadow: 0 8px 24px #0006, 0 0 22px hsl(var(--accent-copper) / .2);
+  backdrop-filter: blur(14px);
+  font-size: .78rem;
+}
+.vs-fabric-manage-trigger span {
+  color: hsl(var(--accent-copper));
+  font-weight: 700;
+}
+.vs-fabric-manage {
+  position: fixed;
+  z-index: 121;
+  top: 5rem;
+  right: 1rem;
+  bottom: 5rem;
+  width: min(25rem, calc(100vw - 2rem));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--accent-copper) / .4);
+  border-radius: 1.35rem;
+  background: hsl(var(--background) / .97);
+  color: hsl(var(--foreground));
+  box-shadow: 0 20px 65px #0009, 0 0 35px hsl(var(--accent-copper) / .12);
+  backdrop-filter: blur(22px);
+}
+.vs-fabric-manage header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.15rem;
+  border-bottom: 1px solid hsl(var(--border) / .7);
+  background: linear-gradient(120deg, hsl(var(--accent-copper) / .17), transparent 80%);
+}
+.vs-fabric-manage header strong, .vs-fabric-manage header small { display: block; }
+.vs-fabric-manage header small { color: hsl(var(--muted-foreground)); font-size: .7rem; }
+.vs-fabric-manage header button { border-radius: .6rem; padding: .3rem; }
+.vs-fabric-manage header button:hover { background: hsl(var(--accent-copper) / .15); }
+.vs-fabric-manage-content { overflow: auto; padding: .9rem; }
+.vs-fabric-manage-peer, .vs-fabric-relay {
+  margin-bottom: .75rem;
+  padding: .8rem;
+  border: 1px solid hsl(var(--border) / .75);
+  border-radius: .9rem;
+  background: hsl(var(--muted) / .35);
+}
+.vs-fabric-manage-peer-title { display: flex; justify-content: space-between; gap: .5rem; font-weight: 650; }
+.vs-fabric-manage-peer-title span:last-child { color: hsl(var(--accent-copper)); font-size: .68rem; }
+.vs-fabric-manage-peer p, .vs-fabric-relay p { color: hsl(var(--muted-foreground)); font-size: .7rem; }
+.vs-fabric-manage-peer pre {
+  overflow: auto;
+  max-height: 7rem;
+  margin-top: .5rem;
+  padding: .5rem;
+  border-radius: .6rem;
+  background: hsl(var(--background) / .75);
+  color: hsl(var(--foreground));
+  font-size: .65rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.vs-fabric-relay h3 { display: flex; align-items: center; gap: .4rem; margin-bottom: .5rem; font-size: .78rem; }
+.vs-fabric-relay label { display: block; margin: .5rem 0; color: hsl(var(--muted-foreground)); font-size: .7rem; }
+.vs-fabric-relay select {
+  display: block;
+  width: 100%;
+  margin-top: .25rem;
+  padding: .45rem .55rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: .7rem;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.vs-fabric-relay > button {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  margin: .7rem 0;
+  padding: .45rem .65rem;
+  border-radius: .7rem;
+  background: hsl(var(--accent-copper) / .22);
+  color: hsl(var(--foreground));
+}
+.vs-fabric-relay > button:disabled { opacity: .5; }
 @media (prefers-reduced-motion: reduce) {
   .vs-fabric-pane {
     transition: none;

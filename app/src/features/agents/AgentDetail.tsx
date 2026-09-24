@@ -336,7 +336,9 @@ export function AgentDetail() {
               </div>
             ) : (
               <pre className="whitespace-pre-wrap break-words font-mono text-secondary leading-relaxed text-foreground/90 bg-paper-soft rounded-md p-4 border border-border max-h-[420px] overflow-y-auto [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:bg-background">
-                {displayedPrompt}
+                {protectedJarvis && !displayedPrompt.trim()
+                  ? 'No custom instructions saved for this agent. Its built-in behavior still applies.'
+                  : displayedPrompt}
               </pre>
             )}
           </div>

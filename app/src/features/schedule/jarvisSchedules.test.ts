@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { EventRow } from '@/types/event';
 import type { WorkspaceId } from '@/types/common';
+import type { ChatModelSelection } from '@/lib/ai/modelSelection';
 import {
   buildJarvisScheduleEventUpdate,
   buildJarvisScheduleEventInput,
@@ -381,6 +382,59 @@ describe('Jarvis schedules', () => {
       runHistory: originalMetadata.runHistory,
       errorHistory: originalMetadata.errorHistory,
     });
+  });
+
+  it('keeps the next occurrence when editing the model of an active repeating action', () => {
+    const startAt = 1_786_303_600_000;
+    const nextRunAt = startAt + 5 * 60 * 1000;
+    const modelSelection = {
+      mode: 'single', providerId: 'openai', modelId: 'codex-auto-review',
+      connectionId: 'openai-codex',
+    } as ChatModelSelection;
+    const input = buildJarvisScheduleEventInput({
+      workspaceId: 'workspace_1' as EventRow['workspace_id'],
+      createdBy: 'agent_jarvis', title: 'Repeating story', prompt: 'Tell a story',
+      startAt, durationMs: 5 * 60 * 1000, recurrence: 'custom_interval',
+      intervalMs: 5 * 60 * 1000, timezone: 'America/Chicago', modelSelection,
+      agentId: 'agent_jarvis',
+    });
+    const event = { ...input, id: 'evt_story', updated_at: startAt,
+      source_ref: { ...input.source_ref, context: {
+        ...input.source_ref?.context,
+        id: serializeJarvisScheduleMetadata({
+          ...parseJarvisScheduleMetadata(input as EventRow)!, nextRunAt,
+        }),
+      } },
+    } as EventRow;
+    const changedModel = { ...modelSelection, modelId: 'gpt-6-luna' };
+    const patch = buildJarvisScheduleEventUpdate(event, {
+      title: 'Repeating story', prompt: 'Tell a story', startAt,
+      recurrence: 'custom_interval', intervalMs: 5 * 60 * 1000,
+      timezone: 'America/Chicago', modelSelection: changedModel,
+    });
+    const updated = parseJarvisScheduleMetadata({ ...event, ...patch } as EventRow);
+    expect(updated?.nextRunAt).toBe(nextRunAt);
+    expect(updated?.modelSelection).toMatchObject({ modelId: 'gpt-6-luna' });
+
+    const staleMetadata = {
+      ...parseJarvisScheduleMetadata(event)!,
+      lastRunAt: nextRunAt,
+      nextRunAt: startAt,
+    };
+    const staleEvent = {
+      ...event,
+      source_ref: { ...event.source_ref, context: {
+        ...event.source_ref?.context,
+        id: serializeJarvisScheduleMetadata(staleMetadata),
+      } },
+    } as EventRow;
+    const recoveredPatch = buildJarvisScheduleEventUpdate(staleEvent, {
+      title: 'Repeating story', prompt: 'Tell a story', startAt,
+      recurrence: 'custom_interval', intervalMs: 5 * 60 * 1000,
+      timezone: 'America/Chicago', modelSelection: changedModel,
+    });
+    expect(parseJarvisScheduleMetadata({ ...staleEvent, ...recoveredPatch } as EventRow)?.nextRunAt)
+      .toBe(nextRunAt + 5 * 60 * 1000);
   });
 
   it('detects same-time conflicts without overwriting user events', () => {

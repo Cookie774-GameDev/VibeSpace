@@ -25,6 +25,7 @@ import {
   openToolFile,
   resolveToolFilePath,
   resolveToolChatRoot,
+  saveToolFileCopy,
 } from './toolFileActions';
 beforeEach(() => {
   vi.clearAllMocks();
@@ -80,6 +81,18 @@ it('uses the scoped native reveal command, never a tool-provided shell command',
     path: 'C:/workspace/invoice.cjs',
     root: 'C:/workspace',
   });
+});
+it('saves a copy only inside the captured project and refuses an out-of-scope path', async () => {
+  const scope = captureToolFileScope('C:/workspace')!;
+  await expect(saveToolFileCopy('invoice.cjs', 'copies/invoice.cjs', scope)).resolves.toBe(
+    'C:/workspace/copies/invoice.cjs',
+  );
+  expect(mocks.invoke).toHaveBeenCalledWith('fs_copy_file', {
+    path: 'C:/workspace/invoice.cjs',
+    newPath: 'C:/workspace/copies/invoice.cjs',
+    root: 'C:/workspace',
+  });
+  await expect(saveToolFileCopy('invoice.cjs', 'C:/other/leak.cjs', scope)).rejects.toThrow(/scope/);
 });
 it('rejects a changed account while the native validation is pending', async () => {
   let release!: (value: unknown) => void;

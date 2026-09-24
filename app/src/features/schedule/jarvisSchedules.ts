@@ -360,13 +360,24 @@ export function buildJarvisScheduleEventUpdate(
     input.durationMs > 0
       ? input.durationMs
       : 30 * 60 * 1000;
+  const retainedNextRunAt =
+    input.startAt === event.start_at && current.nextRunAt !== undefined
+      ? current.nextRunAt
+      : input.startAt;
+  const nextRunAt =
+    input.recurrence === 'custom_interval' &&
+    intervalMs !== undefined &&
+    current.lastRunAt !== undefined &&
+    retainedNextRunAt <= current.lastRunAt
+      ? current.lastRunAt + intervalMs
+      : retainedNextRunAt;
   const metadata: JarvisScheduleMetadata = {
     ...current,
     prompt,
     recurrence: input.recurrence,
     ...(intervalMs === undefined ? { intervalMs: undefined } : { intervalMs }),
     modelSelection: input.modelSelection,
-    nextRunAt: input.startAt,
+    nextRunAt,
     ...(input.chatSupervision ? { chatSupervision: input.chatSupervision } : {}),
   };
   const metadataPatch = withJarvisScheduleMetadata(event, metadata);

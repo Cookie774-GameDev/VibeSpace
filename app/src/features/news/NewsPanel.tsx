@@ -18,8 +18,8 @@ import {
   ExternalLink,
   Newspaper,
   Play,
+  Radar,
   RefreshCw,
-  Sparkles,
   X,
   Cpu,
   Radio,
@@ -475,7 +475,7 @@ export function NewsPanel({
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <span className="eyebrow flex items-center gap-1.5">
-                <Sparkles className="h-3 w-3 text-accent-copper" />
+                <Radar className="h-3 w-3 text-accent-copper" />
                 AI feed
               </span>
               <h2

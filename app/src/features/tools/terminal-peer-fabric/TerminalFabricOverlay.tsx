@@ -1,16 +1,38 @@
 import * as React from 'react';
 import { flushSync } from 'react-dom';
-import { Link2, X } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { Link2, MessageSquareText, RefreshCw, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { readLiveTargetSnapshot } from '@/features/instant-command/targetSnapshot';
 import type { LiveTerminalTarget } from '@/features/instant-command/types';
+import { useTerminalTranscriptStore } from '@/features/terminals/transcriptStore';
 import { terminalPeerFabricCommandPort as port } from './terminalPeerFabricTool';
-import { sameFabricMembers, useFabricPresentationStore } from './fabricPresentationStore';
+import { recordFabricDelivery, sameFabricMembers, useFabricPresentationStore } from './fabricPresentationStore';
 import './terminal-fabric.css';
 
 import { createFabricRouter, type FabricBox as Box } from './fabricRouting';
 import { fabricConnections } from './fabricConnections';
 export { fabricBridge } from './fabricRouting';
+
+function isDirectOpenCode(target: LiveTerminalTarget): boolean {
+  return /(?:^|[\\/])opencode(?:\.exe)?$/i.test(target.command?.trim() ?? '');
+}
+
+function FabricPeerOutput({ target }: { target: LiveTerminalTarget }) {
+  const output = useTerminalTranscriptStore((state) => state.sessions[target.sessionId]?.text ?? '');
+  return (
+    <article className="vs-fabric-manage-peer">
+      <div className="vs-fabric-manage-peer-title">
+        <span>{target.label || `Terminal ${target.ordinal}`}</span>
+        <span>{target.provider || target.agentSlug || 'Terminal'}</span>
+      </div>
+      <p>{target.command || 'Interactive terminal'}</p>
+      <pre aria-label={`Recent output from ${target.label || target.sessionId}`}>
+        {output.slice(-1800) || 'No output captured yet.'}
+      </pre>
+    </article>
+  );
+}
 
 export function TerminalFabricOverlay({
   visible,
@@ -24,6 +46,7 @@ export function TerminalFabricOverlay({
   paneSelector?: string;
 }) {
   const selecting = useFabricPresentationStore((s) => s.selecting);
+  const manageOpen = useFabricPresentationStore((s) => s.managing);
   const peers = useFabricPresentationStore((s) => s.peers);
   const delivery = useFabricPresentationStore((s) => s.delivery);
   const [targets, setTargets] = React.useState<LiveTerminalTarget[]>([]);
@@ -32,6 +55,10 @@ export function TerminalFabricOverlay({
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [verified, setVerified] = React.useState<string[]>([]);
+  const [relaySource, setRelaySource] = React.useState('');
+  const [relayTarget, setRelayTarget] = React.useState('');
+  const [relayStatus, setRelayStatus] = React.useState<string | null>(null);
+  const [relayBusy, setRelayBusy] = React.useState(false);
   const wasVisible = React.useRef(visible);
   const epoch = React.useRef(0);
   const submitting = React.useRef(false);
@@ -248,18 +275,117 @@ export function TerminalFabricOverlay({
     () => fabricConnections(connected, routeBridge),
     [connected, routeBridge],
   );
+  const livePeers = React.useMemo(() => peers.flatMap((peer) => {
+    const target = targets.find((candidate) =>
+      candidate.sessionId === peer.sessionId &&
+      candidate.paneId === peer.paneId &&
+      candidate.projectId === projectId &&
+      candidate.processIdentity.runtimeGeneration === peer.runtimeGeneration &&
+      verified.includes(candidate.sessionId));
+    return target ? [target] : [];
+  }), [peers, targets, projectId, verified]);
+  const sendPeerOutput = async () => {
+    if (relayBusy || !relaySource || !relayTarget || relaySource === relayTarget) return;
+    setRelayBusy(true);
+    setRelayStatus(null);
+    try {
+      const source = livePeers.find((target) => target.sessionId === relaySource);
+      const recipient = livePeers.find((target) => target.sessionId === relayTarget);
+      if (!source || !recipient) throw Error('Choose two connected live terminals.');
+      if (!isDirectOpenCode(source) || !isDirectOpenCode(recipient)) {
+        throw Error('Relay requires two directly launched OpenCode agents.');
+      }
+      const output = useTerminalTranscriptStore.getState().sessions[source.sessionId]?.text.trim();
+      if (!output) throw Error('The source terminal has no captured output to relay.');
+      const fresh = await readTargets();
+      const native = await port.command({
+        commandId: 'team.status', correlationId: crypto.randomUUID(), targetIds: [],
+      });
+      if (native.status !== 'completed' ||
+        ![source, recipient].every((target) =>
+          native.targetIds.includes(target.sessionId) && fresh.some((candidate) =>
+            candidate.sessionId === target.sessionId &&
+            candidate.paneId === target.paneId &&
+            candidate.projectId === projectId &&
+            candidate.processIdentity.processInstanceId === target.processIdentity.processInstanceId &&
+            candidate.processIdentity.runtimeGeneration === target.processIdentity.runtimeGeneration))) {
+        throw Error('A peer changed or disconnected. Refresh the connection.');
+      }
+      await invoke('terminal_write', {
+        sessionId: recipient.sessionId,
+        expectedBinding: recipient.processIdentity,
+        agentMessage: true,
+        data: `Message from ${source.label || source.sessionId}:\n${output.slice(-1500)}\nPlease reply to this peer message.`,
+      });
+      recordFabricDelivery(crypto.randomUUID(), source.sessionId, [recipient.sessionId]);
+      setRelayStatus(`Sent output from ${source.label || source.sessionId} to ${recipient.label || recipient.sessionId}. Check the recipient terminal for its reply.`);
+    } catch (cause) {
+      setRelayStatus(cause instanceof Error ? cause.message : 'Relay failed.');
+    } finally {
+      setRelayBusy(false);
+    }
+  };
   if (!visible) return null;
   return (
     <>
+      {!selecting && livePeers.length > 1 && (
+        <>
+          <button type="button" className="vs-fabric-manage-trigger"
+            aria-label="Manage Terminal Peer Fabric"
+            aria-expanded={manageOpen}
+            onClick={() => manageOpen
+              ? useFabricPresentationStore.getState().closeManage()
+              : useFabricPresentationStore.getState().manage()}>
+            <MessageSquareText size={15} /> Manage peers <span>{livePeers.length}</span>
+          </button>
+          {manageOpen && (
+            <aside className="vs-fabric-manage" aria-label="Terminal Peer Fabric manager">
+              <header>
+                <div><strong>Peer Fabric</strong><small>{livePeers.length} native connected terminals</small></div>
+                <button type="button" aria-label="Close peer manager" onClick={() => useFabricPresentationStore.getState().closeManage()}><X size={17} /></button>
+              </header>
+              <div className="vs-fabric-manage-content">
+                {livePeers.map((target) => <FabricPeerOutput key={target.sessionId} target={target} />)}
+                <section className="vs-fabric-relay" aria-label="Relay peer output">
+                  <h3><Send size={14} /> Relay latest output</h3>
+                  <label>From<select aria-label="Relay from terminal" value={relaySource} onChange={(event) => setRelaySource(event.target.value)}>
+                    <option value="">Choose source</option>
+                    {livePeers.map((target) => <option key={target.sessionId} value={target.sessionId}>{target.label || target.sessionId}</option>)}
+                  </select></label>
+                  <label>To<select aria-label="Relay to terminal" value={relayTarget} onChange={(event) => setRelayTarget(event.target.value)}>
+                    <option value="">Choose recipient</option>
+                    {livePeers.map((target) => <option key={target.sessionId} value={target.sessionId}>{target.label || target.sessionId}</option>)}
+                  </select></label>
+                  <button type="button" disabled={relayBusy || !relaySource || !relayTarget || relaySource === relayTarget}
+                    onClick={() => void sendPeerOutput()}><RefreshCw size={14} className={relayBusy ? 'animate-spin' : ''} /> Relay to peer</button>
+                  {relayStatus && <p role="status">{relayStatus}</p>}
+                  <p>Shared files: none recorded. Relay accepts directly launched OpenCode agents only; native writes require a live process binding.</p>
+                </section>
+              </div>
+            </aside>
+          )}
+        </>
+      )}
       {!selecting && connected.length > 1 && (
         <svg className="vs-fabric-bridges" aria-label={`${connected.length} connected terminals`}>
+          <defs>
+            <linearGradient id="vs-fabric-gradient" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stopColor="hsl(var(--accent-copper))" />
+              <stop offset="0.5" stopColor="hsl(var(--foreground))" />
+              <stop offset="1" stopColor="hsl(var(--accent-copper))" />
+            </linearGradient>
+          </defs>
           {connections.map(({ from, to: box, bridge }) => {
             return (
               <g key={`${from.id}:${box.id}`}>
+                <path className="vs-fabric-aura" d={bridge.path} />
                 <path className="vs-fabric-track" d={bridge.path} />
                 <path className="vs-fabric-line" d={bridge.path} />
-                <circle cx={bridge.x1} cy={bridge.y1} r="1.75" />
-                <circle cx={bridge.x2} cy={bridge.y2} r="1.75" />
+                <path className="vs-fabric-flow" d={bridge.path} />
+                <circle className="vs-fabric-port-halo" cx={bridge.x1} cy={bridge.y1} r="6" />
+                <circle className="vs-fabric-port-halo" cx={bridge.x2} cy={bridge.y2} r="6" />
+                <circle className="vs-fabric-port" cx={bridge.x1} cy={bridge.y1} r="2.5" />
+                <circle className="vs-fabric-port" cx={bridge.x2} cy={bridge.y2} r="2.5" />
               </g>
             );
           })}

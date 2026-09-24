@@ -140,6 +140,7 @@ describe('AgentDetail profile projection', () => {
     await waitFor(() => expect(screen.queryByText('Profile is still loading')).toBeNull());
     expect(screen.getByText('Custom instructions')).toBeTruthy();
     expect(screen.getByText(/0 chars/)).toBeTruthy();
+    expect(screen.getByText(/No custom instructions saved for this agent/i)).toBeTruthy();
     expect(screen.queryByText(protectedJarvis.system_prompt)).toBeNull();
   });
 

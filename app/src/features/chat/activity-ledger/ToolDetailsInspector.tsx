@@ -6,11 +6,12 @@ import {
   captureToolFileScope,
   listToolEditors,
   openToolFile,
+  saveToolFileCopy,
   type ToolEditor,
   type ToolFileAction,
 } from './toolFileActions';
 
-function ToolFileLink({ path, projectRoot }: { path: string; projectRoot?: string }) {
+export function ToolFileLink({ path, projectRoot }: { path: string; projectRoot?: string }) {
   const scope = useMemo(
     () => (projectRoot ? captureToolFileScope(projectRoot) : null),
     [projectRoot],
@@ -18,10 +19,14 @@ function ToolFileLink({ path, projectRoot }: { path: string; projectRoot?: strin
   const [error, setError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [editors, setEditors] = useState<ToolEditor[]>([]);
+  const [savingCopy, setSavingCopy] = useState(false);
+  const [copyPath, setCopyPath] = useState('');
+  const [status, setStatus] = useState('');
   const open = async (action: ToolFileAction) => {
     if (!scope) return;
     setMenuOpen(false);
     setError('');
+    setStatus('');
     try {
       await openToolFile(path, action, scope);
     } catch (error) {
@@ -34,14 +39,26 @@ function ToolFileLink({ path, projectRoot }: { path: string; projectRoot?: strin
       );
     }
   };
+  const saveCopy = async () => {
+    if (!scope) return;
+    setError('');
+    try {
+      const saved = await saveToolFileCopy(path, copyPath, scope);
+      setStatus(`Saved copy: ${saved}`);
+      setSavingCopy(false);
+      setMenuOpen(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save a copy');
+    }
+  };
   if (!scope) return <span className="break-all">{path}</span>;
   return (
     <span className="inline-block max-w-full">
       <button
         type="button"
         className="break-all text-accent-copper underline underline-offset-2"
-        title="Open in VibeSpace · Ctrl-click to reveal in the file manager"
-        onClick={(event) => void open(event.ctrlKey || event.metaKey ? 'reveal' : 'editor')}
+        title="Open in VibeSpace Files · Ctrl-click opens this file"
+        onClick={() => void open('editor')}
         onContextMenu={(event) => {
           event.preventDefault();
           setMenuOpen(true);
@@ -65,7 +82,10 @@ function ToolFileLink({ path, projectRoot }: { path: string; projectRoot?: strin
             Open in VibeSpace
           </button>
           <button type="button" onClick={() => void open('reveal')}>
-            Reveal in file manager
+            Open in File Explorer
+          </button>
+          <button type="button" onClick={() => { setSavingCopy(true); setCopyPath(path); }}>
+            Save a copy as…
           </button>
           {editors.map((editor) => (
             <button type="button" key={editor.id} onClick={() => void open(editor.id)}>
@@ -77,6 +97,16 @@ function ToolFileLink({ path, projectRoot }: { path: string; projectRoot?: strin
           </button>
         </span>
       ) : null}
+      {savingCopy ? (
+        <span role="group" aria-label={`Save a copy of ${path}`} className="flex gap-2 rounded border border-border bg-panel p-2">
+          <input aria-label="New project file path" value={copyPath}
+            onChange={(event) => setCopyPath(event.target.value)}
+            className="min-w-40 rounded border border-border bg-background px-2 text-foreground" />
+          <button type="button" onClick={() => void saveCopy()}>Save copy</button>
+          <button type="button" onClick={() => setSavingCopy(false)}>Cancel copy</button>
+        </span>
+      ) : null}
+      {status ? <span role="status" className="block text-muted-foreground">{status}</span> : null}
       {error ? (
         <span role="alert" className="block text-destructive">
           {error}

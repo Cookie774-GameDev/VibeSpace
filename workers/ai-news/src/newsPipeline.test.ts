@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { NewsSourceDefinition } from './newsSources';
 import {
   clusterNewsCandidates,
+  extractModelNames,
   parseOfficialFeed,
+  parseOfficialNewsroom,
   parseOpenGraphMedia,
   parseXResponse,
   shouldClusterNews,
@@ -98,13 +100,80 @@ describe('official news parsing and clustering', () => {
     });
   });
 
-  it('rejects HTML error pages and malformed feeds', () => {
+  it('accepts a valid but empty Atom feed and rejects HTML or non-feed documents', () => {
     expect(() => parseOfficialFeed(feedSource, '<html>upstream error</html>')).toThrow(
       /returned HTML/i,
     );
-    expect(() => parseOfficialFeed(feedSource, '<rss><channel /></rss>')).toThrow(
+    expect(parseOfficialFeed(feedSource, '<feed><title>Example</title></feed>')).toEqual([]);
+    expect(() => parseOfficialFeed(feedSource, '<document>not a feed</document>')).toThrow(
       /no item or entry/i,
     );
+  });
+
+  it('reads dated model announcements from Anthropic’s official newsroom cards', () => {
+    const newsroomSource: NewsSourceDefinition = {
+      ...feedSource,
+      id: 'anthropic-news',
+      company: 'Anthropic',
+      sourceType: 'official_site',
+      endpoint: 'https://www.anthropic.com/news',
+    };
+    const html = `<html><body>
+      <a href="/claude-opus-5-5" class="featured-story">
+        <h2>Introducing Claude Opus 5.5</h2>
+        <div><time class="caption">Sep 22, 2026</time>
+          <p>Opus 5.5 performs at the level of Claude Fable 5.1 on most work.</p>
+        </div>
+      </a>
+      <a href="https://outside.example/model"><h2>External announcement</h2>
+        <time>Sep 23, 2026</time><p>Do not ingest off-domain items.</p>
+      </a>
+      <a href="/situation-report"><h2>The Situation Report</h2>
+        <time>Sep 23, 2026</time><p>A general corporate update about quarterly operations.</p>
+      </a>
+      <a href="/news"><h2>Newsroom</h2><time>Sep 23, 2026</time></a>
+    </body></html>`;
+
+    const parsed = parseOfficialNewsroom(newsroomSource, html, '2026-09-24T17:00:00Z');
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({
+      title: 'Introducing Claude Opus 5.5',
+      url: 'https://www.anthropic.com/claude-opus-5-5',
+      company: 'Anthropic',
+      category: 'model-release',
+      sourcePlatform: 'rss',
+    });
+    expect(parsed[0]?.publishedAt).toMatch(/^2026-09-22T/u);
+    expect(parsed[0]?.modelNames).toContain('Claude Opus 5.5');
+  });
+
+  it('keeps date-only ISO newsroom timestamps on their published calendar day', () => {
+    const newsroomSource: NewsSourceDefinition = {
+      ...feedSource,
+      id: 'anthropic-news',
+      company: 'Anthropic',
+      sourceType: 'official_site',
+      endpoint: 'https://www.anthropic.com/news',
+    };
+    const html = `<html><body><a href="/claude-sonnet-4-2">
+      <h2>Introducing Claude Sonnet 4.2</h2><time datetime="2026-09-22">Latest</time>
+      <p>Our latest coding and knowledge work model.</p>
+    </a></body></html>`;
+
+    const parsed = parseOfficialNewsroom(newsroomSource, html);
+
+    expect(parsed[0]?.publishedAt).toBe('2026-09-22T12:00:00.000Z');
+    expect(parsed[0]?.category).toBe('model-release');
+  });
+
+  it('stops Claude model names before the surrounding release description', () => {
+    expect(
+      extractModelNames(
+        'Introducing Claude Opus 5.5. Opus 5.5 performs at the level of Claude Fable 5.1 on most work.',
+      ),
+    ).toEqual(['Claude Opus 5.5', 'Claude Fable 5.1']);
+    expect(extractModelNames('Claude for malicious activity; Claude has evolved.')).toEqual([]);
   });
 
   it('parses X media only through the authenticated API response shape', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { unzlibSync } from 'fflate';
 import {
   createCanvasBlock,
   createCanvasDocument,
@@ -61,6 +62,33 @@ function file(name: string, mimeType: string, data: string | Uint8Array): Canvas
     size: typeof data === 'string' ? new TextEncoder().encode(data).length : data.length,
     data,
   };
+}
+
+function pngPixel(bytes: Uint8Array, x: number, y: number): number[] {
+  const compressed: Uint8Array[] = [];
+  let offset = 8;
+  while (offset + 12 <= bytes.length) {
+    const length =
+      bytes[offset]! * 0x1000000 +
+      (bytes[offset + 1]! << 16) +
+      (bytes[offset + 2]! << 8) +
+      bytes[offset + 3]!;
+    const type = new TextDecoder().decode(bytes.subarray(offset + 4, offset + 8));
+    if (type === 'IDAT') compressed.push(bytes.subarray(offset + 8, offset + 8 + length));
+    offset += length + 12;
+    if (type === 'IEND') break;
+  }
+  const compressedLength = compressed.reduce((total, part) => total + part.length, 0);
+  const idat = new Uint8Array(compressedLength);
+  let idatOffset = 0;
+  for (const part of compressed) {
+    idat.set(part, idatOffset);
+    idatOffset += part.length;
+  }
+  const pixels = unzlibSync(idat);
+  const rowSize = 1 + 1280 * 4;
+  const pixelOffset = y * rowSize + 1 + x * 4;
+  return Array.from(pixels.subarray(pixelOffset, pixelOffset + 4));
 }
 
 describe('canvas import and export', () => {
@@ -162,6 +190,40 @@ describe('canvas import and export', () => {
 
     const presentation = exportCanvas(document, { format: 'presentation-pdf' });
     expect(new TextDecoder().decode(presentation.bytes)).toContain('/Count 2');
+  });
+
+  it('fits the whole Canvas placement inside a padded PNG export frame', () => {
+    let document = createCanvasDocument({
+      id: 'visual-export-layout',
+      projectId: 'project-1',
+      ownerId: 'owner-1',
+      now: 1,
+      title: 'Bounded export',
+    });
+    document = withBlockAdded(
+      document,
+      createCanvasBlock({
+        id: 'visual-export-note',
+        now: 2,
+        content: { kind: 'note', text: 'Ship safely' },
+      }),
+      2,
+    );
+    document = withPlacement(
+      document,
+      { blockId: 'visual-export-note', x: 250, y: 300, width: 280, height: 180 },
+      3,
+    );
+
+    const artifact = exportCanvas(document, {
+      format: 'png',
+      width: 1280,
+      height: 720,
+      background: '#abcdef',
+    });
+
+    expect(pngPixel(artifact.bytes, 2, 1)).toEqual([0xab, 0xcd, 0xef, 255]);
+    expect(pngPixel(artifact.bytes, 640, 360)).toEqual([255, 255, 255, 255]);
   });
 
   it('exports shape labels without dropping the real shape payload', () => {

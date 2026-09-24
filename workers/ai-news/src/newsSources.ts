@@ -121,8 +121,8 @@ export const NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     company: 'Anthropic',
     priority: 100,
     enabled: true,
-    sourceType: 'rss',
-    endpoint: 'https://www.anthropic.com/news/rss.xml',
+    sourceType: 'official_site',
+    endpoint: 'https://www.anthropic.com/news',
     officialSite: 'https://www.anthropic.com/news',
     verification: 'official',
     rotationGroup: 0,
@@ -158,8 +158,8 @@ export const NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     priority: 95,
     enabled: true,
     sourceType: 'rss',
-    endpoint: 'https://blogs.microsoft.com/ai/feed/',
-    officialSite: 'https://blogs.microsoft.com/ai/',
+    endpoint: 'https://news.microsoft.com/source/topics/ai/feed/',
+    officialSite: 'https://news.microsoft.com/source/topics/ai/',
     verification: 'official',
     rotationGroup: 0,
     tags: ['models', 'copilot', 'cloud'],
@@ -220,7 +220,14 @@ export const NEWS_SOURCES: readonly NewsSourceDefinition[] = [
   release('qwen3-releases', 'Alibaba Qwen', 'QwenLM/Qwen3', 90, 1, ['open-models']),
   release('kimi-k2-releases', 'Moonshot AI', 'MoonshotAI/Kimi-K2', 89, 2, ['open-models']),
   release('glm4-releases', 'Zhipu AI', 'THUDM/GLM-4', 88, 3, ['open-models']),
-  release('minimax-text-releases', 'MiniMax', 'MiniMax-AI/MiniMax-Text-01', 87, 1, ['open-models']),
+  {
+    ...release('minimax-text-releases', 'MiniMax', 'MiniMax-AI/MiniMax-Text-01', 87, 1, [
+      'open-models',
+    ]),
+    enabled: false,
+    disabledReason:
+      'The configured official GitHub repository returned 404; needs a verified replacement.',
+  },
   release('cohere-python-releases', 'Cohere', 'cohere-ai/cohere-python', 87, 2, ['sdk']),
   release('ai21-python-releases', 'AI21 Labs', 'AI21Labs/ai21-python', 85, 3, ['sdk']),
   release('transformers-releases', 'Hugging Face', 'huggingface/transformers', 94, 1, [
@@ -236,10 +243,19 @@ export const NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     'inference',
     'sdk',
   ]),
-  release('fireworks-python-releases', 'Fireworks AI', 'fireworks-ai/fireworks-ai-python', 85, 2, [
-    'inference',
-    'sdk',
-  ]),
+  {
+    ...release(
+      'fireworks-python-releases',
+      'Fireworks AI',
+      'fireworks-ai/fireworks-ai-python',
+      85,
+      2,
+      ['inference', 'sdk'],
+    ),
+    enabled: false,
+    disabledReason:
+      'The configured official GitHub repository returned 404; needs a verified replacement.',
+  },
   release('ollama-releases', 'Ollama', 'ollama/ollama', 94, 3, ['local-ai']),
   release('vercel-ai-sdk-releases', 'Vercel AI SDK', 'vercel/ai', 91, 1, ['developer-tools']),
   release('langchain-releases', 'LangChain', 'langchain-ai/langchain', 89, 2, [
@@ -507,14 +523,14 @@ function hash32(value: string): number {
 }
 
 /**
- * Keeps core feeds in every hourly run and rotates the long tail deterministically.
- * X is capped separately because the API is optional and rate-limited.
+ * Keeps core official feeds in every hourly run and rotates release feeds by hour.
+ * Authenticated X sources stay opt-in because the free schedule must work without a key.
  */
 export function selectNewsSourcesForRun(
   scheduledAt: string,
   {
     maxSources = 24,
-    maxX = 2,
+    maxX = 0,
     sources = NEWS_SOURCES,
   }: {
     maxSources?: number;
@@ -546,6 +562,15 @@ export function selectNewsSourcesForRun(
         leftOrder - rightOrder || right.priority - left.priority || left.id.localeCompare(right.id)
       );
     });
+  const releaseFeeds = enabled
+    .filter((source) => source.sourceType === 'github_releases')
+    .sort((left, right) => {
+      const leftOrder = hash32(`${hour}:${left.rotationGroup}:${left.id}`);
+      const rightOrder = hash32(`${hour}:${right.rotationGroup}:${right.id}`);
+      return (
+        leftOrder - rightOrder || right.priority - left.priority || left.id.localeCompare(right.id)
+      );
+    });
   const xSources = enabled
     .filter((source) => source.sourceType === 'x')
     .sort((left, right) => {
@@ -563,7 +588,10 @@ export function selectNewsSourcesForRun(
     if (!chosen.some((entry) => entry.id === source.id)) chosen.push(source);
   };
   core.forEach(add);
+  const sourceLimit = Math.max(1, maxSources);
+  const releaseBudget = Math.max(0, sourceLimit - chosen.length - xSources.length);
+  releaseFeeds.slice(0, releaseBudget).forEach(add);
   rotatingFeeds.forEach(add);
   xSources.forEach(add);
-  return chosen.slice(0, Math.max(1, maxSources));
+  return chosen.slice(0, sourceLimit);
 }

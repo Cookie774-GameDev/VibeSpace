@@ -78,6 +78,8 @@ describe('NewsPanel live cards', () => {
     expect(image).toBeTruthy();
     expect(container.querySelector(`time[datetime="${todayTimestamp}"]`)).toBeTruthy();
     expect(screen.getByRole('tab', { name: /Today\s+1/i })).toBeTruthy();
+    expect(container.querySelector('svg.lucide-radar')).toBeTruthy();
+    expect(container.querySelector('svg.lucide-sparkles')).toBeNull();
   });
 
   it('switches to the explicit fallback when a remote image fails', async () => {

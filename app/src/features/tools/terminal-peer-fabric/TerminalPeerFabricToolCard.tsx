@@ -1,11 +1,12 @@
 import * as React from 'react';
-import { Network, Play, RefreshCw } from 'lucide-react';
+import { Network, Play, RefreshCw, PanelRightOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { readLiveTargetSnapshot } from '@/features/instant-command/targetSnapshot';
 import {
   terminalPeerFabricCommandPort,
   type TerminalPeerFabricCommandPort,
 } from './terminalPeerFabricTool';
+import { useFabricPresentationStore } from './fabricPresentationStore';
 
 type CapabilityState = 'checking' | 'available' | 'unavailable';
 
@@ -13,13 +14,16 @@ export type TerminalPeerFabricToolCardProps = Readonly<{
   port?: TerminalPeerFabricCommandPort;
   eligibleTerminalCount?: number;
   onOpen?: () => void;
+  onManage?: () => void;
 }>;
 
 export function TerminalPeerFabricToolCard({
   port = terminalPeerFabricCommandPort,
   eligibleTerminalCount,
   onOpen,
+  onManage,
 }: TerminalPeerFabricToolCardProps) {
+  const connectedCount = useFabricPresentationStore((state) => state.peers.length);
   const [capability, setCapability] = React.useState<CapabilityState>('checking');
   const [discoveredCount, setDiscoveredCount] = React.useState(eligibleTerminalCount ?? 0);
   const [revision, refresh] = React.useReducer((value: number) => value + 1, 0);
@@ -94,8 +98,12 @@ export function TerminalPeerFabricToolCard({
         disabled={capability === 'checking'}
         onClick={refresh}
       >
-        <RefreshCw className="h-3.5 w-3.5" />
+        <RefreshCw className={`h-3.5 w-3.5 ${capability === 'checking' ? 'animate-spin' : ''}`} />
       </Button>
+      {connectedCount > 1 && <Button type="button" size="sm" variant="outline" onClick={onManage}
+        aria-label="Manage Terminal Peer Fabric">
+        <PanelRightOpen className="h-3.5 w-3.5" /> Manage
+      </Button>}
       <Button
         type="button"
         size="sm"

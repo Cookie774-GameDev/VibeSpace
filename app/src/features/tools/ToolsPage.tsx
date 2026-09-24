@@ -603,6 +603,10 @@ export function ToolsPage() {
     useFabricPresentationStore.getState().launch();
     useUIStore.getState().setRoute('terminal');
   };
+  const manageTerminalFabric = () => {
+    useFabricPresentationStore.getState().manage();
+    useUIStore.getState().setRoute('terminal');
+  };
   const [editing, setEditing] = React.useState<CustomTool | null>(null);
   const [templateSeed, setTemplateSeed] = React.useState<QuickTemplate | null>(null);
 
@@ -775,7 +779,7 @@ export function ToolsPage() {
             <CommandCenterToolCard />
             <EmpireFreezerToolCard />
             <FasterAgentsToolCard />
-            <TerminalPeerFabricToolCard onOpen={openTerminalFabric} />
+            <TerminalPeerFabricToolCard onOpen={openTerminalFabric} onManage={manageTerminalFabric} />
           </div>
         </section>
 

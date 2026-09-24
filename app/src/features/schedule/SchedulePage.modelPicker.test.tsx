@@ -233,12 +233,10 @@ describe('SchedulePage Jarvis Action model picker', () => {
       'Encountered two children with the same key',
     );
     consoleError.mockRestore();
-    // Prefer non-Lite Flash when multiple Gemini 2.5 Flash options appear.
-    const flashOptions = screen.getAllByRole('button', {
-      name: /Select Gemini 2\.5 Flash/i,
-    });
-    const nonLite = flashOptions.find((el) => !/Lite/i.test(el.textContent ?? ''));
-    fireEvent.click(nonLite ?? flashOptions[0]!);
+    // Schedule uses the same searchable model and effort picker as Chat.
+    expect(screen.getByRole('listbox', { name: 'Available AI models' })).toBeTruthy();
+    fireEvent.click(document.querySelector(`[data-value="${GEMINI_API_CONNECTION.id}:gemini-2.5-flash"]`)!);
+    fireEvent.click(document.querySelector('[data-effort-level="auto"]')!);
     fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Review release notes' },
     });
@@ -308,19 +306,13 @@ describe('SchedulePage Jarvis Action model picker', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Jarvis Action$/i }));
     fireEvent.click(screen.getByLabelText(/action model/i));
-    expect(screen.queryByRole('listbox')).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'Select GPT-5.6 Sol' })).toHaveLength(1);
-    const unavailable = screen.getByRole('button', { name: 'Use GPT-5.6 Sol Preview' });
+    expect(screen.getByRole('listbox', { name: 'Available AI models' })).toBeTruthy();
+    fireEvent.click(document.querySelector('[data-value="opencode-cli:openai/gpt-5.6-sol"]')!);
+    const unavailable = screen.getByRole('option', { name: /GPT-5\.6 Sol Preview/i });
     expect((unavailable as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(unavailable);
-    expect(unavailable.getAttribute('aria-pressed')).toBe('false');
-    fireEvent.click(screen.getByRole('button', { name: 'Use GPT-5.6 Sol Fast' }));
-    expect(screen.queryByRole('group', { name: 'Connected models' })).toBeNull();
-    fireEvent.click(screen.getByLabelText(/action model/i));
-    expect(
-      screen.getByRole('button', { name: 'Use GPT-5.6 Sol Fast' }).getAttribute('aria-pressed'),
-    ).toBe('true');
-    fireEvent.click(screen.getByLabelText(/action model/i));
+    fireEvent.click(screen.getByRole('option', { name: /GPT-5\.6 Sol Fast/i }));
+    fireEvent.click(document.querySelector('[data-effort-level="auto"]')!);
+    expect(screen.queryByRole('listbox')).toBeNull();
     fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Review the Fast route' },
     });
