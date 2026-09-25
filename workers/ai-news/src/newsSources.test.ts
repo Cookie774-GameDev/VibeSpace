@@ -31,6 +31,43 @@ describe('AI news source registry', () => {
     expect(selectNewsSourcesForRun('2026-08-14T23:07:00Z', { maxSources: 20 })).toHaveLength(20);
   });
 
+  it('keeps confirmed high-volume AI publisher feeds in every hourly run and retains release coverage', () => {
+    const publisherIds = [
+      'techcrunch-ai-news',
+      'the-verge-ai-news',
+      'arstechnica-ai-news',
+      'the-decoder-ai-news',
+      'mit-tech-review-ai-news',
+    ];
+    const publishers = NEWS_SOURCES.filter((source) => publisherIds.includes(source.id));
+
+    expect(publishers.map((source) => source.id)).toEqual(publisherIds);
+    for (const source of publishers) {
+      expect(source).toMatchObject({
+        enabled: true,
+        sourceType: 'rss',
+        verification: 'confirmed',
+        priority: 94,
+        rotationGroup: 0,
+      });
+      expect(new URL(source.endpoint ?? '').origin).toBe(new URL(source.officialSite ?? '').origin);
+      expect(source.tags).toContain('publisher-news');
+    }
+
+    for (const maxSources of [20, 24]) {
+      const selectedIds = new Set(
+        selectNewsSourcesForRun('2026-08-14T23:07:00Z', { maxSources }).map((source) => source.id),
+      );
+      expect(publisherIds.every((id) => selectedIds.has(id))).toBe(true);
+      expect(selectedIds.has('anthropic-news')).toBe(true);
+      expect(
+        NEWS_SOURCES.some(
+          (source) => selectedIds.has(source.id) && source.sourceType === 'github_releases',
+        ),
+      ).toBe(true);
+    }
+  });
+
   it('reserves the requested optional X slots without displacing hourly model releases', () => {
     const selected = selectNewsSourcesForRun('2026-08-14T23:07:00Z', { maxX: 2 });
     expect(selected).toHaveLength(24);

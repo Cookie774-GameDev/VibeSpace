@@ -79,6 +79,25 @@ const youtube = (
   tags: ['video', 'official-channel'],
 });
 
+const publisherRss = (
+  id: string,
+  company: string,
+  endpoint: string,
+  officialSite: string,
+  tags: string[],
+): NewsSourceDefinition => ({
+  id,
+  company,
+  priority: 94,
+  enabled: true,
+  sourceType: 'rss',
+  endpoint,
+  officialSite,
+  verification: 'confirmed',
+  rotationGroup: 0,
+  tags: ['publisher-news', ...tags],
+});
+
 const unavailableSite = (
   id: string,
   company: string,
@@ -99,9 +118,10 @@ const unavailableSite = (
 });
 
 /**
- * Reviewable registry of high-value official AI sources. Disabled entries are
- * intentionally retained so /health can distinguish unsupported capability
- * from a silently missing company. No authenticated HTML scraping is used.
+ * Reviewable registry of official AI sources and confirmed publisher feeds.
+ * Disabled entries are intentionally retained so /health can distinguish
+ * unsupported capability from a silently missing company. No authenticated
+ * HTML scraping is used.
  */
 export const NEWS_SOURCES: readonly NewsSourceDefinition[] = [
   {
@@ -188,6 +208,41 @@ export const NEWS_SOURCES: readonly NewsSourceDefinition[] = [
     rotationGroup: 0,
     tags: ['open-models', 'research', 'developer-tools'],
   },
+  publisherRss(
+    'techcrunch-ai-news',
+    'TechCrunch',
+    'https://techcrunch.com/category/artificial-intelligence/feed/',
+    'https://techcrunch.com/category/artificial-intelligence/',
+    ['ai-news', 'startups', 'models'],
+  ),
+  publisherRss(
+    'the-verge-ai-news',
+    'The Verge',
+    'https://www.theverge.com/rss/ai-artificial-intelligence/index.xml',
+    'https://www.theverge.com/ai-artificial-intelligence',
+    ['ai-news', 'products', 'models'],
+  ),
+  publisherRss(
+    'arstechnica-ai-news',
+    'Ars Technica',
+    'https://arstechnica.com/ai/feed/',
+    'https://arstechnica.com/ai/',
+    ['ai-news', 'research', 'policy'],
+  ),
+  publisherRss(
+    'the-decoder-ai-news',
+    'The Decoder',
+    'https://the-decoder.com/feed/',
+    'https://the-decoder.com/',
+    ['ai-news', 'models', 'research'],
+  ),
+  publisherRss(
+    'mit-tech-review-ai-news',
+    'MIT Technology Review',
+    'https://www.technologyreview.com/feed/',
+    'https://www.technologyreview.com/',
+    ['ai-news', 'research', 'policy'],
+  ),
   youtube('openai-youtube', 'OpenAI', 'UCXZCJLdBC09xxGZ6gcdrc6A', 'OpenAI', 98),
   youtube('anthropic-youtube', 'Anthropic', 'UCrDwWp7EBBv4NwvScIpBDOA', 'anthropic-ai', 98),
   youtube(
@@ -523,7 +578,8 @@ function hash32(value: string): number {
 }
 
 /**
- * Keeps core official feeds in every hourly run and rotates release feeds by hour.
+ * Keeps high-priority official and confirmed publisher feeds in each hourly run,
+ * then fills the bounded free request budget with rotating release and long-tail feeds.
  * Authenticated X sources stay opt-in because the free schedule must work without a key.
  */
 export function selectNewsSourcesForRun(
