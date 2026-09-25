@@ -95,6 +95,39 @@ interface StoredNewsEvent {
   source_count: number;
 }
 
+export function selectNewsCandidates(
+  candidates: readonly NewsCandidate[],
+  maxItems: number,
+  observedAt: string,
+): NewsCandidate[] {
+  if (maxItems <= 0) return [];
+  const recentFirst = [...candidates].sort(
+    (left, right) =>
+      Date.parse(right.publishedAt) - Date.parse(left.publishedAt) ||
+      right.importanceScore - left.importanceScore,
+  );
+  const weekStart = Date.parse(observedAt) - 7 * 86_400_000;
+  const reserved = recentFirst
+    .filter(
+      (candidate) =>
+        candidate.category === 'model-release' && Date.parse(candidate.publishedAt) >= weekStart,
+    )
+    .slice(0, Math.min(8, Math.floor(maxItems / 5)));
+  const selected: NewsCandidate[] = [];
+  const urls = new Set<string>();
+  for (const candidate of [...reserved, ...recentFirst]) {
+    if (urls.has(candidate.url)) continue;
+    selected.push(candidate);
+    urls.add(candidate.url);
+    if (selected.length >= maxItems) break;
+  }
+  return selected.sort(
+    (left, right) =>
+      Date.parse(right.publishedAt) - Date.parse(left.publishedAt) ||
+      right.importanceScore - left.importanceScore,
+  );
+}
+
 interface StoredEventSource {
   event_id: string;
   source_id: string;
@@ -245,13 +278,18 @@ export function extractModelNames(value: string): string[] {
   return [...unique.values()].slice(0, 8);
 }
 
-function categoryFor(value: string): string {
-  if (PRICING_CHANGE.test(value)) return 'pricing-and-limits';
-  if (BENCHMARK_NEWS.test(value)) return 'benchmarks';
-  if (MAJOR_RELEASE.test(value) && extractModelNames(value).length) return 'model-release';
-  if (/\b(api|sdk|developer|tool|mcp|agent|coding)\b/i.test(value)) return 'developer-tools';
-  if (/\b(research|paper|study|safety|alignment)\b/i.test(value)) return 'research';
-  if (MAJOR_RELEASE.test(value) || /\bmodel\b/i.test(value)) return 'model-release';
+function categoryFor(headline: string, detail = headline): string {
+  if (PRICING_CHANGE.test(detail)) return 'pricing-and-limits';
+  if (BENCHMARK_NEWS.test(detail)) return 'benchmarks';
+  const hasModelSubject =
+    extractModelNames(headline).length > 0 || /\b(?:model|llm|vlm)\b/i.test(headline);
+  const announcesRelease =
+    /\b(?:launch(?:es|ed|ing)?|releas(?:e|es|ed|ing)|introduc(?:e|es|ed|ing)|announc(?:e|es|ed|ing)|unveil(?:s|ed|ing)?|debut(?:s|ed)?|new generation)\b/i.test(
+      headline,
+    );
+  if (hasModelSubject && announcesRelease) return 'model-release';
+  if (/\b(api|sdk|developer|tool|mcp|agent|coding)\b/i.test(detail)) return 'developer-tools';
+  if (/\b(research|paper|study|safety|alignment)\b/i.test(detail)) return 'research';
   return 'company-update';
 }
 
@@ -358,7 +396,7 @@ export function parseOfficialFeed(
       summary: truncate(description || title, 480),
       url,
       publishedAt,
-      category: categoryFor(combined),
+      category: categoryFor(title, combined),
       modelNames,
       importanceScore: importanceFor(source, combined, modelNames),
       ...media,
@@ -454,7 +492,7 @@ export function parseOfficialNewsroom(
       summary,
       url,
       publishedAt,
-      category: categoryFor(combined),
+      category: categoryFor(title, combined),
       modelNames,
       importanceScore: importanceFor(source, combined, modelNames),
       mediaType: 'none',
@@ -537,7 +575,7 @@ export function parseXResponse(source: NewsSourceDefinition, payload: unknown): 
         summary: truncate(body, 480),
         url,
         publishedAt,
-        category: categoryFor(body),
+        category: categoryFor(xTitle(body), body),
         modelNames,
         importanceScore: importanceFor(source, body, modelNames),
         ...(imageUrl ? { imageUrl, imageCredit: `${source.company} on X` } : {}),
@@ -1153,14 +1191,11 @@ export async function runNewsIngestion(env: Env, scheduledAt: string): Promise<P
       );
     }
     const maxItems = envInteger(env.NEWS_MAX_ITEMS_PER_RUN, 40, 10, 80);
-    const candidates = healthy
-      .flatMap((entry) => entry.candidates)
-      .sort(
-        (left, right) =>
-          Date.parse(right.publishedAt) - Date.parse(left.publishedAt) ||
-          right.importanceScore - left.importanceScore,
-      )
-      .slice(0, maxItems);
+    const candidates = selectNewsCandidates(
+      healthy.flatMap((entry) => entry.candidates),
+      maxItems,
+      at,
+    );
     let clusters = clusterNewsCandidates(candidates);
     const enrichmentLimit = envInteger(env.NEWS_MEDIA_ENRICHMENT_LIMIT, 4, 0, 8);
     const needsEnrichment = clusters

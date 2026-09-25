@@ -143,9 +143,22 @@ function youtubeIdForUrl(value: string | undefined): string | undefined {
   return undefined;
 }
 
-function kindForItem(category: string, mediaType: LiveMediaType, youtubeId?: string): NewsKind {
+function kindForItem(
+  category: string,
+  mediaType: LiveMediaType,
+  title: string,
+  modelNames: readonly string[],
+  youtubeId?: string,
+): NewsKind {
   if (mediaType === 'video' || youtubeId) return 'youtube';
-  return /model|release|launch/i.test(category) ? 'model_drop' : 'ai_news';
+  const hasModelSubject = modelNames.length > 0 || /\b(?:model|llm|vlm)\b/i.test(title);
+  const announcesRelease =
+    /\b(?:launch(?:es|ed|ing)?|releas(?:e|es|ed|ing)|introduc(?:e|es|ed|ing)|announc(?:e|es|ed|ing)|unveil(?:s|ed|ing)?|debut(?:s|ed)?|new generation)\b/i.test(
+      title,
+    );
+  return category === 'model-release' && hasModelSubject && announcesRelease
+    ? 'model_drop'
+    : 'ai_news';
 }
 
 function requiredCount(record: Record<string, unknown>, key: string): number {
@@ -290,6 +303,7 @@ export function parseNewsResponse(payload: unknown): LiveNewsResponse {
       throw new Error('AI news response is malformed.');
     }
     const category = requiredString(item, 'category');
+    const title = requiredString(item, 'title');
     const sourceUrl = safeHttpsUrl(item.url ?? item.sourceUrl);
     if (!sourceUrl) throw new Error('AI news response is malformed.');
 
@@ -317,7 +331,7 @@ export function parseNewsResponse(payload: unknown): LiveNewsResponse {
 
     return {
       id: requiredId(item),
-      title: requiredString(item, 'title'),
+      title,
       summary: plainText(requiredString(item, 'summary')),
       url: sourceUrl,
       publishedAt: requiredIsoTimestamp(item, 'publishedAt'),
@@ -327,7 +341,7 @@ export function parseNewsResponse(payload: unknown): LiveNewsResponse {
       verification,
       ...(company ? { company } : {}),
       category,
-      kind: kindForItem(category, mediaType, youtubeId),
+      kind: kindForItem(category, mediaType, title, modelNames, youtubeId),
       imageUrl: imageUrl ?? '',
       imageCredit,
       credit: `${verification === 'official' ? 'Official source' : 'Confirmed source'} · ${source}`,
@@ -365,7 +379,7 @@ export async function fetchLiveNews(
   const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   const endpoint = new URL(origin).origin;
   try {
-    const url = new URL('/api/news?limit=50', origin);
+    const url = new URL('/api/news?limit=100', origin);
     const response = await fetcher(url, {
       headers: { accept: 'application/json' },
       mode: 'cors',

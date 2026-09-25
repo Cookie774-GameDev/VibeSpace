@@ -7,6 +7,7 @@ import {
   parseOfficialNewsroom,
   parseOpenGraphMedia,
   parseXResponse,
+  selectNewsCandidates,
   shouldClusterNews,
   titleSimilarity,
   type NewsCandidate,
@@ -44,6 +45,38 @@ function candidate(overrides: Partial<NewsCandidate> = {}): NewsCandidate {
 }
 
 describe('official news parsing and clustering', () => {
+  it('keeps a weekly official model launch when recent general headlines fill the run', () => {
+    const recent = Array.from({ length: 40 }, (_, index) =>
+      candidate({
+        title: `General AI headline ${index}`,
+        url: `https://example.com/general-${index}`,
+        category: 'company-update',
+        publishedAt: new Date(Date.parse('2026-09-24T18:00:00Z') - index * 60_000).toISOString(),
+      }),
+    );
+    const launch = candidate({
+      title: 'Introducing Claude Opus 5.5',
+      url: 'https://example.com/claude-opus-5-5',
+      publishedAt: '2026-09-22T12:00:00Z',
+    });
+    const selected = selectNewsCandidates([...recent, launch], 40, '2026-09-24T19:00:00Z');
+    expect(selected).toHaveLength(40);
+    expect(selected.some((item) => item.url === launch.url)).toBe(true);
+    expect(selected.some((item) => item.url === recent[39]?.url)).toBe(false);
+  });
+
+  it('reserves model-release for a model announcement in the headline', () => {
+    const xml = `<rss><channel>
+      <item><title>Meta announces two new AI game creation tools</title><link>https://example.com/tools</link><pubDate>Thu, 24 Sep 2026 12:00:00 GMT</pubDate><description>The model helps people create games.</description></item>
+      <item><title>Introducing NV-Reason-CT Open 3D CT VLM</title><link>https://example.com/vlm</link><pubDate>Thu, 24 Sep 2026 12:00:00 GMT</pubDate><description>A new vision model for radiology.</description></item>
+      <item><title>DeepMind wants Gemini 4 out the door soon</title><link>https://example.com/future</link><pubDate>Thu, 24 Sep 2026 12:00:00 GMT</pubDate><description>The company hopes to release Gemini 4 later this year.</description></item>
+    </channel></rss>`;
+    const parsed = parseOfficialFeed(feedSource, xml);
+    expect(parsed.find((item) => item.url.endsWith('/tools'))?.category).not.toBe('model-release');
+    expect(parsed.find((item) => item.url.endsWith('/vlm'))?.category).toBe('model-release');
+    expect(parsed.find((item) => item.url.endsWith('/future'))?.category).not.toBe('model-release');
+  });
+
   it('retains recognized model announcements even without generic AI keywords', () => {
     const xml = `<rss><channel>
       <item><title>GPT-6 Astra: A new generation of intelligence</title><link>https://example.com/astra</link><pubDate>Thu, 03 Sep 2026 12:00:00 GMT</pubDate><description>Our latest release.</description></item>

@@ -25,6 +25,26 @@ function responsePayload(item: Record<string, unknown> = baseItem) {
 }
 
 describe('live AI news API adapter', () => {
+  it('keeps general AI updates out of model drops while retaining real launches', () => {
+    const items = [
+      {
+        ...baseItem,
+        id: 1,
+        title: 'Meta announces two new AI game creation tools',
+        modelNames: [],
+      },
+      { ...baseItem, id: 2, title: 'Introducing NV-Reason-CT Open 3D CT VLM', modelNames: [] },
+      {
+        ...baseItem,
+        id: 3,
+        title: 'DeepMind wants Gemini 4 out the door soon',
+        modelNames: ['Gemini 4'],
+      },
+    ];
+    const parsed = parseNewsResponse({ ...responsePayload(), items });
+    expect(parsed.items.map((item) => item.kind)).toEqual(['ai_news', 'model_drop', 'ai_news']);
+  });
+
   it('parses repository metadata into a separate measured GitHub trend section', () => {
     const parsed = parseNewsResponse({
       ...responsePayload(),
@@ -150,7 +170,7 @@ describe('live AI news API adapter', () => {
     );
     const parsed = await fetchLiveNews('https://news.example', { fetcher, timeoutMs: 1000 });
     expect(parsed.items).toHaveLength(1);
-    expect(String(fetcher.mock.calls[0]?.[0])).toBe('https://news.example/api/news?limit=50');
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe('https://news.example/api/news?limit=100');
   });
 
   it('reports a public-news transport failure without claiming the user is offline', async () => {
@@ -162,7 +182,7 @@ describe('live AI news API adapter', () => {
       fetchLiveNews('https://news.example', { fetcher, timeoutMs: 1000 }),
     ).rejects.toThrow(/could not reach https:\/\/news\.example/i);
     expect(fetcher).toHaveBeenCalledWith(
-      new URL('https://news.example/api/news?limit=50'),
+      new URL('https://news.example/api/news?limit=100'),
       expect.objectContaining({ credentials: 'omit', mode: 'cors' }),
     );
   });
