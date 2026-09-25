@@ -241,8 +241,8 @@ fn default_manifest(id: ModelId) -> Manifest {
                 required: true,
             },
             ManifestFile {
-                name: "vocabulary.json".into(),
-                url: format!("{base}/vocabulary.json"),
+                name: "vocabulary.txt".into(),
+                url: format!("{base}/vocabulary.txt"),
                 sha256: String::new(),
                 size_bytes: 1_100_000,
                 required: true,

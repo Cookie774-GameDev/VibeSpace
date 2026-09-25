@@ -12,6 +12,7 @@ import './terminal-fabric.css';
 
 import { createFabricRouter, type FabricBox as Box } from './fabricRouting';
 import { fabricConnections } from './fabricConnections';
+import { latestOpenCodeReply, latestOpenCodeScreenReply } from './peerRelayOutput';
 export { fabricBridge } from './fabricRouting';
 
 function isDirectOpenCode(target: LiveTerminalTarget): boolean {
@@ -59,6 +60,7 @@ export function TerminalFabricOverlay({
   const [relayTarget, setRelayTarget] = React.useState('');
   const [relayStatus, setRelayStatus] = React.useState<string | null>(null);
   const [relayBusy, setRelayBusy] = React.useState(false);
+  const [relayDraft, setRelayDraft] = React.useState('');
   const wasVisible = React.useRef(visible);
   const epoch = React.useRef(0);
   const submitting = React.useRef(false);
@@ -295,8 +297,19 @@ export function TerminalFabricOverlay({
       if (!isDirectOpenCode(source) || !isDirectOpenCode(recipient)) {
         throw Error('Relay requires two directly launched OpenCode agents.');
       }
-      const output = useTerminalTranscriptStore.getState().sessions[source.sessionId]?.text.trim();
-      if (!output) throw Error('The source terminal has no captured output to relay.');
+      const transcript = useTerminalTranscriptStore.getState().sessions[source.sessionId]?.text ?? '';
+      const snapshot = relayDraft.trim() ? null : await invoke<{
+        projectId: string | null; paneId: string; updatedAt: number; text: string;
+      } | null>('terminal_snapshot_load', {
+        projectId: source.projectId, paneId: source.paneId,
+      }).catch(() => null);
+      const currentScreen = snapshot?.projectId === source.projectId &&
+        snapshot?.paneId === source.paneId &&
+        snapshot.updatedAt >= source.processIdentity.processStartedAt
+        ? latestOpenCodeScreenReply(snapshot.text)
+        : null;
+      const output = relayDraft.trim() || currentScreen || latestOpenCodeReply(transcript);
+      if (!output) throw Error('No completed OpenCode reply was found. Enter the message to relay.');
       const fresh = await readTargets();
       const native = await port.command({
         commandId: 'team.status', correlationId: crypto.randomUUID(), targetIds: [],
@@ -317,6 +330,7 @@ export function TerminalFabricOverlay({
         agentMessage: true,
         data: `Message from ${source.label || source.sessionId}:\n${output.slice(-1500)}\nPlease reply to this peer message.`,
       });
+      setRelayDraft('');
       recordFabricDelivery(crypto.randomUUID(), source.sessionId, [recipient.sessionId]);
       setRelayStatus(`Sent output from ${source.label || source.sessionId} to ${recipient.label || recipient.sessionId}. Check the recipient terminal for its reply.`);
     } catch (cause) {
@@ -356,6 +370,9 @@ export function TerminalFabricOverlay({
                     <option value="">Choose recipient</option>
                     {livePeers.map((target) => <option key={target.sessionId} value={target.sessionId}>{target.label || target.sessionId}</option>)}
                   </select></label>
+                  <label>Message (optional)<textarea aria-label="Peer message to relay" value={relayDraft}
+                    onChange={(event) => setRelayDraft(event.target.value)}
+                    placeholder="Leave blank to relay the latest completed OpenCode reply" /></label>
                   <button type="button" disabled={relayBusy || !relaySource || !relayTarget || relaySource === relayTarget}
                     onClick={() => void sendPeerOutput()}><RefreshCw size={14} className={relayBusy ? 'animate-spin' : ''} /> Relay to peer</button>
                   {relayStatus && <p role="status">{relayStatus}</p>}

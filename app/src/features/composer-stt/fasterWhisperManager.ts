@@ -35,12 +35,16 @@ function buildManifest(modelId: FasterWhisperModelId) {
   const normalized = normalizeFasterWhisperModelId(modelId);
   const def = fasterWhisperModelDef(normalized);
   const base = `https://huggingface.co/${def.hfRepo}/resolve/main`;
+  const vocabularyUrl = `${base}/vocabulary.txt`;
   return {
     model: normalized,
     files: [
       { name: 'config.json', url: `${base}/config.json`, size_bytes: 2_000, required: true },
       { name: 'tokenizer.json', url: `${base}/tokenizer.json`, size_bytes: 2_200_000, required: true },
-      { name: 'vocabulary.json', url: `${base}/vocabulary.json`, size_bytes: 1_100_000, required: true },
+      { name: 'vocabulary.txt', url: vocabularyUrl, size_bytes: 1_100_000, required: true },
+      // Older native binaries still check for vocabulary.json. Convert the real text
+      // vocabulary under that legacy filename until those binaries are replaced.
+      { name: 'vocabulary.json', url: vocabularyUrl, size_bytes: 1_100_000, required: true },
       { name: 'model.bin', url: `${base}/model.bin`, size_bytes: def.sizeBytes, required: true },
     ],
   };
@@ -107,12 +111,34 @@ class FasterWhisperManagerImpl {
         model,
         manifest: buildManifest(model),
       });
+      await this.writeLegacyVocabularyJson(invoke, model);
       return true;
     } catch {
       return false;
     } finally {
       unlisten?.();
     }
+  }
+
+  private async writeLegacyVocabularyJson(invoke: TauriInvoke, model: string): Promise<void> {
+    const modelPath = await invoke<string>('faster_whisper_model_path', { model });
+    const modelRoot = modelPath.replace(/[\\/]+$/u, '');
+    const vocabularyPath = `${modelRoot}/vocabulary.txt`;
+    const vocabularyText = await invoke<string>('fs_read_text', { path: vocabularyPath });
+    const tokens = vocabularyText.split(/\r?\n/u);
+    if (tokens[tokens.length - 1] === '') tokens.pop();
+    if (tokens.length === 0 || tokens.some((token) => token.length === 0)) {
+      throw new Error('The local Whisper vocabulary must contain one non-empty token per line.');
+    }
+
+    const content = JSON.stringify(tokens);
+    if (new TextEncoder().encode(content).byteLength > 1_000_000) {
+      throw new Error('The local Whisper vocabulary is too large for the compatibility file.');
+    }
+    await invoke('fs_write_text', {
+      path: `${modelRoot}/vocabulary.json`,
+      content,
+    });
   }
 
   async removeModel(modelId: FasterWhisperModelId): Promise<boolean> {

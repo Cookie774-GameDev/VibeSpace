@@ -181,7 +181,7 @@ describe('native Fabric pane selection', () => {
     view.rerender(<TerminalFabricOverlay visible projectId="different-project" />);
     expect(document.querySelector('.vs-fabric-bridges')).toBeNull();
   }, 15000);
-  it('manages confirmed peers and only relays captured output through bound native OpenCode write', async () => {
+  it('manages confirmed peers and relays an explicit message through bound native OpenCode write', async () => {
     render(<TerminalFabricOverlay visible projectId="project" />);
     await selectTwo();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm connection' }));
@@ -194,6 +194,7 @@ describe('native Fabric pane selection', () => {
     });
     fireEvent.change(screen.getByLabelText('Relay from terminal'), { target: { value: 'tty-1' } });
     fireEvent.change(screen.getByLabelText('Relay to terminal'), { target: { value: 'tty-2' } });
+    fireEvent.change(screen.getByLabelText('Peer message to relay'), { target: { value: 'Hello from peer one' } });
     fireEvent.click(screen.getByRole('button', { name: 'Relay to peer' }));
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledOnce());
     expect(mocks.invoke).toHaveBeenCalledWith('terminal_write', {
@@ -201,6 +202,32 @@ describe('native Fabric pane selection', () => {
       agentMessage: true, data: expect.stringContaining('Hello from peer one'),
     });
     expect(screen.getByText(/Shared files: none recorded/i)).toBeTruthy();
+  });
+  it('relays a completed native screen reply without sending PTY redraw noise', async () => {
+    const live = targets.map((target) => ({
+      ...target,
+      processIdentity: { ...target.processIdentity, processStartedAt: 1 },
+    }));
+    mocks.read.mockResolvedValue(live);
+    mocks.invoke.mockImplementation(async (command: string) => command === 'terminal_snapshot_load'
+      ? {
+          projectId: 'project', paneId: 'pane-1', updatedAt: 2,
+          text: '┃ [CAO acting for user]\n┃ Message from peer two\n\n' +
+            'PEER-READY-X26\n\n▣ Build · GPT-6 Luna · 1m 2s\n',
+        }
+      : undefined);
+    render(<TerminalFabricOverlay visible projectId="project" />);
+    await selectTwo();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm connection' }));
+    await screen.findByLabelText('Terminal Peer Fabric manager');
+    fireEvent.change(screen.getByLabelText('Relay from terminal'), { target: { value: 'tty-1' } });
+    fireEvent.change(screen.getByLabelText('Relay to terminal'), { target: { value: 'tty-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Relay to peer' }));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('terminal_write', {
+      sessionId: 'tty-2', expectedBinding: live[1]!.processIdentity,
+      agentMessage: true,
+      data: 'Message from Shell 1:\nPEER-READY-X26\nPlease reply to this peer message.',
+    }));
   });
   it('cancels without connecting', async () => {
     render(<TerminalFabricOverlay visible projectId="project" />);

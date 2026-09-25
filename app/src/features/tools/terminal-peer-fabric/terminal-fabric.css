@@ -209,9 +209,11 @@
 }
 .vs-fabric-relay h3 { display: flex; align-items: center; gap: .4rem; margin-bottom: .5rem; font-size: .78rem; }
 .vs-fabric-relay label { display: block; margin: .5rem 0; color: hsl(var(--muted-foreground)); font-size: .7rem; }
-.vs-fabric-relay select {
+.vs-fabric-relay select,
+.vs-fabric-relay textarea {
   display: block;
   width: 100%;
+  box-sizing: border-box;
   margin-top: .25rem;
   padding: .45rem .55rem;
   border: 1px solid hsl(var(--border));
@@ -219,6 +221,12 @@
   background: hsl(var(--background));
   color: hsl(var(--foreground));
 }
+.vs-fabric-relay textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+  line-height: 1.4;
+}
+.vs-fabric-relay textarea::placeholder { color: hsl(var(--muted-foreground)); }
 .vs-fabric-relay > button {
   display: flex;
   align-items: center;
