@@ -694,6 +694,27 @@ describe('runDueJarvisSchedules', () => {
     expect(dispatches[0]?.dueAt).toBe(currentTime);
   });
 
+  it('retries the same due occurrence when the desktop kernel is still starting', async () => {
+    const event = buildEvent({ startAt: BASE_NOW - 60_000, recurrence: 'daily' });
+    const { deps, dispatches } = buildDeps([event]);
+    const originalDispatch = deps.dispatchScheduledOccurrence;
+    let first = true;
+    deps.dispatchScheduledOccurrence = vi.fn(async (input) => {
+      if (first) {
+        first = false;
+        throw new Error('jarvis_kernel_host_not_installed');
+      }
+      return originalDispatch(input);
+    });
+
+    await runDueJarvisSchedules(ACCOUNT, WORKSPACE, deps);
+    expect(parseJarvisScheduleMetadata(event)?.nextRunAt).toBe(event.start_at);
+    expect(parseJarvisScheduleMetadata(event)?.errorHistory).toEqual([]);
+    await runDueJarvisSchedules(ACCOUNT, WORKSPACE, deps);
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]?.dueAt).toBe(event.start_at);
+  });
+
   it('reuses the stored output chat instead of creating duplicates', async () => {
     const event = buildEvent({
       startAt: BASE_NOW - 60_000,

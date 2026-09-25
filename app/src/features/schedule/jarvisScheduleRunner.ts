@@ -580,6 +580,12 @@ export async function runDueJarvisSchedules(
       result.ran.push(String(event.id));
       options.onStage?.('completed');
     } catch (error) {
+      if (error instanceof Error && error.message === 'jarvis_kernel_host_not_installed') {
+        // Dev reload and desktop startup can briefly precede kernel installation.
+        // Nothing was allocated, so keep the same occurrence for the next poll.
+        releaseRun(claimKey);
+        continue;
+      }
       options.onStage?.('failed');
       if (error instanceof Error && error.message === 'kernel_schedule_allocation_conflict') {
         // The kernel already allocated this concrete occurrence. Retrying the
