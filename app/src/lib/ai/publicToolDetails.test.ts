@@ -199,3 +199,169 @@ describe('public tool detail safety and merging', () => {
     expect(publicToolOutput('safe\u001b[31').text).not.toContain('\u001b');
   });
 });
+
+describe('Plan 1 structured OpenCode result regression', () => {
+  it.each([
+    { label: 'object', output: { records: [{ path: 'src/game.ts', lines: [1, 2] }], total: 1 } },
+    { label: 'array', output: [{ path: 'first.ts' }, { path: 'last.ts', found: true }] },
+    { label: 'false', output: false },
+    { label: 'zero', output: 0 },
+    { label: 'null', output: null },
+  ])('retains $label output in the public Result field', ({ output }) => {
+    const details = openCodeToolDetails('mcp_search', {
+      status: 'completed', input: { query: 'game' }, output,
+    });
+    expect(details.result).toEqual(output);
+    expect(details.output).toBeUndefined();
+    expect(details.truncated).toBeUndefined();
+    expect(mergePublicToolDetails(details, openCodeToolDetails('mcp_search', {
+      status: 'completed', input: { query: 'game' },
+    })).result).toEqual(output);
+  });
+  it('redacts and bounds structured results before persistence', () => {
+    const output: Record<string, unknown> = {
+      records: Array.from({ length: 300 }, (_, index) => ({ path: `file-${index}.ts` })),
+      password: 'structured-secret-must-not-persist',
+    };
+    output.self = output;
+    const details = openCodeToolDetails('mcp_search', { status: 'completed', output });
+    expect(details.result).toMatchObject({
+      records: output.records,
+      password: '[redacted: credentials]',
+      self: '[omitted: circular value]',
+    });
+    expect(details).toMatchObject({ redacted: true, truncated: true });
+    expect(JSON.stringify(details)).not.toContain('structured-secret-must-not-persist');
+  });
+  it('omits internal Context receipts identically for JSON text and structured output', () => {
+    const envelope = {
+      requestId: 'private-request',
+      data: { receiptId: 'private-receipt', scopeRevision: 'private-scope', records: [{ title: 'Public result' }] },
+      ok: true,
+    };
+    const expected = { data: { records: [{ title: 'Public result' }] }, ok: true };
+    const details = openCodeToolDetails('vibespace_context', { status: 'completed', output: envelope });
+    expect(details.result).toEqual(expected);
+    expect(details.redacted).toBe(true);
+    const text = openCodeToolDetails('vibespace_context', { status: 'completed', output: JSON.stringify(envelope) });
+    expect(JSON.parse(text.output!.text)).toEqual(expected);
+    expect(JSON.stringify(details)).not.toMatch(/private-(request|receipt|scope)/);
+  });
+  it('does not evaluate result accessors', () => {
+    let reads = 0;
+    const output = Object.defineProperty({}, 'content', {
+      enumerable: true, get() { reads++; return 'private-accessor-value'; },
+    });
+    const details = openCodeToolDetails('mcp_search', { status: 'completed', output });
+    expect(reads).toBe(0);
+    expect(details.result).toBe('[unavailable]');
+    expect(details.truncated).toBe(true);
+    expect(JSON.stringify(details)).not.toContain('private-accessor-value');
+  });
+});
+
+
+describe('native per-file patch metadata', () => {
+  it('retains each actual OpenCode patch without assigning the aggregate diff to every file', () => {
+    const first = '@@ -0,0 +1,2 @@\n+first line\n+last line';
+    const second = '@@ -1 +1 @@\n-old value\n+new value';
+    const details = openCodeToolDetails('apply_patch', {
+      status: 'completed', input: { patchText: 'bounded native patch input' }, output: 'Updated two files',
+      metadata: { diff: first + '\n' + second, files: [
+        { filePath: 'first.ts', type: 'add', patch: first },
+        { filePath: 'second.ts', type: 'update', patch: second },
+      ] },
+    });
+    expect(details.changes).toEqual([
+      { path: 'first.ts', kind: 'add', diff: first, complete: true },
+      { path: 'second.ts', kind: 'update', diff: second, complete: true },
+    ]);
+    expect(details.truncated).toBeUndefined();
+  });
+  it('keeps canonical diff precedence and absent per-file evidence visibly incomplete', () => {
+    const details = openCodeToolDetails('apply_patch', { status: 'completed', metadata: {
+      diff: 'aggregate must not be guessed onto a file', files: [
+        { path: 'known.ts', type: 'update', diff: '-old\n+new', patch: 'alternate must not replace canonical' },
+        { path: 'missing.ts', type: 'update' },
+      ],
+    } });
+    expect(details.changes).toEqual([
+      { path: 'known.ts', kind: 'update', diff: '-old\n+new', complete: true },
+      { path: 'missing.ts', kind: 'update', complete: false },
+    ]);
+  });
+  it('passes native patch aliases through the existing redaction boundary', () => {
+    const patch = '+https://fixture-user:synthetic-private-value@example.com/result?access_token=synthetic-query-value';
+    const details = openCodeToolDetails('apply_patch', { status: 'completed', metadata: {
+      files: [{ filePath: 'result.txt', type: 'add', patch }],
+    } });
+    expect(details.changes?.[0]?.diff).toContain('https://example.com/result');
+    expect(JSON.stringify(details)).not.toContain('synthetic-private-value');
+    expect(JSON.stringify(details)).not.toContain('synthetic-query-value');
+    expect(details.redacted).toBe(true);
+  });
+  it('marks oversized native patches incomplete under the unchanged byte cap', () => {
+    const patch = '+x'.repeat(MAX_PUBLIC_TOOL_OUTPUT_BYTES);
+    const details = openCodeToolDetails('apply_patch', { status: 'completed', metadata: {
+      files: [{ filePath: 'large.txt', type: 'add', patch }],
+    } });
+    expect(details.changes?.[0]?.diff?.startsWith('+x')).toBe(true);
+    expect(new TextEncoder().encode(details.changes?.[0]?.diff).length).toBeLessThanOrEqual(MAX_PUBLIC_TOOL_OUTPUT_BYTES);
+    expect(details.changes?.[0]?.complete).toBe(false);
+    expect(details.truncated).toBe(true);
+  });
+});
+
+
+describe('nested Context result privacy', () => {
+  it.each(['object', 'JSON text'] as const)('omits transport fields throughout a %s result without removing citations', format => {
+    const envelope = {
+      response: { result: {
+        is_error: true, code: 'context_unavailable', requestId: 'private-nested-request',
+        data: { receiptId: 'private-nested-receipt', scopeRevision: 'private-nested-scope',
+          records: [{ title: 'Known source', citation: 'ctx://fixture/source#L1-L4' }],
+          related: [{ requestId: 'private-array-request', message: 'Public detail' }],
+        },
+      } },
+    };
+    const details = openCodeToolDetails('vibespace_context', {
+      status: 'completed', output: format === 'JSON text' ? JSON.stringify(envelope) : envelope,
+    });
+    const result = format === 'JSON text' ? JSON.parse(details.output!.text) : details.result;
+    expect(result).toEqual({ response: { result: {
+      is_error: true, code: 'context_unavailable', data: {
+        records: [{ title: 'Known source', citation: 'ctx://fixture/source#L1-L4' }],
+        related: [{ message: 'Public detail' }],
+      },
+    } } });
+    expect(details.redacted).toBe(true);
+    expect(details.truncated).toBeUndefined();
+    expect(JSON.stringify(details)).not.toMatch(/private-(nested|array)-/);
+  });
+  it('retains ordinary non-Context request identifiers and arguments', () => {
+    const output = { response: { requestId: 'public-job-request', receiptId: 'public-job-receipt', count: 4 } };
+    expect(openCodeToolDetails('mcp_job_status', {
+      status: 'completed', input: { requestId: 'requested-job' }, output,
+    })).toMatchObject({ arguments: { requestId: 'requested-job' }, result: output });
+  });
+  it('keeps the existing cycle bound while omitting nested Context transport fields', () => {
+    const output: Record<string, unknown> = { response: { requestId: 'private-cycle-request', answer: 'Public answer' } };
+    output.self = output;
+    const details = openCodeToolDetails('vibespace_context', { status: 'completed', output });
+    expect(details).toMatchObject({ redacted: true, truncated: true,
+      result: { response: { answer: 'Public answer' }, self: '[omitted: circular value]' } });
+    expect(JSON.stringify(details)).not.toContain('private-cycle-request');
+  });
+  it('never evaluates nested Context accessors in an otherwise serializable result', () => {
+    let reads = 0;
+    const nested = Object.defineProperty({}, 'requestId', {
+      enumerable: true, get() { reads++; return 'private-getter-request'; },
+    });
+    const details = openCodeToolDetails('vibespace_context', {
+      status: 'completed', output: { response: { nested } },
+    });
+    expect(reads).toBe(0);
+    expect(details.truncated).toBe(true);
+    expect(JSON.stringify(details)).not.toContain('private-getter-request');
+  });
+});

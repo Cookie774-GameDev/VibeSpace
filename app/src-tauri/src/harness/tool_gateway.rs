@@ -29,7 +29,6 @@ const TOOL_CATALOG: &[&str] = &[
     "terminal.read",
     "terminal.schedule",
     "command.list",
-    "command.run",
     "profile.allAboutMe.read",
     "profile.allAboutMe.update",
     "memory.learning.read",
@@ -69,7 +68,10 @@ pub struct ToolGatewayRequest {
 
 fn response_timeout(request: &ToolGatewayRequest) -> Duration {
     if request.tool == "vibespace_context"
-        && matches!(request.args.get("operation").and_then(Value::as_str), Some("query" | "investigate"))
+        && matches!(
+            request.args.get("operation").and_then(Value::as_str),
+            Some("query" | "investigate")
+        )
     {
         CONTEXT_INVESTIGATION_TIMEOUT
     } else {
@@ -1358,7 +1360,7 @@ mod tests {
             item.args = json!({ "operation": operation });
             assert_eq!(super::response_timeout(&item), Duration::from_secs(30));
         }
-        item.tool = "command.run".into();
+        item.tool = "terminal.list".into();
         item.args = json!({ "operation": "investigate" });
         assert_eq!(super::response_timeout(&item), Duration::from_secs(30));
     }
@@ -1412,7 +1414,10 @@ mod tests {
             "vibespace_context"
         );
         for accepted in ["mcp.list", "mcp.run"] {
-            assert_eq!(parse_tool_request(&request(accepted)).unwrap().tool, accepted);
+            assert_eq!(
+                parse_tool_request(&request(accepted)).unwrap().tool,
+                accepted
+            );
         }
 
         for rejected in [
@@ -1420,6 +1425,7 @@ mod tests {
             "native.invoke",
             "terminal_list",
             "terminal.list;rm",
+            "command.run",
             "context.update",
             "",
         ] {

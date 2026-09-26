@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { reasoningModeInstructions } from './reasoningControls';
+import { ponytailFullInstructions } from './ponytail';
+import { ponytailInstructions } from './ponytailInstructions';
 
 describe('Ponytail Token Saver integration', () => {
+  it('uses the pinned upstream full-mode builder artifact verbatim before the host policy', () => {
+    expect(ponytailInstructions.startsWith(`${ponytailFullInstructions}\n\n`)).toBe(true);
+    expect(ponytailInstructions.slice(ponytailFullInstructions.length + 2)).toContain(
+      'Current VibeSpace /mode selection controls activation',
+    );
+  });
+
   it('injects upstream full-mode rules exclusively in Token Saver', () => {
     const saver = reasoningModeInstructions('token-saver');
     expect(saver).toContain('PONYTAIL MODE ACTIVE — level: full');

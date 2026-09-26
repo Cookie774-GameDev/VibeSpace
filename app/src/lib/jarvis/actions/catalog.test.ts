@@ -45,6 +45,24 @@ function registration(
 }
 
 describe('Jarvis action catalog', () => {
+  it('does not publish VibeSpace file I/O or arbitrary shell execution tools', () => {
+    const catalog = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS);
+
+    for (const id of [
+      'files.read',
+      'files.create',
+      'files.edit',
+      'terminal.run',
+      'terminal.powershell',
+      'custom.createTerminalCommand',
+    ]) {
+      expect(catalog.resolve(id), `${id} must stay delegated to the native CLI`).toBeUndefined();
+    }
+    for (const id of ['file.search', 'terminal.start_cli', 'terminal.send_input']) {
+      expect(catalog.resolve(id), `${id} remains a supported app capability`).toBeDefined();
+    }
+  });
+
   it('permits auto approval only for literal read-only/never registrations', () => {
     expect(isJarvisAutoApprovableRegistration(registration())).toBe(true);
     expect(isJarvisAutoApprovableRegistration(registration({ risk: 'safe-write' }))).toBe(false);
@@ -60,9 +78,6 @@ describe('Jarvis action catalog', () => {
       })),
     ).toEqual([
       { id: 'file.search', risk: 'read-only', approval: 'never' },
-      { id: 'files.read', risk: 'read-only', approval: 'always' },
-      { id: 'files.create', risk: 'safe-write', approval: 'always' },
-      { id: 'files.edit', risk: 'safe-write', approval: 'always' },
       { id: 'github.identity', risk: 'read-only', approval: 'never' },
       { id: 'github.repository.read', risk: 'read-only', approval: 'never' },
       { id: 'github.issue.read', risk: 'read-only', approval: 'never' },
@@ -124,7 +139,6 @@ describe('Jarvis action catalog', () => {
       { id: 'schedule.create', risk: 'safe-write', approval: 'always' },
       { id: 'agent.run', risk: 'external-side-effect', approval: 'always' },
       { id: 'terminal.create', risk: 'safe-write', approval: 'always' },
-      { id: 'terminal.run', risk: 'external-side-effect', approval: 'always' },
       { id: 'terminal.start_cli', risk: 'external-side-effect', approval: 'always' },
       { id: 'terminal.send_input', risk: 'external-side-effect', approval: 'always' },
       { id: 'terminal.wait_for_output', risk: 'read-only', approval: 'never' },
@@ -133,47 +147,12 @@ describe('Jarvis action catalog', () => {
     ]);
   });
 
-  it('registers bounded project-file actions behind explicit approval', () => {
+  it('keeps direct project-file executors out of the live action catalog', () => {
     const catalog = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS);
-    const read = catalog.resolve('files.read');
-    const create = catalog.resolve('files.create');
-    const edit = catalog.resolve('files.edit');
-
-    expect(read).toMatchObject({
-      requiredCapabilities: ['files.read'],
-      risk: 'read-only',
-      approval: 'always',
-      executor: { kind: 'builtin', registryActionId: 'files.read' },
-    });
-    expect(create).toMatchObject({
-      requiredCapabilities: ['files.write'],
-      risk: 'safe-write',
-      approval: 'always',
-      executor: { kind: 'builtin', registryActionId: 'files.create' },
-    });
-    expect(edit).toMatchObject({
-      requiredCapabilities: ['files.write'],
-      risk: 'safe-write',
-      approval: 'always',
-      executor: { kind: 'builtin', registryActionId: 'files.edit' },
-    });
-    expect(read?.validateParameters({ path: 'C:\\safe\\input.txt' })).toEqual({
-      path: 'C:\\safe\\input.txt',
-    });
-    expect(
-      create?.validateParameters({
-        path: 'C:\\safe\\output.txt',
-        content: 'hello',
-        attachToChat: true,
-      }),
-    ).toEqual({
-      path: 'C:\\safe\\output.txt',
-      content: 'hello',
-      attachToChat: true,
-    });
-    expect(() => read?.validateParameters({ path: 'C:\\safe\\input.txt', secret: 'x' })).toThrow(
-      /unknown fields/i,
-    );
+    for (const id of ['files.read', 'files.create', 'files.edit']) {
+      expect(catalog.resolve(id)).toBeUndefined();
+    }
+    expect(catalog.resolve('file.search')).toBeDefined();
   });
 
   it('registers the bounded agent and skill creator launcher behind approval', () => {

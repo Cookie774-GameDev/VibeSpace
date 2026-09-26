@@ -81,3 +81,18 @@ it.each(['codex', 'opencode'] as const)('shows the locked %s backend when openin
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
   expect(screen.queryByRole('option', { name: /\/cli/ })).toBeNull();
 });
+
+it('keeps an unfinished message when the coding runtime is changed', async () => {
+  state.locked = false;
+  state.backend = 'opencode';
+  render(<TooltipProvider><Composer chatId={'chat-cli-draft' as never} /></TooltipProvider>);
+
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  const paragraph = 'A long unfinished request that must remain when I choose the CLI runtime.';
+  fireEvent.change(input, { target: { value: paragraph } });
+  fireEvent.click(screen.getByRole('button', { name: 'Choose coding runtime' }));
+  fireEvent.click(await screen.findByRole('button', { name: /Codex.*Use the Codex runtime/i }));
+
+  await waitFor(() => expect(selectBackend).toHaveBeenCalled());
+  expect(input.value).toBe(paragraph);
+});

@@ -125,7 +125,9 @@ enum InstallEvent {
 }
 
 fn managed_base(app: &AppHandle) -> Result<PathBuf, String> {
-    let app_data = app.path().app_data_dir()
+    let app_data = app
+        .path()
+        .app_data_dir()
         .map_err(|_| "VibeSpace managed runtime storage is unavailable.".to_string())?;
     crate::harness::managed_codex_storage::storage_root(&app_data)
         .map(|root| root.join("managed-runtime"))

@@ -566,9 +566,18 @@ mod tests {
         let fixture = temp_root("nested-seal");
         let nested = fixture.join("a/b/c/d");
         fs::create_dir_all(&nested).unwrap();
-        let mut directories = vec![fixture.clone(), fixture.join("a"), fixture.join("a/b"), fixture.join("a/b/c"), nested.clone()];
+        let mut directories = vec![
+            fixture.clone(),
+            fixture.join("a"),
+            fixture.join("a/b"),
+            fixture.join("a/b/c"),
+            nested.clone(),
+        ];
         directories.sort();
-        let before = directories.iter().map(|path| read_directory_dacl(path).unwrap().protected).collect::<Vec<_>>();
+        let before = directories
+            .iter()
+            .map(|path| read_directory_dacl(path).unwrap().protected)
+            .collect::<Vec<_>>();
         let seal = seal_directory_dacls(&directories).unwrap();
         assert_eq!(seal.saved.first().unwrap().path, nested);
         assert_eq!(seal.saved.last().unwrap().path, fixture);

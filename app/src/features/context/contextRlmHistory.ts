@@ -61,6 +61,32 @@ function normalizedQuery(query: string): string {
     .toLocaleLowerCase('en-US');
 }
 
+function abortIfNeeded(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+}
+
+function sourceMatchRange(content: string, needle: string): { start: number; end: number } | undefined {
+  const folded = content.toLocaleLowerCase('en-US');
+  const start = folded.indexOf(needle);
+  if (start < 0) return undefined;
+  const end = start + needle.length;
+  if (folded.length === content.length) return { start, end };
+
+  // Lowercasing can expand a source character (for example, İ -> i + dot).
+  // Keep matching semantics, but translate offsets back to the original text.
+  let sourceOffset = 0;
+  let foldedOffset = 0;
+  let sourceStart: number | undefined;
+  for (const character of content) {
+    const nextFoldedOffset = foldedOffset + character.toLocaleLowerCase('en-US').length;
+    if (sourceStart === undefined && start < nextFoldedOffset) sourceStart = sourceOffset;
+    sourceOffset += character.length;
+    if (end <= nextFoldedOffset) return { start: sourceStart ?? 0, end: sourceOffset };
+    foldedOffset = nextFoldedOffset;
+  }
+  return undefined;
+}
+
 function truncateUtf8(value: string, maxBytes: number): string {
   const bytes = new TextEncoder().encode(value);
   if (bytes.byteLength <= maxBytes) return value;
@@ -86,8 +112,9 @@ export function createHistoryRlmRepository(dependencies: {
   const authorities = new Map<string, HistoryAuthority>();
 
   const load = async (scope: ContextScope, signal?: AbortSignal) => {
-    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    abortIfNeeded(signal);
     const evidence = await dependencies.load(scope, signal);
+    abortIfNeeded(signal);
     const loaded: HistoryAuthority[] = [];
     const scopeBinding = scope.worktreeId
       ? await sha256(
@@ -101,7 +128,9 @@ export function createHistoryRlmRepository(dependencies: {
           ),
         )
       : '';
+    abortIfNeeded(signal);
     for (const item of evidence.slice(0, MAX_HISTORY_RECORDS)) {
+      abortIfNeeded(signal);
       if (!inScope(item, scope)) continue;
       const content = truncateUtf8(item.content, MAX_HISTORY_BYTES);
       if (!content.trim()) continue;
@@ -115,6 +144,7 @@ export function createHistoryRlmRepository(dependencies: {
       if (!policy.allowed) continue;
       const bytes = new TextEncoder().encode(content);
       const contentHash = await sha256(bytes);
+      abortIfNeeded(signal);
       let record: Readonly<ContextRecord>;
       try {
         record = createContextRecord({
@@ -139,9 +169,11 @@ export function createHistoryRlmRepository(dependencies: {
         continue;
       }
       const authority = { record, content, bytes };
-      authorities.set(record.id, authority);
+      // Publish the completed batch below, only after its final cancellation check.
       loaded.push(authority);
     }
+    abortIfNeeded(signal);
+    for (const authority of loaded) authorities.set(authority.record.id, authority);
     return loaded;
   };
 
@@ -157,13 +189,16 @@ export function createHistoryRlmRepository(dependencies: {
       if (!needle) return [];
       const hits: ContextSearchHit[] = [];
       for (const authority of await load(scope, signal)) {
-        const offset = authority.content.toLocaleLowerCase('en-US').indexOf(needle);
-        if (offset < 0) continue;
-        const selected = authority.content.slice(
-          offset,
-          Math.min(authority.content.length, offset + needle.length + 512),
-        );
-        const byteStart = new TextEncoder().encode(authority.content.slice(0, offset)).length;
+        const match = sourceMatchRange(authority.content, needle);
+        if (!match) continue;
+        let end = Math.min(authority.content.length, match.end + 512);
+        if (
+          end < authority.content.length &&
+          /[\uD800-\uDBFF]/u.test(authority.content[end - 1] ?? '') &&
+          /[\uDC00-\uDFFF]/u.test(authority.content[end] ?? '')
+        ) end -= 1;
+        const selected = authority.content.slice(match.start, end);
+        const byteStart = new TextEncoder().encode(authority.content.slice(0, match.start)).length;
         const byteEnd = byteStart + new TextEncoder().encode(selected).length;
         hits.push({
           recordId: authority.record.id,

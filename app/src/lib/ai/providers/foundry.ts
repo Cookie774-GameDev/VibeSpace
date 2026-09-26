@@ -16,11 +16,24 @@ function parseArtifactModelId(model: string): {
   return { projectId: match[1]!, jobId: match[2]!, nativeArtifact: match[1] === 'artifact' };
 }
 
-function buildPrompt(req: LLMRequest): string {
-  const turns = req.messages
-    .slice(-12)
-    .map((message) => `${message.role.toUpperCase()}: ${llmContentToText(message.content)}`);
-  return [req.agent.system_prompt?.trim(), ...turns, 'ASSISTANT:'].filter(Boolean).join('\n\n');
+function buildMessages(
+  req: LLMRequest,
+): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
+  const systemPrompt = req.agent.system_prompt?.trim();
+  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+  for (const message of req.messages.slice(-12)) {
+    const content = llmContentToText(message.content);
+    if (content.trim()) messages.push({ role: message.role, content });
+  }
+  return messages;
+}
+
+function buildPromptForEstimate(messages: readonly { role: string; content: string }[]): string {
+  return [
+    ...messages.map((message) => `${message.role.toUpperCase()}: ${message.content}`),
+    'ASSISTANT:',
+  ].join('\n\n');
 }
 
 export const foundryProvider: LLMProvider = {
@@ -39,11 +52,13 @@ export const foundryProvider: LLMProvider = {
         'Choose a promoted Foundry adapter that has passed its current local evaluation.',
       );
     }
-    const prompt = buildPrompt(req);
+    const messages = buildMessages(req);
+    const prompt = buildPromptForEstimate(messages);
     const response = await generateFromFoundryArtifact({
       projectId,
       jobId,
       prompt,
+      messages,
       maxNewTokens: Math.min(512, Math.max(1, req.max_output_tokens ?? 320)),
     });
     if (req.signal?.aborted) throw new DOMException('Aborted', 'AbortError');

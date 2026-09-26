@@ -44,11 +44,11 @@ export function ToolFileLink({ path, projectRoot }: { path: string; projectRoot?
     setError('');
     try {
       const saved = await saveToolFileCopy(path, copyPath, scope);
-      setStatus(`Saved copy: ${saved}`);
+      setStatus(`Saved path: ${saved}`);
       setSavingCopy(false);
       setMenuOpen(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not save a copy');
+      setError(cause instanceof Error ? cause.message : 'Could not save to that path');
     }
   };
   if (!scope) return <span className="break-all">{path}</span>;
@@ -85,25 +85,29 @@ export function ToolFileLink({ path, projectRoot }: { path: string; projectRoot?
             Open in File Explorer
           </button>
           <button type="button" onClick={() => { setSavingCopy(true); setCopyPath(path); }}>
-            Save a copy as…
+            Save Path As…
           </button>
-          {editors.map((editor) => (
-            <button type="button" key={editor.id} onClick={() => void open(editor.id)}>
-              Open in {editor.name}
-            </button>
-          ))}
+          {editors.length > 0 ? (
+            <span role="group" aria-label="Open With" className="flex gap-3">
+              {editors.map((editor) => (
+                <button type="button" key={editor.id} onClick={() => void open(editor.id)}>
+                  Open in {editor.name}
+                </button>
+              ))}
+            </span>
+          ) : null}
           <button type="button" onClick={() => setMenuOpen(false)}>
             Close file actions
           </button>
         </span>
       ) : null}
       {savingCopy ? (
-        <span role="group" aria-label={`Save a copy of ${path}`} className="flex gap-2 rounded border border-border bg-panel p-2">
+        <span role="group" aria-label={`Save Path As for ${path}`} className="flex gap-2 rounded border border-border bg-panel p-2">
           <input aria-label="New project file path" value={copyPath}
             onChange={(event) => setCopyPath(event.target.value)}
             className="min-w-40 rounded border border-border bg-background px-2 text-foreground" />
-          <button type="button" onClick={() => void saveCopy()}>Save copy</button>
-          <button type="button" onClick={() => setSavingCopy(false)}>Cancel copy</button>
+          <button type="button" onClick={() => void saveCopy()}>Save path</button>
+          <button type="button" onClick={() => setSavingCopy(false)}>Cancel</button>
         </span>
       ) : null}
       {status ? <span role="status" className="block text-muted-foreground">{status}</span> : null}

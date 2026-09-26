@@ -19,8 +19,8 @@ export function sanitizeCaoMissionFailureReason(value: unknown): string {
     .replace(/\s+/gu, ' ')
     .trim()
     .slice(0, 2048);
-  const redacted = applySecretPolicy(bounded, 'redact')
-    .text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, ' ')
+  const redacted = (applySecretPolicy(bounded, 'redact').text ?? '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, ' ')
     .replace(/\s+/gu, ' ')
     .trim()
     .slice(0, MAX_FAILURE_REASON_LENGTH);

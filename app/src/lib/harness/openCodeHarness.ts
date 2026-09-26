@@ -370,6 +370,7 @@ export class OpenCodeHarness implements VibeSpaceHarness {
 
     let connection = this.connection();
     let client = this.client(connection);
+    let promptSubmissionStarted = false;
     let promptSubmitted = false;
     let terminal = false;
     let reconnects = 0;
@@ -389,6 +390,7 @@ export class OpenCodeHarness implements VibeSpaceHarness {
       await waitForServerConnected(pending);
       pending = nextEvent(iterator);
       if (!controller.signal.aborted) {
+        promptSubmissionStarted = true;
         await client.promptAsync(
           input.sessionId,
           {
@@ -502,11 +504,22 @@ export class OpenCodeHarness implements VibeSpaceHarness {
       controller.abort();
       this.controllers.delete(controller);
       input.signal?.removeEventListener('abort', abort);
-      if (((promptSubmitted && !terminal) || input.signal?.aborted) && !this.disposed) {
+      if (promptSubmissionStarted && !terminal) {
+        let abortAcknowledged = false;
         try {
-          await client.abortSession(input.sessionId, workingDirectory);
+          if (!this.disposed) {
+            abortAcknowledged = await client.abortSession(input.sessionId, workingDirectory);
+          }
         } catch {
-          // Best effort: the server may be the reason the stream ended.
+          // A rejected request is not proof that the server stopped the session.
+        }
+        if (!abortAcknowledged) {
+          throw new HarnessError({
+            code: 'HARNESS_ABORT_UNCONFIRMED',
+            message: 'OpenCode did not confirm cancellation of the active session.',
+            repair: 'Check the OpenCode session state before retrying.',
+            recoverable: true,
+          });
         }
       }
     }

@@ -96,6 +96,20 @@ describe('production exact-local tokenizer engines', () => {
     expect(loadO200k).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps GPT-6 Luna explicitly estimate-only until its tokenizer is model-validated', async () => {
+    const loadO200k = vi.fn(async () => ({ encode: () => [1, 2, 3] }));
+    const registry = createTokenizerRegistry(
+      createProductionTokenizers({ loadOpenAiO200k: loadO200k }),
+    );
+
+    await expect(registry.estimateText('openai', 'gpt-6-luna', 'hello')).resolves.toEqual({
+      tokens: 5,
+      source: 'conservative_estimate',
+      tokenizerId: 'builtin:utf8-conservative-estimate',
+    });
+    expect(loadO200k).not.toHaveBeenCalled();
+  });
+
   it('accepts only catalog-reviewed qualified OpenCode OpenAI IDs', async () => {
     const loadO200k = vi.fn(async () => ({ encode: () => [1, 2, 3] }));
     const registry = createTokenizerRegistry(

@@ -153,4 +153,31 @@ describe('WarmHexProgress', () => {
     expect(cancelFrame).toHaveBeenCalledWith(73);
     expect(disconnect).toHaveBeenCalledOnce();
   });
+
+  it('shows a dense moving field immediately for a new SiYuan map', () => {
+    const colors: string[] = [];
+    context.fill.mockImplementation(() => { colors.push(context.fillStyle); });
+    let nextFrame: FrameRequestCallback | undefined;
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      nextFrame = callback;
+      return 91;
+    });
+
+    render(<WarmHexProgress progress={0} label="SiYuan map" mode="compact" density="fine" />);
+    const firstFrame = colors.slice();
+    expect(firstFrame.length).toBeGreaterThan(600);
+    expect(nextFrame).toBeDefined();
+
+    act(() => nextFrame?.(1_500));
+    expect(colors.slice(firstFrame.length)).not.toEqual(firstFrame);
+  });
+
+  it('labels a failed map distinctly and stops its animation', () => {
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame');
+    render(<WarmHexProgress progress={29} label="SiYuan map" mode="compact" failed paused />);
+    const progressbar = screen.getByRole('progressbar', { name: 'SiYuan map' });
+    expect(progressbar.getAttribute('data-failed')).toBe('true');
+    expect(progressbar.getAttribute('aria-valuetext')).toContain('failed');
+    expect(requestFrame).not.toHaveBeenCalled();
+  });
 });

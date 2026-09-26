@@ -374,11 +374,11 @@ describe('OpenCodeHarness', () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (url) => {
       const path = new URL(String(url)).pathname;
       if (path === '/config/providers') return providerResponse();
-      if (path === '/event') {
+      if (path === '/event') return sse({ type: 'server.connected', properties: {} });
+      if (path.endsWith('/prompt_async')) {
         controller.abort();
-        return sse({ type: 'server.connected', properties: {} });
+        return new Response(null, { status: 204 });
       }
-      if (path.endsWith('/prompt_async')) return new Response(null, { status: 204 });
       if (path.endsWith('/abort')) return new Response('true', { status: 200 });
       throw new Error(`Unexpected request ${path}`);
     });
@@ -389,6 +389,58 @@ describe('OpenCodeHarness', () => {
       true,
     );
   });
+
+  it('does not request a remote abort when cancelled before prompt submission', async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (url) => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/config/providers') return providerResponse();
+      if (path === '/event') {
+        controller.abort();
+        return sse({ type: 'server.connected', properties: {} });
+      }
+      if (path.endsWith('/prompt_async')) return new Response(null, { status: 204 });
+      if (path.endsWith('/abort')) throw new Error('no active prompt should be aborted');
+      throw new Error(`Unexpected request ${path}`);
+    });
+    const harness = new OpenCodeHarness(runtime(), { fetch });
+
+    await expect(collect(harness.send(request(controller.signal)))).resolves.toEqual([]);
+    expect(fetch.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/prompt_async')))
+      .toBe(false);
+    expect(fetch.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/abort')))
+      .toBe(false);
+  });
+
+  it.each(['false', 'throw'] as const)(
+    'reports an unconfirmed native abort when the OpenCode server %s',
+    async (abortResult) => {
+      const controller = new AbortController();
+      const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/config/providers') return providerResponse();
+        if (path === '/event') return sse({ type: 'server.connected', properties: {} });
+        if (path.endsWith('/prompt_async')) {
+          controller.abort();
+          return new Response(null, { status: 204 });
+        }
+        if (path.endsWith('/abort')) {
+          if (abortResult === 'throw') throw new Error('abort endpoint unavailable');
+          return new Response('false', { status: 200 });
+        }
+        throw new Error(`Unexpected request ${path}`);
+      });
+      const harness = new OpenCodeHarness(runtime(), { fetch });
+
+      await expect(collect(harness.send(request(controller.signal)))).rejects.toMatchObject({
+        name: 'HarnessError',
+        code: 'HARNESS_ABORT_UNCONFIRMED',
+      });
+      expect(
+        fetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/abort')),
+      ).toHaveLength(1);
+    },
+  );
 
   it('emits a sanitized terminal error when the server dies and recovery fails', async () => {
     const secretFailure = `server ${syntheticSecret} died`;

@@ -10,6 +10,8 @@ import {
 
 export interface DictationEvents {
   onOpen?: () => void;
+  /** Non-transcript status, such as switching the active take to a local fallback. */
+  onStatus?: (message: string) => void;
   onPartial?: (text: string) => void;
   onFinal?: (text: string) => void;
   /** Confirmed provider turn completion, delivered after the final transcript. */

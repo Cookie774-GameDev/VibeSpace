@@ -33,7 +33,12 @@ vi.mock('@/features/chat', () => ({
   EmptyChat: () => <div>empty</div>,
   ensureActiveChat: vi.fn(async () => 'chat-1'),
 }));
-vi.mock('@/lib/tauri', () => ({ openExternal: vi.fn(async () => undefined) }));
+vi.mock('@/lib/tauri', () => ({
+  openExternal: vi.fn(async () => undefined),
+  openRelayActiveContext: vi.fn(async () => null),
+  updateRelayActiveContext: vi.fn(async () => undefined),
+  closeRelayActiveContext: vi.fn(async () => undefined),
+}));
 
 import { WorkbenchPage } from './WorkbenchPage';
 

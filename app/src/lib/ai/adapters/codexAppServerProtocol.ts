@@ -42,6 +42,43 @@ export interface CodexThreadResumeRequestInput extends CodexThreadRequestInput {
 export interface CodexTurnStartRequestInput extends CodexThreadResumeRequestInput {
   clientUserMessageId: string;
   text: string;
+  skills?: readonly CodexDiscoveredSkill[];
+}
+
+export type CodexSkillScope = 'user' | 'repo' | 'system' | 'admin';
+
+/** Exact metadata returned by Codex skills/list for a particular requested cwd. */
+export interface CodexDiscoveredSkill {
+  cwd: string;
+  name: string;
+  description: string;
+  shortDescription?: string;
+  path: string;
+  scope: CodexSkillScope;
+  enabled: boolean;
+  pluginId: string | null;
+}
+
+export interface CodexSkillDiscoveryError {
+  cwd: string;
+  path: string;
+  message: string;
+}
+
+export interface CodexSkillsListEntry {
+  cwd: string;
+  skills: readonly CodexDiscoveredSkill[];
+  errors: readonly CodexSkillDiscoveryError[];
+}
+
+export type CodexSkillsListValidation =
+  | { ok: true; entries: readonly CodexSkillsListEntry[] }
+  | { ok: false; reason: 'invalid_response' | 'request_mismatch' | 'cwd_mismatch'; field: string };
+
+export interface CodexSkillsListRequestInput {
+  requestId: string;
+  cwds: readonly string[];
+  forceReload?: boolean;
 }
 
 export type CodexThreadStartValidation =
@@ -74,6 +111,44 @@ export interface CodexTurnInterruptRequestInput {
   turnId: string;
 }
 
+export interface CodexTurnSteerRequestInput {
+  requestId: string;
+  threadId: string;
+  expectedTurnId: string;
+  clientUserMessageId: string;
+  text: string;
+  skills?: readonly CodexDiscoveredSkill[];
+}
+
+export interface CodexThreadQueueAddRequestInput {
+  requestId: string;
+  threadId: string;
+  clientUserMessageId: string;
+  text: string;
+  skills?: readonly CodexDiscoveredSkill[];
+}
+
+export interface CodexThreadQueueStartRequestInput {
+  requestId: string;
+  threadId: string;
+  queuedSubmissionId?: string;
+}
+
+export type CodexThreadQueueValidation =
+  | {
+      ok: true;
+      submissionId?: string;
+      submissions?: readonly { id: string; clientUserMessageId: string }[];
+      nextCursor: string | null;
+      turnId?: string;
+      turnStatus?: 'completed' | 'interrupted' | 'failed' | 'inProgress';
+    }
+  | { ok: false; reason: 'invalid_response' | 'request_mismatch'; field: string };
+
+export type CodexTurnSteerValidation =
+  | { ok: true; turnId: string }
+  | { ok: false; reason: 'invalid_response' | 'request_mismatch' | 'turn_mismatch'; field: string };
+
 export interface CodexModelListRequestInput {
   requestId: string;
   cursor?: string;
@@ -102,6 +177,14 @@ const MAX_ANSWER_TEXT = 32_768;
 const MAX_MODEL_PAGE = 100;
 const MAX_MODEL_OPTIONS = 32;
 const MAX_CURSOR = 1_024;
+const MAX_QUEUE_ITEMS = 1_000;
+const MAX_SKILL_CWDS = 16;
+const MAX_SKILLS_PER_CWD = 512;
+const MAX_SKILL_ERRORS_PER_CWD = 128;
+const MAX_SELECTED_SKILLS = 32;
+const MAX_SKILL_NAME = 256;
+const MAX_SKILL_DESCRIPTION = 8_192;
+const MAX_SKILL_ERROR_MESSAGE = 2_048;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/+@-]*$/u;
 const UNSAFE_CONTROL = /[\u0000-\u001f\u007f]/u;
 const UNSAFE_ANSWER_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
@@ -329,16 +412,13 @@ export function buildCodexTurnStartRequest(input: Readonly<CodexTurnStartRequest
   const clientUserMessageId = requireIdentifier(input.clientUserMessageId, 'message');
   const identity = requireIdentity(input.identity);
   const policy = modePolicy(input.mode);
-  if (!input.text || input.text.length > MAX_TEXT || UNSAFE_ANSWER_CONTROL.test(input.text)) {
-    throw new Error('Codex user text is invalid.');
-  }
   return {
     id: requestId,
     method: 'turn/start' as const,
     params: {
       threadId,
       clientUserMessageId,
-      input: [{ type: 'text' as const, text: input.text, text_elements: [] }],
+      input: buildCodexSkillUserInputs(input.text, input.skills),
       turnTrigger: 'user',
       cwd: identity.cwd,
       approvalPolicy: policy.approvalPolicy,
@@ -594,4 +674,339 @@ export function buildCodexTurnInterruptRequest(input: Readonly<CodexTurnInterrup
       turnId: requireIdentifier(input.turnId, 'turn'),
     },
   };
+}
+
+function userTextInput(text: string) {
+  if (!text || text.length > MAX_TEXT || UNSAFE_ANSWER_CONTROL.test(text)) {
+    throw new Error('Codex user text is invalid.');
+  }
+  return [{ type: 'text' as const, text, text_elements: [] }];
+}
+
+export function buildCodexTurnSteerRequest(input: Readonly<CodexTurnSteerRequestInput>) {
+  return {
+    id: requireIdentifier(input.requestId, 'request'),
+    method: 'turn/steer' as const,
+    params: {
+      threadId: requireIdentifier(input.threadId, 'thread'),
+      expectedTurnId: requireIdentifier(input.expectedTurnId, 'turn'),
+      clientUserMessageId: requireIdentifier(input.clientUserMessageId, 'message'),
+      input: buildCodexSkillUserInputs(input.text, input.skills),
+    },
+  };
+}
+
+export function validateCodexTurnSteerResponse(
+  value: unknown,
+  expectedRequestId: string,
+  expectedTurnId: string,
+): CodexTurnSteerValidation {
+  const requestId = requireIdentifier(expectedRequestId, 'request');
+  const turnId = requireIdentifier(expectedTurnId, 'turn');
+  const envelope = recordOf(value);
+  if (!envelope) return { ok: false, reason: 'invalid_response', field: 'envelope' };
+  if (envelope.id !== requestId) return { ok: false, reason: 'request_mismatch', field: 'id' };
+  const result = recordOf(envelope.result);
+  if (typeof result?.turnId !== 'string' || !SAFE_IDENTIFIER.test(result.turnId)) {
+    return { ok: false, reason: 'invalid_response', field: 'turnId' };
+  }
+  if (result.turnId !== turnId) return { ok: false, reason: 'turn_mismatch', field: 'turnId' };
+  return { ok: true, turnId };
+}
+
+export function buildCodexThreadQueueAddRequest(input: Readonly<CodexThreadQueueAddRequestInput>) {
+  return {
+    id: requireIdentifier(input.requestId, 'request'),
+    method: 'thread/queue/add' as const,
+    params: {
+      threadId: requireIdentifier(input.threadId, 'thread'),
+      clientUserMessageId: requireIdentifier(input.clientUserMessageId, 'message'),
+      input: buildCodexSkillUserInputs(input.text, input.skills),
+    },
+  };
+}
+
+export function validateCodexThreadQueueAddResponse(
+  value: unknown,
+  expectedRequestId: string,
+  expectedMessageId: string,
+): CodexThreadQueueValidation {
+  const requestId = requireIdentifier(expectedRequestId, 'request');
+  const messageId = requireIdentifier(expectedMessageId, 'message');
+  const envelope = recordOf(value);
+  if (!envelope) return { ok: false, reason: 'invalid_response', field: 'envelope' };
+  if (envelope.id !== requestId) return { ok: false, reason: 'request_mismatch', field: 'id' };
+  const submission = recordOf(recordOf(envelope.result)?.queuedSubmission);
+  const id = typeof submission?.id === 'string' ? submission.id : '';
+  if (!id || !SAFE_IDENTIFIER.test(id) || submission?.clientUserMessageId !== messageId || !Array.isArray(submission?.input)) {
+    return { ok: false, reason: 'invalid_response', field: 'queuedSubmission' };
+  }
+  return { ok: true, submissionId: id, nextCursor: null };
+}
+
+export function validateCodexThreadQueueListResponse(
+  value: unknown,
+  expectedRequestId: string,
+): CodexThreadQueueValidation {
+  const requestId = requireIdentifier(expectedRequestId, 'request');
+  const envelope = recordOf(value);
+  if (!envelope) return { ok: false, reason: 'invalid_response', field: 'envelope' };
+  if (envelope.id !== requestId) return { ok: false, reason: 'request_mismatch', field: 'id' };
+  const result = recordOf(envelope.result);
+  if (!result || !Array.isArray(result.data) || result.data.length > MAX_QUEUE_ITEMS) {
+    return { ok: false, reason: 'invalid_response', field: 'data' };
+  }
+  const submissions: { id: string; clientUserMessageId: string }[] = [];
+  for (const raw of result.data) {
+    const submission = recordOf(raw);
+    const id = typeof submission?.id === 'string' ? submission.id : '';
+    const clientUserMessageId = typeof submission?.clientUserMessageId === 'string' ? submission.clientUserMessageId : '';
+    if (!id || !SAFE_IDENTIFIER.test(id) || !clientUserMessageId || !SAFE_IDENTIFIER.test(clientUserMessageId) || !Array.isArray(submission?.input)) {
+      return { ok: false, reason: 'invalid_response', field: 'data' };
+    }
+    submissions.push({ id, clientUserMessageId });
+  }
+  const nextCursor = result.nextCursor;
+  if (nextCursor !== null && (typeof nextCursor !== 'string' || !nextCursor || nextCursor.length > MAX_CURSOR || UNSAFE_CONTROL.test(nextCursor))) {
+    return { ok: false, reason: 'invalid_response', field: 'nextCursor' };
+  }
+  return { ok: true, submissions, nextCursor };
+}
+
+function requireSkillText(value: unknown, label: string, maximum: number): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > maximum || UNSAFE_CONTROL.test(value)) {
+    throw new Error(`Codex skill ${label} is invalid.`);
+  }
+  return value;
+}
+
+function skillPathKey(path: string): string {
+  const normalized = path.replaceAll('\\', '/');
+  return /^[A-Za-z]:\//u.test(normalized) ? normalized.toLocaleLowerCase('en-US') : normalized;
+}
+
+export function buildCodexSkillsListRequest(input: Readonly<CodexSkillsListRequestInput>) {
+  if (!Array.isArray(input.cwds) || input.cwds.length === 0 || input.cwds.length > MAX_SKILL_CWDS) {
+    throw new Error('Codex skill working-directory count is invalid.');
+  }
+  const cwds = input.cwds.map((cwd) => requireAbsolutePath(cwd, 'skill working directory'));
+  const keys = new Set(cwds.map((cwd) => {
+    const path = comparablePath(cwd);
+    return typeof path === 'string' && /^[A-Za-z]:\//u.test(path)
+      ? path.toLocaleLowerCase('en-US')
+      : path;
+  }));
+  if (keys.size !== cwds.length) throw new Error('Codex skill working directories must be unique.');
+  if (input.forceReload !== undefined && typeof input.forceReload !== 'boolean') {
+    throw new Error('Codex skill forceReload flag is invalid.');
+  }
+  return {
+    id: requireIdentifier(input.requestId, 'request'),
+    method: 'skills/list' as const,
+    params: { cwds, ...(input.forceReload === undefined ? {} : { forceReload: input.forceReload }) },
+  };
+}
+
+/** Force a native re-scan after `skills/changed` or an explicit refresh. */
+export function buildCodexSkillsRefreshRequest(input: Readonly<Omit<CodexSkillsListRequestInput, 'forceReload'>>) {
+  return buildCodexSkillsListRequest({ ...input, forceReload: true });
+}
+
+/** Validate the exact generated Codex 0.153.4 `skills/list` response shape. */
+export function validateCodexSkillsListResponse(
+  value: unknown,
+  expectedRequestId: string,
+  expectedCwds: readonly string[],
+): CodexSkillsListValidation {
+  const requestId = requireIdentifier(expectedRequestId, 'request');
+  if (!Array.isArray(expectedCwds) || expectedCwds.length === 0 || expectedCwds.length > MAX_SKILL_CWDS) {
+    return { ok: false, reason: 'invalid_response', field: 'expectedCwds' };
+  }
+  const expectedKeys = new Map<string, string>();
+  for (const cwd of expectedCwds) {
+    if (typeof cwd !== 'string' || !isAbsolutePath(cwd)) {
+      return { ok: false, reason: 'invalid_response', field: 'expectedCwds' };
+    }
+    const key = skillPathKey(cwd);
+    if (expectedKeys.has(key)) return { ok: false, reason: 'invalid_response', field: 'expectedCwds' };
+    expectedKeys.set(key, cwd);
+  }
+  const envelope = recordOf(value);
+  if (!envelope) return { ok: false, reason: 'invalid_response', field: 'envelope' };
+  if (envelope.id !== requestId) return { ok: false, reason: 'request_mismatch', field: 'id' };
+  const result = recordOf(envelope.result);
+  if (!result || !Array.isArray(result.data) || result.data.length !== expectedKeys.size) {
+    return { ok: false, reason: 'invalid_response', field: 'data' };
+  }
+  const seenCwds = new Set<string>();
+  const entries: CodexSkillsListEntry[] = [];
+  for (const rawEntry of result.data) {
+    const entry = recordOf(rawEntry);
+    if (!entry || typeof entry.cwd !== 'string' || !isAbsolutePath(entry.cwd)) {
+      return { ok: false, reason: 'invalid_response', field: 'cwd' };
+    }
+    const cwdKey = skillPathKey(entry.cwd);
+    const expectedCwd = expectedKeys.get(cwdKey);
+    if (!expectedCwd || seenCwds.has(cwdKey)) {
+      return { ok: false, reason: 'cwd_mismatch', field: 'cwd' };
+    }
+    if (!Array.isArray(entry.skills) || entry.skills.length > MAX_SKILLS_PER_CWD ||
+        !Array.isArray(entry.errors) || entry.errors.length > MAX_SKILL_ERRORS_PER_CWD) {
+      return { ok: false, reason: 'invalid_response', field: 'skills' };
+    }
+    const skills: CodexDiscoveredSkill[] = [];
+    const identities = new Set<string>();
+    for (const rawSkill of entry.skills) {
+      const skill = recordOf(rawSkill);
+      if (!skill || typeof skill.path !== 'string' || !isAbsolutePath(skill.path) ||
+          typeof skill.enabled !== 'boolean' ||
+          !['user', 'repo', 'system', 'admin'].includes(String(skill.scope)) ||
+          (skill.pluginId !== null && typeof skill.pluginId !== 'string')) {
+        return { ok: false, reason: 'invalid_response', field: 'skill.path' };
+      }
+      let name: string;
+      let description: string;
+      let shortDescription: string | undefined;
+      try {
+        name = requireSkillText(skill.name, 'name', MAX_SKILL_NAME);
+        description = requireSkillText(skill.description, 'description', MAX_SKILL_DESCRIPTION);
+        if (skill.shortDescription !== undefined) {
+          shortDescription = requireSkillText(skill.shortDescription, 'shortDescription', MAX_SKILL_DESCRIPTION);
+        }
+        if (skill.pluginId !== null) requireIdentifier(skill.pluginId, 'skill plugin');
+      } catch {
+        return { ok: false, reason: 'invalid_response', field: 'skill.metadata' };
+      }
+      const identity = `${name}\u0000${skillPathKey(skill.path)}`;
+      if (identities.has(identity)) return { ok: false, reason: 'invalid_response', field: 'skill.duplicate' };
+      identities.add(identity);
+      skills.push({
+        cwd: expectedCwd,
+        name,
+        description,
+        ...(shortDescription === undefined ? {} : { shortDescription }),
+        path: skill.path,
+        scope: skill.scope as CodexSkillScope,
+        enabled: skill.enabled,
+        pluginId: skill.pluginId as string | null,
+      });
+    }
+    const errors: CodexSkillDiscoveryError[] = [];
+    for (const rawError of entry.errors) {
+      const error = recordOf(rawError);
+      if (!error || typeof error.path !== 'string' || !isAbsolutePath(error.path)) {
+        return { ok: false, reason: 'invalid_response', field: 'error.path' };
+      }
+      try {
+        errors.push({
+          cwd: expectedCwd,
+          path: error.path,
+          message: requireSkillText(error.message, 'error message', MAX_SKILL_ERROR_MESSAGE),
+        });
+      } catch {
+        return { ok: false, reason: 'invalid_response', field: 'error.message' };
+      }
+    }
+    seenCwds.add(cwdKey);
+    entries.push({ cwd: expectedCwd, skills, errors });
+  }
+  if (seenCwds.size !== expectedKeys.size) return { ok: false, reason: 'cwd_mismatch', field: 'cwd' };
+  return { ok: true, entries };
+}
+
+/** Exact app-server notification used only to invalidate and re-run skills/list. */
+export function isCodexSkillsChangedNotification(value: unknown): boolean {
+  const notification = recordOf(value);
+  const params = recordOf(notification?.params);
+  return notification?.method === 'skills/changed' && params !== undefined && Object.keys(params).length === 0;
+}
+
+export function buildCodexSkillUserInputs(
+  text: string,
+  skills: readonly CodexDiscoveredSkill[] = [],
+) {
+  if (!text || text.length > MAX_TEXT || UNSAFE_ANSWER_CONTROL.test(text)) {
+    throw new Error('Codex user text is invalid.');
+  }
+  if (skills.length > MAX_SELECTED_SKILLS) throw new Error('Codex selected skill count is invalid.');
+  const seen = new Set<string>();
+  const inputs: (
+    | { type: 'text'; text: string; text_elements: never[] }
+    | { type: 'skill'; name: string; path: string }
+  )[] = [{ type: 'text', text, text_elements: [] }];
+  for (const skill of skills) {
+    if (!skill || skill.enabled !== true) throw new Error('Codex selected skill is disabled.');
+    const name = requireSkillText(skill.name, 'name', MAX_SKILL_NAME);
+    const path = requireAbsolutePath(skill.path, 'skill path');
+    const identity = `${name}\u0000${skillPathKey(path)}`;
+    if (seen.has(identity)) throw new Error('Codex selected skills must be unique.');
+    seen.add(identity);
+    inputs.push({ type: 'skill' as const, name, path });
+  }
+  return inputs;
+}
+
+export function buildCodexThreadQueueListRequest(input: Readonly<{
+  requestId: string;
+  threadId: string;
+  cursor?: string;
+}>) {
+  if (input.cursor !== undefined && (
+    !input.cursor || input.cursor.length > MAX_CURSOR || UNSAFE_CONTROL.test(input.cursor)
+  )) throw new Error('Codex queue cursor is invalid.');
+  return {
+    id: requireIdentifier(input.requestId, 'request'),
+    method: 'thread/queue/list' as const,
+    params: {
+      threadId: requireIdentifier(input.threadId, 'thread'),
+      ...(input.cursor ? { cursor: input.cursor } : {}),
+    },
+  };
+}
+
+export function buildCodexThreadReadRequest(input: Readonly<{
+  requestId: string;
+  threadId: string;
+}>) {
+  return {
+    id: requireIdentifier(input.requestId, 'request'),
+    method: 'thread/read' as const,
+    params: { threadId: requireIdentifier(input.threadId, 'thread'), includeTurns: true },
+  };
+}
+
+export function buildCodexThreadQueueStartRequest(
+  input: Readonly<CodexThreadQueueStartRequestInput>,
+) {
+  return {
+    id: requireIdentifier(input.requestId, 'request'),
+    method: 'thread/queue/start' as const,
+    params: {
+      threadId: requireIdentifier(input.threadId, 'thread'),
+      ...(input.queuedSubmissionId
+        ? { queuedSubmissionId: requireIdentifier(input.queuedSubmissionId, 'queued submission') }
+        : {}),
+    },
+  };
+}
+
+export function validateCodexThreadQueueStartResponse(
+  value: unknown,
+  expectedRequestId: string,
+): CodexThreadQueueValidation {
+  const requestId = requireIdentifier(expectedRequestId, 'request');
+  const envelope = recordOf(value);
+  if (!envelope) return { ok: false, reason: 'invalid_response', field: 'envelope' };
+  if (envelope.id !== requestId) return { ok: false, reason: 'request_mismatch', field: 'id' };
+  const turn = recordOf(recordOf(envelope.result)?.turn);
+  const turnId = typeof turn?.id === 'string' ? turn.id : '';
+  const turnStatus = turn?.status;
+  if (
+    !turnId ||
+    !SAFE_IDENTIFIER.test(turnId) ||
+    (turnStatus !== 'completed' && turnStatus !== 'interrupted' && turnStatus !== 'failed' && turnStatus !== 'inProgress')
+  ) {
+    return { ok: false, reason: 'invalid_response', field: 'turn' };
+  }
+  return { ok: true, nextCursor: null, turnId, turnStatus };
 }

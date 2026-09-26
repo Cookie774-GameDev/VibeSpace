@@ -355,6 +355,11 @@ class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
       requestJson(this.handle.generation, this.handle.scope, '/command', {}, 30_000),
   };
 
+  readonly skill = {
+    list: async (): Promise<unknown> =>
+      requestJson(this.handle.generation, this.handle.scope, '/skill', {}, 30_000),
+  };
+
   readonly session = {
     create: async (input: { body: { title?: string } }): Promise<unknown> =>
       requestJson(
@@ -829,9 +834,17 @@ async function executePersistentOpenCodeApproval(
 }
 
 export async function respondToPersistentOpenCodeApproval(
-  input: Readonly<HarnessApprovalResponse & { route?: OpenCodeApprovalHarnessRoute }>,
+  input: Readonly<
+    Omit<HarnessApprovalResponse, 'response'> & {
+      response: HarnessApprovalResponse['response'] | 'cancel';
+      route?: OpenCodeApprovalHarnessRoute;
+    }
+  >,
 ): Promise<void> {
   if (input.approvalId.startsWith('codex-approval-')) return replyCodexApproval(input);
+  if (input.response === 'cancel') {
+    throw new Error('OpenCode approval cancellation is not supported by this route.');
+  }
   const sessionId = cleanIdentifier(input.sessionId, 512);
   const approvalId = cleanIdentifier(input.approvalId, 512);
   if (!sessionId || !approvalId) {
@@ -848,7 +861,7 @@ export async function respondToPersistentOpenCodeApproval(
     }
     return existing.promise;
   }
-  const promise = executePersistentOpenCodeApproval(input, sessionId, approvalId)
+  const promise = executePersistentOpenCodeApproval({ ...input, response: input.response }, sessionId, approvalId)
     .then(() => {
       if (settledApprovalResponses.size >= 4_096) settledApprovalResponses.clear();
       settledApprovalResponses.add(key);
@@ -2362,6 +2375,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         projectRoot: scope.workingDirectory ?? request.workingDirectory ?? '.',
       },
       system: systemPrompt,
+      nativeSkillRefs: request.nativeSkillRefs,
       tools: toolsForPolicy({
         mode,
         access,
@@ -3202,6 +3216,16 @@ async function detectPersistent(): Promise<DetectionResult> {
 }
 
 const catalogScope: HarnessScope = { accountId: 'local-desktop-account' };
+
+/** Discover native skill metadata in the exact active project scope, without sending a turn. */
+export async function listPersistentOpenCodeSkills(scope: Readonly<HarnessScope>) {
+  if (!cleanIdentifier(scope.accountId, 512) || !cleanIdentifier(scope.workspaceId, 512) || !scope.workingDirectory?.trim()) {
+    throw new Error('OpenCode skill discovery requires an exact account, workspace and project folder.');
+  }
+  const entry = await sessions.clientForScope(scope);
+  const client = entry.client as PersistentOpenCodeClient;
+  return client.listSkillsAsync();
+}
 
 export const openCodePersistentAdapter: ProviderAdapter = Object.freeze({
   id: 'opencode-cli',

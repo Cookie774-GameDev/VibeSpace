@@ -58,6 +58,14 @@ function validatedRequest(
     return undefined;
   }
   if (
+    (request.deadlineAt !== undefined &&
+      (!Number.isSafeInteger(request.deadlineAt) || request.deadlineAt <= 0)) ||
+    (request.nativeRequestId !== undefined &&
+      !(typeof request.nativeRequestId === 'number'
+        ? Number.isSafeInteger(request.nativeRequestId)
+        : stableText(request.nativeRequestId, 512)))
+  ) return undefined;
+  if (
     request.tool &&
     (!stableText(request.tool.messageId, 512) || !stableText(request.tool.callId, 512))
   ) {
@@ -123,6 +131,8 @@ export function projectOpenCodeQuestionEvent(
     blockId,
     requestId: request.id,
     sessionId: request.sessionId,
+    ...(request.nativeRequestId !== undefined ? { nativeRequestId: request.nativeRequestId } : {}),
+    ...(request.deadlineAt !== undefined ? { deadlineAt: request.deadlineAt } : {}),
     ...(request.tool ? { tool: { ...request.tool } } : {}),
     questions: questions.map((question, questionIndex) => ({
       questionId: question.id,
@@ -149,4 +159,18 @@ export function projectOpenCodeQuestionEvent(
     },
     route,
   };
+}
+
+/** A server resolution closes its exact pending request without assuming why it ended. */
+export function resolveNativeQuestionPart(
+  part: QuestionBlockPart,
+  resolved: Readonly<{ requestId: string; sessionId: string }>,
+): QuestionBlockPart {
+  if (
+    part.block.status !== 'pending' ||
+    !resolved.requestId.startsWith('que_codex_') ||
+    part.harness?.requestId !== resolved.requestId ||
+    part.harness.sessionId !== resolved.sessionId
+  ) return part;
+  return { ...part, block: { ...part.block, status: 'resolved' } };
 }

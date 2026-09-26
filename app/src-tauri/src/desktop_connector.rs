@@ -197,6 +197,18 @@ fn packaged(app: &AppHandle) -> bool {
             .map(|p| p.join("runtime.zip").is_file())
             .unwrap_or(false)
 }
+pub(crate) fn packaged_node_executable(app: &AppHandle) -> Result<PathBuf, String> {
+    if !cfg!(windows) {
+        return Err("The packaged Relay engine currently requires Windows.".into());
+    }
+    let state = app.state::<DesktopConnectorState>();
+    let _guard = state.0.lock().map_err(|_| "Connector runtime is busy.")?;
+    let executable = unpack(app)?.join("runtime/node.exe");
+    if !executable.is_file() {
+        return Err("The packaged Node runtime is incomplete.".into());
+    }
+    Ok(executable)
+}
 fn unpack(app: &AppHandle) -> Result<PathBuf, String> {
     let resources = resources(app)?;
     let manifest: Value = serde_json::from_slice(

@@ -7,6 +7,48 @@ import {
 } from './toolResult';
 
 describe('external MCP tool-result normalization', () => {
+  it.each(['first\nsecond\n', 'first\r\n\tsecond\r\n', 'café\n東京\t🚀']) (
+    'preserves ordinary multiline input data in the redacted audit: %j',
+    (text) => {
+      const input = Object.freeze({ expectedSha256: 'a'.repeat(64), text });
+      const result = redactMcpArgumentsForAuditWithStats(input);
+      expect(result.value).toEqual(input);
+      expect(result.truncatedValues).toBe(0);
+      expect(input.text).toBe(text);
+      expect(Object.isFrozen(result.value)).toBe(true);
+    },
+  );
+
+  it('preserves multiline tool text and structured data while redacting secrets', () => {
+    const result = normalizeExternalMcpToolResult({
+      content: [{ type: 'text', text: 'First line\n\tSecond line\r\npassword=synthetic-private-value' }],
+      structuredContent: { note: 'café\n東京\t🚀', apiKey: 'synthetic-key' },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.textExcerpts).toEqual(['First line\n\tSecond line\r\npassword=[REDACTED]']);
+    expect(result.structuredData).toEqual({ note: 'café\n東京\t🚀', apiKey: '[REDACTED]' });
+    expect(JSON.stringify(result)).not.toContain('synthetic-private-value');
+    expect(JSON.stringify(result)).not.toContain('synthetic-key');
+  });
+
+  it.each(['\u0000', '\u0007', '\u000b', '\u001b', '\u007f', '\u0085', '\u202e', '\u2028', '\u2029'])(
+    'continues to reject non-text controls in multiline data: %j',
+    (control) => {
+      expect(() => redactMcpArgumentsForAudit({ text: `first\n${control}second` })).toThrow();
+      expect(() => normalizeExternalMcpToolResult({
+        content: [{ type: 'text', text: `first\n${control}second` }],
+      })).toThrow();
+    },
+  );
+
+  it('does not permit multiline resource names or suggested action labels', () => {
+    expect(() => normalizeExternalMcpToolResult({ content: [{
+      type: 'resource_link', uri: 'https://example.com/result', name: 'first\nsecond',
+    }] })).toThrow();
+    expect(() => normalizeExternalMcpToolResult({ content: [], structuredContent: {
+      suggestedNextActions: ['first\nsecond'],
+    } })).toThrow();
+  });
   it('returns a bounded safe contract and never forwards inline media or unsafe references', () => {
     const result = normalizeExternalMcpToolResult({
       content: [

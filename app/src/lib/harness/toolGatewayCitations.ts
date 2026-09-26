@@ -119,5 +119,5 @@ export function registerToolGatewayFallbackCitations(
     existingIds.add(item.source.id);
     merged.push(item);
   }
-  contextCitationItems.set(sessionId, Object.freeze(merged));
+  replaceToolGatewayContextCitationItems(sessionId, Object.freeze(merged));
 }

@@ -78,9 +78,6 @@ describe('createJarvisCapabilitySnapshot', () => {
       'chat.send',
       'creator.start',
       'file.search',
-      'files.create',
-      'files.edit',
-      'files.read',
       'github.commits.recent',
       'github.identity',
       'github.issue.read',
@@ -101,7 +98,6 @@ describe('createJarvisCapabilitySnapshot', () => {
       'schedule.create',
       'task.cancel',
       'terminal.create',
-      'terminal.run',
       'zapier.action.invoke',
       'zapier.actions.discover',
     ]);

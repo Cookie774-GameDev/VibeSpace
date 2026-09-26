@@ -461,6 +461,19 @@ describe('Jarvis canonical core actions', () => {
     expect(terminalRun).not.toHaveBeenCalled();
   });
 
+  it('does not create saved arbitrary terminal commands from tool.create', async () => {
+    const create = createJarvisCoreActions(() => undefined).find((item) => item.id === 'tool.create')!;
+
+    await expect(
+      create.run(
+        { name: 'Dev server', command: 'npm run dev' },
+        { source: 'ai' },
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: 'Workflow steps JSON is required; start native CLI tools with terminal.start_cli.',
+    });
+  });
   it('does not claim legacy task cancellation before canonical kernel injection', async () => {
     const cancel = createJarvisCoreActions(() => undefined).find(
       (item) => item.id === 'task.cancel',
@@ -586,81 +599,28 @@ describe('Jarvis canonical core actions', () => {
     expect(JSON.stringify(outcome)).not.toContain('jcancel_native_1');
   });
 
-  it('hands an approved terminal.run command and bounded metadata to the canonical acceptor', async () => {
-    const owned: JarvisTerminalOwnedExecution = {
-      recordResult: vi.fn(),
-      recordCancellationVerified: vi.fn(),
-      requestCancellation: vi.fn(),
-      dispose: vi.fn(),
-    };
-    const acceptIssuedExecution = vi.fn(({ executionId, ownerId }) =>
-      Object.freeze({
-        executionId,
-        ownerId,
-        [jarvisTerminalHandoffReceiptBrand]: true as const,
-      }),
-    );
-    const createAcceptor = vi.fn(() => ({ acceptIssuedExecution }));
-    const transferTerminalOwnership = vi.fn(({ executionId, acceptor }) => ({
-      kind: 'committed' as const,
-      value: acceptor.acceptIssuedExecution({
-        executionId,
-        ownerId: 'approval:jappr_run',
-        execution: owned,
-      }),
-    }));
+  it('rejects terminal.run before accepting a shell execution', async () => {
+    const createAcceptor = vi.fn();
     const dispatcher = createJarvisTerminalRegisteredActionDispatcher({
       newExecutionId: () => 'jterm_run',
       newCancellationToken: () => 'jcancel_native_run',
       createAcceptor,
     });
 
-    const outcome = await dispatcher({
-      registration: {
-        id: 'terminal.run',
-        version: 1,
-        executor: { kind: 'builtin', registryActionId: 'terminal.run' },
-      } as never,
-      params: {
-        command: "Write-Output 'VibeSpace kernel terminal fixture'; exit",
-        label: 'Kernel smoke fixture',
-        cwd: 'C:\\work',
-        timeoutMs: 15_000,
-      },
-      context: {
-        source: 'ai',
-        accountId: 'account-a',
-        runId: 'jrun_run',
-        approvalId: 'jappr_run',
-        requestId: 'request-run',
-        attemptNumber: 1,
-      },
-      execution: {
-        producerKind: 'terminal',
-        ownerId: 'approval:jappr_run',
-        [jarvisIssuedActionExecutionBrand]: true,
-        transferTerminalOwnership,
-      } as never,
-    });
-
-    expect(createAcceptor).toHaveBeenCalledWith({
-      accountId: 'account-a',
-      runId: 'jrun_run',
-      executionId: 'jterm_run',
-      cancellationToken: 'jcancel_native_run',
-      command: "Write-Output 'VibeSpace kernel terminal fixture'; exit",
-      label: 'Kernel smoke fixture',
-      cwd: 'C:\\work',
-      timeoutMs: 15_000,
-    });
-    expect(outcome).toMatchObject({
-      kind: 'terminal_handoff_accepted',
-      executorKind: 'terminal',
-      ownerId: 'approval:jappr_run',
-      result: { ok: true, data: { state: 'queued', executionId: 'jterm_run' } },
-    });
+    await expect(
+      dispatcher({
+        registration: {
+          id: 'terminal.run',
+          version: 1,
+          executor: { kind: 'builtin', registryActionId: 'terminal.run' },
+        } as never,
+        params: { command: 'npm test' },
+        context: { source: 'ai', accountId: 'account-a', runId: 'jrun_run' } as never,
+        execution: {} as never,
+      }),
+    ).resolves.toBeNull();
+    expect(createAcceptor).not.toHaveBeenCalled();
   });
-
   it('dispatches protected terminal.start_cli through the canonical pre-published scope', async () => {
     const createAcceptor = vi.fn(() => ({
       acceptIssuedExecution: vi.fn(({ executionId, ownerId }) =>

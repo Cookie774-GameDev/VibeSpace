@@ -156,6 +156,55 @@ describe('RLM scoped history federation', () => {
     expect((await repository.getRecord(hits[0]!.recordId))?.sourceId).toBe('valid');
   });
 
+  it.each([
+    ['\u0130 Orchid recall evidence', 'orchid', 2],
+    ['\u0130\u0130\u0130 Orchid recall evidence', 'ORCHID', 4],
+    ['🦄\u0130 Orchid recall evidence', 'orchid', 4],
+    ['prefix \u0130ris recall evidence', 'i\u0307ris', 7],
+    ['\u0130 "Orchid" recall evidence', '"orchid"', 3],
+    ['orchid' + ' '.repeat(511) + '🦄 suffix', 'orchid', 0],
+  ] as const)('keeps Unicode history citations on exact source bytes %#', async (content, query, offset) => {
+    const scope = { accountId: 'unicode-account' };
+    const repository = createHistoryRlmRepository({
+      load: async () => [{
+        ...scope, id: 'unicode-message', sourceKind: 'chat_message', sourceId: 'unicode-message',
+        title: 'Unicode history', content, createdAt: 1,
+      }],
+    });
+    const hits = await repository.search(scope, query);
+    expect(hits).toHaveLength(1);
+    const hit = hits[0]!;
+    const record = await repository.getRecord(hit.recordId);
+    const source = await repository.readSource(record!);
+    expect(hit.pointer.byteStart).toBe(new TextEncoder().encode(content.slice(0, offset)).length);
+    const exact = new TextDecoder('utf-8', { fatal: true }).decode(
+      source!.bytes.slice(hit.pointer.byteStart, hit.pointer.byteEnd),
+    );
+    expect(exact.slice(0, 320)).toBe(hit.preview);
+    expect(exact.toLocaleLowerCase('en-US')).toContain(
+      query.replace(/^"|"$/g, '').toLocaleLowerCase('en-US'),
+    );
+  });
+
+  it.each(['search', 'listRecords'] as const)('rejects late-cancelled history %s without publishing authority', async (operation) => {
+    const controller = new AbortController();
+    const scope = { accountId: 'cancelled-account' };
+    const content = 'orchid recall evidence';
+    const contentHash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content)))]
+      .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    const repository = createHistoryRlmRepository({
+      load: async () => {
+        controller.abort();
+        return [{ ...scope, id: 'cancelled-message', sourceKind: 'chat_message', sourceId: 'cancelled-message', title: 'Cancelled history', content, createdAt: 1 }];
+      },
+    });
+    const result = operation === 'search'
+      ? repository.search(scope, 'orchid', controller.signal)
+      : repository.listRecords(scope, controller.signal);
+    await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(repository.getRecord(`rlm:history:chat_message:cancelled-message:${contentHash.slice(0, 16)}`)).resolves.toBeUndefined();
+  });
+
   it('caps persisted history by UTF-8 bytes without a malformed multibyte tail', async () => {
     const repository = createHistoryRlmRepository({
       load: vi.fn(async () => [

@@ -213,7 +213,7 @@ export class OpenCodeSessionPool {
     if (entry.disposed) throw new Error('HARNESS_SCOPE_DISPOSED');
     if (persisted?.runtimeGeneration === entry.handle.generation) {
       const valid = entry.client.getSession
-        ? await entry.client.getSession(persisted.sessionId).catch(() => null)
+        ? await entry.client.getSession(persisted.sessionId)
         : { id: persisted.sessionId };
       if (valid?.id === persisted.sessionId) {
         if (entry.disposed) throw new Error('HARNESS_SCOPE_DISPOSED');
@@ -277,6 +277,7 @@ export class OpenCodeSessionPool {
           }
           sessionId = await creating;
         }
+        if (entry.disposed) throw new Error('HARNESS_SCOPE_DISPOSED');
         entry.lastUsedAt = this.now();
         return { client: entry.client, sessionId, runtimeGeneration: entry.handle.generation };
       })().finally(() => {

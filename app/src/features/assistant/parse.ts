@@ -13,7 +13,7 @@
  *   - `create_event` is matched on the verb only; the heavy lifting (parsing
  *     "friday at 1pm" etc) is delegated to `parseEventInput` at execute time.
  */
-import type { AssistantIntent } from './intents';
+import { NATIVE_CLI_COMMANDS, type AssistantIntent } from './intents';
 import type { WallpaperId, WorkbenchPanelKind } from '@/features/workbench/types';
 import type { Route } from '@/features/navigation/routeSchema';
 
@@ -36,23 +36,6 @@ const FILLER_PREFIXES = [
 ];
 
 /** Known shell commands recognised in the "open <cmd> in <project>" shorthand. */
-const KNOWN_SHELL_COMMANDS = [
-  'claude code',
-  'claude',
-  'gpt',
-  'gemini',
-  'cursor',
-  'opencode',
-  'node',
-  'python',
-  'bash',
-  'pwsh',
-  'powershell',
-  'zsh',
-  'fish',
-  'cmd',
-];
-
 /** Day-relative offsets used by the casual-task due-date hints. */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -266,7 +249,7 @@ function normalizeTerminalCommand(command: string | undefined): string | undefin
   c = c.replace(/^(?:each\s+)?(?:with|running)\s+/i, '').trim();
   c = c.replace(/\s+in\s+(?:it|them|each)$/i, '').trim();
   c = c.replace(/^each\s+/i, '').trim();
-  return c || undefined;
+  return matchKnownShellCommand(c);
 }
 
 function parseTerminalCount(raw: string | undefined): number {
@@ -291,7 +274,7 @@ function parseTerminalCount(raw: string | undefined): number {
 
 function matchKnownShellCommand(raw: string): string | undefined {
   const cmd = raw.trim().toLowerCase();
-  const sortedCommands = [...KNOWN_SHELL_COMMANDS].sort((a, b) => b.length - a.length);
+  const sortedCommands = [...NATIVE_CLI_COMMANDS].sort((a, b) => b.length - a.length);
   return sortedCommands.find((candidate) => cmd === candidate);
 }
 
@@ -410,7 +393,7 @@ function tryOpenTerminalRunChain(raw: string): AssistantIntent | null {
   const count = parseTerminalCount(match[1]);
   const { command, project } = splitProjectSuffix(match[2]);
   const normalizedCommand = normalizeTerminalCommand(command);
-  if (!normalizedCommand) return null;
+  if (!normalizedCommand) return { kind: 'unknown', raw };
   return { kind: 'open_terminals', count, command: normalizedCommand, project };
 }
 
@@ -522,6 +505,7 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   if (openTerms) {
     const count = parseTerminalCount(openTerms[1]);
     const command = normalizeTerminalCommand(openTerms[2]);
+    if (openTerms[2] && !command) return { kind: 'unknown', raw };
     const projectRaw = openTerms[3]?.trim();
     return {
       kind: 'open_terminals',
@@ -538,6 +522,7 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   if (openOneTerm) {
     const count = parseTerminalCount(openOneTerm[1]);
     const command = normalizeTerminalCommand(openOneTerm[2]);
+    if (openOneTerm[2] && !command) return { kind: 'unknown', raw };
     const projectRaw = openOneTerm[3]?.trim() || openOneTerm[4]?.trim();
     return {
       kind: 'open_terminals',
@@ -551,31 +536,6 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   if (openKnownShell) {
     const command = matchKnownShellCommand(openKnownShell[1]);
     if (command) return { kind: 'open_terminals', count: 1, command };
-  }
-
-  // ---- run command in all terminals ----
-  const runAllTerms =
-    /^(?:run|start|launch|execute)\s+(.+?)\s+in\s+(?:all|every|any)\s+terminals?$/i.exec(s);
-  if (runAllTerms) {
-    const command = runAllTerms[1]?.trim();
-    if (command) return { kind: 'run_in_terminals', command, target: 'all' };
-  }
-
-  const createCustomCommand =
-    /^(?:create|make|add|save)\s+(?:a\s+)?(?:custom\s+)?(?:command|tool|action)\s+(.+?)\s+(?:to\s+run|that\s+runs|as)\s+(.+)$/i.exec(
-      s,
-    );
-  if (createCustomCommand) {
-    const name = unquote(createCustomCommand[1]);
-    const command = createCustomCommand[2]?.trim();
-    if (name && command) return { kind: 'create_custom_command', name, command };
-  }
-
-  const runCustomCommand =
-    /^(?:run|use|execute|start)\s+(?:my\s+)?(?:custom\s+)?(?:command|tool|action)\s+(.+)$/i.exec(s);
-  if (runCustomCommand) {
-    const name = unquote(runCustomCommand[1]);
-    if (name) return { kind: 'run_custom_command', name };
   }
 
   const askProvider =
@@ -792,9 +752,6 @@ const COMMAND_SUGGESTIONS = [
   { keywords: 'create chat', example: 'create chat called planning' },
   { keywords: 'open terminals', example: 'open 4 terminals with opencode' },
   { keywords: 'open terminal', example: 'open 4 terminals with opencode' },
-  { keywords: 'run in all terminals', example: 'run npm test in all terminals' },
-  { keywords: 'create command', example: 'create command dev server to run npm run dev' },
-  { keywords: 'run command', example: 'run command dev server' },
   { keywords: 'ask provider', example: 'ask claude to fix the tests' },
   { keywords: 'create context map', example: 'create context map' },
   { keywords: 'recenter context map', example: 'recenter context map' },
@@ -861,5 +818,6 @@ export function parseAssistantInput(raw: string): AssistantIntent {
     .filter(Boolean);
   if (parts.length <= 1) return parseSingleAssistantInput(raw);
   const steps = parts.map(parseSingleAssistantInput);
+  if (steps.some((step) => step.kind === 'unknown')) return { kind: 'unknown', raw };
   return { kind: 'multi_step', steps };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ProviderEvent } from './adapters/types';
-import { projectOpenCodeQuestionEvent } from './openCodeQuestionProjection';
+import { projectOpenCodeQuestionEvent, resolveNativeQuestionPart } from './openCodeQuestionProjection';
 
 function questionEvent(
   overrides: Partial<Extract<ProviderEvent, { type: 'question' }>['request']> = {},
@@ -39,6 +39,24 @@ function questionEvent(
 }
 
 describe('projectOpenCodeQuestionEvent', () => {
+  it('retains an observed native Codex deadline and original response identity', () => {
+    const projection = projectOpenCodeQuestionEvent(questionEvent({
+      id: 'que_codex_1', nativeRequestId: 42, deadlineAt: 1_800_000_005_000,
+    }), 'ses_exact');
+    expect(projection?.route).toMatchObject({ nativeRequestId: 42, deadlineAt: 1_800_000_005_000 });
+    expect(projectOpenCodeQuestionEvent(questionEvent(), 'ses_exact')?.route).not.toHaveProperty('deadlineAt');
+  });
+
+  it('resolves only the exact pending native question without inventing expiry or replacing accepted answers', () => {
+    const part = projectOpenCodeQuestionEvent(questionEvent({ id: 'que_codex_1', nativeRequestId: 42 }), 'ses_exact')!.part;
+    const resolved = { requestId: 'que_codex_1', sessionId: 'ses_exact' };
+    expect(resolveNativeQuestionPart(part, resolved).block.status).toBe('resolved');
+    expect(resolveNativeQuestionPart(part, { ...resolved, sessionId: 'other' })).toBe(part);
+    expect(resolveNativeQuestionPart(part, { ...resolved, requestId: 'que_codex_other' })).toBe(part);
+    const answered = { ...part, block: { ...part.block, status: 'answered' as const } };
+    expect(resolveNativeQuestionPart(answered, resolved)).toBe(answered);
+  });
+
   it('projects ordered native questions into one deterministic persisted block and exact route', () => {
     const event = questionEvent();
     const first = projectOpenCodeQuestionEvent(event, 'ses_exact');

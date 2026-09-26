@@ -7,7 +7,6 @@ export const TOOL_GATEWAY_CATALOG = [
   'terminal.read',
   'terminal.schedule',
   'command.list',
-  'command.run',
   'profile.allAboutMe.read',
   'profile.allAboutMe.update',
   'memory.learning.read',
@@ -37,7 +36,6 @@ export const MUTATING_TOOL_GATEWAY_TOOLS: ReadonlySet<ToolGatewayTool> = new Set
   'terminal.spawn',
   'terminal.write',
   'terminal.schedule',
-  'command.run',
   'profile.allAboutMe.update',
   'memory.learning.update',
   'context.attach',
@@ -298,11 +296,6 @@ function validateArgs(tool: ToolGatewayTool, input: unknown): Record<string, unk
       terminal(args.terminal);
       stringField(args.command, 'command', 32_768);
       stringField(args.runAt, 'runAt', 128);
-      return args;
-    case 'command.run':
-      args = exactKeys(input, ['command'], ['input']);
-      stringField(args.command, 'command', 128, { id: true });
-      optionalString(args.input, 'input', 32_768);
       return args;
     case 'profile.allAboutMe.read':
     case 'app.getState':

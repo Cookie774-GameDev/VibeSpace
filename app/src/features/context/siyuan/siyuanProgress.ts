@@ -13,6 +13,26 @@ export interface SiyuanProgressEstimate {
   samples: readonly SiyuanProgressSample[];
 }
 
+/** A running job with no durable checkpoint for this long needs user-visible attention. */
+export const SIYUAN_STALLED_CHECKPOINT_MS = 5 * 60 * 1_000;
+
+export type SiyuanCheckpointLiveness = 'running' | 'stalled' | 'not-running';
+
+/**
+ * Classifies persisted progress without changing job state. A stale timestamp is only a signal:
+ * it cannot prove that a native SiYuan request or worker is no longer active.
+ */
+export function classifySiyuanCheckpointLiveness(
+  job: SiyuanIndexJobRecord,
+  now = Date.now(),
+): SiyuanCheckpointLiveness {
+  if (job.status !== 'running' || job.phase === 'completed') return 'not-running';
+  if (!Number.isFinite(now) || !Number.isFinite(job.updatedAt) || now < job.updatedAt) {
+    return 'running';
+  }
+  return now - job.updatedAt >= SIYUAN_STALLED_CHECKPOINT_MS ? 'stalled' : 'running';
+}
+
 const MIN_SAMPLE_COUNT = 3;
 const MIN_SAMPLE_WINDOW_MS = 5_000;
 const EWMA_ALPHA = 0.35;

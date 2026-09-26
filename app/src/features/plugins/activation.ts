@@ -1,12 +1,30 @@
 import { PLUGIN_CATALOG } from './catalog';
 import { selectPluginConnectionsForAccount, usePluginStore } from './store';
-import type { PluginManifest } from './types';
+import type { PluginConnection, PluginManifest } from './types';
 
 export type ActivePluginFilter = {
   category?: string;
   tag?: string;
   feature?: string;
 };
+
+function isConnectedForAccount(
+  connection: PluginConnection | undefined,
+  accountId: string,
+  pluginId: string,
+): connection is PluginConnection {
+  return Boolean(
+    connection &&
+    connection.accountId === accountId &&
+    connection.pluginId === pluginId &&
+    connection.state === 'connected' &&
+    connection.enabled === true &&
+    Array.isArray(connection.enabledProjectIds) &&
+    connection.enabledProjectIds.every(
+      (projectId) => typeof projectId === 'string' && projectId.length > 0 && projectId.trim() === projectId,
+    ),
+  );
+}
 
 export function listActivePlugins(
   accountId: string,
@@ -16,7 +34,7 @@ export function listActivePlugins(
   const connections = selectPluginConnectionsForAccount(usePluginStore.getState(), accountId);
   return PLUGIN_CATALOG.filter((plugin) => {
     const connection = connections[plugin.id];
-    if (!connection || connection.state !== 'connected' || !connection.enabled) return false;
+    if (!isConnectedForAccount(connection, accountId, plugin.id)) return false;
     if (filter?.category && plugin.category !== filter.category) return false;
     if (filter?.tag && !plugin.tags.includes(filter.tag)) return false;
     if (filter?.feature && !plugin.supportedFeatures.includes(filter.feature)) return false;
@@ -33,7 +51,7 @@ export function isPluginActive(
   const connection = selectPluginConnectionsForAccount(usePluginStore.getState(), accountId)[
     pluginId
   ];
-  if (!connection || connection.state !== 'connected' || !connection.enabled) return false;
+  if (!isConnectedForAccount(connection, accountId, pluginId)) return false;
   return (
     connection.enabledProjectIds.includes('*') ||
     Boolean(projectId && connection.enabledProjectIds.includes(projectId))

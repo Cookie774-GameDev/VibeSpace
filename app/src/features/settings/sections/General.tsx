@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { ArrowDown, ArrowUp, Eye, EyeOff, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -7,8 +7,10 @@ import { chatActivityPreferences } from '@/features/chat/activity/chatActivityPr
 import { TokenOptimizationGlobalSettings } from '@/features/token-optimizer';
 import { BrowserAgentSettings } from './BrowserAgentSettings';
 import { RecycleBinSettings } from '@/features/recycle-bin/RecycleBinSettings';
+import { readRelaySettings, writeRelaySettings } from '../relaySettings';
 
 export function General() {
+  const [relaySettings, setRelaySettings] = useState(readRelaySettings);
   const state = useSyncExternalStore(
     taskbarUsageStore.subscribe,
     taskbarUsageStore.getSnapshot,
@@ -41,6 +43,108 @@ export function General() {
       <TokenOptimizationGlobalSettings />
       <BrowserAgentSettings />
       <RecycleBinSettings />
+
+      <section
+        className="rounded-lg border border-border bg-panel p-4"
+        aria-labelledby="relay-title"
+      >
+        <div>
+          <h3 id="relay-title" className="text-ui-strong text-foreground">
+            Agent Relay
+          </h3>
+          <p className="mt-1 text-metadata text-muted-foreground">
+            Choose which VibeSpace sessions may collaborate. Participation stays off until you
+            enable it.
+          </p>
+        </div>
+
+        <label className="mt-4 flex min-h-12 items-center justify-between gap-4">
+          <span>
+            <span className="block text-secondary text-foreground">Collaboration</span>
+            <span className="block text-metadata text-muted-foreground">
+              Off disables Relay participation. Project keeps conversations within one project.
+            </span>
+          </span>
+          <select
+            aria-label="Agent Relay collaboration scope"
+            className="min-h-10 rounded-md border border-border bg-background px-3 text-secondary text-foreground"
+            value={relaySettings.scope}
+            onChange={(event) => {
+              const next = writeRelaySettings({
+                ...relaySettings,
+                scope: event.currentTarget.value as typeof relaySettings.scope,
+              });
+              setRelaySettings(next);
+            }}
+          >
+            <option value="off">Off</option>
+            <option value="project">Project</option>
+            <option value="entire-app">Entire app</option>
+          </select>
+        </label>
+
+        <label className="mt-2 flex min-h-12 items-center justify-between gap-4">
+          <span>
+            <span className="block text-secondary text-foreground">
+              Automatic check-ins and replies
+            </span>
+            <span className="block text-metadata text-muted-foreground">
+              Allow bounded peer check-ins and replies at safe boundaries when collaboration is
+              enabled.
+            </span>
+          </span>
+          <Switch
+            aria-label="Automatic Agent Relay check-ins and replies"
+            checked={relaySettings.automaticParticipation}
+            onCheckedChange={(automaticParticipation) =>
+              setRelaySettings(writeRelaySettings({ ...relaySettings, automaticParticipation }))
+            }
+          />
+        </label>
+
+        <label className="mt-3 block">
+          <span className="block text-secondary text-foreground">Participation exclusions</span>
+          <span className="block text-metadata text-muted-foreground">
+            Enter project or session IDs, one per line. Exclusions take priority over the
+            collaboration scope.
+          </span>
+          <textarea
+            aria-label="Agent Relay excluded project and session IDs"
+            className="mt-2 min-h-20 w-full resize-y rounded-md border border-border bg-background p-3 text-secondary text-foreground"
+            value={relaySettings.excludedParticipants.join('\n')}
+            onChange={(event) => {
+              const excludedParticipants = event.currentTarget.value
+                .split(/[\n,]/)
+                .map((id) => id.trim())
+                .filter(Boolean);
+              setRelaySettings(writeRelaySettings({ ...relaySettings, excludedParticipants }));
+            }}
+          />
+        </label>
+
+        <div className="mt-4 rounded-md border border-border p-3" aria-live="polite">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-secondary font-medium text-foreground">Connection status</p>
+              <p className="text-metadata text-muted-foreground">
+                Live Relay health is not available in this settings session yet.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled
+              title="Requires a live authenticated Relay exchange"
+            >
+              Test connection
+            </Button>
+          </div>
+          <p className="mt-2 text-metadata text-muted-foreground">
+            Testing will be enabled when VibeSpace can verify an authenticated message and reply; a
+            running process alone is not a connection test.
+          </p>
+        </div>
+      </section>
 
       <section
         className="rounded-lg border border-border bg-panel p-4"

@@ -541,4 +541,149 @@ describe('CAO production lifecycle', () => {
     });
     lifecycle.stop();
   });
+
+  it('keeps pending approval paused across restart, resumes after approval, and stops on cancel', async () => {
+    let persistedMission: CaoMission = {
+      ...mission,
+      workers: mission.workers.map((worker) => ({
+        ...worker,
+        status: 'waiting' as const,
+        proposalId: 'proposal-1',
+      })),
+    };
+    const createJev = vi.fn(async () => ({
+      evaluate: vi.fn(async () => evaluation()),
+    }));
+    const onObservation = vi.fn();
+    const lifecycle = createCaoProductionLifecycle({
+      readScope: () => scope,
+      isEnabled: () => true,
+      loadSettings: async () => settings(),
+      readLiveCatalog: async () => catalog,
+      listMissions: async () => [persistedMission],
+      createJev,
+      readSnapshot: async () => snapshot,
+      onObservation,
+      persistObservation: async () => undefined,
+      setInterval: () => 1 as never,
+      clearInterval: vi.fn(),
+      sweepMs: 1,
+      debounceMs: 1,
+    });
+
+    await lifecycle.reconcile();
+    expect(createJev).not.toHaveBeenCalled();
+    expect(onObservation).not.toHaveBeenCalled();
+
+    const waitingWorker = persistedMission.workers[0];
+    if (!waitingWorker) throw new Error('waiting worker missing');
+    const { proposalId: _proposalId, ...resumedWorker } = waitingWorker;
+    persistedMission = {
+      ...persistedMission,
+      updatedAt: 3,
+      workers: [{ ...resumedWorker, status: 'running' }],
+    };
+    await lifecycle.reconcile();
+    expect(createJev).toHaveBeenCalledOnce();
+    expect(onObservation).toHaveBeenCalledOnce();
+
+    persistedMission = { ...persistedMission, status: 'cancelled', updatedAt: 4 };
+    await lifecycle.reconcile();
+    await lifecycle.refresh('sweep');
+    expect(createJev).toHaveBeenCalledOnce();
+    expect(onObservation).toHaveBeenCalledOnce();
+    lifecycle.stop();
+  });
+
+  it('persists target observation revisions monotonically and skips duplicate revisions', async () => {
+    let persistedMission = mission;
+    let currentSnapshot = snapshot;
+    const compareAndSave = vi.fn(
+      async ({ expected, next }: { expected: CaoMission; next: CaoMission }) => {
+        if (expected !== persistedMission) return false;
+        persistedMission = next;
+        return true;
+      },
+    );
+    const missionStore: CaoMissionStore = {
+      async save(next) {
+        persistedMission = next;
+      },
+      compareAndSave,
+      async get() {
+        return persistedMission;
+      },
+      async list() {
+        return [persistedMission];
+      },
+    };
+    const lifecycle = createCaoProductionLifecycle({
+      readScope: () => scope,
+      isEnabled: () => true,
+      loadSettings: async () => settings(),
+      readLiveCatalog: async () => catalog,
+      listMissions: async () => [persistedMission],
+      missionStore,
+      createJev: async () => ({ evaluate: vi.fn(async () => evaluation()) }),
+      readSnapshot: async () => currentSnapshot,
+      setInterval: () => 1 as never,
+      clearInterval: vi.fn(),
+      now: () => 1000,
+      sweepMs: 1,
+      debounceMs: 1,
+    });
+
+    await lifecycle.reconcile();
+    expect(persistedMission.workers[0]?.lastObservedRevision).toBe(1);
+    expect(persistedMission.workers[0]?.sentinelReceipts).toEqual([
+      expect.objectContaining({
+        missionId: mission.id,
+        targetId: 'chat-1',
+        targetRevision: 1,
+        trigger: 'sweep',
+        action: 'noop',
+        reasonCode: 'healthy_noop',
+      }),
+    ]);
+    expect(compareAndSave).toHaveBeenCalledTimes(2);
+
+    currentSnapshot = {
+      ...snapshot,
+      contextRevision: 'context@2',
+      cursor: {
+        targetRevision: 1,
+        contentHash: 'hash-2',
+        contextRevision: 'context@2',
+        observedAt: 200,
+      },
+    };
+    await lifecycle.refresh('sweep');
+    expect(persistedMission.workers[0]?.lastObservedRevision).toBe(1);
+    expect(compareAndSave).toHaveBeenCalledTimes(2);
+
+    currentSnapshot = {
+      ...snapshot,
+      targetRevision: 2,
+      cursor: { targetRevision: 2, contentHash: 'hash-3', contextRevision: null, observedAt: 300 },
+    };
+    await lifecycle.refresh('sweep');
+    expect(persistedMission.workers[0]?.lastObservedRevision).toBe(2);
+    expect(persistedMission.workers[0]?.sentinelReceipts).toHaveLength(2);
+    expect(compareAndSave).toHaveBeenCalledTimes(4);
+
+    currentSnapshot = {
+      ...snapshot,
+      cursor: {
+        targetRevision: 1,
+        contentHash: 'hash-stale',
+        contextRevision: null,
+        observedAt: 400,
+      },
+    };
+    await lifecycle.refresh('sweep');
+    expect(persistedMission.workers[0]?.lastObservedRevision).toBe(2);
+    expect(persistedMission.workers[0]?.sentinelReceipts).toHaveLength(2);
+    expect(compareAndSave).toHaveBeenCalledTimes(4);
+    lifecycle.stop();
+  });
 });

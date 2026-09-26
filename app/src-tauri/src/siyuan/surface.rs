@@ -22,8 +22,8 @@ const MAIN_WEBVIEW_ADDITIONAL_BROWSER_ARGS: &str = "--js-flags=--max-old-space-s
 const SIYUAN_CHILD_CDP_PORT_ENV: &str = "VIBESPACE_SIYUAN_CHILD_CDP_PORT";
 const GRAPH_REPORT_PREFIX: &str = "__VIBESPACE_SIYUAN_GRAPH__";
 const GRAPH_BOOTSTRAP_RETRY_DELAYS_MS: [u64; 22] = [
-    50, 100, 150, 250, 400, 600, 800, 1_000, 1_200, 1_500, 1_750, 2_000,
-    2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000,
+    50, 100, 150, 250, 400, 600, 800, 1_000, 1_200, 1_500, 1_750, 2_000, 2_000, 2_000, 2_000,
+    2_000, 2_000, 2_000, 2_000, 2_000, 2_000, 2_000,
 ];
 // Navigation may consume the retry budget before the injected graph script
 // begins its own 30-second bounded initialization.
@@ -442,7 +442,10 @@ fn graph_initialization_script(
     let expected_origin = serde_json::to_string(&expected_origin.origin().ascii_serialization())
         .map_err(|_| public_error("siyuan_surface_origin_invalid"))?;
     Ok(SIYUAN_GRAPH_FIRST_INITIALIZATION_SCRIPT_TEMPLATE
-        .replace("__MANAGED_PRESENTATION__", include_str!("native_presentation.js"))
+        .replace(
+            "__MANAGED_PRESENTATION__",
+            include_str!("native_presentation.js"),
+        )
         .replace("__TARGET_DOCUMENT_ID__", &target)
         .replace("__TARGET_NOTEBOOK_ID__", &notebook)
         .replace("__GRAPH_MODE__", &mode)
@@ -488,6 +491,7 @@ fn parse_graph_report(
 
 fn schedule_graph_bootstrap_retry(
     webview: Webview,
+    origin: url::Url,
     operation_id: String,
     report_nonce: String,
     initialization_script: String,
@@ -495,8 +499,10 @@ fn schedule_graph_bootstrap_retry(
     authenticated_document_loaded: Arc<AtomicBool>,
 ) {
     thread::spawn(move || {
-        let deadline = std::time::Instant::now()
-            + Duration::from_millis(GRAPH_BOOTSTRAP_TIMEOUT_MS);
+        let started = std::time::Instant::now();
+        let mut navigation_fallback_issued = false;
+        let deadline =
+            std::time::Instant::now() + Duration::from_millis(GRAPH_BOOTSTRAP_TIMEOUT_MS);
         for delay_ms in GRAPH_BOOTSTRAP_RETRY_DELAYS_MS {
             thread::sleep(Duration::from_millis(delay_ms));
             let should_retry = SURFACE_STATE.lock().ok().is_some_and(|state| {
@@ -523,10 +529,17 @@ fn schedule_graph_bootstrap_retry(
                 return;
             }
             let main_webview = webview.clone();
+            let origin_for_main = origin.clone();
             let operation_for_main = operation_id.clone();
             let nonce_for_main = report_nonce.clone();
             let script_for_main = initialization_script.clone();
             let authenticated_ready = authenticated_document_loaded.load(Ordering::Acquire);
+            let retry_navigation = should_retry_managed_navigation(
+                authenticated_ready,
+                navigation_fallback_issued,
+                started.elapsed(),
+            );
+            navigation_fallback_issued |= retry_navigation;
             let navigation_phase = if !authenticated_ready {
                 "origin-navigation-pending"
             } else {
@@ -537,20 +550,53 @@ fn schedule_graph_bootstrap_retry(
                     _ => "origin-navigation-pending",
                 }
             };
-            let may_evaluate = authenticated_ready
+            let may_evaluate_after_load = authenticated_ready
                 && navigation_classification.load(Ordering::Acquire) == NAVIGATION_MANAGED_ORIGIN;
             let dispatch_result = webview.run_on_main_thread(move || {
-                if let Ok(mut state) = SURFACE_STATE.lock() {
-                    if let Some(record) = state.as_mut() {
-                        if record.operation_id == operation_for_main
-                            && record.report_nonce == nonce_for_main
-                            && record.graph_state == "loading"
+                let owns_surface = SURFACE_STATE.lock().ok().is_some_and(|mut state| {
+                    state.as_mut().is_some_and(|record| {
+                        if record.operation_id != operation_for_main
+                            || record.report_nonce != nonce_for_main
+                            || record.graph_state != "loading"
                         {
-                            record.graph_phase = navigation_phase.to_owned();
+                            return false;
+                        }
+                        record.graph_phase = navigation_phase.to_owned();
+                        true
+                    })
+                });
+                if !owns_surface {
+                    return;
+                }
+                // WebView2 can reach the authenticated desktop document before
+                // emitting Finished. Its URL is already verified and the graph
+                // bootstrap waits for the desktop DOM, so do not reset that load.
+                let desktop_document = main_webview
+                    .url()
+                    .ok()
+                    .is_some_and(|url| is_managed_desktop_document(&origin_for_main, &url));
+                if retry_navigation && !desktop_document {
+                    // WebView2 can acknowledge child creation while its queued first
+                    // navigation never starts. Set the cookie first, then retry the
+                    // same verified loopback origin once after the normal queue has
+                    // had time to run. The page-load handler still owns auth replay.
+                    if main_webview.navigate(origin_for_main).is_err() {
+                        if let Ok(mut state) = SURFACE_STATE.lock() {
+                            if let Some(record) = state.as_mut() {
+                                if record.operation_id == operation_for_main
+                                    && record.report_nonce == nonce_for_main
+                                {
+                                    record.graph_state = "failed".to_owned();
+                                    record.graph_phase = "failed".to_owned();
+                                    record.graph_error =
+                                        Some("siyuan_graph_root_navigation_unavailable".to_owned());
+                                }
+                            }
                         }
                     }
+                    return;
                 }
-                if !may_evaluate {
+                if !may_evaluate_after_load && !desktop_document {
                     return;
                 }
                 if main_webview.eval(&script_for_main).is_ok() {
@@ -608,6 +654,20 @@ fn schedule_graph_bootstrap_retry(
     });
 }
 
+fn should_retry_managed_navigation(
+    authenticated_ready: bool,
+    already_requested: bool,
+    elapsed: Duration,
+) -> bool {
+    !authenticated_ready && !already_requested && elapsed >= Duration::from_secs(8)
+}
+
+fn is_managed_desktop_document(origin: &url::Url, candidate: &url::Url) -> bool {
+    candidate.as_str() != "about:blank"
+        && navigation_allowed(origin, candidate)
+        && candidate.path().starts_with("/stage/build/desktop/")
+}
+
 fn graph_navigation_classification(expected_origin: &url::Url, candidate: &url::Url) -> u8 {
     if candidate.as_str() == "about:blank" {
         NAVIGATION_ABOUT_BLANK
@@ -636,12 +696,17 @@ async fn retire_surface_window_acknowledged(webview: &Webview) -> Result<(), Str
     // the old child, before another open can reuse that label/environment.
     let retiring = webview.clone();
     let (sender, mut receiver) = tauri::async_runtime::channel(1);
-    webview.run_on_main_thread(move || {
-        let result = retire_surface_window(&retiring)
-            .map_err(|_| public_error("siyuan_surface_window_unavailable"));
-        let _ = sender.try_send(result);
-    }).map_err(|_| public_error("siyuan_surface_window_unavailable"))?;
-    receiver.recv().await.ok_or_else(|| public_error("siyuan_surface_window_unavailable"))?
+    webview
+        .run_on_main_thread(move || {
+            let result = retire_surface_window(&retiring)
+                .map_err(|_| public_error("siyuan_surface_window_unavailable"));
+            let _ = sender.try_send(result);
+        })
+        .map_err(|_| public_error("siyuan_surface_window_unavailable"))?;
+    receiver
+        .recv()
+        .await
+        .ok_or_else(|| public_error("siyuan_surface_window_unavailable"))?
 }
 
 fn validate_bounds(bounds: &SiyuanSurfaceBounds) -> Result<(), String> {
@@ -667,7 +732,11 @@ fn main_window(app: &AppHandle) -> Result<Window, String> {
         .ok_or_else(|| public_error("siyuan_surface_main_window_unavailable"))
 }
 
-fn debug_child_cdp_port(value: Option<&str>, debug_build: bool, shared_profile: bool) -> Option<u16> {
+fn debug_child_cdp_port(
+    value: Option<&str>,
+    debug_build: bool,
+    shared_profile: bool,
+) -> Option<u16> {
     if !debug_build || shared_profile {
         return None;
     }
@@ -679,7 +748,10 @@ fn debug_child_cdp_port(value: Option<&str>, debug_build: bool, shared_profile: 
 }
 
 fn main_webview_browser_args(config: &tauri::Config) -> Option<&str> {
-    config.app.windows.iter()
+    config
+        .app
+        .windows
+        .iter()
         .find(|window| window.label == "main")
         .and_then(|window| window.additional_browser_args.as_deref())
 }
@@ -1042,8 +1114,7 @@ pub async fn siyuan_surface_open(
         .on_download(|_, _| false);
     // A child sharing the main WebView2 profile must use its effective options,
     // including development overrides. Different options can prevent creation.
-    if let Some(arguments) = main_webview_browser_args(app.config())
-    {
+    if let Some(arguments) = main_webview_browser_args(app.config()) {
         builder = builder.additional_browser_args(arguments);
     }
     let child_cdp = match child_cdp_configuration(&app) {
@@ -1089,8 +1160,12 @@ pub async fn siyuan_surface_open(
             let child_operation = operation_id.clone();
             let dispatched = parent.with_webview(move |platform| {
                 let result = if operation_is_current(&child_operation) {
-                    main.add_child(builder.with_environment(platform.environment()), position, size)
-                        .map_err(|_| public_error("siyuan_surface_webview_unavailable"))
+                    main.add_child(
+                        builder.with_environment(platform.environment()),
+                        position,
+                        size,
+                    )
+                    .map_err(|_| public_error("siyuan_surface_webview_unavailable"))
                 } else {
                     Err(public_error("siyuan_surface_open_cancelled"))
                 };
@@ -1099,7 +1174,11 @@ pub async fn siyuan_surface_open(
             if dispatched.is_err() {
                 Err(public_error("siyuan_surface_webview_unavailable"))
             } else {
-                match tauri::async_runtime::spawn_blocking(move || receiver.recv_timeout(Duration::from_secs(5))).await {
+                match tauri::async_runtime::spawn_blocking(move || {
+                    receiver.recv_timeout(Duration::from_secs(5))
+                })
+                .await
+                {
                     Ok(Ok(result)) => result,
                     _ => Err(public_error("siyuan_surface_webview_unavailable")),
                 }
@@ -1165,6 +1244,7 @@ pub async fn siyuan_surface_open(
     }
     schedule_graph_bootstrap_retry(
         webview,
+        origin,
         operation_id,
         retry_report_nonce,
         initialization_script,
@@ -1437,7 +1517,10 @@ mod tests {
                 { "label": "main", "additionalBrowserArgs": "--js-flags=--max-old-space-size=1536 --remote-debugging-port=9251" }
             ] }
         })).unwrap();
-        assert_eq!(main_webview_browser_args(&config), Some("--js-flags=--max-old-space-size=1536 --remote-debugging-port=9251"));
+        assert_eq!(
+            main_webview_browser_args(&config),
+            Some("--js-flags=--max-old-space-size=1536 --remote-debugging-port=9251")
+        );
         let mut defaults = config.clone();
         defaults.app.windows[1].additional_browser_args = None;
         assert_eq!(main_webview_browser_args(&defaults), None);
@@ -1447,7 +1530,10 @@ mod tests {
 
     #[test]
     fn child_cdp_port_is_debug_only_and_validated() {
-        assert_eq!(debug_child_cdp_port(Some(" 9334 "), true, false), Some(9334));
+        assert_eq!(
+            debug_child_cdp_port(Some(" 9334 "), true, false),
+            Some(9334)
+        );
         assert_eq!(debug_child_cdp_port(Some("9334"), false, false), None);
         assert_eq!(debug_child_cdp_port(Some("0"), true, false), None);
         assert_eq!(debug_child_cdp_port(Some("1023"), true, false), None);
@@ -1706,9 +1792,48 @@ mod tests {
         assert!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS[0] <= 100);
         assert!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.iter().sum::<u64>() < 30_000);
         assert_eq!(GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.len(), 22);
-        assert!(GRAPH_BOOTSTRAP_TIMEOUT_MS
-            >= GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.iter().sum::<u64>() + 30_000);
+        assert!(
+            GRAPH_BOOTSTRAP_TIMEOUT_MS
+                >= GRAPH_BOOTSTRAP_RETRY_DELAYS_MS.iter().sum::<u64>() + 30_000
+        );
         assert!(GRAPH_BOOTSTRAP_TIMEOUT_MS < 65_000);
+    }
+
+    #[test]
+    fn stalled_child_navigation_gets_one_delayed_managed_origin_retry() {
+        assert!(!should_retry_managed_navigation(
+            false,
+            false,
+            Duration::from_millis(7_999)
+        ));
+        assert!(should_retry_managed_navigation(
+            false,
+            false,
+            Duration::from_secs(8)
+        ));
+        assert!(!should_retry_managed_navigation(
+            true,
+            false,
+            Duration::from_secs(10)
+        ));
+        assert!(!should_retry_managed_navigation(
+            false,
+            true,
+            Duration::from_secs(10)
+        ));
+    }
+
+    #[test]
+    fn only_the_verified_siyuan_desktop_document_can_bootstrap_before_finished() {
+        let origin = url::Url::parse("http://127.0.0.1:61342/").unwrap();
+        let desktop = url::Url::parse("http://127.0.0.1:61342/stage/build/desktop/?r=abc").unwrap();
+        let auth = url::Url::parse("http://127.0.0.1:61342/check-auth").unwrap();
+        let other_port = url::Url::parse("http://127.0.0.1:61343/stage/build/desktop/").unwrap();
+        let remote = url::Url::parse("https://example.com/stage/build/desktop/").unwrap();
+        assert!(is_managed_desktop_document(&origin, &desktop));
+        assert!(!is_managed_desktop_document(&origin, &auth));
+        assert!(!is_managed_desktop_document(&origin, &other_port));
+        assert!(!is_managed_desktop_document(&origin, &remote));
     }
 
     #[test]

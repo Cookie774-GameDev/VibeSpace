@@ -97,6 +97,37 @@ describe('bounded Skills 2.0 discovery', () => {
     expect(skill?.body).toContain('# Prompt Forge upgrade contract');
   });
 
+  it('exposes the stock Ponytail whole-repo audit as a separate manual built-in skill', async () => {
+    const skill = (await loadAllSkills()).find((manifest) => manifest.name === 'ponytail-audit');
+
+    expect(skill).toMatchObject({
+      name: 'ponytail-audit',
+      title: 'Ponytail Audit',
+      source: 'builtin',
+      kind: 'skill',
+    });
+    expect(skill?.description).toContain('Whole-repo audit for over-engineering.');
+    expect(skill?.body).toContain(
+      'ponytail-review, repo-wide. Scan the whole tree instead of a diff.',
+    );
+    expect(skill?.trigger).toBeUndefined();
+    expect(skill?.tools).toBeUndefined();
+    expect(skill?.filePath).toBe('/third_party/ponytail/skills/ponytail-audit/SKILL.md');
+  });
+
+  it('loads only the pinned Ponytail skill manifests from the prepared upstream artifact', async () => {
+    const skills = await loadAllSkills();
+    const ponytailSkills = skills.filter(
+      (manifest) => manifest.name === 'ponytail' || manifest.name === 'ponytail-audit',
+    );
+
+    expect(ponytailSkills).toHaveLength(2);
+    expect(ponytailSkills.map((skill) => skill.filePath).sort()).toEqual([
+      '/third_party/ponytail/skills/ponytail-audit/SKILL.md',
+      '/third_party/ponytail/skills/ponytail/SKILL.md',
+    ]);
+  });
+
   it('uses the exact project root and gives project packages precedence over trusted user packages', async () => {
     const fs = fakeFilesystem({
       directories: {

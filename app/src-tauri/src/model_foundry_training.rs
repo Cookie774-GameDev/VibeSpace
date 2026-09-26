@@ -2789,6 +2789,61 @@ mod tests {
     }
 
     #[test]
+    fn worker_probe_cache_refreshes_after_runtime_setup_changes() {
+        let Some(python) = locate_system_python() else {
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "vibespace-foundry-probe-cache-{}",
+            nanoid::nanoid!()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let worker = worker_path(&root);
+        let requirements = root.join("requirements-real.lock");
+        fs::write(
+            &worker,
+            br#"import json
+from pathlib import Path
+runtime = Path(__file__).with_name("requirements-real.lock").read_text().strip()
+methods = ["full"] if runtime == "ready" else []
+print(json.dumps({"protocol": 1, "localOnly": True, "ready": bool(methods), "methods": methods, "modalities": ["text"], "precisions": ["fp32"], "reason": None}))
+"#,
+        )
+        .unwrap();
+        fs::write(&requirements, b"ready").unwrap();
+
+        let first = probe_worker(&root, &python, &worker, "fixture-source").unwrap();
+        assert_eq!(first.methods, vec!["full"]);
+
+        fs::write(&requirements, b"runtime-is-not-ready").unwrap();
+        let second = probe_worker(&root, &python, &worker, "fixture-source").unwrap();
+        assert!(second.methods.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_private_runtime_does_not_advertise_worker_capabilities() {
+        let root = std::env::temp_dir().join(format!(
+            "vibespace-foundry-missing-runtime-{}",
+            nanoid::nanoid!()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(worker_path(&root), WORKER_SOURCE.as_bytes()).unwrap();
+
+        let status = inspect_worker(&root);
+        assert!(status.installed);
+        assert!(status.attested);
+        assert!(status.methods.is_empty());
+        assert!(status
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("Set up the private Model Foundry runtime")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn worker_probe_advertises_only_closed_supported_capability_values() {
         let root =
             std::env::temp_dir().join(format!("vibespace-foundry-training-{}", nanoid::nanoid!()));
@@ -2841,27 +2896,36 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(10));
     }
 
+    #[cfg(target_os = "windows")]
+    fn command_with_temp_file_stdout(bytes: usize, label: &str) -> (Command, Option<PathBuf>) {
+        let fixture_root =
+            std::env::temp_dir().join(format!("vibespace-foundry-{label}-{}", nanoid::nanoid!()));
+        fs::create_dir_all(&fixture_root).unwrap();
+        let fixture = fixture_root.join("payload.bin");
+        fs::write(&fixture, vec![b'x'; bytes]).unwrap();
+        let mut command = hidden_command("cmd");
+        command.args(["/C", "type", fixture.to_string_lossy().as_ref()]);
+        (command, Some(fixture_root))
+    }
+
     #[test]
     fn worker_process_capture_handles_output_larger_than_a_pipe_buffer() {
         #[cfg(target_os = "windows")]
-        let command = {
-            let mut command = hidden_command("cmd");
-            command.args([
-                "/C",
-                "for /L %i in (1,1,20000) do @echo 0123456789012345678901234567890123456789",
-            ]);
-            command
-        };
+        let (command, capture_fixture) =
+            command_with_temp_file_stdout(512 * 1024 + 1, "large-output");
         #[cfg(not(target_os = "windows"))]
-        let command = {
+        let (command, capture_fixture): (Command, Option<PathBuf>) = {
             let mut command = hidden_command("sh");
             command.args(["-c", "yes 0123456789 | head -n 100000"]);
-            command
+            (command, None)
         };
 
-        let output =
-            bounded_process_output(command, Duration::from_secs(10), "noisy test worker probe")
-                .expect("noisy worker output should not deadlock");
+        let output_result =
+            bounded_process_output(command, Duration::from_secs(10), "noisy test worker probe");
+        if let Some(fixture) = capture_fixture {
+            let _ = fs::remove_dir_all(fixture);
+        }
+        let output = output_result.expect("noisy worker output should not deadlock");
 
         assert!(output.status.success());
         assert!(output.stdout.len() > 512 * 1024);
@@ -2870,19 +2934,15 @@ mod tests {
     #[test]
     fn worker_process_capture_rejects_output_over_the_capture_limit() {
         #[cfg(target_os = "windows")]
-        let command = {
-            let mut command = hidden_command("cmd");
-            command.args([
-                "/C",
-                "for /L %i in (1,1,200000) do @echo 0123456789012345678901234567890123456789",
-            ]);
-            command
-        };
+        let (command, capture_fixture) = command_with_temp_file_stdout(
+            MAX_PROCESS_CAPTURE_BYTES as usize + 1,
+            "oversized-output",
+        );
         #[cfg(not(target_os = "windows"))]
-        let command = {
+        let (command, capture_fixture): (Command, Option<PathBuf>) = {
             let mut command = hidden_command("sh");
             command.args(["-c", "yes 0123456789 | head -c 5000000"]);
-            command
+            (command, None)
         };
 
         let started = Instant::now();
@@ -2892,6 +2952,9 @@ mod tests {
             "oversized test worker probe",
         )
         .unwrap_err();
+        if let Some(fixture) = capture_fixture {
+            let _ = fs::remove_dir_all(fixture);
+        }
 
         assert!(
             error.contains("output exceeded"),
@@ -3223,6 +3286,50 @@ torch.utils.checkpoint: use_reentrant should be passed explicitly.
             MAX_WORKER_LOG_BYTES
         );
         assert!(!cancel_training_worker("job_missing").unwrap());
+    }
+
+    #[test]
+    fn cancelling_registered_training_worker_stops_child_and_releases_registry() {
+        let job_id = format!("job_foundry_cancel_{}", nanoid::nanoid!());
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let mut command = hidden_command("powershell");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[System.Threading.Thread]::Sleep(30000)",
+            ]);
+            command
+        };
+        #[cfg(not(target_os = "windows"))]
+        let mut command = {
+            let mut command = hidden_command("sh");
+            command.args(["-c", "read -r waiting"]);
+            command.stdin(Stdio::piped());
+            command
+        };
+        command.stdout(Stdio::null()).stderr(Stdio::null());
+        let child = Arc::new(Mutex::new(command.spawn().unwrap()));
+        ACTIVE_TRAINING
+            .lock()
+            .unwrap()
+            .insert(job_id.clone(), child.clone());
+        let registry_guard = TrainingRegistryGuard(job_id.clone());
+
+        let cancelled = cancel_training_worker(&job_id);
+        let mut process = child.lock().unwrap();
+        if !matches!(cancelled, Ok(true)) {
+            let _ = process.kill();
+        }
+        let exit = process.wait();
+        drop(process);
+        drop(registry_guard);
+        let remains_registered = ACTIVE_TRAINING.lock().unwrap().contains_key(&job_id);
+
+        assert_eq!(cancelled.unwrap(), true);
+        assert!(!exit.unwrap().success());
+        assert!(!remains_registered);
     }
 
     #[test]

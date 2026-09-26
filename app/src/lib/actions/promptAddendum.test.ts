@@ -52,7 +52,7 @@ describe('buildAddendumText', () => {
     const text = buildAddendumText();
     expect(text).toContain('nav.chat');
     expect(text).toContain('terminal.swarm');
-    expect(text).toContain('Prefer `terminal.powershell`');
+    expect(text).not.toContain('terminal.powershell');
     expect(text).toContain('voice.setEngine');
     expect(text).toContain('workflow.run');
     expect(text).toContain('settings.voice');
@@ -66,17 +66,16 @@ describe('buildAddendumText', () => {
     expect(text).not.toContain('plugin.invoke');
   });
 
-  it('teaches providers the real approval-gated file action ids without inventing files.write', () => {
+  it('directs file operations to the native CLI without advertising VibeSpace file actions', () => {
     const text = buildAddendumText();
 
-    expect(text).toContain('`files.read`');
-    expect(text).toContain('`files.create`');
-    expect(text).toContain('`files.edit`');
-    expect(text).not.toContain('`files.write`');
-    expect(text).toContain('do not claim you cannot read or write files');
+    expect(text).not.toContain('`files.read`');
+    expect(text).not.toContain('`files.create`');
+    expect(text).not.toContain('`files.edit`');
+    expect(text).toContain('native CLI');
   });
 
-  it('appends custom tools that are exposed to AI', () => {
+  it('does not advertise a saved command that depends on the retired terminal executor', () => {
     useToolStore.getState().create({
       name: 'My dev server',
       description: 'Start the dev server.',
@@ -84,7 +83,7 @@ describe('buildAddendumText', () => {
       params: { command: 'npm run jarvis' },
     });
     const text = buildAddendumText();
-    expect(text).toMatch(/custom\.my-dev-server/);
+    expect(text).not.toMatch(/custom\.my-dev-server/);
   });
 });
 

@@ -1505,16 +1505,63 @@ function pdfString(value: string): string {
   return value.replace(/[^\x20-\x7e]/gu, '?').replace(/([\\()])/gu, '\\$1');
 }
 
+const PDF_BODY_LINES_PER_PAGE = 30;
+const PDF_MAX_LINE_LENGTH = 96;
+
+function wrapPdfLine(value: string): string[] {
+  const normalized = value.replace(/[^\x20-\x7e]/gu, '?');
+  const wrapped: string[] = [];
+  for (const paragraph of normalized.split(/\r?\n/u)) {
+    if (!paragraph) {
+      wrapped.push('');
+      continue;
+    }
+    let line = '';
+    for (const word of paragraph.split(/\s+/u)) {
+      if (!word) continue;
+      if (word.length > PDF_MAX_LINE_LENGTH) {
+        if (line) wrapped.push(line);
+        line = '';
+        for (let offset = 0; offset < word.length; offset += PDF_MAX_LINE_LENGTH) {
+          const fragment = word.slice(offset, offset + PDF_MAX_LINE_LENGTH);
+          if (fragment.length === PDF_MAX_LINE_LENGTH) wrapped.push(fragment);
+          else line = fragment;
+        }
+      } else if (!line) {
+        line = word;
+      } else if (line.length + word.length + 1 <= PDF_MAX_LINE_LENGTH) {
+        line += ` ${word}`;
+      } else {
+        wrapped.push(line);
+        line = word;
+      }
+    }
+    if (line) wrapped.push(line);
+  }
+  return wrapped;
+}
+
 function pdf(pages: readonly { title: string; lines: readonly string[] }[]): Uint8Array {
-  const pageCount = Math.max(1, pages.length);
   const normalizedPages =
     pages.length === 0 ? [{ title: 'Untitled', lines: [] as readonly string[] }] : pages;
+  const printablePages = normalizedPages.flatMap((page) => {
+    const lines = page.lines.flatMap(wrapPdfLine);
+    const pageCount = Math.max(1, Math.ceil(lines.length / PDF_BODY_LINES_PER_PAGE));
+    return Array.from({ length: pageCount }, (_, pageIndex) => ({
+      title: pageIndex === 0 ? page.title : `${page.title} (continued)`,
+      lines: lines.slice(
+        pageIndex * PDF_BODY_LINES_PER_PAGE,
+        (pageIndex + 1) * PDF_BODY_LINES_PER_PAGE,
+      ),
+    }));
+  });
+  const pageCount = printablePages.length;
   const objects: string[] = [];
   objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
   const kids = Array.from({ length: pageCount }, (_, index) => `${4 + index * 2} 0 R`).join(' ');
   objects[2] = `<< /Type /Pages /Kids [${kids}] /Count ${pageCount} >>`;
   objects[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
-  normalizedPages.forEach((page, index) => {
+  printablePages.forEach((page, index) => {
     const pageId = 4 + index * 2;
     const contentId = pageId + 1;
     objects[pageId] =

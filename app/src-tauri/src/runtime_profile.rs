@@ -1007,7 +1007,13 @@ mod tests {
     fn actual_production_config_passes_the_exact_startup_capability_policy() {
         let config: tauri::utils::config::Config =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert!(resolve_startup_context(None, None, &config.identifier, &config.app.security.capabilities).is_ok());
+        assert!(resolve_startup_context(
+            None,
+            None,
+            &config.identifier,
+            &config.app.security.capabilities
+        )
+        .is_ok());
     }
 
     #[test]

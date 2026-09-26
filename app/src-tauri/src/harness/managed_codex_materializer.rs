@@ -3,8 +3,9 @@ use crate::harness::download::{
 };
 use crate::harness::managed_cli_manifest::{embedded_managed_release, ManagedCliKind};
 use crate::harness::managed_cli_runtime::{
-    inspect_managed_runtime, inspect_codex_code_mode_host, ManagedCliReadiness, ManagedRuntimeReceipt,
-    CODEX_CODE_MODE_HOST, CODEX_CODE_MODE_HOST_SHA256, CODEX_CODE_MODE_HOST_MISSING,
+    inspect_codex_code_mode_host, inspect_managed_runtime, ManagedCliReadiness,
+    ManagedRuntimeReceipt, CODEX_CODE_MODE_HOST, CODEX_CODE_MODE_HOST_MISSING,
+    CODEX_CODE_MODE_HOST_SHA256,
 };
 use crate::harness::manifest::OpenCodeRelease;
 use sha2::{Digest, Sha256};
@@ -198,36 +199,70 @@ fn write_receipt(
 }
 
 /// Materialize only the missing, pinned companion. Existing bytes are never replaced.
-fn install_code_mode_host(root: &Path, cancellation: &AtomicBool) -> Result<(), ManagedCodexFailure> {
+fn install_code_mode_host(
+    root: &Path,
+    cancellation: &AtomicBool,
+) -> Result<(), ManagedCodexFailure> {
     match inspect_codex_code_mode_host(root) {
         Ok(()) => return Ok(()),
-        Err(CODEX_CODE_MODE_HOST_MISSING) => {},
+        Err(CODEX_CODE_MODE_HOST_MISSING) => {}
         Err(reason) => return Err(failure(ManagedCodexFailureKind::Integrity, reason)),
     }
     if cancellation.load(Ordering::Acquire) {
-        return Err(failure(ManagedCodexFailureKind::Cancelled, "Managed Codex installation was cancelled."));
+        return Err(failure(
+            ManagedCodexFailureKind::Cancelled,
+            "Managed Codex installation was cancelled.",
+        ));
     }
     ensure_regular_directory(root)?;
     let temporary = root.join(format!(".code-mode-{}.download", nanoid::nanoid!(20)));
     let _cleanup = CleanupPath(temporary.clone());
-    let mut output = File::options().write(true).create_new(true).open(&temporary)
-        .map_err(|_| failure(ManagedCodexFailureKind::Disk, "Managed Codex helper staging failed."))?;
+    let mut output = File::options()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|_| {
+            failure(
+                ManagedCodexFailureKind::Disk,
+                "Managed Codex helper staging failed.",
+            )
+        })?;
     let response = reqwest::blocking::Client::builder().connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(15 * 60)).build()
         .and_then(|client| client.get("https://github.com/openai/codex/releases/download/rust-v0.151.0/codex-code-mode-host-x86_64-pc-windows-msvc.exe").send())
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|_| failure(ManagedCodexFailureKind::Network, "Managed Codex helper download failed."))?;
-    stream_verified_download(response, &mut output, 72_271_664, CODEX_CODE_MODE_HOST_SHA256, cancellation, |_| {})
-        .map_err(map_download_failure)?;
-    output.sync_all().map_err(|_| failure(ManagedCodexFailureKind::Disk, "Managed Codex helper finalization failed."))?;
+    stream_verified_download(
+        response,
+        &mut output,
+        72_271_664,
+        CODEX_CODE_MODE_HOST_SHA256,
+        cancellation,
+        |_| {},
+    )
+    .map_err(map_download_failure)?;
+    output.sync_all().map_err(|_| {
+        failure(
+            ManagedCodexFailureKind::Disk,
+            "Managed Codex helper finalization failed.",
+        )
+    })?;
     drop(output);
     if cancellation.load(Ordering::Acquire) {
-        return Err(failure(ManagedCodexFailureKind::Cancelled, "Managed Codex installation was cancelled."));
+        return Err(failure(
+            ManagedCodexFailureKind::Cancelled,
+            "Managed Codex installation was cancelled.",
+        ));
     }
     // Hard-link promotion is atomic and cannot overwrite a concurrently created target.
-    fs::hard_link(&temporary, root.join(CODEX_CODE_MODE_HOST))
-        .map_err(|_| failure(ManagedCodexFailureKind::Existing, "Managed Codex helper promotion failed."))?;
-    inspect_codex_code_mode_host(root).map_err(|reason| failure(ManagedCodexFailureKind::Integrity, reason))
+    fs::hard_link(&temporary, root.join(CODEX_CODE_MODE_HOST)).map_err(|_| {
+        failure(
+            ManagedCodexFailureKind::Existing,
+            "Managed Codex helper promotion failed.",
+        )
+    })?;
+    inspect_codex_code_mode_host(root)
+        .map_err(|reason| failure(ManagedCodexFailureKind::Integrity, reason))
 }
 
 pub fn download_and_install_embedded_codex<F>(
@@ -254,10 +289,15 @@ where
     let managed_root = managed_base.join("codex");
     match inspect_managed_runtime(&managed_root, &release) {
         ready @ ManagedCliReadiness::Ready { .. } => return Ok(ready),
-        ManagedCliReadiness::Incomplete { reason: CODEX_CODE_MODE_HOST_MISSING } => {
+        ManagedCliReadiness::Incomplete {
+            reason: CODEX_CODE_MODE_HOST_MISSING,
+        } => {
             // inspect_managed_runtime reaches this reason only after verifying the
             // existing pinned receipt and executable; preserve those exact bytes.
-            install_code_mode_host(&managed_root.join("versions").join(&release.version), cancellation)?;
+            install_code_mode_host(
+                &managed_root.join("versions").join(&release.version),
+                cancellation,
+            )?;
             return Ok(inspect_managed_runtime(&managed_root, &release));
         }
         ManagedCliReadiness::Incomplete { .. } => {

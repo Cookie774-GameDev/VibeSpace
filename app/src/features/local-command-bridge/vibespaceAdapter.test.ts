@@ -15,6 +15,36 @@ function detected(id: string, slots: Readonly<Record<string, unknown>>): LocalDe
 }
 
 describe('VibeSpace local-command adapter', () => {
+  it('preserves the canonical authority for a status command with empty slots', () => {
+    expect(adaptLocalCommand(detected('status.show', {}))).toEqual({
+      status: 'mapped',
+      command: {
+        kind: 'catalog',
+        id: 'status.show',
+        family: 'navigation',
+        authority: 'router.status',
+        safety: 'read',
+        slots: {},
+      },
+    });
+  });
+
+  it.each([
+    ['unexpected argument', { format: 'json' }],
+    ['unexpected target', { route: 'settings' }],
+    ['array', []],
+    ['null', null],
+    ['missing slots', undefined],
+    ['number', 7],
+    ['string', 'status'],
+  ])('rejects status %s instead of erasing malformed slots', (_label, slots) => {
+    expect(
+      adaptLocalCommand(
+        detected('status.show', slots as unknown as Readonly<Record<string, unknown>>),
+      ),
+    ).toEqual({ status: 'unsupported', reason: 'invalid_slots' });
+  });
+
   it('passes validated terminal counts through to open-agent-cli', () => {
     expect(adaptLocalCommand(detected('terminal.open', { provider: 'claude', count: 2 }))).toEqual({
       status: 'mapped',

@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui';
+import { checkpointNotesComposer } from '@/features/notes/notesComposerDraft';
 import { jarvisArtifactRepo } from '@/lib/db/jarvisRepositories';
 import type { JarvisArtifactV1 } from '@/lib/jarvis/contracts/execution';
 import { useAuthStore } from '@/stores/auth';
@@ -27,6 +28,8 @@ vi.mock('./HarnessReadinessGate', async (importOriginal) => {
 });
 
 const originalAuth = useAuthStore.getState();
+const composerChatId = 'chat-md-refresh';
+const composerNoteScope = { accountId: 'account-alpha', projectId: 'project-1' } as const;
 
 function artifact(
   id: string,
@@ -51,7 +54,7 @@ function artifact(
 function renderComposer() {
   return render(
     <TooltipProvider>
-      <Composer chatId={'chat-md-refresh' as never} />
+      <Composer chatId={composerChatId as never} />
     </TooltipProvider>,
   );
 }
@@ -87,10 +90,12 @@ describe('Composer canonical artifact refresh', () => {
       workspaceId: 'workspace-1' as never,
       projectId: 'project-1' as never,
     });
+    checkpointNotesComposer(composerNoteScope, composerChatId, '', []);
   });
 
   afterEach(() => {
     cleanup();
+    checkpointNotesComposer(composerNoteScope, composerChatId, '', []);
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     useAuthStore.setState({

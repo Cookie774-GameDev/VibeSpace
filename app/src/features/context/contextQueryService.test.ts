@@ -79,6 +79,22 @@ function repository(
 }
 
 describe('context query service', () => {
+  it('uses scoped repository metadata for describe without hydrating every source', async () => {
+    const repo = repository([record('one')]);
+    repo.describeSummary = vi.fn(async () => ({
+      recordCount: 5_734,
+      sourceKinds: ['file_version' as const],
+    }));
+    const service = createContextQueryService({ repository: repo });
+
+    await expect(service.describe({ scope })).resolves.toMatchObject({
+      scope, recordCount: 5_734, sourceKinds: ['file_version'],
+      indexAvailable: true, stale: false,
+    });
+    expect(repo.describeSummary).toHaveBeenCalledWith(scope, undefined);
+    expect(repo.listRecords).not.toHaveBeenCalled();
+  });
+
   it('exposes the complete bounded query surface', () => {
     const service = createContextQueryService({ repository: repository([]) });
     expect(Object.keys(service).sort()).toEqual(
@@ -193,6 +209,70 @@ describe('context query service', () => {
       service.search({ scope, query: 'match', signal: controller.signal }),
     ).rejects.toMatchObject({ code: 'cancelled' });
     expect(issuePointers).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'one\r\ntwo three',
+    'AéBαC',
+    '甲乙丙丁終',
+    'a🚀b🌍c',
+    'Cafe\u0301 e\u0301',
+    '\uFEFFalpha\uFEFFomega',
+    'α\r\n🚀終e\u0301\nlast',
+  ])('round-trips exact UTF-8 source bytes across bounded pages: %s', async (content) => {
+    const bytes = encoder.encode(content);
+    for (const maxOpenBytes of [4, 5, 7, 11]) {
+      const service = createContextQueryService({
+        repository: repository([record('one')], content),
+        limits: { maxOpenBytes },
+      });
+      const exact = pointer('one', 0, bytes.length);
+      let continuation: string | undefined;
+      let joined = '';
+      let end = 0;
+      let pages = 0;
+      do {
+        const page = await service.open({ scope, pointer: exact, continuation });
+        expect(page.byteStart).toBe(end);
+        expect(page.byteEnd).toBeGreaterThan(end);
+        expect(page.byteEnd - page.byteStart).toBeLessThanOrEqual(maxOpenBytes);
+        expect(encoder.encode(page.text)).toEqual(bytes.slice(page.byteStart, page.byteEnd));
+        expect(page.pointer.byteStart).toBe(page.byteStart);
+        expect(page.pointer.byteEnd).toBe(page.byteEnd);
+        expect(Boolean(page.continuation)).toBe(page.truncated);
+        joined += page.text;
+        end = page.byteEnd;
+        continuation = page.continuation;
+        expect(++pages).toBeLessThan(100);
+      } while (continuation);
+      expect(joined).toBe(content);
+      expect(end).toBe(bytes.length);
+    }
+  });
+
+  it('rejects a byte budget too small for one whole character', async () => {
+    const service = createContextQueryService({ repository: repository([record('one')], '🚀x') });
+    await expect(service.open({ scope, pointer: pointer('one', 0, 5), maxBytes: 1 }))
+      .rejects.toMatchObject({ code: 'query_invalid' });
+  });
+
+  it.each([{ start: 1, end: 5 }, { start: 0, end: 2 }])(
+    'rejects partial-character pointer $start-$end instead of widening authority', async ({ start, end }) => {
+      const service = createContextQueryService({ repository: repository([record('one')], '🚀x') });
+      await expect(service.open({ scope, pointer: pointer('one', start, end) }))
+        .rejects.toMatchObject({ code: 'pointer_invalid' });
+    },
+  );
+
+  it('expands only complete UTF-8 neighbors inside the requested byte limits', async () => {
+    const service = createContextQueryService({
+      repository: repository([record('one')], 'αSTART🚀END終'),
+    });
+    const exact = pointer('one', 2, 7);
+    expect(await service.expand({ scope, pointer: exact, beforeBytes: 1, afterBytes: 2 }))
+      .toMatchObject({ text: 'START', byteStart: 2, byteEnd: 7 });
+    expect(await service.expand({ scope, pointer: exact, beforeBytes: 2, afterBytes: 4 }))
+      .toMatchObject({ text: 'αSTART🚀', byteStart: 0, byteEnd: 11 });
   });
 
   it('re-checks scope and permission at open time and returns exact bounded bytes', async () => {
@@ -357,6 +437,45 @@ describe('context query service', () => {
     expect(repo.getRecord).toHaveBeenCalledTimes(2);
   });
 
+  it('uses targeted missing-record rehydration when the repository provides it', async () => {
+    const repo = repository([]);
+    const rehydrate = vi.fn(async () => undefined);
+    repo.rehydrateMissingRecord = rehydrate;
+    const service = createContextQueryService({ repository: repo });
+
+    await expect(service.open({ scope, pointer: pointer('missing') })).rejects.toMatchObject({
+      code: 'record_missing',
+    });
+    expect(rehydrate).toHaveBeenCalledWith('missing', scope, undefined);
+    expect(repo.listRecords).not.toHaveBeenCalled();
+    expect(repo.getRecord).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a mismatched mapped-file pointer before rehydration or source I/O', async () => {
+    const repo = repository([]);
+    const rehydrate = vi.fn(async () => undefined);
+    repo.rehydrateMissingRecord = rehydrate;
+    const service = createContextQueryService({ repository: repo });
+    const legitimateRecordId = `rlm:${'a'.repeat(64)}`;
+    const mismatchedRecordId = `rlm:${'b'.repeat(64)}`;
+    const malformed = createContextPointer({
+      id: `ptr:${legitimateRecordId}:0:12`,
+      recordId: mismatchedRecordId,
+      byteStart: 0,
+      byteEnd: 12,
+      sourceVersion: `sha256:${HASH_A}`,
+      contentHash: HASH_A,
+    });
+
+    await expect(service.open({ scope, pointer: malformed })).rejects.toMatchObject({
+      code: 'pointer_invalid',
+    });
+    expect(repo.getRecord).not.toHaveBeenCalled();
+    expect(rehydrate).not.toHaveBeenCalled();
+    expect(repo.listRecords).not.toHaveBeenCalled();
+    expect(repo.readSource).not.toHaveBeenCalled();
+  });
+
   it('refuses cross-scope records even when a repository accidentally returns them', async () => {
     const repo = repository([record('foreign', { projectId: 'project-2' })]);
     const service = createContextQueryService({ repository: repo });
@@ -392,6 +511,53 @@ describe('context query service', () => {
     await expect(service.open({ scope, pointer: pointer('deleted') })).rejects.toMatchObject({
       code: 'scope_denied',
     });
+  });
+
+  it('rejects an unissued pointer before canOpen or source reads', async () => {
+    const repo = repository([record('one')]);
+    repo.authorizePointer = vi.fn(async () => false);
+    const service = createContextQueryService({ repository: repo });
+
+    await expect(service.open({ scope, pointer: pointer('one') })).rejects.toMatchObject({
+      code: 'pointer_invalid',
+    });
+    expect(repo.authorizePointer).toHaveBeenCalledWith(pointer('one'), record('one'), scope, undefined);
+    expect(repo.canOpen).not.toHaveBeenCalled();
+    expect(repo.readSource).not.toHaveBeenCalled();
+  });
+
+  it('preauthorizes a valid pointer before canOpen and retains post-read validation', async () => {
+    const order: string[] = [];
+    const repo = repository([record('one')]);
+    repo.authorizePointer = vi.fn(async () => { order.push('authorize'); return true; });
+    vi.mocked(repo.canOpen).mockImplementation(async () => { order.push('canOpen'); return true; });
+    vi.mocked(repo.readSource).mockImplementation(async () => {
+      order.push('readSource');
+      return { bytes: encoder.encode('alpha\nbeta\ngamma\ndelta\n'), contentHash: HASH_A, sourceVersion: 'sha256:aaaaaaaa' };
+    });
+    repo.validatePointer = vi.fn(async () => { order.push('validate'); return true; });
+    const service = createContextQueryService({ repository: repo });
+
+    await expect(service.open({ scope, pointer: pointer('one') })).resolves.toMatchObject({
+      status: 'current',
+    });
+    expect(order).toEqual(['authorize', 'canOpen', 'readSource', 'validate']);
+  });
+
+  it('honors cancellation raised during pre-read pointer authorization before source access', async () => {
+    const controller = new AbortController();
+    const repo = repository([record('one')]);
+    repo.authorizePointer = vi.fn(async () => {
+      controller.abort('owner_cancelled');
+      return true;
+    });
+    const service = createContextQueryService({ repository: repo });
+
+    await expect(
+      service.open({ scope, pointer: pointer('one'), signal: controller.signal }),
+    ).rejects.toMatchObject({ code: 'cancelled' });
+    expect(repo.canOpen).not.toHaveBeenCalled();
+    expect(repo.readSource).not.toHaveBeenCalled();
   });
 
   it('never crosses account, project, or worktree boundaries in cached continuations', async () => {
@@ -433,6 +599,54 @@ describe('context query service', () => {
     expect(result.lineEnd).toBe(1);
     expect(result.truncated).toBe(true);
     expect(validatePointer).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues expanded pages by revalidating the original issued pointer', async () => {
+    const content = '0123456789🚀tail';
+    const original = { ...pointer('one', 6, 10) };
+    const validatePointer = vi.fn(async (candidate: ContextPointer) =>
+      candidate.id === 'pointer-one-6-10' && candidate.byteStart === 6 && candidate.byteEnd === 10,
+    );
+    const service = createContextQueryService({
+      repository: { ...repository([record('one')], content), validatePointer },
+      limits: { maxOpenBytes: 5 },
+    });
+    let page = await service.expand({ scope, pointer: original, beforeBytes: 6, afterBytes: 20 });
+    expect(page.truncated).toBe(true);
+    const first = page;
+    // A caller cannot alter the authority already retained by the opaque continuation.
+    original.byteStart = 0;
+    original.byteEnd = 1_000;
+    let joined = page.text;
+    while (page.continuation) {
+      page = await service.open({ scope, pointer: page.pointer, continuation: page.continuation });
+      joined += page.text;
+    }
+    expect(joined).toBe(content);
+    expect(validatePointer.mock.calls.every(([candidate]) => candidate.id === 'pointer-one-6-10'))
+      .toBe(true);
+    await expect(service.open({ scope, pointer: first.pointer, continuation: first.continuation }))
+      .rejects.toMatchObject({ code: 'continuation_invalid' });
+    await expect(service.open({ scope, pointer: first.pointer }))
+      .rejects.toMatchObject({ code: 'pointer_invalid' });
+  });
+
+  it.each([
+    ['pointer', 'pointer_invalid'],
+    ['permission', 'permission_denied'],
+    ['revision', 'source_stale'],
+  ] as const)('keeps %s revocation effective on expanded continuations', async (kind, code) => {
+    const validatePointer = vi.fn(async () => true);
+    const repo = { ...repository([record('one')], '0123456789abcdefghijkl'), validatePointer };
+    const service = createContextQueryService({ repository: repo, limits: { maxOpenBytes: 5 } });
+    const first = await service.expand({ scope, pointer: pointer('one', 6, 10), beforeBytes: 6, afterBytes: 10 });
+    if (kind === 'pointer') validatePointer.mockResolvedValue(false);
+    if (kind === 'permission') vi.mocked(repo.canOpen).mockResolvedValue(false);
+    if (kind === 'revision') vi.mocked(repo.readSource).mockResolvedValue({
+      bytes: encoder.encode('changed'), contentHash: HASH_B, sourceVersion: 'changed',
+    });
+    await expect(service.open({ scope, pointer: first.pointer, continuation: first.continuation }))
+      .rejects.toMatchObject({ code });
   });
 
   it('derives expanded line provenance from the exact bounded expanded byte range', async () => {

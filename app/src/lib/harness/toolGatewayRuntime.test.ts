@@ -60,7 +60,6 @@ const argumentsByTool: Record<ToolGatewayTool, Record<string, unknown>> = {
   'terminal.read': { terminal: 4 },
   'terminal.schedule': { terminal: 4, command: 'npm test', runAt: 'tomorrow' },
   'command.list': {},
-  'command.run': { command: 'open-settings' },
   'profile.allAboutMe.read': {},
   'profile.allAboutMe.update': { content: '# Me' },
   'memory.learning.read': {},

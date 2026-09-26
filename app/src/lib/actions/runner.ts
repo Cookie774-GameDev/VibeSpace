@@ -41,6 +41,21 @@ import { isCanonicalFileArtifactResult } from './registryFiles';
 import { dispatchCanonicalBrowserGoalAction } from '@/features/browser/browserGoalIntegration';
 import { createChatActivityId, useChatActivityStore } from '@/features/chat/activity';
 
+const RETIRED_ACTION_IDS = new Set([
+  'files.read',
+  'files.create',
+  'files.edit',
+  'terminal.run',
+  'terminal.powershell',
+]);
+
+function isUnavailableCustomTool(tool: { baseAction: string; steps?: readonly { action: string }[] }) {
+  return (
+    RETIRED_ACTION_IDS.has(tool.baseAction) ||
+    tool.steps?.some((step) => RETIRED_ACTION_IDS.has(step.action)) === true
+  );
+}
+
 /** @internal Re-reads a committed action result and its exact producer evidence. */
 export interface CanonicalFileActionResultReadPort {
   readCanonicalFileActionResult(evidence: CanonicalFileActionEvidence): Promise<Readonly<{
@@ -48,6 +63,14 @@ export interface CanonicalFileActionResultReadPort {
     result: ActionResult;
   }> | null>;
 }
+
+const HISTORICAL_FILE_ARTIFACT_ACTION_IDS = new Set([
+  'files.create',
+  'files.edit',
+  'files.read',
+  'files.patch.apply',
+  'files.patch.rollback',
+]);
 
 function validFileActionEvidence(evidence: CanonicalFileActionEvidence): boolean {
   const stable = (value: string) =>
@@ -93,9 +116,12 @@ export function createCanonicalFileActionEvidenceAuthority(
 ): CanonicalFileActionEvidenceAuthority {
   return Object.freeze({
     async verify(evidence: CanonicalFileActionEvidence) {
-      if (!validFileActionEvidence(evidence)) return null;
-      const action = resolveAction(evidence.actionId);
-      if (!action || action.category !== 'file') return null;
+      if (
+        !validFileActionEvidence(evidence) ||
+        !HISTORICAL_FILE_ARTIFACT_ACTION_IDS.has(evidence.actionId)
+      ) {
+        return null;
+      }
       let current: Awaited<ReturnType<typeof port.readCanonicalFileActionResult>>;
       try {
         current = await port.readCanonicalFileActionResult(evidence);
@@ -132,7 +158,12 @@ export function resolveAction(id: string): ActionDef | undefined {
   // Late-binding the tool store keeps this module loadable even if
   // the tool feature was tree-shaken in some future build configuration.
   try {
-    return useToolStore.getState().resolve(id);
+    const tools = useToolStore.getState();
+    if (id.startsWith('custom.')) {
+      const tool = tools.bySlug(id.slice('custom.'.length));
+      if (tool && isUnavailableCustomTool(tool)) return undefined;
+    }
+    return tools.resolve(id);
   } catch {
     return undefined;
   }
@@ -147,7 +178,14 @@ export function getAllActions(): ActionDef[] {
   const builtins = getBuiltinActions();
   let customs: ActionDef[] = [];
   try {
-    customs = useToolStore.getState().toActionDefs();
+    const tools = useToolStore.getState();
+    const unavailableCustomIds = new Set(
+      tools
+        .list()
+        .filter(isUnavailableCustomTool)
+        .map((tool) => `custom.${tool.slug}`),
+    );
+    customs = tools.toActionDefs().filter((action) => !unavailableCustomIds.has(action.id));
   } catch {
     customs = [];
   }

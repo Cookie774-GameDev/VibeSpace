@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { HarnessError } from '@/lib/harness/errors';
 import type { VibeSpaceHarness } from '@/lib/harness/types';
 import {
   createContextQueryService,
@@ -12,9 +13,51 @@ import {
   createProductionFederatedRlmRepository,
   requestsMappedFileAuthority,
   mentionsMappedPath,
+  synthesizeEvidencePack,
 } from './contextRlmProduction';
 
 const SHA = `sha256:${'a'.repeat(64)}` as const;
+
+describe('synthesizeEvidencePack provider boundary', () => {
+  it('keeps child answers and cited source spans whole within a serialized response budget', async () => {
+    const pointers = Array.from({ length: 6 }, (_, index) => ({
+      id: `pointer-${index}`, recordId: `record-${index}`, byteStart: 0, byteEnd: 9_000,
+      sourceVersion: SHA, contentHash: 'a'.repeat(64),
+    }));
+    const sources = pointers.map((_, index) =>
+      `SOURCE_${index}_BEGIN\n${'😀"\\'.repeat(1_500)}\nSOURCE_${index}_END`);
+    const childAnswer = 'The cited source establishes the watchdog timer branch at sched/wdog/wd_start.c:80-374.';
+    const result = await synthesizeEvidencePack({
+      question: 'What happens to the watchdog timer?', scope: {} as never,
+      evidence: pointers.map((pointer, index) => ({
+        pointer, record: { path: `sched/wdog/source-${index}.c` },
+        lineStart: 1, lineEnd: 400, text: sources[index],
+      })) as never,
+      childAnalyses: [{ answer: childAnswer, citations: [pointers[1]] }] as never,
+      signal: new AbortController().signal,
+    });
+
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(20 * 1024);
+    expect(result.citations).toEqual(pointers);
+    expect(result.answer).toContain(`CHILD_1=${childAnswer}`);
+    expect(result.answer).toContain(`EVIDENCE_2_TEXT=${sources[1]}`);
+    for (const [index, source] of sources.entries()) {
+      const complete = result.answer.includes(`EVIDENCE_${index + 1}_TEXT=${source}`);
+      const omitted = result.answer.includes(`EVIDENCE_${index + 1}_TEXT_OMITTED=bounded provider result`);
+      expect(complete || omitted).toBe(true);
+      expect(complete && omitted).toBe(false);
+      expect(result.answer).toContain(`EVIDENCE_${index + 1}_POINTER=`);
+    }
+  });
+
+  it('fails closed when even the complete child analysis exceeds the provider budget', () => {
+    expect(() => synthesizeEvidencePack({
+      question: 'Source question', scope: {} as never, evidence: [],
+      childAnalyses: [{ answer: 'x'.repeat(21 * 1024), citations: [] }],
+      signal: new AbortController().signal,
+    })).toThrow('rlm_synthesis_essential_evidence_too_large');
+  });
+});
 
 async function contentSha(content: string): Promise<`sha256:${string}`> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
@@ -179,6 +222,19 @@ describe('production Context Map RLM repository multi-part logical sources', () 
     return { repository, contents };
   }
 
+  it('keeps genuine pagination for an explicitly named source with more than six physical parts', async () => {
+    const { repository } = multiPartRepository({ partCount: 8, duplicateBasename: true });
+    const service = createContextQueryService({ repository });
+    const result = await service.search({
+      scope: { accountId: 'account-1', projectId: 'project-1' },
+      query: 'Read source file 100k/requirements.txt.', limit: 6,
+    });
+    expect(result.items).toHaveLength(6);
+    expect(result.truncated).toBe(true);
+    expect(result.continuation).toBeDefined();
+    expect(result.items.every(item => !item.preview.includes('==9.9.9'))).toBe(true);
+  });
+
   it('selects the final logical part for an original-name LAST-record question', async () => {
     const { repository } = multiPartRepository({ partCount: 24 });
     const scope = { accountId: 'account-1', projectId: 'project-1' };
@@ -258,6 +314,7 @@ function fixedRepository(input: {
   text: string;
   score: number;
   issuePointers?: (items: readonly ContextSearchItem[]) => boolean;
+  authorizePointer?: ContextQueryRepository['authorizePointer'];
 }): ContextQueryRepository {
   const contentHash = input.id.endsWith('siyuan')
     ? 'c'.repeat(64)
@@ -315,6 +372,7 @@ function fixedRepository(input: {
         source.contentHash === contentHash
       );
     },
+    ...(input.authorizePointer ? { authorizePointer: input.authorizePointer } : {}),
     ...(input.issuePointers
       ? {
           issuePointers(items: readonly ContextSearchItem[]) {
@@ -326,9 +384,48 @@ function fixedRepository(input: {
 }
 
 describe('production RLM federation authority routing', () => {
+  it('rehydrates a missing SiYuan pointer through only its owner', async () => {
+    const mapped = fixedRepository({
+      id: `rlm:${'1'.repeat(64)}`, sourceId: 'mapped',
+      sourceKind: 'file_version', text: 'mapped', score: 1,
+    });
+    const history = fixedRepository({
+      id: 'rlm:history:chat_message:message-1:bbbbbbbbbbbbbbbb', sourceId: 'history',
+      sourceKind: 'chat_message', text: 'history', score: 1,
+    });
+    const siyuan = fixedRepository({
+      id: 'siyuan:cccccccccccccccccccccccc:block-siyuan', sourceId: 'siyuan',
+      sourceKind: 'context_note', text: 'siyuan', score: 1,
+    });
+    const mappedList = vi.spyOn(mapped, 'listRecords');
+    const historyList = vi.spyOn(history, 'listRecords');
+    const siyuanList = vi.spyOn(siyuan, 'listRecords');
+    const service = createContextQueryService({
+      repository: createProductionFederatedRlmRepository(mapped, history, siyuan),
+    });
+    const scope = { accountId: 'account-1', projectId: 'project-1' };
+    const pointer = createContextPointer({
+      id: 'ptr:missing-siyuan',
+      recordId: 'siyuan:cccccccccccccccccccccccc:missing-block',
+      byteStart: 0, byteEnd: 1,
+      sourceVersion: `sha256:${'c'.repeat(64)}`,
+      contentHash: 'c'.repeat(64),
+    });
+
+    await expect(service.open({ scope, pointer })).rejects.toMatchObject({
+      code: 'record_missing',
+    });
+    expect(siyuanList).toHaveBeenCalledTimes(1);
+    expect(mappedList).not.toHaveBeenCalled();
+    expect(historyList).not.toHaveBeenCalled();
+  });
+
   it('issues and validates mixed mapped-file, history, and SiYuan pointers through their owner', async () => {
     const mappedIssue = vi.fn((_items: readonly ContextSearchItem[]) => true);
     const siyuanIssue = vi.fn((_items: readonly ContextSearchItem[]) => true);
+    const mappedAuthorize = vi.fn(async () => true);
+    const historyAuthorize = vi.fn(async () => true);
+    const siyuanAuthorize = vi.fn(async () => true);
     const mapped = fixedRepository({
       id: `rlm:${'1'.repeat(64)}`,
       sourceId: 'mapped',
@@ -336,6 +433,7 @@ describe('production RLM federation authority routing', () => {
       text: 'mapped evidence',
       score: 3,
       issuePointers: mappedIssue,
+      authorizePointer: mappedAuthorize,
     });
     const history = fixedRepository({
       id: 'rlm:history:chat_message:message-1:bbbbbbbbbbbbbbbb',
@@ -343,6 +441,7 @@ describe('production RLM federation authority routing', () => {
       sourceKind: 'chat_message',
       text: 'history evidence',
       score: 2,
+      authorizePointer: historyAuthorize,
     });
     const siyuan = fixedRepository({
       id: 'siyuan:cccccccccccccccccccccccc:block-siyuan',
@@ -351,6 +450,7 @@ describe('production RLM federation authority routing', () => {
       text: 'siyuan evidence',
       score: 1,
       issuePointers: siyuanIssue,
+      authorizePointer: siyuanAuthorize,
     });
     const service = createContextQueryService({
       repository: createProductionFederatedRlmRepository(mapped, history, siyuan),
@@ -371,6 +471,9 @@ describe('production RLM federation authority routing', () => {
     await expect(
       Promise.all(result.items.map((item) => service.open({ scope, pointer: item.pointer }))),
     ).resolves.toHaveLength(3);
+    expect(mappedAuthorize).toHaveBeenCalledTimes(1);
+    expect(historyAuthorize).toHaveBeenCalledTimes(1);
+    expect(siyuanAuthorize).toHaveBeenCalledTimes(1);
   });
 
   it('keeps explicit mapped-file questions out of history and SiYuan search', async () => {
@@ -528,6 +631,51 @@ async function singleShardAddressRepository(
 }
 
 describe('production Context Map RLM repository', () => {
+  it('describes a large scoped map from inventory without hashing all files', async () => {
+    const stat = vi.fn(async () => { throw new Error('describe must not stat files'); });
+    const read = vi.fn(async () => { throw new Error('describe must not read files'); });
+    const nodes = Array.from({ length: 5_734 }, (_, index) => ({
+      id: `node-${index}`, kind: 'file' as const, title: `file-${index}.c`,
+      summary: '', path: `C:\\repo\\file-${index}.c`,
+    }));
+    const mapped = createContextMapRlmRepository({
+      loadMaps: vi.fn(async () => [{
+        id: 'map-large', projectId: 'project-1', rootDir: 'C:\\repo',
+        status: 'active' as const, updatedAt: 20, tree: { nodes },
+      }]),
+      stat, read, lexicalSearch: vi.fn(async () => []),
+    });
+    const scope = { accountId: 'account-1', projectId: 'project-1' };
+
+    await expect(mapped.describeSummary!(scope)).resolves.toEqual({
+      recordCount: 5_734, sourceKinds: ['file_version'],
+    });
+    expect(stat).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('limits mapped source inventory to the active working root when the project has other maps', async () => {
+    const mapped = createContextMapRlmRepository({
+      loadMaps: vi.fn(async () => [
+        { id: 'old-map', projectId: 'project-1', rootDir: 'D:/old-context',
+          status: 'active' as const, updatedAt: 30, tree: { nodes: [
+            { id: 'old-file', kind: 'file', title: 'known-facts.md', summary: '', path: 'D:/old-context/known-facts.md' },
+          ] } },
+        { id: 'nuttx-map', projectId: 'project-1', rootDir: 'D:/NuttX/source-core',
+          status: 'active' as const, updatedAt: 20, tree: { nodes: [
+            { id: 'wd-file', kind: 'file', title: 'wd_start_abstick.c', summary: '', path: 'D:/NuttX/source-core/wd_start_abstick.c' },
+          ] } },
+      ]),
+      stat: vi.fn(async () => { throw new Error('description must not stat'); }),
+      read: vi.fn(async () => { throw new Error('description must not read'); }),
+      lexicalSearch: vi.fn(async () => []),
+    });
+    await expect(mapped.describeSummary!({ accountId: 'account-1', projectId: 'project-1', worktreeId: 'd:\\nuttx\\source-core\\' }))
+      .resolves.toEqual({ recordCount: 1, sourceKinds: ['file_version'] });
+    await expect(mapped.describeSummary!({ accountId: 'account-1', projectId: 'project-1', worktreeId: 'D:/NuttX' }))
+      .resolves.toEqual({ recordCount: 1, sourceKinds: ['file_version'] });
+  });
+
   it('routes an unsafe-integer logical address through one physical mapped descriptor and shard', async () => {
     const shard0 = 'sparse shard zero';
     const shard1 = 'SAFE_TRANSITION_ANSWER=amber-quartz';
@@ -2303,6 +2451,74 @@ describe('production Context Map RLM repository', () => {
     expect(hits.every((hit) => !hit.preview.includes('untrusted derivative excerpt'))).toBe(true);
   });
 
+  it('keeps a concise code-identifier query intact for the physical index', async () => {
+    const content = 'O_NOFOLLOW VFS open: if (desc.nofollow && INODE_IS_SOFTLINK(inode)) ret = -ELOOP;';
+    const fixtureMaps = maps();
+    fixtureMaps[0]!.tree.nodes = Array.from({ length: 130 }, (_, index) => ({
+      id: `file-${index}`,
+      kind: 'file' as const,
+      title: index === 129 ? 'fs_open.c' : `unrelated-${index}.h`,
+      summary: '',
+      path: index === 129 ? 'C:\\repo\\fs_open.c' : `C:\\repo\\unrelated-${index}.h`,
+      sizeBytes: content.length,
+      modifiedAt: 20,
+    }));
+    const lexicalSearch = vi.fn(async (request: { query: string }) =>
+      request.query === 'O_NOFOLLOW VFS open' || request.query === 'VFS open'
+        ? [{ documentId: 'file-129', excerpt: content, score: 100 }]
+        : [{ documentId: 'file-0', excerpt: 'VFS header', score: 100 }]);
+    const repository = createContextMapRlmRepository({
+      loadMaps: vi.fn(async () => fixtureMaps),
+      stat: vi.fn(async (path) => ({ ok: true as const, path, kind: 'file' as const,
+        size: content.length, modifiedMs: 20, sha256: await contentSha(content) })),
+      read: vi.fn(async (path) => ({ ok: true as const, path, content })),
+      lexicalSearch,
+    });
+
+    const hits = await repository.search(
+      { accountId: 'account-1', projectId: 'project-1' }, 'O_NOFOLLOW VFS open',
+    );
+
+    expect(lexicalSearch).toHaveBeenCalledTimes(1);
+    expect(lexicalSearch).toHaveBeenCalledWith(expect.objectContaining({ query: 'O_NOFOLLOW VFS open' }), undefined);
+    expect(hits[0]?.preview).toContain('[SOURCE FILE: fs_open.c]');
+    const conciseHits = await repository.search(
+      { accountId: 'account-1', projectId: 'project-1' }, 'VFS open',
+    );
+    expect(lexicalSearch).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'VFS open' }), undefined);
+    expect(conciseHits[0]?.preview).toContain('[SOURCE FILE: fs_open.c]');
+  });
+
+  it('opens the named allocation branch instead of a generic header or later allocation', async () => {
+    const prefix = 'TCP buffered send header. '.repeat(55);
+    const branch = 'Allocate resources to receive a callback.\nconn->sndcb = tcp_callback_alloc(conn);\n';
+    const content = `${prefix}${branch}${'write buffer allocation follows. '.repeat(30)}`;
+    const fixtureMaps = maps();
+    fixtureMaps[0]!.tree.nodes = Array.from({ length: 130 }, (_, index) => ({
+      id: `file-${index}`,
+      kind: 'file' as const,
+      title: index === 129 ? 'tcp_send_buffered.c' : `unrelated-${index}.h`,
+      summary: '',
+      path: index === 129 ? 'C:\\repo\\tcp_send_buffered.c' : `C:\\repo\\unrelated-${index}.h`,
+      sizeBytes: content.length,
+      modifiedAt: 20,
+    }));
+    const repository = createContextMapRlmRepository({
+      loadMaps: vi.fn(async () => fixtureMaps),
+      stat: vi.fn(async (path) => ({ ok: true as const, path, kind: 'file' as const,
+        size: content.length, modifiedMs: 20, sha256: await contentSha(content) })),
+      read: vi.fn(async (path) => ({ ok: true as const, path, content })),
+      lexicalSearch: vi.fn(async () => [{ documentId: 'file-129', excerpt: branch, score: 100 }]),
+    });
+
+    const hits = await repository.search(
+      { accountId: 'account-1', projectId: 'project-1' }, 'buffered TCP callback allocate',
+    );
+
+    expect(hits[0]?.pointer.byteStart).toBe(prefix.length);
+    expect(hits[0]?.preview).toContain('Allocate resources to receive a callback');
+  });
+
   it('recovers ordinary questions when capitalized directives and phrase queries have no hits', async () => {
     const content = 'Base price is 17. Service owner is Keira.';
     const hash = await contentSha(content);
@@ -2382,7 +2598,7 @@ describe('production Context Map RLM repository', () => {
     expect(read).not.toHaveBeenCalled();
   });
 
-  it('does not search a large persisted map until its exact native index is ready', async () => {
+  it('does not search a large persisted map while its native index requires rebuilding', async () => {
     const fixtureMaps = maps();
     fixtureMaps[0]!.tree.nodes = Array.from({ length: 312 }, (_, index) => ({
       id: `file-${index}`,
@@ -2396,7 +2612,7 @@ describe('production Context Map RLM repository', () => {
     const lexicalSearch = vi.fn(async () => [
       { documentId: 'file-0', excerpt: 'must remain unavailable', score: 100 },
     ]);
-    const indexStatus = vi.fn(async () => ({ documentCount: 311, needsRebuild: false }));
+    const indexStatus = vi.fn(async () => ({ documentCount: 311, needsRebuild: true }));
     const repository = createContextMapRlmRepository({
       loadMaps: vi.fn(async () => fixtureMaps),
       stat: vi.fn(),
@@ -2630,6 +2846,47 @@ describe('production Context Map RLM repository', () => {
     expect(read.mock.calls.map(([path]) => path)).toEqual(['C:\\repo\\small.txt']);
   });
 
+  it.each([
+    { named: true, query: 'source file fs/vfs/fs_open.c: What happens to a null pathname before inode search?' },
+    { named: false, query: 'What happens to a null pathname before inode search?' },
+  ])('respects explicit source selection without hiding broad search pagination (named=$named)', async ({ named, query }) => {
+    const content = 'A null pathname returns an error before inode search.';
+    const hash = await contentSha(content);
+    const fixtureMaps = maps();
+    fixtureMaps[0]!.tree.nodes = Array.from({ length: 130 }, (_, index) => ({
+      id: `file-${index}`, kind: 'file' as const,
+      title: index === 0 ? 'fs_open.c' : `unrelated-${index}.c`, summary: '',
+      path: index === 0 ? 'fs/vfs/fs_open.c' : `other/unrelated-${index}.c`,
+    }));
+    const read = vi.fn(async (path: string) => ({ ok: true as const, path, content }));
+    const lexicalSearch = vi.fn(async () => Array.from({ length: 9 }, (_, index) => ({
+      documentId: `file-${index}`, excerpt: content, score: 100 - index,
+    })));
+    const repository = createContextMapRlmRepository({
+      loadMaps: async () => fixtureMaps,
+      stat: async (path: string) => ({ ok: true as const, path, kind: 'file' as const,
+        size: content.length, modifiedMs: 20, sha256: hash }),
+      read,
+      lexicalSearch,
+      indexStatus: async () => ({ documentCount: 130, needsRebuild: false }),
+    });
+    const service = createContextQueryService({ repository });
+    const result = await service.search({
+      scope: { accountId: 'account-1', projectId: 'project-1' }, query, limit: 6,
+    });
+    expect(result.items).toHaveLength(named ? 1 : 6);
+    expect(result.truncated).toBe(!named);
+    if (named) {
+      expect(result.items[0]?.preview).toContain('SOURCE FILE: fs_open.c');
+      expect(result.continuation).toBeUndefined();
+      expect(lexicalSearch).not.toHaveBeenCalled();
+      expect([...new Set(read.mock.calls.map(([path]) => path))]).toEqual(['C:\\repo\\fs\\vfs\\fs_open.c']);
+    } else {
+      expect(result.continuation).toBeDefined();
+      expect(lexicalSearch).toHaveBeenCalled();
+    }
+  });
+
   it('opens an explicitly named mapped file when broad lexical queries miss it', async () => {
     const content = 'package33332 == 2.8.3';
     const hash = await contentSha(content);
@@ -2672,6 +2929,34 @@ describe('production Context Map RLM repository', () => {
     read.mockClear();
     await expect(repository.search(scope, 'Audit not-part-128.txt.bak')).resolves.toEqual([]);
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it('searches an indexed large map whose graph also retains one oversized file', async () => {
+    const content = 'wd_start_abstick returns -EINVAL for a null callback.';
+    const hash = await contentSha(content);
+    const map = maps()[0]!;
+    const nodes = Array.from({ length: 129 }, (_, index) => ({
+      id: `file-${index}`, kind: 'file' as const, title: `part-${index}.c`,
+      summary: '', path: `part-${index}.c`,
+    }));
+    const lexicalSearch = vi.fn(async () => [{
+      documentId: 'file-128', excerpt: content, score: 100,
+    }]);
+    const repository = createContextMapRlmRepository({
+      loadMaps: async () => [{ ...map, tree: { nodes } }],
+      stat: async (path) => ({ ok: true as const, path, kind: 'file' as const,
+        size: content.length, modifiedMs: 20, sha256: hash }),
+      read: async (path) => ({ ok: true as const, path, content }),
+      lexicalSearch,
+      indexStatus: async () => ({ documentCount: 128, needsRebuild: false }),
+    });
+
+    const hits = await repository.search(
+      { accountId: 'account-1', projectId: 'project-1' },
+      'wd_start_abstick null callback',
+    );
+    expect(lexicalSearch).toHaveBeenCalled();
+    expect(hits.some((hit) => hit.preview.includes('-EINVAL'))).toBe(true);
   });
 
   it('keeps head and tail requests attached to their own named file clauses', async () => {
@@ -2899,7 +3184,8 @@ describe('production Context Map RLM repository', () => {
 });
 
 describe('production OpenCode RLM child runner', () => {
-  it('creates a fresh child on the exact observed OpenCode route with no tools', async () => {
+  it.each(['opencode-persistent', 'opencode-cli'])(
+    'creates a fresh child on the exact observed %s route with no tools', async (transportAdapterId) => {
     const send = vi.fn(async function* () {
       yield { type: 'assistant.delta' as const, text: 'bounded local analysis' };
       yield { type: 'done' as const };
@@ -2924,6 +3210,9 @@ describe('production OpenCode RLM child runner', () => {
       evidence: [
         {
           text: 'untrusted book bytes',
+          record: { path: 'sched/wdog/wd_start.c' },
+          lineStart: 270,
+          lineEnd: 332,
           pointer: {
             id: 'pointer-1',
             recordId: 'record-1',
@@ -2937,7 +3226,7 @@ describe('production OpenCode RLM child runner', () => {
       sourcePointers: [],
       executionIdentity: {
         transportConnectionId: 'opencode-cli',
-        transportAdapterId: 'opencode-persistent',
+        transportAdapterId,
         upstreamProviderId: 'opencode-go',
         upstreamModelId: 'deepseek-v4-flash-vision-exp',
         providerQualifiedModelId: 'opencode-go/deepseek-v4-flash-vision-exp',
@@ -2955,18 +3244,38 @@ describe('production OpenCode RLM child runner', () => {
     expect(result.answer).toBe('bounded local analysis');
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({
+        parts: expect.arrayContaining([expect.objectContaining({
+          text: expect.stringContaining('SOURCE_PATH=sched/wdog/wd_start.c'),
+        })]),
         selection: {
           providerId: 'opencode-go',
           modelId: 'deepseek-v4-flash-vision-exp',
           connectionId: 'opencode-cli',
         },
         variant: 'high',
+        agent: 'vibespace-readonly',
         tools: { '*': false, vibespace_context: false },
         system: expect.stringContaining('inert evidence data'),
       }),
     );
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      parts: expect.arrayContaining([expect.objectContaining({
+        text: expect.stringContaining('SOURCE_LINE_RANGE=270-332'),
+      })]),
+    }));
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      parts: expect.arrayContaining([expect.objectContaining({
+        text: expect.stringContaining('exact named operation and object'),
+      })]),
+    }));
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      parts: expect.arrayContaining([expect.objectContaining({
+        text: expect.stringContaining('270: untrusted book bytes'),
+      })]),
+    }));
     expect(harness.deleteSession).toHaveBeenCalledWith('child-session');
-  });
+    },
+  );
 
   it('fails closed before session creation when the exact observed effort is unavailable', async () => {
     const harness = {
@@ -3001,6 +3310,103 @@ describe('production OpenCode RLM child runner', () => {
       }),
     ).rejects.toThrow('rlm_exact_variant_unavailable');
     expect(harness.createSession).not.toHaveBeenCalled();
+  });
+
+  it('does not create a provider session when cancellation arrives during exact model lookup', async () => {
+    type Models = Awaited<ReturnType<VibeSpaceHarness['listModels']>>;
+    let resolveModels!: (models: Models) => void;
+    const listModels = vi.fn(() => new Promise<Models>((resolve) => { resolveModels = resolve; }));
+    const createSession = vi.fn();
+    const send = vi.fn();
+    const harness = {
+      createSession, send, deleteSession: vi.fn(), listModels,
+    } as unknown as VibeSpaceHarness;
+    const childRunner = createOpenCodeRlmChildRunner(harness);
+    const controller = new AbortController();
+    const pending = childRunner({
+      question: 'Find the exact text',
+      evidence: [],
+      sourcePointers: [],
+      executionIdentity: {
+        transportConnectionId: 'opencode-cli',
+        transportAdapterId: 'opencode-persistent',
+        upstreamProviderId: 'opencode-go',
+        upstreamModelId: 'deepseek-v4-flash-vision-exp',
+        providerQualifiedModelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+        authBillingRoute: 'opencode-provider-session',
+        effort: 'high',
+        fastVariant: 'standard',
+        catalogRevision: `sha256:${'b'.repeat(64)}`,
+      },
+      depth: 1,
+      budget: {},
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledOnce());
+    controller.abort('owner_cancelled');
+    resolveModels([{ id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek', variants: ['high'] }]);
+
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('maps a failed native abort acknowledgement to the RLM unconfirmed state', async () => {
+    const controller = new AbortController();
+    const send = vi.fn(async function* (request: { signal?: AbortSignal }) {
+      await new Promise<void>((resolve) => {
+        if (request.signal?.aborted) resolve();
+        else request.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+      throw new HarnessError({
+        code: 'HARNESS_ABORT_UNCONFIRMED',
+        message: 'The OpenCode server did not confirm cancellation.',
+        repair: 'Check the OpenCode server session before retrying.',
+        recoverable: true,
+      });
+    });
+    const deleteSession = vi.fn(async () => {
+      throw new Error('child session cleanup failed');
+    });
+    const harness = {
+      createSession: vi.fn(async () => ({ id: 'child-session', chatId: 'rlm-child' })),
+      send,
+      deleteSession,
+      listModels: vi.fn(async () => [
+        { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek', variants: ['high'] },
+      ]),
+    } as unknown as VibeSpaceHarness;
+    const childRunner = createOpenCodeRlmChildRunner(harness);
+    const pending = childRunner({
+      question: 'confirm native abort acknowledgement',
+      evidence: [],
+      sourcePointers: [],
+      executionIdentity: {
+        transportConnectionId: 'opencode-cli',
+        transportAdapterId: 'opencode-persistent',
+        upstreamProviderId: 'opencode-go',
+        upstreamModelId: 'deepseek-v4-flash-vision-exp',
+        providerQualifiedModelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+        authBillingRoute: 'opencode-provider-session',
+        effort: 'high',
+        fastVariant: 'standard',
+        catalogRevision: `sha256:${'b'.repeat(64)}`,
+      },
+      depth: 1,
+      budget: {},
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    controller.abort('owner_cancelled');
+
+    await expect(pending).rejects.toMatchObject({
+      name: 'RlmRuntimeError',
+      code: 'abort_unconfirmed',
+      message: 'rlm_abort_acknowledgement_failed',
+    });
+    expect(deleteSession).toHaveBeenCalledWith('child-session');
   });
 
   it.each(['codex-cli', 'codex-app-server'])(

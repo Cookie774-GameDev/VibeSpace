@@ -59,6 +59,23 @@ const harnessPermissionPart: Extract<Part, { kind: 'permission_request' }> = {
   },
 };
 
+function codexPermissionPart(
+  availableDecisions: readonly ('accept' | 'acceptForSession' | 'decline' | 'cancel')[],
+) {
+  return {
+    ...harnessPermissionPart,
+    request: {
+      ...harnessPermissionPart.request,
+      id: 'codex-approval-test',
+      harness: {
+        ...harnessPermissionPart.request.harness!,
+        approvalId: 'codex-approval-test',
+        availableDecisions,
+      },
+    },
+  } satisfies Extract<Part, { kind: 'permission_request' }>;
+}
+
 describe('PermissionRequestCard', () => {
   it('reconciles a passive exact native acknowledgment without sending another decision', async () => {
     persist(harnessPermissionPart);
@@ -356,5 +373,48 @@ describe('PermissionRequestCard', () => {
         ],
       }),
     );
+  });
+
+  it('hides Deny when decline is not offered and sends the distinct offered cancel choice', async () => {
+    const part = codexPermissionPart(['accept', 'cancel']);
+    persist(part);
+    render(<PermissionRequestCard part={part} messageId={'msg_1' as never} chatId="chat_1" />);
+
+    expect(screen.queryByRole('button', { name: /^Deny$/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+
+    await waitFor(() =>
+      expect(repo.respondToApproval).toHaveBeenCalledWith({
+        sessionId: 'session-1',
+        approvalId: 'codex-approval-test',
+        response: 'cancel',
+        route: part.request.harness,
+      }),
+    );
+    expect(repo.update).toHaveBeenCalledWith(
+      'msg_1',
+      expect.objectContaining({
+        parts: [expect.objectContaining({ request: expect.objectContaining({ status: 'cancelled' }) })],
+      }),
+    );
+  });
+
+  it('hides Deny and Cancel when neither choice was offered', () => {
+    const part = codexPermissionPart(['accept']);
+    persist(part);
+    render(<PermissionRequestCard part={part} messageId={'msg_1' as never} chatId="chat_1" />);
+
+    expect(screen.queryByRole('button', { name: /^Deny$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Cancel$/i })).toBeNull();
+    expect(repo.respondToApproval).not.toHaveBeenCalled();
+  });
+
+  it('shows Deny only when decline is offered', () => {
+    const part = codexPermissionPart(['accept', 'decline']);
+    persist(part);
+    render(<PermissionRequestCard part={part} messageId={'msg_1' as never} chatId="chat_1" />);
+
+    expect(screen.getByRole('button', { name: /^Deny$/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Cancel$/i })).toBeNull();
   });
 });

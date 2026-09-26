@@ -192,6 +192,37 @@ describe('canvas import and export', () => {
     expect(new TextDecoder().decode(presentation.bytes)).toContain('/Count 2');
   });
 
+  it('paginates long standard PDF exports instead of clipping items below the page', () => {
+    let document = createCanvasDocument({
+      id: 'long-pdf-export',
+      projectId: 'project-1',
+      ownerId: 'owner-1',
+      now: 1,
+      title: 'Long PDF export',
+    });
+    for (let index = 0; index < 40; index += 1) {
+      document = withBlockAdded(
+        document,
+        createCanvasBlock({
+          id: `pdf-line-${index + 1}`,
+          now: index + 2,
+          content: {
+            kind: 'note',
+            text: index === 0 ? `Visible item 1 ${'x'.repeat(120)}` : `Visible item ${index + 1}`,
+          },
+        }),
+        index + 2,
+      );
+    }
+
+    const pdfText = new TextDecoder().decode(exportCanvas(document, { format: 'pdf' }).bytes);
+
+    expect(pdfText).toMatch(/\/Count 2\b/u);
+    expect(pdfText).toContain('(Visible item 40) Tj');
+    expect(pdfText).toContain(`(${'x'.repeat(96)}) Tj`);
+    expect(pdfText).toContain(`(${'x'.repeat(24)}) Tj`);
+  });
+
   it('fits the whole Canvas placement inside a padded PNG export frame', () => {
     let document = createCanvasDocument({
       id: 'visual-export-layout',

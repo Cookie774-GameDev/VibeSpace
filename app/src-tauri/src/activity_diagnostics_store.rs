@@ -8,14 +8,44 @@ use std::time::Instant;
 pub const ACTIVITY_DIAGNOSTIC_SCHEMA_VERSION: u8 = 2;
 pub const ACTIVITY_DIAGNOSTIC_MAX_BATCH_EVENTS: usize = 64;
 pub const ACTIVITY_DIAGNOSTIC_FIELDS: &[&str] = &[
-    "sequence", "operationId", "kind", "phase", "observedAt", "monotonicMs",
-    "durationMs", "requestId", "chatId", "sessionId", "callId", "runId",
-    "publicationRevision", "coalescedRevisions", "uiCommitMs", "nativeSequence",
-    "nativeHandoffWallUs", "nativeHandoffMonotonicUs", "rendererReceivedAt",
-    "rendererReceivedMonotonicMs", "provider", "model", "tool", "operation",
-    "eventType", "resultCode", "runtimeGeneration", "nativeProcessId", "rendererSentAt",
-    "rendererSentMonotonicMs", "clockRoundTripMs", "clockUncertaintyMs", "outcome", "completeness",
-    "hasContinuation", "returnedItems", "returnedChars", "diagnosticTruncated",
+    "sequence",
+    "operationId",
+    "kind",
+    "phase",
+    "observedAt",
+    "monotonicMs",
+    "durationMs",
+    "requestId",
+    "chatId",
+    "sessionId",
+    "callId",
+    "runId",
+    "publicationRevision",
+    "coalescedRevisions",
+    "uiCommitMs",
+    "nativeSequence",
+    "nativeHandoffWallUs",
+    "nativeHandoffMonotonicUs",
+    "rendererReceivedAt",
+    "rendererReceivedMonotonicMs",
+    "provider",
+    "model",
+    "tool",
+    "operation",
+    "eventType",
+    "resultCode",
+    "runtimeGeneration",
+    "nativeProcessId",
+    "rendererSentAt",
+    "rendererSentMonotonicMs",
+    "clockRoundTripMs",
+    "clockUncertaintyMs",
+    "outcome",
+    "completeness",
+    "hasContinuation",
+    "returnedItems",
+    "returnedChars",
+    "diagnosticTruncated",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -65,6 +95,33 @@ pub struct ActivityDiagnosticBatch {
 pub struct DiagnosticReceipt {
     accepted: usize,
     path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexStderrCategory {
+    Empty,
+    Unavailable,
+    Authentication,
+    RateLimit,
+    Network,
+    Permission,
+    Configuration,
+    Other,
+}
+
+impl CodexStderrCategory {
+    fn result_code(self) -> &'static str {
+        match self {
+            Self::Empty => "stderr_empty",
+            Self::Unavailable => "stderr_unavailable",
+            Self::Authentication => "stderr_authentication",
+            Self::RateLimit => "stderr_rate_limit",
+            Self::Network => "stderr_network",
+            Self::Permission => "stderr_permission",
+            Self::Configuration => "stderr_configuration",
+            Self::Other => "stderr_other",
+        }
+    }
 }
 fn valid_identifier(value: &str) -> bool {
     if value.is_empty() || value.len() > 256 || !value.as_bytes()[0].is_ascii_alphanumeric() {
@@ -116,7 +173,9 @@ fn validate_batch(batch: &ActivityDiagnosticBatch) -> Result<(), String> {
             let valid = match key.as_str() {
                 "operationId" | "kind" | "phase" | "requestId" | "chatId" | "sessionId"
                 | "runId" | "callId" | "provider" | "model" | "tool" | "operation"
-                | "eventType" | "resultCode" | "runtimeGeneration" => value.as_str().is_some_and(valid_identifier),
+                | "eventType" | "resultCode" | "runtimeGeneration" => {
+                    value.as_str().is_some_and(valid_identifier)
+                }
                 "sequence"
                 | "returnedItems"
                 | "returnedChars"
@@ -137,11 +196,9 @@ fn validate_batch(batch: &ActivityDiagnosticBatch) -> Result<(), String> {
                 | "rendererSentAt"
                 | "rendererSentMonotonicMs"
                 | "clockRoundTripMs"
-                | "clockUncertaintyMs" => value
-                    .as_f64()
-                    .is_some_and(|number| {
-                        number.is_finite() && (0.0..=9_007_199_254_740_991.0).contains(&number)
-                    }),
+                | "clockUncertaintyMs" => value.as_f64().is_some_and(|number| {
+                    number.is_finite() && (0.0..=9_007_199_254_740_991.0).contains(&number)
+                }),
                 "outcome" => value.as_str().is_some_and(|value| {
                     matches!(
                         value,
@@ -257,6 +314,39 @@ pub fn append_batch_at(
         accepted,
         path: paths[0].to_string_lossy().into_owned(),
     })
+}
+
+pub fn append_codex_start_stderr_diagnostic_at(
+    directory: &Path,
+    model_id: &str,
+    category: CodexStderrCategory,
+) -> Result<DiagnosticReceipt, String> {
+    if !valid_identifier(model_id) {
+        return Err("diagnostics_invalid_metadata".into());
+    }
+    let wall_us = native_wall_us()?;
+    let observed_at = wall_us as f64 / 1_000.0;
+    let batch = ActivityDiagnosticBatch {
+        schema_version: ACTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
+        renderer_instance: "native-codex".to_string(),
+        dropped_total: 0,
+        failed_batches: 0,
+        events: vec![serde_json::json!({
+            "sequence": wall_us / 1_000,
+            "operationId": format!("codex-start-{}", wall_us),
+            "kind": "codex-app-server",
+            "phase": "failed",
+            "observedAt": observed_at,
+            "monotonicMs": native_monotonic_us() as f64 / 1_000.0,
+            "provider": "openai",
+            "model": model_id,
+            "eventType": "stderr-diagnostic",
+            "resultCode": category.result_code(),
+            "outcome": "failure",
+            "completeness": "complete"
+        })],
+    };
+    append_batch_at(directory, batch, 8 * 1024 * 1024)
 }
 
 #[cfg(test)]
@@ -375,6 +465,33 @@ mod tests {
                 assert_eq!(value["batch"]["schemaVersion"], 2);
             }
         }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn codex_stderr_diagnostic_persists_only_allowlisted_metadata() {
+        let root = std::env::var_os("VIBESPACE_DIAGNOSTICS_TEST_ROOT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let directory = root.join(format!("codex-stderr-diagnostic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+
+        let receipt = append_codex_start_stderr_diagnostic_at(
+            &directory,
+            "gpt-6-luna",
+            CodexStderrCategory::Authentication,
+        )
+        .unwrap();
+        assert_eq!(receipt.accepted, 1);
+        let persisted = std::fs::read_to_string(&receipt.path).unwrap();
+        let value: Value = serde_json::from_str(persisted.trim()).unwrap();
+        let event = &value["batch"]["events"][0];
+        assert_eq!(event["eventType"], "stderr-diagnostic");
+        assert_eq!(event["resultCode"], "stderr_authentication");
+        assert_eq!(event["model"], "gpt-6-luna");
+        assert_eq!(event["outcome"], "failure");
+        assert!(event.get("stderr").is_none());
+        assert!(event.get("prompt").is_none());
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

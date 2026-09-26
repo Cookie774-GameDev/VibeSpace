@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Bot, Check, ChevronDown, ClipboardList, HelpCircle, type LucideIcon } from 'lucide-react';
+import { Bot, Check, ChevronDown, ClipboardList, HelpCircle, ShieldCheck, ShieldAlert, type LucideIcon } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui';
 import { useThemeMotionTransition } from '@/features/appearance/themeMotion';
 import { cn } from '@/lib/utils';
@@ -218,24 +218,60 @@ export function ModeIndicator({
 
         <div
           ref={optionSetRef}
-          className="space-y-1 p-2"
+          className="max-h-[min(50vh,320px)] space-y-1 overflow-y-auto overscroll-contain p-2"
           role="listbox"
           aria-label={agentStep ? 'Agent access' : 'Chat modes'}
           onKeyDown={handleOptionSetKeyDown}
         >
           <AnimatePresence initial={false}>
-            {agentStep ? AGENT_APPROVAL_OPTIONS.map((option) => (
-              <button key={option.id} type="button" role="option"
-                aria-selected={readAgentApprovalMode(chatId ?? '') === option.id}
-                data-option-id={option.id}
-                tabIndex={focusedOptionId === option.id ? 0 : -1}
-                onFocus={() => setFocusedOptionId(option.id)}
-                onClick={() => pick('agent', option.id)}
-                className="block w-full rounded-xl border border-transparent px-2.5 py-2 text-left hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-                <span className="block text-[12px] font-semibold">{option.label}</span>
-                <span className="mt-0.5 block text-[11px] text-muted-foreground">{option.description}</span>
-              </button>
-            )) : PERMISSION_MODE_OPTIONS.map((option) => {
+            {agentStep ? AGENT_APPROVAL_OPTIONS.map((option) => {
+              const selected = readAgentApprovalMode(chatId ?? '') === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  data-option-id={option.id}
+                  tabIndex={focusedOptionId === option.id ? 0 : -1}
+                  onFocus={() => setFocusedOptionId(option.id)}
+                  onClick={() => pick('agent', option.id)}
+                  className={cn(
+                    'block w-full rounded-xl border px-2.5 py-2 text-left transition-colors',
+                    'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                    selected
+                      ? 'border-accent-cyan/45 bg-accent-cyan/10'
+                      : 'border-transparent',
+                  )}
+                >
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="flex min-w-0 items-center gap-2 text-[12px] font-semibold">
+                      {option.id === 'full' ? (
+                        <ShieldCheck
+                          className="h-4 w-4 shrink-0 text-emerald-500"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <ShieldAlert
+                          className="h-4 w-4 shrink-0 text-amber-500"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span className="truncate">{option.label}</span>
+                    </span>
+                    {selected && (
+                      <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-background/50 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-foreground/80">
+                        <Check className="h-2.5 w-2.5" />
+                        Active
+                      </span>
+                    )}
+                  </span>
+                  <span className="mt-0.5 block pl-6 text-[11px] text-muted-foreground">
+                    {option.description}
+                  </span>
+                </button>
+              );
+            }) : PERMISSION_MODE_OPTIONS.map((option) => {
               const OptionIcon = MODE_ICONS[option.id];
               const optionAccent = ACCENT[option.accent];
               const selected = option.id === mode;

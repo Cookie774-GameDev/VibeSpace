@@ -698,7 +698,20 @@ describe('canonical OpenCode AI routing', () => {
     warn.mockRestore();
   });
 
-  it('routes an exact local connection through OpenCode without native provider fallback', async () => {
+  it('blocks an explicit OpenCode cloud connection while offline', async () => {
+    useAuthStore.setState({ offlineMode: true });
+
+    await expect(runAgent({
+      agent: openaiAgent,
+      connectionId: 'opencode-cli',
+      messages: [{ role: 'user', content: 'hello' }],
+    })).rejects.toThrow('No model selected. Choose a model before sending.');
+
+    expect(openCodeSend).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('routes an exact local connection through OpenCode with offlineMode=%s', async (offlineMode) => {
+    useAuthStore.setState({ offlineMode });
     const localAgent: Agent = {
       ...jarvis,
       id: 'agent_local' as Agent['id'],

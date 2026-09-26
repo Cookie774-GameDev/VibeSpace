@@ -46,7 +46,6 @@ const TERMINAL_COMMANDS = new Set([
   'terminal.clear',
   'terminal.stop',
   'terminal.close',
-  'terminal.run_saved_command',
   'terminal.cancel_queued',
   'agent.message',
   'agent.broadcast',

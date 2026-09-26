@@ -568,6 +568,7 @@ describe('production tool gateway dependencies', () => {
         projectId: 'project-a',
         worktreeId: 'C:\\work\\project\\.worktrees\\feature',
       }),
+      undefined,
     );
     dispose();
   });
@@ -648,6 +649,85 @@ describe('production tool gateway dependencies', () => {
     });
     expect(execute).not.toHaveBeenCalled();
     ask.mockRestore();
+    dispose();
+  });
+
+  it('routes explicit investigate through the installed recursive RLM port with observed identity and cancellation', async () => {
+    const authority = captureToolGatewayAuthorityClaim()!;
+    expect(bindToolGatewayObservedExecutionAuthority('session-1', authority, {
+      executionIdentity: observedIdentity,
+      performance: 'quality',
+    })).toBe(true);
+    const result = Object.freeze({ answer: 'Grounded answer', citations: Object.freeze([]),
+      trace: Object.freeze({ mode: 'rlm', usage: { subcalls: 1 } }) });
+    const execute = vi.fn(async () => result);
+    const dispose = installToolGatewayRlmContextPort({ execute });
+    const ask = vi.spyOn(productionContextGateway, 'ask');
+    const signal = new AbortController().signal;
+    const args = { operation: 'investigate', query: 'Trace the active mapped source.' };
+
+    await expect(Promise.resolve(createProductionToolGatewayDependencies().context.rlm(args, {
+      requestId: 'request-rlm-investigate', sessionId: 'session-1', messageId: 'message-1',
+      directory: 'C:\\work\\project', worktree: 'C:\\work\\project\\.worktrees\\feature',
+      mutationApproved: false, signal,
+    }))).resolves.toBe(result);
+    expect(execute).toHaveBeenCalledWith(args, expect.objectContaining({
+      sessionId: 'session-1', accountId: 'account-a', projectId: 'project-a',
+      worktreeId: 'C:\\work\\project\\.worktrees\\feature', executionIdentity: observedIdentity,
+    }), signal);
+    expect(ask).not.toHaveBeenCalled();
+    ask.mockRestore();
+    dispose();
+  });
+
+  it('passes only investigate inputs accepted by the recursive port when the tool supplies search display limits', async () => {
+    const authority = captureToolGatewayAuthorityClaim()!;
+    expect(bindToolGatewayObservedExecutionAuthority('session-1', authority, {
+      executionIdentity: observedIdentity,
+      performance: 'quality',
+    })).toBe(true);
+    const execute = vi.fn(async () => ({ answer: 'Grounded answer' }));
+    const dispose = installToolGatewayRlmContextPort({ execute });
+
+    await createProductionToolGatewayDependencies().context.rlm(
+      { operation: 'investigate', query: 'Trace mapped source.', limit: 10, maxBytes: 12_000 },
+      {
+        requestId: 'request-investigate-display-limits', sessionId: 'session-1', messageId: 'message-1',
+        directory: 'C:\\work\\project', mutationApproved: false,
+      },
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      { operation: 'investigate', query: 'Trace mapped source.' },
+      expect.objectContaining({ executionIdentity: observedIdentity }),
+      undefined,
+    );
+    dispose();
+  });
+
+  it('projects recursive trace onto the provider-safe result while preserving usage and citations', async () => {
+    const authority = captureToolGatewayAuthorityClaim()!;
+    expect(bindToolGatewayObservedExecutionAuthority('session-1', authority, {
+      executionIdentity: observedIdentity, performance: 'quality',
+    })).toBe(true);
+    const citation = { id: 'ptr:rlm:record:0:12', recordId: 'record', byteStart: 0,
+      byteEnd: 12, sourceVersion: 'sha256:' + 'a'.repeat(64), contentHash: 'a'.repeat(64) };
+    const execute = vi.fn(async () => ({ answer: 'Grounded answer', citations: [citation], trace: {
+      mode: 'rlm', events: [{ type: 'child_completed', at: 1, depth: 1 }],
+      usage: { subcalls: 1, toolCalls: 2, openBytes: 12, maxDepthReached: 1 },
+      budget: { maxInputTokens: 8192, maxOutputTokens: 2048 }, budgetExhausted: false,
+    } }));
+    const dispose = installToolGatewayRlmContextPort({ execute });
+
+    const result = await createProductionToolGatewayDependencies().context.rlm(
+      { operation: 'investigate', query: 'Trace mapped source.' },
+      { requestId: 'request-investigate-safe-trace', sessionId: 'session-1',
+        messageId: 'message-1', directory: 'C:\\work\\project', mutationApproved: false },
+    );
+
+    expect(result).toMatchObject({ answer: 'Grounded answer', citations: [citation],
+      trace: { mode: 'rlm', usage: { subcalls: 1 }, events: [{ type: 'child_completed' }] } });
+    expect((result as { trace: Record<string, unknown> }).trace).not.toHaveProperty('budget');
     dispose();
   });
 
@@ -732,7 +812,7 @@ describe('production tool gateway dependencies', () => {
     await expect(
       Promise.resolve(
         createProductionToolGatewayDependencies().context.rlm(
-          { operation: 'investigate', query: 'Ground this answer in the active project.' },
+          { operation: 'query', query: 'Ground this answer in the active project.' },
           {
             requestId: 'request-main-checkout',
             sessionId: 'session-1',
@@ -755,7 +835,7 @@ describe('production tool gateway dependencies', () => {
     ask.mockRestore();
   });
 
-  it('routes the generated-schema investigate alias through the shared Gateway', async () => {
+  it('adds canonical provenance to the shared Gateway query route', async () => {
     const authority = captureToolGatewayAuthorityClaim()!;
     expect(
       bindToolGatewayObservedExecutionAuthority('session-1', authority, {
@@ -792,7 +872,7 @@ describe('production tool gateway dependencies', () => {
 
     const result = await Promise.resolve(
       createProductionToolGatewayDependencies().context.rlm(
-        { operation: 'investigate', query: 'Trace the cross-source decision.' },
+        { operation: 'query', query: 'Trace the cross-source decision.' },
         {
           requestId: 'request-investigate',
           sessionId: 'session-1',
@@ -839,7 +919,7 @@ describe('production tool gateway dependencies', () => {
         question: 'Trace the cross-source decision.',
         executionIdentity: observedIdentity,
         performance: 'quality',
-        userIntent: { context: true, deep: true },
+        userIntent: { context: true },
       }),
     );
     expect(execute).not.toHaveBeenCalled();

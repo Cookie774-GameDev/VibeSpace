@@ -76,7 +76,6 @@ import { getExplicitTerminalBlock } from '@/lib/ai/context';
 import { formatUserTime } from '@/lib/timeFormat';
 import { PRESET_ACTIONS } from './registryPresets';
 import { APP_CONTROL_ACTIONS } from './registryAppControl';
-import { FILE_ACTIONS } from './registryFiles';
 import {
   buildJarvisScheduleEventInput,
   scheduleActionSummary,
@@ -1679,7 +1678,7 @@ const PRODUCTIVITY_ACTIONS: ActionDef[] = [
         label: 'Workflow steps JSON',
         type: 'string',
         required: true,
-        help: 'JSON array of steps like [{"action":"nav.terminal","params":{}},{"action":"terminal.run","params":{"command":"npm test"}}]. Built-in actions only.',
+        help: 'JSON array of steps like [{"action":"nav.chat","params":{}},{"action":"settings.open","params":{}}]. Built-in actions only.',
       },
       {
         key: 'description',
@@ -1730,7 +1729,6 @@ export function getBuiltinActions(): ActionDef[] {
     ...SETTINGS_ACTIONS,
     ...THEME_ACTIONS,
     ...VOICE_ACTIONS,
-    ...FILE_ACTIONS,
     ...TERMINAL_ACTIONS,
     ...SCHEDULE_ACTIONS,
     ...CHAT_ACTIONS,
@@ -1742,8 +1740,17 @@ export function getBuiltinActions(): ActionDef[] {
     ...APP_CONTROL_ACTIONS,
     ...PRESET_ACTIONS,
   ];
-  const byId = new Map(baseActions.map((action) => [action.id, action]));
-  return [...baseActions, ...createJarvisCoreActions((id) => byId.get(id))];
+  const internalById = new Map(baseActions.map((action) => [action.id, action]));
+  const hiddenActionIds = new Set([
+    'files.read',
+    'files.create',
+    'files.edit',
+    'terminal.run',
+    'terminal.powershell',
+    'custom.createTerminalCommand',
+  ]);
+  const exposedActions = baseActions.filter((action) => !hiddenActionIds.has(action.id));
+  return [...exposedActions, ...createJarvisCoreActions((id) => internalById.get(id))];
 }
 
 /**

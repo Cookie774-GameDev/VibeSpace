@@ -21,6 +21,49 @@ const manifest: PluginManifest = {
 };
 
 describe('plugin runtime contract', () => {
+  it.each([
+    ['connecting', 'not-connected'],
+    ['awaiting_approval', 'not-connected'],
+    ['reauthorize', 'setup-required'],
+    ['expired', 'setup-required'],
+    ['error', 'unhealthy'],
+    ['needs_setup', 'setup-required'],
+    ['not_connected', 'not-connected'],
+  ] as const)('reports %s without claiming healthy execution', (state, expected) => {
+    for (const enabled of [true, false]) {
+      usePluginStore.setState({ connectionsByAccount: { 'account-a': { example: {
+        accountId: 'account-a', pluginId: 'example', state, enabled,
+        enabledProjectIds: ['*'], configuredFields: ['token'], updatedAt: 1,
+      } } } });
+      expect(getPluginRuntimeContract('account-a', manifest).health.state).toBe(expected);
+    }
+  });
+
+  it.each(['accountId', 'pluginId'] as const)('ignores mismatched %s metadata in an account bucket', (field) => {
+    usePluginStore.setState({ connectionsByAccount: { 'account-a': { example: {
+      accountId: 'account-a', pluginId: 'example', state: 'connected', enabled: true,
+      enabledProjectIds: ['*'], configuredFields: ['token'], updatedAt: 1, [field]: 'other',
+    } } } });
+    const contract = getPluginRuntimeContract('account-a', manifest);
+    expect(contract.health.state).toBe('not-connected');
+    expect(contract.setup.missingFields).toEqual(['token']);
+  });
+
+  it('never marks invalid persisted lifecycle or enabled values healthy', () => {
+    for (const corrupt of [{ state: 'invented' }, { state: undefined }, { enabled: 'false' }]) {
+      usePluginStore.setState({ connectionsByAccount: { 'account-a': { example: {
+        accountId: 'account-a', pluginId: 'example', state: 'connected', enabled: true,
+        enabledProjectIds: ['*'], configuredFields: ['token'], updatedAt: 1, ...corrupt,
+      } as never } } });
+      expect(getPluginRuntimeContract('account-a', manifest).health.state).not.toBe('healthy');
+    }
+  });
+  it.each([undefined, null, '', ' ', ' account-a', 'account-a '])(
+    'keeps missing or noncanonical account %s disconnected', (accountId) => {
+      expect(getPluginRuntimeContract(accountId as never, manifest).health.state).toBe('not-connected');
+    },
+  );
+
   it('requires an exact account-owned connection and exposes only human management actions', () => {
     const connection = {
       accountId: 'account-a',

@@ -33,6 +33,49 @@ async function tauriInvoke<T = unknown>(cmd: string, args?: Record<string, unkno
   return invoke<T>(cmd, args);
 }
 
+export type RelayActiveContext = Readonly<{
+  accountId: string;
+  workspaceId: string | null;
+  projectId: string;
+  chatId: string;
+}>;
+
+type RelayActiveContextOwner = Readonly<{ ownerHandle: string }>;
+
+/** Opens a native-owned mirror of the selected Workbench scope. It grants no Relay authority. */
+export async function openRelayActiveContext(): Promise<RelayActiveContextOwner | null> {
+  if (!isTauri) return null;
+  return tauriInvoke<RelayActiveContextOwner>('relay_active_context_open');
+}
+
+/** Mirrors current selection into native state; this is cache data, never authorization. */
+export async function updateRelayActiveContext(
+  ownerHandle: string,
+  revision: number,
+  context: RelayActiveContext | null,
+): Promise<void> {
+  if (!isTauri) return;
+  await tauriInvoke('relay_active_context_update', { ownerHandle, revision, context });
+}
+
+export async function closeRelayActiveContext(
+  ownerHandle: string,
+  revision: number,
+): Promise<void> {
+  if (!isTauri) return;
+  await tauriInvoke('relay_active_context_close', { ownerHandle, revision });
+}
+
+export type RelayActiveContextSnapshot = Readonly<{
+  generation: number;
+  context: RelayActiveContext | null;
+}>;
+
+export async function getRelayActiveContext(): Promise<RelayActiveContextSnapshot | null> {
+  if (!isTauri) return null;
+  return tauriInvoke<RelayActiveContextSnapshot>('relay_active_context_snapshot');
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Notifications                                                             */
 /* -------------------------------------------------------------------------- */

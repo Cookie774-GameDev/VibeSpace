@@ -1,4 +1,4 @@
-import type { JevClient } from '@/lib/jev/contracts';
+import { JevClientError, type JevClient } from '@/lib/jev/contracts';
 import { buildCaoCandidateMessages } from './candidateMessages';
 import { interpretJevSentinelEvaluation, CAO_SENTINEL_QUESTIONS } from './jevDecision';
 import { decideCaoSentinelAction } from './sentinelPolicy';
@@ -22,7 +22,21 @@ type SentinelResult = Readonly<{
   candidateDispatch?: CaoCandidateDispatchResult;
 }>;
 
-function unavailableObservation(snapshot: CaoTargetSnapshot, now: number): CaoSentinelObservation {
+export type CaoSentinelDecisionReceipt = Readonly<{
+  missionId: string;
+  targetId: string;
+  targetRevision: number;
+  observedAt: number;
+  trigger: CaoSentinelTrigger;
+  action: CaoSentinelDecision['action'];
+  reasonCode: string;
+}>;
+
+function unavailableObservation(
+  snapshot: CaoTargetSnapshot,
+  now: number,
+  reasonCode = 'jev_unavailable',
+): CaoSentinelObservation {
   return Object.freeze({
     missionId: snapshot.missionId,
     targetId: snapshot.targetId,
@@ -36,17 +50,48 @@ function unavailableObservation(snapshot: CaoTargetSnapshot, now: number): CaoSe
     needsMainCaoProbability: 0,
     offTrackProbability: 0,
     doneWithoutProofProbability: 0,
-    reasonCode: 'jev_unavailable',
+    reasonCode,
   });
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    (error as { name?: unknown }).name === 'AbortError'
+  );
+}
+
+function assertNotAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  if (signal.reason !== undefined) throw signal.reason;
+  const error = new Error('The operation was aborted');
+  error.name = 'AbortError';
+  throw error;
+}
+
+function jevFailureReason(error: unknown): string {
+  if (error instanceof JevClientError) {
+    if (error.code === 'transport_timeout') return 'jev_timeout';
+    if (error.code === 'response_invalid') return 'jev_invalid_result';
+    if (error.code === 'request_invalid') return 'jev_invalid_request';
+  }
+  if (error instanceof Error && error.message === 'jev_sentinel_answer_invalid') {
+    return 'jev_invalid_result';
+  }
+  return 'jev_unavailable';
 }
 
 export function createCaoSentinelRuntime(input: {
   jev: Pick<JevClient, 'evaluate'>;
+  signal?: AbortSignal;
   now?: () => number;
   onObservation?: (
     observation: CaoSentinelObservation,
     trigger: CaoSentinelTrigger,
   ) => Promise<void> | void;
+  onDecisionReceipt?: (receipt: CaoSentinelDecisionReceipt) => Promise<void> | void;
   onWake?: (packet: CaoWakePacket) => Promise<void> | void;
   onCandidate?: (
     candidate: CaoCandidateMessage,
@@ -68,15 +113,19 @@ export function createCaoSentinelRuntime(input: {
       snapshot: CaoTargetSnapshot,
       trigger: CaoSentinelTrigger,
     ): Promise<SentinelResult> {
+      assertNotAborted(input.signal);
       let observation: CaoSentinelObservation;
       try {
         const evaluation = await input.jev.evaluate({
           state: snapshot,
           questions: CAO_SENTINEL_QUESTIONS,
+          ...(input.signal ? { signal: input.signal } : {}),
         });
+        assertNotAborted(input.signal);
         observation = interpretJevSentinelEvaluation(snapshot, evaluation);
-      } catch {
-        observation = unavailableObservation(snapshot, now());
+      } catch (error) {
+        if (input.signal?.aborted || isAbortError(error)) throw error;
+        observation = unavailableObservation(snapshot, now(), jevFailureReason(error));
       }
       const key = `${snapshot.missionId}:${snapshot.targetId}`;
       const candidates = buildCaoCandidateMessages(snapshot, observation);
@@ -87,6 +136,7 @@ export function createCaoSentinelRuntime(input: {
         });
       }
       await input.onObservation?.(observation, trigger);
+      assertNotAborted(input.signal);
       const decision = decideCaoSentinelAction({
         snapshot,
         observation,
@@ -111,6 +161,7 @@ export function createCaoSentinelRuntime(input: {
             reasonCode: 'candidate_authority_unavailable',
           });
         } else {
+          assertNotAborted(input.signal);
           const candidateKey = `${key}:${candidate.id}`;
           if (
             previousCandidateKeys.get(key) === candidate.id ||
@@ -154,6 +205,7 @@ export function createCaoSentinelRuntime(input: {
         }
       }
       if (decision.action === 'wake_main_cao') {
+        assertNotAborted(input.signal);
         const packet = buildCaoWakePacket(snapshot, observation, observation.observedAt);
         const wakeKey = decision.wakeKey ?? packet.key;
         const dispatchKey = `${key}:${wakeKey}`;
@@ -168,12 +220,24 @@ export function createCaoSentinelRuntime(input: {
           wake = packet;
           try {
             await input.onWake?.(packet);
+            assertNotAborted(input.signal);
             if (decision.wakeKey) previousWakeKeys.set(key, decision.wakeKey);
           } finally {
             pendingWakeKeys.delete(dispatchKey);
           }
         }
       }
+      await input.onDecisionReceipt?.(
+        Object.freeze({
+          missionId: observation.missionId,
+          targetId: observation.targetId,
+          targetRevision: observation.targetRevision,
+          observedAt: observation.observedAt,
+          trigger,
+          action: finalDecision.action,
+          reasonCode: finalDecision.reasonCode.slice(0, 64),
+        }),
+      );
       return Object.freeze({
         observation,
         decision: finalDecision,

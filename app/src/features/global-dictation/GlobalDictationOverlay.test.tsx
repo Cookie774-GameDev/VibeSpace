@@ -45,6 +45,7 @@ import { resolve } from 'node:path';
 
 type SessionCallbacks = {
   onOpen?: () => void;
+  onStatus?: (message: string) => void;
   onPartial?: (text: string) => void;
   onFinal?: (text: string) => void;
   onError?: (message: string) => void;
@@ -99,6 +100,7 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     vi.clearAllMocks();
     tauriMocks.tauriListeners.clear();
     tauriMocks.invoke.mockResolvedValue(undefined);
+    tauriMocks.windowApi.hide.mockResolvedValue(undefined);
   });
 
   it('renders contained visual evidence without native listeners or speech startup', async () => {
@@ -135,6 +137,23 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     expect(screen.getByText('Built-in speech recognition')).toBeTruthy();
     // The OS dictation command is NEVER part of the overlay path.
     expect(tauriMocks.invoke).not.toHaveBeenCalledWith('trigger_os_dictation');
+  });
+
+  it('shows fallback status in the status text without sending it to paste', async () => {
+    let callbacks: SessionCallbacks | null = null;
+    sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
+      callbacks = cb;
+      return fakeSession('');
+    });
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+
+    await act(async () => {
+      callbacks?.onStatus?.('Recording locally with Whisper; press Space to finish.');
+    });
+
+    expect(screen.getByRole('status').textContent).toContain('Recording locally with Whisper');
+    expect(tauriMocks.invoke).not.toHaveBeenCalledWith('dictation_paste_text', expect.anything());
   });
 
   it('reads speech settings changed in the main window before opening the hidden-window session', async () => {
@@ -419,6 +438,56 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     expect(tauriMocks.invoke).toHaveBeenCalledWith('dictation_cancel');
     expect(tauriMocks.windowApi.hide).toHaveBeenCalled();
     expect(tauriMocks.invoke).not.toHaveBeenCalledWith('dictation_paste_text', expect.anything());
+  });
+
+  it('offers a visible theme-aware Close action on right-click and cancels the take', async () => {
+    const session = fakeSession('discard this take');
+    sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
+      cb.onOpen?.();
+      return session;
+    });
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+
+    const panel = screen.getByLabelText('VibeSpace Dictation — drag to move');
+    fireEvent.contextMenu(panel);
+    const close = screen.getByRole('button', { name: 'Close dictation menu' });
+    expect(close.getAttribute('class')).toContain('text-foreground');
+    expect(close.closest('.sr-only')).toBeNull();
+    await act(async () => {
+      fireEvent.click(close);
+      await Promise.resolve();
+    });
+
+    expect(session.cancel).toHaveBeenCalledOnce();
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('dictation_cancel');
+    expect(tauriMocks.windowApi.hide).toHaveBeenCalled();
+  });
+
+  it('retries a transient native hide failure when closing the panel', async () => {
+    tauriMocks.windowApi.hide.mockRejectedValueOnce(new Error('Window busy'));
+    render(<GlobalDictationOverlay />);
+    fireEvent.contextMenu(screen.getByLabelText('VibeSpace Dictation — drag to move'));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Close dictation menu' }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(tauriMocks.windowApi.hide).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps Close available with an error when native hide fails twice', async () => {
+    tauriMocks.windowApi.hide.mockRejectedValueOnce(new Error('busy'));
+    tauriMocks.windowApi.hide.mockRejectedValueOnce(new Error('still busy'));
+    render(<GlobalDictationOverlay />);
+    fireEvent.contextMenu(screen.getByLabelText('VibeSpace Dictation — drag to move'));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Close dictation menu' }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/Could not close dictation/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Close dictation menu' })).toBeTruthy();
   });
 
   it('Space confirms once, but does not double-handle the native Ctrl+Space shortcut', async () => {

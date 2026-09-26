@@ -46,6 +46,7 @@ import type {
   ProviderConnection,
   ProviderEvent,
   ProviderRequest,
+  ProviderLiveTurnControl,
   UsageSnapshot,
 } from './adapters/types';
 import { CONNECTION_MODEL_OPTIONS, getProviderConnectionDescriptor } from './adapters/catalog';
@@ -391,6 +392,10 @@ export interface RunAgentRequest {
   explicitReadRoot?: boolean;
   explicitReadSynthesis?: boolean;
   expectedSessionId?: string;
+  nativeQueuedSubmission?: import('./adapters/types').ProviderRequest['nativeQueuedSubmission'];
+  codexSkills?: import('./adapters/types').ProviderRequest['codexSkills'];
+  nativeSkillRefs?: ProviderRequest['nativeSkillRefs'];
+  onCodexSkillsChanged?: import('./adapters/types').ProviderRequest['onCodexSkillsChanged'];
   compiledPrompt?: Readonly<CompiledJarvisPrompt>;
   requestId?: string;
   chatId?: string;
@@ -408,11 +413,13 @@ export interface RunAgentRequest {
   approveAllForRun?: boolean;
   tools?: Readonly<Record<string, boolean>>;
   onApprovalRequested?: (approval: VibeSpaceApproval) => void | Promise<void>;
+  onLiveTurnControl?: (control: ProviderLiveTurnControl | null) => void;
   onHarnessSessionBound?: (binding: {
     sessionId: string;
     parentSessionId?: string;
   }) => void | Promise<void>;
   onQuestionRequested?: (projection: Readonly<OpenCodeQuestionProjection>) => void | Promise<void>;
+  onQuestionResolved?: (resolution: Readonly<{ requestId: string; sessionId: string }>) => void | Promise<void>;
   /** Ordered, request-local, privacy-safe OpenCode tool lifecycle evidence for Chat UI receipts. */
   onToolActivity?: (
     activity: Readonly<{
@@ -599,6 +606,9 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
     workingDirectory: req.workingDirectory,
     sessionId: req.expectedSessionId,
     expectedSessionId: req.expectedSessionId,
+    nativeQueuedSubmission: req.nativeQueuedSubmission,
+    codexSkills: req.codexSkills,
+    onCodexSkillsChanged: req.onCodexSkillsChanged,
     runtimeSettings: req.runtimeSettings,
     interactionMode: req.interactionMode,
     accessLevel: req.accessLevel,
@@ -607,6 +617,7 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
     tools: req.tools,
     signal: req.signal,
     onApprovalRequested: req.onApprovalRequested,
+    onLiveTurnControl: req.onLiveTurnControl,
   };
   const iterator = codexPersistentAdapter.send(providerRequest)[Symbol.asyncIterator]();
   try {
@@ -678,6 +689,11 @@ async function executePersistentCodex(req: Readonly<RunAgentRequest>): Promise<L
           throw new Error('provider_question_handler_missing');
         }
         await req.onQuestionRequested(projection);
+      } else if (event.type === 'question-resolved') {
+        if (!sessionId || event.sessionId !== sessionId) {
+          throw new Error('provider_question_session_mismatch');
+        }
+        await req.onQuestionResolved?.({ requestId: event.requestId, sessionId: event.sessionId });
       } else if (event.type === 'tool') {
         await publishTool(event);
       } else if (event.type === 'tool_output') {
@@ -793,11 +809,7 @@ function resolveOpenCodeSelection(req: Readonly<RunAgentRequest>): OpenCodeSelec
     const connection = getProviderConnectionDescriptor(req.connectionId);
     if (!connection.enabled)
       throw new Error(`Provider connection is disabled: ${req.connectionId}`);
-    if (
-      auth.offlineMode &&
-      connection.mode !== 'local' &&
-      connection.adapterId !== 'opencode-cli'
-    ) {
+    if (auth.offlineMode && connection.mode !== 'local') {
       throw new NoModelSelectedError();
     }
     assertConnectionCapabilities(connection, req.connectionRequirements);
@@ -977,6 +989,7 @@ async function executePersistentOpenCode(
           .map((message) => `${message.role}: ${llmContentToText(message.content)}`).join('\n\n')
         : undefined,
       reasoningEffort: variant,
+      nativeSkillRefs: req.nativeSkillRefs,
       systemPrompt: req.compiledPrompt?.systemText ?? req.agent.system_prompt,
       workingDirectory: req.workingDirectory,
       explicitReadRoot: req.explicitReadRoot === true,
@@ -1553,7 +1566,9 @@ async function runFoundryDispatch(req: RunAgentRequest): Promise<LLMResponse> {
   if (req.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
   const llmReq: LLMRequest = {
     purpose: req.purpose ?? 'chat',
-    agent: req.agent,
+    agent: req.compiledPrompt
+      ? { ...req.agent, system_prompt: req.compiledPrompt.systemText }
+      : req.agent,
     messages: req.messages,
     signal: req.signal,
     onChunk: req.onChunk,

@@ -15,6 +15,7 @@ import {
   type FsListResult,
   type FsReadResult,
 } from '@/lib/fs';
+import { ponytailAuditRaw, ponytailRawSkill } from '@/lib/ai/ponytail';
 import { parseFrontmatter } from './parseFrontmatter';
 
 export type SkillManifestSource = 'builtin' | 'project' | 'user';
@@ -101,11 +102,29 @@ const SEVERITY_ORDER: Record<NonNullable<SkillManifest['severity']>, number> = {
 
 /* Vite glob: project-relative paths under app/.jarvis/. Eager so the data is
  * synchronously available the first time `loadAllSkills` is awaited. */
-const SKILL_FILES = import.meta.glob(['/.jarvis/skills/*.md', '/.jarvis/skills/*/SKILL.md'], {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>;
+const EMBEDDED_SKILL_FILES = import.meta.glob(
+  ['/.jarvis/skills/*.md', '/.jarvis/skills/*/SKILL.md'],
+  {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  },
+) as Record<string, string>;
+
+const INSTALLED_PONYTAIL_SKILL_PATHS = new Set([
+  '/.jarvis/skills/ponytail/SKILL.md',
+  '/.jarvis/skills/ponytail-audit/SKILL.md',
+]);
+
+const SKILL_FILES: Record<string, string> = {
+  ...Object.fromEntries(
+    Object.entries(EMBEDDED_SKILL_FILES).filter(
+      ([filePath]) => !INSTALLED_PONYTAIL_SKILL_PATHS.has(filePath),
+    ),
+  ),
+  '/third_party/ponytail/skills/ponytail/SKILL.md': ponytailRawSkill,
+  '/third_party/ponytail/skills/ponytail-audit/SKILL.md': ponytailAuditRaw,
+};
 
 const AGENT_FILES = import.meta.glob('/.jarvis/agents/*.md', {
   query: '?raw',
@@ -141,6 +160,23 @@ function fileBaseName(filePath: string): string {
   return last.replace(/\.md$/i, '');
 }
 
+function embeddedDescription(raw: string, parsed: unknown): string | undefined {
+  if (typeof parsed !== 'string') return undefined;
+  if (!/^[>|][+-]?$/u.test(parsed.trim())) return parsed;
+
+  // The bundled Ponytail audit uses the common folded YAML description form.
+  // Keep the shared frontmatter parser small and fold only this embedded scalar.
+  const normalized = raw.replace(/\r\n/gu, '\n');
+  const match = normalized.match(
+    /^description:\s*[>|][+-]?\s*\n((?:[ \t]+[^\n]*(?:\n|$))+)/mu,
+  );
+  return match?.[1]
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
 function manifestFromRaw(
   filePath: string,
   raw: string,
@@ -163,7 +199,7 @@ function manifestFromRaw(
 
   return {
     name: typeof meta.name === 'string' ? meta.name : fallbackName,
-    description: typeof meta.description === 'string' ? meta.description : undefined,
+    description: embeddedDescription(raw, meta.description),
     title:
       typeof meta.title === 'string'
         ? meta.title

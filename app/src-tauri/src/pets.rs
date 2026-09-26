@@ -25,8 +25,12 @@ const PANEL_MIN_H: f64 = 360.0;
 
 fn restored_panel_size(width: Option<f64>, height: Option<f64>) -> (f64, f64) {
     (
-        width.filter(|value| value.is_finite() && (PANEL_MIN_W..=4000.0).contains(value)).unwrap_or(PANEL_DEFAULT_W),
-        height.filter(|value| value.is_finite() && (PANEL_MIN_H..=4000.0).contains(value)).unwrap_or(PANEL_DEFAULT_H),
+        width
+            .filter(|value| value.is_finite() && (PANEL_MIN_W..=4000.0).contains(value))
+            .unwrap_or(PANEL_DEFAULT_W),
+        height
+            .filter(|value| value.is_finite() && (PANEL_MIN_H..=4000.0).contains(value))
+            .unwrap_or(PANEL_DEFAULT_H),
     )
 }
 const MAIN_NAV_EXCLUSION_LOGICAL_W: f64 = 240.0;
@@ -884,10 +888,19 @@ fn strip_pet_native_frame_ex_style(ex_style: isize) -> isize {
 fn install_pet_client_only_frame(hwnd: windows::Win32::Foundation::HWND) {
     use windows::Win32::{
         Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-        UI::{Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
-            WindowsAndMessaging::{WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCPAINT}},
+        UI::{
+            Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+            WindowsAndMessaging::{WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCPAINT},
+        },
     };
-    unsafe extern "system" fn frame_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, id: usize, _: usize) -> LRESULT {
+    unsafe extern "system" fn frame_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        id: usize,
+        _: usize,
+    ) -> LRESULT {
         match message {
             WM_NCCALCSIZE | WM_NCPAINT => LRESULT(0),
             WM_NCACTIVATE => LRESULT(1),
@@ -908,9 +921,9 @@ fn install_pet_client_only_frame(hwnd: windows::Win32::Foundation::HWND) {
 fn native_restore_pet_window_chrome(hwnd: windows::Win32::Foundation::HWND) {
     use windows::core::w;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetPropW, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, WS_THICKFRAME,
-        IsIconic, ShowWindow, SW_RESTORE,
-        SET_WINDOW_POS_FLAGS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOCOPYBITS,
+        GetPropW, GetWindowLongPtrW, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+        GWL_EXSTYLE, GWL_STYLE, SET_WINDOW_POS_FLAGS, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+        SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SW_RESTORE, WS_THICKFRAME,
     };
 
     unsafe {
@@ -923,8 +936,8 @@ fn native_restore_pet_window_chrome(hwnd: windows::Win32::Foundation::HWND) {
         // Keep Windows' sizing behavior on the panel. The client-only subclass
         // removes its painted frame without disabling native edge resizing.
         let panel = GetPropW(hwnd, w!("VibeSpace.PetPanel")).0 == hwnd.0;
-        let repaired_style = strip_pet_native_frame_style(style)
-            | if panel { WS_THICKFRAME.0 as isize } else { 0 };
+        let repaired_style =
+            strip_pet_native_frame_style(style) | if panel { WS_THICKFRAME.0 as isize } else { 0 };
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let repaired_ex_style = strip_pet_native_frame_ex_style(ex_style);
         if repaired_style == style && repaired_ex_style == ex_style {
@@ -982,14 +995,28 @@ fn native_pin_hwnd_topmost_noactivate(win: &WebviewWindow) {
 // Keep the overlay caption empty; identify it with a process-owned HWND property
 // instead of displaying an internal window title above the character.
 #[cfg(target_os = "windows")]
-fn set_pet_native_caption(hwnd: windows::Win32::Foundation::HWND, overlay: bool, title: &str) -> bool {
+fn set_pet_native_caption(
+    hwnd: windows::Win32::Foundation::HWND,
+    overlay: bool,
+    title: &str,
+) -> bool {
     use windows::core::{w, PCWSTR};
-    use windows::Win32::{Foundation::HANDLE, UI::WindowsAndMessaging::{SetPropW, SetWindowTextW}};
-    let property = if overlay { w!("VibeSpace.PetOverlay") } else { w!("VibeSpace.PetPanel") };
+    use windows::Win32::{
+        Foundation::HANDLE,
+        UI::WindowsAndMessaging::{SetPropW, SetWindowTextW},
+    };
+    let property = if overlay {
+        w!("VibeSpace.PetOverlay")
+    } else {
+        w!("VibeSpace.PetPanel")
+    };
     if unsafe { SetPropW(hwnd, property, Some(HANDLE(hwnd.0))) }.is_err() {
         return false;
     }
-    let caption: Vec<u16> = (if overlay { "" } else { title }).encode_utf16().chain(Some(0)).collect();
+    let caption: Vec<u16> = (if overlay { "" } else { title })
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
     unsafe { SetWindowTextW(hwnd, PCWSTR(caption.as_ptr())) }.is_ok()
 }
 
@@ -997,8 +1024,7 @@ fn set_pet_native_caption(hwnd: windows::Win32::Foundation::HWND, overlay: bool,
 fn native_show_pet_window(win: &WebviewWindow, title: &str, focus: bool) -> bool {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsWindowVisible, SetForegroundWindow, ShowWindow, SW_SHOW,
-        SW_SHOWNOACTIVATE,
+        IsWindowVisible, SetForegroundWindow, ShowWindow, SW_SHOW, SW_SHOWNOACTIVATE,
     };
     let Ok(raw) = win.hwnd() else { return false };
     let hwnd = HWND(raw.0 as *mut _);
@@ -1092,8 +1118,8 @@ fn native_configure_pet_window(
 ) -> Option<isize> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IsWindowVisible, SetForegroundWindow, SetWindowPos, HWND_TOPMOST,
-        SWP_NOACTIVATE, SWP_SHOWWINDOW,
+        IsWindowVisible, SetForegroundWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE,
+        SWP_SHOWWINDOW,
     };
     let Ok(raw) = win.hwnd() else { return None };
     let hwnd = HWND(raw.0 as *mut _);
@@ -1129,9 +1155,14 @@ fn native_show_pet_window(win: &WebviewWindow, _title: &str, _focus: bool) -> bo
 fn native_pet_hwnds(label: &str) -> Vec<windows::Win32::Foundation::HWND> {
     use windows::core::{w, BOOL, PCWSTR};
     use windows::Win32::Foundation::{HWND, LPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetPropW, GetWindowThreadProcessId};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetPropW, GetWindowThreadProcessId,
+    };
 
-    struct Lookup { property: PCWSTR, windows: Vec<HWND> }
+    struct Lookup {
+        property: PCWSTR,
+        windows: Vec<HWND>,
+    }
     unsafe extern "system" fn visit(hwnd: HWND, data: LPARAM) -> BOOL {
         let lookup = unsafe { &mut *(data.0 as *mut Lookup) };
         let mut process_id = 0;
@@ -1139,7 +1170,8 @@ fn native_pet_hwnds(label: &str) -> Vec<windows::Win32::Foundation::HWND> {
             GetWindowThreadProcessId(hwnd, Some(&mut process_id));
         }
         if process_id == std::process::id()
-            && unsafe { GetPropW(hwnd, lookup.property) }.0 == hwnd.0 {
+            && unsafe { GetPropW(hwnd, lookup.property) }.0 == hwnd.0
+        {
             lookup.windows.push(hwnd);
         }
         true.into()
@@ -1149,7 +1181,10 @@ fn native_pet_hwnds(label: &str) -> Vec<windows::Win32::Foundation::HWND> {
         PET_MINI_PANEL_LABEL => w!("VibeSpace.PetPanel"),
         _ => return Vec::new(),
     };
-    let mut lookup = Lookup { property, windows: Vec::new() };
+    let mut lookup = Lookup {
+        property,
+        windows: Vec::new(),
+    };
     // Never ask window procedures for captions from a focus callback. Native
     // properties identify our surfaces without a synchronous window message.
     let _ = unsafe { EnumWindows(Some(visit), LPARAM((&mut lookup as *mut Lookup) as isize)) };
@@ -1264,12 +1299,17 @@ fn pet_window_should_stay_topmost(win: &WebviewWindow) -> bool {
 #[cfg(target_os = "windows")]
 fn native_pin_visible_pet_hwnds() {
     static PINNING: AtomicBool = AtomicBool::new(false);
-    if PINNING.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+    if PINNING
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
         return;
     }
     struct PinGuard;
     impl Drop for PinGuard {
-        fn drop(&mut self) { PINNING.store(false, Ordering::Release); }
+        fn drop(&mut self) {
+            PINNING.store(false, Ordering::Release);
+        }
     }
     // Focus notifications can re-enter while the watchdog changes native
     // window position. Coalesce them instead of recursively repairing frames.
@@ -2294,7 +2334,9 @@ fn open_or_focus_pet_panel_blocking(
     let follow_anchor = if panel_mode == PetPanelMode::FollowPet {
         // Drag/show/display recovery already records physical coordinates.
         // Do not wait on the window event loop while holding geometry state.
-        near_x.zip(near_y).or_else(|| geo.overlay_x.zip(geo.overlay_y))
+        near_x
+            .zip(near_y)
+            .or_else(|| geo.overlay_x.zip(geo.overlay_y))
     } else {
         None
     };
@@ -2358,7 +2400,10 @@ fn open_or_focus_pet_panel_blocking(
         geo.panel_h = Some(h);
         save_geometry(&app, &geo);
         drop(geo);
-        *state.panel_open.lock().map_err(|_| "panel_state_unavailable")? = true;
+        *state
+            .panel_open
+            .lock()
+            .map_err(|_| "panel_state_unavailable")? = true;
         return Ok(PetPanelOpenResult::visible_and_focused(created));
     }
 
@@ -2417,7 +2462,10 @@ fn open_or_focus_pet_panel_blocking(
         geo.panel_monitor_name = monitor_name;
         save_geometry(&app, &geo);
         drop(geo);
-        *state.panel_open.lock().map_err(|_| "panel_state_unavailable")? = true;
+        *state
+            .panel_open
+            .lock()
+            .map_err(|_| "panel_state_unavailable")? = true;
 
         // Intentionally do not hide pet-overlay here — JS confirm-then-hide.
         Ok(PetPanelOpenResult::visible_and_focused(created))
@@ -2512,8 +2560,12 @@ pub async fn pet_hide_panel(app: AppHandle) -> Result<(), String> {
             // A minimized window reports its tiny caption rectangle. Never
             // persist that rectangle as the next full panel's geometry.
             let geometry = if !win.is_minimized().unwrap_or(true) {
-                win.outer_position().ok().zip(win.outer_size().ok())
-                    .filter(|(_, size)| size.width as f64 >= PANEL_MIN_W && size.height as f64 >= PANEL_MIN_H)
+                win.outer_position()
+                    .ok()
+                    .zip(win.outer_size().ok())
+                    .filter(|(_, size)| {
+                        size.width as f64 >= PANEL_MIN_W && size.height as f64 >= PANEL_MIN_H
+                    })
             } else {
                 None
             };
@@ -2601,9 +2653,18 @@ pub fn pet_validate_action(action: String) -> Result<bool, String> {
 mod tests {
     #[test]
     fn panel_restore_rejects_minimized_or_invalid_dimensions() {
-        assert_eq!(super::restored_panel_size(Some(159.0), Some(27.0)), (430.0, 560.0));
-        assert_eq!(super::restored_panel_size(Some(f64::NAN), Some(f64::INFINITY)), (430.0, 560.0));
-        assert_eq!(super::restored_panel_size(Some(800.0), Some(650.0)), (800.0, 650.0));
+        assert_eq!(
+            super::restored_panel_size(Some(159.0), Some(27.0)),
+            (430.0, 560.0)
+        );
+        assert_eq!(
+            super::restored_panel_size(Some(f64::NAN), Some(f64::INFINITY)),
+            (430.0, 560.0)
+        );
+        assert_eq!(
+            super::restored_panel_size(Some(800.0), Some(650.0)),
+            (800.0, 650.0)
+        );
         assert_eq!(super::restored_panel_size(None, None), (430.0, 560.0));
     }
     use super::*;
@@ -3135,9 +3196,46 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn overlay_caption_is_empty_and_lookup_requires_our_window_property() {
-        use windows::{core::w, Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, GetWindowTextW, IsIconic, WS_POPUP, WS_MINIMIZE}};
-        let tagged = unsafe { CreateWindowExW(Default::default(), w!("STATIC"), w!("old pet title"), WS_POPUP | WS_MINIMIZE, -32000, -32000, 144, 144, None, None, None, None) }.unwrap();
-        let unrelated = unsafe { CreateWindowExW(Default::default(), w!("STATIC"), w!(""), WS_POPUP, 0, 0, 144, 144, None, None, None, None) }.unwrap();
+        use windows::{
+            core::w,
+            Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, GetWindowTextW, IsIconic, WS_MINIMIZE, WS_POPUP,
+            },
+        };
+        let tagged = unsafe {
+            CreateWindowExW(
+                Default::default(),
+                w!("STATIC"),
+                w!("old pet title"),
+                WS_POPUP | WS_MINIMIZE,
+                -32000,
+                -32000,
+                144,
+                144,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .unwrap();
+        let unrelated = unsafe {
+            CreateWindowExW(
+                Default::default(),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                144,
+                144,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .unwrap();
         assert!(set_pet_native_caption(tagged, true, "VibeSpace Pet"));
         install_pet_client_only_frame(tagged);
         native_restore_pet_window_chrome(tagged);
@@ -3151,7 +3249,10 @@ mod tests {
         let matches = native_pet_hwnds(PET_OVERLAY_LABEL);
         let tagged_found = matches.contains(&tagged);
         let unrelated_found = matches.contains(&unrelated);
-        unsafe { let _ = DestroyWindow(tagged); let _ = DestroyWindow(unrelated); }
+        unsafe {
+            let _ = DestroyWindow(tagged);
+            let _ = DestroyWindow(unrelated);
+        }
         assert!(tagged_found);
         assert!(!unrelated_found);
     }
@@ -3199,14 +3300,30 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn panel_keeps_native_resize_style_without_a_painted_frame() {
-        use windows::{core::w, Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
-            GetWindowRect, GWL_STYLE, WS_POPUP, WS_THICKFRAME,
-        }};
+        use windows::{
+            core::w,
+            Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, GetClientRect, GetWindowLongPtrW, GetWindowRect,
+                GWL_STYLE, WS_POPUP, WS_THICKFRAME,
+            },
+        };
         let panel = unsafe {
-            CreateWindowExW(Default::default(), w!("STATIC"), w!("panel"), WS_POPUP,
-                -32000, -32000, 240, 180, None, None, None, None)
-        }.unwrap();
+            CreateWindowExW(
+                Default::default(),
+                w!("STATIC"),
+                w!("panel"),
+                WS_POPUP,
+                -32000,
+                -32000,
+                240,
+                180,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .unwrap();
         assert!(set_pet_native_caption(panel, false, "VibeSpace Pet Panel"));
         install_pet_client_only_frame(panel);
         native_restore_pet_window_chrome(panel);
@@ -3227,39 +3344,80 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn minimized_panel_restores_its_normal_window_state() {
-        use windows::{core::w, Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, DestroyWindow, IsIconic, ShowWindow, SW_MINIMIZE, WS_POPUP,
-        }};
+        use windows::{
+            core::w,
+            Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, IsIconic, ShowWindow, SW_MINIMIZE, WS_POPUP,
+            },
+        };
         let panel = unsafe {
-            CreateWindowExW(Default::default(), w!("STATIC"), w!("panel"), WS_POPUP,
-                -32000, -32000, 430, 560, None, None, None, None)
-        }.unwrap();
+            CreateWindowExW(
+                Default::default(),
+                w!("STATIC"),
+                w!("panel"),
+                WS_POPUP,
+                -32000,
+                -32000,
+                430,
+                560,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .unwrap();
         assert!(set_pet_native_caption(panel, false, "VibeSpace Pet Panel"));
         install_pet_client_only_frame(panel);
-        unsafe { let _ = ShowWindow(panel, SW_MINIMIZE); }
+        unsafe {
+            let _ = ShowWindow(panel, SW_MINIMIZE);
+        }
         assert!(unsafe { IsIconic(panel).as_bool() });
         native_restore_pet_window_chrome(panel);
         let still_minimized = unsafe { IsIconic(panel).as_bool() };
-        unsafe { let _ = DestroyWindow(panel); }
+        unsafe {
+            let _ = DestroyWindow(panel);
+        }
         assert!(!still_minimized);
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn panel_dismiss_hides_native_shown_window_and_verifies_visibility() {
-        use windows::{core::w, Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, DestroyWindow, IsWindowVisible, ShowWindow, SW_SHOWNOACTIVATE, WS_POPUP,
-        }};
+        use windows::{
+            core::w,
+            Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, IsWindowVisible, ShowWindow, SW_SHOWNOACTIVATE,
+                WS_POPUP,
+            },
+        };
         let panel = unsafe {
-            CreateWindowExW(Default::default(), w!("STATIC"), w!("panel"), WS_POPUP,
-                -32000, -32000, 430, 560, None, None, None, None)
-        }.unwrap();
+            CreateWindowExW(
+                Default::default(),
+                w!("STATIC"),
+                w!("panel"),
+                WS_POPUP,
+                -32000,
+                -32000,
+                430,
+                560,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .unwrap();
         assert!(set_pet_native_caption(panel, false, "VibeSpace Pet Panel"));
-        unsafe { let _ = ShowWindow(panel, SW_SHOWNOACTIVATE); }
+        unsafe {
+            let _ = ShowWindow(panel, SW_SHOWNOACTIVATE);
+        }
         assert!(unsafe { IsWindowVisible(panel).as_bool() });
         let hidden = hide_pet_windows_by_label(PET_MINI_PANEL_LABEL);
         let still_visible = unsafe { IsWindowVisible(panel).as_bool() };
-        unsafe { let _ = DestroyWindow(panel); }
+        unsafe {
+            let _ = DestroyWindow(panel);
+        }
         assert!(hidden.is_ok());
         assert!(!still_visible);
         let source = include_str!("pets.rs");

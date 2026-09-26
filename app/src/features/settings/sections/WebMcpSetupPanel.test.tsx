@@ -25,7 +25,9 @@ it('opens a native mini panel with tutorial tabs instead of an external setup pa
       : undefined,
   );
   render(<DesktopConnectorSetup />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Setup' }));
+  const setupButton = await screen.findByRole('button', { name: 'Setup' });
+  await waitFor(() => expect((setupButton as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(setupButton);
   expect(await screen.findByRole('dialog', { name: 'WebMCP setup' })).toBeTruthy();
   expect(screen.getByRole('tab', { name: 'Tunnel video' })).toBeTruthy();
   expect(screen.getByRole('tab', { name: 'API key video' })).toBeTruthy();

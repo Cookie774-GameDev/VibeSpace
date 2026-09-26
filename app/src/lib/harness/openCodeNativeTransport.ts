@@ -12,6 +12,7 @@ type NativeTransportRoute =
   | { kind: 'config' }
   | { kind: 'config_providers' }
   | { kind: 'command_list' }
+  | { kind: 'skill_list' }
   | { kind: 'provider_auth' }
   | { kind: 'provider_status' }
   | { kind: 'provider_authorize'; providerId: string }
@@ -33,6 +34,7 @@ type NativeTransportRoute =
   | { kind: 'session_messages'; sessionId: string; limit?: number }
   | { kind: 'session_diff'; sessionId: string }
   | { kind: 'session_prompt_async'; sessionId: string }
+  | { kind: 'session_summarize'; sessionId: string }
   | { kind: 'session_command'; sessionId: string }
   | { kind: 'session_abort'; sessionId: string }
   | { kind: 'session_permission'; sessionId: string; permissionId: string }
@@ -124,6 +126,7 @@ function nativeRoute(
   else if (key === 'PATCH /config') route = { kind: 'config' };
   else if (key === 'GET /config/providers') route = { kind: 'config_providers' };
   else if (key === 'GET /command') route = { kind: 'command_list' };
+  else if (key === 'GET /skill') route = { kind: 'skill_list' };
   else if (key === 'GET /provider/auth') route = { kind: 'provider_auth' };
   else if (key === 'GET /provider') route = { kind: 'provider_status' };
   else if (
@@ -173,6 +176,8 @@ function nativeRoute(
     if (segments.length === 2 && method === 'GET') route = { kind: 'session_get', sessionId };
     else if (segments.length === 2 && method === 'DELETE')
       route = { kind: 'session_delete', sessionId };
+    else if (segments.length === 3 && segments[2] === 'summarize' && method === 'POST')
+      route = { kind: 'session_summarize', sessionId };
     else if (segments.length === 3 && segments[2] === 'children' && method === 'GET')
       route = { kind: 'session_children', sessionId };
     else if (segments.length === 3 && segments[2] === 'message' && method === 'GET') {

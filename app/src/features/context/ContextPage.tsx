@@ -117,7 +117,7 @@ import { buildGitHubProjectContextTree } from './githubContextTree';
 import { getStoredContextSourceRoot, setStoredContextSourceRoot } from './contextSourceRoot';
 import { SIYUAN_CONTEXT_VAULT_ENABLED } from './siyuan/siyuanContracts';
 import { normalizeSiyuanFilesystemPath } from './siyuan/siyuanPathAuthority';
-import { SiyuanVaultSurface } from './siyuan/SiyuanVaultSurface';
+import { SiyuanVaultLoading, SiyuanVaultSurface } from './siyuan/SiyuanVaultSurface';
 import {
   assertSiyuanCloudApprovalPreflightReady,
   clearArchivedSiyuanSummaryDocuments,
@@ -250,6 +250,20 @@ function SiyuanIndexProgressCard({
     ),
   );
   const eta = formatSiyuanJobEta(job);
+  const checkpointAgeSeconds = Math.max(0, Math.floor((Date.now() - job.updatedAt) / 1_000));
+  const waitingOnSiyuan = job.status === 'running' && checkpointAgeSeconds >= 30;
+  const progressState =
+    job.status === 'running'
+      ? waitingOnSiyuan
+        ? 'Waiting for SiYuan'
+        : 'Working'
+      : job.status === 'failed'
+        ? 'Failed · repair needed'
+        : job.status === 'paused'
+          ? 'Paused · progress saved'
+          : job.status === 'cancelled'
+            ? 'Cancelled'
+            : 'Complete';
   const elapsed =
     elapsedSeconds < 60
       ? `${elapsedSeconds}s`
@@ -276,6 +290,21 @@ function SiyuanIndexProgressCard({
             ) : null}
             <p className="truncate text-sm font-medium text-foreground">{phaseLabel[job.phase]}</p>
           </div>
+          <p
+            data-testid="siyuan-progress-state"
+            className="mt-1 text-metadata font-medium text-foreground"
+          >
+            {progressState}
+            {job.indexed > 0 && job.phase !== 'discovering'
+              ? ` · ${job.createdNodes.toLocaleString()} of ${job.indexed.toLocaleString()} items saved`
+              : ''}
+          </p>
+          {waitingOnSiyuan ? (
+            <p className="text-metadata text-muted-foreground">
+              Last checkpoint {checkpointAgeSeconds}s ago. SiYuan may still be processing this
+              batch.
+            </p>
+          ) : null}
           <p className="text-metadata text-muted-foreground">
             {job.status === 'paused'
               ? job.pauseReason === 'local_model_unavailable'
@@ -319,7 +348,9 @@ function SiyuanIndexProgressCard({
         label="SiYuan map creation progress"
         detail={`${phaseLabel[job.phase]} · ${job.status}`}
         mode="compact"
+        density="fine"
         paused={job.status !== 'running'}
+        failed={job.status === 'failed'}
         estimated={job.phase !== 'completed'}
       />
       <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-metadata text-muted-foreground sm:grid-cols-4">
@@ -465,7 +496,7 @@ function SiyuanIndexProgressCard({
           ) : null}
           {job.status === 'failed' ? (
             <Button size="sm" variant="secondary" onClick={onRetry}>
-              Retry
+              Redo from checkpoint
             </Button>
           ) : null}
           {job.status === 'failed' || job.status === 'cancelled' ? (
@@ -587,7 +618,7 @@ export function ContextPage() {
   const accessibleSummaryModels = useAccessibleChatModels();
   const setRoute = useUIStore((s) => s.setRoute);
   const [rootDraft, setRootDraft] = React.useState(() =>
-    getStoredContextSourceRoot(accountId, projectId),
+    normalizeSiyuanFilesystemPath(getStoredContextSourceRoot(accountId, projectId)),
   );
   const [maps, setMaps] = React.useState<ContextMapRecord[]>([]);
   const [recovery, setRecovery] = React.useState<ContextRecoverySummary | null>(null);
@@ -625,6 +656,8 @@ export function ContextPage() {
   const [inspectorTab, setInspectorTab] = React.useState<ContextInspectorTabId>('details');
   const [searchQuery, setSearchQuery] = React.useState('');
   const [focusedMap, setFocusedMap] = React.useState(false);
+  const [preparingMapId, setPreparingMapId] = React.useState<string | null>(null);
+  const focusedMapOpenGenerationRef = React.useRef(0);
   const [githubPickerOpen, setGithubPickerOpen] = React.useState(false);
   const [githubInstallationId, setGithubInstallationId] = React.useState('');
   const [githubRepositories, setGithubRepositories] = React.useState<
@@ -677,7 +710,7 @@ export function ContextPage() {
     indexControlRef.current?.resume();
     indexControlRef.current = null;
     generationAbortRef.current = null;
-    setRootDraft(getStoredContextSourceRoot(accountId, projectId));
+    setRootDraft(normalizeSiyuanFilesystemPath(getStoredContextSourceRoot(accountId, projectId)));
     setMaps([]);
     setRecovery(null);
     setSelectedMapId(null);
@@ -1511,7 +1544,11 @@ export function ContextPage() {
         setStatus('SiYuan could not read this Context Map.');
         toast.error(
           'SiYuan Context Map unavailable',
-          error instanceof Error ? error.message : 'Unknown local vault error',
+          error instanceof Error
+            ? error.message
+            : typeof error === 'string' && error.trim()
+              ? error
+              : 'Unknown local vault error',
         );
       })
       .finally(() => {
@@ -1727,13 +1764,23 @@ export function ContextPage() {
 
   const openFocusedMap = React.useCallback(
     async (mapId: string) => {
-      if (!(await selectMap(mapId))) return;
+      const generation = ++focusedMapOpenGenerationRef.current;
       const record = maps.find((map) => map.id === mapId && map.status === 'active');
-      if (SIYUAN_CONTEXT_VAULT_ENABLED && projectId && record) {
+      const openingSiyuan = Boolean(SIYUAN_CONTEXT_VAULT_ENABLED && projectId && record);
+      if (openingSiyuan) {
+        setPreparingMapId(mapId);
         setStatus('Opening this SiYuan Context Map...');
+      }
+      if (!(await selectMap(mapId))) {
+        if (focusedMapOpenGenerationRef.current === generation) setPreparingMapId(null);
+        return;
+      }
+      if (focusedMapOpenGenerationRef.current !== generation) return;
+      if (SIYUAN_CONTEXT_VAULT_ENABLED && projectId && record) {
         try {
           const manifest = readSiyuanMapManifest(projectId, record.id);
           const durableJob = await readSiyuanIndexJob(projectId, record.id);
+          if (focusedMapOpenGenerationRef.current !== generation) return;
           if (durableJob && !hasSiyuanMapJobAuthority(record, manifest, durableJob, accountId)) {
             const safeJob =
               durableJob.status === 'running'
@@ -1741,6 +1788,7 @@ export function ContextPage() {
                 : durableJob;
             setIndexJobSnapshot(safeJob);
             setStatus('SiYuan indexing needs repair before this map can open.');
+            setPreparingMapId(null);
             return;
           }
           if (canOpenPartialSiyuanSurface(record, manifest, durableJob, accountId)) {
@@ -1753,11 +1801,13 @@ export function ContextPage() {
           } else if (durableJob && ['paused', 'cancelled', 'failed'].includes(durableJob.status)) {
             setIndexJobSnapshot(durableJob);
             setStatus('This SiYuan Context Map has no viewable checkpoint yet.');
+            setPreparingMapId(null);
             return;
           } else {
             const existing = await productionSiyuanContextMaps.read(projectId, record);
             if (!existing && durableJob?.status === 'completed') {
               setStatus('SiYuan Context Map needs repair before it can reopen.');
+              setPreparingMapId(null);
               return;
             }
             const snapshot =
@@ -1770,34 +1820,40 @@ export function ContextPage() {
             setStatus('SiYuan Context Map ready.');
           }
         } catch (error) {
+          if (focusedMapOpenGenerationRef.current !== generation) return;
           setStatus('SiYuan could not read this Context Map.');
           toast.error(
             'SiYuan Context Map could not open',
             error instanceof Error ? error.message : 'Unknown local vault error',
           );
+          setPreparingMapId(null);
           return;
         }
       }
+      if (focusedMapOpenGenerationRef.current !== generation) return;
       setCenterMode('graph');
       setFocusedMap(true);
+      setPreparingMapId(null);
     },
     [accountId, maps, projectId, selectMap, workspaceId],
   );
 
   const closeFocusedMap = React.useCallback(() => {
+    focusedMapOpenGenerationRef.current += 1;
+    setPreparingMapId(null);
     setFocusedMap(false);
   }, []);
 
   React.useEffect(() => {
     return subscribeContextNavigation((intent) => {
       if (intent.target === 'overview') {
-        setFocusedMap(false);
+        closeFocusedMap();
         setWorkspaceSection('maps');
         return;
       }
       void openFocusedMap(intent.mapId);
     });
-  }, [openFocusedMap]);
+  }, [closeFocusedMap, openFocusedMap]);
 
   React.useEffect(() => {
     if (!focusedMap) return;
@@ -1899,9 +1955,10 @@ export function ContextPage() {
       initialPath: rootDraft.trim() || undefined,
     });
     if (!picked) return;
-    setRootDraft(picked);
-    setStoredContextSourceRoot(accountId, projectId, picked);
-    toast.success('Context source selected', picked);
+    const sourceRoot = normalizeSiyuanFilesystemPath(picked);
+    setRootDraft(sourceRoot);
+    setStoredContextSourceRoot(accountId, projectId, sourceRoot);
+    toast.success('Context source selected', sourceRoot);
   };
 
   const openFilePicker = async () => {
@@ -1910,7 +1967,7 @@ export function ContextPage() {
       initialPath: rootDraft.trim() || undefined,
     });
     if (!picked) return;
-    const containingFolder = parentDirectory(picked);
+    const containingFolder = normalizeSiyuanFilesystemPath(parentDirectory(picked));
     setRootDraft(containingFolder);
     setStoredContextSourceRoot(accountId, projectId, containingFolder);
     setStatus(
@@ -2087,14 +2144,14 @@ export function ContextPage() {
   );
 
   const rememberRoot = () => {
-    const clean = rootDraft.trim();
+    const clean = normalizeSiyuanFilesystemPath(rootDraft.trim());
     if (!clean) return;
     setStoredContextSourceRoot(accountId, projectId, clean);
     toast.success('Context source saved', clean);
   };
 
   const makeSkillTree = React.useCallback(async () => {
-    const rootDir = rootDraft.trim();
+    const rootDir = normalizeSiyuanFilesystemPath(rootDraft.trim());
     if (!rootDir) {
       toast.warning('Choose a Context source', 'Context needs a folder to scan.');
       return;
@@ -2346,6 +2403,29 @@ export function ContextPage() {
     },
     [openFolderPicker],
   );
+
+  if (preparingMapId && SIYUAN_CONTEXT_VAULT_ENABLED) {
+    const preparingMap = maps.find((map) => map.id === preparingMapId);
+    return (
+      <div
+        data-context-siyuan-map-page
+        data-context-map-id={preparingMapId}
+        className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-background"
+      >
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-panel/90 px-4 backdrop-blur">
+          <Button type="button" size="sm" variant="ghost" onClick={closeFocusedMap}>
+            <ArrowLeft className="h-4 w-4" /> Back to Context Maps
+          </Button>
+          <h1 className="min-w-0 truncate font-display text-xl font-semibold text-foreground">
+            {preparingMap?.name ?? 'SiYuan Context Map'}
+          </h1>
+        </header>
+        <div className="min-h-0 flex-1">
+          <SiyuanVaultLoading stage="checking" />
+        </div>
+      </div>
+    );
+  }
 
   if (focusedMap && SIYUAN_CONTEXT_VAULT_ENABLED && projectId && selectedMap?.status === 'active') {
     const focusedManifest = readSiyuanMapManifest(projectId, selectedMap.id);
@@ -2827,14 +2907,19 @@ export function ContextPage() {
                     setStatus('SiYuan indexing cancelled. Saved nodes remain recoverable.');
                   }}
                   onRetry={() => {
-                    void updateSiyuanIndexJobStatus(
-                      projectId,
-                      indexJobSnapshot.mapId,
-                      'running',
-                    ).then((job) => {
-                      if (job) setIndexJobSnapshot(job);
-                      setIndexResumeNonce((value) => value + 1);
-                    });
+                    void updateSiyuanIndexJobStatus(projectId, indexJobSnapshot.mapId, 'running')
+                      .then((job) => {
+                        if (!job) throw new Error('siyuan_index_job_missing');
+                        setIndexJobSnapshot(job);
+                        setIndexResumeNonce((value) => value + 1);
+                        setStatus('Redoing the SiYuan map from saved progress…');
+                      })
+                      .catch((error) => {
+                        toast.error(
+                          'SiYuan redo could not start',
+                          error instanceof Error ? error.message : String(error),
+                        );
+                      });
                   }}
                   onRestart={() => {
                     void (async () => {

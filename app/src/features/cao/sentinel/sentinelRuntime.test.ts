@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createJevClient } from '@/lib/jev/client';
 import { createCaoSentinelRuntime } from './sentinelRuntime';
 import type { CaoTargetSnapshot } from './types';
 import type { JevEvaluation } from '@/lib/jev/types';
@@ -106,6 +107,32 @@ const candidateEvaluation = (): JevEvaluation => ({
   },
 });
 
+const actionEvaluation = (choice: string): JevEvaluation => {
+  const base = wakeEvaluation();
+  const actions = [
+    'noop',
+    'refresh_evidence',
+    'verify',
+    'use_candidate_message',
+    'wake_main_cao',
+    'ask_user',
+  ];
+  return {
+    ...base,
+    answers: {
+      ...base.answers,
+      action: {
+        type: 'choice',
+        choice,
+        probabilities: Object.fromEntries(
+          actions.map((action) => [action, action === choice ? 1 : 0]),
+        ),
+        confidence: 1,
+      },
+    },
+  };
+};
+
 describe('CAO Sentinel runtime', () => {
   it('turns typed Jev answers into a bounded observation and wake packet', async () => {
     const runtime = createCaoSentinelRuntime({
@@ -173,6 +200,154 @@ describe('CAO Sentinel runtime', () => {
     expect(result.wake?.targetId).toBe('t');
   });
 
+  it('records a genuine Jev noop against the fixed bounded question set', async () => {
+    const controller = new AbortController();
+    const secret = 'sk-live-DO-NOT-RECEIPT-3bc551';
+    const privateSnapshot = {
+      ...snapshot,
+      assignment: 'PRIVATE USER PROMPT',
+      recentDelta: secret,
+    };
+    let received: unknown;
+    const receipts: unknown[] = [];
+    const runtime = createCaoSentinelRuntime({
+      signal: controller.signal,
+      jev: {
+        evaluate: async (request) => {
+          received = request;
+          return actionEvaluation('noop');
+        },
+      },
+      onDecisionReceipt: (receipt) => {
+        receipts.push(receipt);
+      },
+    });
+
+    const result = await runtime.observe(privateSnapshot, 'sweep');
+
+    expect(received).toMatchObject({ state: privateSnapshot, signal: controller.signal });
+    expect((received as { questions: Record<string, unknown> }).questions).toHaveProperty('health');
+    expect((received as { questions: Record<string, unknown> }).questions).toHaveProperty('action');
+    expect(
+      Object.keys((received as { questions: Record<string, unknown> }).questions),
+    ).toHaveLength(6);
+    expect(result.observation).toMatchObject({
+      nextAction: 'noop',
+      reasonCode: 'jev_likely_stuck_noop',
+    });
+    expect(result.decision.action).toBe('noop');
+    expect(result.wake).toBeUndefined();
+    expect(receipts).toEqual([
+      {
+        missionId: 'm',
+        targetId: 't',
+        targetRevision: 2,
+        observedAt: 101,
+        trigger: 'sweep',
+        action: 'noop',
+        reasonCode: 'jev_likely_stuck_noop',
+      },
+    ]);
+    expect(JSON.stringify(receipts)).not.toContain(secret);
+    expect(JSON.stringify(receipts)).not.toContain('PRIVATE USER PROMPT');
+    expect(Object.isFrozen(receipts[0])).toBe(true);
+  });
+
+  it('returns a truthful no-op when the bounded Jev client times out', async () => {
+    const jev = createJevClient({
+      transport: async () => new Promise<unknown>(() => undefined),
+      timeoutMs: 5,
+    });
+    const receipts: unknown[] = [];
+    const runtime = createCaoSentinelRuntime({
+      jev,
+      now: () => 900,
+      onDecisionReceipt: (receipt) => {
+        receipts.push(receipt);
+      },
+    });
+
+    const result = await runtime.observe(snapshot, 'sweep');
+
+    expect(result.observation).toMatchObject({
+      health: 'unclear',
+      nextAction: 'noop',
+      reasonCode: 'jev_timeout',
+    });
+    expect(result.decision.action).toBe('noop');
+    expect(result.wake).toBeUndefined();
+    expect(receipts).toEqual([
+      {
+        missionId: 'm',
+        targetId: 't',
+        targetRevision: 2,
+        observedAt: 900,
+        trigger: 'sweep',
+        action: 'noop',
+        reasonCode: 'jev_timeout',
+      },
+    ]);
+  });
+
+  it('fails closed with a distinct safe reason when Jev returns an invalid result', async () => {
+    const jev = createJevClient({
+      transport: async () => ({ model: 'jev-1.13.0', answers: {} }),
+      timeoutMs: 100,
+    });
+    const receipts: unknown[] = [];
+    const runtime = createCaoSentinelRuntime({
+      jev,
+      now: () => 901,
+      onDecisionReceipt: (receipt) => {
+        receipts.push(receipt);
+      },
+    });
+
+    const result = await runtime.observe(snapshot, 'sweep');
+
+    expect(result.observation).toMatchObject({
+      health: 'unclear',
+      nextAction: 'noop',
+      reasonCode: 'jev_invalid_result',
+    });
+    expect(result.decision.action).toBe('noop');
+    expect(result.wake).toBeUndefined();
+    expect(receipts).toEqual([
+      {
+        missionId: 'm',
+        targetId: 't',
+        targetRevision: 2,
+        observedAt: 901,
+        trigger: 'sweep',
+        action: 'noop',
+        reasonCode: 'jev_invalid_result',
+      },
+    ]);
+  });
+
+  it('propagates mission cancellation to Jev and skips persistence of a late observation', async () => {
+    const controller = new AbortController();
+    let signalTransportStarted!: () => void;
+    const transportStarted = new Promise<void>((resolve) => {
+      signalTransportStarted = resolve;
+    });
+    const jev = createJevClient({
+      transport: async () => {
+        signalTransportStarted();
+        return new Promise<unknown>(() => undefined);
+      },
+      timeoutMs: 1_000,
+    });
+    const onObservation = vi.fn();
+    const runtime = createCaoSentinelRuntime({ jev, signal: controller.signal, onObservation });
+    const pending = runtime.observe(snapshot, 'event');
+    await transportStarted;
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(onObservation).not.toHaveBeenCalled();
+  });
+
   it('fails closed to manual CAO when Jev is unavailable', async () => {
     const runtime = createCaoSentinelRuntime({
       jev: {
@@ -209,10 +384,17 @@ describe('CAO Sentinel runtime', () => {
 
   it('deduplicates a successful wake with the same evidence', async () => {
     let calls = 0;
+    const events: string[] = [];
+    const receipts: Array<{ action: string; reasonCode: string }> = [];
     const runtime = createCaoSentinelRuntime({
       jev: { evaluate: async () => wakeEvaluation() },
       onWake: async () => {
         calls += 1;
+        events.push('wake');
+      },
+      onDecisionReceipt: (receipt) => {
+        events.push(`receipt:${receipt.reasonCode}`);
+        receipts.push(receipt);
       },
     });
 
@@ -222,6 +404,15 @@ describe('CAO Sentinel runtime', () => {
     expect(calls).toBe(1);
     expect(duplicate.decision).toMatchObject({ action: 'noop', reasonCode: 'wake_deduplicated' });
     expect(duplicate.wake).toBeUndefined();
+    expect(receipts.map(({ action, reasonCode }) => ({ action, reasonCode }))).toEqual([
+      { action: 'wake_main_cao', reasonCode: 'jev_likely_stuck_wake_main_cao' },
+      { action: 'noop', reasonCode: 'wake_deduplicated' },
+    ]);
+    expect(events).toEqual([
+      'wake',
+      'receipt:jev_likely_stuck_wake_main_cao',
+      'receipt:wake_deduplicated',
+    ]);
   });
 
   it('deduplicates a successful failed-target wake using the policy key', async () => {
@@ -294,6 +485,7 @@ describe('CAO Sentinel runtime', () => {
 
   it('routes candidates once and retries after a rejected authority dispatch', async () => {
     let attempts = 0;
+    const receipts: Array<{ action: string; reasonCode: string }> = [];
     const onCandidate = vi.fn(async () => {
       attempts += 1;
       if (attempts === 1) throw new Error('authority rejected');
@@ -302,6 +494,9 @@ describe('CAO Sentinel runtime', () => {
     const runtime = createCaoSentinelRuntime({
       jev: { evaluate: async () => candidateEvaluation() },
       onCandidate,
+      onDecisionReceipt: (receipt) => {
+        receipts.push(receipt);
+      },
     });
 
     await expect(runtime.observe(snapshot, 'event')).rejects.toThrow('authority rejected');
@@ -321,5 +516,9 @@ describe('CAO Sentinel runtime', () => {
       action: 'noop',
       reasonCode: 'candidate_deduplicated',
     });
+    expect(receipts.map(({ action, reasonCode }) => ({ action, reasonCode }))).toEqual([
+      { action: 'use_candidate_message', reasonCode: 'candidate_awaiting_approval' },
+      { action: 'noop', reasonCode: 'candidate_deduplicated' },
+    ]);
   });
 });

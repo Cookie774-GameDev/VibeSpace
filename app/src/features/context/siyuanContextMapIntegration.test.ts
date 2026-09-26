@@ -6,11 +6,13 @@ import type {
   ProductionSiyuanRlmPort,
   SiyuanManagedBlockAppendInput,
   SiyuanManagedDocumentCreateInput,
+  SiyuanManagedDocumentCreateUnderParentInput,
 } from './siyuanRlmProduction';
 import {
   assertSiyuanCloudApprovalPreflightReady,
   clearArchivedSiyuanSummaryDocuments,
   createSiyuanContextMapIntegration,
+  recoverPendingSiyuanFileBlock,
 } from './siyuanContextMapIntegration';
 import type { ContextMapRecord } from './tree';
 import {
@@ -1138,6 +1140,175 @@ describe('SiYuan Context Map integration', () => {
     }
   });
 
+  it('keeps every deep D-drive folder and file when native documents cannot nest past seven path segments', async () => {
+    const record = { ...map(), id: 'map-deep-d-drive', rootDir: 'D:\\DeepProject' };
+    const documents = new Map<
+      string,
+      { id: string; notebookId: string; path: string; markdown: string }
+    >();
+    const root = {
+      id: '20260923190000-root001',
+      notebookId: '20260923180000-book001',
+      path: '/20260923180000-base001/20260923190000-root001.sy',
+      markdown: '',
+    };
+    documents.set(root.id, root);
+    let sequence = 0;
+    const nativePort = port();
+    nativePort.createManagedDocument = vi.fn(async (_projectId, _path, markdown) => {
+      const created = { ...root, markdown };
+      documents.set(root.id, created);
+      return created;
+    });
+    nativePort.readManagedDocument = vi.fn(
+      async (_projectId, lookup) =>
+        [...documents.values()].find((document) => document.markdown.includes(lookup.marker)) ??
+        null,
+    );
+    nativePort.getBlock = vi.fn(async (_projectId, id) => {
+      const found = documents.get(id);
+      if (!found) throw new Error('siyuan_block_not_found');
+      return found;
+    });
+    nativePort.updateManagedDocument = vi.fn(async (_projectId, id, _expected, markdown) => {
+      const current = documents.get(id)!;
+      const updated = { ...current, markdown };
+      documents.set(id, updated);
+      return updated;
+    });
+    nativePort.createManagedDocumentsUnderParents = vi.fn(
+      async (
+        _projectId,
+        _mapRootId,
+        inputs: readonly SiyuanManagedDocumentCreateUnderParentInput[],
+      ) =>
+        inputs.map((input: SiyuanManagedDocumentCreateUnderParentInput) => {
+          const parent = documents.get(input.parentId)!;
+          const id = `20260923190001-${String(++sequence).padStart(7, '0')}`;
+          const path = `${parent.path.slice(0, -3)}/${id}.sy`;
+          if (path.slice(1, -3).split('/').length > 7) {
+            return {
+              ok: false as const,
+              error: new Error(`native_depth_exceeded:${input.marker}:${path}`),
+            };
+          }
+          const document = { id, notebookId: root.notebookId, path, markdown: input.markdown };
+          documents.set(id, document);
+          return { ok: true as const, document };
+        }),
+    );
+    nativePort.appendManagedBlocks = vi.fn(
+      async (_projectId, _rootId, inputs: readonly SiyuanManagedBlockAppendInput[]) =>
+        inputs.map(
+          (_input: SiyuanManagedBlockAppendInput, index: number) =>
+            `20260923190002-${String(index + 1).padStart(7, '0')}`,
+        ),
+    );
+    const previousInternals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      const synced = await createSiyuanContextMapIntegration(nativePort).sync('project-1', record, {
+        summaryPolicy: { mode: 'none', selectedExtensions: [], selectedPaths: [] },
+        list: async (path) => {
+          const depth = (path.replaceAll('\\', '/').match(/level-\d+/gu) ?? []).length;
+          return {
+            ok: true,
+            path,
+            entries:
+              depth < 7
+                ? [
+                    {
+                      name: `level-${depth + 1}`,
+                      path: `${path}\\level-${depth + 1}`,
+                      isDir: true,
+                      modifiedMs: 1,
+                    },
+                  ]
+                : [
+                    {
+                      name: 'leaf.ts',
+                      path: `${path}\\leaf.ts`,
+                      isDir: false,
+                      size: 42,
+                      modifiedMs: 2,
+                    },
+                  ],
+          };
+        },
+      });
+      const bindings = await readSiyuanNodeBindings('project-1', record.id);
+      expect(synced.manifest?.status).toBe('ready');
+      expect(synced.tree.fileCount).toBe(1);
+      expect(Object.keys(bindings)).toHaveLength(8);
+      expect(nativePort.createManagedDocumentsUnderParents).toHaveBeenCalled();
+      expect(
+        [...documents.values()].every(
+          (document) => document.path.slice(1, -3).split('/').length <= 7,
+        ),
+      ).toBe(true);
+      expect(nativePort.appendManagedBlocks).toHaveBeenCalledWith('project-1', root.id, [
+        expect.objectContaining({
+          parentId: bindings['path:level-1/level-2/level-3/level-4/level-5/level-6/level-7'],
+        }),
+      ]);
+    } finally {
+      if (previousInternals === undefined) {
+        delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+      } else {
+        (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = previousInternals;
+      }
+    }
+  });
+
+  it('finishes and reopens a D-drive map whose complete tree exceeds one SiYuan root block', async () => {
+    const record = { ...map(), id: 'map-large-d-drive', rootDir: 'D:\\LargeProject' };
+    const nativePort = port();
+    let nextBlock = 0;
+    nativePort.appendManagedBlocks = vi.fn(async (_projectId, _rootId, inputs) =>
+      inputs.map(() => `block-${++nextBlock}`),
+    );
+    const names = Array.from(
+      { length: 1_200 },
+      (_, index) => `file-${index}-${'x'.repeat(450)}.txt`,
+    );
+    const previousInternals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      const integration = createSiyuanContextMapIntegration(nativePort);
+      const completed = await integration.sync('project-1', record, {
+        summaryPolicy: { mode: 'none', selectedExtensions: [], selectedPaths: [] },
+        list: async (path) => ({
+          ok: true,
+          path,
+          entries:
+            path.replaceAll('\\', '/') === record.rootDir.replaceAll('\\', '/')
+              ? [{ name: 'src', path: `${record.rootDir}\\src`, isDir: true, modifiedMs: 1 }]
+              : names.map((name) => ({
+                  name,
+                  path: `${record.rootDir}\\src\\${name}`,
+                  isDir: false,
+                  size: 1,
+                  modifiedMs: 2,
+                })),
+        }),
+      });
+      expect(completed.manifest?.status).toBe('ready');
+      expect(completed.tree.fileCount).toBe(names.length);
+      expect(completed.document.markdown).toContain('index=v1');
+      expect(completed.document.markdown).not.toContain('payload=');
+
+      const reopened = await integration.read('project-1', record);
+      expect(reopened?.tree.fileCount).toBe(names.length);
+      expect(reopened?.tree.nodes[0]?.children).toHaveLength(names.length);
+    } finally {
+      if (previousInternals === undefined) {
+        delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+      } else {
+        (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = previousInternals;
+      }
+    }
+  });
+
   it('re-appends a pending file only when the exact parent proves the marker was never committed', async () => {
     const record = { ...map(), id: 'map-batch-preflight-rejected' };
     const policy = await seedPendingNativeFileRecovery(record);
@@ -1164,6 +1335,78 @@ describe('SiYuan Context Map integration', () => {
       } else {
         (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = previousInternals;
       }
+    }
+  });
+
+  it('recovers a committed split-batch prefix and appends only its uncommitted suffix', async () => {
+    const record = { ...map(), id: 'map-partial-native-batch' };
+    const policy = await seedPendingNativeFileRecovery(record);
+    const job = (await readSiyuanIndexJob('project-1', record.id))!;
+    await checkpointSiyuanIndexJob({
+      job: { ...job, indexed: 3, pendingNativeNodeIds: ['path:index.ts', 'path:second.ts'] },
+      appendedEntries: [
+        {
+          nodeId: 'path:second.ts',
+          parentNodeId: 'path:src',
+          title: 'second.ts',
+          kind: 'file',
+          relativePath: 'src/second.ts',
+          sourcePointer: `${record.rootDir}\\src\\second.ts`,
+          summary: null,
+          sizeBytes: 20,
+          modifiedAt: 4,
+        },
+      ],
+    });
+    const nativePort = port();
+    const originalGetBlock = nativePort.getBlock;
+    let committed: Awaited<ReturnType<ProductionSiyuanRlmPort['getBlock']>> | null = null;
+    nativePort.getBlock = vi.fn(async (projectId, id) => {
+      if (id === 'committed-prefix' && committed) return committed;
+      const document = await originalGetBlock(projectId, id);
+      if (!document.markdown.includes('node=path%3Asrc')) return document;
+      const markdown = `**index.ts** · Parent: ((${id} "Parent")) · \`vibespace-context-node:v1 map=${record.id} node=path%3Aindex.ts\``;
+      committed = { ...document, id: 'committed-prefix', markdown };
+      return { ...document, markdown: `${document.markdown}\n${markdown}` };
+    });
+    nativePort.searchBlocks = vi.fn(async () =>
+      committed
+        ? [
+            {
+              id: committed.id,
+              notebookId: committed.notebookId,
+              path: committed.path,
+              content: '',
+            },
+          ]
+        : [],
+    );
+    nativePort.appendManagedBlocks = vi.fn(async () => ['new-suffix']);
+    const previousInternals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      await createSiyuanContextMapIntegration(nativePort).sync('project-1', record, {
+        accountId: 'account-1',
+        summaryPolicy: policy,
+      });
+      expect(nativePort.appendManagedBlocks).toHaveBeenCalledOnce();
+      const appended = vi.mocked(nativePort.appendManagedBlocks).mock.calls[0]![2];
+      expect(appended).toHaveLength(1);
+      expect(appended[0]!.markdown).toContain('node=path%3Asecond.ts');
+      expect(appended[0]!.markdown).not.toContain('node=path%3Aindex.ts');
+      expect(await readSiyuanNodeBindings('project-1', record.id)).toMatchObject({
+        'path:index.ts': 'committed-prefix',
+        'path:second.ts': 'new-suffix',
+      });
+      expect(await readSiyuanIndexJob('project-1', record.id)).toMatchObject({
+        status: 'completed',
+        createdNodes: 3,
+        pendingNativeNodeIds: [],
+      });
+    } finally {
+      if (previousInternals === undefined)
+        delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+      else (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = previousInternals;
     }
   });
 
@@ -1239,44 +1482,65 @@ describe('SiYuan Context Map integration', () => {
     }
   });
 
-  it('never re-appends a pending file when marker recovery is ambiguous', async () => {
-    const record = { ...map(), id: 'map-batch-crash-duplicate-markers' };
-    const policy = await seedPendingNativeFileRecovery(record);
+  it('recovers an exact child block and removes identical task-created duplicates', async () => {
     const nativePort = port();
-    nativePort.appendManagedBlocks = vi.fn(async () => ['duplicate-block']);
+    const mapId = 'map-recover-child';
+    const marker = `vibespace-context-node:v1 map=${mapId} node=path%3Aindex.ts`;
+    const parent = {
+      id: 'parent-doc', notebookId: 'notebook-1', path: '/root/parent-doc.sy', markdown: marker,
+    };
+    const markdown = `**index.ts** · Parent: ((parent-doc "Parent")) · \`${marker}\``;
+    const blocks = [
+      { id: 'block-old', notebookId: 'notebook-1', path: parent.path, markdown: `${markdown}\n{: id="block-old" updated="20260923205033"}` },
+      { id: 'block-new', notebookId: 'notebook-1', path: parent.path, markdown: `${markdown}\n{: id="block-new" updated="20260923205102"}` },
+    ];
+    vi.mocked(nativePort.searchBlocks).mockResolvedValue([
+      { id: parent.id, notebookId: parent.notebookId, path: parent.path, content: '' },
+      ...blocks.map(({ id, notebookId, path }) => ({ id, notebookId, path, content: '' })),
+    ]);
+    vi.mocked(nativePort.getBlock).mockImplementation(async (_projectId, id) => {
+      const block = blocks.find((candidate) => candidate.id === id);
+      if (!block) throw new Error('missing');
+      return block;
+    });
+    const entry = {
+      nodeId: 'path:index.ts', parentNodeId: 'path:src', title: 'index.ts',
+      kind: 'file' as const, relativePath: 'src/index.ts', sourcePointer: 'C:/Work/Example/src/index.ts',
+      summary: null, sizeBytes: 43, modifiedAt: 3,
+    };
+    await expect(recoverPendingSiyuanFileBlock(
+      nativePort, 'project-1', 'root-doc', mapId, entry, parent,
+    )).resolves.toBe('block-new');
+    expect(nativePort.deleteManagedDocument).toHaveBeenCalledWith(
+      'project-1', 'block-old', blocks[0]!.markdown, 'root-doc',
+    );
+    expect(nativePort.readManagedDocument).not.toHaveBeenCalled();
+  });
+
+  it('rejects child blocks with the same marker but different content', async () => {
+    const nativePort = port();
+    const mapId = 'map-batch-crash-duplicate-markers';
+    const marker = `vibespace-context-node:v1 map=${mapId} node=path%3Aindex.ts`;
+    const parent = { id: 'parent-doc', notebookId: 'notebook-1', path: '/map-root', markdown: marker };
+    vi.mocked(nativePort.searchBlocks).mockResolvedValue([
+      { id: 'block-a', notebookId: 'notebook-1', path: '/map-root', content: '' },
+      { id: 'block-b', notebookId: 'notebook-1', path: '/map-root', content: '' },
+    ]);
     vi.mocked(nativePort.getBlock).mockImplementation(async (_projectId, id) => ({
       id,
       notebookId: 'notebook-1',
       path: '/map-root',
-      markdown:
-        'vibespace-context-node:v1 map=map-batch-crash-duplicate-markers node=path%3Aindex.ts',
+      markdown: `${id} Parent: ((parent-doc "Parent")) ${marker}`,
     }));
-    vi.mocked(nativePort.readManagedDocument).mockImplementation(async (_projectId, lookup) => {
-      if (lookup.marker.includes('vibespace-context-node:v1')) {
-        throw new Error('siyuan_managed_document_ambiguous');
-      }
-      return null;
-    });
-    const previousInternals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
-    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
-    try {
-      await expect(
-        createSiyuanContextMapIntegration(nativePort).sync('project-1', record, {
-          accountId: 'account-1',
-          summaryPolicy: policy,
-        }),
-      ).rejects.toThrow('siyuan_managed_document_ambiguous');
-      expect(nativePort.appendManagedBlocks).not.toHaveBeenCalled();
-      expect(await readSiyuanIndexJob('project-1', record.id)).toMatchObject({
-        pendingNativeNodeIds: ['path:index.ts'],
-      });
-    } finally {
-      if (previousInternals === undefined) {
-        delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
-      } else {
-        (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = previousInternals;
-      }
-    }
+    const entry = {
+      nodeId: 'path:index.ts', parentNodeId: 'path:src', title: 'index.ts',
+      kind: 'file' as const, relativePath: 'src/index.ts', sourcePointer: 'C:/Work/Example/src/index.ts',
+      summary: null, sizeBytes: 43, modifiedAt: 3,
+    };
+    await expect(recoverPendingSiyuanFileBlock(
+      nativePort, 'project-1', 'root-doc', mapId, entry, parent,
+    )).rejects.toThrow('siyuan_managed_block_ambiguous');
+    expect(nativePort.deleteManagedDocument).not.toHaveBeenCalled();
   });
 
   it('repairs duplicate owned documents deterministically before updating SiYuan', async () => {

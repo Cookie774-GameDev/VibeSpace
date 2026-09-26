@@ -10,6 +10,7 @@ import {
   LEGACY_JARVIS_AGENT_COMPATIBILITY_PROMPT,
   createBuiltinAgentRoster,
   getBuiltinAgentDefinition,
+  mergePersistedAndBuiltinAgents,
 } from './builtinAgents';
 
 const CURRENT_CODER_PROMPT = `You are the Coder agent. You write, refactor, debug, and explain code. Your output is precise, runnable, and matches the conventions of the project you're working in.
@@ -141,6 +142,36 @@ describe('canonical built-in agent roster', () => {
       model: { provider: 'google', model: 'gemini-2.5-flash-lite' },
       capabilities: ['voice_supervision', 'planning'],
     });
+  });
+
+  it('restores missing built-ins beside persisted custom agents without replacing saved built-in edits', () => {
+    const defaults = createBuiltinAgentRoster({
+      now: 10,
+      newId: vi
+        .fn<() => AgentId>()
+        .mockReturnValueOnce('agt_default_jarvis' as AgentId)
+        .mockReturnValueOnce('agt_default_coder' as AgentId),
+    });
+    const custom = {
+      ...defaults[1]!,
+      id: 'agt_custom' as AgentId,
+      slug: 'custom',
+      builtin: false,
+    };
+    const [jarvis, coder] = defaults;
+    expect(mergePersistedAndBuiltinAgents([custom], defaults)).toEqual([jarvis, coder, custom]);
+    const savedJarvis = { ...jarvis!, id: 'agt_saved_jarvis' as AgentId, system_prompt: 'Saved edit' };
+    expect(mergePersistedAndBuiltinAgents([savedJarvis, custom], defaults)).toEqual([
+      coder,
+      savedJarvis,
+      custom,
+    ]);
+    expect(mergePersistedAndBuiltinAgents([custom, { ...jarvis!, builtin: false }], defaults)).toEqual([
+      jarvis,
+      coder,
+      custom,
+      { ...jarvis!, builtin: false },
+    ]);
   });
 
   it('uses the shared protected predicate without protecting slug or display-name collisions', () => {

@@ -238,7 +238,9 @@ pub async fn workbench_browser_surface_open(
         if let Some(webview) = existing.as_ref() {
             current_operation(&panel_id, &operation_id)?;
             apply_bounds(webview, &bounds)?;
-            webview.show().map_err(|_| "workbench_browser_window_unavailable".to_owned())?;
+            webview
+                .show()
+                .map_err(|_| "workbench_browser_window_unavailable".to_owned())?;
             return current_status(&panel_id, &operation_id);
         }
     }

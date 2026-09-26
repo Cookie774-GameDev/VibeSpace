@@ -38,7 +38,7 @@ it('navigates immediately without waiting for a saved note body', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Open now' }));
   await waitFor(() => expect(openNoteReference).toHaveBeenCalledWith({ ...scope, id: 'note-a' }));
 });
-it('shows sent notes only in existing session details and preserves other attachment cards', () => {
+it('shows sent notes in console settings without hiding other attachment cards', () => {
   const project = 'project-a',
     map = 'notes:0123456789abcdef01234567:note-a',
     node = 'note:note-a';
@@ -68,7 +68,7 @@ it('shows sent notes only in existing session details and preserves other attach
   );
   expect(screen.queryByText(/Design notes/)).toBeNull();
   expect(screen.getByText(/src\/example.ts/)).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Open session details' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Chat console settings' }));
   expect(screen.getByRole('region', { name: 'Referenced notes' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Design notes' })).toBeTruthy();
 });

@@ -197,6 +197,7 @@ function HeaderProgressSlot({
 function SessionHeader({
   chatId,
   messages,
+  activity,
   summary,
   nativeRuns,
   preferences,
@@ -212,6 +213,7 @@ function SessionHeader({
 }: {
   chatId: string;
   messages: readonly Message[];
+  activity: AgenticConsoleProps['activity'];
   summary: AgenticSessionSummary;
   nativeRuns: readonly NativeTaskRun[];
   preferences: ConsolePreferences;
@@ -226,7 +228,44 @@ function SessionHeader({
   htmlExportBusy: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
+  const [metricPanel, setMetricPanel] = React.useState<'files' | 'tokens' | null>(null);
   const [hasHeaderProgress, setHasHeaderProgress] = React.useState(false);
+  const confirmedChangedFilePaths = React.useMemo(() => {
+    const paths = new Set<string>();
+    for (const block of projectAgenticTranscript(messages, activity ?? [])) {
+      if (block.kind === 'diff' && block.status === 'done' && block.filePath && block.diff.trim()) paths.add(block.filePath);
+    }
+    return [...paths].sort((left, right) => left.localeCompare(right));
+  }, [activity, messages]);
+  const usageMessages = messages.filter((message) => message.role === 'assistant' && message.usage);
+  const inputTokens = usageMessages.reduce((total, message) => total + (message.usage?.input_tokens ?? 0), 0);
+  const outputTokens = usageMessages.reduce((total, message) => total + (message.usage?.output_tokens ?? 0), 0);
+  const cacheReadTokens = usageMessages.reduce((total, message) => total + (message.usage?.cache_read_tokens ?? 0), 0);
+  const cacheWriteTokens = usageMessages.reduce((total, message) => total + (message.usage?.cache_write_tokens ?? 0), 0);
+  const totalCost = usageMessages.reduce((total, message) => total + (message.usage?.cost_usd ?? 0), 0);
+  const hasCompleteCacheRead = summary.tokenCount !== '—' && usageMessages.length > 0 && usageMessages.every(
+    (message) => typeof message.usage?.cache_read_tokens === 'number',
+  );
+  const hasCompleteCacheWrite = summary.tokenCount !== '—' && usageMessages.length > 0 && usageMessages.every(
+    (message) => typeof message.usage?.cache_write_tokens === 'number',
+  );
+  const hasCompleteCost = summary.tokenCount !== '—' && usageMessages.length > 0 && usageMessages.every(
+    (message) => typeof message.usage?.cost_usd === 'number',
+  );
+  const hasEstimatedCost = hasCompleteCost && usageMessages.some(
+    (message) => message.usage?.provenance === 'estimated',
+  );
+  const hasCompleteBreakdown = usageMessages.length > 0 && usageMessages.every((message) =>
+    typeof message.usage?.input_tokens === 'number' && typeof message.usage?.output_tokens === 'number');
+  const modelUsage = new Map<string, Message['usage'][] >();
+  for (const message of usageMessages) {
+    const usage = message.usage!;
+    const modelName = usage.model ?? 'Unknown model';
+    modelUsage.set(modelName, [...(modelUsage.get(modelName) ?? []), usage]);
+  }
+  const sumModelField = (rows: Message['usage'][], field: 'input_tokens' | 'output_tokens' | 'cache_read_tokens' | 'cache_write_tokens' | 'cost_usd') =>
+    summary.tokenCount !== '—' && rows.length > 0 && rows.every((row) => typeof row?.[field] === 'number' && Number.isFinite(row[field]))
+      ? rows.reduce((sum, row) => sum + (row?.[field] as number), 0) : null;
   const invoke = (action: (() => void | Promise<void>) | undefined) => {
     if (!action) return;
     const report = (error: unknown) => {
@@ -260,23 +299,20 @@ function SessionHeader({
         {headerProgress}
       </HeaderProgressSlot>
       <div className="agentic-session__metrics-row">
-        <button
-          type="button"
-          className="agentic-session__metrics"
-          aria-label="Open session details"
-          aria-expanded={open}
-          onClick={() => setOpen(true)}
-        >
-          <span>
+        <div className="agentic-session__metrics">
+          <button type="button" aria-label="Show changed files" aria-expanded={metricPanel === 'files'}
+            onClick={() => setMetricPanel((value) => value === 'files' ? null : 'files')}>
             <FileCode2 aria-hidden="true" />
-            {summary.fileCount} {summary.fileCount === 1 ? 'file' : 'files'}
-          </span>
+            {confirmedChangedFilePaths.length} {confirmedChangedFilePaths.length === 1 ? 'file' : 'files'}
+          </button>
           <span className="is-add">+{summary.addedLines}</span>
           <span className="is-remove">-{summary.removedLines}</span>
-          <span title={summary.tokenCount === '—' ? 'Token usage unavailable' : summary.tokenProvenance === 'estimated' ? 'Estimated token usage' : 'Reported token usage'}>
+          <button type="button" aria-label="Show token usage" aria-expanded={metricPanel === 'tokens'}
+            title={summary.tokenCount === '—' ? 'Token usage unavailable' : summary.tokenProvenance === 'estimated' ? 'Estimated token usage' : 'Reported token usage'}
+            onClick={() => setMetricPanel((value) => value === 'tokens' ? null : 'tokens')}>
             {summary.tokenProvenance === 'estimated' && summary.tokenCount !== '—' ? 'Estimated ' : ''}
             {formatMetric(summary.tokenCount, ' tokens')}
-          </span>
+          </button>
           <span title="Elapsed time">
             <Clock3 aria-hidden="true" />
             {formatDuration(summary.durationMs)}
@@ -284,9 +320,58 @@ function SessionHeader({
           <span className="agentic-session__model" title={summary.model}>
             {summary.model}
           </span>
-        </button>
+        </div>
         <SubagentsHeaderButton chatId={chatId} nativeRuns={nativeRuns} />
       </div>
+      {metricPanel ? (
+        <div className="agentic-session__metric-panel" role="dialog" aria-label={metricPanel === 'files' ? 'Changed files' : 'Token usage'}>
+          <div className="agentic-session__metric-panel-title">
+            <strong>{metricPanel === 'files' ? 'Confirmed changed files' : 'Token usage'}</strong>
+            <button type="button" aria-label="Close session metrics" onClick={() => setMetricPanel(null)}>×</button>
+          </div>
+          {metricPanel === 'files' ? (
+            confirmedChangedFilePaths.length > 0 ? (
+              <ul className="agentic-session__file-list">
+                {confirmedChangedFilePaths.map((path) => <li key={path} title={path}>{path}</li>)}
+              </ul>
+            ) : <p>No confirmed file changes were reported.</p>
+          ) : (
+            <>
+              <dl className="agentic-session__usage-list">
+                <div><dt>Total</dt><dd>{formatMetric(summary.tokenCount)}</dd></div>
+                <div><dt>Input</dt><dd>{hasCompleteBreakdown ? formatMetric(inputTokens) : '—'}</dd></div>
+                <div><dt>Output</dt><dd>{hasCompleteBreakdown ? formatMetric(outputTokens) : '—'}</dd></div>
+                <div><dt>Cache read</dt><dd>{hasCompleteCacheRead ? formatMetric(cacheReadTokens) : '—'}</dd></div>
+                <div><dt>Cache write</dt><dd>{hasCompleteCacheWrite ? formatMetric(cacheWriteTokens) : '—'}</dd></div>
+                <div><dt>{hasEstimatedCost ? 'Estimated cost' : 'Reported cost'}</dt><dd>{hasCompleteCost ? `$${totalCost.toFixed(4)}` : 'Unavailable from CLI'}</dd></div>
+                <div><dt>Context window</dt><dd>Unavailable from CLI</dd></div>
+              </dl>
+              {modelUsage.size > 0 && <div className="agentic-session__model-usage">
+                <strong>By model</strong>
+                {[...modelUsage].map(([modelName, rows]) => {
+                  const input = sumModelField(rows, 'input_tokens');
+                  const output = sumModelField(rows, 'output_tokens');
+                  const cacheRead = sumModelField(rows, 'cache_read_tokens');
+                  const cacheWrite = sumModelField(rows, 'cache_write_tokens');
+                  const cost = sumModelField(rows, 'cost_usd');
+                  const estimatedCost = cost !== null && rows.some((row) => row?.provenance === 'estimated');
+                  return <section key={modelName} aria-label={`Usage for ${modelName}`}>
+                    <div><span title={modelName}>{modelName}</span><span>Total {input !== null && output !== null ? formatMetric(input + output) : 'Unavailable'}</span></div>
+                    <dl className="agentic-session__usage-list">
+                      <div><dt>Input</dt><dd>{input === null ? 'Unavailable' : formatMetric(input)}</dd></div>
+                      <div><dt>Output</dt><dd>{output === null ? 'Unavailable' : formatMetric(output)}</dd></div>
+                      <div><dt>Cache read</dt><dd>{cacheRead === null ? 'Unavailable' : formatMetric(cacheRead)}</dd></div>
+                      <div><dt>Cache write</dt><dd>{cacheWrite === null ? 'Unavailable' : formatMetric(cacheWrite)}</dd></div>
+                      <div><dt>{estimatedCost ? 'Estimated cost' : 'Reported cost'}</dt><dd>{cost === null ? 'Unavailable' : `$${cost.toFixed(4)}`}</dd></div>
+                    </dl>
+                  </section>;
+                })}
+              </div>}
+              {summary.tokenProvenance === 'estimated' && <p>Token totals are estimated.</p>}
+            </>
+          )}
+        </div>
+      ) : null}
       <div className="agentic-session__actions">
         {actions?.continue ? (
           <Button
@@ -1325,6 +1410,7 @@ export function AgenticConsole({
       <SessionHeader
         chatId={chatId}
         messages={messages}
+        activity={activity}
         summary={summary}
         nativeRuns={nativeRuns}
         preferences={preferences}

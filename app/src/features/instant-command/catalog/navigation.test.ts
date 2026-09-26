@@ -84,6 +84,7 @@ describe('navigation command catalog', () => {
       'launcher.open',
       'fullscreen.set',
       'connections.open',
+      'status.show',
     ]);
     expect(NAVIGATION_COMMAND_INPUTS.every((command) => command.availability === 'available')).toBe(
       true,

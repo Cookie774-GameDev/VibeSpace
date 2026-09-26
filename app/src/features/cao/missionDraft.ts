@@ -8,15 +8,37 @@ export type CaoSetupDraft = {
   targets: string[];
   editing: boolean;
   choice?: CaoExecutionIdentity;
+  choiceExplicit?: boolean;
+  choiceProfileUpdatedAt?: number | null;
 };
 const empty = (): CaoSetupDraft => ({ objective: '', step: 0, targets: [], editing: false });
 const memory = new Map<string, CaoSetupDraft>();
+
+function normalizeDraft(value: CaoSetupDraft): CaoSetupDraft {
+  const hasProfileVersion =
+    value.choiceProfileUpdatedAt === null ||
+    (typeof value.choiceProfileUpdatedAt === 'number' &&
+      Number.isFinite(value.choiceProfileUpdatedAt));
+  const choiceExplicit =
+    Boolean(value.choice) && value.choiceExplicit === true && hasProfileVersion;
+  return {
+    ...value,
+    editing: value.editing === true,
+    choiceExplicit,
+    choiceProfileUpdatedAt: choiceExplicit ? value.choiceProfileUpdatedAt! : null,
+  };
+}
+
 export function caoDraftKey(scope: CaoControlScope): string {
   return `cao-setup-v1:${JSON.stringify([scope.accountId, scope.workspaceId, scope.projectId])}`;
 }
 export function readCaoDraft(key: string): CaoSetupDraft {
   const cached = memory.get(key);
-  if (cached) return cached;
+  if (cached) {
+    const normalized = normalizeDraft(cached);
+    memory.set(key, normalized);
+    return normalized;
+  }
   try {
     const value = JSON.parse(sessionStorage.getItem(key) ?? 'null');
     if (
@@ -28,7 +50,9 @@ export function readCaoDraft(key: string): CaoSetupDraft {
       Array.isArray(value.targets) &&
       value.targets.every((item: unknown) => typeof item === 'string')
     ) {
-      return { ...value, editing: value.editing === true };
+      const normalized = normalizeDraft(value);
+      memory.set(key, normalized);
+      return normalized;
     }
   } catch {
     /* In-memory persistence remains available if storage is disabled. */

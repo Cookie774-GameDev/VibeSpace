@@ -190,6 +190,15 @@ export function adaptLocalCommand(command: LocalDetectedCommand): LocalCommandAd
     case 'page.open':
       return pageCommand(command);
     case 'status.show':
+      // Reject malformed arguments rather than hiding them from the authority.
+      if (
+        !command.slots ||
+        typeof command.slots !== 'object' ||
+        Array.isArray(command.slots) ||
+        Object.keys(command.slots).length !== 0
+      ) {
+        return Object.freeze({ status: 'unsupported', reason: 'invalid_slots' as const });
+      }
       return canonicalCatalogCommand('status.show', {});
     case 'music.play':
     case 'music.pause':

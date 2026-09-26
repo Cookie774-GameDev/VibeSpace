@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { createElement, createRef, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { HelpCircle, Terminal, Wrench } from 'lucide-react';
@@ -11,6 +11,7 @@ import {
   normalizeSlashCmd,
   orderSlashCommandsForDisplay,
   resolveSlashCommandSelection,
+  slashCommandCompositeKey,
   slashCmdMatchScore,
   SlashCommandTypeahead,
   type SlashCommandTypeaheadRef,
@@ -98,6 +99,133 @@ describe('orderSlashCommandsForDisplay', () => {
       'tools',
       'help',
     ]);
+  });
+
+  it('keeps same-name harness commands distinct by owner and source', () => {
+    const commands: SlashCommandDef[] = [
+      {
+        cmd: 'review',
+        commandIdentifier: 'review',
+        owner: 'opencode',
+        source: 'command',
+        backend: 'opencode',
+        description: 'OpenCode command',
+        icon: Terminal,
+      },
+      {
+        cmd: 'review',
+        commandIdentifier: 'review',
+        owner: 'opencode',
+        source: 'mcp',
+        backend: 'opencode',
+        description: 'MCP prompt',
+        icon: Terminal,
+      },
+    ];
+    const pickerRef = createRef<SlashCommandTypeaheadRef>();
+    const onSelect = vi.fn();
+    const onHoverCommand = vi.fn();
+
+    expect(
+      slashCommandCompositeKey({
+        cmd: 'safe',
+        commandIdentifier: '\uD800',
+        owner: 'opencode',
+        source: 'command',
+        description: 'Malformed identifier',
+        icon: Terminal,
+      }),
+    ).toBe('opencode:command:utf16-d800');
+
+    render(
+      createElement(SlashCommandTypeahead, {
+        ref: pickerRef,
+        commands,
+        selectedCmd: 'review',
+        selectedCommandKey: slashCommandCompositeKey(commands[1]!),
+        query: 'review',
+        onHoverCommand,
+        onSelect,
+      }),
+    );
+
+    const options = screen.getAllByRole('option');
+    expect(screen.getByText('Harness commands · OpenCode')).toBeTruthy();
+    expect(new Set(options.map((option) => option.id)).size).toBe(2);
+    expect(options.map((option) => option.getAttribute('aria-selected'))).toEqual([
+      'false',
+      'true',
+    ]);
+    expect(options[0]?.textContent).toContain('command');
+    expect(options[1]?.textContent).toContain('mcp');
+
+    act(() => pickerRef.current?.moveUp());
+    expect(onHoverCommand).toHaveBeenCalledWith(commands[0]);
+    act(() => pickerRef.current?.selectCurrent());
+    expect(onSelect).toHaveBeenCalledWith(commands[1]);
+  });
+
+  it('reports per-group overflow without starving another harness owner', () => {
+    const commands: SlashCommandDef[] = [...Array.from({ length: 130 }, (_, index): SlashCommandDef => ({
+      cmd: `extra-${index}`,
+      description: 'Extra command',
+      icon: Terminal,
+      category: 'chat',
+    })), {
+      cmd: 'review',
+      owner: 'opencode',
+      backend: 'opencode',
+      source: 'command',
+      commandIdentifier: 'review',
+      description: 'OpenCode native command',
+      icon: Terminal,
+    }];
+
+    render(
+      createElement(SlashCommandTypeahead, {
+        commands,
+        selectedCmd: 'extra-0',
+        query: 'extra',
+        onSelect: vi.fn(),
+      }),
+    );
+
+    expect(screen.getAllByRole('option')).toHaveLength(129);
+    expect(screen.getByText('Harness commands · OpenCode')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('2 more commands match');
+  });
+
+  it('keeps unknown command sources visible but never dispatches them as session commands', () => {
+    const command: SlashCommandDef = {
+      cmd: 'theme',
+      commandIdentifier: 'theme',
+      owner: 'opencode',
+      source: 'unknown-source',
+      backend: 'opencode',
+      executionCapability: 'requires-native-cli-ui',
+      description: 'Requires native UI',
+      icon: Terminal,
+    };
+    const onSelect = vi.fn();
+    const pickerRef = createRef<SlashCommandTypeaheadRef>();
+
+    render(
+      createElement(SlashCommandTypeahead, {
+        ref: pickerRef,
+        commands: [command],
+        selectedCmd: 'theme',
+        selectedCommandKey: slashCommandCompositeKey(command),
+        query: 'theme',
+        onSelect,
+      }),
+    );
+
+    const option = screen.getByRole('option');
+    expect(option.getAttribute('aria-disabled')).toBe('true');
+    expect(option.textContent).toContain('Requires native CLI UI');
+    fireEvent.click(option);
+    act(() => pickerRef.current?.selectCurrent());
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('prefers an exact command or alias over an earlier cross-category fuzzy selection', () => {

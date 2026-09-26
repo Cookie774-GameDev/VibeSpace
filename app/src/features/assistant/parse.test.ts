@@ -24,12 +24,15 @@ describe('parseAssistantInput terminal commands', () => {
     });
   });
 
-  it('turns "open terminal then run" into one startup-command pane', () => {
-    expect(parseAssistantInput('open terminal then run npm test')).toMatchObject({
-      kind: 'open_terminals',
-      count: 1,
-      command: 'npm test',
-    });
+  it.each([
+    'open terminal then run npm test',
+    'open 2 terminals with npm run build',
+    'run npm test in all terminals',
+    'create command dev server to run npm run dev',
+    'run custom command dev server',
+    'create project tiger then run npm test in all terminals',
+  ])('does not parse arbitrary shell execution: %s', (input) => {
+    expect(parseAssistantInput(input)).toMatchObject({ kind: 'unknown' });
   });
 
   it('preserves true multi-step project workflows', () => {

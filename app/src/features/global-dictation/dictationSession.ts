@@ -3,12 +3,15 @@
  *
  * The Ctrl+Space overlay uses the saved speech-to-text provider and the same
  * Deepgram option as composer settings. It opens exactly one of local
- * faster-whisper, built-in system speech, or Deepgram streaming; it never
- * substitutes another available provider or invokes Windows Win+H.
+ * faster-whisper, built-in system speech, or Deepgram streaming. Built-in
+ * system speech can fall back to an already-installed local Whisper model only
+ * when its speech service reports a network failure; Deepgram never falls back.
  *
- * Privacy: audio goes only to the engine listed above that the user's own
- * settings selected (local engines keep it on device). Recognized text is
- * checkpointed in local recovery history; microphone audio is never retained there.
+ * Privacy: built-in speech uses the browser engine first. Only after its
+ * network service fails may the current in-memory take be transcribed by an
+ * already-installed local Whisper model. Deepgram is used only when selected.
+ * Recognized text is checkpointed in local recovery history; microphone audio
+ * is discarded at stop/cancel and is never stored there.
  */
 
 import { isTauri } from '@/lib/utils';
@@ -70,10 +73,10 @@ function micAvailable(): boolean {
   );
 }
 
-async function fasterWhisperReady(): Promise<boolean> {
+async function fasterWhisperReady(model = getFasterWhisperModel()): Promise<boolean> {
   if (!isTauri || !getAudioContextCtor()) return false;
   try {
-    return await FasterWhisperManager.checkInstalled(getFasterWhisperModel());
+    return await FasterWhisperManager.checkInstalled(model);
   } catch {
     return false;
   }
@@ -154,6 +157,81 @@ async function createWebSpeechSession(
   let finishStop: (() => void) | null = null;
   let stopTimer: ReturnType<typeof setTimeout> | null = null;
   let meter: FasterWhisperRecorder | null = null;
+  let checkingLocalFallback = false;
+  let usingLocalFallback = false;
+  let fallbackCheck: Promise<void> | null = null;
+  let fallbackTranscription: Promise<void> | null = null;
+  let fallbackModel: ReturnType<typeof getFasterWhisperModel> | null = null;
+
+  const transcribeLocalFallback = (): Promise<void> => {
+    if (fallbackTranscription) return fallbackTranscription;
+    const wav = meter?.captureWav() ?? null;
+    meter?.stop();
+    meter = null;
+    fallbackTranscription = (async () => {
+      if (!wav || wav.size === 0) {
+        if (!done) events.onError?.(formatGlobalDictationSessionFailure('No speech detected'));
+        teardown();
+        return;
+      }
+      try {
+        const text = (
+          await transcribeFasterWhisper(wav, fallbackModel ?? getFasterWhisperModel())
+        ).trim();
+        if (done) return;
+        if (text) {
+          finalText = text;
+          events.onFinal?.(text);
+        } else {
+          events.onError?.(formatGlobalDictationSessionFailure('No speech detected'));
+        }
+      } catch {
+        if (!done) events.onError?.(formatGlobalDictationTranscriptionFailure('faster-whisper'));
+      } finally {
+        teardown();
+      }
+    })();
+    return fallbackTranscription;
+  };
+
+  const beginLocalFallback = (message: string): Promise<void> => {
+    if (done || usingLocalFallback || checkingLocalFallback) {
+      return fallbackCheck ?? Promise.resolve();
+    }
+    checkingLocalFallback = true;
+    fallbackCheck = (async () => {
+      const model = getFasterWhisperModel();
+      const ready = await fasterWhisperReady(model);
+      if (done) return;
+      checkingLocalFallback = false;
+      if (!ready) {
+        events.onError?.(formatGlobalDictationSessionFailure(message));
+        teardown();
+        return;
+      }
+
+      fallbackModel = model;
+      usingLocalFallback = true;
+      if (!opened) {
+        opened = true;
+        events.onOpen?.();
+      }
+      events.onStatus?.(
+        `Web Speech could not reach its service. Recording locally with Whisper (${model}); press Space to finish.`,
+      );
+      if (stopTimer !== null) clearTimeout(stopTimer);
+      stopTimer = null;
+      VoiceService.stopListening();
+      if (stopping) void transcribeLocalFallback();
+    })().catch(() => {
+      checkingLocalFallback = false;
+      if (done) return;
+      events.onError?.(formatGlobalDictationSessionFailure(message));
+      teardown();
+    });
+    return fallbackCheck;
+  };
+
   const offs = [
     VoiceService.on('voice:start', () => {
       if (done || opened) return;
@@ -174,10 +252,15 @@ async function createWebSpeechSession(
       // Chromium emits these when idle or restarting its continuous session.
       // VoiceService already resumes listening; a normal pause is not a failure.
       if (kind === 'no_speech' || kind === 'aborted') return;
+      if (kind === 'network') {
+        void beginLocalFallback(message);
+        return;
+      }
       events.onError?.(formatGlobalDictationSessionFailure(message));
       teardown();
     }),
     VoiceService.on('voice:end', () => {
+      if (checkingLocalFallback || usingLocalFallback) return;
       if (stopping || (!VoiceService.isListening() && !VoiceService.wantsListening())) teardown();
     }),
   ];
@@ -196,14 +279,21 @@ async function createWebSpeechSession(
   };
 
   try {
-    // SpeechRecognition exposes no samples. Meter the same system-default
-    // microphone without retaining PCM, and own that stream until teardown.
+    // SpeechRecognition exposes no samples. Keep the same microphone's PCM
+    // in memory for this take so an unreachable browser service can hand the
+    // captured audio to an already-installed local Whisper model. Audio is
+    // discarded at stop/cancel and never written to dictation history.
     meter = await startBatchAudioRecorder(
       (level) => {
         if (!done) events.onLevel?.(level);
       },
-      () => undefined,
-      { retainAudio: false },
+      () => {
+        if (!done && usingLocalFallback) {
+          events.onError?.(formatGlobalDictationSessionFailure('No speech detected'));
+          teardown();
+        }
+      },
+      { retainAudio: true },
     );
     assertCurrent();
     VoiceService.setInactivityTimeoutMs(null);
@@ -222,11 +312,16 @@ async function createWebSpeechSession(
     stop: () => {
       if (done) return Promise.resolve();
       if (stopping) return stopping;
-      // Keep result listeners alive until recognition's final result/end event.
-      // A bounded wait also handles engines that never send an end notification.
       stopping = new Promise<void>((resolve) => {
         finishStop = resolve;
       });
+      if (usingLocalFallback) {
+        void transcribeLocalFallback();
+        return stopping;
+      }
+      if (checkingLocalFallback) return stopping;
+      // Keep result listeners alive until recognition's final result/end event.
+      // A bounded wait also handles engines that never send an end notification.
       stopTimer = setTimeout(teardown, 1_200);
       VoiceService.stopListening();
       return stopping;
@@ -288,6 +383,9 @@ export async function createSelectedSttSession(
   const scopedEvents: DictationEvents = {
     onOpen: () => {
       if (isCurrent()) events.onOpen?.();
+    },
+    onStatus: (message) => {
+      if (isCurrent()) events.onStatus?.(message);
     },
     onPartial: (text) => {
       if (isCurrent()) {

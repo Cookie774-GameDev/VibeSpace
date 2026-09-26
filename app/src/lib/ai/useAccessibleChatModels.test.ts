@@ -281,6 +281,46 @@ describe('useAccessibleChatModels', () => {
     ).toBe(false);
   });
 
+  it('makes the native Codex route the primary visible row when merged OpenCode discovery came first', () => {
+    const groups = buildConnectionPickerGroups({
+      connections: [OPENCODE_CLI_CONNECTION, CODEX_CLI_CONNECTION],
+      modelsByProvider: {},
+      modelsByConnection: {
+        [OPENCODE_CLI_CONNECTION.id]: [
+          { id: 'openai/gpt-6-luna', label: 'GPT-6 Luna', source: 'opencode-live' },
+        ],
+        [CODEX_CLI_CONNECTION.id]: [
+          { id: 'gpt-6-luna', label: 'GPT-6 Luna', source: 'provider-live' },
+        ],
+      },
+      stateByConnection: {
+        [OPENCODE_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' },
+        [CODEX_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' },
+      },
+    });
+
+    const codexOpenAi = filterModelPickerGroupsForBackend(groups, 'codex').find(
+      (group) => group.id === 'provider:openai',
+    );
+    expect(codexOpenAi?.options[0]).toMatchObject({
+      id: 'openai-codex:gpt-6-luna',
+      modelId: 'gpt-6-luna',
+      connectionId: CODEX_CLI_CONNECTION.id,
+    });
+    expect(codexOpenAi?.options[0]?.alternativeRoutes?.map((route) => route.connectionId)).toEqual([
+      CODEX_CLI_CONNECTION.id,
+      OPENCODE_CLI_CONNECTION.id,
+    ]);
+
+    const openCodeOpenAi = filterModelPickerGroupsForBackend(groups, 'opencode').find(
+      (group) => group.id === 'provider:openai',
+    );
+    expect(openCodeOpenAi?.options[0]).toMatchObject({
+      id: 'opencode-cli:openai/gpt-6-luna',
+      connectionId: OPENCODE_CLI_CONNECTION.id,
+    });
+  });
+
   it('maps a stale exact Codex selection to the qualified live OpenCode route', () => {
     const options: ModelPickerOption[] = [
       {
@@ -332,6 +372,47 @@ describe('useAccessibleChatModels', () => {
         'opencode',
       ),
     ).toBeUndefined();
+  });
+
+  it('reconciles an OpenCode model selection to the exact Codex route when the chat runtime changes to Codex', () => {
+    const options: ModelPickerOption[] = [
+      {
+        id: 'opencode-cli:openai/gpt-6-luna',
+        provider: 'openai',
+        modelId: 'openai/gpt-6-luna',
+        label: 'GPT-6 Luna',
+        connectionId: OPENCODE_CLI_CONNECTION.id,
+        connection: OPENCODE_CLI_CONNECTION,
+        available: true,
+        catalogSource: 'opencode-live' as const,
+      },
+      {
+        id: 'openai-codex:gpt-6-luna',
+        provider: 'openai',
+        modelId: 'gpt-6-luna',
+        label: 'GPT-6 Luna',
+        connectionId: CODEX_CLI_CONNECTION.id,
+        connection: CODEX_CLI_CONNECTION,
+        available: true,
+        catalogSource: 'provider-live' as const,
+      },
+    ];
+
+    expect(
+      findBackendModelPickerRoute(
+        {
+          mode: 'single',
+          providerId: 'openai',
+          modelId: 'openai/gpt-6-luna',
+          connectionId: OPENCODE_CLI_CONNECTION.id,
+        },
+        options,
+        'codex',
+      ),
+    ).toMatchObject({
+      connectionId: CODEX_CLI_CONNECTION.id,
+      modelId: 'gpt-6-luna',
+    });
   });
 
   it('does not cross provider boundaries or choose an ambiguous same-leaf route', () => {
@@ -1226,20 +1307,86 @@ describe('useAccessibleChatModels', () => {
 
     const { result } = renderHook(() => useAccessibleChatModels());
 
-    await waitFor(() => expect(listPersistentCodexModels).toHaveBeenCalledOnce());
-    expect(getDiscoveredConnectionModels('openai-codex')).toEqual([
-      expect.objectContaining({ defaultReasoningEffort: 'low' }),
+    await waitFor(() => {
+      expect(listPersistentCodexModels).toHaveBeenCalledOnce();
+      expect(getDiscoveredConnectionModels('openai-codex')).toEqual([
+        expect.objectContaining({ defaultReasoningEffort: 'low' }),
+      ]);
+      const routes = result.current.flatOptions.flatMap((option) => option.alternativeRoutes ?? [option]);
+      expect(routes).toEqual([
+        expect.objectContaining({
+          connectionId: 'openai-codex',
+          modelId: 'gpt-5.6-luna',
+          available: true,
+          variants: ['low', 'high'],
+          catalogSource: 'provider-live',
+        }),
+      ]);
+    });
+  });
+
+  it('awaits live chat discovery and publishes both authenticated CLI catalogs before refresh resolves', async () => {
+    isConnectionSessionChecked.mockImplementation(
+      (id) => id === 'openai-codex' || id === 'opencode-cli',
+    );
+    listPersistentCodexModels.mockResolvedValue([
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', variants: ['low'] },
     ]);
-    const routes = result.current.flatOptions.flatMap((option) => option.alternativeRoutes ?? [option]);
-    expect(routes).toEqual([
+    listPersistentOpenCodeModels.mockResolvedValue([
+      { id: 'openai/gpt-5.6-sol', label: 'GPT-5.6 Sol', variants: ['low'] },
+    ]);
+    writeConnectionMetadata({
+      'openai-codex': {
+        installation: 'installed',
+        auth: 'authenticated',
+        lastCheckedAt: 1,
+      },
+      'opencode-cli': {
+        installation: 'installed',
+        auth: 'authenticated',
+        lastCheckedAt: 1,
+      },
+    });
+    markConnectionSessionChecked(['opencode-cli']);
+    runtimeManagerHarness.emit(
+      { kind: 'ready', source: 'system', version: '1.18.23' },
+      { version: '1.18.23', source: 'system', generation: 'refresh-live-cli-catalogs' },
+    );
+
+    const { result, unmount } = renderHook(() => useAccessibleChatModels());
+    await waitFor(() => {
+      expect(listPersistentCodexModels).toHaveBeenCalledOnce();
+      expect(listPersistentOpenCodeModels).toHaveBeenCalledOnce();
+    });
+
+    listPersistentCodexModels.mockResolvedValue([
+      { id: 'gpt-5.6-luna-refreshed', label: 'GPT-5.6 Luna Refreshed', variants: ['high'] },
+    ]);
+    listPersistentOpenCodeModels.mockResolvedValue([
+      { id: 'openai/gpt-5.6-sol-refreshed', label: 'GPT-5.6 Sol Refreshed', variants: ['medium'] },
+    ]);
+
+    await act(async () => {
+      await result.current.refreshModels();
+    });
+
+    expect(listPersistentCodexModels).toHaveBeenCalledTimes(2);
+    expect(listPersistentOpenCodeModels).toHaveBeenCalledTimes(2);
+    expect(getDiscoveredConnectionModels('openai-codex')).toEqual([
       expect.objectContaining({
-        connectionId: 'openai-codex',
-        modelId: 'gpt-5.6-luna',
-        available: true,
-        variants: ['low', 'high'],
-        catalogSource: 'provider-live',
+        id: 'gpt-5.6-luna-refreshed',
+        source: 'cli_model',
+        variants: ['high'],
       }),
     ]);
+    expect(getDiscoveredConnectionModels('opencode-cli')).toEqual([
+      expect.objectContaining({
+        id: 'openai/gpt-5.6-sol-refreshed',
+        source: 'opencode_refresh',
+        variants: ['medium'],
+      }),
+    ]);
+    unmount();
   });
 
   it('keeps a checked but unknown OpenCode session fail closed and clears stale evidence', async () => {

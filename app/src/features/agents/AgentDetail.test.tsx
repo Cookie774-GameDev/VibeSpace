@@ -126,6 +126,7 @@ describe('AgentDetail profile projection', () => {
     render(<AgentDetail />);
 
     expect(await screen.findByText('PROFILE CUSTOM INSTRUCTIONS')).toBeTruthy();
+    expect(screen.getByText('27 chars · ~7 tokens')).toBeTruthy();
     expect(screen.getByText('Custom instructions')).toBeTruthy();
     expect(screen.queryByText('System prompt')).toBeNull();
     expect(screen.queryByText(protectedJarvis.system_prompt)).toBeNull();
@@ -151,6 +152,7 @@ describe('AgentDetail profile projection', () => {
 
     await waitFor(() => expect(getActiveProfileMock).toHaveBeenCalledWith('account-a'));
     expect(screen.getByRole('status').textContent).toBe('Profile is still loading');
+    expect(screen.queryByText('0 chars · ~0 tokens')).toBeNull();
     expect(screen.queryByText(protectedJarvis.system_prompt)).toBeNull();
   });
 

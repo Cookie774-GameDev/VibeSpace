@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { createCaoMissionRuntime } from './missionRuntime';
+import { describe, expect, it, vi } from 'vitest';
+import * as secretDetector from '@/lib/security/secretDetector';
+import { createCaoMissionRuntime, sanitizeCaoMissionFailureReason } from './missionRuntime';
 import { createCaoMissionStore } from './missionStore';
 import type { CaoMission } from './types';
 
@@ -28,6 +29,22 @@ const scope = {
 } as const;
 
 describe('CAO mission runtime', () => {
+  it('uses the safe fallback when the secret policy omits public text', () => {
+    const policy = vi.spyOn(secretDetector, 'applySecretPolicy').mockReturnValueOnce({
+      decision: 'excluded',
+      findings: [],
+      requiresUserDecision: false,
+    });
+    try {
+      expect(sanitizeCaoMissionFailureReason('private failure detail')).toBe(
+        'cao_mission_start_failed',
+      );
+      expect(policy).toHaveBeenCalledWith('private failure detail', 'redact');
+    } finally {
+      policy.mockRestore();
+    }
+  });
+
   it('transitions durable mission lifecycle and recovers running work after reload', async () => {
     let current = mission;
     const runtime = createCaoMissionRuntime({

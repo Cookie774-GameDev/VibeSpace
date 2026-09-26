@@ -122,7 +122,7 @@ function pointerCapabilityKey(
   scope: ContextScope,
   pointer: ContextPointer,
   record: ContextRecord,
-  source: ContextSourceRead,
+  source: Pick<ContextSourceRead, 'contentHash' | 'sourceVersion'>,
 ): string {
   return JSON.stringify([
     scope.accountId,
@@ -201,6 +201,7 @@ export function createSiyuanRlmRepository(
     try {
       block = await port.getBlock(scope.projectId, blockId);
     } catch {
+      abortIfNeeded(signal);
       return undefined;
     }
     abortIfNeeded(signal);
@@ -213,6 +214,9 @@ export function createSiyuanRlmRepository(
     const id = recordId(digest, block.id);
     const previous = authorities.get(id)?.record;
     const observedAt = now();
+    const updatedAt = previous && previous.contentHash !== contentHash
+      ? observedAt
+      : previous?.updatedAt;
     const record = createContextRecord({
       id,
       accountId: scope.accountId,
@@ -223,7 +227,7 @@ export function createSiyuanRlmRepository(
       sourceId: block.id,
       parentSourceId: block.notebookId,
       createdAt: previous?.createdAt ?? observedAt,
-      ...(previous && previous.contentHash !== contentHash ? { updatedAt: observedAt } : {}),
+      ...(updatedAt === undefined ? {} : { updatedAt }),
       contentHash,
       contentRef: `siyuan://${block.notebookId}/${block.id}`,
       title: `SiYuan block ${block.id}`,
@@ -284,6 +288,7 @@ export function createSiyuanRlmRepository(
           MAX_SEARCH_RESULTS,
         );
       } catch {
+        abortIfNeeded(signal);
         return [];
       }
       abortIfNeeded(signal);
@@ -306,7 +311,9 @@ export function createSiyuanRlmRepository(
           signal,
         );
         if (!authority || authority.block.notebookId !== summary.notebookId) continue;
-        const byteEnd = Math.min(authority.bytes.length, MAX_POINTER_BYTES);
+        let byteEnd = Math.min(authority.bytes.length, MAX_POINTER_BYTES);
+        // Keep the capped, issued byte authority on a complete UTF-8 boundary.
+        while (byteEnd > 0 && (authority.bytes[byteEnd]! & 0xc0) === 0x80) byteEnd -= 1;
         const pointer = createContextPointer({
           id: `ptr:${authority.record.id}:0:${byteEnd}`,
           recordId: authority.record.id,
@@ -351,6 +358,31 @@ export function createSiyuanRlmRepository(
         scopeContains(current, scope) &&
         JSON.stringify(current) === JSON.stringify(record),
       );
+    },
+
+    authorizePointer(pointer, record, scope, signal) {
+      abortIfNeeded(signal);
+      const current = authorities.get(record.id);
+      if (!current || !scopeContains(record, scope) || JSON.stringify(current.record) !== JSON.stringify(record)) {
+        return false;
+      }
+      if (
+        pointer.recordId !== record.id ||
+        !Number.isSafeInteger(pointer.byteStart) ||
+        !Number.isSafeInteger(pointer.byteEnd) ||
+        pointer.byteStart! < 0 ||
+        pointer.byteEnd! <= pointer.byteStart! ||
+        pointer.byteEnd! > MAX_POINTER_BYTES ||
+        pointer.id !== `ptr:${record.id}:${pointer.byteStart}:${pointer.byteEnd}` ||
+        pointer.contentHash !== record.contentHash ||
+        pointer.sourceVersion !== current.sourceVersion
+      ) {
+        return false;
+      }
+      return issuedPointers.has(pointerCapabilityKey(scope, pointer, record, {
+        contentHash: record.contentHash,
+        sourceVersion: current.sourceVersion,
+      }));
     },
 
     validatePointer(pointer, record, source, scope, signal) {
@@ -401,6 +433,7 @@ export function createSiyuanRlmRepository(
       try {
         inboundBlockIds = await port.listInboundBacklinks(scope.projectId, parsed.blockId);
       } catch {
+        abortIfNeeded(signal);
         return [];
       }
       abortIfNeeded(signal);

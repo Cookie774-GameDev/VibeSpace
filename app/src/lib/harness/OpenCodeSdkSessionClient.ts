@@ -1,4 +1,5 @@
 import type { OpenCodeRequestControls } from './OpenCodeRequestControls';
+import { MUTATING_TOOL_GATEWAY_TOOLS } from './toolGatewayProtocol';
 import type { OpenCodeExecutionAgentId } from '../permissions/OpenCodePermissionProfile';
 import {
   extractOpenCodeTextPartUpdate,
@@ -33,6 +34,10 @@ export interface OpenCodeSdkClientLike {
     providers(): Promise<unknown>;
   };
   command: {
+    list(): Promise<unknown>;
+  };
+  /** Read-only catalog exposed by the installed OpenCode server. */
+  skill?: {
     list(): Promise<unknown>;
   };
   session: {
@@ -76,6 +81,21 @@ export function toProviderSafeOpenCodeTools(
     }
     safe[wireName] = enabled;
   }
+  // OpenCode's legacy prompt endpoint persists every tools flag as a
+  // session-wide wildcard permission after the selected agent's rules. Keep
+  // native mutation decisions inherited from that agent so a Full capability
+  // map cannot erase scoped/review asks.
+  // Explicit false flags remain intact to preserve deliberate denials.
+  for (const name of ['edit', 'write', 'patch', 'bash', 'shell', 'task']) {
+    const wireName = name.replace(/[^a-zA-Z0-9_-]/gu, '_');
+    if (safe[wireName] === true) delete safe[wireName];
+  }
+  // Gateway mutations also require the matching VibeSpace grant; omit their
+  // positive flags while preserving explicit denials and availability policy.
+  for (const name of MUTATING_TOOL_GATEWAY_TOOLS) {
+    const wireName = name.replace(/[^a-zA-Z0-9_-]/gu, '_');
+    if (safe[wireName] === true) delete safe[wireName];
+  }
   return Object.freeze(safe);
 }
 
@@ -89,10 +109,80 @@ export interface OpenCodeVariantTransportDescriptor {
 }
 
 export interface OpenCodeCommandDescriptor {
+  /** Exact identifier supplied by OpenCode. */
   readonly name: string;
+  readonly identifier: string;
+  /** Owner/source/name key; equal names from different sources remain distinct. */
+  readonly identity: string;
+  readonly source: string;
+  readonly executionCapability: 'session-command' | 'requires-native-cli-ui';
   readonly description?: string;
-  readonly source?: string;
-  readonly template?: string;
+}
+
+/** Metadata only; native skill bodies and command templates are never returned. */
+export interface OpenCodeNativeSkillDescriptor {
+  readonly name: string;
+  /** Absolute path of the registered SKILL.md. */
+  readonly location: string;
+  readonly description?: string;
+}
+
+const MAX_CATALOG_NAME_LENGTH = 256;
+const MAX_CATALOG_SOURCE_LENGTH = 64;
+const CONTROL_BYTES = /[\u0000-\u001f\u007f]/u;
+const EXECUTABLE_COMMAND_NAME = /^[a-z][a-z0-9_-]*$/iu;
+const KNOWN_COMMAND_SOURCES = new Set(['command', 'mcp', 'skill']);
+
+function encodeIdentityPart(value: string): string {
+  try {
+    return encodeURIComponent(value);
+  } catch {
+    const codeUnits = Array.from({ length: value.length }, (_, index) =>
+      value.charCodeAt(index).toString(16).padStart(4, '0'),
+    );
+    return `utf16-${codeUnits.join('-')}`;
+  }
+}
+
+function cleanCatalogDescription(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  return value.replace(/[\r\n\u0000-\u001f\u007f]+/gu, ' ').trim().slice(0, 512) || undefined;
+}
+
+function validCatalogName(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_CATALOG_NAME_LENGTH &&
+    value === value.trim() && !CONTROL_BYTES.test(value);
+}
+
+/** Compare the registered SKILL.md location to a selected file or directory. */
+export function canonicalOpenCodeSkillBasePath(value: unknown): string | undefined {
+  if (
+    typeof value !== 'string' ||
+    !value ||
+    value.length > 4096 ||
+    value !== value.trim() ||
+    CONTROL_BYTES.test(value)
+  ) return undefined;
+  const slashPath = value.replace(/\\/gu, '/');
+  const drive = slashPath.match(/^([a-z]:)\//iu)?.[1];
+  const unc = !drive && slashPath.startsWith('//');
+  if (!drive && !unc && !slashPath.startsWith('/')) return undefined;
+  const prefix = drive ? `${drive}/` : unc ? '//' : '/';
+  const remainder = drive ? slashPath.slice(3) : slashPath.slice(prefix.length);
+  const parts: string[] = [];
+  for (const part of remainder.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (!parts.length) return undefined;
+      parts.pop();
+    } else {
+      parts.push(part);
+    }
+  }
+  if (unc && parts.length < 2) return undefined;
+  if (parts.at(-1)?.toLocaleLowerCase('en-US') === 'skill.md') parts.pop();
+  const normalized = `${prefix}${parts.join('/')}`.replace(/\/$/u, '') || prefix;
+  return drive || unc ? normalized.toLocaleLowerCase('en-US') : normalized;
 }
 
 /**
@@ -175,6 +265,26 @@ function unwrapData<T>(value: unknown): T {
   return value as T;
 }
 
+/** Parse the scoped OpenCode skill catalog without exposing private body/template fields. */
+export function parseOpenCodeNativeSkillCatalog(
+  payload: unknown,
+): readonly OpenCodeNativeSkillDescriptor[] {
+  const listed = unwrapData<unknown>(payload);
+  if (!Array.isArray(listed)) throw new Error('OpenCode native skill catalog response is malformed.');
+  const skills = listed.flatMap((entry): OpenCodeNativeSkillDescriptor[] => {
+    if (!entry || typeof entry !== 'object') return [];
+    const value = entry as { name?: unknown; location?: unknown; description?: unknown };
+    if (!validCatalogName(value.name) || !canonicalOpenCodeSkillBasePath(value.location)) return [];
+    const description = cleanCatalogDescription(value.description);
+    return [Object.freeze({
+      name: value.name,
+      location: value.location as string,
+      ...(description ? { description } : {}),
+    })];
+  });
+  return Object.freeze(skills);
+}
+
 function requiredId(value: unknown, label: string): string {
   if (!value || typeof value !== 'object') throw new Error(`${label} response is malformed.`);
   const id = (value as { id?: unknown }).id;
@@ -217,12 +327,9 @@ export class OpenCodeSdkSessionClient implements OpenCodeSessionClient {
   async getSession(sessionId: string): Promise<{ id: string } | null> {
     const id = sessionId.trim();
     if (!id || !this.client.session.get) return null;
-    try {
-      const response = unwrapData(await this.client.session.get({ path: { id } }));
-      return { id: requiredId(response, 'OpenCode session.get') };
-    } catch {
-      return null;
-    }
+    const response = unwrapData(await this.client.session.get({ path: { id } }));
+    if (response === null) return null;
+    return { id: requiredId(response, 'OpenCode session.get') };
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -234,14 +341,42 @@ export class OpenCodeSdkSessionClient implements OpenCodeSessionClient {
   async listCommandsAsync(): Promise<readonly OpenCodeCommandDescriptor[]> {
     const listed = unwrapData<unknown>(await this.client.command.list());
     if (!Array.isArray(listed)) throw new Error('OpenCode command catalog response is malformed.');
-    return Object.freeze(listed.flatMap((entry): OpenCodeCommandDescriptor[] => {
+    const parsed = listed.flatMap((entry): OpenCodeCommandDescriptor[] => {
       if (!entry || typeof entry !== 'object') return [];
-      const name = typeof (entry as { name?: unknown }).name === 'string'
-        ? (entry as { name: string }).name.trim().toLowerCase()
-        : '';
-      if (!/^[a-z][a-z0-9_-]*$/u.test(name)) return [];
-      return [{ name }];
-    }));
+      const value = entry as { name?: unknown; source?: unknown; description?: unknown };
+      const name = value.name;
+      if (!validCatalogName(name)) return [];
+      const rawSource = value.source;
+      const source = typeof rawSource === 'string' &&
+        rawSource.length <= MAX_CATALOG_SOURCE_LENGTH &&
+        rawSource === rawSource.trim() && !CONTROL_BYTES.test(rawSource)
+        ? rawSource
+        : rawSource === undefined ? 'command' : 'unknown';
+      const description = cleanCatalogDescription(value.description);
+      return [Object.freeze({
+        name,
+        identifier: name,
+        identity: `opencode:${encodeIdentityPart(source)}:${encodeIdentityPart(name)}`,
+        source,
+        executionCapability:
+          KNOWN_COMMAND_SOURCES.has(source) && EXECUTABLE_COMMAND_NAME.test(name)
+            ? 'session-command' as const
+            : 'requires-native-cli-ui' as const,
+        ...(description ? { description } : {}),
+      })];
+    });
+    const unique = new Map<string, OpenCodeCommandDescriptor>();
+    for (const descriptor of parsed) {
+      if (!unique.has(descriptor.identity)) unique.set(descriptor.identity, descriptor);
+    }
+    return Object.freeze(Array.from(unique.values()));
+  }
+
+  async listSkillsAsync(): Promise<readonly OpenCodeNativeSkillDescriptor[]> {
+    if (!this.client.skill?.list) {
+      throw new Error('HARNESS_INCOMPATIBLE: installed OpenCode client cannot inspect native skills.');
+    }
+    return parseOpenCodeNativeSkillCatalog(await this.client.skill.list());
   }
 
   async sendAsync(input: {
@@ -297,7 +432,10 @@ export class OpenCodeSdkSessionClient implements OpenCodeSessionClient {
         'A session id, execution agent, and registered command are required.',
       );
     }
-    const registered = (await this.listCommandsAsync()).some((entry) => entry.name === command);
+    const registered = (await this.listCommandsAsync()).some(
+      (entry) => entry.name.toLocaleLowerCase('en-US') === command &&
+        entry.executionCapability === 'session-command',
+    );
     if (!registered) {
       throw new Error(
         `OpenCode command /${command} is not registered in the live command catalog.`,

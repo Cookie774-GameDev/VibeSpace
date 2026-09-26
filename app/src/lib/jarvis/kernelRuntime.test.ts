@@ -708,9 +708,15 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
       (value) => ({ kind: 'resolved' as const, value }),
       (error: unknown) => ({ kind: 'rejected' as const, error }),
     );
-    await vi.waitFor(() => {
+    await vi.waitFor(async () => {
       expect(start).toHaveBeenCalledOnce();
       expect(registeredOwners.has(`${turn.run.id}:provider`)).toBe(true);
+      // This case cancels after durable provider start, before any response.
+      // start() returning does not mean both asynchronous start events committed.
+      const startedEvents = await db.jarvis_events.orderBy('[run_id+seq]').toArray();
+      expect(startedEvents.map((event) => event.status)).toEqual([
+        'compiling', 'running', 'started', 'started',
+      ]);
     });
 
     const cancellation = await runtime.kernel.requestCancellation({

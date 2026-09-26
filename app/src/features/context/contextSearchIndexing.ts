@@ -14,8 +14,11 @@ import {
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_BATCH_BODY_BYTES = 4 * 1024 * 1024;
-const MAX_BATCH_DOCUMENTS = 8;
-const MAX_MAP_DOCUMENTS = 1_000;
+const MAX_BATCH_DOCUMENTS = 64;
+const MAX_DELETE_BATCH_DOCUMENTS = 1_000;
+// The native limit is per mutation; population writes at most eight documents
+// per batch, so a larger bounded source tree is safe to index incrementally.
+const MAX_MAP_DOCUMENTS = 10_000;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/u;
 const SAFE_HASH = /^sha256:[a-f0-9]{64}$/u;
 
@@ -230,7 +233,13 @@ async function documentFor(
     kind: 'text',
     contentSample: read.content,
   });
-  if (!decision.allowed) return fail('source_denied');
+  if (!decision.allowed) {
+    // A discovered secret remains a structural node in the SiYuan graph, but
+    // its body must never enter the model-searchable derivative index.
+    if (decision.reason === 'secret_content' || decision.reason === 'secret_filename' ||
+      decision.reason === 'credential_path') return null;
+    return fail('source_denied');
+  }
   const computedHash = await dependencies.hash(read.content);
   abortIfNeeded(signal);
   const after = await dependencies.stat(candidate.absolutePath, true, access);
@@ -286,8 +295,44 @@ export function createContextSearchIndexPopulationPort(
     hash: input.hash ?? sha256Text,
   };
 
+  const deleteDocumentsBounded = async (
+    accountId: string,
+    mapId: string,
+    documentIds: readonly string[],
+  ) => {
+    for (let offset = 0; offset < documentIds.length; offset += MAX_DELETE_BATCH_DOCUMENTS) {
+      await port.deleteDocuments(
+        accountId,
+        mapId,
+        documentIds.slice(offset, offset + MAX_DELETE_BATCH_DOCUMENTS),
+      );
+    }
+  };
+
+  const replaceDocumentsWithRetry = async (
+    accountId: string,
+    mapId: string,
+    documents: readonly ContextSearchDocumentInput[],
+    signal?: AbortSignal,
+  ) => {
+    for (let attempt = 0; ; attempt++) {
+      abortIfNeeded(signal);
+      try {
+        return await port.replaceDocuments(accountId, mapId, documents);
+      } catch (error) {
+        // Windows can briefly deny a Tantivy segment while a merge closes it.
+        // Replacement is idempotent by document ID; retry only that native
+        // commit race, keeping every other failure and cancellation visible.
+        const message = String(error);
+        if (attempt >= 2 || !message.includes('context_search_commit:') ||
+          !(/PermissionDenied|Access is denied/u.test(message))) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+  };
+
   const cleanup = async (accountId: string, mapId: string, documentIds: readonly string[]) => {
-    await port.deleteDocuments(accountId, mapId, documentIds);
+    await deleteDocumentsBounded(accountId, mapId, documentIds);
     const status = await port.status(accountId, mapId);
     if (status.documentCount !== 0) fail('cleanup_failed');
   };
@@ -309,7 +354,7 @@ export function createContextSearchIndexPopulationPort(
         // This port is used for newly created maps and confirmed-empty repair.
         // Delete exact snapshot IDs first so retry is deterministic.
         if (documentIds.length > 0) {
-          await port.deleteDocuments(accountId, map.id, documentIds);
+          await deleteDocumentsBounded(accountId, map.id, documentIds);
         }
         const initial = await port.status(accountId, map.id);
         if (initial.documentCount !== 0 || initial.needsRebuild) fail('not_empty');
@@ -319,7 +364,7 @@ export function createContextSearchIndexPopulationPort(
         const flush = async () => {
           if (batch.length === 0) return;
           abortIfNeeded(signal);
-          const result = await port.replaceDocuments(accountId, map.id, batch);
+          const result = await replaceDocumentsWithRetry(accountId, map.id, batch, signal);
           if (result.affectedDocuments !== batch.length) fail('mutation_failed');
           affected += batch.length;
           batch = [];

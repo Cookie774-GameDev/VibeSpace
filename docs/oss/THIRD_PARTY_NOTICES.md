@@ -62,3 +62,18 @@ provenance, modification, license status, and release blocker are recorded in
 ## Ponytail (Token Saver)
 
 DietrichGebert/ponytail, pinned commit 356918eba965ee1eac64bd3a7f0dd02108350de5, MIT, Copyright (c) 2026 DietrichGebert. The upstream skill and adapted full-mode filtering are bundled for Token Saver. Full license and modification record: app/.jarvis/skills/ponytail/LICENSE.txt and UPSTREAM.md. No lifecycle executables or global hooks are installed.
+
+## Relaycast local runtime
+
+The packaged local Relay engine includes the pinned 138-package Node closure
+listed in `app/src-tauri/resources/relay-runtime/relay-runtime-lock.json`.
+The archive retains package-provided license and NOTICE files. Six published
+packages omit SPDX license metadata; their upstream repositories identify
+Apache License 2.0: `@agent-relay/sdk@12.4.1` from
+AgentWorkforce/relay and `@relaycast/a2a`, `@relaycast/engine`,
+`@relaycast/mcp`, `@relaycast/sdk`, and `@relaycast/types` at 8.12.0 from
+AgentWorkforce/relaycast. `drizzle-orm@0.45.3` declares Apache-2.0 in its
+package metadata but omits the text from its npm archive. The full license
+text and attribution are bundled at
+`app/src-tauri/resources/relay-runtime/LICENSE-APACHE-2.0.txt`; package and
+upstream source details are in the Relay runtime notice.

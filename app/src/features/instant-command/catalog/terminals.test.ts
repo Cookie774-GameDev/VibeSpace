@@ -40,7 +40,6 @@ describe('terminal and agent command catalog', () => {
       'terminal.clear',
       'terminal.stop',
       'terminal.close',
-      'terminal.run_saved_command',
       'terminal.cancel_queued',
       'agent.message',
       'agent.broadcast',

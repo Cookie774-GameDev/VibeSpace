@@ -1,6 +1,12 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), panels: [] as any[], overlay: vi.fn() }));
+import { createRelayRoomController } from '@/lib/relay/relayRoomController';
+const mocks = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  panels: [] as any[],
+  overlay: vi.fn(),
+  relay: vi.fn(),
+}));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 vi.mock('@/stores/auth', () => ({
   useAuthStore: Object.assign((selector: any) => selector({ projectId: 'project-k24' }), {
@@ -14,9 +20,18 @@ vi.mock('@/features/tools/terminal-peer-fabric/TerminalFabricOverlay', () => ({
     return null;
   },
 }));
+vi.mock('./RelayGroupChat', () => ({
+  RelayGroupChat: (props: any) => {
+    mocks.relay(props);
+    return null;
+  },
+}));
 import { readWorkbenchFabricTargets, WorkbenchFabric } from './WorkbenchFabric';
 import { useFabricPresentationStore } from '@/features/tools/terminal-peer-fabric/fabricPresentationStore';
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mocks.relay.mockClear();
+});
 it('discovers ten real Workbench sessions with native project identities, not the terminal-page tree', async () => {
   mocks.panels = Array.from({ length: 10 }, (_, i) => ({
     id: `wb-${i}`,
@@ -56,4 +71,70 @@ it('opens the shared picker scoped to the Workbench panel frames', () => {
       paneSelector: '.workbench-canvas .workbench-panel:not(.wb-creative-item)',
     }),
   );
+});
+
+it('opens Relay offline with no invented messages, participants, or human authority', async () => {
+  render(<WorkbenchFabric />);
+  fireEvent.click(screen.getByRole('button', { name: 'Open Agent Relay group chat' }));
+  const props = mocks.relay.mock.lastCall?.[0];
+  expect(props).toMatchObject({
+    open: true,
+    humanAuthorized: false,
+    room: { connection: 'offline', participants: [], messages: [] },
+  });
+  await expect(props.onSend('forged message')).rejects.toThrow('Relay room unavailable');
+  await expect(props.onStopAll()).rejects.toThrow('Relay room unavailable');
+});
+
+it('projects only host-bound controller data and forwards owner actions through it', async () => {
+  const ticket = Object.freeze({ verified: true });
+  const roomSnapshot = vi.fn().mockResolvedValue({
+    channel: 'vibespace',
+    participants: [
+      { id: 'human-id', name: 'Owner', role: 'human', status: 'online', iconKey: 'human-id' },
+    ],
+    messages: [
+      {
+        messageId: 'sdk-message',
+        text: 'Actual SDK text',
+        authorId: 'human-id',
+        authorName: 'Owner',
+        authorRole: 'human',
+        createdAt: '2026-09-25T00:00:00Z',
+        replyCount: 0,
+        authority: 'untrusted-peer',
+      },
+    ],
+  });
+  const humanBroadcast = vi.fn().mockResolvedValue({ id: 'sdk-ack' });
+  const humanStop = vi.fn().mockResolvedValue(undefined);
+  const controller = createRelayRoomController({
+    bridge: { roomSnapshot, humanBroadcast, humanStop },
+    humanSessionId: 'verified-human-session',
+    getHumanControlTicket: () => ticket,
+    scope: 'Project',
+    channel: 'vibespace',
+    listActiveAgentSessionIds: () => ['host-agent-session'],
+  });
+  const view = render(<WorkbenchFabric relayController={controller} />);
+  expect(roomSnapshot).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Open Agent Relay group chat' }));
+  await waitFor(() =>
+    expect(mocks.relay.mock.lastCall?.[0]).toMatchObject({
+      humanAuthorized: true,
+      room: { connection: 'connected', messages: [{ id: 'sdk-message', text: 'Actual SDK text' }] },
+    }),
+  );
+  expect(roomSnapshot).toHaveBeenCalledWith('verified-human-session', ticket, 30);
+  const props = mocks.relay.mock.lastCall?.[0];
+  await act(async () => {
+    await props.onSend('real request');
+  });
+  expect(humanBroadcast).toHaveBeenCalledWith('verified-human-session', ticket, 'real request');
+  await act(async () => {
+    await props.onStopAll();
+  });
+  expect(humanStop).toHaveBeenCalledWith('verified-human-session', ticket, 'host-agent-session');
+  view.unmount();
+  controller.dispose();
 });

@@ -52,3 +52,39 @@ describe('status.show navigation authority', () => {
     expect(port.readRouterStatus).not.toHaveBeenCalled();
   });
 });
+
+
+describe('status.show visible result', () => {
+  it('presents the validated local result exactly once without opening another surface', async () => {
+    const port = { ...authority(), showRouterStatus: vi.fn() };
+    const result = await executeNavigationCommand({ id: 'status.show', slots: {} }, port);
+    expect(result.ok).toBe(true);
+    expect(port.showRouterStatus).toHaveBeenCalledExactlyOnceWith(result.message);
+    expect(port.openRoute).not.toHaveBeenCalled();
+    expect(port.openProviderConnections).not.toHaveBeenCalled();
+  });
+
+  it('does not present success for invalid slot data', async () => {
+    const port = { ...authority(), showRouterStatus: vi.fn() };
+    const result = await executeNavigationCommand({ id: 'status.show', slots: { scope: 'unexpected' } }, port);
+    expect(result.ok).toBe(false);
+    expect(port.readRouterStatus).not.toHaveBeenCalled();
+    expect(port.showRouterStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not present a fabricated success when catalog counts are unavailable', async () => {
+    const port = { ...authority(), readRouterStatus: vi.fn(() => { throw new Error('catalog unavailable'); }), showRouterStatus: vi.fn() };
+    expect((await executeNavigationCommand({ id: 'status.show', slots: {} }, port)).ok).toBe(false);
+    expect(port.showRouterStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not present stale status when cancellation happens during its read', async () => {
+    const controller = new AbortController();
+    const port = { ...authority(), showRouterStatus: vi.fn(), readRouterStatus: vi.fn(() => {
+      controller.abort();
+      return { state: 'ready' as const, catalogCommands: 12, availableCommands: 8, gatedCommands: 4 };
+    }) };
+    expect((await executeNavigationCommand({ id: 'status.show', slots: {} }, port, controller.signal)).ok).toBe(false);
+    expect(port.showRouterStatus).not.toHaveBeenCalled();
+  });
+});

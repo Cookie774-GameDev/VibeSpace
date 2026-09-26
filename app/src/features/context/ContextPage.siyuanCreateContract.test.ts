@@ -129,7 +129,7 @@ describe('ContextPage SiYuan creation contract', () => {
   });
 
   it('opens an exact map as a dedicated official SiYuan page inside the Context route', () => {
-    expect(source).toContain("import { SiyuanVaultSurface } from './siyuan/SiyuanVaultSurface'");
+    expect(source).toContain("SiyuanVaultSurface } from './siyuan/SiyuanVaultSurface'");
     expect(source).toContain('data-context-siyuan-map-page');
     expect(source).toContain('<SiyuanVaultSurface');
     expect(source).toContain('mapId={selectedMap.id}');
@@ -141,6 +141,9 @@ describe('ContextPage SiYuan creation contract', () => {
 
   it('shows an accessible reduced-motion-safe animation while a Context Map is working', () => {
     expect(source).toContain('data-testid="siyuan-working-animation"');
+    expect(source).toContain('density="fine"');
+    expect(source).toContain("failed={job.status === 'failed'}");
+    expect(source).toContain("? 'Failed · repair needed'");
     expect(source).toContain('label="SiYuan map creation progress"');
     expect(source).toContain('aria-hidden="true"');
     expect(source).toContain('motion-reduce:animate-none');
@@ -301,5 +304,12 @@ describe('ContextPage SiYuan creation contract', () => {
     expect(resume).toContain('indexControlRef.current?.resume();');
     expect(resume).toContain('setIndexResumeNonce((value) => value + 1);');
     expect(resume).not.toContain('else setIndexResumeNonce');
+  });
+
+  it('shows a native string error when opening a SiYuan Context Map fails', () => {
+    const errorStart = source.indexOf("'SiYuan Context Map unavailable',");
+    const errorEnd = source.indexOf("'Unknown local vault error',", errorStart);
+    expect(errorStart).toBeGreaterThan(-1);
+    expect(source.slice(errorStart, errorEnd)).toContain("typeof error === 'string' && error.trim()");
   });
 });

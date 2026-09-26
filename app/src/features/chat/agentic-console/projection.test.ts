@@ -171,6 +171,118 @@ describe('projectAgenticTranscript', () => {
       expect(projectAgenticTranscriptWindow(messages, events).visible.filter(block => block.kind === 'diff')).toHaveLength(1);
     }
   });
+  it('projects completed file changes from the persisted native edit receipt', () => {
+    // Minimized from native-followup-1790407314935.json (SHA256 EE4A1F8D5410958096AFF0D9865084D2EF6380183EE8FDFB1F7A0C2F128A124A).
+    const changedPath = 'D:\\VibeSpace-Testing\\Chat01-CH31-fixtures\\codex-mode-full.txt';
+    const diff = '@@ -1 +1 @@\n-CH31_MODE_ORIGINAL_CODEX_FULL\n\\ No newline at end of file\n+CH31_MODE_CHANGED_CODEX_FULL\n';
+    const savedMessage = message('msg_jreq_cea43034-38fa-4fd2-892e-a5363fa725d1', 'assistant', 1790407339413, [
+      {
+        kind: 'tool_call',
+        tool: 'edit',
+        call_id: 'exec-59244565-fba3-442a-9d71-68f99d1a7065',
+        args: { path: 'codex-mode-full.txt' },
+        details: { changes: [{ path: changedPath, kind: 'update', complete: true, diff }] },
+      },
+      {
+        kind: 'tool_result',
+        call_id: 'exec-59244565-fba3-442a-9d71-68f99d1a7065',
+        result: { status: 'completed' },
+      },
+    ]);
+    const blocks = projectAgenticTranscript([savedMessage], []);
+    const diffs = blocks.filter((block) => block.kind === 'diff');
+
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]).toMatchObject({
+      kind: 'diff',
+      status: 'done',
+      filePath: changedPath,
+      diff,
+    });
+  });
+  it('requires completed matching results and complete details before confirming per-file patches', () => {
+    const fullChange = { path: 'src/alpha.txt', kind: 'update' as const, complete: true, diff: '-old\n+new' };
+    const cases = [
+      { label: 'pending result', details: { changes: [fullChange] }, result: { status: 'pending' } },
+      { label: 'failed result', details: { changes: [fullChange] }, result: { status: 'failed', diff: fullChange.diff } },
+      { label: 'errored result', details: { changes: [fullChange] }, result: { status: 'completed', diff: fullChange.diff }, error: 'write failed' },
+      { label: 'incomplete details without a final diff', details: { changes: [{ ...fullChange, complete: false }] }, result: { status: 'completed' } },
+    ];
+
+    for (const [index, item] of cases.entries()) {
+      const messages = [message(`unconfirmed-${index}`, 'assistant', index + 1, [
+        { kind: 'tool_call', tool: 'edit', call_id: `edit-${index}`, args: { path: fullChange.path }, details: item.details },
+        { kind: 'tool_result', call_id: `edit-${index}`, result: item.result, error: item.error },
+      ])];
+      expect(projectAgenticTranscript(messages, []).filter((block) => block.kind === 'diff'), item.label).toHaveLength(0);
+    }
+  });
+  it('keeps a successful final result.diff when the earlier tool-call details were incomplete', () => {
+    const messages = [message('final-result-diff', 'assistant', 1, [
+      { kind: 'tool_call', tool: 'edit', call_id: 'edit-final', args: { path: 'src/alpha.txt' }, details: {
+        changes: [{ path: 'src/alpha.txt', kind: 'update', complete: false, diff: '-old\n+provisional' }],
+      } },
+      { kind: 'tool_result', call_id: 'edit-final', result: { status: 'completed', diff: '-old\n+final' } },
+    ])];
+
+    expect(projectAgenticTranscript(messages, []).filter((block) => block.kind === 'diff')).toMatchObject([
+      { kind: 'diff', status: 'done', filePath: 'src/alpha.txt', diff: '-old\n+final' },
+    ]);
+  });
+  it('deduplicates complete details by path and suppresses a matching result.diff duplicate', () => {
+    const alpha = { path: 'src/alpha.txt', kind: 'update' as const, complete: true, diff: '-old\n+new' };
+    const beta = { path: 'src/beta.txt', kind: 'add' as const, complete: true, diff: '+second file' };
+    const messages = [message('multi-edit', 'assistant', 1, [
+      { kind: 'tool_call', tool: 'edit', call_id: 'multi', args: {}, details: { changes: [alpha, alpha, beta] } },
+      { kind: 'tool_result', call_id: 'multi', result: { status: 'completed', diff: alpha.diff } },
+    ])];
+
+    const diffs = projectAgenticTranscript(messages, []).filter((block) => block.kind === 'diff');
+
+    expect(diffs).toHaveLength(2);
+    expect(diffs.map((block) => block.kind === 'diff' ? block.filePath : undefined)).toEqual([
+      'src/alpha.txt',
+      'src/beta.txt',
+    ]);
+  });
+  it('keeps a result diff for a distinct known path even when its patch text matches another file', () => {
+    const identicalDiff = '-old\n+new';
+    const messages = [message('same-patch-different-files', 'assistant', 1, [
+      {
+        kind: 'tool_call',
+        tool: 'edit',
+        call_id: 'same-patch',
+        args: { path: 'src/beta.txt' },
+        details: { changes: [{ path: 'D:\\repo\\src\\alpha.txt', kind: 'update', complete: true, diff: identicalDiff }] },
+      },
+      { kind: 'tool_result', call_id: 'same-patch', result: { status: 'completed', diff: identicalDiff } },
+    ])];
+
+    const diffs = projectAgenticTranscript(messages, []).filter((block) => block.kind === 'diff');
+
+    expect(diffs).toHaveLength(2);
+    expect(diffs.map((block) => block.kind === 'diff' ? block.filePath : undefined).sort()).toEqual([
+      'D:\\repo\\src\\alpha.txt',
+      'src/beta.txt',
+    ].sort());
+  });
+  it('matches a relative result path to its unique absolute detail path after slash normalization', () => {
+    const messages = [message('relative-to-absolute-path', 'assistant', 1, [
+      {
+        kind: 'tool_call',
+        tool: 'edit',
+        call_id: 'same-file',
+        args: { path: 'src\\alpha.txt' },
+        details: { changes: [{ path: 'D:/repo/src/alpha.txt', kind: 'update', complete: true, diff: '-old\n+detail' }] },
+      },
+      { kind: 'tool_result', call_id: 'same-file', result: { status: 'completed', diff: '-old\n+result' } },
+    ])];
+
+    const diffs = projectAgenticTranscript(messages, []).filter((block) => block.kind === 'diff');
+
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]).toMatchObject({ filePath: 'D:/repo/src/alpha.txt', diff: '-old\n+detail' });
+  });
   it('does not collapse distinct edits merely because their diff text is identical', () => {
     const messages = ['first', 'second'].map((id, index) => message(id, 'assistant', index + 1, [
       {kind: 'tool_call', tool: 'edit', call_id: 'one', args: {path: 'alpha.txt'}},
@@ -178,14 +290,33 @@ describe('projectAgenticTranscript', () => {
     ]));
     expect(summarizeAgenticSession(messages, [])).toMatchObject({addedLines: 2, removedLines: 2});
   });
-  it('counts saved authoritative changes even when a source reference keeps the message interactive', () => {
+  it('keeps completed saved diffs visible when a source reference retains the interactive legacy message', () => {
+    const changedPath = 'D:\\VibeSpace-Testing\\Chat01-CH31-fixtures\\codex-mode-full.txt';
+    const diff = '@@ -1 +1 @@\n-old\n+new';
     const saved = message('with-source', 'assistant', 1, [
+      { kind: 'text', text: 'The saved change is complete.' },
       { kind: 'jarvis_source_ref', source: { id: 'source', kind: 'project_file', label: 'Context', trust: 'app_verified', sensitivity: 'restricted' } },
-      { kind: 'tool_call', tool: 'edit', call_id: 'edit', args: { path: 'alpha.txt' } },
-      { kind: 'tool_result', call_id: 'edit', result: { status: 'completed', diff: '-old\n+new' } },
+      {
+        kind: 'tool_call',
+        tool: 'edit',
+        call_id: 'edit',
+        args: { path: 'codex-mode-full.txt' },
+        details: { changes: [{ path: changedPath, kind: 'update' as const, complete: true, diff }] },
+      },
+      { kind: 'tool_result', call_id: 'edit', result: { status: 'completed' } },
     ]);
+
+    const blocks = projectAgenticTranscript([saved], []);
+    const diffs = blocks.filter((block) => block.kind === 'diff');
+    expect(blocks.filter((block) => block.kind === 'legacy')).toHaveLength(1);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]).toMatchObject({ kind: 'diff', status: 'done', filePath: changedPath, diff });
     expect(summarizeAgenticSession([saved], [])).toMatchObject({ fileCount: 1, addedLines: 1, removedLines: 1 });
-    expect(projectAgenticTranscript([saved], [])[0]?.kind).toBe('legacy');
+
+    const window = projectAgenticTranscriptWindow([saved], [], 10);
+    expect(window.total).toBe(blocks.length);
+    expect(window.visible.filter((block) => block.kind === 'legacy')).toHaveLength(1);
+    expect(window.visible.filter((block) => block.kind === 'diff')).toHaveLength(1);
   });
   it('keeps unavailable usage distinct from estimates and observed zero', () => {
     expect(summarizeAgenticSession([message('u', 'assistant', 1, [], {

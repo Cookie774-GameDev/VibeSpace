@@ -185,6 +185,26 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
   ) {
     const listRef = useRef<HTMLDivElement>(null);
     const surfaceRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+      const list = listRef.current;
+      if (!list) return;
+      // WebView2 can dispatch a wheel event to this nested list without applying
+      // its default scroll. Own the wheel here so long catalogs remain usable.
+      const scrollWithWheel = (event: WheelEvent) => {
+        if (event.ctrlKey || list.scrollHeight <= list.clientHeight) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const unit =
+          event.deltaMode === WheelEvent.DOM_DELTA_LINE
+            ? 16
+            : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+              ? list.clientHeight
+              : 1;
+        list.scrollTop += event.deltaY * unit;
+      };
+      list.addEventListener('wheel', scrollWithWheel, { passive: false });
+      return () => list.removeEventListener('wheel', scrollWithWheel);
+    }, []);
     const pickerId = useId();
     const reducedMotion = useReducedMotion();
     const dropdownTransition = useThemeMotionTransition(LEGACY_DROPDOWN_TRANSITION);
@@ -365,6 +385,32 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
       else if (option) beginSelection(option);
     };
 
+    const movePage = (direction: -1 | 1) => {
+      if (pendingOption || pendingRoutes || navIds.length === 0) return;
+      const list = listRef.current;
+      const rows = list
+        ? Array.from(list.querySelectorAll<HTMLElement>('[role="option"][data-value]'))
+        : [];
+      const rowHeight = rows
+        .map((row) => row.getBoundingClientRect().height || row.offsetHeight)
+        .find((height) => height > 0);
+      const viewportHeight =
+        list?.clientHeight || list?.getBoundingClientRect().height || (compact ? 200 : 280);
+      const pageRows = Math.max(
+        1,
+        Math.min(navIds.length, Math.floor(viewportHeight / (rowHeight || (compact ? 40 : 56)))),
+      );
+      const currentIndex = navIds.indexOf(selectedRowId);
+      const startIndex =
+        currentIndex >= 0 ? currentIndex : direction > 0 ? -1 : navIds.length;
+      const targetIndex = Math.max(
+        0,
+        Math.min(navIds.length - 1, startIndex + direction * pageRows),
+      );
+      const targetId = navIds[targetIndex];
+      if (targetId) onHoverId?.(targetId);
+    };
+
     useImperativeHandle(ref, () => ({
       moveUp: () => {
         if (pendingRoutes) {
@@ -428,8 +474,15 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
           return;
         }
         const selectedExactRoute = exactOptions.find((option) => option.id === selectedId);
+        const highlightedLogicalRow = flatOptions.find((option) => option.id === selectedRowId);
+        const sameConnection =
+          selectedExactRoute?.connectionId ?? selectedExactRoute?.connection?.id;
+        const highlightedConnection =
+          highlightedLogicalRow?.connectionId ?? highlightedLogicalRow?.connection?.id;
         const id = navIds.includes(selectedRowId)
-          ? (selectedExactRoute?.id ?? selectedRowId)
+          ? selectedExactRoute && sameConnection === highlightedConnection
+            ? selectedExactRoute.id
+            : selectedRowId
           : navIds[0];
         if (id) selectId(id);
       },
@@ -496,6 +549,13 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
         initial={false}
         role="dialog"
         aria-label="Choose AI model"
+        onKeyDown={(event) => {
+          if (event.key !== 'PageDown' && event.key !== 'PageUp') return;
+          if (pendingOption || pendingRoutes) return;
+          event.preventDefault();
+          event.stopPropagation();
+          movePage(event.key === 'PageDown' ? 1 : -1);
+        }}
         data-pet-scaled-picker={compact ? 'true' : undefined}
         className={cn(
           'model-picker-typeahead jarvis-slash-dropdown overflow-hidden rounded-[14px] border border-border-mid/80',

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { ChatActivityEvent } from '../activity/types';
@@ -210,6 +210,170 @@ describe('AgenticConsole', () => {
     expect(screen.getByText('Update the chat renderer.')).toBeTruthy();
     expect(screen.getByText('The renderer is updated.')).toBeTruthy();
     expect(screen.queryByRole('article', { name: 'Diff AgenticConsole.tsx' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show changed files' }));
+    expect(screen.getByRole('dialog', { name: 'Changed files' }).textContent).toContain('AgenticConsole.tsx');
+    fireEvent.click(screen.getByRole('button', { name: 'Show token usage' }));
+    const usagePanel = screen.getByRole('dialog', { name: 'Token usage' });
+    expect(usagePanel.textContent).toContain('Input80');
+    expect(usagePanel.textContent).toContain('Output20');
+    expect(within(usagePanel).getByRole('region', { name: 'Usage for local-model' }).textContent).toContain('Input80');
+    expect(usagePanel.textContent).toContain('Unavailable from CLI');
+  });
+
+  it('keeps cache and cost aggregates unavailable when any usage row omits them', () => {
+    renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('partial-usage-a', 'assistant', 10, [{ kind: 'text', text: 'First response.' }], {
+          input_tokens: 40,
+          output_tokens: 10,
+          cache_read_tokens: 7,
+          cost_usd: 1.25,
+          model: 'model-a',
+        }),
+        message('partial-usage-b', 'assistant', 20, [{ kind: 'text', text: 'Second response.' }], {
+          input_tokens: 50,
+          output_tokens: 12,
+          model: 'model-b',
+        }),
+      ],
+      activity: [],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show token usage' }));
+    const panel = screen.getByRole('dialog', { name: 'Token usage' });
+    const globalUsage = panel.querySelector<HTMLElement>(':scope > .agentic-session__usage-list')!;
+    for (const label of ['Cache read', 'Cache write', 'Reported cost']) {
+      const row = within(globalUsage).getByText(label).parentElement;
+      expect(row?.querySelector('dd')?.textContent).toBe(label === 'Reported cost' ? 'Unavailable from CLI' : '—');
+    }
+  });
+
+  it('does not count read-only file access as a confirmed changed file', () => {
+    renderConsole({
+      chatId: 'chat-console',
+      messages: [message('read-only', 'assistant', 10, [
+        { kind: 'tool_call', call_id: 'read-one', tool: 'read', args: { path: 'src/read-only.ts' } },
+        { kind: 'tool_result', call_id: 'read-one', result: { status: 'completed', path: 'src/read-only.ts' } },
+      ])],
+      activity: [],
+    });
+    expect(screen.getByRole('button', { name: 'Show changed files' }).textContent).toContain('0 files');
+    fireEvent.click(screen.getByRole('button', { name: 'Show changed files' }));
+    expect(screen.getByRole('dialog', { name: 'Changed files' }).textContent).toContain('No confirmed file changes were reported.');
+  });
+
+  it('shows a persisted completed tool change in the changed-files header', () => {
+    renderConsole({
+      chatId: 'chat-console',
+      messages: [message('persisted-edit', 'assistant', 10, [
+        {
+          kind: 'tool_call',
+          tool: 'edit',
+          call_id: 'persisted-edit-call',
+          args: { path: 'codex-mode-full.txt' },
+          details: { changes: [{
+            path: 'D:\\VibeSpace-Testing\\Chat01-CH31-fixtures\\codex-mode-full.txt',
+            kind: 'update',
+            complete: true,
+            diff: '-CH31_MODE_ORIGINAL_CODEX_FULL\n+CH31_MODE_CHANGED_CODEX_FULL',
+          }] },
+        },
+        { kind: 'tool_result', call_id: 'persisted-edit-call', result: { status: 'completed' } },
+      ])],
+      activity: [],
+    });
+
+    expect(screen.getByRole('button', { name: 'Show changed files' }).textContent).toContain('1 file');
+    fireEvent.click(screen.getByRole('button', { name: 'Show changed files' }));
+    expect(screen.getByRole('dialog', { name: 'Changed files' }).textContent)
+      .toContain('D:\\VibeSpace-Testing\\Chat01-CH31-fixtures\\codex-mode-full.txt');
+  });
+
+  it('preserves explicitly reported zero cache and cost values', () => {
+    renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('zero-usage', 'assistant', 10, [{ kind: 'text', text: 'No cache was used.' }], {
+          input_tokens: 20,
+          output_tokens: 5,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          cost_usd: 0,
+          model: 'model-zero',
+        }),
+      ],
+      activity: [],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show token usage' }));
+    const panel = screen.getByRole('dialog', { name: 'Token usage' });
+    const globalUsage = panel.querySelector<HTMLElement>(':scope > .agentic-session__usage-list')!;
+    for (const [label, expected] of [
+      ['Cache read', '0'],
+      ['Cache write', '0'],
+      ['Reported cost', '$0.0000'],
+    ]) {
+      const row = within(globalUsage).getByText(label).parentElement;
+      expect(row?.querySelector('dd')?.textContent).toBe(expected);
+    }
+  });
+
+  it('keeps cache and cost unavailable when an assistant response has no usage record', () => {
+    renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('known-usage', 'assistant', 10, [{ kind: 'text', text: 'First response.' }], {
+          input_tokens: 40,
+          output_tokens: 10,
+          cache_read_tokens: 7,
+          cache_write_tokens: 3,
+          cost_usd: 0.5,
+          model: 'model-a',
+        }),
+        message('unknown-usage', 'assistant', 20, [{ kind: 'text', text: 'Second response.' }]),
+      ],
+      activity: [],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show token usage' }));
+    const panel = screen.getByRole('dialog', { name: 'Token usage' });
+    const globalUsage = panel.querySelector<HTMLElement>(':scope > .agentic-session__usage-list')!;
+    for (const label of ['Cache read', 'Cache write', 'Reported cost']) {
+      const row = within(globalUsage).getByText(label).parentElement;
+      expect(row?.querySelector('dd')?.textContent).toBe(label === 'Reported cost' ? 'Unavailable from CLI' : '—');
+    }
+  });
+
+  it('labels estimated usage cost as estimated in the session and model breakdowns', () => {
+    renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('estimated-usage', 'assistant', 10, [{ kind: 'text', text: 'Estimated response.' }], {
+          provenance: 'estimated',
+          input_tokens: 20,
+          output_tokens: 5,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          cost_usd: 0.25,
+          model: 'model-estimated',
+        }),
+      ],
+      activity: [],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show token usage' }));
+    const panel = screen.getByRole('dialog', { name: 'Token usage' });
+    const globalUsage = panel.querySelector<HTMLElement>(':scope > .agentic-session__usage-list')!;
+    const modelUsage = within(panel).getByRole('region', { name: 'Usage for model-estimated' });
+
+    expect(within(globalUsage).getByText('Estimated cost').parentElement?.querySelector('dd')?.textContent)
+      .toBe('$0.2500');
+    expect(within(globalUsage).queryByText('Reported cost')).toBeNull();
+    expect(within(modelUsage).getByText('Estimated cost').parentElement?.querySelector('dd')?.textContent)
+      .toBe('$0.2500');
+    expect(within(modelUsage).queryByText('Reported cost')).toBeNull();
   });
 
   it('renders completed OpenCode work expanded by default and collapses only its public chronology', () => {
@@ -1051,7 +1215,8 @@ describe('AgenticConsole', () => {
     const panels = rendered.container.querySelectorAll('[data-testid="jarvis-session-panel"]');
     expect(panels).toHaveLength(1);
     expect(screen.getByLabelText('Session status')).toBeTruthy();
-    expect(screen.getByLabelText('Open session details')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Show changed files' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Show token usage' })).toBeTruthy();
     expect(screen.getByText(/tokens/i)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Chat console settings' }));
@@ -1082,7 +1247,7 @@ describe('AgenticConsole', () => {
     const status = screen.getByLabelText('Session status').closest('.agentic-session__identity');
     const progress = screen.getByTestId('header-progress');
     const metrics = screen
-      .getByLabelText('Open session details')
+      .getByRole('button', { name: 'Show changed files' })
       .closest('.agentic-session__metrics-row');
 
     expect(header).not.toBeNull();

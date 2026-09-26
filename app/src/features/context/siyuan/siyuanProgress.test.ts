@@ -1,13 +1,43 @@
 import { describe, expect, it } from 'vitest';
 import { createSiyuanIndexJob } from './siyuanIndexJobStore';
 import {
+  classifySiyuanCheckpointLiveness,
   estimateSiyuanDiscoveryProgress,
   formatSiyuanEta,
   formatSiyuanJobEta,
+  SIYUAN_STALLED_CHECKPOINT_MS,
   siyuanOverallProgressPercent,
 } from './siyuanProgress';
 
 describe('SiYuan honest progress estimator', () => {
+  it('distinguishes active progress from a stale running checkpoint without changing job state', () => {
+    const base = createSiyuanIndexJob({
+      projectId: 'project-1',
+      mapId: 'map-1',
+      canonicalRoot: 'C:/root',
+      policyFingerprint: 'policy',
+    });
+    const running = { ...base, status: 'running' as const, updatedAt: 10_000 };
+
+    expect(classifySiyuanCheckpointLiveness(running, 10_000 + SIYUAN_STALLED_CHECKPOINT_MS - 1)).toBe(
+      'running',
+    );
+    expect(classifySiyuanCheckpointLiveness(running, 10_000 + SIYUAN_STALLED_CHECKPOINT_MS)).toBe(
+      'stalled',
+    );
+    expect(classifySiyuanCheckpointLiveness({ ...running, status: 'paused' }, 999_999)).toBe(
+      'not-running',
+    );
+    expect(classifySiyuanCheckpointLiveness({ ...running, phase: 'completed' }, 999_999)).toBe(
+      'not-running',
+    );
+    expect(classifySiyuanCheckpointLiveness(running, 1)).toBe('running');
+    expect(classifySiyuanCheckpointLiveness({ ...running, updatedAt: Number.NaN }, 999_999)).toBe(
+      'running',
+    );
+    expect(running.status).toBe('running');
+  });
+
   it('stays indeterminate until it has three samples and five seconds of evidence', () => {
     let estimate = estimateSiyuanDiscoveryProgress({
       sample: { at: 0, processed: 0, discovered: 0, frontierRemaining: 1 },

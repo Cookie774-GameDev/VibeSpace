@@ -65,6 +65,10 @@ const MAX_MARKDOWN_BYTES = 900_000;
 // fulfilled member before surfacing a sibling failure; replay then recovers
 // the same paths without duplicating documents.
 const SIYUAN_NODE_WRITE_CONCURRENCY = 4;
+// The bundled SiYuan kernel refused the first folder whose document path would
+// contain eight IDs. Keep deeper source folders as documents below the last
+// supported ancestor; their source path and logical parent link stay intact.
+const SIYUAN_MAX_NATIVE_DOCUMENT_SEGMENTS = 7;
 const SIYUAN_FILE_BLOCK_BATCH_LIMIT = 64;
 const SIYUAN_FILE_BLOCK_BATCH_BYTES = 262_144;
 
@@ -218,6 +222,51 @@ function nodeManagedMarkdown(
     : nodeDocumentMarkdown(mapId, entry, parentDocumentId);
 }
 
+export async function recoverPendingSiyuanFileBlock(
+  port: Pick<ProductionSiyuanRlmPort, 'searchBlocks' | 'getBlock' | 'deleteManagedDocument'>,
+  projectId: string,
+  mapRootId: string,
+  mapId: string,
+  entry: SiyuanSafeIndexEntry,
+  parent: SiyuanManagedDocument,
+): Promise<string | null> {
+  const exactMarker = nodeMarker(mapId, entry.nodeId);
+  if (!parent.markdown.includes(exactMarker)) return null;
+  const summaries = await port.searchBlocks(projectId, exactMarker, 50);
+  const matching: SiyuanManagedDocument[] = [];
+  for (const summary of summaries) {
+    if (
+      summary.id === parent.id ||
+      summary.notebookId !== parent.notebookId ||
+      summary.path !== parent.path
+    ) continue;
+    const block = await port.getBlock(projectId, summary.id);
+    if (
+      block.id === summary.id &&
+      block.notebookId === parent.notebookId &&
+      block.path === parent.path &&
+      block.markdown.includes(exactMarker) &&
+      block.markdown.includes(`Parent: ((${parent.id} "Parent"))`)
+    ) matching.push(block);
+  }
+  if (matching.length === 0) throw new Error('siyuan_native_block_recovery_inconclusive');
+  matching.sort((left, right) => left.id.localeCompare(right.id, 'en-US'));
+  const survivor = matching[0]!;
+  const comparableMarkdown = (block: SiyuanManagedDocument) => {
+    const metadata = /\n\{:\s+id="([^"]+)" updated="\d+"\}\s*$/u.exec(block.markdown);
+    return metadata?.[1] === block.id
+      ? block.markdown.slice(0, metadata.index).trimEnd()
+      : block.markdown.trimEnd();
+  };
+  if (matching.some((block) => comparableMarkdown(block) !== comparableMarkdown(survivor))) {
+    throw new Error('siyuan_managed_block_ambiguous');
+  }
+  for (const duplicate of matching.slice(1)) {
+    await port.deleteManagedDocument(projectId, duplicate.id, duplicate.markdown, mapRootId);
+  }
+  return survivor.id;
+}
+
 export async function clearArchivedSiyuanSummaryDocuments(
   projectId: string,
   mapId: string,
@@ -368,8 +417,7 @@ function generatedRootContent(markdown: string): string {
 
 function contextMapMarkdown(record: ContextMapRecord): string {
   const payload = encodeTree(record.tree);
-  const lines = [
-    `<!-- ${marker(record.id)} payload=${payload} -->`,
+  const body = [
     `# ${safeText(record.name)}`,
     '',
     '> VibeSpace-managed SiYuan map root. Native child documents are the searchable graph nodes.',
@@ -378,10 +426,17 @@ function contextMapMarkdown(record: ContextMapRecord): string {
     '',
     `> Files: ${record.tree.fileCount} · Bytes: ${record.tree.totalBytes} · Generated: ${record.tree.generatedAt}`,
   ];
-  if (new TextEncoder().encode(lines.join('\n')).byteLength >= MAX_MARKDOWN_BYTES) {
+  const withPayload = [`<!-- ${marker(record.id)} payload=${payload} -->`, ...body].join('\n');
+  if (new TextEncoder().encode(withPayload).byteLength < MAX_MARKDOWN_BYTES) {
+    return `${withPayload}\n`;
+  }
+  // The durable index is the full source authority for larger maps. Keep the
+  // root document small and reconstruct its tree from the completed checkpoint.
+  const withIndex = [`<!-- ${marker(record.id)} index=v1 -->`, ...body].join('\n');
+  if (new TextEncoder().encode(withIndex).byteLength >= MAX_MARKDOWN_BYTES) {
     throw new Error('siyuan_context_map_requires_sharding');
   }
-  return `${lines.join('\n')}\n`;
+  return `${withIndex}\n`;
 }
 
 export interface SiyuanContextMapSnapshot {
@@ -429,9 +484,14 @@ export function assertSiyuanCloudApprovalPreflightReady(
 function parseContextMapMarkdown(
   document: SiyuanManagedDocument,
   record: ContextMapRecord,
+  indexedTree?: ProjectContextTree,
 ): SiyuanContextMapSnapshot {
   if (!document.markdown.includes(marker(record.id))) {
     throw new Error('siyuan_context_map_marker_invalid');
+  }
+  if (document.markdown.includes(`<!-- ${marker(record.id)} index=v1 -->`)) {
+    if (!indexedTree) throw new Error('siyuan_context_map_index_missing');
+    return { document, tree: { ...indexedTree, model: 'siyuan-managed-v1' } };
   }
   const payloadMatch = /\bpayload=([A-Za-z0-9_-]+)\s*-->/u.exec(document.markdown);
   if (payloadMatch?.[1]) {
@@ -683,13 +743,37 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
       ...manifest.nodeBindings,
       ...(await readSiyuanNodeBindings(projectId, record.id)),
     };
+    const entriesByNodeId = new Map(index.entries.map((entry) => [entry.nodeId, entry]));
+    const nativeRootDepth = nativeSiyuanDocumentSegments(rootDocument.path)?.length;
+    const storageParentId = (entry: SiyuanSafeIndexEntry, logicalParentId: string): string => {
+      if (entry.kind !== 'area' || nativeRootDepth === undefined) return logicalParentId;
+      const maximumSourceDepth = SIYUAN_MAX_NATIVE_DOCUMENT_SEGMENTS - nativeRootDepth;
+      if (maximumSourceDepth < 1) throw new Error('siyuan_document_depth_unavailable');
+      const sourceDepth = (candidate: SiyuanSafeIndexEntry) =>
+        (candidate.relativePath ?? '').split(/[\\/]/u).filter(Boolean).length;
+      if (sourceDepth(entry) <= maximumSourceDepth) return logicalParentId;
+      let ancestorNodeId = entry.parentNodeId;
+      while (ancestorNodeId) {
+        const parent = entriesByNodeId.get(ancestorNodeId);
+        if (!parent || parent.kind !== 'area') {
+          throw new Error('siyuan_node_parent_binding_unavailable');
+        }
+        if (sourceDepth(parent) < maximumSourceDepth) {
+          const cappedParentId = bindings[parent.nodeId];
+          if (!cappedParentId) throw new Error('siyuan_node_parent_binding_unavailable');
+          return cappedParentId;
+        }
+        ancestorNodeId = parent.parentNodeId;
+      }
+      return rootDocument.id;
+    };
     const createDocumentBackedNode = async (
       entry: SiyuanSafeIndexEntry,
       parentDocumentId: string,
       markdown: string,
     ): Promise<SiyuanManagedDocument> => {
       const input = {
-        parentId: parentDocumentId,
+        parentId: storageParentId(entry, parentDocumentId),
         path: nodeStagingPath(record, rootDocument, entry),
         markdown,
         marker: nodeMarker(record.id, entry.nodeId),
@@ -908,7 +992,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
         const requests = batch.map((entry) => {
           const parentId = entry.parentNodeId ? bindings[entry.parentNodeId]! : rootDocument.id;
           return {
-            parentId,
+            parentId: storageParentId(entry, parentId),
             path: port.createManagedDocumentsUnderParents
               ? nodeStagingPath(record, rootDocument, entry)
               : `/VibeSpace Context Maps/${slug(record.name)}-${slug(record.id)}/Nodes/${slug(entry.title)}-${stableNodeSlug(entry.nodeId)}`,
@@ -1017,7 +1101,6 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
           ? bindings[entry.parentNodeId]
           : rootDocument.id;
         if (!parentDocumentId) throw new Error('siyuan_node_parent_binding_unavailable');
-        const markdown = nodeFileBlockMarkdown(record.id, entry, parentDocumentId);
         // The exact parent is the receipt authority. Read it before global
         // search so a slow or unavailable full-text index cannot strand a
         // definitely uncommitted append after restart.
@@ -1027,10 +1110,16 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
         } catch {
           throw new Error('siyuan_native_block_recovery_inconclusive');
         }
-        if (parent.markdown.includes(nodeMarker(record.id, entry.nodeId))) {
-          const recovered = await recoverCreatedNode(entry, markdown);
-          if (!recovered) throw new Error('siyuan_native_block_recovery_inconclusive');
-          await checkpointCompletedNodes({ [entry.nodeId]: recovered.id });
+        const recoveredId = await recoverPendingSiyuanFileBlock(
+          port,
+          projectId,
+          rootDocument.id,
+          record.id,
+          entry,
+          parent,
+        );
+        if (recoveredId) {
+          await checkpointCompletedNodes({ [entry.nodeId]: recoveredId });
           continue;
         }
         if (durableJob) {
@@ -1228,6 +1317,8 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
           summarized: reconciledEntries.filter((entry) => entry.summaryState === 'completed')
             .length,
         });
+        entriesByNodeId.clear();
+        for (const entry of reconciledEntries) entriesByNodeId.set(entry.nodeId, entry);
         activeNodeIds = new Set(reconciledEntries.map((entry) => entry.nodeId));
         const reconciledJob: SiyuanIndexJobRecord = {
           ...durableJob,
@@ -1738,6 +1829,16 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
       if (!document) return null;
       managedDocumentIds.set(documentKey(exactProjectId, record.id), document.id);
       try {
+        let indexedTree: ProjectContextTree | undefined;
+        if (document.markdown.includes(`<!-- ${marker(record.id)} index=v1 -->`)) {
+          const job = await readSiyuanIndexJob(exactProjectId, record.id);
+          if (manifest?.status !== 'ready' || job?.status !== 'completed') return null;
+          const entries = await readSiyuanIndexEntries(exactProjectId, record.id);
+          if (entries.length !== job.indexed || entries.length !== manifest.counts.indexed) {
+            throw new Error('siyuan_index_checkpoint_inconsistent');
+          }
+          indexedTree = buildProjectContextTreeFromSiyuanIndex(record.tree, entries);
+        }
         const payload = /\bpayload=([A-Za-z0-9_-]+)\s*-->/u.exec(document.markdown)?.[1];
         const legacy = payload ? decodeTree(payload) : null;
         // Upgrade only untouched generated metadata roots. User-authored SiYuan
@@ -1776,12 +1877,14 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
             return parseContextMapMarkdown(
               await connectCompletedNativeGraph(exactProjectId, record, updated),
               record,
+              tree,
             );
           }
         }
         return parseContextMapMarkdown(
           await connectCompletedNativeGraph(exactProjectId, record, document),
           record,
+          indexedTree,
         );
       } catch (error) {
         if (
@@ -1873,6 +1976,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
           status: 'indexing',
         });
         writeSiyuanMapManifest(manifest);
+        let completedTree: ProjectContextTree | undefined;
         try {
           const completed = await syncNativeNodeDocuments(
             exactProjectId,
@@ -1882,6 +1986,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
             effectiveOptions,
           );
           manifest = completed.manifest;
+          completedTree = completed.tree;
           const completedMarkdown = contextMapMarkdown({ ...record, tree: completed.tree });
           if (document.markdown !== completedMarkdown) {
             document = await port.updateManagedDocument(
@@ -1931,7 +2036,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
           throw error;
         }
         document = await connectCompletedNativeGraph(exactProjectId, record, document);
-        const snapshot = { ...parseContextMapMarkdown(document, record), manifest };
+        const snapshot = { ...parseContextMapMarkdown(document, record, completedTree), manifest };
         devConsole.log({
           channel: 'ai',
           level: 'info',

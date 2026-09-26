@@ -22,6 +22,11 @@ import {
   type OpenCodeRequestControls,
 } from './OpenCodeRequestControls';
 import {
+  canonicalOpenCodeSkillBasePath,
+  type OpenCodeCommandDescriptor,
+  type OpenCodeNativeSkillDescriptor,
+} from './OpenCodeSdkSessionClient';
+import {
   OpenCodeSessionPool,
   type HarnessScope,
   type OpenCodeSessionClient,
@@ -32,6 +37,15 @@ export interface ExactModelSelection {
   providerId: string;
   modelId: string;
   metadata: LiveModelRuntimeMetadata;
+}
+
+/** Exact chat-scoped reference to a native or compatible discovered skill. */
+export interface OpenCodeNativeSkillReference {
+  origin: 'opencode' | 'codex';
+  name: string;
+  path: string;
+  executionHost: string;
+  sourceRevision: string;
 }
 
 export interface PersistentOpenCodeTurnClient extends OpenCodeSessionClient {
@@ -51,7 +65,8 @@ export interface PersistentOpenCodeTurnClient extends OpenCodeSessionClient {
     agent: OpenCodeExecutionAgentId;
     signal?: AbortSignal;
   }): Promise<void>;
-  listCommandsAsync?(): Promise<readonly { name: string }[]>;
+  listCommandsAsync?(): Promise<readonly OpenCodeCommandDescriptor[]>;
+  listSkillsAsync?(): Promise<readonly OpenCodeNativeSkillDescriptor[]>;
 }
 
 export interface TurnPolicyInput {
@@ -74,6 +89,8 @@ export interface OpenCodeTurnInput {
   system?: string;
   agent?: string;
   tools?: Readonly<Record<string, boolean>>;
+  /** Selected native skills, revalidated against the active OpenCode host before dispatch. */
+  nativeSkillRefs?: readonly OpenCodeNativeSkillReference[];
   expectedSessionId?: string;
   requireExactRuntimeControls?: boolean;
   signal?: AbortSignal;
@@ -114,6 +131,52 @@ function slashCommandCandidate(text: string): { command: string; arguments: stri
   return { command: match[1]!.toLowerCase(), arguments: (match[2] ?? '').trim() };
 }
 
+function nativeSkillReferenceError(
+  refs: readonly OpenCodeNativeSkillReference[],
+  catalog?: readonly OpenCodeNativeSkillDescriptor[],
+): string | undefined {
+  const selectedNames = new Set<string>();
+  for (const ref of refs) {
+    if (
+      !ref ||
+      (ref.origin !== 'opencode' && ref.origin !== 'codex') ||
+      typeof ref.name !== 'string' || !ref.name || ref.name.length > 256 || ref.name !== ref.name.trim() ||
+      /[\u0000-\u001f\u007f]/u.test(ref.name) ||
+      typeof ref.sourceRevision !== 'string' || !ref.sourceRevision || ref.sourceRevision.length > 512 ||
+      ref.sourceRevision !== ref.sourceRevision.trim() ||
+      ref.executionHost !== 'local'
+    ) return 'A selected skill reference is invalid or belongs to a non-local execution host.';
+    if (selectedNames.has(ref.name)) {
+      return 'Selected native skills contain an ambiguous duplicate name.';
+    }
+    selectedNames.add(ref.name);
+    const selectedBase = canonicalOpenCodeSkillBasePath(ref.path);
+    if (!selectedBase) return `Selected native skill ${ref.name} has an invalid path.`;
+    if (!catalog) continue;
+    const matches = catalog.filter((skill) => skill.name === ref.name);
+    if (matches.length !== 1) {
+      return `Selected native skill ${ref.name} is not unique in the active OpenCode catalog.`;
+    }
+    const nativeBase = canonicalOpenCodeSkillBasePath(matches[0]?.location);
+    if (!nativeBase || nativeBase !== selectedBase) {
+      return `Selected native skill ${ref.name} no longer matches its verified native path.`;
+    }
+  }
+  return undefined;
+}
+
+function systemWithNativeSkillReminder(
+  baseSystem: string | undefined,
+  refs: readonly OpenCodeNativeSkillReference[],
+): string {
+  const names = JSON.stringify(refs.map((ref) => ref.name));
+  const reminder =
+    `Before answering, load every selected skill by calling the native OpenCode skill tool ` +
+    `with each exact name in this JSON array: ${names}. Complete these loads in the same turn, ` +
+    'then continue the user\'s original request. Do not claim a skill is loaded unless its native tool call completes successfully.';
+  return baseSystem?.trim() ? `${baseSystem}\n\n${reminder}` : reminder;
+}
+
 /**
  * Central production seam for one VibeSpace Chat turn. Commands are consumed by
  * VibeSpace, exact controls are validated before send, permission authority is
@@ -137,7 +200,17 @@ export class OpenCodeTurnCoordinator {
       };
     }
 
+    const nativeSkillRefs = input.nativeSkillRefs ?? [];
     const command = parseChatRuntimeCommand(text);
+    if (nativeSkillRefs.length && command) {
+      return {
+        kind: 'rejected',
+        code: 'HARNESS_INCOMPATIBLE',
+        message: 'A local Chat command cannot load selected native skills in the same turn; the user message was not sent.',
+        settings,
+      };
+    }
+
     if (command) {
       const commandResult = applyChatRuntimeCommand(settings, command);
       return {
@@ -208,6 +281,66 @@ export class OpenCodeTurnCoordinator {
       rlmEnabled: settings.rlmEnabled,
     });
 
+    let turnSystem = input.system;
+    let turnTools = input.tools;
+    if (nativeSkillRefs.length) {
+      if (commandCandidate) {
+        return {
+          kind: 'rejected',
+          code: 'HARNESS_INCOMPATIBLE',
+          message: 'An OpenCode slash command cannot load selected native skills in the same turn; the user message was not sent.',
+          settings,
+        };
+      }
+      if (input.tools?.skill === false) {
+        return {
+          kind: 'rejected',
+          code: 'HARNESS_INCOMPATIBLE',
+          message: 'The selected native skill tool is disabled for this turn; the user message was not sent.',
+          settings,
+        };
+      }
+      const inputReferenceError = nativeSkillReferenceError(nativeSkillRefs);
+      if (inputReferenceError) {
+        return {
+          kind: 'rejected',
+          code: 'HARNESS_INCOMPATIBLE',
+          message: `${inputReferenceError} The user message was not sent.`,
+          settings,
+        };
+      }
+      if (!session.client.listSkillsAsync) {
+        return {
+          kind: 'rejected',
+          code: 'HARNESS_INCOMPATIBLE',
+          message: 'The active OpenCode client cannot inspect its native skill catalog; the user message was not sent.',
+          settings,
+        };
+      }
+      let skillCatalog: readonly OpenCodeNativeSkillDescriptor[];
+      try {
+        skillCatalog = await session.client.listSkillsAsync();
+      } catch {
+        return {
+          kind: 'rejected',
+          code: 'HARNESS_INCOMPATIBLE',
+          message: 'The active OpenCode skill catalog could not be read; the user message was not sent.',
+          settings,
+        };
+      }
+      const referenceError = nativeSkillReferenceError(nativeSkillRefs, skillCatalog);
+      if (referenceError) {
+        return {
+          kind: 'rejected',
+          code: 'HARNESS_INCOMPATIBLE',
+          message: `${referenceError} The user message was not sent.`,
+          settings,
+        };
+      }
+      turnSystem = systemWithNativeSkillReminder(input.system, nativeSkillRefs);
+      turnTools = Object.freeze({ ...input.tools, skill: true });
+    }
+
     let liveCommand = officialCommand;
     if (!liveCommand && commandCandidate) {
       if (!session.client.listCommandsAsync) {
@@ -218,7 +351,7 @@ export class OpenCodeTurnCoordinator {
           settings,
         };
       }
-      let commands: readonly { name: string }[];
+      let commands: readonly OpenCodeCommandDescriptor[];
       try {
         commands = await session.client.listCommandsAsync();
       } catch {
@@ -229,7 +362,7 @@ export class OpenCodeTurnCoordinator {
           settings,
         };
       }
-      if (commands.some((command) => command.name === commandCandidate.command)) {
+      if (commands.some((command) => command.name.toLocaleLowerCase('en-US') === commandCandidate.command)) {
         liveCommand = commandCandidate;
       } else {
         return {
@@ -263,9 +396,9 @@ export class OpenCodeTurnCoordinator {
         sessionId: session.sessionId,
         controls,
         text,
-        ...(input.system?.trim() ? { system: input.system } : {}),
+        ...(turnSystem?.trim() ? { system: turnSystem } : {}),
         agent: permissions.openCodeAgent,
-        ...(input.tools ? { tools: input.tools } : {}),
+        ...(turnTools ? { tools: turnTools } : {}),
       });
     }
 

@@ -10,6 +10,7 @@ import {
   resumableSiyuanMaps,
   retryRunningSiyuanJob,
   runSiyuanStartupResume,
+  siyuanResumeFailureReason,
 } from './SiyuanIndexJobHost';
 
 function map(id: string, status: ContextMapRecord['status'] = 'active'): ContextMapRecord {
@@ -56,6 +57,15 @@ function runningJob(mapRecord: ContextMapRecord) {
 }
 
 describe('SiYuan durable startup host', () => {
+  it('keeps native string rejection reasons in checkpoint repair diagnostics', () => {
+    expect(siyuanResumeFailureReason('siyuan_document_create_failed')).toBe(
+      'siyuan_document_create_failed',
+    );
+    expect(siyuanResumeFailureReason(new Error('siyuan_parent_missing'))).toBe(
+      'siyuan_parent_missing',
+    );
+    expect(siyuanResumeFailureReason(null)).toBe('siyuan_resume_failed');
+  });
   it('threads the active workspace into automatic summary resume authority', () => {
     const source = readFileSync(
       resolve('src/features/context/siyuan/SiyuanIndexJobHost.tsx'),

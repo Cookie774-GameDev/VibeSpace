@@ -453,19 +453,23 @@ export async function inspectFoundryArtifact(
   };
 }
 
+type FoundryChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+
 async function chatWithArtifact(
   artifactId: string,
   prompt: string,
   maxNewTokens?: number,
+  messages?: readonly FoundryChatMessage[],
 ): Promise<string> {
   const requestId = 'foundry-bridge-' + crypto.randomUUID();
-  await invoke('model_foundry_prepare_chat', { artifactId, query: prompt, limit: null });
+  // The chat command performs its own completed-job and full artifact checks.
+  // A separate prepare call repeats an expensive full weight-manifest scan.
   const response = await invoke<{ text?: string; content?: string; message?: string }>(
     'model_foundry_chat',
     {
       requestId,
       artifactId,
-      messages: [{ role: 'user', content: prompt }],
+      messages: messages ? [...messages] : [{ role: 'user', content: prompt }],
       maxOutputTokens: maxNewTokens ?? null,
     },
   );
@@ -476,10 +480,11 @@ export async function generateFromFoundryArtifact(args: {
   projectId: string;
   jobId: string;
   prompt: string;
+  messages?: readonly FoundryChatMessage[];
   maxNewTokens?: number;
 }): Promise<FoundryArtifactGeneration> {
   if (!isTauri) throw new Error('Local adapter inference is available only in the desktop app.');
-  const text = await chatWithArtifact(args.jobId, args.prompt, args.maxNewTokens);
+  const text = await chatWithArtifact(args.jobId, args.prompt, args.maxNewTokens, args.messages);
   const jobs = await invoke<CurrentFoundryJob[]>('model_foundry_list_jobs');
   const job = jobs.find((entry) => entry.id === args.jobId);
   return {

@@ -10,7 +10,9 @@ export interface WarmHexProgressProps {
   label: string;
   detail?: string;
   mode?: 'compact' | 'full';
+  density?: 'standard' | 'fine';
   paused?: boolean;
+  failed?: boolean;
   estimated?: boolean;
   reducedMotion?: boolean;
   className?: string;
@@ -56,6 +58,7 @@ function drawWarmHexes(
   context: CanvasRenderingContext2D,
   progress: number,
   mode: 'compact' | 'full',
+  density: 'standard' | 'fine',
   phase: number,
   indeterminate: boolean,
 ): void {
@@ -84,12 +87,18 @@ function drawWarmHexes(
   context.fillStyle = '#130e0a';
   context.fillRect(0, 0, cssWidth, cssHeight);
 
-  const radius = Math.max(mode === 'compact' ? 4.2 : 6.5, cssWidth / 180);
+  const radius =
+    density === 'fine'
+      ? Math.max(2.5, Math.min(3.1, cssWidth / 155))
+      : Math.max(mode === 'compact' ? 4.2 : 6.5, cssWidth / 180);
   const stepX = radius * 1.52;
   const stepY = radius * 1.74;
   const completedX = cssWidth * (progress / 100);
   const sweepX = ((Math.sin(phase * 0.45) + 1) / 2) * cssWidth;
-  const glowWidth = Math.max(radius * 5, cssWidth * 0.075);
+  const glowWidth =
+    density === 'fine'
+      ? Math.max(radius * 18, cssWidth * 0.22)
+      : Math.max(radius * 5, cssWidth * 0.075);
   const columns = Math.ceil(cssWidth / stepX) + 2;
   const rows = Math.ceil(cssHeight / stepY) + 2;
 
@@ -101,13 +110,19 @@ function drawWarmHexes(
       const edgeDistance = Math.abs(x - completedX);
       const edgeGlow = isComplete ? Math.max(0, 1 - edgeDistance / glowWidth) : 0;
       const estimatingGlow = indeterminate ? Math.max(0, 1 - Math.abs(x - sweepX) / glowWidth) : 0;
-      const shimmer = edgeGlow * (0.72 + Math.sin(phase + row * 0.45 + column * 0.31) * 0.18);
+      const workingGlow =
+        density === 'fine' ? Math.max(0, 1 - Math.abs(x - sweepX) / glowWidth) : 0;
+      const shimmer = Math.max(edgeGlow, workingGlow * 0.7) *
+        (0.72 + Math.sin(phase + row * 0.45 + column * 0.31) * 0.18);
       const warmBand = Math.max(0, Math.min(1, x / Math.max(1, completedX)));
 
       if (estimatingGlow > 0) {
         context.fillStyle = `rgba(214, 95, 50, ${0.18 + estimatingGlow * 0.56})`;
       } else if (!isComplete) {
-        context.fillStyle = 'rgba(82, 38, 24, 0.18)';
+        context.fillStyle =
+          workingGlow > 0
+            ? `rgba(255, 165, 105, ${0.2 + workingGlow * 0.62})`
+            : 'rgba(82, 38, 24, 0.22)';
       } else if (shimmer > 0.5) {
         context.fillStyle = `rgba(255, 198, 137, ${Math.min(0.96, 0.7 + shimmer * 0.24)})`;
       } else if (warmBand > 0.72) {
@@ -127,7 +142,9 @@ export function WarmHexProgress({
   label,
   detail,
   mode = 'full',
+  density = 'standard',
   paused = false,
+  failed = false,
   estimated = false,
   reducedMotion: reducedMotionOverride,
   className,
@@ -148,7 +165,9 @@ export function WarmHexProgress({
     let frame: number | null = null;
     const startedAt = performance.now();
     const animated =
-      !paused && !reducedMotion && (indeterminate || (exactProgress > 0 && exactProgress < 100));
+      !paused &&
+      !reducedMotion &&
+      (indeterminate || (exactProgress < 100 && (exactProgress > 0 || density === 'fine')));
 
     const render = (time = startedAt) => {
       if (disposed) return;
@@ -157,6 +176,7 @@ export function WarmHexProgress({
         context,
         exactProgress,
         mode,
+        density,
         animated ? (time - startedAt) / 560 : 0,
         indeterminate,
       );
@@ -182,7 +202,7 @@ export function WarmHexProgress({
       observer?.disconnect();
       if (frame !== null) window.cancelAnimationFrame(frame);
     };
-  }, [exactProgress, indeterminate, mode, paused, reducedMotion]);
+  }, [density, exactProgress, indeterminate, mode, paused, reducedMotion]);
 
   const classes = ['warm-hex-progress', `warm-hex-progress--${mode}`, className]
     .filter(Boolean)
@@ -199,10 +219,12 @@ export function WarmHexProgress({
       aria-valuetext={
         indeterminate
           ? 'Estimating time…'
-          : `${estimated ? 'Approximately ' : ''}${displayedProgress}%${paused ? ', paused' : ''}`
+          : `${estimated ? 'Approximately ' : ''}${displayedProgress}%${failed ? ', failed' : paused ? ', paused' : ''}`
       }
       data-motion={reducedMotion ? 'reduced' : 'full'}
       data-paused={paused ? 'true' : 'false'}
+      data-failed={failed ? 'true' : 'false'}
+      data-density={density}
       data-estimated={estimated ? 'true' : 'false'}
       data-indeterminate={indeterminate ? 'true' : 'false'}
     >

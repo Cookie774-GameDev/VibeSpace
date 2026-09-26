@@ -1,0 +1,30 @@
+.relay-group-backdrop { position: fixed; inset: 0; z-index: 91; display: flex; justify-content: flex-end; background: rgba(26, 18, 15, .38); backdrop-filter: blur(3px); }
+.relay-group-panel { display: flex; flex-direction: column; width: min(540px, 100vw); height: 100%; background: var(--background); border-left: 1px solid var(--border); box-shadow: -18px 0 60px rgba(40, 24, 17, .2); color: var(--foreground); }
+.relay-group-header { display: flex; align-items: center; gap: 12px; padding: 19px 20px 14px; border-bottom: 1px solid var(--border); }
+.relay-group-emblem { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 14px; background: color-mix(in srgb, var(--accent-copper) 16%, var(--background)); color: var(--accent-copper); }
+.relay-group-heading { flex: 1; min-width: 0; }
+.relay-group-heading h2 { font-family: var(--font-display); font-size: 20px; font-weight: 700; line-height: 1.1; }
+.relay-group-heading p, .relay-group-muted { color: var(--muted-foreground); font-size: 12px; }
+.relay-group-members { display: flex; align-items: center; gap: 7px; min-height: 72px; padding: 10px 16px; overflow-x: auto; border-bottom: 1px solid var(--border); }
+.relay-group-member { display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 150px; padding: 6px 8px 6px 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); font-size: 12px; }
+.relay-group-member-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relay-group-avatar { display: grid; flex: none; place-items: center; width: 28px; height: 28px; border-radius: 10px; background: color-mix(in srgb, var(--accent-copper) 13%, var(--background)); font-size: 17px; }
+.relay-group-presence { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-foreground); }
+.relay-group-presence--online { background: #60b986; }
+.relay-group-presence--busy { background: #d99b4c; }
+.relay-group-timeline { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 20px; }
+.relay-group-empty { margin: 24px auto; max-width: 260px; text-align: center; color: var(--muted-foreground); font-size: 13px; }
+.relay-group-message { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 18px; }
+.relay-group-message-body { min-width: 0; max-width: 100%; }
+.relay-group-byline { display: flex; align-items: center; gap: 7px; margin: 1px 0 5px; font-size: 12px; }
+.relay-group-byline strong { font-weight: 700; }
+.relay-group-byline time { color: var(--muted-foreground); }
+.relay-group-owner, .relay-group-report { padding: 1px 6px; border-radius: 99px; background: color-mix(in srgb, var(--accent-copper) 15%, var(--background)); color: var(--accent-copper); font-size: 10px; }
+.relay-group-report { background: color-mix(in srgb, var(--accent-cyan) 15%, var(--background)); color: var(--accent-cyan); }
+.relay-group-message-body p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; font-size: 13px; }
+.relay-group-error { margin: 0 20px 8px; color: var(--destructive); font-size: 12px; }
+.relay-group-footer { padding: 14px 18px 17px; border-top: 1px solid var(--border); }
+.relay-group-footer textarea { width: 100%; resize: vertical; min-height: 65px; padding: 10px 11px; border: 1px solid var(--border); border-radius: 13px; background: var(--background); color: var(--foreground); outline: none; font-size: 13px; }
+.relay-group-footer textarea:focus-visible { border-color: var(--accent-copper); }
+.relay-group-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.relay-group-actions .relay-group-muted { flex: 1; }

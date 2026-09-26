@@ -6,6 +6,12 @@ import type { WorkspaceId } from '@/types/common';
 const repoMocks = vi.hoisted(() => ({
   agentList: vi.fn(),
   projectList: vi.fn(),
+  enqueueTerminalCommand: vi.fn(),
+}));
+
+vi.mock('@/features/terminals/terminalCommandQueue', () => ({
+  enqueueTerminalCommand: repoMocks.enqueueTerminalCommand,
+  broadcastTerminalCommand: vi.fn(),
 }));
 
 vi.mock('@/lib/db', async (importOriginal) => {
@@ -23,6 +29,7 @@ describe('executeIntent navigation', () => {
   beforeEach(() => {
     repoMocks.agentList.mockReset();
     repoMocks.projectList.mockReset();
+    repoMocks.enqueueTerminalCommand.mockReset();
     useUIStore.setState({ route: 'chat', activeAgentId: null });
     useAuthStore.setState({ workspaceId: 'wsp_test' as WorkspaceId, projectId: null });
   });
@@ -33,6 +40,31 @@ describe('executeIntent navigation', () => {
       message: 'Showing files.',
     });
     expect(useUIStore.getState().route).toBe('files');
+  });
+
+  it('rejects arbitrary shell commands but still opens blank terminals and native CLIs', async () => {
+    await expect(
+      executeIntent({ kind: 'open_terminals', count: 1, command: 'npm test' }),
+    ).resolves.toEqual({
+      ok: false,
+      message: 'Only supported native CLI launchers can start in a new terminal.',
+    });
+    expect(repoMocks.enqueueTerminalCommand).not.toHaveBeenCalled();
+    expect(useUIStore.getState().route).toBe('chat');
+
+    await expect(executeIntent({ kind: 'open_terminals', count: 1 })).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(repoMocks.enqueueTerminalCommand).toHaveBeenLastCalledWith({ command: '', label: 'shell' });
+
+    await expect(
+      executeIntent({ kind: 'open_terminals', count: 1, command: 'opencode' }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(repoMocks.enqueueTerminalCommand).toHaveBeenLastCalledWith({
+      command: 'opencode',
+      label: 'opencode',
+    });
+    expect(useUIStore.getState().route).toBe('terminal');
   });
 
   it('resolves an agent by exact id or unique case-insensitive name before navigation', async () => {

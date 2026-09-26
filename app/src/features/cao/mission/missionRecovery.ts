@@ -1,25 +1,21 @@
 import type { CaoMission, CaoMissionStore } from './types';
 
+/**
+ * Reload the durable mission snapshot used by the production lifecycle after
+ * restart. Reconciliation rebuilds runtime effects from this snapshot, so this
+ * read must not bump timestamps or replay an in-flight approval.
+ */
 export async function recoverCaoMission(input: {
   store: CaoMissionStore;
   accountId: string;
   workspaceId: string;
   projectId: string | null;
   missionId: string;
-  now?: number;
 }): Promise<CaoMission | undefined> {
-  const mission = await input.store.get({
+  return input.store.get({
     accountId: input.accountId,
     workspaceId: input.workspaceId,
     projectId: input.projectId,
     missionId: input.missionId,
   });
-  if (!mission || mission.status !== 'running') return mission;
-  const recovered = Object.freeze({ ...mission, updatedAt: input.now ?? Date.now() });
-  const applied = await input.store.compareAndSave({
-    expected: mission,
-    next: recovered,
-  });
-  if (!applied) throw new Error('cao_mission_recovery_conflict');
-  return recovered;
 }

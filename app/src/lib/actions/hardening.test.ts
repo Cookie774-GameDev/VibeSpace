@@ -68,14 +68,10 @@ describe('runAction param coercion', () => {
     if (!result.ok) expect(result.error).toMatch(/string/);
   });
 
-  it('aggregates every parameter problem in a single error', async () => {
-    // terminal.run has a required string `command`. Send wrong-type
-    // command and an out-of-spec extra — only `command` is declared,
-    // unknown keys are allowed through verbatim, so the only error
-    // should be the missing required param.
+  it('does not expose arbitrary shell commands as a VibeSpace action', async () => {
     const result = await runAction('terminal.run', {}, { source: 'user' }, { emitToast: false });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/Missing required.*command/i);
+    if (!result.ok) expect(result.error).toMatch(/Unknown action/i);
   });
 });
 
@@ -109,7 +105,7 @@ describe('terminal action shell-injection guard', () => {
     if (!result.ok) expect(result.error).toMatch(/metacharacter/i);
   });
 
-  it('rejects a cwd containing a backtick command-substitution', async () => {
+  it('does not expose arbitrary shell execution even with a guarded cwd', async () => {
     const result = await runAction(
       'terminal.run',
       { command: 'npm test', cwd: '/tmp/`whoami`' },
@@ -117,7 +113,8 @@ describe('terminal action shell-injection guard', () => {
       { emitToast: false },
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/metacharacter/i);
+    if (!result.ok) expect(result.error).toMatch(/Unknown action/i);
+    expect(useTerminalCommandQueue.getState().queue).toHaveLength(0);
   });
 
   it('accepts a normal Windows path with spaces and parens', async () => {
@@ -147,7 +144,7 @@ describe('terminal action shell-injection guard', () => {
     expect(useUIStore.getState().route).toBe('terminal');
   });
 
-  it('queues approved PowerShell as a UTF-16LE encoded command', async () => {
+  it('does not expose VibeSpace PowerShell execution', async () => {
     const script = "Write-Output 'hello world'; $value = 2 + 2";
     const result = await runAction(
       'terminal.powershell',
@@ -156,40 +153,22 @@ describe('terminal action shell-injection guard', () => {
       { emitToast: false },
     );
 
-    expect(result.ok).toBe(true);
-    const queued = useTerminalCommandQueue.getState().drain();
-    expect(queued).toHaveLength(1);
-    expect(queued[0]).toMatchObject({
-      kind: 'shell',
-      cwd: 'C:\\Projects\\Farm Life',
-    });
-    const command = (queued[0] as { command: string }).command;
-    expect(command).toMatch(/^powershell\.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand /);
-    const encoded = command.split(' ').at(-1)!;
-    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
-    const decoded = Array.from({ length: bytes.length / 2 }, (_, index) =>
-      String.fromCharCode(bytes[index * 2]! | (bytes[index * 2 + 1]! << 8)),
-    ).join('');
-    expect(decoded).toBe(script);
-    if (result.ok) expect(result.data).toEqual(expect.objectContaining({ state: 'queued' }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/Unknown action/i);
+    expect(useTerminalCommandQueue.getState().queue).toHaveLength(0);
   });
 
-  it('attaches a bounded opt-in timeout to a queued command', async () => {
+  it('does not queue arbitrary terminal commands through a VibeSpace action', async () => {
     const result = await runAction(
       'terminal.run',
       { command: 'npm test', timeoutMs: 30_000 },
       { source: 'user' },
       { emitToast: false },
     );
-    expect(result.ok).toBe(true);
-    const executionId = result.ok
-      ? (result.data as { executionId?: string } | undefined)?.executionId
-      : undefined;
-    expect(executionId).toBeTruthy();
-    expect(useTerminalExecutionStore.getState().executions[executionId!]).toMatchObject({
-      status: 'queued',
-      timeoutMs: 30_000,
-    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/Unknown action/i);
+    expect(useTerminalCommandQueue.getState().queue).toHaveLength(0);
+    expect(useTerminalExecutionStore.getState().executions).toEqual({});
   });
 });
 

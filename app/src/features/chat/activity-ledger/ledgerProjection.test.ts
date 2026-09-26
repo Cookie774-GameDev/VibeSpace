@@ -56,6 +56,67 @@ describe('projectAssistantActivityLedger', () => {
     expect(ledger.receipts[0]).toMatchObject({ callId: 'failed-turn-tool', status: 'error' });
   });
 
+  it.each([
+    ['plugins_run', { pluginId: 'github' }, { plugin: 'github' }],
+    ['plugins.run', { plugin_id: 'github' }, { plugin: 'github' }],
+    ['mcp_run', { connectionId: 'github-mcp' }, { mcpServer: 'github-mcp' }],
+    ['mcp.run', { connection_id: 'github-mcp' }, { mcpServer: 'github-mcp' }],
+  ] as const)('attributes correlated %s activity from its explicit public arguments', (tool, args, attribution) => {
+    for (const publicArgs of [args, JSON.stringify(args)]) {
+      for (const status of ['running', 'done', 'error', 'cancelled'] as const) {
+        const activity = event({
+          id: `bridge-${tool}`,
+          title: 'Jarvis tool activity',
+          subtitle: tool,
+          providerCallId: 'bridge-call',
+          status,
+          toolDetails: { arguments: publicArgs },
+        });
+        for (const observed of [activity, JSON.parse(JSON.stringify(activity)) as ChatActivityEvent]) {
+          const ledger = projectAssistantActivityLedger(assistant([]), [observed]);
+          expect(ledger.actionsTotal).toBe(1);
+          expect(ledger.receipts).toHaveLength(1);
+          expect(ledger.receipts[0]).toMatchObject({
+            ...attribution,
+            callId: 'bridge-call',
+            toolName: tool,
+            status,
+          });
+          expect(ledger.receipts[0].toolDetails).toEqual(activity.toolDetails);
+        }
+      }
+    }
+  });
+
+  it.each([
+    ['plugins_run', 'not JSON'],
+    ['plugins_run', JSON.stringify([{ pluginId: 'not-authority' }])],
+    ['plugins_run', `${' '.repeat(16_385)}{"pluginId":"not-authority"}`],
+    ['search.web', { pluginId: 'not-authority' }],
+    ['plugins_run', { pluginId: 42 }],
+    ['plugins_run', { pluginId: '   ' }],
+  ] as const)('does not invent correlated plugin attribution for invalid %s arguments %#', (tool, args) => {
+    const ledger = projectAssistantActivityLedger(assistant([]), [event({
+      id: 'invalid-attribution',
+      title: 'Jarvis tool activity',
+      subtitle: tool,
+      toolDetails: { arguments: args },
+    })]);
+    expect(ledger.receipts[0].plugin).toBeUndefined();
+    expect(ledger.receipts[0].mcpServer).toBeUndefined();
+  });
+
+  it('retains a generic MCP label when correlated activity has no explicit server identity', () => {
+    const ledger = projectAssistantActivityLedger(assistant([]), [event({
+      id: 'unknown-mcp',
+      title: 'Jarvis tool activity',
+      subtitle: 'mcp_run',
+      toolDetails: { arguments: { toolName: 'list_repositories' } },
+    })]);
+    expect(ledger.receipts[0].mcpServer).toBe('MCP server');
+    expect(ledger.receipts[0].plugin).toBeUndefined();
+  });
+
   it('attributes native bridge calls whose public arguments are stored in details', () => {
     const ledger = projectAssistantActivityLedger(assistant([
       { kind: 'tool_call', call_id: 'plugin-native', tool: 'plugins_run', args: {},

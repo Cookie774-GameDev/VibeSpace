@@ -278,12 +278,16 @@ mod tests {
     #[test]
     fn ten_peers_connect_and_an_eleventh_cannot_replace_the_team() {
         let state = TerminalPeerFabricState::default();
-        let peers = (0..10).map(|n| peer_ref(&format!("pane-{n}"), &format!("tty-{n}"), "gen")).collect::<Vec<_>>();
+        let peers = (0..10)
+            .map(|n| peer_ref(&format!("pane-{n}"), &format!("tty-{n}"), "gen"))
+            .collect::<Vec<_>>();
         assert!(connect(&state, "ten".into(), peers.clone()).is_ok());
         let mut excessive = peers;
         excessive.push(peer_ref("pane-10", "tty-10", "gen"));
         assert!(connect(&state, "eleven".into(), excessive).is_err());
-        assert!(matches!(status(&state, "status".into(), vec![], None).unwrap(), TerminalPeerFabricResponse::Receipt { target_ids, .. } if target_ids.len() == 10));
+        assert!(
+            matches!(status(&state, "status".into(), vec![], None).unwrap(), TerminalPeerFabricResponse::Receipt { target_ids, .. } if target_ids.len() == 10)
+        );
     }
 
     #[test]

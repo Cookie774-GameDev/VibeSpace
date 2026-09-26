@@ -53,7 +53,7 @@ describe('resolveAction', () => {
     expect(resolveAction('does.not.exist')).toBeUndefined();
   });
 
-  it('falls through to a custom tool when its slug is present', () => {
+  it('does not resolve a saved command when its base executor is retired', () => {
     useToolStore.setState({ tools: [] });
     useToolStore.getState().create({
       name: 'My dev server',
@@ -63,14 +63,23 @@ describe('resolveAction', () => {
     });
 
     const slug = useToolStore.getState().tools[0]!.slug;
-    const a = resolveAction(`custom.${slug}`);
-    expect(a).toBeDefined();
-    expect(a?.id).toBe(`custom.${slug}`);
-    expect(a?.category).toBe('custom');
+    expect(resolveAction(`custom.${slug}`)).toBeUndefined();
   });
 });
 
 describe('getAllActions', () => {
+  it('hides saved custom actions backed by retired file or shell executors', () => {
+    useToolStore.setState({ tools: [] });
+    const command = useToolStore.getState().create({
+      name: 'My dev server',
+      description: 'Start the dev server.',
+      baseAction: 'terminal.run',
+      params: { command: 'npm run jarvis' },
+    });
+
+    expect(getAllActions().some((action) => action.id === `custom.${command.slug}`)).toBe(false);
+  });
+
   it('combines built-ins and custom tools, with built-ins winning collisions', () => {
     useToolStore.setState({ tools: [] });
     const before = getAllActions();
@@ -118,17 +127,14 @@ describe('runAction', () => {
     expect(toast.error).toHaveBeenCalled();
   });
 
-  it('rejects required-param omissions before dispatching the runner', async () => {
+  it('rejects retired arbitrary command ids before dispatching the runner', async () => {
     const result = await runAction('terminal.run', {}, { source: 'user' });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/required/i);
+    if (!result.ok) expect(result.error).toMatch(/unknown action/i);
   });
 
-  it('rejects direct AI terminal dispatch without issued canonical approval authority', async () => {
-    const definition = resolveAction('terminal.run');
-    expect(definition).toBeTruthy();
-    const direct = vi.spyOn(definition!, 'run');
-
+  it('does not route AI requests for a retired arbitrary command id', async () => {
+    expect(resolveAction('terminal.run')).toBeUndefined();
     await expect(
       runAction(
         'terminal.run',
@@ -138,9 +144,8 @@ describe('runAction', () => {
       ),
     ).resolves.toEqual({
       ok: false,
-      error: 'AI terminal actions require canonical approval authority.',
+      error: 'AI actions require canonical approval authority.',
     });
-    expect(direct).not.toHaveBeenCalled();
     expect(useTerminalCommandQueue.getState().queue).toHaveLength(0);
   });
 
@@ -349,61 +354,19 @@ describe('runAction', () => {
     );
   });
 
-  it('shows live writing only while an approved file mutation is actually executing', async () => {
-    const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+  it('does not emit file-writing activity for retired file actions', async () => {
+    expect(createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve('files.edit')).toBeUndefined();
+    expect(resolveAction('files.edit')).toBeUndefined();
+    const result = await runAction(
       'files.edit',
-    )!;
-    const definition = resolveAction('files.edit')!;
-    let finishWrite!: (value: { ok: true; summary: string }) => void;
-    vi.spyOn(definition, 'run').mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finishWrite = resolve;
-        }),
+      { path: 'C:\\project\\notes.md', content: 'Updated notes.' },
+      { source: 'user', chatId: 'chat-file-write' },
+      { emitToast: false },
     );
-    const signal = new AbortController().signal;
-    const beginExternalEffect = vi.fn((begin) => ({
-      kind: 'committed' as const,
-      value: begin(signal),
-    }));
-    const dispatcher = createJarvisRegisteredBuiltinDispatcher();
 
-    const outcome = dispatcher({
-      registration,
-      params: { path: 'C:\\project\\notes.md', content: 'Updated notes.' },
-      context: {
-        source: 'ai',
-        chatId: 'chat-file-write',
-        accountId: 'account-kernel',
-        runId: 'run-file-write',
-        approvalId: 'approval-file-write',
-        requestId: 'request-file-write',
-        attemptNumber: 1,
-      },
-      execution: { beginExternalEffect } as never,
-    });
-
-    await vi.waitFor(() =>
-      expect(useChatActivityStore.getState().eventsByChat['chat-file-write']?.at(-1)).toMatchObject(
-        {
-          category: 'writing',
-          status: 'running',
-          title: 'Writing project files',
-        },
-      ),
-    );
-    finishWrite({ ok: true, summary: 'Updated notes.' });
-    await expect(outcome).resolves.toMatchObject({
-      kind: 'executor_returned',
-      result: { ok: true },
-    });
-    expect(useChatActivityStore.getState().eventsByChat['chat-file-write']?.at(-1)).toMatchObject({
-      category: 'writing',
-      status: 'done',
-      title: 'Project file update complete',
-    });
+    expect(result.ok).toBe(false);
+    expect(useChatActivityStore.getState().eventsByChat['chat-file-write']).toBeUndefined();
   });
-
   it('routes canonical browser registrations only to a live scoped host', async () => {
     revokeBrowserGoalHostSession();
     const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
@@ -458,50 +421,19 @@ describe('runAction', () => {
     expect(beginExternalEffect).not.toHaveBeenCalled();
   });
 
-  it('queues exactly one terminal command through issued authority and propagates cancellation', async () => {
-    const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+  it('does not dispatch retired arbitrary terminal commands through the approval kernel', async () => {
+    expect(createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve('terminal.run')).toBeUndefined();
+    expect(resolveAction('terminal.run')).toBeUndefined();
+    const result = await runAction(
       'terminal.run',
-    )!;
-    const definition = resolveAction('terminal.run')!;
-    const run = vi.spyOn(definition, 'run');
-    const signal = new AbortController().signal;
-    const beginExternalEffect = vi.fn((begin) => ({
-      kind: 'committed' as const,
-      value: begin(signal),
-    }));
-    const dispatcher = createJarvisRegisteredBuiltinDispatcher();
-
-    const outcome = await dispatcher({
-      registration,
-      params: { command: 'npm test', label: 'Approved tests' },
-      context: {
-        source: 'ai',
-        accountId: 'account-kernel',
-        runId: 'run-terminal',
-        approvalId: 'approval-terminal',
-        requestId: 'request-terminal',
-        attemptNumber: 1,
-      },
-      execution: { beginExternalEffect } as never,
-    });
-    expect(outcome).toEqual({
-      kind: 'executor_returned',
-      result: {
-        ok: true,
-        summary: 'Command queued in Terminal.',
-        data: { state: 'queued', executionId: expect.any(String) },
-      },
-    });
-    expect(beginExternalEffect).toHaveBeenCalledOnce();
-    expect(run).toHaveBeenCalledWith(
-      { command: 'npm test', label: 'Approved tests' },
-      expect.objectContaining({ source: 'ai', signal }),
+      { command: 'npm test' },
+      { source: 'user' },
+      { emitToast: false },
     );
-    expect(useTerminalCommandQueue.getState().queue).toMatchObject([
-      { kind: 'shell', command: 'npm test', label: 'Approved tests' },
-    ]);
-  });
 
+    expect(result.ok).toBe(false);
+    expect(useTerminalCommandQueue.getState().queue).toHaveLength(0);
+  });
   it('dispatches the protected model switch with canonical approval correlation', async () => {
     const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
       'chat.model.switch',
@@ -554,7 +486,7 @@ describe('runAction', () => {
       { source: 'user', messageId: 'message_secret', callId: 'call_secret' },
       { emitToast: false },
     );
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     const serialized = JSON.stringify(useDevConsoleStore.getState().entries);
     expect(serialized).not.toContain(secretCommand);
     expect(serialized).toContain('[omitted]');

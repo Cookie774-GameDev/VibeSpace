@@ -107,6 +107,17 @@ export function getBuiltinAgentDefinition(slug: BuiltinAgentSlug): BuiltinAgentD
   return cloneBuiltinAgentDefinition(BUILTIN_AGENT_DEFINITIONS[slug]);
 }
 
+export function mergePersistedAndBuiltinAgents(
+  persisted: readonly Agent[],
+  defaults: readonly Agent[],
+): Agent[] {
+  const missing = defaults.filter(
+    (candidate) =>
+      !persisted.some((saved) => saved.builtin === true && saved.slug === candidate.slug),
+  );
+  return [...missing, ...persisted];
+}
+
 export function createBuiltinAgentRoster(
   input: {
     now?: number;

@@ -28,6 +28,13 @@ export interface ContextSourceRead {
 
 export interface ContextQueryRepository {
   listRecords(scope: ContextScope, signal?: AbortSignal): Promise<readonly ContextRecord[]>;
+  /** Rebuild only the authority that could own a missing durable record ID. */
+  rehydrateMissingRecord?(recordId: string, scope: ContextScope, signal?: AbortSignal): Promise<void>;
+  /** Scoped inventory metadata; search/open still validate exact source authority. */
+  describeSummary?(scope: ContextScope, signal?: AbortSignal): Promise<{
+    recordCount: number;
+    sourceKinds: readonly ContextSourceKind[];
+  }>;
   getRecord(recordId: string, signal?: AbortSignal): Promise<ContextRecord | undefined>;
   search(
     scope: ContextScope,
@@ -36,6 +43,13 @@ export interface ContextQueryRepository {
   ): Promise<readonly ContextSearchHit[]>;
   readSource(record: ContextRecord, signal?: AbortSignal): Promise<ContextSourceRead | undefined>;
   canOpen(record: ContextRecord, scope: ContextScope, signal?: AbortSignal): Promise<boolean>;
+  /** Check an issued pointer capability without reading source bytes. */
+  authorizePointer?(
+    pointer: ContextPointer,
+    record: ContextRecord,
+    scope: ContextScope,
+    signal?: AbortSignal,
+  ): boolean | Promise<boolean>;
   validatePointer?(
     pointer: ContextPointer,
     record: ContextRecord,
@@ -91,6 +105,7 @@ interface OpenContinuation {
   kind: 'open';
   scope: ContextScope;
   pointer: ContextPointer;
+  authorityPointer: ContextPointer;
   nextByte: number;
   requestedEnd: number;
 }
@@ -145,6 +160,10 @@ function inScope(record: ContextRecord, scope: ContextScope): boolean {
   return true;
 }
 
+function isUtf8Continuation(bytes: Uint8Array, offset: number): boolean {
+  return offset < bytes.length && (bytes[offset]! & 0xc0) === 0x80;
+}
+
 function byteRangeForPointer(
   pointer: ContextPointer,
   bytes: Uint8Array,
@@ -154,7 +173,10 @@ function byteRangeForPointer(
 } {
   const bounds = pointerBounds(pointer);
   if (bounds.kind === 'bytes') {
-    if (bounds.start >= bytes.length || bounds.end > bytes.length) {
+    if (
+      bounds.start >= bytes.length || bounds.end > bytes.length ||
+      isUtf8Continuation(bytes, bounds.start) || isUtf8Continuation(bytes, bounds.end)
+    ) {
       throw new ContextQueryError('pointer_invalid');
     }
     return { start: bounds.start, end: bounds.end };
@@ -249,7 +271,11 @@ export function createContextQueryService(dependencies: {
       // Context-map repositories rebuild their authority cache from persisted,
       // scope-filtered metadata. Rehydrate before declaring a durable pointer
       // missing (for example after an app restart).
-      await repository.listRecords(scope, signal);
+      if (repository.rehydrateMissingRecord) {
+        await repository.rehydrateMissingRecord(recordId, scope, signal);
+      } else {
+        await repository.listRecords(scope, signal);
+      }
       abortIfNeeded(signal);
       record = await repository.getRecord(recordId, signal);
     }
@@ -267,7 +293,22 @@ export function createContextQueryService(dependencies: {
     signal?: AbortSignal,
     validatePointer = true,
   ) => {
+    // Mapped-file pointers encode their record and byte span. Reject a
+    // mismatched tuple before a missing record can trigger a full map rebuild.
+    // Other repositories own different pointer formats and retain their
+    // existing authority checks below.
+    if (validatePointer && /^rlm:[a-f0-9]{64}$/i.test(pointer.recordId) &&
+        (!Number.isSafeInteger(pointer.byteStart) ||
+          !Number.isSafeInteger(pointer.byteEnd) ||
+          pointer.id !== `ptr:${pointer.recordId}:${pointer.byteStart}:${pointer.byteEnd}`)) {
+      throw new ContextQueryError('pointer_invalid');
+    }
     const record = await resolveRecord(pointer.recordId, scope, signal);
+    if (validatePointer && repository.authorizePointer) {
+      const authorized = await repository.authorizePointer(pointer, record, scope, signal);
+      abortIfNeeded(signal);
+      if (!authorized) throw new ContextQueryError('pointer_invalid');
+    }
     if (!(await repository.canOpen(record, scope, signal))) {
       throw new ContextQueryError('permission_denied');
     }
@@ -292,13 +333,18 @@ export function createContextQueryService(dependencies: {
   };
 
   const describe = async (input: { scope: ContextScope; signal?: AbortSignal }) => {
-    const records = await scopedRecords(input.scope, input.signal);
-    const sourceKinds = [...new Set(records.map((record) => record.sourceKind))].sort() as
+    abortIfNeeded(input.signal);
+    const summary = repository.describeSummary
+      ? await repository.describeSummary(input.scope, input.signal)
+      : undefined;
+    const records = summary ? undefined : await scopedRecords(input.scope, input.signal);
+    abortIfNeeded(input.signal);
+    const sourceKinds = [...new Set(summary?.sourceKinds ?? records?.map((record) => record.sourceKind) ?? [])].sort() as
       | ContextSourceKind[]
       | [];
     return {
       scope: input.scope,
-      recordCount: records.length,
+      recordCount: summary?.recordCount ?? records?.length ?? 0,
       sourceKinds,
       indexAvailable: true,
       stale: false,
@@ -385,6 +431,7 @@ export function createContextQueryService(dependencies: {
       signal?: AbortSignal;
     },
     validatePointer: boolean,
+    authorityPointer?: ContextPointer,
   ): Promise<ContextOpenResult> => {
     abortIfNeeded(input.signal);
     const continued = takeContinuation(input.continuation, 'open');
@@ -394,18 +441,31 @@ export function createContextQueryService(dependencies: {
     ) {
       throw new ContextQueryError('continuation_invalid');
     }
-    const pointer = continued?.pointer ?? input.pointer;
+    const pointer = continued?.pointer ?? Object.freeze({ ...input.pointer });
+    const originalPointer = continued?.authorityPointer ?? authorityPointer ?? pointer;
     const { record, source } = await readAuthority(
-      pointer,
+      continued ? originalPointer : pointer,
       input.scope,
       input.signal,
-      validatePointer,
+      continued ? true : validatePointer,
     );
     const requested = byteRangeForPointer(pointer, source.bytes);
     const start = continued?.nextByte ?? requested.start;
     const requestedEnd = continued?.requestedEnd ?? requested.end;
     const byteBudget = boundedInteger(input.maxBytes, limits.maxOpenBytes, limits.maxOpenBytes);
-    const end = Math.min(requestedEnd, start + byteBudget);
+    let end = Math.min(requestedEnd, start + byteBudget);
+    // Never widen an issued byte span or exceed the caller's byte budget.
+    // Leave a partial final character for the next page, not a replacement glyph.
+    while (end > start && isUtf8Continuation(source.bytes, end)) end -= 1;
+    if (end <= start) throw new ContextQueryError('query_invalid');
+    let text: string;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
+        source.bytes.subarray(start, end),
+      );
+    } catch {
+      throw new ContextQueryError('pointer_invalid');
+    }
     const truncated = end < requestedEnd;
     const lines = lineRangeForBytes(source.bytes, start, end);
     const exactPointer = createContextPointer({
@@ -419,7 +479,7 @@ export function createContextQueryService(dependencies: {
       status: 'current',
       record,
       pointer: exactPointer,
-      text: new TextDecoder().decode(source.bytes.slice(start, end)),
+      text,
       byteStart: start,
       byteEnd: end,
       lineStart: lines.start,
@@ -431,6 +491,9 @@ export function createContextQueryService(dependencies: {
               kind: 'open',
               scope: input.scope,
               pointer,
+              // Expanded pointers are derived spans, not new independent grants.
+              // Revalidate the original issued authority on every continued page.
+              authorityPointer: Object.freeze({ ...originalPointer }),
               nextByte: end,
               requestedEnd,
             }),
@@ -454,19 +517,29 @@ export function createContextQueryService(dependencies: {
     afterBytes?: number;
     signal?: AbortSignal;
   }): Promise<ContextOpenResult> => {
-    const { source } = await readAuthority(input.pointer, input.scope, input.signal);
-    const range = byteRangeForPointer(input.pointer, source.bytes);
+    const authorityPointer = Object.freeze({ ...input.pointer });
+    const { source } = await readAuthority(authorityPointer, input.scope, input.signal);
+    const range = byteRangeForPointer(authorityPointer, source.bytes);
     const before = Math.max(0, Math.floor(input.beforeBytes ?? 0));
     const after = Math.max(0, Math.floor(input.afterBytes ?? 0));
+    let expandedStart = Math.max(0, range.start - before);
+    let expandedEnd = Math.min(source.bytes.length, range.end + after);
+    // Trim partial neighbors inward; the original valid span remains included.
+    while (expandedStart < range.start && isUtf8Continuation(source.bytes, expandedStart)) expandedStart += 1;
+    while (expandedEnd > range.end && isUtf8Continuation(source.bytes, expandedEnd)) expandedEnd -= 1;
     const expanded = createContextPointer({
-      ...input.pointer,
-      id: `${input.pointer.id}:expand:${before}:${after}`,
+      ...authorityPointer,
+      id: `${authorityPointer.id}:expand:${before}:${after}`,
       lineStart: undefined,
       lineEnd: undefined,
-      byteStart: Math.max(0, range.start - before),
-      byteEnd: Math.min(source.bytes.length, range.end + after),
+      byteStart: expandedStart,
+      byteEnd: expandedEnd,
     });
-    return openResolved({ scope: input.scope, pointer: expanded, signal: input.signal }, false);
+    return openResolved(
+      { scope: input.scope, pointer: expanded, signal: input.signal },
+      false,
+      authorityPointer,
+    );
   };
 
   const sources = async (input: { scope: ContextScope; limit?: number; signal?: AbortSignal }) => {

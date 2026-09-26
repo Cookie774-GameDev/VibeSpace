@@ -117,3 +117,56 @@ describe('tool Gateway citation authority', () => {
     expect(consumeToolGatewayContextCitationItems('session-128')).toHaveLength(1);
   });
 });
+
+
+describe('fallback Context citation retention', () => {
+  beforeEach(() => clearToolGatewayContextCitationItems());
+  const scope = { accountId: 'account-1', projectId: 'project-1' };
+  const pointer = (id: string) => ({
+    pointerId: `ptr:${id}`, recordId: `record:${id}`,
+    sourceRevision: `sha256:${'a'.repeat(64)}`, contentHash: 'a'.repeat(64),
+  });
+
+  it('applies the existing 128-session bound to fallback registrations', () => {
+    for (let index = 0; index < 129; index += 1) {
+      registerToolGatewayFallbackCitations(`fallback-${index}`, [pointer(String(index))], scope);
+    }
+    expect(consumeToolGatewayContextCitationItems('fallback-0')).toEqual([]);
+    expect(consumeToolGatewayContextCitationItems('fallback-128')).toHaveLength(1);
+  });
+
+  it('refreshes fallback session recency without losing its previous evidence', () => {
+    for (let index = 0; index < 128; index += 1) {
+      registerToolGatewayFallbackCitations(`fallback-${index}`, [pointer(String(index))], scope);
+    }
+    registerToolGatewayFallbackCitations('fallback-0', [pointer('new-0')], scope);
+    registerToolGatewayFallbackCitations('fallback-128', [pointer('128')], scope);
+    expect(consumeToolGatewayContextCitationItems('fallback-1')).toEqual([]);
+    expect(consumeToolGatewayContextCitationItems('fallback-0').map((item) => item.source.id))
+      .toEqual(['ptr:0', 'ptr:new-0']);
+    expect(consumeToolGatewayContextCitationItems('fallback-128')).toHaveLength(1);
+  });
+
+  it('does not trim or duplicate evidence inside a retained session', () => {
+    const pointers = Array.from({ length: 180 }, (_, index) => pointer(`evidence-${index}`));
+    registerToolGatewayFallbackCitations('active', [...pointers, ...pointers], scope);
+    const items = consumeToolGatewayContextCitationItems('active');
+    expect(items).toHaveLength(180);
+    expect(items.at(-1)?.source.id).toBe('ptr:evidence-179');
+  });
+
+  it('shares the same retention boundary between receipts and fallback evidence', () => {
+    const receipt = contextCitationItem({
+      id: 'receipt-test', kind: 'receipt', label: 'Context receipt', ...scope, observedAt: 123,
+    });
+    replaceToolGatewayContextCitationItems('oldest', [receipt]);
+    for (let index = 0; index < 127; index += 1) {
+      registerToolGatewayFallbackCitations(`fallback-${index}`, [pointer(String(index))], scope);
+    }
+    registerToolGatewayFallbackCitations('latest', [pointer('latest')], scope);
+    expect(consumeToolGatewayContextCitationItems('oldest')).toEqual([]);
+    replaceToolGatewayContextCitationItems('receipt-new', [receipt]);
+    expect(consumeToolGatewayContextCitationItems('receipt-new')).toHaveLength(1);
+    expect(consumeToolGatewayContextCitationItems('latest')).toHaveLength(1);
+  });
+});

@@ -36,7 +36,7 @@ describe('AUTHORITY_INVENTORY', () => {
       settings.section.open palette.open launcher.open fullscreen.set
       terminal.open terminal.focus terminal.message terminal.broadcast terminal.split
       terminal.rename terminal.move_project terminal.restart terminal.clear terminal.stop
-      terminal.close terminal.list terminal.status terminal.run_saved_command terminal.cancel_queued
+      terminal.close terminal.list terminal.status terminal.cancel_queued
       agent.message agent.broadcast agent.open agent.status agent.continue agent.stop
       agent.assign_role agent.give_context
       project.create project.open project.rename project.archive project.list

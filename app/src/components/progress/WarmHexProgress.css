@@ -132,6 +132,12 @@
   filter: saturate(0.78);
 }
 
+.warm-hex-progress[data-failed='true'] {
+  --warm-hex-border: rgba(238, 106, 85, 0.75);
+  filter: none;
+  box-shadow: inset 0 0 0 1px rgba(238, 106, 85, 0.24);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .warm-hex-progress,
   .warm-hex-progress * {

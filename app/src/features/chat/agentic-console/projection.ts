@@ -110,6 +110,7 @@ export type AgenticSessionSummary = {
     | 'done';
   currentOperation: string;
   fileCount: number;
+  filePaths: readonly string[];
   addedLines: number;
   removedLines: number;
   tokenCount: number | '—';
@@ -261,6 +262,79 @@ function boundedDiff(diff: string): string {
   return sanitizeConsoleText(diff, MAX_OUTPUT_CHARS);
 }
 
+type ComparableDiffPath = {
+  absolute: boolean;
+  prefix: string;
+  segments: string[];
+  windowsStyle: boolean;
+};
+
+function comparableDiffPath(rawPath: string): ComparableDiffPath | undefined {
+  const raw = rawPath.trim().replace(/\\/g, '/');
+  if (!raw) return undefined;
+
+  const isUnc = raw.startsWith('//');
+  const path = isUnc ? `//${raw.slice(2).replace(/\\/g, '/')}` : raw.replace(/\\/g, '/');
+  const drive = /^([a-z]:)(?:\/|$)/i.exec(path);
+  const absolute = Boolean(drive) || path.startsWith('/');
+  const prefix = drive ? drive[1].toLowerCase() : isUnc ? '//' : absolute ? '/' : '';
+  const remainder = drive ? path.slice(2) : isUnc ? path.slice(2) : absolute ? path.replace(/^\/+/, '') : path;
+  const segments: string[] = [];
+
+  for (const segment of remainder.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (segments.length && segments[segments.length - 1] !== '..') segments.pop();
+      else if (!absolute) segments.push(segment);
+      continue;
+    }
+    segments.push(segment);
+  }
+
+  return { absolute, prefix, segments, windowsStyle: Boolean(drive) || isUnc };
+}
+
+function comparableDiffPathKey(path: ComparableDiffPath): string {
+  const segments = path.windowsStyle ? path.segments.map(segment => segment.toLowerCase()) : path.segments;
+  return `${path.absolute ? `absolute:${path.prefix}` : 'relative:'}${segments.join('/')}`;
+}
+
+function sameComparableDiffPath(left: ComparableDiffPath, right: ComparableDiffPath): boolean {
+  if (left.absolute !== right.absolute || left.prefix !== right.prefix || left.segments.length !== right.segments.length) {
+    return false;
+  }
+  const caseInsensitive = left.windowsStyle || right.windowsStyle;
+  return left.segments.every((segment, index) => caseInsensitive
+    ? segment.toLowerCase() === right.segments[index].toLowerCase()
+    : segment === right.segments[index]);
+}
+
+function relativePathMatchesAbsolutePath(relative: ComparableDiffPath, absolute: ComparableDiffPath): boolean {
+  if (relative.absolute || !absolute.absolute || relative.segments.length > absolute.segments.length) return false;
+  const caseInsensitive = relative.windowsStyle || absolute.windowsStyle;
+  const offset = absolute.segments.length - relative.segments.length;
+  return relative.segments.every((segment, index) => {
+    const absoluteSegment = absolute.segments[offset + index];
+    return caseInsensitive ? segment.toLowerCase() === absoluteSegment.toLowerCase() : segment === absoluteSegment;
+  });
+}
+
+function resultDiffPathMatch(
+  resultPath: string | undefined,
+  detailPaths: readonly string[],
+): 'matched' | 'distinct' | 'ambiguous' | 'missing' {
+  const result = resultPath ? comparableDiffPath(resultPath) : undefined;
+  if (!result) return 'missing';
+  const details = detailPaths.map(comparableDiffPath).filter((path): path is ComparableDiffPath => Boolean(path));
+  if (details.some(detail => sameComparableDiffPath(result, detail))) return 'matched';
+  if (result.absolute) return 'distinct';
+
+  const suffixMatches = details.filter(detail => relativePathMatchesAbsolutePath(result, detail));
+  if (suffixMatches.length === 1) return 'matched';
+  if (suffixMatches.length > 1) return 'ambiguous';
+  return 'distinct';
+}
+
 function projectMessage(message: Message, preserveAssistantMessages: boolean): TranscriptBlock[] {
   const sourceId = `message:${message.id}`;
   if (
@@ -268,15 +342,17 @@ function projectMessage(message: Message, preserveAssistantMessages: boolean): T
     message.role === 'system' ||
     (preserveAssistantMessages && message.role === 'assistant')
   ) {
-    return [
-      {
-        id: `${sourceId}:legacy`,
-        sourceId,
-        ts: message.created_at,
-        kind: 'legacy',
-        message,
-      },
-    ];
+    const legacy: LegacyBlock = {
+      id: `${sourceId}:legacy`,
+      sourceId,
+      ts: message.created_at,
+      kind: 'legacy',
+      message,
+    };
+    const additionalDiffs = message.role === 'assistant' && !preserveAssistantMessages && hasInteractiveParts(message)
+      ? projectInteractiveAssistantDiffs(message)
+      : [];
+    return [legacy, ...additionalDiffs];
   }
 
   if (message.role === 'user') {
@@ -334,15 +410,38 @@ function projectMessage(message: Message, preserveAssistantMessages: boolean): T
       if (result) pairedResults.add(part.call_id);
       const change = result?.result && typeof result.result === 'object'
         ? result.result as Record<string, unknown> : undefined;
-      if (/^(edit|write|apply_patch)$/.test(part.tool) && change?.status === 'completed' &&
-          !result?.error && typeof change.diff === 'string' && change.diff.trim()) {
-        const diff = boundedDiff(change.diff);
-        const lines = formatUnifiedDiffLines(diff);
-        const filePath = typeof part.args.path === 'string' ? part.args.path : undefined;
-        blocks.push({ ...base, id: `${sourceId}:diff:${part.call_id}`, kind: 'diff', status: 'done',
-          title: 'Edited files', filePath, diff,
-          addedLines: lines.filter(line => line.kind === 'add').length,
-          removedLines: lines.filter(line => line.kind === 'remove').length });
+      if (/^(edit|write|apply_patch)$/.test(part.tool) && change?.status === 'completed' && !result?.error) {
+        const appendDiff = (rawDiff: string, filePath: string | undefined, id: string) => {
+          const diff = boundedDiff(rawDiff);
+          const lines = formatUnifiedDiffLines(diff);
+          blocks.push({ ...base, id, kind: 'diff', status: 'done', title: 'Edited files', filePath, diff,
+            addedLines: lines.filter(line => line.kind === 'add').length,
+            removedLines: lines.filter(line => line.kind === 'remove').length });
+        };
+        const confirmedDetails: Array<{ path: string; diff: string }> = [];
+        const seenPaths = new Set<string>();
+        const detailChanges = Array.isArray(part.details?.changes) ? part.details.changes : [];
+        detailChanges.forEach((detail, detailIndex) => {
+          if (detail.complete !== true || typeof detail.path !== 'string' || !detail.path.trim() ||
+              typeof detail.diff !== 'string' || !detail.diff.trim()) return;
+          const path = comparableDiffPath(detail.path);
+          if (!path) return;
+          const pathKey = comparableDiffPathKey(path);
+          if (seenPaths.has(pathKey)) return;
+          seenPaths.add(pathKey);
+          confirmedDetails.push({ path: detail.path, diff: detail.diff });
+          appendDiff(detail.diff, detail.path, `${sourceId}:diff:${part.call_id}:change:${detailIndex}`);
+        });
+
+        if (typeof change.diff === 'string' && change.diff.trim()) {
+          const resultFilePath = typeof part.args.path === 'string' ? part.args.path : undefined;
+          const pathMatch = resultDiffPathMatch(resultFilePath, confirmedDetails.map(detail => detail.path));
+          const representedByDetails = pathMatch === 'matched' ||
+            ((pathMatch === 'missing' || pathMatch === 'ambiguous') && confirmedDetails.some(detail => detail.diff === change.diff));
+          if (!representedByDetails) {
+            appendDiff(change.diff, resultFilePath, `${sourceId}:diff:${part.call_id}`);
+          }
+        }
       }
       const command = commandFromArgs(part.args);
       if (COMMAND_TOOLS.test(part.tool) && command.command) {
@@ -391,6 +490,15 @@ function projectMessage(message: Message, preserveAssistantMessages: boolean): T
   return blocks.length
     ? blocks
     : [{ id: `${sourceId}:legacy`, sourceId, ts: message.created_at, kind: 'legacy', message }];
+}
+
+function projectInteractiveAssistantDiffs(message: Message): DiffBlock[] {
+  const projectionMessage = {
+    ...message,
+    parts: message.parts.filter((part) => !INTERACTIVE_PARTS.has(part.kind)),
+  };
+  return projectMessage(projectionMessage, false)
+    .filter((block): block is DiffBlock => block.kind === 'diff');
 }
 
 function projectActivity(event: ChatActivityEvent): TranscriptBlock {
@@ -508,7 +616,14 @@ function projectedMessageShape(
     message.role === 'user' ||
     (preserveAssistantMessages && message.role === 'assistant')
   ) {
-    return { count: 1, firstTs: message.created_at, lastTs: message.created_at };
+    const additionalDiffs = message.role === 'assistant' && !preserveAssistantMessages && hasInteractiveParts(message)
+      ? projectInteractiveAssistantDiffs(message)
+      : [];
+    return {
+      count: 1 + additionalDiffs.length,
+      firstTs: message.created_at,
+      lastTs: additionalDiffs.reduce((latest, block) => Math.max(latest, block.ts), message.created_at),
+    };
   }
 
   const resultIds = new Set(
@@ -860,6 +975,7 @@ export function summarizeAgenticSession(
                       ? 'Partially complete'
                       : 'Ready'),
     fileCount: uniqueFiles.size,
+    filePaths: [...uniqueFiles].sort((left, right) => left.localeCompare(right)),
     addedLines,
     removedLines,
     tokenCount: hasTokenUsage && !hasUnavailableTokenUsage ? tokenCount : '—',

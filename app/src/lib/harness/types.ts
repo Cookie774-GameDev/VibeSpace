@@ -19,6 +19,7 @@ export type HarnessErrorCode =
   | 'HARNESS_HEALTH_FAILED'
   | 'HARNESS_CRASHED'
   | 'HARNESS_AUTH_FAILED'
+  | 'HARNESS_ABORT_UNCONFIRMED'
   | 'PROVIDER_NOT_CONFIGURED'
   | 'MODEL_NOT_AVAILABLE'
   | 'MODEL_CAPABILITY_MISMATCH'
@@ -85,6 +86,8 @@ export interface VibeSpaceApproval {
   title: string;
   capability: string;
   pattern?: string | readonly string[];
+  /** Presentation-only native choices; the live provider bridge remains authoritative. */
+  availableDecisions?: readonly ('accept' | 'acceptForSession' | 'decline' | 'cancel')[];
   /** Operation identity only; the gateway still validates connection and execution authority. */
   pluginOperation?: Readonly<{ pluginId: string; operation: string }>;
 }

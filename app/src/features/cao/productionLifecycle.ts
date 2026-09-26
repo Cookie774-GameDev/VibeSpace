@@ -45,7 +45,10 @@ import {
   createCaoTerminalSnapshotAdapter,
   type CaoTerminalSnapshotIdentityReader,
 } from './sentinel/terminalSnapshotAdapter';
-import { createCaoSentinelRuntime } from './sentinel/sentinelRuntime';
+import {
+  createCaoSentinelRuntime,
+  type CaoSentinelDecisionReceipt,
+} from './sentinel/sentinelRuntime';
 import { createCaoSentinelScheduler } from './sentinel/sentinelScheduler';
 import type {
   CaoCandidateDispatchResult,
@@ -162,10 +165,6 @@ function activeMission(mission: CaoMission): mission is ActiveMission {
   return mission.status === 'running' || mission.status === 'verifying';
 }
 
-function activeWorker(worker: CaoMissionWorker): boolean {
-  return worker.status === 'assigned' || worker.status === 'running' || worker.status === 'waiting';
-}
-
 function effectWorker(worker: CaoMissionWorker): boolean {
   return worker.status === 'assigned' || worker.status === 'running';
 }
@@ -238,6 +237,62 @@ async function persistMissionObservation(
         ),
       ),
       updatedAt: Math.max(current.updatedAt, observation.observedAt),
+    });
+    if (await store.compareAndSave({ expected: current, next })) return;
+  }
+}
+
+async function persistMissionDecisionReceipt(
+  store: CaoMissionStore,
+  scope: CaoProductionScope,
+  mission: CaoMission,
+  receipt: CaoSentinelDecisionReceipt,
+): Promise<void> {
+  if (
+    receipt.missionId !== mission.id ||
+    !mission.workers.some((worker) => worker.targetId === receipt.targetId) ||
+    !/^[a-z][a-z0-9_]{0,95}$/u.test(receipt.reasonCode)
+  )
+    return;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const current = await store.get({
+      accountId: scope.accountId,
+      workspaceId: scope.workspaceId,
+      projectId: mission.projectId,
+      missionId: mission.id,
+    });
+    if (!current || !activeMission(current)) return;
+    const worker = current.workers.find((candidate) => candidate.targetId === receipt.targetId);
+    if (
+      !worker ||
+      (worker.status !== 'assigned' &&
+        worker.status !== 'running' &&
+        worker.status !== 'waiting') ||
+      (worker.lastObservedRevision !== null && worker.lastObservedRevision > receipt.targetRevision)
+    )
+      return;
+    const prior = worker.sentinelReceipts ?? [];
+    const last = prior.at(-1);
+    if (
+      last &&
+      last.targetRevision === receipt.targetRevision &&
+      last.observedAt === receipt.observedAt &&
+      last.trigger === receipt.trigger &&
+      last.action === receipt.action &&
+      last.reasonCode === receipt.reasonCode
+    )
+      return;
+    const nextReceipts = Object.freeze([...prior.slice(-255), Object.freeze({ ...receipt })]);
+    const next = Object.freeze({
+      ...current,
+      workers: Object.freeze(
+        current.workers.map((candidate) =>
+          candidate.targetId === receipt.targetId
+            ? Object.freeze({ ...candidate, sentinelReceipts: nextReceipts })
+            : candidate,
+        ),
+      ),
+      updatedAt: Math.max(current.updatedAt, receipt.observedAt),
     });
     if (await store.compareAndSave({ expected: current, next })) return;
   }
@@ -814,6 +869,7 @@ export function createCaoProductionLifecycle(
     };
     const runtime = createCaoSentinelRuntime({
       jev,
+      signal,
       now,
       onObservation: async (observation, trigger) => {
         try {
@@ -827,6 +883,13 @@ export function createCaoProductionLifecycle(
           // valid Sentinel decision into an effects failure.
         }
         await input.onObservation?.(observation, trigger);
+      },
+      onDecisionReceipt: async (receipt) => {
+        try {
+          await persistMissionDecisionReceipt(missionStore, scope, mission, receipt);
+        } catch {
+          // Local evidence persistence must not turn a valid Sentinel decision into an effects failure.
+        }
       },
       onCandidate: async (candidate, candidateInput) => {
         if (
@@ -947,7 +1010,7 @@ export function createCaoProductionLifecycle(
     const nextTargets = new Map<string, TargetRuntime>();
     for (const mission of missions) {
       for (const worker of mission.workers) {
-        if (!activeWorker(worker)) continue;
+        if (!effectWorker(worker)) continue;
         let profile: CaoExecutionProfile;
         try {
           const selected = profileMatchesWorker(catalog, scope, worker);

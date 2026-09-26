@@ -6,6 +6,7 @@ import { useAgentStore } from '@/stores/agents';
 import { useAuthStore } from '@/stores/auth';
 import { syncDiscoveredOllamaModels } from '@/lib/ai/models';
 import { resetProviderModelCache } from '@/lib/ai/providerModelCatalog';
+import { TOOL_GATEWAY_CATALOG } from '@/lib/harness/toolGatewayProtocol';
 import type { JarvisProfile } from '@/lib/jarvis/profiles/types';
 import { AgentManager } from './AgentManager';
 
@@ -15,9 +16,28 @@ const recycleBinMocks = vi.hoisted(() => ({
 const playUiSound = vi.hoisted(() => vi.fn());
 
 vi.mock('@/features/model-foundry', () => ({
-  BuildYourOwnAIHub: ({ open, onActivateArtifact }: { open: boolean; onActivateArtifact(job: unknown): void }) => open ? (
-    <button onClick={() => onActivateArtifact({ id: 'job_native_test', name: 'Local debater', status: 'completed', artifactVerified: true, artifactPath: 'D:/models/job_native_test' })}>Use verified test artifact</button>
-  ) : null,
+  BuildYourOwnAIHub: ({
+    open,
+    onActivateArtifact,
+  }: {
+    open: boolean;
+    onActivateArtifact(job: unknown): void;
+  }) =>
+    open ? (
+      <button
+        onClick={() =>
+          onActivateArtifact({
+            id: 'job_native_test',
+            name: 'Local debater',
+            status: 'completed',
+            artifactVerified: true,
+            artifactPath: 'D:/models/job_native_test',
+          })
+        }
+      >
+        Use verified test artifact
+      </button>
+    ) : null,
 }));
 
 vi.mock('@/lib/sfx', () => ({ playUiSound }));
@@ -218,10 +238,18 @@ describe('AgentManager save lifecycle', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Build Your Own AI' }));
     fireEvent.click(screen.getByRole('button', { name: 'Use verified test artifact' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
-    await waitFor(() => expect(agentRepo.update).toHaveBeenCalledWith(baseAgent.id,
-      expect.objectContaining({ model: { provider: 'foundry', model: 'artifact--job_native_test' } })));
+    await waitFor(() =>
+      expect(agentRepo.update).toHaveBeenCalledWith(
+        baseAgent.id,
+        expect.objectContaining({
+          model: { provider: 'foundry', model: 'artifact--job_native_test' },
+        }),
+      ),
+    );
     expect(vi.mocked(agentRepo.update).mock.calls[0][1]).not.toHaveProperty('effort');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save agent' })).toHaveProperty('disabled', true));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Save agent' })).toHaveProperty('disabled', true),
+    );
   });
 
   it('requires confirmation before moving a custom agent to the Recycle Bin', async () => {
@@ -255,6 +283,44 @@ describe('AgentManager save lifecycle', () => {
       'custom',
     ]);
     expect(maxTokens.value).toBe('recommended');
+  });
+
+  it('uses the default token setting for an existing recommended value and hides reasoning effort', async () => {
+    const builtin = { ...baseAgent, builtin: true, max_output_tokens: 4096 };
+    registerOnly(builtin);
+    await repoMocks(builtin);
+    render(<AgentManager />);
+
+    expect(screen.getByLabelText('Max output tokens')).toHaveProperty('value', 'recommended');
+    expect(screen.queryByLabelText('Reasoning effort')).toBeNull();
+  });
+
+  it('offers every VibeSpace runtime tool when Allowed tools is focused and saves the selection', async () => {
+    const agentRepo = await repoMocks();
+    render(<AgentManager />);
+    fireEvent.focus(screen.getByLabelText('Allowed tools'));
+
+    const choices = within(screen.getByRole('group', { name: 'VibeSpace tools' })).getAllByRole(
+      'checkbox',
+    );
+    expect(choices.length).toBeGreaterThan(TOOL_GATEWAY_CATALOG.length + 1);
+    expect(
+      screen.getByRole('checkbox', { name: /VibeSpace Context.*vibespace_context/i }),
+    ).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: /terminal\.list/i })).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: /VibeSpace Context.*vibespace_context/i }),
+    );
+    fireEvent.click(screen.getByRole('checkbox', { name: /terminal\.list/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
+    await waitFor(() => expect(agentRepo.update).toHaveBeenCalledTimes(1));
+    expect(agentRepo.update).toHaveBeenCalledWith(
+      baseAgent.id,
+      expect.objectContaining({
+        tools_allowed: ['files.read', 'terminal.list', 'vibespace_context'],
+      }),
+    );
   });
 
   it('hides provider and model controls for a preloaded agent without migrating its route', async () => {
@@ -779,6 +845,7 @@ describe('AgentManager protected JARVIS profile lifecycle', () => {
     const instructions = await screen.findByLabelText('Custom instructions');
     expect(instructions).toHaveProperty('disabled', true);
     expect(screen.getByText('Profile is still loading')).toBeTruthy();
+    expect(screen.queryByText('0 chars · ~0 tokens')).toBeNull();
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'JARVIS V2' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
 
@@ -788,6 +855,9 @@ describe('AgentManager protected JARVIS profile lifecycle', () => {
 
     pendingProfile.resolve(profileFixture());
     await waitFor(() => expect(instructions).toHaveProperty('disabled', false));
+    expect(screen.getByText('11 chars · ~3 tokens')).toBeTruthy();
+    fireEvent.change(instructions, { target: { value: 'Use my active profile.' } });
+    expect(screen.getByText('22 chars · ~6 tokens')).toBeTruthy();
   });
 
   it('clears prior-account profile text immediately when the account changes', async () => {

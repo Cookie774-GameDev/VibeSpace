@@ -334,6 +334,19 @@ describe('OpenCodeHttpClient', () => {
     });
   });
 
+  it('preserves a redacted native string rejection instead of losing its repair code', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(
+      `OpenCode transport request exceeded its safe bound. Bearer ${syntheticSecret}`,
+    );
+    const client = createOpenCodeHttpClient(connection, { fetch });
+
+    await expect(client.health()).rejects.toSatisfy((error: Error) => {
+      expect(error.message).toContain('OpenCode transport request exceeded its safe bound.');
+      expect(error.message).not.toContain(syntheticSecret);
+      return true;
+    });
+  });
+
   it('requires an authenticated event-stream response', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
       new Response('not a stream', {

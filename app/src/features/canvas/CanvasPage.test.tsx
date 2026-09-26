@@ -1834,6 +1834,18 @@ describe('CanvasPage', () => {
     expect(screen.getAllByLabelText('Canvas note')).toHaveLength(1);
   });
 
+  it('focuses the first note editor so typing can begin immediately', () => {
+    render(<CanvasPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add first note' }));
+
+    const editor = screen.getByRole('textbox', {
+      name: 'Edit note block',
+    }) as HTMLTextAreaElement;
+    expect(document.activeElement).toBe(editor);
+    fireEvent.change(editor, { target: { value: 'My first idea' } });
+    expect(editor.value).toBe('My first idea');
+  });
+
   it('creates and edits shared text, heading, note, and code content across layouts', () => {
     render(<CanvasPage />);
     fireEvent.click(screen.getByRole('button', { name: 'Add text' }));

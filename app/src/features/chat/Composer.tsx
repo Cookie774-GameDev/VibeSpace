@@ -43,6 +43,7 @@ import {
   FileText,
   X,
   Network,
+  Plug,
   Terminal,
 } from 'lucide-react';
 import { HiveModelIcon } from '@/components/brand';
@@ -115,6 +116,12 @@ import { CodexReadinessGate, useCodexRuntimeState } from './CodexReadinessGate';
 import { runVibeSpaceDoctor } from '@/features/doctor/vibeSpaceDoctor';
 import { harnessRuntimeManager } from '@/lib/harness/runtimeManager';
 import { useOpenCodeCommandCatalog } from './openCodeCommandCatalog';
+import { codexPersistentAdapter } from '@/lib/ai/adapters/codexPersistent';
+import type { CodexDiscoveredSkill, CodexSkillsListEntry } from '@/lib/ai/adapters/codexAppServerProtocol';
+import { NativeSkillTypeahead, type NativeSkillTypeaheadHandle } from './NativeSkillTypeahead';
+import { parseNativeSkillMention, nativeSkillSelectionKey, replaceNativeSkillMention, type NativeSkillMention } from './nativeSkillMention';
+import { useNativeSkillSelection, nativeSkillCatalogReference } from './useNativeSkillSelection';
+import type { NativeSkillSelectionReference } from './nativeSkillSelectionStore';
 
 export function getThemeCommandHelp(): string {
   return `Chat console themes: ${CONSOLE_PROFILES.map((theme) => theme.label).join(', ')}. Use /theme <name>.`;
@@ -161,6 +168,8 @@ import {
 } from '@/features/composer-stt';
 import { readDeepgramSttOption } from '@/lib/deepgram';
 import { createComposerDictationController } from '@/features/composer-stt/composerDictationController';
+import { InlineQuestionBlockCard } from '@/features/jarvis-interaction/QuestionBlockCard';
+import { usePagedChatMessages } from './hooks';
 import { JARVIS_COMMAND_CATALOG } from '@/features/assistant/commands';
 import { toast } from '@/components/ui/toast';
 import type {
@@ -236,6 +245,7 @@ import {
   isImmediateLocalSlashCommand,
   normalizeSlashCmd,
   slashCmdMatchScore,
+  slashCommandCompositeKey,
   type SlashCommandDef,
   type SlashCommandTypeaheadRef,
 } from './SlashCommandTypeahead';
@@ -369,7 +379,7 @@ import {
   type ModelPickerGroup,
   type ModelPickerOption,
 } from '@/lib/ai/useAccessibleChatModels';
-import { openCodePersistentAdapter } from '@/lib/ai/adapters/opencodePersistent';
+import { openCodePersistentAdapter, listPersistentOpenCodeSkills } from '@/lib/ai/adapters/opencodePersistent';
 import type { ProviderDiscoveredModel } from '@/lib/ai/adapters/types';
 import { getProviderConnectionDescriptor, PROVIDER_CONNECTIONS } from '@/lib/ai/adapters/catalog';
 import { useAllAboutMeStore } from '@/features/all-about-me/store';
@@ -466,6 +476,7 @@ import {
   type EscapeCancelState,
 } from './composerEscapeCancel';
 import { getChatRunState } from './runtime/chatRunState';
+import { buildComposerResumeRequest } from './composerResumeRequest';
 import { hydrateLatestTurn } from './runtime/turn/turnStore';
 import { CaoCommandPanel, type CaoCommandInput } from '@/features/cao/CaoCommandPanel';
 import { agentSelectorOptions } from './listLiveChatAgents';
@@ -663,6 +674,8 @@ const KERNEL_SMOKE_HIVE_STEPS: readonly StackStepSpec[] = Object.freeze([
 ]);
 
 export interface QueuedComposerAttachments {
+  codexSkills?: CodexDiscoveredSkill[];
+  nativeSkillRefs?: import('@/lib/harness/OpenCodeTurnCoordinator').OpenCodeNativeSkillReference[];
   files: string[];
   images: ChatImageAttachment[];
   terminals: TerminalRef[];
@@ -769,6 +782,8 @@ export function buildQueuedComposerChatHandoff(
   const payload = buildComposerChatHandoffPayload(input);
   return Object.freeze({ text: payload.text, payload: Object.freeze(payload) });
 }
+
+const nativeQueueBlockedByScope = new Map<string, Set<string>>();
 
 export function createComposerQueuedMessage(
   input: Readonly<{
@@ -1395,6 +1410,19 @@ export function Composer({
     if (caoRequested) { setCaoPanelOpen(true); useUIStore.getState().setChatMode('chat'); }
   }, [caoRequested]);
   const [text, setText] = useState(() => readNotesComposerDraft(noteScope, String(chatId)).text);
+  const recentChatMessages = usePagedChatMessages(chatId).messages;
+  const pendingQuestion = useMemo(() => {
+    for (let index = recentChatMessages.length - 1; index >= 0; index -= 1) {
+      const message = recentChatMessages[index]!;
+      for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex -= 1) {
+        const part = message.parts[partIndex]!;
+        if (part.kind === 'question_block' && part.block.status === 'pending') {
+          return { part, messageId: message.id };
+        }
+      }
+    }
+    return null;
+  }, [recentChatMessages]);
   const [notesCtx, setNotesCtx] = useState<NotesCommandSpan | null>(null);
   const [attachedNotes, setAttachedNotes] = useState<NoteReference[]>(
     () => readNotesComposerDraft(noteScope, String(chatId)).references,
@@ -1459,6 +1487,18 @@ export function Composer({
   const [selectedReferenceKey, setSelectedReferenceKey] = useState<string>('');
   const [slashCtx, setSlashCtx] = useState<SlashContext | null>(null);
   const [selectedSlashCmd, setSelectedSlashCmd] = useState<string>('');
+  const [selectedSlashCommandKey, setSelectedSlashCommandKey] = useState<string>('');
+  const selectedHarnessCommandRef = useRef<SlashCommandDef | null>(null);
+  const nativeCodexCommandInFlightRef = useRef(false);
+  const [selectedCodexSkills, setSelectedCodexSkills] = useState<CodexDiscoveredSkill[]>([]);
+  const [codexSkillCatalog, setCodexSkillCatalog] = useState<CodexSkillsListEntry | null>(null);
+  const [nativeSkillReferences, setNativeSkillReferences] = useState<readonly NativeSkillSelectionReference[] | undefined>();
+  const [nativeSkillCtx, setNativeSkillCtx] = useState<NativeSkillMention | null>(null);
+  const [nativeSkillLoading, setNativeSkillLoading] = useState(false);
+  const [nativeSkillError, setNativeSkillError] = useState<string | null>(null);
+  const [selectedNativeSkillKey, setSelectedNativeSkillKey] = useState<string | null>(null);
+  const nativeSkillTypeaheadRef = useRef<NativeSkillTypeaheadHandle>(null);
+  const dismissedNativeSkillRef = useRef<string | null>(null);
   const [optionPickerCtx, setOptionPickerCtx] = useState<OptionPickerContext | null>(null);
   const [permissionAgentStep, setPermissionAgentStep] = useState(false);
   useEffect(() => {
@@ -1578,6 +1618,11 @@ export function Composer({
   const setComposerSttListening = useUIStore((s) => s.setComposerSttListening);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const questionInlineRef = useRef<HTMLDivElement>(null);
+  const questionDictationTargetRef = useRef<{
+    input: HTMLTextAreaElement;
+    commit: (value: string, caret: number) => void;
+  } | null>(null);
   const slashTypeaheadRef = useRef<SlashCommandTypeaheadRef>(null);
   const [slashComboboxMetadata, setSlashComboboxMetadata] = useState<SlashComboboxMetadata | null>(
     null,
@@ -1597,7 +1642,7 @@ export function Composer({
   const sttController = useMemo(
     () =>
       createComposerDictationController({
-        field: () => textareaRef.current,
+        field: () => questionDictationTargetRef.current?.input ?? textareaRef.current,
         scope: () =>
           JSON.stringify([
             chatId,
@@ -1608,6 +1653,12 @@ export function Composer({
           ]),
         onLevel: setSttVolumeLevel,
         commit: (value, caret) => {
+          const questionTarget = questionDictationTargetRef.current;
+          if (questionTarget) {
+            questionDictationTargetRef.current = null;
+            if (questionTarget.input.isConnected) questionTarget.commit(value, caret);
+            return;
+          }
           voiceReplyRequestedRef.current = true;
           setText(value);
           const field = textareaRef.current;
@@ -1661,6 +1712,14 @@ export function Composer({
   sendingRef.current = sending;
   const activeCancellationKeyRef = useRef<string | null>(null);
   const queuedDispatchInFlightRef = queueSession.dispatchInFlight;
+  const nativeQueueBlockedIdsRef = useMemo(() => {
+    let blocked = nativeQueueBlockedByScope.get(queueScope);
+    if (!blocked) {
+      blocked = new Set<string>();
+      nativeQueueBlockedByScope.set(queueScope, blocked);
+    }
+    return { current: blocked };
+  }, [queueScope]);
   const queuedInterruptInFlightRef = queueSession.interruptInFlight;
   /** When true, a user Esc×3 cancel must not auto-drain the queue. */
   const suppressQueueFlushOnUserCancelRef = queueSession.suppressCancelFlush;
@@ -1728,10 +1787,11 @@ export function Composer({
     activeCancellationKeyRef.current =
       retained?.status === 'running' ? (retained.cancellationKey ?? null) : null;
     const onRunState = (event: Event) => {
-      const detail = (event as CustomEvent<{ chatId?: string; status?: string }>).detail;
+      const detail = (event as CustomEvent<{ chatId?: string; status?: string; cancellationKey?: string }>).detail;
       if (String(detail?.chatId) !== String(chatId)) return;
       const status = detail?.status;
       if (status === 'running') {
+        if (detail.cancellationKey) activeCancellationKeyRef.current = detail.cancellationKey;
         setJarvisRunning(true);
         setStoppedRequest(false);
         return;
@@ -1831,6 +1891,10 @@ export function Composer({
   };
 
   const editQueuedMessage = (id: string) => {
+    if (nativeQueueBlockedIdsRef.current.has(id)) {
+      toast.error('Native queue needs review', 'Codex may have accepted this item. Verify the thread before editing.');
+      return;
+    }
     setQueuedMessages((current) => {
       const queued = current.find((message) => message.id === id);
       if (queued) {
@@ -1845,6 +1909,9 @@ export function Composer({
           setConfirmedCommands(a.commands);
           setConfirmedAgentMentions(a.agents);
           setConfirmedCatalogReferences(a.catalog);
+          setSelectedCodexSkills(a.codexSkills ?? []);
+          nativeSelection.clear();
+          for (const reference of a.nativeSkillRefs ?? []) nativeSelection.select(reference);
         }
       }
       queuedHandoffsRef.current.delete(id);
@@ -1854,6 +1921,10 @@ export function Composer({
   };
 
   const deleteQueuedMessage = (id: string) => {
+    if (nativeQueueBlockedIdsRef.current.has(id)) {
+      toast.error('Native queue needs review', 'Codex may have accepted this item. Verify the thread before removing it.');
+      return;
+    }
     queuedHandoffsRef.current.delete(id);
     setQueuedMessages((current) => current.filter((message) => message.id !== id));
   };
@@ -1867,19 +1938,19 @@ export function Composer({
   const [retainedExactChatSelection, setRetainedExactChatSelection] =
     useState<ExactChatSelection | null>(null);
   const chatBackendAffinity = useChatBackendAffinity(String(chatId));
+  const projectId = useAuthStore((s) => s.projectId);
   const openCodeCommandCatalog = useOpenCodeCommandCatalog(
     harnessRuntimeManager.getConnection()?.generation,
     chatBackendAffinity?.backend !== 'codex',
+    projectId ? getStoredProjectRoot(projectId) : null,
   );
   const dynamicOpenCodeCommands = useMemo<SlashCommandDef[]>(
     () =>
       chatBackendAffinity?.backend === 'codex'
         ? []
-        : openCodeCommandCatalog.commands.flatMap((live) => {
+        : openCodeCommandCatalog.commands.map((live) => {
             const staticDef = findSlashCommandDef(live.name);
-            if (staticDef && staticDef.backend !== 'codex') return [];
-            return [
-              {
+            return {
                 ...(staticDef ?? {
                   cmd: live.name,
                   description: live.description || `Run OpenCode /${live.name}`,
@@ -1891,10 +1962,13 @@ export function Composer({
                 description:
                   live.description || staticDef?.description || `Run OpenCode /${live.name}`,
                 backend: 'opencode' as const,
+                owner: 'opencode' as const,
+                source: live.source,
+                commandIdentifier: live.identifier,
+                executionCapability: live.executionCapability,
                 takesArg: true,
                 argPlaceholder: staticDef?.argPlaceholder ?? '[arguments]',
-              },
-            ];
+              };
           }),
     [chatBackendAffinity?.backend, openCodeCommandCatalog.commands],
   );
@@ -1917,7 +1991,99 @@ export function Composer({
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const plan = useAuthStore((s) => s.plan);
   const workspaceId = useAuthStore((s) => s.workspaceId);
-  const projectId = useAuthStore((s) => s.projectId);
+  const nativeSkillAccountId = useAuthStore((s) => resolveAccountIdentity(s)?.accountId ?? '');
+  const nativeSkillWorkingDirectory = chatBackendAffinity && projectId
+    ? getStoredProjectRoot(projectId)
+    : null;
+  const nativeSkillScope = useMemo(() => nativeSkillAccountId && chatBackendAffinity ? {
+    accountId: nativeSkillAccountId, workspaceId: workspaceId ?? null, projectId: projectId ?? null,
+    chatId: String(chatId), harness: chatBackendAffinity.backend, executionHost: 'local',
+    workingDirectory: nativeSkillWorkingDirectory,
+  } : null, [nativeSkillAccountId, workspaceId, projectId, chatId, chatBackendAffinity?.backend, nativeSkillWorkingDirectory]);
+  const nativeSelection = useNativeSkillSelection({ scope: nativeSkillScope, catalog: nativeSkillReferences });
+  useEffect(() => {
+    let current = true;
+    setNativeSkillReferences(undefined);
+    if (!codexSkillCatalog || codexSkillCatalog.cwd !== nativeSkillWorkingDirectory || !chatBackendAffinity) return;
+    void Promise.all(codexSkillCatalog.skills.filter((skill) => skill.enabled &&
+      !codexSkillCatalog.errors.some((error) => error.path === skill.path)).map((skill) => nativeSkillCatalogReference({
+        origin: chatBackendAffinity.backend === 'codex' || /(?:^|[\\/])\.codex[\\/]skills[\\/]/iu.test(skill.path) ? 'codex' : 'opencode',
+        name: skill.name, path: skill.path,
+        executionHost: 'local', metadata: { cwd: skill.cwd, name: skill.name, path: skill.path,
+          description: skill.description, enabled: skill.enabled, pluginId: skill.pluginId },
+      }))).then((references) => { if (current) setNativeSkillReferences(references); })
+      .catch(() => { if (current) setNativeSkillError('Native skill metadata could not be verified. Refresh skills.'); });
+    return () => { current = false; };
+  }, [codexSkillCatalog, nativeSkillWorkingDirectory, chatBackendAffinity?.backend]);
+  useEffect(() => {
+    setSelectedCodexSkills(nativeSelection.entries.map((entry) =>
+      codexSkillCatalog?.skills.find((skill) => skill.name === entry.name && skill.path === entry.path) ?? {
+        cwd: nativeSkillWorkingDirectory ?? '', name: entry.name, path: entry.path,
+        description: '', enabled: false, scope: 'repo' as const, pluginId: null,
+      }));
+  }, [nativeSelection.entries, codexSkillCatalog, nativeSkillWorkingDirectory]);
+  const nativeSkillDiscoveryGenerationRef = useRef(0);
+  const refreshNativeSkillCatalog = useCallback(async () => {
+    if (!nativeSkillWorkingDirectory || !chatBackendAffinity) return;
+    const generation = ++nativeSkillDiscoveryGenerationRef.current;
+    setNativeSkillLoading(true);
+    setNativeSkillError(null);
+    try {
+      if (chatBackendAffinity.backend === 'opencode') {
+        const auth = useAuthStore.getState();
+        const accountId = resolveAccountIdentity(auth)?.accountId;
+        if (!accountId || !auth.workspaceId) throw new Error('Choose an account and workspace to discover native skills.');
+        const skills = await listPersistentOpenCodeSkills({
+          accountId, workspaceId: auth.workspaceId, projectId: auth.projectId ?? undefined,
+          workingDirectory: nativeSkillWorkingDirectory,
+        });
+        if (nativeSkillDiscoveryGenerationRef.current !== generation) return;
+        setCodexSkillCatalog({ cwd: nativeSkillWorkingDirectory, errors: [], skills: skills.map((skill) => ({
+          cwd: nativeSkillWorkingDirectory, name: skill.name, path: skill.location,
+          description: skill.description ?? '', enabled: true, scope: 'repo' as const, pluginId: null,
+        })) });
+        return;
+      }
+      const entries = await codexPersistentAdapter.listSkills({
+        workingDirectory: nativeSkillWorkingDirectory,
+        forceReload: true,
+      });
+      if (nativeSkillDiscoveryGenerationRef.current !== generation) return;
+      const entry = entries.find((candidate) => candidate.cwd === nativeSkillWorkingDirectory);
+      if (!entry) throw new Error('Codex did not return skills for this project folder.');
+      setCodexSkillCatalog(entry);
+    } catch (error) {
+      if (nativeSkillDiscoveryGenerationRef.current !== generation) return;
+      setCodexSkillCatalog(null);
+      setNativeSkillError(error instanceof Error ? error.message : 'Native skills are unavailable.');
+    } finally {
+      if (nativeSkillDiscoveryGenerationRef.current === generation) setNativeSkillLoading(false);
+    }
+  }, [chatBackendAffinity?.backend, nativeSkillWorkingDirectory]);
+  useEffect(() => {
+    nativeSkillDiscoveryGenerationRef.current += 1;
+    setCodexSkillCatalog(null);
+    setSelectedCodexSkills([]);
+    setNativeSkillCtx(null);
+    setNativeSkillError(null);
+  }, [chatId, chatBackendAffinity?.backend, nativeSkillWorkingDirectory, nativeSkillAccountId, workspaceId]);
+  useEffect(() => {
+    if (nativeSelection.entries.length > 0 && !codexSkillCatalog) void refreshNativeSkillCatalog();
+  }, [nativeSelection.entries.length, codexSkillCatalog, refreshNativeSkillCatalog]);
+  useEffect(() => {
+    if (nativeSkillCtx === null) return;
+    void refreshNativeSkillCatalog();
+    return () => { nativeSkillDiscoveryGenerationRef.current += 1; };
+  }, [nativeSkillCtx?.start, refreshNativeSkillCatalog]);
+  useEffect(() => {
+    const handleSkillsChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId?: string; entry?: CodexSkillsListEntry }>).detail;
+      if (detail?.chatId !== String(chatId) || detail.entry?.cwd !== nativeSkillWorkingDirectory) return;
+      setCodexSkillCatalog(detail.entry);
+    };
+    window.addEventListener('jarvis:codex-skills-changed', handleSkillsChanged);
+    return () => window.removeEventListener('jarvis:codex-skills-changed', handleSkillsChanged);
+  }, [chatId, nativeSkillWorkingDirectory]);
   const [contextMaps, setContextMaps] = useState<readonly ContextMapRecord[]>([]);
   const pluginAccountId = useAuthStore((s) => resolveAccountIdentity(s)?.accountId ?? '');
   const mentionDiscoveryOpen = mentionCtx !== null;
@@ -2538,7 +2704,17 @@ export function Composer({
     const q = (slashCtx?.query ?? '').toLowerCase();
     if (!slashCtx) return [];
     const effectiveBackend = chatBackendAffinity?.backend ?? 'opencode';
-    const scored = [...getVisibleSlashCommands(effectiveBackend), ...dynamicOpenCodeCommands]
+    const nativeCodexCommands: SlashCommandDef[] = effectiveBackend === 'codex' ? [{
+      cmd: 'mcp',
+      description: 'Show Codex MCP server status through its native app-server',
+      icon: Plug,
+      backend: 'codex',
+      owner: 'codex',
+      source: 'app-server',
+      commandIdentifier: 'mcp',
+      category: 'utility',
+    }] : [];
+    const scored = [...getVisibleSlashCommands(effectiveBackend), ...nativeCodexCommands, ...dynamicOpenCodeCommands]
       .map((c) => ({
         cmd: c,
         score: slashCmdMatchScore(q, c),
@@ -2550,7 +2726,7 @@ export function Composer({
   }, [chatBackendAffinity?.backend, dynamicOpenCodeCommands, slashCtx]);
 
   const filteredSlashCommandsSignature = useMemo(
-    () => filteredSlashCommands.map((command) => command.cmd).join('\0'),
+    () => filteredSlashCommands.map(slashCommandCompositeKey).join('\0'),
     [filteredSlashCommands],
   );
 
@@ -2560,6 +2736,14 @@ export function Composer({
       resolveSlashCommandSelection(slashCtx?.query ?? '', filteredSlashCommands, current),
     );
   }, [filteredSlashCommandsSignature, slashCtx?.query]);
+
+  useEffect(() => {
+    setSelectedSlashCommandKey((current) =>
+      filteredSlashCommands.some((command) => slashCommandCompositeKey(command) === current)
+        ? current
+        : filteredSlashCommands[0] ? slashCommandCompositeKey(filteredSlashCommands[0]) : '',
+    );
+  }, [filteredSlashCommandsSignature]);
 
   useEffect(() => {
     if (slashCtx === null) {
@@ -2594,6 +2778,43 @@ export function Composer({
     const ta = textareaRef.current;
     if (!ta) return;
     setMentionCtx(getMentionContext(ta.value, ta.selectionStart));
+  };
+
+  const recomputeNativeSkill = () => {
+    const ta = textareaRef.current;
+    if (!ta || !chatBackendAffinity) {
+      setNativeSkillCtx(null);
+      return;
+    }
+    const next = parseNativeSkillMention(ta.value, ta.selectionStart);
+    if (dismissedNativeSkillRef.current === `${ta.value}\u0000${ta.selectionStart}`) return;
+    dismissedNativeSkillRef.current = null;
+    setNativeSkillCtx(next);
+    if (next) {
+      setMentionCtx(null);
+      setSlashCtx(null);
+    }
+  };
+
+  const insertNativeSkill = (skill: CodexDiscoveredSkill) => {
+    if (!nativeSkillCtx || !skill.enabled || !nativeSkillWorkingDirectory ||
+        skill.cwd !== nativeSkillWorkingDirectory ||
+        !codexSkillCatalog?.skills.some((entry) => nativeSkillSelectionKey(entry) === nativeSkillSelectionKey(skill))) return;
+    try {
+      const reference = nativeSkillReferences?.find((entry) => entry.name === skill.name && entry.path === skill.path);
+      if (!reference) throw new Error('Native skill metadata is still loading. Try selecting it again.');
+      const selected = nativeSelection.select(reference);
+      if (!selected.ok) throw new Error('The selected skill could not be saved for this chat. Refresh skills.');
+      const inserted = replaceNativeSkillMention(text, nativeSkillCtx, skill);
+      setText(inserted.text);
+      setNativeSkillCtx(null);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(inserted.caret, inserted.caret);
+      });
+    } catch (error) {
+      toast.warning('Skill unavailable', error instanceof Error ? error.message : 'Refresh native skills.');
+    }
   };
 
   const recomputeSlash = () => {
@@ -2644,6 +2865,66 @@ export function Composer({
     const before = text.slice(0, slashCtx.start);
     const after = text.slice(ta.selectionStart);
 
+    if (cmd.owner === 'codex') {
+      if (cmd.source !== 'app-server' || cmd.commandIdentifier !== 'mcp' ||
+          chatBackendAffinity?.backend !== 'codex' || nativeCodexCommandInFlightRef.current) {
+        toast.warning('Codex command unavailable', 'This command has no verified app-server route.');
+        return;
+      }
+      nativeCodexCommandInFlightRef.current = true;
+      setSlashCtx(null);
+      void codexPersistentAdapter.listMcpServerStatus()
+        .then(async (servers) => {
+          const commandMessage = await messageRepo.create({
+            chat_id: chatId as ChatId,
+            role: 'user',
+            parts: [{ kind: 'text', text: '/mcp' }],
+          });
+          await messageRepo.create({
+            chat_id: chatId as ChatId,
+            role: 'system',
+            parts: [{ kind: 'text', text: servers.length
+              ? `Codex MCP servers:\n${servers.slice(0, 100).map((server) => `• ${server.name}: ${server.runtimeStatus ?? 'unknown'}`).join('\n')}`
+              : 'Codex has no configured MCP servers.' }],
+          });
+          await messageRepo.update(commandMessage.id, {
+            parts: [
+              ...commandMessage.parts,
+              ...buildLocalTurnReceipt([{ commandId: 'codex-mcp-status', status: 'completed' }]),
+            ],
+          });
+          setText(before + after);
+        })
+        .catch((error) => {
+          toast.error('Codex MCP status unavailable', error instanceof Error ? error.message : 'The native app-server rejected this command.');
+        })
+        .finally(() => { nativeCodexCommandInFlightRef.current = false; });
+      return;
+    }
+
+    if (cmd.owner === 'opencode') {
+      if (cmd.executionCapability !== 'session-command') {
+        toast.warning('Requires native CLI UI', `/${cmd.cmd} has no verified chat command route.`);
+        return;
+      }
+      const sourceMatches = openCodeCommandCatalog.commands.filter((live) => live.name === cmd.commandIdentifier);
+      if (sourceMatches.length !== 1) {
+        toast.warning('Choose in native CLI', `/${cmd.cmd} has multiple upstream sources; the chat API cannot select one safely.`);
+        return;
+      }
+      selectedHarnessCommandRef.current = cmd;
+      const insert = `/${cmd.commandIdentifier} `;
+      setText(before + insert + after);
+      setSlashCtx(null);
+      requestAnimationFrame(() => {
+        const node = textareaRef.current;
+        if (!node) return;
+        node.focus();
+        node.setSelectionRange(before.length + insert.length, before.length + insert.length);
+      });
+      return;
+    }
+
     const canonicalCmd = normalizeSlashCmd(cmd.cmd);
     if (canonicalCmd === 'notes') {
       setText(before + '/notes' + after);
@@ -2656,6 +2937,9 @@ export function Composer({
     // Immediate local commands are actions, not decorative confirmed chips.
     // Selecting one with Enter runs locally and never reaches provider dispatch.
     if (isImmediateLocalSlashCommand(canonicalCmd)) {
+      if (canonicalCmd === 'mcp' && chatBackendAffinity?.backend === 'codex') {
+        selectedHarnessCommandRef.current = cmd;
+      }
       setText(before + after);
       setSlashCtx(null);
       requestAnimationFrame(() => void handleSend(`/${canonicalCmd}`));
@@ -2840,7 +3124,6 @@ export function Composer({
       const targetEngine = option.id === 'browser' ? 'browser' : 'native';
       setOptionPickerCtx(null);
       setSelectedOptionId('');
-      setText('');
       void transitionChatEngine({
         chatId: String(chatId),
         targetEngine,
@@ -2861,7 +3144,6 @@ export function Composer({
     ) {
       setOptionPickerCtx(null);
       setSelectedOptionId('');
-      setText('');
       if (option.id !== 'status') void chooseChatBackend(option.id);
       requestAnimationFrame(() => textareaRef.current?.focus());
       return;
@@ -3148,6 +3430,18 @@ export function Composer({
     trimmed: string,
     originalUserText = trimmed,
   ): Promise<boolean | string> => {
+    const selectedHarnessCommand = selectedHarnessCommandRef.current;
+    selectedHarnessCommandRef.current = null;
+    if (chatBackendAffinity?.backend === 'codex' && /^\/mcp(?:\s*)$/iu.test(trimmed) &&
+        selectedHarnessCommand?.cmd !== 'mcp') {
+      toast.warning('Choose an MCP command', 'Select VibeSpace MCP manager or Codex MCP status from the command list.');
+      return true;
+    }
+    if (selectedHarnessCommand?.owner === 'opencode' &&
+        chatBackendAffinity?.backend !== 'codex' &&
+        trimmed.match(/^\/([a-z][a-z0-9_-]*)(?:\s|$)/iu)?.[1]?.toLowerCase() === selectedHarnessCommand.commandIdentifier?.toLowerCase()) {
+      return trimmed;
+    }
     if (isComposerInstantCommandSource(trimmed)) {
       if (instantCommandInFlightRef.current) return true;
       instantCommandInFlightRef.current = true;
@@ -4030,6 +4324,8 @@ export function Composer({
   };
 
   const currentComposerAttachments: QueuedComposerAttachments = {
+    codexSkills: selectedCodexSkills,
+    nativeSkillRefs: [...nativeSelection.selectedReferences],
     files: attachedFiles,
     images: attachedImages,
     terminals: attachedTerminals,
@@ -4064,6 +4360,8 @@ export function Composer({
       commands: confirmedCommands,
       agents: confirmedAgentMentions,
       catalog: confirmedCatalogReferences,
+      codexSkills,
+      nativeSkillRefs,
     } = options.attachments ?? currentComposerAttachments;
     const attachedNotes = options.attachments ? [] : currentComposerNotes;
     if (notesCtx || notesSendingRef.current) return false;
@@ -4155,6 +4453,11 @@ export function Composer({
     // Model readiness must not disable commands that need no model. This
     // preflight is pure; the normal bridge below still owns execution.
     if (backendRuntimeBlocked && !canRunLocalCommandWithoutModel(rawSendText)) return false;
+    if (!options.attachments && nativeSelection.entries.length > 0 && !nativeSelection.canDispatch &&
+        !canRunLocalCommandWithoutModel(rawSendText)) {
+      toast.warning('Skills need review', 'Refresh native skills and reselect any changed or unavailable entries before sending.');
+      return false;
+    }
 
     let caoDecision = bootstrapCaoLearning({
       text: rawSendText,
@@ -4760,6 +5063,8 @@ export function Composer({
           contextNodes: nextAttachedContexts,
           pluginIds,
           skillIds,
+          codexSkills: chatBackendAffinity?.backend === 'codex' ? codexSkills : undefined,
+          nativeSkillRefs: chatBackendAffinity?.backend === 'opencode' ? nativeSkillRefs : undefined,
           forceAllAboutMeUpdate,
           interactionMode: interactionModeForSend,
           speakReply: voiceReplyRequestedRef.current || useAuthStore.getState().speakReplies,
@@ -4923,6 +5228,7 @@ export function Composer({
   };
 
   const dispatchQueuedMessage = (queued: QueuedChatMessage, payload = queued.text) => {
+    if (nativeQueueBlockedIdsRef.current.has(queued.id)) return;
     if (queuedDispatchInFlightRef.current) return;
     queuedDispatchInFlightRef.current = queued.id;
     void dispatchQueuedMessageAfterAcceptance(
@@ -4978,8 +5284,11 @@ export function Composer({
     // with the same queued interaction ID, before any residual model dispatch.
     const needsLocalPreflight =
       isComposerInstantCommandSource(queued.text) || requiresLocalCommandPreflight(queued.text);
-    if (needsLocalPreflight ||
-        (queued.attachments && Object.values(queued.attachments).some((items) => items.length > 0))) {
+    const needsAttachmentPreparation = queued.attachments &&
+      Object.entries(queued.attachments).some(([kind, items]) =>
+        items.length > 0 && !(chatBackendAffinity?.backend === 'codex' &&
+          (kind === 'codexSkills' || kind === 'nativeSkillRefs')));
+    if (needsLocalPreflight || needsAttachmentPreparation) {
       const reordered = [
         queued,
         ...queuedMessagesRef.current.filter((message) => message.id !== id),
@@ -5005,6 +5314,8 @@ export function Composer({
         detail: {
           chatId: String(chatId),
           text: queued.text,
+          clientUserMessageId: queued.id,
+          codexSkills: queued.attachments?.codexSkills,
           onAccepted: (cancellationKey: string) => {
             activeCancellationKeyRef.current = cancellationKey;
             setQueuedMessages((current) => {
@@ -5021,12 +5332,22 @@ export function Composer({
               'The active request could not accept this message. It remains queued for retry.',
             );
           },
+          onBlocked: () => {
+            nativeQueueBlockedIdsRef.current.add(queued.id);
+            queuedInterruptInFlightRef.current = null;
+            toast.error(
+              'Steer needs review',
+              'Codex may have received this message. Do not retry it until you verify the thread.',
+            );
+          },
         },
       }),
     );
     toast.info(
-      'Steering current reply',
-      'The active request is stopping, then this message will continue on the same session and model.',
+      chatBackendAffinity?.backend === 'codex' ? 'Sending steer to current reply' : 'Stopping reply and following up',
+      chatBackendAffinity?.backend === 'codex'
+        ? 'The message will be added to the active Codex turn after Codex confirms it.'
+        : 'OpenCode will stop the current reply and receive this message as the next turn.',
     );
   };
   interruptQueuedRef.current = interruptAndSendQueued;
@@ -5040,11 +5361,71 @@ export function Composer({
   const sendQueuedMessageNow = (id: string) => {
     const queued = queuedMessages.find((message) => message.id === id);
     if (!queued) return;
+    if (nativeQueueBlockedIdsRef.current.has(id)) {
+      toast.error('Native queue needs review', 'Codex may have accepted this item. Do not resend it.');
+      return;
+    }
     if (jarvisRunning) {
       interruptAndSendQueued(id);
       return;
     }
     dispatchQueuedMessage(queued);
+  };
+
+  const queueQueuedMessageNatively = (id: string) => {
+    const queued = queuedMessagesRef.current.find((message) => message.id === id);
+    if (!queued || queuedDispatchInFlightRef.current || !jarvisRunning) return;
+    if (nativeQueueBlockedIdsRef.current.has(id)) {
+      toast.error('Native queue needs review', 'Codex may have accepted this item, but local state is incomplete. Do not resend it.');
+      return;
+    }
+    if (queuedHandoffsRef.current.has(id) ||
+        isComposerInstantCommandSource(queued.text) || requiresLocalCommandPreflight(queued.text) ||
+        (queued.attachments && Object.entries(queued.attachments).some(([kind, items]) =>
+          items.length > 0 && !(chatBackendAffinity?.backend === 'codex' &&
+            (kind === 'codexSkills' || kind === 'nativeSkillRefs'))))) {
+      toast.error('Native queue unavailable', 'This message needs its normal local preparation. It remains queued.');
+      return;
+    }
+    queuedDispatchInFlightRef.current = id;
+    setSideOpeningId(id);
+    const finish = () => {
+      queuedDispatchInFlightRef.current = null;
+      setSideOpeningId(null);
+    };
+    window.dispatchEvent(new CustomEvent('jarvis:queue', {
+      detail: {
+        chatId: String(chatId),
+        text: queued.text,
+        clientUserMessageId: queued.id,
+        codexSkills: queued.attachments?.codexSkills,
+        onAccepted: () => {
+          setQueuedMessages((current) => {
+            const remaining = current.filter((message) => message.id !== id);
+            queuedMessagesRef.current = remaining;
+            return remaining;
+          });
+          finish();
+        },
+        onRejected: () => {
+          finish();
+          toast.error('Native queue not accepted', 'The message remains queued for retry.');
+        },
+        onBlocked: (savedMessageId?: string) => {
+          nativeQueueBlockedIdsRef.current.add(id);
+          if (savedMessageId) {
+            setQueuedMessages((current) => {
+              const remaining = current.filter((message) => message.id !== id);
+              queuedMessagesRef.current = remaining;
+              return remaining;
+            });
+          }
+          finish();
+          toast.error('Native queue needs review',
+            'Codex accepted the queue item, but the local turn could not finish saving it. Do not resend it.');
+        },
+      },
+    }));
   };
 
   /** Same as typing `/multitask <message>` for a queued row (parallel agent work). */
@@ -5056,6 +5437,7 @@ export function Composer({
 
   // Keep auto-flush bound to latest handleSend + queue (after handleSend is defined).
   flushNextQueuedRef.current = () => {
+    if (nativeQueueBlockedIdsRef.current.has(queuedMessagesRef.current[0]?.id ?? '')) return;
     if (
       !shouldDispatchNextQueuedMessage(
         sendingRef.current,
@@ -5184,6 +5566,26 @@ export function Composer({
           optionPickerRef.current?.selectCurrent();
           return;
         }
+      }
+    }
+
+    if (nativeSkillCtx) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        dismissedNativeSkillRef.current = `${text}\u0000${textareaRef.current?.selectionStart ?? text.length}`;
+        setNativeSkillCtx(null);
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (e.key === 'ArrowDown') nativeSkillTypeaheadRef.current?.moveDown();
+        else nativeSkillTypeaheadRef.current?.moveUp();
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        nativeSkillTypeaheadRef.current?.selectCurrent();
+        return;
       }
     }
 
@@ -6196,7 +6598,14 @@ export function Composer({
       toast.error('Dictation needs attention', sttView.error);
     }
   }, [sttController, sttView.phase, sttView.error]);
-  const toggleStt = useCallback(() => {
+  const toggleStt = useCallback((questionTarget?: {
+    input: HTMLTextAreaElement;
+    commit: (value: string, caret: number) => void;
+  }) => {
+    const previousTarget = questionDictationTargetRef.current;
+    if (!questionTarget && previousTarget) sttController.cancel();
+    else if (questionTarget && previousTarget?.input !== questionTarget.input) sttController.cancel();
+    questionDictationTargetRef.current = questionTarget ?? null;
     const phase = sttController.getSnapshot().phase;
     if (phase === 'starting' || phase === 'transcribing') {
       sttController.cancel();
@@ -6208,6 +6617,21 @@ export function Composer({
     }
     if (composerSttEnabled) void sttController.start();
   }, [composerSttEnabled, sttController]);
+  const cleanupQuestionDictation = useCallback(() => {
+    if (!questionDictationTargetRef.current) return;
+    sttController.cancel();
+    questionDictationTargetRef.current = null;
+  }, [sttController]);
+  useEffect(() => {
+    const focusQuestion = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId?: string; blockId?: string }>).detail;
+      if (!pendingQuestion || detail?.chatId !== String(chatId) ||
+          detail.blockId !== pendingQuestion.part.block.id) return;
+      questionInlineRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    };
+    window.addEventListener('jarvis:question:focus-inline', focusQuestion);
+    return () => window.removeEventListener('jarvis:question:focus-inline', focusQuestion);
+  }, [chatId, pendingQuestion]);
   useEffect(() => {
     const onToggle = (event: Event) => {
       if (!composerSttEnabled) return;
@@ -6263,11 +6687,29 @@ export function Composer({
       data-tour="chat-composer"
       data-composer-frame={compact ? undefined : 'layered'}
     >
+      {pendingQuestion && (
+        <div ref={questionInlineRef}>
+          <InlineQuestionBlockCard
+          key={`${String(chatId)}:${pendingQuestion.part.block.id}`}
+          part={pendingQuestion.part}
+          messageId={pendingQuestion.messageId}
+          chatId={String(chatId)}
+          deadlineAt={pendingQuestion.part.harness?.deadlineAt}
+          onDictationToggle={composerSttEnabled
+            ? (input, commit) => toggleStt({ input, commit })
+            : undefined}
+          onDictationCleanup={cleanupQuestionDictation}
+          />
+        </div>
+      )}
       <QueuedMessagesBar
         key={String(chatId)}
+        steerMode={jarvisRunning && chatBackendAffinity?.backend === 'opencode' ? 'stop-followup' : 'native'}
         messages={queuedMessages}
         onEdit={editQueuedMessage}
         onSendNow={sendQueuedMessageNow}
+        onQueueNative={jarvisRunning && chatBackendAffinity?.backend === 'codex'
+          ? queueQueuedMessageNatively : undefined}
         onStartMultitask={startQueuedMultitask}
         onOpenSideChat={openQueueInSideChat}
         busyId={sideOpeningId}
@@ -6333,6 +6775,7 @@ export function Composer({
           open={
             notesCtx !== null ||
             mentionCtx !== null ||
+            nativeSkillCtx !== null ||
             slashCtx !== null ||
             optionPickerCtx !== null
           }
@@ -6344,6 +6787,7 @@ export function Composer({
                 return;
               }
               setMentionCtx(null);
+              setNativeSkillCtx(null);
               setSlashCtx(null);
               setOptionPickerCtx(null);
             }
@@ -6475,6 +6919,10 @@ export function Composer({
                 rows={1}
                 onChange={(e) => {
                   const nextDraft = e.target.value;
+                  if (selectedHarnessCommandRef.current &&
+                      !nextDraft.startsWith(`/${selectedHarnessCommandRef.current.commandIdentifier}`)) {
+                    selectedHarnessCommandRef.current = null;
+                  }
                   handoffDraftEditRevisionRef.current += 1;
                   retainHandoffs(nextDraft);
                   setText(nextDraft);
@@ -6485,16 +6933,19 @@ export function Composer({
                   requestAnimationFrame(() => {
                     recomputeMention();
                     recomputeSlash();
+                    recomputeNativeSkill();
                   });
                 }}
                 onKeyDown={onKeyDown}
                 onKeyUp={() => {
                   recomputeMention();
                   recomputeSlash();
+                  recomputeNativeSkill();
                 }}
                 onClick={() => {
                   recomputeMention();
                   recomputeSlash();
+                  recomputeNativeSkill();
                 }}
                 onPaste={(e) => {
                   const files = e.clipboardData?.files;
@@ -6621,6 +7072,25 @@ export function Composer({
                             current.filter((candidate) => candidate.key !== reference.key),
                           )
                         }
+                      />
+                    ))}
+                  </TokenList>
+                </div>
+              )}
+              {selectedCodexSkills.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-2 pb-1" aria-label="Selected native CLI skills">
+                  <TokenList>
+                    {selectedCodexSkills.map((skill) => (
+                      <InputToken
+                        key={`${skill.cwd}:${skill.path}:${skill.name}`}
+                        type="native-skill"
+                        label={`$${skill.name}`}
+                        sublabel={nativeSelection.entries.find((entry) => entry.name === skill.name && entry.path === skill.path)?.revalidation !== 'validated'
+                          ? 'Needs review' : nativeSelection.entries.find((entry) => entry.name === skill.name && entry.path === skill.path)?.origin === 'codex' ? 'Codex · Selected' : 'OpenCode · Selected'}
+                        onRemove={() => {
+                          const reference = nativeSelection.entries.find((entry) => entry.name === skill.name && entry.path === skill.path);
+                          if (reference) nativeSelection.remove(reference);
+                        }}
                       />
                     ))}
                   </TokenList>
@@ -6870,7 +7340,7 @@ export function Composer({
                         size="icon-sm"
                         variant={sttListening ? 'accent' : 'ghost'}
                         onMouseDown={(event) => event.preventDefault()}
-                        onClick={toggleStt}
+                        onClick={() => toggleStt()}
                         aria-label={
                           sttView.phase === 'starting'
                             ? 'Cancel microphone request'
@@ -6917,6 +7387,9 @@ export function Composer({
                         size="icon-sm"
                         variant="accent"
                         onClick={() => {
+                          const stoppedCancellationKey = getChatRunState(String(chatId))?.cancellationKey;
+                          const resumeScope = useAuthStore.getState();
+                          const resumeAccountId = resolveAccountIdentity(resumeScope)?.accountId;
                           const cancellationKey = crypto.randomUUID();
                           activeCancellationKeyRef.current = cancellationKey;
                           window.dispatchEvent(
@@ -6924,10 +7397,31 @@ export function Composer({
                               detail: {
                                 chatId: String(chatId),
                                 cancellationKey,
-                                onUnavailable: () => {
-                                  void handleSend(
-                                    'Continue the interrupted task from the retained conversation and any progress in this persistent session. Check what is already complete before doing more work; do not repeat completed actions.',
-                                  );
+                                onUnavailable: async () => {
+                                  try {
+                                    const history = await messageRepo.listByChat(chatId as ChatId);
+                                    const currentScope = useAuthStore.getState();
+                                    const currentTurn = getChatRunState(String(chatId));
+                                    if (
+                                      !resumeAccountId ||
+                                      resolveAccountIdentity(currentScope)?.accountId !== resumeAccountId ||
+                                      currentScope.workspaceId !== resumeScope.workspaceId ||
+                                      currentScope.projectId !== resumeScope.projectId ||
+                                      activeCancellationKeyRef.current !== cancellationKey ||
+                                      currentTurn?.status !== 'cancelled' ||
+                                      currentTurn.cancellationKey !== stoppedCancellationKey
+                                    ) return;
+                                    const request = buildComposerResumeRequest(
+                                      String(chatId), history, stoppedCancellationKey,
+                                    );
+                                    if (!request) {
+                                      toast.error('Cannot resume', 'The original request is unavailable. Send a new message to continue.');
+                                      return;
+                                    }
+                                    await handleSend(request);
+                                  } catch {
+                                    toast.error('Cannot resume', 'The retained request could not be read safely. Try again after the chat finishes loading.');
+                                  }
                                 },
                               },
                             }),
@@ -7048,13 +7542,29 @@ export function Composer({
                 onSelect={selectOption}
                 compact={compact}
               />
+            ) : nativeSkillCtx !== null ? (
+              <NativeSkillTypeahead
+                ref={nativeSkillTypeaheadRef}
+                harness={chatBackendAffinity?.backend ?? 'codex'}
+                query={nativeSkillCtx.query}
+                skills={codexSkillCatalog?.skills ?? []}
+                errors={codexSkillCatalog?.errors ?? []}
+                loading={nativeSkillLoading}
+                error={nativeSkillWorkingDirectory ? nativeSkillError : 'Choose a project folder to use native skills.'}
+                selectedKey={selectedNativeSkillKey}
+                onHoverKey={setSelectedNativeSkillKey}
+                onSelect={insertNativeSkill}
+                onRefresh={() => void refreshNativeSkillCatalog()}
+              />
             ) : slashCtx !== null ? (
               <SlashCommandTypeahead
                 ref={slashTypeaheadRef}
                 commands={filteredSlashCommands}
                 selectedCmd={selectedSlashCmd}
+                selectedCommandKey={selectedSlashCommandKey}
                 query={slashCtx.query}
                 onHoverCmd={setSelectedSlashCmd}
+                onHoverCommand={(command) => setSelectedSlashCommandKey(slashCommandCompositeKey(command))}
                 onSelect={insertSlashCommand}
                 compact={compact}
               />

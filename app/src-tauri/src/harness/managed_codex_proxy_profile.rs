@@ -50,9 +50,12 @@ pub fn build_managed_codex_proxy_profile(
     if !valid_model(model) {
         return Err(ManagedCodexProxyProfileError::InvalidModel);
     }
-    if session_id.is_empty() || session_id.len() > 256 || !session_id.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'@' | b'/' | b'-')
-    }) {
+    if session_id.is_empty()
+        || session_id.len() > 256
+        || !session_id.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'@' | b'/' | b'-')
+        })
+    {
         return Err(ManagedCodexProxyProfileError::InvalidSession);
     }
 
@@ -111,7 +114,8 @@ mod tests {
     #[test]
     fn profile_is_loopback_exact_provider_and_environment_only() {
         let profile =
-            build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, 10_100, MODEL, "chat_1").expect("profile");
+            build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, 10_100, MODEL, "chat_1")
+                .expect("profile");
         let config: serde_json::Value =
             serde_json::from_slice(&profile.opencodex_config_json).expect("config JSON");
         assert_eq!(config["hostname"], "127.0.0.1");
@@ -131,24 +135,36 @@ mod tests {
         assert_eq!(config["clientIntegrations"]["claude-desktop"], false);
         assert_eq!(config["claudeCode"]["enabled"], false);
         assert_eq!(profile.provider_environment_name, OPENCODE_GO_API_KEY_ENV);
-        assert_eq!(config["providers"][OPENCODE_GO_PROVIDER_ID]["headers"]["x-opencode-session"], "chat_1");
-        assert_eq!(config["providers"][OPENCODE_GO_PROVIDER_ID]["headers"]["user-agent"], concat!("VibeSpace/", env!("CARGO_PKG_VERSION")));
+        assert_eq!(
+            config["providers"][OPENCODE_GO_PROVIDER_ID]["headers"]["x-opencode-session"],
+            "chat_1"
+        );
+        assert_eq!(
+            config["providers"][OPENCODE_GO_PROVIDER_ID]["headers"]["user-agent"],
+            concat!("VibeSpace/", env!("CARGO_PKG_VERSION"))
+        );
     }
 
     #[test]
     fn session_header_is_stable_per_chat_and_rejects_header_injection() {
-        let profile = |session| build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, 10_100, MODEL, session);
+        let profile = |session| {
+            build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, 10_100, MODEL, session)
+        };
         assert_eq!(profile("chat_1"), profile("chat_1"));
         assert_ne!(profile("chat_1"), profile("chat_2"));
         for invalid in ["", "chat\r\nx-api-key: bad", "chat one"] {
-            assert_eq!(profile(invalid).err(), Some(ManagedCodexProxyProfileError::InvalidSession));
+            assert_eq!(
+                profile(invalid).err(),
+                Some(ManagedCodexProxyProfileError::InvalidSession)
+            );
         }
     }
 
     #[test]
     fn codex_profile_routes_responses_to_the_exact_owned_proxy() {
         let profile =
-            build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, 23_417, MODEL, "chat_1").expect("profile");
+            build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, 23_417, MODEL, "chat_1")
+                .expect("profile");
         let codex = String::from_utf8(profile.codex_config_toml).expect("UTF-8");
         assert!(codex.contains("openai_base_url = \"http://127.0.0.1:23417/v1\""));
         assert!(codex.contains(&format!("model = \"{MODEL}\"")));
@@ -176,7 +192,8 @@ mod tests {
             "other/deepseek-v4-flash-vision-exp",
         ] {
             assert_eq!(
-                build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, 10_100, model, "chat_1").err(),
+                build_managed_codex_proxy_profile(Ipv4Addr::LOCALHOST, 10_100, model, "chat_1")
+                    .err(),
                 Some(ManagedCodexProxyProfileError::InvalidModel)
             );
         }

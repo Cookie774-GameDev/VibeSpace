@@ -22,6 +22,26 @@ describe('buildEffectivePermissionProfile', () => {
     }
   });
 
+  it('allows the non-mutating native skill loader without widening gateway authority', () => {
+    for (const mode of modes) {
+      for (const access of levels) {
+        const profile = buildEffectivePermissionProfile({
+          mode,
+          access,
+          approveAllForRun: false,
+          projectRoot: '/project',
+        });
+        expect(profile.openCode.skill).toBe('allow');
+        expect(profile.gateway.hardDenySecrets).toBe(true);
+        expect(profile.gateway.hardDenyProductionMutation).toBe(true);
+        if (mode !== 'agent') {
+          expect(profile.gateway.mutationAuthority).toBe('none');
+          expect(profile.openCode.edit['/project/**']).toBe('deny');
+        }
+      }
+    }
+  });
+
   it('keeps Ask + Read Only non-mutating', () => {
     const profile = buildEffectivePermissionProfile({
       mode: 'ask',
@@ -31,7 +51,14 @@ describe('buildEffectivePermissionProfile', () => {
     });
     expect(profile.gateway.mutationAuthority).toBe('none');
     expect(profile.openCode.edit['/project/**']).toBe('deny');
-    expect(profile.openCode.bash).toBe('deny');
+    expect(profile.openCode.bash).toMatchObject({
+      '*': 'deny',
+      pwd: 'allow',
+      ls: 'allow',
+      'git status': 'allow',
+      'git diff': 'allow',
+      'git log': 'allow',
+    });
   });
 
   it('keeps Ask non-mutating even when access and Approve All are set', () => {
@@ -45,7 +72,7 @@ describe('buildEffectivePermissionProfile', () => {
     expect(profile.gateway.terminalAuthority).toBe('none');
     expect(profile.gateway.autoApproveExactRequestedActions).toBe(false);
     expect(profile.openCode.edit['/project/**']).toBe('deny');
-    expect(profile.openCode.bash).toBe('deny');
+    expect(profile.openCode.bash).toMatchObject({ '*': 'deny', pwd: 'allow' });
     expect(profile.openCodeAgent).toBe('vibespace-readonly');
     expect(profile.gateway.allowDelete).toBe(false);
   });
@@ -60,7 +87,7 @@ describe('buildEffectivePermissionProfile', () => {
     expect(profile.gateway.mutationAuthority).toBe('none');
     expect(profile.gateway.terminalAuthority).toBe('none');
     expect(profile.openCode.edit['/project/**']).toBe('deny');
-    expect(profile.openCode.bash).toBe('deny');
+    expect(profile.openCode.bash).toMatchObject({ '*': 'deny', pwd: 'allow' });
     expect(profile.openCodeAgent).toBe('vibespace-readonly');
     expect(profile.gateway.planArtifactGlobs).toContain('/project/docs/plans/**');
     expect(profile.gateway.allowDelete).toBe(false);
@@ -129,11 +156,37 @@ describe('buildEffectivePermissionProfile', () => {
     expect(review.openCodeAgent).toBe('vibespace-full');
     expect(review.openCode.read['*']).toBe('deny');
     expect(review.openCode.edit['*']).toBe('deny');
-    expect(review.openCode.edit['/project/**']).toBe('ask');
-    expect(review.openCode.bash).toBe('ask');
+    expect(review.openCode.edit['/project/**']).toBe('allow');
+    expect(review.openCode.bash).toMatchObject({
+      '*': 'allow',
+      'rm *': 'ask',
+      'Remove-Item *': 'ask',
+      'git clean *': 'ask',
+      'git reset *': 'ask',
+      'git push *': 'ask',
+      'sudo *': 'ask',
+    });
+    expect(review.openCode.bash).not.toHaveProperty('npm test');
     expect(review.openCode.external_directory).toBe('ask');
+    expect(review.openCode.doom_loop).toBe('ask');
     expect(review.gateway.approveAllForRun).toBe(false);
     expect(review.gateway.autoApproveAutonomousActions).toBe(false);
+  });
+
+  it('allows project edits but keeps native shell disabled for Agent + Write Review', () => {
+    const review = buildEffectivePermissionProfile({
+      mode: 'agent',
+      access: 'write',
+      approveAllForRun: true,
+      agentApprovalMode: 'review',
+      projectRoot: '/project',
+    });
+    expect(review.openCodeAgent).toBe('vibespace-write');
+    expect(review.openCode.edit['*']).toBe('deny');
+    expect(review.openCode.edit['/project/**']).toBe('allow');
+    expect(review.openCode.bash).toMatchObject({ '*': 'deny', pwd: 'allow' });
+    expect(review.openCode.external_directory).toBe('ask');
+    expect(review.openCode.doom_loop).toBe('ask');
   });
 
   it('preserves nested secret and external-directory denies in every mode', () => {

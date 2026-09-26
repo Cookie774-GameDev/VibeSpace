@@ -1330,7 +1330,10 @@ pub async fn cli_bridge_codex_account_snapshot(
     app: tauri::AppHandle,
     request: CodexAccountSnapshotRequest,
 ) -> Result<CodexAccountSnapshot, String> {
-    run_cli_blocking(move || codex_account_snapshot_with_state(&app.state::<CliBridgeState>(), request)).await
+    run_cli_blocking(move || {
+        codex_account_snapshot_with_state(&app.state::<CliBridgeState>(), request)
+    })
+    .await
 }
 
 fn codex_account_snapshot_with_state(
@@ -3131,17 +3134,22 @@ mod tests {
         use std::future::Future;
         use std::task::{Context, Poll, Wake, Waker};
         struct NoopWake;
-        impl Wake for NoopWake { fn wake(self: Arc<Self>) {} }
+        impl Wake for NoopWake {
+            fn wake(self: Arc<Self>) {}
+        }
         let (release, waiting) = mpsc::channel();
         let mut future = Box::pin(run_cli_blocking(move || {
-            waiting.recv_timeout(Duration::from_secs(2))
+            waiting
+                .recv_timeout(Duration::from_secs(2))
                 .map_err(|_| "worker was not released".to_string())?;
             Ok(7_u8)
         }));
         let waker = Waker::from(Arc::new(NoopWake));
         let mut context = Context::from_waker(&waker);
-        assert!(matches!(future.as_mut().poll(&mut context), Poll::Pending),
-            "CLI work must yield the async worker before waiting for a process");
+        assert!(
+            matches!(future.as_mut().poll(&mut context), Poll::Pending),
+            "CLI work must yield the async worker before waiting for a process"
+        );
         release.send(()).unwrap();
         assert_eq!(tauri::async_runtime::block_on(future).unwrap(), 7);
     }

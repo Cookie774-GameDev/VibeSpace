@@ -6,6 +6,41 @@ function modelListFrame(id: string, data: readonly Record<string, unknown>[], ne
 }
 
 describe('Codex persistent model catalog', () => {
+  it('uses the prefetched first response and stops the native server before closing its stream', async () => {
+    let nextCount = 0;
+    let stopped = false;
+    let returned = false;
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'codex.exe' }),
+      start: async () => ({ generation: 'single-frame-catalog' }),
+      frames: (_generation, signal) => ({
+        ready: Promise.resolve(),
+        stream: {
+          [Symbol.asyncIterator]: () => ({
+            next: async () => nextCount++ === 0
+              ? { done: false as const, value: modelListFrame(
+                  'vibespace-codex-model-catalog_model_1',
+                  [{ model: 'gpt-6-luna', displayName: 'GPT-6 Luna' }], null,
+                ) }
+              : { done: true as const, value: undefined },
+            return: async () => {
+              returned = true;
+              expect(stopped).toBe(true);
+              expect(signal?.aborted).toBe(true);
+              return { done: true as const, value: undefined };
+            },
+          }),
+        },
+      }),
+      write: async () => undefined,
+      stop: async () => { stopped = true; return true; },
+    });
+    await expect(adapter.listModels?.()).resolves.toEqual([{ id: 'gpt-6-luna', label: 'GPT-6 Luna' }]);
+    expect(nextCount).toBe(1);
+    expect(stopped).toBe(true);
+    expect(returned).toBe(true);
+  });
+
   it('discovers authenticated app-server models through model/list and caches the verified page set', async () => {
     const writes: Record<string, unknown>[] = [];
     const starts: Array<Record<string, unknown>> = [];

@@ -69,6 +69,7 @@ const WORKER_KEYS = new Set([
   'ownedPaths',
   'status',
   'lastObservedRevision',
+  'sentinelReceipts',
   'proposalId',
   'approvalClaimId',
   'approvalOutcome',
@@ -86,6 +87,29 @@ const ROW_KEYS = new Set([
   'createdAt',
   'updatedAt',
 ]);
+const SENTINEL_RECEIPT_KEYS = new Set([
+  'missionId',
+  'targetId',
+  'targetRevision',
+  'observedAt',
+  'trigger',
+  'action',
+  'reasonCode',
+]);
+const SENTINEL_TRIGGERS = new Set([
+  'event',
+  'run-status',
+  'tool-failure',
+  'permission',
+  'approval',
+  'question',
+  'terminal-exit',
+  'output',
+  'completion',
+  'context',
+  'sweep',
+]);
+const SENTINEL_ACTIONS = new Set(['noop', 'wake_main_cao', 'ask_user', 'use_candidate_message']);
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -118,6 +142,22 @@ function exactKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>)
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
+function validSentinelReceipt(value: unknown): boolean {
+  const receipt = recordOf(value);
+  return Boolean(
+    receipt &&
+    exactKeys(receipt, SENTINEL_RECEIPT_KEYS) &&
+    safeId(receipt.missionId) &&
+    safeId(receipt.targetId) &&
+    safeRevision(receipt.targetRevision) &&
+    safeTimestamp(receipt.observedAt) &&
+    SENTINEL_TRIGGERS.has(receipt.trigger as string) &&
+    SENTINEL_ACTIONS.has(receipt.action as string) &&
+    typeof receipt.reasonCode === 'string' &&
+    /^[a-z][a-z0-9_]{0,95}$/u.test(receipt.reasonCode),
+  );
+}
+
 function validWorker(value: unknown): value is CaoMissionWorker {
   const worker = recordOf(value);
   if (
@@ -135,6 +175,12 @@ function validWorker(value: unknown): value is CaoMissionWorker {
     worker.ownedPaths.some((path) => !safeText(path, 512)) ||
     !WORKER_STATUSES.includes(worker.status as CaoMissionWorker['status']) ||
     (worker.lastObservedRevision !== null && !safeRevision(worker.lastObservedRevision)) ||
+    (worker.sentinelReceipts !== undefined &&
+      (!Array.isArray(worker.sentinelReceipts) ||
+        worker.sentinelReceipts.length > 256 ||
+        worker.sentinelReceipts.some(
+          (receipt) => !validSentinelReceipt(receipt) || receipt.targetId !== worker.targetId,
+        ))) ||
     (worker.proposalId !== undefined && !safeId(worker.proposalId, false)) ||
     (worker.approvalClaimId !== undefined && !safeId(worker.approvalClaimId, false)) ||
     (worker.approvalOutcome !== undefined &&
@@ -185,6 +231,9 @@ function validMission(value: unknown): value is CaoMission {
     Array.isArray(mission.workers) &&
     mission.workers.length <= 32 &&
     mission.workers.every(validWorker) &&
+    mission.workers.every((worker: CaoMissionWorker) =>
+      (worker.sentinelReceipts ?? []).every((receipt) => receipt.missionId === mission.id),
+    ) &&
     Array.isArray(mission.milestones) &&
     mission.milestones.length <= 256 &&
     mission.milestones.every(validMilestone) &&

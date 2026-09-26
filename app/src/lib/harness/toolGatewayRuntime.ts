@@ -613,7 +613,7 @@ function requiresMutationApproval(request: ToolGatewayRequest, deps: ToolGateway
 export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
   execute(request: ToolGatewayRequest): Promise<ToolGatewayResponse>;
 } {
-  const handlers: Record<ToolGatewayTool, SemanticMethod> = {
+  const handlers: Partial<Record<ToolGatewayTool, SemanticMethod>> = {
     'terminal.list': deps.terminal.list,
     'terminal.open': deps.terminal.open,
     'terminal.focus': deps.terminal.focus,
@@ -622,7 +622,6 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
     'terminal.read': deps.terminal.read,
     'terminal.schedule': deps.terminal.schedule,
     'command.list': deps.command.list,
-    'command.run': deps.command.run,
     'profile.allAboutMe.read': deps.profile.readAllAboutMe,
     'profile.allAboutMe.update': deps.profile.updateAllAboutMe,
     'memory.learning.read': deps.learning.read,
@@ -674,7 +673,16 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
             message: 'The VibeSpace request was cancelled.',
           };
         }
-        const data = await handlers[request.tool](
+        const handler = handlers[request.tool];
+        if (!handler) {
+          return {
+            requestId: request.requestId,
+            ok: false,
+            code: 'tool_unavailable',
+            message: 'The requested semantic tool is unavailable.',
+          };
+        }
+        const data = await handler(
           request.args,
           executionContext(request, mutation, signal),
         );

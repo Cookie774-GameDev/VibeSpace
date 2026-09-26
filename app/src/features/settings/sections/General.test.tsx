@@ -1,42 +1,46 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { General } from './General';
-import {
-  resetTaskbarUsageStoreForTests,
-  taskbarUsageStore,
-} from '@/features/taskbar-usage/taskbarUsageStore';
 
-describe('General taskbar usage settings', () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-    resetTaskbarUsageStoreForTests();
-  });
+describe('General Agent Relay settings', () => {
+  beforeEach(() => localStorage.clear());
 
-  it('offers the bounded controls and persists the master toggle automatically', () => {
+  it('lets the user opt into Project scope and automatic check-ins', () => {
     render(<General />);
 
-    const master = screen.getByRole('switch', { name: 'Show taskbar usage module' });
-    expect(master.getAttribute('aria-checked')).toBe('true');
-    fireEvent.click(master);
-    expect(taskbarUsageStore.getSnapshot().preferences.enabled).toBe(false);
-    expect(window.localStorage.getItem('vibespace.taskbar-usage.v1')).toContain('"enabled":false');
-    expect(screen.getByRole('button', { name: 'Reset taskbar usage position' })).toBeTruthy();
-    expect(screen.getByText('The first four visible providers are shown.')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Recycle Bin' })).toBeTruthy();
-    expect(screen.getByText(/recoverable on this device for 90 days/i)).toBeTruthy();
+    const scope = screen.getByRole('combobox', { name: 'Agent Relay collaboration scope' });
+    expect(scope).toHaveProperty('value', 'off');
+    fireEvent.change(scope, { target: { value: 'project' } });
+    fireEvent.click(
+      screen.getByRole('switch', { name: 'Automatic Agent Relay check-ins and replies' }),
+    );
+
+    expect(localStorage.getItem('vibespace:agent-relay:settings:v1')).toContain(
+      '"scope":"project"',
+    );
+    expect(localStorage.getItem('vibespace:agent-relay:settings:v1')).toContain(
+      '"automaticParticipation":true',
+    );
   });
 
-  it('shows a recoverable sanitized mount diagnostic', () => {
-    taskbarUsageStore.setRuntimeDiagnostic({
-      code: 'WINDOW_CREATE_FAILED',
-      message: 'The desktop usage window could not be created.',
-      occurredAt: Date.now(),
-      retryable: true,
-    });
+  it('persists participation exclusions and does not claim an unverified connection', () => {
     render(<General />);
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Agent Relay excluded project and session IDs' }),
+      {
+        target: { value: 'project-private\nsession-private' },
+      },
+    );
 
-    expect(screen.getByRole('alert')).toBeTruthy();
-    expect(screen.getByText('The desktop usage window could not be created.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Retry usage module' })).toBeTruthy();
+    expect(localStorage.getItem('vibespace:agent-relay:settings:v1')).toContain(
+      '"excludedParticipants":["project-private","session-private"]',
+    );
+    expect(
+      screen.getByText('Live Relay health is not available in this settings session yet.'),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Test connection' })).toHaveProperty(
+      'disabled',
+      true,
+    );
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalSiyuanAuthorityRoot } from './siyuanPathAuthority';
+import { canonicalSiyuanAuthorityRoot, normalizeSiyuanFilesystemPath } from './siyuanPathAuthority';
 
 describe('SiYuan path authority', () => {
   it('normalizes drive-letter and UNC roots case-insensitively on Windows', () => {
@@ -19,6 +19,17 @@ describe('SiYuan path authority', () => {
     expect(canonicalSiyuanAuthorityRoot('\\\\.\\C:\\Users\\Viper\\Projects')).not.toBe(
       'c:/users/viper/projects',
     );
+  });
+
+  it('repairs a leading slash before a Windows drive without changing Unix or UNC roots', () => {
+    expect(normalizeSiyuanFilesystemPath('/D:/VibeSpace-Testing/Context')).toBe(
+      'D:/VibeSpace-Testing/Context',
+    );
+    expect(canonicalSiyuanAuthorityRoot('/D:/VibeSpace-Testing/Context')).toBe(
+      'd:/vibespace-testing/context',
+    );
+    expect(normalizeSiyuanFilesystemPath('/Users/Viper')).toBe('/Users/Viper');
+    expect(normalizeSiyuanFilesystemPath('//Server/Share/Folder')).toBe('//Server/Share/Folder');
   });
 
   it('preserves case sensitivity for non-Windows roots', () => {

@@ -143,6 +143,7 @@ import {
   type SyncQueueCloudAuthorityLease,
 } from '@/lib/cloudSyncQueueOwner';
 import { getDefaultAgents } from '@/features/agents';
+import { mergePersistedAndBuiltinAgents } from '@/lib/jarvis/builtinAgents';
 import { ensureActiveChat, branchChatFromMessage } from '@/features/chat/chatLifecycle';
 import { MONOCHROME_CHAT_FIXTURE } from '@/features/chat/monochromeFixture';
 import type { ChatId, MessageId } from '@/types/common';
@@ -1343,7 +1344,7 @@ function useBoot() {
         try {
           const persistedAgents = await withTimeout(agentRepo.list(), 10_000, 'agentRepo');
           if (cancelled) return;
-          registerMany(persistedAgents.length > 0 ? persistedAgents : getDefaultAgents());
+          registerMany(mergePersistedAndBuiltinAgents(persistedAgents, getDefaultAgents()));
         } catch {
           if (cancelled) return;
           registerMany(getDefaultAgents());

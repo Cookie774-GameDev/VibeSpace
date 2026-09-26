@@ -138,14 +138,6 @@ const entries: readonly TerminalAgentCommandInput[] = [
   ['terminal.stop', 'terminal', ['stop terminal'], 'terminal.lifecycle', 'confirm', 'blocked'],
   ['terminal.close', 'terminal', ['close terminal'], 'terminal.lifecycle', 'confirm', 'blocked'],
   [
-    'terminal.run_saved_command',
-    'terminal',
-    ['run saved terminal command'],
-    'terminal.queue',
-    'approval',
-    'blocked',
-  ],
-  [
     'terminal.cancel_queued',
     'terminal',
     ['cancel queued command'],

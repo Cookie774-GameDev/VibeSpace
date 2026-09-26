@@ -19,6 +19,57 @@ function pendingQuestion(bridge: ReturnType<typeof createCodexControlBridge>) {
     expectedSessionId: 'thread-a', expectedBlockId: projection.route.blockId };
 }
 describe('Codex native controls', () => {
+  it('does not resend an approval after an attempted write has an unknown outcome', async () => {
+    const write = vi.fn(async () => { throw new Error('write outcome unknown'); });
+    const bridge = createCodexControlBridge(write, mode);
+    try {
+      const pending = bridge.approval(approval, 7);
+      const input = { sessionId: pending.sessionId, approvalId: pending.id, response: 'once' as const };
+      await expect(replyCodexApproval(input)).rejects.toThrow();
+      await expect(replyCodexApproval(input)).rejects.toThrow();
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally { bridge.dispose(); }
+  });
+  it('does not resend a question response after an uncertain attempted write', async () => {
+    const write = vi.fn(async () => { throw new Error('write outcome unknown'); });
+    const bridge = createCodexControlBridge(write, mode);
+    try {
+      const input = pendingQuestion(bridge);
+      await expect(replyCodexQuestion(input)).rejects.toThrow();
+      await expect(replyCodexQuestion(input)).rejects.toThrow();
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally { bridge.dispose(); }
+  });
+  it('resolves only a pending question with the exact raw RPC id type', () => {
+    const bridge = createCodexControlBridge(vi.fn(async () => {}), mode);
+    try {
+      const numericId = bridge.question(question, 42);
+      const stringId = bridge.question(question, '42');
+
+      expect(bridge.resolve('42')).toEqual({
+        type: 'question-resolved',
+        requestId: stringId,
+        sessionId: 'thread-a',
+      });
+      expect(bridge.resolve(42)).toEqual({
+        type: 'question-resolved',
+        requestId: numericId,
+        sessionId: 'thread-a',
+      });
+      expect(bridge.resolve(42)).toBeUndefined();
+    } finally { bridge.dispose(); }
+  });
+  it('revokes a question reply after native resolution', async () => {
+    const write = vi.fn(async () => {});
+    const bridge = createCodexControlBridge(write, mode);
+    try {
+      const input = pendingQuestion(bridge);
+
+      expect(bridge.resolve(42)).toMatchObject({ type: 'question-resolved' });
+      await expect(replyCodexQuestion(input)).rejects.toThrow('no longer');
+      expect(write).not.toHaveBeenCalled();
+    } finally { bridge.dispose(); }
+  });
   it('round trips answers to the exact numeric RPC identity and consumes authority once', async () => {
     const write = vi.fn(async () => {}); const bridge = createCodexControlBridge(write, mode);
     const input = pendingQuestion(bridge);

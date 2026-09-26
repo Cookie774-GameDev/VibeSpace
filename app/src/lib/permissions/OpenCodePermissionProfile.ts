@@ -1,6 +1,7 @@
 export type InteractionMode = 'ask' | 'plan' | 'agent';
 export type AccessLevel = 'read-only' | 'write' | 'full';
 export type PermissionDecision = 'allow' | 'ask' | 'deny';
+export type BashPermission = PermissionDecision | Readonly<Record<string, PermissionDecision>>;
 /** Persistent Agent profile captured for one provider run. */
 export type AgentApprovalMode = 'full' | 'review';
 export type OpenCodeExecutionAgentId =
@@ -26,7 +27,7 @@ export interface PermissionProfileInput {
 export interface OpenCodePermissionProfile {
   read: Readonly<Record<string, PermissionDecision>>;
   edit: Readonly<Record<string, PermissionDecision>>;
-  bash: PermissionDecision;
+  bash: BashPermission;
   task: PermissionDecision;
   skill: PermissionDecision;
   webfetch: PermissionDecision;
@@ -132,25 +133,58 @@ function openCodeExecutionAgentFor(
   return approveAllForRun ? 'vibespace-full-auto' : 'vibespace-full';
 }
 
-function editDecisionFor(
-  authority: MutationAuthority,
-  approveAllForRun: boolean,
-): PermissionDecision {
+function editDecisionFor(authority: MutationAuthority): PermissionDecision {
   if (authority === 'none') return 'deny';
-  // Ask/Plan require request-aware validation in the outer VibeSpace gateway;
-  // keeping OpenCode at `ask` ensures an arbitrary model expansion cannot turn
-  // a run-scoped approval into blanket write authority.
+  // Non-Agent paths never gain autonomous write authority, and paths outside
+  // the selected project remain guarded by external_directory.
   if (authority === 'exact-request' || authority === 'plan-artifacts') return 'ask';
-  return agentDecision(approveAllForRun);
+  // Agent write/full access scopes edits to the current project. Review mode
+  // still asks before paths outside the project through external_directory.
+  return 'allow';
 }
 
-function bashDecisionFor(
-  authority: TerminalAuthority,
-  approveAllForRun: boolean,
-): PermissionDecision {
-  if (authority === 'none') return 'deny';
-  if (authority === 'exact-request' || authority === 'inspection-only') return 'ask';
-  return agentDecision(approveAllForRun);
+const REVIEW_BASH_ASK_PATTERNS: Readonly<Record<string, PermissionDecision>> = Object.freeze({
+  'rm *': 'ask',
+  'rmdir *': 'ask',
+  'del *': 'ask',
+  'erase *': 'ask',
+  'rd *': 'ask',
+  'Remove-Item *': 'ask',
+  'format *': 'ask',
+  'diskpart *': 'ask',
+  'sudo *': 'ask',
+  'runas *': 'ask',
+  'Start-Process *': 'ask',
+  'git clean *': 'ask',
+  'git reset *': 'ask',
+  'git checkout -- *': 'ask',
+  'git restore *': 'ask',
+  'git push *': 'ask',
+  'npm publish *': 'ask',
+  'cargo publish *': 'ask',
+  'gh repo delete *': 'ask',
+});
+
+function bashDecisionFor(authority: TerminalAuthority, approveAllForRun: boolean): BashPermission {
+  if (authority === 'autonomous' && approveAllForRun) return 'allow';
+  if (authority === 'autonomous') {
+    // The OpenCode agent is already bound to this project's working directory.
+    // Keep ordinary native CLI work prompt-free and ask on destructive,
+    // privilege-changing, or externally publishing command patterns.
+    return Object.freeze({ '*': 'allow', ...REVIEW_BASH_ASK_PATTERNS });
+  }
+  const defaultDecision = 'deny';
+  // Use exact, argument-free commands for the native shell's low-risk
+  // inspection path. Argument-bearing patterns can also match shell
+  // redirection, so project reads with filters use OpenCode's read/grep tools.
+  return Object.freeze({
+    '*': defaultDecision,
+    pwd: 'allow',
+    ls: 'allow',
+    'git status': 'allow',
+    'git diff': 'allow',
+    'git log': 'allow',
+  });
 }
 
 /**
@@ -181,7 +215,8 @@ export function buildEffectivePermissionProfile(
   };
   for (const pattern of SENSITIVE_READ_DENIES) readRules[pattern] = 'deny';
 
-  const editDecision = editDecisionFor(mutationAuthority, nativeApproveAll);
+  const editDecision = editDecisionFor(mutationAuthority);
+  const reviewAccess = input.mode === 'agent' && input.access !== 'read-only' && !nativeApproveAll;
   const bashDecision = bashDecisionFor(terminalAuthority, nativeApproveAll);
   const planArtifactGlobs = Object.freeze([
     `${projectRoot}/.vibespace/plans/**`,
@@ -207,7 +242,7 @@ export function buildEffectivePermissionProfile(
       // The explicit Full profile opts into native unrestricted routing. The
       // outer gateway hard-deny fields below still govern VibeSpace tools.
       external_directory: nativeFullAccess ? 'allow' : 'ask',
-      doom_loop: 'deny',
+      doom_loop: reviewAccess ? 'ask' : 'deny',
     },
     gateway: {
       projectRoot,
@@ -224,8 +259,7 @@ export function buildEffectivePermissionProfile(
       allowDelete: autonomousFull,
       allowSubagents: agent,
       approveAllForRun: nativeApproveAll,
-      autoApproveExactRequestedActions:
-        nativeApproveAll && mutationAuthority === 'exact-request',
+      autoApproveExactRequestedActions: nativeApproveAll && mutationAuthority === 'exact-request',
       autoApproveAutonomousActions: nativeApproveAll && autonomous,
       planArtifactGlobs,
       hardDenySecrets: true,

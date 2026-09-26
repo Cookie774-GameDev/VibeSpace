@@ -53,6 +53,37 @@ function events(text: string) {
 }
 
 describe('explicit Chat backend routing', () => {
+  it('forwards native question resolution in stream order with the exact session and request', async () => {
+    const observed: string[] = [];
+    codexSend.mockImplementationOnce(() => (async function* () {
+      yield { type: 'session', sessionId: 'thread_native_1' } as const;
+      yield { type: 'question', request: {
+        id: 'que_codex_deadline', nativeRequestId: 42, deadlineAt: 1_800_000_005_000,
+        sessionId: 'thread_native_1', questions: [{ header: 'Preference', prompt: 'Tea?',
+          options: [], multiple: false, allowCustomAnswer: true }],
+      } } as const;
+      yield { type: 'question-resolved', requestId: 'que_codex_deadline', sessionId: 'thread_native_1' } as const;
+      yield { type: 'done', finishReason: 'completed' } as const;
+    })());
+    await runAgent({ backend: 'codex', agent, connectionId: 'openai-codex', messages: [{ role: 'user', content: 'Ask a preference' }],
+      onQuestionRequested: (projection) => { observed.push(`question:${projection.route.nativeRequestId}`); },
+      onQuestionResolved: (resolution) => { observed.push(`resolved:${resolution.sessionId}:${resolution.requestId}`); },
+    });
+    expect(observed).toEqual(['question:42', 'resolved:thread_native_1:que_codex_deadline']);
+  });
+
+  it('rejects native question resolution from a different session', async () => {
+    const onQuestionResolved = vi.fn();
+    codexSend.mockImplementationOnce(() => (async function* () {
+      yield { type: 'session', sessionId: 'thread_native_1' } as const;
+      yield { type: 'question-resolved', requestId: 'que_codex_other', sessionId: 'thread_other' } as const;
+    })());
+    await expect(runAgent({ backend: 'codex', agent, connectionId: 'openai-codex',
+      messages: [{ role: 'user', content: 'Ask a preference' }], onQuestionResolved,
+    })).rejects.toThrow('provider_question_session_mismatch');
+    expect(onQuestionResolved).not.toHaveBeenCalled();
+  });
+
   it('normalizes a subscription model selected from the shared OpenCode catalog', async () => {
     const result = await runAgent({
       backend: 'codex',
@@ -215,8 +246,10 @@ describe('explicit Chat backend routing', () => {
   });
 
   it('keeps an explicitly OpenCode-locked chat on the unchanged OpenCode executor', async () => {
+    const nativeSkillRefs = [{ origin: 'opencode' as const, name: 'fixture-skill', path: 'C:/workspace/.opencode/skills/fixture-skill/SKILL.md', executionHost: 'local', sourceRevision: 'catalog:test' }];
     const result = await runAgent({
       backend: 'opencode',
+      nativeSkillRefs,
       agent,
       chatId: 'chat_opencode_1',
       requestId: 'request_opencode_1',
@@ -227,6 +260,7 @@ describe('explicit Chat backend routing', () => {
 
     expect(result.text).toBe('opencode complete');
     expect(openCodeSend).toHaveBeenCalledOnce();
+    expect(openCodeSend.mock.calls[0]?.[0].nativeSkillRefs).toEqual(nativeSkillRefs);
     expect(codexSend).not.toHaveBeenCalled();
   });
 

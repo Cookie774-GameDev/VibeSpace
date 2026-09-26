@@ -11,6 +11,7 @@ import { captureSyncQueueOwner, type SyncQueueOwnerSnapshot } from '@/lib/cloudS
 import type { AccountIdentity } from '@/lib/accountIdentity';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { createJarvisChatIntentStore, selectJarvisChatForIntent } from './jarvisChatIntent';
+import { copyNotesComposerDraft } from '@/features/notes/notesComposerDraft';
 import {
   requireHealthyLocalChatStorage,
   runLocalChatStorageOperation,
@@ -96,6 +97,14 @@ export async function createChatInScope(options: CreateChatInScopeOptions): Prom
   );
 
   if (!chat || !options.beforeActivate(String(chat.id))) return null;
+  const previousChatId = useUIStore.getState().activeChatId;
+  if (previousChatId && scoped.some((row) => String(row.id) === String(previousChatId))) {
+    copyNotesComposerDraft(
+      options.projectId ? { accountId: options.accountId, projectId: options.projectId } : null,
+      String(previousChatId),
+      String(chat.id),
+    );
+  }
   createJarvisChatIntentStore(window.localStorage).recordCreatedPrimary(
     {
       accountId: options.accountId,
@@ -264,6 +273,16 @@ async function ensureActiveChatInternal(
 
     if (!chat || !creationIsCurrent()) return null;
     if (intentScope) intentStore.recordCreatedPrimary(intentScope, String(chat.id));
+
+    if (activeChatId && scoped.some((row) => String(row.id) === String(activeChatId))) {
+      copyNotesComposerDraft(
+        projectId && identity
+          ? { accountId: identity.accountId, projectId: String(projectId) }
+          : null,
+        String(activeChatId),
+        String(chat.id),
+      );
+    }
 
     ui.setActiveChat(chat.id);
     if (navigate) {

@@ -282,6 +282,7 @@ export function createRlmOpenCodeTool(dependencies: {
     signal?: AbortSignal,
   ): Promise<unknown> => {
     const scope = leaseScope(lease, now());
+    signal?.throwIfAborted();
     const base = exactKeys(
       rawInput,
       ['operation'],
@@ -337,16 +338,19 @@ export function createRlmOpenCodeTool(dependencies: {
             evidence: [],
           };
         }
-        return executeRouted('retrieval', () =>
-          dependencies.queryService.search({
+        return executeRouted('retrieval', async () => {
+          const result = await dependencies.queryService.search({
             scope,
             query: question,
             ...(optionalPositiveInteger(args.limit, 100) === undefined
               ? {}
               : { limit: optionalPositiveInteger(args.limit, 100) }),
             signal,
-          }),
-        );
+          });
+          signal?.throwIfAborted();
+          registerFallbackCitationsFromSearch(lease, result);
+          return result;
+        });
       }
       case 'describe': {
         exactKeys(rawInput, ['operation']);
@@ -365,6 +369,7 @@ export function createRlmOpenCodeTool(dependencies: {
             : { continuation: text(args.continuation, 512) }),
           signal,
         });
+        signal?.throwIfAborted();
         registerFallbackCitationsFromSearch(lease, result);
         return result;
       }
@@ -379,6 +384,7 @@ export function createRlmOpenCodeTool(dependencies: {
             : { continuation: text(args.continuation, 512) }),
           signal,
         });
+        signal?.throwIfAborted();
         registerFallbackCitationFromOpen(lease, result);
         return result;
       }
@@ -391,6 +397,7 @@ export function createRlmOpenCodeTool(dependencies: {
           afterBytes: optionalPositiveInteger(args.afterBytes, maxOpenBytes) ?? 0,
           signal,
         });
+        signal?.throwIfAborted();
         registerFallbackCitationFromOpen(lease, result);
         return result;
       }
@@ -434,13 +441,16 @@ export function createRlmOpenCodeTool(dependencies: {
       case 'investigate': {
         const args = exactKeys(rawInput, ['operation', 'query']);
         if (!resolveRlmEnabled({ workspaceId: lease.workspaceId }).enabled) {
-          return executeRouted('retrieval', () =>
-            dependencies.queryService.search({
+          return executeRouted('retrieval', async () => {
+            const result = await dependencies.queryService.search({
               scope,
               query: text(args.query),
               signal,
-            }),
-          );
+            });
+            signal?.throwIfAborted();
+            registerFallbackCitationsFromSearch(lease, result);
+            return result;
+          });
         }
         return executeRouted('rlm', () =>
           dependencies.rlmRuntime.investigate({

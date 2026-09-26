@@ -237,7 +237,10 @@ fn account_for(provider: &str) -> Result<String, String> {
 }
 
 fn reject_renderer_jev_access(provider: &str) -> Result<(), String> {
-    if provider.trim().eq_ignore_ascii_case(JEV_CREDENTIAL_PROVIDER) {
+    if provider
+        .trim()
+        .eq_ignore_ascii_case(JEV_CREDENTIAL_PROVIDER)
+    {
         return Err("jev credential is native-only".to_string());
     }
     Ok(())
@@ -521,7 +524,11 @@ mod tests {
         assert!(credential_set("jev".into(), "private-jev-secret".into()).is_err());
         assert!(credential_get("jev".into()).is_err());
         assert!(credential_delete("jev".into()).is_err());
-        assert_eq!(sink.total(), 0, "renderer commands must not reach the Jev vault");
+        assert_eq!(
+            sink.total(),
+            0,
+            "renderer commands must not reach the Jev vault"
+        );
     }
 
     // -----------------------------------------------------------------

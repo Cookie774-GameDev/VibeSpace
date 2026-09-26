@@ -155,20 +155,6 @@ function renderPreview(intent: AssistantIntent): React.ReactNode {
       if (intent.action === 'resume-wallpaper')
         return <>→ Will {verb('resume Workbench wallpaper motion')}.</>;
       return <>→ Will {verb('open Workbench')}.</>;
-    case 'create_custom_command':
-      return (
-        <>
-          → Will {verb('create command')} <span className="text-foreground">'{intent.name}'</span>{' '}
-          to run <span className="text-foreground">{intent.command}</span>.
-        </>
-      );
-    case 'run_custom_command':
-      return (
-        <>
-          → Will {verb('run custom command')}{' '}
-          <span className="text-foreground">'{intent.name}'</span>.
-        </>
-      );
     case 'clock_timer':
       return <>→ Clock/timer tool has been removed.</>;
     case 'clock_alarm':

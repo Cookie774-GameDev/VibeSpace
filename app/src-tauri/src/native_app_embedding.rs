@@ -347,7 +347,8 @@ mod tests {
                 EmbeddedWindow::attach_content(handle(frame), handle(hwnd), parent.0 .0 as isize)
             } else {
                 EmbeddedWindow::attach(hwnd, parent.0 .0 as isize)
-            }.unwrap();
+            }
+            .unwrap();
             if content {
                 assert!(!unsafe { IsWindowVisible(handle(frame)) }.as_bool());
             }

@@ -280,6 +280,19 @@ describe('reasoning controls', () => {
     });
   });
 
+  it('accepts GPT-6 Luna Max on the native Codex route', () => {
+    const policy = resolveReasoningPolicy({
+      selection: selection('openai', 'gpt-6-luna', 'openai-codex'),
+      preference: { mode: 'normal', effortOverride: 'max' },
+    });
+    expect(policy).toMatchObject({
+      requestedEffort: 'max',
+      resolvedEffort: 'max',
+      providerEffort: 'max',
+      providerOptions: { reasoning_effort: 'max' },
+    });
+  });
+
   it('binds each mode to a real execution contract and gives Final Boss a bounded verification loop', () => {
     const selected = selection('openai', 'gpt-5.6-sol', 'openai-codex');
     const saver = resolveReasoningPolicy({

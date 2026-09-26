@@ -53,6 +53,9 @@ interface CachedAssetTokenizer {
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/u;
+// GPT-6 Luna is intentionally not mapped here: neither the pinned tokenizer's
+// model table nor OpenAI's current tiktoken model mapping validates its encoding.
+// Keep it on the conservative estimate path until model-specific evidence exists.
 const OPENAI_O200K_MODELS =
   /^(?:chatgpt-4o(?:-[A-Za-z0-9.-]+)?|codex-mini-latest|computer-use-preview(?:-[A-Za-z0-9.-]+)?|gpt-(?:(?:4o|4\.1|4\.5|5)(?:-[A-Za-z0-9.-]+)?|5\.6-(?:luna|sol|terra)(?:-fast)?)|o[134](?:-[A-Za-z0-9.-]+)?)$/u;
 // OpenCode's authoritative live catalog qualifies these reviewed OpenAI models

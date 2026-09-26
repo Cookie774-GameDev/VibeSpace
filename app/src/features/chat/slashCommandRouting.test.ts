@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SECTION_20_COMMANDS,
   SLASH_COMMAND_ALIASES,
+  buildVibeSpaceReferenceRequest,
   classifySlashCommand,
   normalizeSlashCommand,
 } from './slashCommandRouting';
@@ -61,6 +62,22 @@ const expected = {
 } as const;
 
 describe('Section 20 slash command routing', () => {
+  it.each([
+    'Run this check tomorrow:\n```python\nif ready:\n    print("two  spaces")\n```',
+    'Keep the Markdown hard break.  \nNext line; then a\ttab.',
+    '  A naïve café 🧪\r\n    preserve indentation\r\n  ',
+  ])('preserves the exact reference request payload: %s', (request) => {
+    expect(buildVibeSpaceReferenceRequest('schedule', request)).toBe(
+      `Context references: /schedule references Schedule. User request: ${request}`,
+    );
+  });
+
+  it.each(['', ' \n\t\r\n '])('omits a whitespace-only reference request: %j', (request) => {
+    expect(buildVibeSpaceReferenceRequest('schedule', request)).toBe(
+      'Context references: /schedule references Schedule.',
+    );
+  });
+
   it('freezes the complete canonical command, owner, and execution matrix', () => {
     expect(SECTION_20_COMMANDS).toEqual(Object.keys(expected));
     expect(

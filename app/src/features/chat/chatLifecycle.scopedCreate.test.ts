@@ -5,6 +5,7 @@ const state = vi.hoisted(() => ({
   activeChatId: null as string | null,
   currentAccountId: 'account-a',
   rowsGate: Promise.resolve(),
+  rows: [] as { id: string; workspace_id: string; project_id: string }[],
   syncEnqueues: 0,
 }));
 
@@ -20,7 +21,7 @@ vi.mock('@/lib/db', () => ({
         equals: () => ({
           toArray: async () => {
             await state.rowsGate;
-            return [];
+            return state.rows;
           },
         }),
       })),
@@ -69,6 +70,10 @@ vi.mock('@/stores/ui', () => ({
 }));
 
 import { createChatInScope } from './chatLifecycle';
+import {
+  checkpointNotesComposer,
+  readNotesComposerDraft,
+} from '@/features/notes/notesComposerDraft';
 
 describe('createChatInScope', () => {
   beforeEach(() => {
@@ -76,7 +81,9 @@ describe('createChatInScope', () => {
     state.activeChatId = 'chat-source';
     state.currentAccountId = 'account-a';
     state.rowsGate = Promise.resolve();
+    state.rows = [];
     state.syncEnqueues = 0;
+    window.localStorage.clear();
   });
 
   it('uses the captured workspace/project and refuses activation when the guard fails', async () => {
@@ -125,5 +132,28 @@ describe('createChatInScope', () => {
     expect(state.createdInput).toBeNull();
     expect(state.syncEnqueues).toBe(0);
     expect(state.activeChatId).toBe('chat-source');
+  });
+
+  it('keeps an unfinished message when switching chat engines into a new chat', async () => {
+    state.rows = [
+      { id: 'chat-source', workspace_id: 'workspace-source', project_id: 'project-source' },
+    ];
+    const scope = { accountId: 'account-a', projectId: 'project-source' };
+    checkpointNotesComposer(scope, 'chat-source', 'An unfinished CLI request', []);
+
+    await expect(
+      createChatInScope({
+        accountId: 'account-a',
+        accountSource: 'local',
+        syncOwner: { state: 'unbound', capturedAt: 1 },
+        workspaceId: 'workspace-source',
+        projectId: 'project-source',
+        isScopeCurrent: () => true,
+        beforeActivate: () => true,
+      }),
+    ).resolves.toBe('chat-scoped');
+
+    expect(readNotesComposerDraft(scope, 'chat-scoped').text).toBe('An unfinished CLI request');
+    expect(readNotesComposerDraft(scope, 'chat-source').text).toBe('An unfinished CLI request');
   });
 });

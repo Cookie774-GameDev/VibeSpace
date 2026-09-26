@@ -96,6 +96,18 @@ it('preserves dotted identifiers and version numbers during deterministic style 
   expect(result.displayText).not.toContain('unverified link');
 });
 
+it('does not turn retired VibeSpace file or arbitrary shell actions into approval cards', async () => {
+  for (const actionId of ['files.read', 'files.create', 'files.edit', 'terminal.run']) {
+    const result = await processJarvisResponse(
+      raw(`\`\`\`action\n{"id":"${actionId}","params":{"path":"C:\\\\tmp\\\\note.txt","content":"x","command":"echo x"}}\n\`\`\``),
+      request({ userText: `Use ${actionId} for this request.` }),
+      { repair: vi.fn(async (input) => input.prose) },
+    );
+
+    expect(result.parts.some((part) => part.kind === 'action_proposal')).toBe(false);
+  }
+});
+
 function raw(
   text: string,
   status?: 'awaiting_approval' | 'running' | 'completed' | 'failed',
@@ -715,7 +727,7 @@ describe('processJarvisResponse', () => {
     );
   });
 
-  it('emits all ten files.create cards for an exact Test03 raw-marker request', async () => {
+  it('does not emit VibeSpace files.create cards for an exact Test03 raw-marker request', async () => {
     const root = 'C:\\Users\\viper\\Downloads';
     const base = `${root}\\VibeSpace-Test03-Ten-Files-20260814-Grok2`;
     const files = [
@@ -764,8 +776,6 @@ describe('processJarvisResponse', () => {
 
 ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
 
-    const { __setCachedDefaultWriteDirForTests } = await import('@/lib/actions/defaultWriteDir');
-    __setCachedDefaultWriteDirForTests(root);
     const result = await processJarvisResponse(
       raw(
         [
@@ -780,14 +790,7 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
     );
 
     const actions = result.parts.filter((part) => part.kind === 'action_proposal');
-    expect(actions).toHaveLength(10);
-    expect(actions.map((part) => part.action_id)).toEqual(
-      Array.from({ length: 10 }, () => 'files.create'),
-    );
-    expect(
-      actions.map((part) => (part as unknown as { params: { path: string } }).params.path),
-    ).toEqual(files.map(([name]) => `${base}\\${name}`));
-    __setCachedDefaultWriteDirForTests(null);
+    expect(actions.map((part) => part.action_id)).toEqual([]);
   });
 
   it('keeps only the first executable action when a local model emits multiple actions', async () => {
@@ -796,10 +799,10 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
         [
           'Prepared.',
           '```action',
-          '{"id":"files.create","params":{"path":"C:\\\\Users\\\\viper\\\\Downloads\\\\proof.txt","content":"proof"}}',
+          '{"id":"nav.chat","params":{}}',
           '```',
           '```action',
-          '{"id":"files.read","params":{"path":"C:\\\\Users\\\\viper\\\\Downloads\\\\proof.txt"}}',
+          '{"id":"settings.open","params":{}}',
           '```',
         ].join('\n'),
       ),
@@ -811,10 +814,10 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
 
     const actions = result.parts.filter((part) => part.kind === 'action_proposal');
     expect(actions).toHaveLength(1);
-    expect(actions[0]).toMatchObject({ action_id: 'files.create', status: 'pending' });
+    expect(actions[0]).toMatchObject({ action_id: 'nav.chat', status: 'pending' });
   });
 
-  it('replaces a question-only reply with ten files.read cards', async () => {
+  it('does not replace a question-only reply with VibeSpace files.read cards', async () => {
     const base = 'C:\\Users\\viper\\Downloads\\VibeSpace-Test03-Ten-Files-20260814-Grok4';
     const names = [
       '01_readme.txt',
@@ -839,16 +842,10 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
       { repair: vi.fn(async (input) => input.prose) },
     );
     const actions = result.parts.filter((part) => part.kind === 'action_proposal');
-    expect(actions).toHaveLength(10);
-    expect(actions.map((part) => part.action_id)).toEqual(
-      Array.from({ length: 10 }, () => 'files.read'),
-    );
-    expect(
-      actions.map((part) => (part as unknown as { params: { path: string } }).params.path),
-    ).toEqual(names.map((name) => `${base}\\${name}`));
+    expect(actions).toHaveLength(0);
   });
 
-  it('infers only a read action when the requested filename contains write', async () => {
+  it('does not infer VibeSpace file.read for a requested filename containing write', async () => {
     const result = await processJarvisResponse(
       raw('I need permission to read that file.'),
       request({
@@ -859,14 +856,7 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
     );
 
     const actions = result.parts.filter((part) => part.kind === 'action_proposal');
-    expect(actions).toHaveLength(1);
-    expect(actions[0]).toMatchObject({
-      action_id: 'files.read',
-      params: {
-        path: 'C:\\Users\\viper\\VibeSpace-RLM-UAT\\native-write-proof.txt',
-      },
-      status: 'pending',
-    });
+    expect(actions).toHaveLength(0);
   });
 
   it('does not infer a filesystem approval from a protected Context tool turn', async () => {
@@ -891,7 +881,7 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
     expect(result.parts.some((part) => part.kind === 'action_proposal')).toBe(false);
   });
 
-  it('replaces an unrelated agent-creator proposal with the requested read-only file action', async () => {
+  it('does not replace unrelated output with a retired file action', async () => {
     const result = await processJarvisResponse(
       raw(
         [
@@ -911,16 +901,7 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
       { repair: vi.fn(async (input) => input.prose) },
     );
 
-    expect(result.parts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'action_proposal',
-          action_id: 'files.read',
-          params: { path: 'C:\\Users\\viper\\VibeSpace-RLM-UAT\\build-corpus.mjs' },
-          status: 'pending',
-        }),
-      ]),
-    );
+    expect(result.parts.some((part) => part.kind === 'action_proposal')).toBe(false);
     expect(
       result.parts.some(
         (part) => part.kind === 'action_proposal' && part.action_id === 'creator.start',
@@ -969,29 +950,15 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
     expect(result.enforcement.violations).not.toContain('protected_information_leak');
   });
 
-  it('replaces simulated terminal prose with a real approval-gated action proposal', async () => {
+  it('does not replace simulated terminal prose with a VibeSpace shell action', async () => {
     const result = await processJarvisResponse(
       raw("I'll simulate the output of Get-Location: PS C:\\Users\\viper\\Downloads"),
       request({ userText: 'Open a terminal and run Get-Location.' }),
       { repair: vi.fn(async (input) => input.prose) },
     );
 
-    expect(result.parts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'action_proposal',
-          action_id: 'terminal.run',
-          params: { command: 'Get-Location' },
-          status: 'pending',
-        }),
-      ]),
-    );
-    expect(
-      result.parts
-        .filter((part) => part.kind === 'text')
-        .map((part) => part.text)
-        .join(' '),
-    ).not.toMatch(/simulate|PS C:\\Users\\viper\\Downloads/i);
+    expect(result.parts.some((part) => part.kind === 'action_proposal')).toBe(false);
+    expect(result.displayText).toContain('simulate the output');
   });
 
   it('keeps malformed action bytes non-executable and exposes only safe violation codes', async () => {
@@ -1119,15 +1086,7 @@ ${files.map(([name, content]) => `${name}\n${content}`).join('\n')}`;
       }),
     ]);
     expect(ask.parts.every((part) => part.kind === 'text')).toBe(true);
-    expect(agent.parts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'action_proposal',
-          action_id: 'files.create',
-          status: 'pending',
-        }),
-      ]),
-    );
+    expect(agent.parts.some((part) => part.kind === 'action_proposal')).toBe(false);
     expect(agent.parts.every((part) => part.kind !== 'plan_review')).toBe(true);
   });
 

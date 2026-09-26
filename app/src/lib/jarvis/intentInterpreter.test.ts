@@ -45,6 +45,16 @@ describe('Jarvis intent interpreter', () => {
     expect(result.steps.every((step) => registered.has(step.action))).toBe(true);
   });
 
+  it('leaves offline attached-file access to the selected native runtime', () => {
+    const result = interpretJarvisRequest('In offline mode, summarize the attached local file.');
+
+    expect(result.intent).toBe('file-work');
+    expect(result.execution).toBe('automatic');
+    expect(result.steps).toEqual([]);
+    expect(result.response).toMatch(/local runtime.*attached file/i);
+    expect(registered.has('files.read')).toBe(false);
+  });
+
   it('keeps every model switch mutation behind the reviewed action approval', () => {
     const result = interpretJarvisRequest('Switch to Gemini.');
 

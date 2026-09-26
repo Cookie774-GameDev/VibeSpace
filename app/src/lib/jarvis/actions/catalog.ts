@@ -1998,9 +1998,16 @@ function validateAgentRunParameters(
   return validated;
 }
 
-export const DEFAULT_JARVIS_ACTION_REGISTRATIONS = deepFreeze<
-  readonly JarvisRegisteredActionDefinition[]
->([
+const RETIRED_VIBESPACE_ACTION_IDS = new Set([
+  'files.read',
+  'files.create',
+  'files.edit',
+  'terminal.run',
+  'terminal.powershell',
+  'custom.createTerminalCommand',
+]);
+
+const ALL_DEFAULT_JARVIS_ACTION_REGISTRATIONS: readonly JarvisRegisteredActionDefinition[] = [
   {
     id: 'file.search',
     version: 1,
@@ -3030,7 +3037,11 @@ export const DEFAULT_JARVIS_ACTION_REGISTRATIONS = deepFreeze<
     validateParameters: (input: Readonly<Record<string, unknown>>) => ({ ...input }),
     deriveTarget: () => ({ kind: 'app_resource', namespace: 'tasks', resourceId: 'selected' }),
   },
-]);
+];
+
+export const DEFAULT_JARVIS_ACTION_REGISTRATIONS = deepFreeze(
+  ALL_DEFAULT_JARVIS_ACTION_REGISTRATIONS.filter(({ id }) => !RETIRED_VIBESPACE_ACTION_IDS.has(id)),
+);
 
 function schemaForParam(param: ActionParam): JsonSchema & { enum?: string[]; default?: unknown } {
   const type = param.type === 'number' ? 'number' : param.type === 'boolean' ? 'boolean' : 'string';

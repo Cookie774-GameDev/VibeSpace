@@ -34,6 +34,69 @@ function port(markdown = '# Project Atlas\nThe launch phrase is cobalt fern.'): 
 }
 
 describe('SiYuan RLM repository', () => {
+  it('preserves the observed revision timestamp through repeated search, open and expand', async () => {
+    let markdown = 'Revision one: cobalt fern.';
+    let now = 1_000;
+    const native = port();
+    vi.mocked(native.getBlock).mockImplementation(async (_projectId, id) => ({
+      id, notebookId: '20260820-book', path: '/Project Atlas.sy', markdown,
+    }));
+    const service = createContextQueryService({
+      repository: createSiyuanRlmRepository(native, { now: () => now }),
+    });
+    const initial = (await service.search({ scope, query: 'cobalt fern' })).items[0]!;
+    expect(initial.record.createdAt).toBe(1_000);
+    expect(initial.record.updatedAt).toBeUndefined();
+
+    markdown = 'Revision two: cobalt fern.';
+    now = 2_000;
+    const revised = (await service.search({ scope, query: 'cobalt fern' })).items[0]!;
+    expect(revised.record.updatedAt).toBe(2_000);
+    now = 3_000;
+    const first = await service.open({ scope, pointer: revised.pointer });
+    const second = await service.open({ scope, pointer: revised.pointer });
+    const expanded = await service.expand({ scope, pointer: revised.pointer, beforeBytes: 16, afterBytes: 16 });
+    const repeated = (await service.search({ scope, query: 'cobalt fern' })).items[0]!;
+    for (const record of [first.record, second.record, expanded.record, repeated.record]) {
+      expect(record).toEqual(revised.record);
+    }
+    expect(second.text).toContain('Revision two');
+
+    markdown = 'Revision three: cobalt fern.';
+    now = 4_000;
+    const latest = (await service.search({ scope, query: 'cobalt fern' })).items[0]!;
+    expect(latest.record).toMatchObject({ createdAt: 1_000, updatedAt: 4_000 });
+    expect(latest.record.contentHash).not.toBe(revised.record.contentHash);
+    expect((await service.open({ scope, pointer: latest.pointer })).record).toEqual(latest.record);
+  });
+
+  it('does not invent an update timestamp when unchanged content is reread', async () => {
+    let now = 1_000;
+    const service = createContextQueryService({
+      repository: createSiyuanRlmRepository(port(), { now: () => now }),
+    });
+    const initial = (await service.search({ scope, query: 'cobalt fern' })).items[0]!;
+    now = 2_000;
+    const reopened = await service.open({ scope, pointer: initial.pointer });
+    const repeated = (await service.search({ scope, query: 'cobalt fern' })).items[0]!;
+    expect(reopened.record).toEqual(initial.record);
+    expect(repeated.record).toEqual(initial.record);
+    expect(repeated.record.updatedAt).toBeUndefined();
+  });
+
+  it('keeps a byte-capped search pointer on a complete UTF-8 boundary', async () => {
+    const markdown = `${'x'.repeat(65_535)}🚀END`;
+    const service = createContextQueryService({ repository: createSiyuanRlmRepository(port(markdown)) });
+    const item = (await service.search({ scope, query: 'atlas' })).items[0]!;
+    expect(item.pointer.byteEnd).toBe(65_535);
+    expect(item.pointer.id).toBe(`ptr:${item.record.id}:0:65535`);
+    const opened = await service.open({ scope, pointer: item.pointer });
+    expect(opened.text).toBe('x'.repeat(65_535));
+    expect(new TextEncoder().encode(opened.text)).toEqual(
+      new TextEncoder().encode(markdown).slice(opened.byteStart, opened.byteEnd),
+    );
+  });
+
   it('produces scoped hash-bound pointers that open through ContextQueryService', async () => {
     const native = port();
     const repository = createSiyuanRlmRepository(native, { now: () => 1_000 });
@@ -164,6 +227,35 @@ describe('SiYuan RLM repository', () => {
     expect(await repository.validatePointer!(forged, record!, source!, scope)).toBe(false);
   });
 
+  it('authorizes issued SiYuan pointers without reloading source bytes', async () => {
+    const native = port();
+    const getBlock = vi.spyOn(native, 'getBlock');
+    const repository = createSiyuanRlmRepository(native);
+    const [hit] = await repository.search(scope, 'atlas');
+    const record = await repository.getRecord(hit!.recordId);
+    expect(record).toBeDefined();
+    const source = await repository.readSource(record!);
+    const item = {
+      record: record!,
+      pointer: hit!.pointer,
+      preview: hit!.preview,
+      score: hit!.score,
+    };
+    expect(repository.issuePointers!([item], scope)).toBe(true);
+    const readsAfterIssue = getBlock.mock.calls.length;
+    const forged = createContextPointer({
+      ...hit!.pointer,
+      id: `ptr:${record!.id}:0:1`,
+      byteStart: 0,
+      byteEnd: 1,
+    });
+
+    expect(repository.authorizePointer!(forged, record!, scope)).toBe(false);
+    expect(repository.authorizePointer!(hit!.pointer, record!, scope)).toBe(true);
+    expect(getBlock).toHaveBeenCalledTimes(readsAfterIssue);
+    expect(await repository.validatePointer!(hit!.pointer, record!, source!, scope)).toBe(true);
+  });
+
   it('rehydrates an exact persisted record id after a new repository receives its scope', async () => {
     const native = port();
     const first = createSiyuanRlmRepository(native);
@@ -247,6 +339,45 @@ describe('SiYuan RLM repository', () => {
     expect(await repository.relatedRecordIds!(source.recordId)).not.toContain(
       expect.stringMatching(/:unrelated-block$/u),
     );
+  });
+
+  it.each(['search', 'read', 'related-source', 'backlinks'] as const)(
+    'preserves cancellation when the %s transport rejects',
+    async (operation) => {
+      const native = port();
+      const repository = createSiyuanRlmRepository(native);
+      const [hit] = await repository.search(scope, 'source');
+      const record = await repository.getRecord(hit!.recordId);
+      const controller = new AbortController();
+      const rejectAfterCancellation = async () => {
+        controller.abort('owner_cancelled');
+        throw new Error('siyuan_transport_unavailable');
+      };
+      if (operation === 'search') {
+        vi.mocked(native.searchBlocks).mockImplementation(rejectAfterCancellation);
+      } else if (operation === 'backlinks') {
+        vi.mocked(native.listInboundBacklinks!).mockImplementation(rejectAfterCancellation);
+      } else {
+        vi.mocked(native.getBlock).mockImplementation(rejectAfterCancellation);
+      }
+      const result = operation === 'search'
+        ? repository.search(scope, 'source', controller.signal)
+        : operation === 'read'
+          ? repository.readSource(record!, controller.signal)
+          : repository.relatedRecordIds!(hit!.recordId, controller.signal);
+      await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+    },
+  );
+
+  it('retains optional-source empty and missing fallbacks for uncancelled failures', async () => {
+    const native = port();
+    const repository = createSiyuanRlmRepository(native);
+    const [hit] = await repository.search(scope, 'source');
+    const record = await repository.getRecord(hit!.recordId);
+    vi.mocked(native.searchBlocks).mockRejectedValue(new Error('siyuan_transport_unavailable'));
+    await expect(repository.search(scope, 'source')).resolves.toEqual([]);
+    vi.mocked(native.getBlock).mockRejectedValue(new Error('siyuan_transport_unavailable'));
+    await expect(repository.readSource(record!)).resolves.toBeUndefined();
   });
 
   it('fails closed when the typed relation route is unavailable', async () => {

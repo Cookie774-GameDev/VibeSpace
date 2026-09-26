@@ -137,9 +137,9 @@ fn valid_model_id(value: &str) -> bool {
     let trimmed = value.trim();
     !trimmed.is_empty()
         && trimmed.len() <= MAX_MODEL_ID_BYTES
-        && trimmed
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-'))
+        && trimmed.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
 }
 
 fn string_field(value: &Value, names: &[&str]) -> Option<String> {
@@ -182,7 +182,10 @@ fn parse_models(body: &[u8], secret: &str) -> Result<Vec<JevModelOption>, &'stat
         let label = string_field(model, &["label", "name"])
             .filter(|value| value.len() <= MAX_MODEL_ID_BYTES)
             .filter(|value| secret.is_empty() || !value.contains(secret));
-        parsed.push(JevModelOption { id: id.to_string(), label });
+        parsed.push(JevModelOption {
+            id: id.to_string(),
+            label,
+        });
     }
     if models.is_empty() || !parsed.is_empty() {
         return Ok(parsed);
@@ -246,9 +249,7 @@ fn sensitive_field(name: &str) -> bool {
 }
 
 fn valid_question_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_MODEL_ID_BYTES
-        && !value.chars().any(char::is_control)
+    !value.is_empty() && value.len() <= MAX_MODEL_ID_BYTES && !value.chars().any(char::is_control)
 }
 
 fn validate_json_shape(value: &Value, depth: usize) -> Result<(), &'static str> {
@@ -315,10 +316,7 @@ fn validate_question(value: &Value, depth: usize) -> Result<(), &'static str> {
             validate_question_instructions(instructions, depth + 1)?;
             if let Some(criteria) = object.get("criteria") {
                 let criteria = criteria.as_object().ok_or("invalid_request")?;
-                if criteria.len() > 2
-                    || criteria
-                        .keys()
-                        .any(|key| key != "true" && key != "false")
+                if criteria.len() > 2 || criteria.keys().any(|key| key != "true" && key != "false")
                 {
                     return Err("invalid_request");
                 }
@@ -601,20 +599,35 @@ mod tests {
             "",
         )
         .expect("catalog should parse");
-        assert_eq!(models, vec![JevModelOption { id: "jev-1".into(), label: Some("Jev".into()) }]);
+        assert_eq!(
+            models,
+            vec![JevModelOption {
+                id: "jev-1".into(),
+                label: Some("Jev".into())
+            }]
+        );
     }
 
     #[test]
     fn model_parser_rejects_unbounded_or_malformed_shapes() {
         assert_eq!(parse_models(br#"{"unexpected":[]}"#, ""), Err("malformed"));
-        assert_eq!(parse_models(br#"{"data":[{"id":"bad/id"}]}"#, ""), Err("malformed"));
+        assert_eq!(
+            parse_models(br#"{"data":[{"id":"bad/id"}]}"#, ""),
+            Err("malformed")
+        );
         let secret = "private-jev-secret";
         let models = parse_models(
             format!(r#"{{"data":[{{"id":"jev-1","name":"{secret}"}}]}}"#).as_bytes(),
             secret,
         )
         .expect("public catalog with a reflected secret should still parse");
-        assert_eq!(models, vec![JevModelOption { id: "jev-1".into(), label: None }]);
+        assert_eq!(
+            models,
+            vec![JevModelOption {
+                id: "jev-1".into(),
+                label: None
+            }]
+        );
     }
 
     #[test]
@@ -625,9 +638,16 @@ mod tests {
         ).expect("TypeSafe name-based catalog should parse");
         assert_eq!(models[0].id, "jev-1");
         assert_eq!(models[0].label.as_deref(), Some("jev-1"));
-        for id in ["x".repeat(MAX_MODEL_ID_BYTES + 1), "bad/id".into(), "private-key".into()] {
+        for id in [
+            "x".repeat(MAX_MODEL_ID_BYTES + 1),
+            "bad/id".into(),
+            "private-key".into(),
+        ] {
             let body = serde_json::json!({"models": [{"name": id}]}).to_string();
-            assert_eq!(parse_models(body.as_bytes(), "private-key"), Err("malformed"));
+            assert_eq!(
+                parse_models(body.as_bytes(), "private-key"),
+                Err("malformed")
+            );
         }
         let body = serde_json::json!({"models": [{"id": "x".repeat(MAX_MODEL_ID_BYTES + 1), "name": "jev-1"}]}).to_string();
         assert_eq!(parse_models(body.as_bytes(), ""), Err("malformed"));
@@ -734,7 +754,12 @@ mod tests {
     fn caller_gate_allows_only_main_and_workbench_main() {
         assert!(jev_caller_allowed("main"));
         assert!(jev_caller_allowed("workbench-main"));
-        for label in ["dictation", "pet-overlay", "browser-chat-provider", "workbench-browser-1"] {
+        for label in [
+            "dictation",
+            "pet-overlay",
+            "browser-chat-provider",
+            "workbench-browser-1",
+        ] {
             assert!(!jev_caller_allowed(label));
         }
     }

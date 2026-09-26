@@ -44,6 +44,37 @@ function bridge(overrides: Partial<SiyuanSurfaceBridge> = {}): SiyuanSurfaceBrid
 }
 
 describe('SiYuan Context Vault surface', () => {
+  it('shows the animated Axo startup state until the official graph is ready', async () => {
+    let finishOpen!: (status: Awaited<ReturnType<SiyuanSurfaceBridge['status']>>) => void;
+    const ready = await bridge().status();
+    const native = bridge({
+      open: vi.fn(
+        () =>
+          new Promise<typeof ready>((resolve) => {
+            finishOpen = resolve;
+          }),
+      ),
+    });
+    render(
+      <SiyuanVaultSurface
+        projectId="project-1"
+        {...targetProps}
+        bridge={native}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const loading = screen.getByTestId('siyuan-vault-loading');
+    expect(loading.getAttribute('role')).toBe('status');
+    expect(loading.textContent).toContain('Starting SiYuan Context Map');
+    expect(loading.querySelector('svg[data-siyuan-axo]')).not.toBeNull();
+    await waitFor(() => expect(native.open).toHaveBeenCalledOnce());
+    expect(screen.getByTestId('siyuan-vault-loading')).not.toBeNull();
+
+    await act(async () => finishOpen(ready));
+    await waitFor(() => expect(screen.queryByTestId('siyuan-vault-loading')).toBeNull());
+  });
+
   it('keeps only the latest rectangle while a native resize is pending', async () => {
     let finish!: (applied: boolean) => void;
     const setBounds = vi.fn(

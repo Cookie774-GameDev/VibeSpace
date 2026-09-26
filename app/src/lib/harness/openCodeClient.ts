@@ -444,7 +444,8 @@ export function createOpenCodeHttpClient(
         : await nativeOpenCodeRequest(connection.generation, requestPath, init, timeoutMs);
     } catch (error) {
       throw new Error(
-        sanitize(error instanceof Error ? error.message : 'OpenCode request failed.'),
+        sanitize(error instanceof Error ? error.message :
+          typeof error === 'string' ? error : 'OpenCode request failed.'),
       );
     }
     if (response.status >= 300 && response.status < 400) {

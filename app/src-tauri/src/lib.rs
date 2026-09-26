@@ -72,6 +72,8 @@ mod pets;
 mod playwright_feature_pack;
 mod playwright_feature_pack_commands;
 mod preview;
+mod relay_engine;
+mod relay_active_context;
 mod renderer_watchdog;
 pub mod runtime_profile;
 #[cfg(debug_assertions)]
@@ -500,6 +502,8 @@ fn run_ordinary(
         .manage(terminal_cli::TerminalCliState::default())
         .manage(terminal_peer_fabric::TerminalPeerFabricState::default())
         .manage(desktop_connector::DesktopConnectorState::default())
+        .manage(relay_engine::RelayEngineState::default())
+        .manage(relay_active_context::RelayActiveContextState::default())
         .manage(pets::PetWindowState::default())
         .manage(jarvis_ambient_overlay::JarvisAmbientOverlayState::default())
         .manage(terminal_snapshot::PersistenceFlushState::default())
@@ -693,6 +697,13 @@ fn run_ordinary(
             greet,
             desktop_connector::desktop_connector_status,
             desktop_connector::desktop_connector_setup,
+            relay_engine::relay_engine_start,
+            relay_engine::relay_engine_stop,
+            relay_engine::relay_engine_status,
+            relay_active_context::relay_active_context_open,
+            relay_active_context::relay_active_context_update,
+            relay_active_context::relay_active_context_close,
+            relay_active_context::relay_active_context_snapshot,
             jarvis_ambient_overlay::set_jarvis_ambient_snapshot,
             jarvis_ambient_overlay::jarvis_ambient_renderer_ready,
             app_version,
@@ -950,6 +961,7 @@ fn run_ordinary(
                 harness::server::shutdown_owned_server(app_handle);
                 harness::codex_server::shutdown_owned_server(app_handle);
                 kernel_host::release_on_process_exit(app_handle);
+                relay_engine::shutdown_on_app_exit(app_handle);
                 return;
             }
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {

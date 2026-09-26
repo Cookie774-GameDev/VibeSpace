@@ -114,7 +114,9 @@ fn reviewed_translation_adapter(adapter: &str) -> Option<&'static str> {
 
 fn prune(registry: &mut RouteRegistry, now: u64) {
     registry.routes.retain(|_, route| route.expires_at > now);
-    registry.order.retain(|handle| registry.routes.contains_key(handle));
+    registry
+        .order
+        .retain(|handle| registry.routes.contains_key(handle));
     while registry.order.len() > MAX_ROUTES {
         if let Some(handle) = registry.order.pop_front() {
             registry.routes.remove(&handle);
@@ -218,7 +220,9 @@ pub async fn managed_codex_route_resolve(
     let now = now_ms()?;
     prune(&mut registry, now);
     registry.order.push_back(capability.route_handle.clone());
-    registry.routes.insert(capability.route_handle.clone(), stored);
+    registry
+        .routes
+        .insert(capability.route_handle.clone(), stored);
     prune(&mut registry, now);
     Ok(capability)
 }
@@ -279,11 +283,20 @@ mod tests {
 
     #[test]
     fn only_reviewed_translation_protocols_are_advertised() {
-        assert_eq!(reviewed_translation_adapter("openai-chat"), Some("chat-completions"));
-        assert_eq!(reviewed_translation_adapter("openai-responses"), Some("responses"));
+        assert_eq!(
+            reviewed_translation_adapter("openai-chat"),
+            Some("chat-completions")
+        );
+        assert_eq!(
+            reviewed_translation_adapter("openai-responses"),
+            Some("responses")
+        );
         assert_eq!(reviewed_translation_adapter("anthropic"), Some("anthropic"));
         assert_eq!(reviewed_translation_adapter("google"), Some("google"));
-        assert_eq!(reviewed_translation_adapter("azure-openai"), Some("azure-openai"));
+        assert_eq!(
+            reviewed_translation_adapter("azure-openai"),
+            Some("azure-openai")
+        );
     }
 
     #[test]

@@ -49,13 +49,53 @@ describe('foundryProvider', () => {
     canRoute.mockReturnValue(false);
 
     await foundryProvider.run({
-      agent: { model: { provider: 'foundry', model: 'artifact--job_native_1' } } as never,
-      messages: [{ role: 'user', content: 'Use the local artifact.' }],
+      agent: {
+        id: 'custom_dnjksbyc',
+        model: { provider: 'foundry', model: 'artifact--job_0-vjmMedLqAeGX' },
+        system_prompt: 'Compare both sides of a debate before deciding.',
+      } as never,
+      messages: [
+        { role: 'user', content: 'Should cities prioritize buses or protected bike lanes?' },
+      ],
     });
 
     expect(canRoute).not.toHaveBeenCalled();
     expect(generate).toHaveBeenCalledWith(
-      expect.objectContaining({ projectId: 'artifact', jobId: 'job_native_1' }),
+      expect.objectContaining({
+        projectId: 'artifact',
+        jobId: 'job_0-vjmMedLqAeGX',
+        prompt: expect.stringContaining('Should cities prioritize buses or protected bike lanes?'),
+        maxNewTokens: 320,
+      }),
+    );
+  });
+
+  it('keeps a long agent system prompt separate from Foundry’s bounded user query', async () => {
+    const systemPrompt = 'Follow the saved agent instructions carefully. '.repeat(120);
+    const currentUserTurn =
+      'Compare both sides of the transit question and give one concise recommendation.';
+
+    await foundryProvider.run({
+      agent: {
+        model: { provider: 'foundry', model: 'artifact--job_0-vjmMedLqAeGX' },
+        system_prompt: systemPrompt,
+      } as never,
+      messages: [
+        { role: 'user', content: 'What are the tradeoffs?' },
+        { role: 'assistant', content: 'Ridership and street safety both matter.' },
+        { role: 'user', content: currentUserTurn },
+      ],
+    });
+
+    expect(generate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          { role: 'system', content: systemPrompt.trim() },
+          { role: 'user', content: 'What are the tradeoffs?' },
+          { role: 'assistant', content: 'Ridership and street safety both matter.' },
+          { role: 'user', content: currentUserTurn },
+        ],
+      }),
     );
   });
 

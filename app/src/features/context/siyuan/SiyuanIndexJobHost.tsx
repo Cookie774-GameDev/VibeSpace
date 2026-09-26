@@ -18,6 +18,12 @@ import { canResumeSiyuanMapJob } from './siyuanSurfaceAvailability';
 const DEFAULT_STARTUP_RETRY_MS = 2_000;
 const DEFAULT_STARTUP_ATTEMPTS = 4;
 
+export function siyuanResumeFailureReason(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string' && error.trim()) return error;
+  return 'siyuan_resume_failed';
+}
+
 export async function retryRunningSiyuanJob<T>(options: {
   run: () => Promise<T>;
   isRunning: () => Promise<boolean>;
@@ -212,7 +218,7 @@ export function SiyuanIndexJobHost() {
                     detail: {
                       mapId: map.id,
                       attempt,
-                      reason: error instanceof Error ? error.message : 'siyuan_resume_failed',
+                      reason: siyuanResumeFailureReason(error),
                     },
                   }),
               });
@@ -224,7 +230,7 @@ export function SiyuanIndexJobHost() {
                   message: 'SiYuan Context Map resume needs repair',
                   detail: {
                     mapId: map.id,
-                    reason: error instanceof Error ? error.message : 'siyuan_resume_failed',
+                    reason: siyuanResumeFailureReason(error),
                   },
                 });
               }

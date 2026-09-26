@@ -107,4 +107,37 @@ describe('CAO Sentinel snapshot sanitization', () => {
       }),
     ).toThrow('cao_snapshot_provider_invalid');
   });
+
+  it('rejects secret-shaped target IDs that do not match a trusted native ID format', () => {
+    expect(() =>
+      sanitizeCaoTargetSnapshot({
+        missionId: 'cao_mission_f7929214-7a99-4e8f-9f73-05386d3f1595',
+        targetId: 'sk-12345678901234567890',
+        kind: 'chat',
+        accountId: 'account-1',
+        workspaceId: 'workspace-1',
+        projectId: 'project-1',
+        backend: 'codex',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-luna',
+        reasoningEffort: 'low',
+        assignment: 'Review the current work',
+        ownedPaths: [],
+        targetRevision: 1,
+        runStatus: 'running',
+        lastActivityAt: 100,
+        pendingUserInput: false,
+        pendingApproval: false,
+        pendingTool: false,
+        pendingRetry: false,
+        receiptIds: [],
+        verification: 'pending',
+        recentDelta: '',
+        errors: [],
+        claims: [],
+        contextRevision: null,
+        milestone: 'active-turn',
+      }),
+    ).toThrow('cao_snapshot_target_invalid');
+  });
 });

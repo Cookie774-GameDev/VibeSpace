@@ -26,11 +26,13 @@ interface Props {
   messages: QueuedChatMessage[];
   onEdit: (id: string) => void;
   onSendNow: (id: string) => void;
+  onQueueNative?: (id: string) => void;
   onStartMultitask: (id: string) => void;
   onOpenSideChat?: (id: string) => void;
   busyId?: string | null;
   isModelSwitch?: (message: QueuedChatMessage) => boolean;
   onStopAndRestart?: (id: string) => void;
+  steerMode?: 'native' | 'stop-followup';
   onDelete: (id: string) => void;
 }
 function QueueRow({ message, ...props }: Omit<Props, 'messages'> & { message: QueuedChatMessage }) {
@@ -40,6 +42,7 @@ function QueueRow({ message, ...props }: Omit<Props, 'messages'> & { message: Qu
     ? Object.values(message.attachments).reduce((sum, items) => sum + items.length, 0)
     : 0;
   const switching = props.isModelSwitch?.(message);
+  const stopAndFollowUp = !switching && props.steerMode === 'stop-followup';
   const action = (callback: ((id: string) => void) | undefined) => {
     setOpen(false);
     callback?.(message.id);
@@ -71,8 +74,15 @@ function QueueRow({ message, ...props }: Omit<Props, 'messages'> & { message: Qu
           className="queue-steer"
           disabled={Boolean(props.busyId) || Boolean(switching && !props.onStopAndRestart)}
           aria-label={
-            switching ? 'Stop current reply and restart with model switch' : 'Steer queued message'
+            switching
+              ? 'Stop current reply and restart with model switch'
+              : stopAndFollowUp
+                ? 'Stop current reply and follow up'
+                : 'Steer queued message'
           }
+          title={stopAndFollowUp
+            ? 'Stop the active OpenCode reply and send this message as the next turn.'
+            : undefined}
           onClick={() => (switching ? props.onStopAndRestart : props.onSendNow)?.(message.id)}
         >
           {props.busyId === message.id ? (
@@ -80,7 +90,7 @@ function QueueRow({ message, ...props }: Omit<Props, 'messages'> & { message: Qu
           ) : (
             <CornerDownRight size={14} />
           )}
-          <span>Steer</span>
+          <span>{stopAndFollowUp ? 'Follow up' : 'Steer'}</span>
         </button>
         <button
           type="button"
@@ -119,6 +129,17 @@ function QueueRow({ message, ...props }: Omit<Props, 'messages'> & { message: Qu
               <MessageSquarePlus size={15} />
               Open in side chat
             </button>
+            {!switching && (
+              <button
+                type="button"
+                disabled={!props.onQueueNative}
+                aria-label="Queue on active Codex turn"
+                onClick={() => action(props.onQueueNative)}
+              >
+                <ListEnd size={15} />
+                Queue on Codex
+              </button>
+            )}
             {!switching && (
               <button
                 type="button"

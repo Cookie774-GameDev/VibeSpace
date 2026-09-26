@@ -52,6 +52,7 @@ import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { isProtectedJarvisAgent } from '@/lib/jarvis/identity';
 import type { JarvisProfile } from '@/lib/jarvis/profiles/types';
 import { AgentBadge } from './AgentBadge';
+import { AgentAllowedToolsPicker } from './AgentAllowedToolsPicker';
 import { hasNoBsPromptSection, setNoBsPromptSection } from './noBs';
 import { NoBsCinematic } from './NoBsCinematic';
 import { EmojiPicker } from '@/features/emoji/EmojiPicker';
@@ -202,6 +203,10 @@ function agentToDraft(a: Agent): DraftState {
   };
 }
 
+function usesRecommendedMaxOutputTokens(value: number | null | undefined): boolean {
+  return value == null || value === RECOMMENDED_MAX_OUTPUT_TOKENS;
+}
+
 function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n?/g, '\n');
 }
@@ -261,7 +266,13 @@ type SaveErrorState = {
 };
 
 type EditorStatus =
-  'idle' | 'unsaved' | 'saving' | 'saved' | 'conflict' | 'validation-error' | 'error';
+  | 'idle'
+  | 'unsaved'
+  | 'saving'
+  | 'saved'
+  | 'conflict'
+  | 'validation-error'
+  | 'error';
 
 type ProtectedProfileState =
   | { status: 'idle'; requestGeneration: number }
@@ -352,9 +363,7 @@ export function AgentManager() {
     setBaselineUpdatedAt(selectedAgent?.updated_at ?? null);
     baselineUpdatedAtRef.current = selectedAgent?.updated_at ?? null;
     setMaxTokensMode(
-      selectedAgent?.max_output_tokens == null || selectedAgent.max_output_tokens === undefined
-        ? 'recommended'
-        : 'custom',
+      usesRecommendedMaxOutputTokens(selectedAgent?.max_output_tokens) ? 'recommended' : 'custom',
     );
     setSaveState('idle');
     setSaveError(null);
@@ -687,9 +696,10 @@ export function AgentManager() {
     setSaveState('saving');
     setSaveError(null);
     const customAgentBeingSaved = !selectedAgent.builtin;
-    const activatedLocalModel = activatedFoundryJob && currentDraft.provider === 'foundry'
-      ? foundryAgentModelSelection(activatedFoundryJob)
-      : null;
+    const activatedLocalModel =
+      activatedFoundryJob && currentDraft.provider === 'foundry'
+        ? foundryAgentModelSelection(activatedFoundryJob)
+        : null;
     const localArtifactSelected = activatedLocalModel?.model === currentDraft.model;
     const patch: Partial<Agent> = {
       name: currentDraft.name,
@@ -705,7 +715,13 @@ export function AgentManager() {
       persona: currentDraft.persona,
       ...(customAgentBeingSaved
         ? localArtifactSelected
-          ? { model: { ...selectedAgent.model, provider: currentDraft.provider, model: currentDraft.model } }
+          ? {
+              model: {
+                ...selectedAgent.model,
+                provider: currentDraft.provider,
+                model: currentDraft.model,
+              },
+            }
           : {}
         : {
             model: {
@@ -752,9 +768,7 @@ export function AgentManager() {
           setBaselineUpdatedAt(savedAgent.updated_at);
           baselineUpdatedAtRef.current = savedAgent.updated_at;
           setMaxTokensMode(
-            savedAgent.max_output_tokens == null || savedAgent.max_output_tokens === undefined
-              ? 'recommended'
-              : 'custom',
+            usesRecommendedMaxOutputTokens(savedAgent.max_output_tokens) ? 'recommended' : 'custom',
           );
           draftRef.current = nextDraft;
           baselineRef.current = syncedDraft;
@@ -894,7 +908,9 @@ export function AgentManager() {
     };
     setDraft(next);
     draftRef.current = next;
-    setMaxTokensMode(baseline.max_output_tokens == null ? 'recommended' : 'custom');
+    setMaxTokensMode(
+      usesRecommendedMaxOutputTokens(baseline.max_output_tokens) ? 'recommended' : 'custom',
+    );
     if (selectedAgent) {
       setBaselineUpdatedAt(selectedAgent.updated_at);
       baselineUpdatedAtRef.current = selectedAgent.updated_at;
@@ -920,9 +936,7 @@ export function AgentManager() {
     setBaselineUpdatedAt(selectedAgent.updated_at);
     baselineUpdatedAtRef.current = selectedAgent.updated_at;
     setMaxTokensMode(
-      selectedAgent.max_output_tokens == null || selectedAgent.max_output_tokens === undefined
-        ? 'recommended'
-        : 'custom',
+      usesRecommendedMaxOutputTokens(selectedAgent.max_output_tokens) ? 'recommended' : 'custom',
     );
     draftRef.current = next;
     baselineRef.current = next;
@@ -1505,8 +1519,14 @@ export function AgentManager() {
                     <p className="text-metadata text-muted-foreground">Profile is still loading</p>
                   ) : null}
                   <div className="text-metadata text-muted-foreground">
-                    {editablePrompt.length.toLocaleString()} chars · ~
-                    {Math.ceil(editablePrompt.length / 4).toLocaleString()} tokens
+                    {protectedJarvis && !protectedProfileReady ? (
+                      <span aria-live="polite">Loading…</span>
+                    ) : (
+                      <>
+                        {editablePrompt.length.toLocaleString()} chars · ~
+                        {Math.ceil(editablePrompt.length / 4).toLocaleString()} tokens
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -1559,24 +1579,12 @@ export function AgentManager() {
                       Only catalog skill ids load at runtime (not decorative labels).
                     </p>
                   </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="agent-tools">Allowed tools</Label>
-                    <Input
-                      id="agent-tools"
-                      value={formatList(draft.tools_allowed)}
-                      placeholder="* or tool ids"
-                      onChange={(event) =>
-                        setDraft((current) =>
-                          current
-                            ? {
-                                ...current,
-                                tools_allowed: parseList(event.target.value),
-                              }
-                            : current,
-                        )
-                      }
-                    />
-                  </div>
+                  <AgentAllowedToolsPicker
+                    value={draft.tools_allowed}
+                    onChange={(tools_allowed) =>
+                      setDraft((current) => (current ? { ...current, tools_allowed } : current))
+                    }
+                  />
                   <div className="space-y-1.5">
                     <Label htmlFor="agent-memory-scope">
                       {customAgent ? 'Scope' : 'Memory scope'}
@@ -1611,32 +1619,6 @@ export function AgentManager() {
                       </p>
                     ) : null}
                   </div>
-                  {!customAgent ? (
-                    <div className="space-y-1.5">
-                      <Label htmlFor="agent-effort">Reasoning effort</Label>
-                      <select
-                        id="agent-effort"
-                        value={draft.effort}
-                        onChange={(event) =>
-                          setDraft((current) =>
-                            current
-                              ? {
-                                  ...current,
-                                  effort: event.target.value as AgentEffort,
-                                }
-                              : current,
-                          )
-                        }
-                        className="flex h-8 w-full rounded-md border border-input bg-background px-2 text-body text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      >
-                        {['minimal', 'low', 'medium', 'high', 'max', 'custom'].map((effort) => (
-                          <option key={effort} value={effort}>
-                            {effort}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : null}
                   <div className="space-y-1.5">
                     <Label htmlFor="agent-persona">Persona</Label>
                     <select

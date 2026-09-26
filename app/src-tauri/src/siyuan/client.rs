@@ -21,6 +21,11 @@ pub const MAX_DOCUMENT_PATH_BYTES: usize = 4_096;
 pub const MAX_SNAPSHOT_MEMO_BYTES: usize = 256;
 pub const MAX_BATCH_BLOCKS: usize = 64;
 pub const MAX_BATCH_BLOCK_TOTAL_BYTES: usize = 262_144;
+const MAX_BATCH_APPEND_REQUEST_BLOCKS: usize = 8;
+const MAX_BATCH_APPEND_REQUEST_MARKDOWN_BYTES: usize = 32 * 1024;
+// Method-3 counts can include tag-only matches that its result filter omits.
+// Bound their paging even when a caller asks for only a few final results.
+const MAX_MANAGED_MARKER_SEARCH_PAGES: usize = 8;
 const MAX_HTTP_RESPONSE_BYTES: u64 = 1_100_000;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const SEARCH_HTTP_TIMEOUT: Duration = Duration::from_secs(45);
@@ -79,6 +84,43 @@ pub struct Block {
 pub struct AppendBlockInput {
     pub parent_id: String,
     pub markdown: String,
+}
+
+fn split_batch_append_requests(blocks: &[AppendBlockInput]) -> Vec<&[AppendBlockInput]> {
+    let mut requests = Vec::new();
+    let mut parent_start = 0;
+
+    while parent_start < blocks.len() {
+        let parent_id = blocks[parent_start].parent_id.as_str();
+        let parent_end = blocks[parent_start..]
+            .iter()
+            .position(|block| block.parent_id.as_str() != parent_id)
+            .map_or(blocks.len(), |offset| parent_start + offset);
+        let mut chunk_start = parent_start;
+
+        while chunk_start < parent_end {
+            let mut chunk_end = chunk_start;
+            let mut markdown_bytes = 0usize;
+            while chunk_end < parent_end
+                && chunk_end - chunk_start < MAX_BATCH_APPEND_REQUEST_BLOCKS
+            {
+                let next_bytes = markdown_bytes.saturating_add(blocks[chunk_end].markdown.len());
+                if chunk_end > chunk_start && next_bytes > MAX_BATCH_APPEND_REQUEST_MARKDOWN_BYTES {
+                    break;
+                }
+                // Keep a large valid block intact and isolate it in its own request.
+                markdown_bytes = next_bytes;
+                chunk_end += 1;
+            }
+
+            requests.push(&blocks[chunk_start..chunk_end]);
+            chunk_start = chunk_end;
+        }
+
+        parent_start = parent_end;
+    }
+
+    requests
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -239,6 +281,12 @@ struct NotebookWire {
 #[derive(Deserialize)]
 struct SearchData {
     blocks: Vec<SearchBlockWire>,
+    #[serde(default, rename = "matchedBlockCount")]
+    matched_block_count: Option<usize>,
+    #[serde(default, rename = "pageCount")]
+    page_count: Option<usize>,
+    #[serde(default, rename = "docMode")]
+    doc_mode: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -343,12 +391,14 @@ impl HttpSiyuanTransport {
         &self,
         mut response: reqwest::blocking::Response,
     ) -> Result<Vec<u8>, ClientError> {
-        if !response.status().is_success()
-            || response
-                .content_length()
-                .is_some_and(|length| length > MAX_HTTP_RESPONSE_BYTES)
-        {
+        if !response.status().is_success() {
             return Err(ClientError::TransportUnavailable);
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_HTTP_RESPONSE_BYTES)
+        {
+            return Err(ClientError::ResponseTooLarge);
         }
         let mut bytes = Vec::new();
         response
@@ -448,7 +498,13 @@ impl HttpSiyuanTransport {
             .json(&body)
             .send()
             .map_err(|_| ClientError::TransportUnavailable)?;
-        self.read_envelope(response)
+        let result = self.read_envelope(response);
+        if matches!(&result, Err(ClientError::ResponseTooLarge)) {
+            // Routes are static and safe to identify; never log the request body,
+            // session token, notebook identity, or any document content here.
+            eprintln!("SiYuan response exceeded the size limit at endpoint {path}");
+        }
+        result
     }
 
     fn post_block_info(&self, id: &str) -> Result<Option<BlockInfoData>, ClientError> {
@@ -572,20 +628,110 @@ impl HttpSiyuanTransport {
     }
 
     fn search(&self, query: &str, limit: u16) -> Result<Vec<BlockSummary>, ClientError> {
-        let data: SearchData = self.post_search(
+        validate_query(query)?;
+        if let Some(regex_query) = managed_node_marker_regex(query)? {
+            return self.search_managed_marker(&regex_query, limit);
+        }
+
+        let data = self.search_page(query, limit, 1, 0)?;
+        Self::validate_search_blocks(data.blocks, limit)
+    }
+
+    fn search_page(
+        &self,
+        query: &str,
+        page_size: u16,
+        page: usize,
+        method: u8,
+    ) -> Result<SearchData, ClientError> {
+        self.post_search(
             "/api/search/fullTextSearchBlock",
             json!({
                 "query": query,
-                "page": 1,
-                "pageSize": limit,
-                "method": 0,
+                "page": page,
+                "pageSize": page_size,
+                "method": method,
                 "searchHPath": false,
             }),
-        )?;
-        if data.blocks.len() > usize::from(limit) {
+        )
+    }
+
+    fn search_managed_marker(
+        &self,
+        regex_query: &str,
+        limit: u16,
+    ) -> Result<Vec<BlockSummary>, ClientError> {
+        let first = self.search_page(regex_query, limit, 1, 3)?;
+        let matched_count = first
+            .matched_block_count
+            .ok_or(ClientError::ResponseTypeMismatch)?;
+        let page_count = first.page_count.ok_or(ClientError::ResponseTypeMismatch)?;
+        if first.doc_mode != Some(false) {
+            return Err(ClientError::ResponseTypeMismatch);
+        }
+        if matched_count > usize::from(MAX_SEARCH_RESULTS) {
             return Err(ClientError::ResponseTooLarge);
         }
-        data.blocks
+
+        let page_size = usize::from(limit);
+        let expected_page_count = if matched_count == 0 {
+            0
+        } else {
+            (matched_count + page_size - 1) / page_size
+        };
+        if (matched_count == 0 && !matches!(page_count, 0 | 1))
+            || (matched_count != 0 && page_count != expected_page_count)
+        {
+            return Err(ClientError::ResponseTypeMismatch);
+        }
+        if page_count > MAX_MANAGED_MARKER_SEARCH_PAGES {
+            return Err(ClientError::ResponseTooLarge);
+        }
+        if matched_count == 0 && !first.blocks.is_empty() {
+            return Err(ClientError::ResponseTypeMismatch);
+        }
+
+        let mut results: Vec<BlockSummary> = Vec::new();
+        let mut first_page = Some(first);
+        // Do not stop at an empty filtered page: the API's page count may include
+        // tag-only rows which are excluded from its returned blocks.
+        for page in 1..=page_count {
+            let data = if page == 1 {
+                first_page.take().ok_or(ClientError::ResponseTypeMismatch)?
+            } else {
+                self.search_page(regex_query, limit, page, 3)?
+            };
+            if data.matched_block_count != Some(matched_count)
+                || data.page_count != Some(page_count)
+                || data.doc_mode != Some(false)
+            {
+                return Err(ClientError::ResponseTypeMismatch);
+            }
+
+            for block in Self::validate_search_blocks(data.blocks, limit)? {
+                if let Some(previous) = results.iter().find(|item| item.id == block.id) {
+                    if previous != &block {
+                        return Err(ClientError::ResponseTypeMismatch);
+                    }
+                } else {
+                    results.push(block);
+                    if results.len() > page_size {
+                        return Err(ClientError::ResponseTooLarge);
+                    }
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    fn validate_search_blocks(
+        blocks: Vec<SearchBlockWire>,
+        limit: u16,
+    ) -> Result<Vec<BlockSummary>, ClientError> {
+        if blocks.len() > usize::from(limit) {
+            return Err(ClientError::ResponseTooLarge);
+        }
+        blocks
             .into_iter()
             .map(|block| {
                 validate_identifier(&block.id)?;
@@ -854,15 +1000,9 @@ impl HttpSiyuanTransport {
                 Self::require_append_parent(&root, &block.parent_id, &info)?;
             }
         }
+        let request_batches = split_batch_append_requests(blocks);
         let mut ids = Vec::with_capacity(blocks.len());
-        let mut cursor = 0;
-        while cursor < blocks.len() {
-            let parent_id = blocks[cursor].parent_id.as_str();
-            let end = blocks[cursor..]
-                .iter()
-                .position(|block| block.parent_id != parent_id)
-                .map_or(blocks.len(), |offset| cursor + offset);
-            let parent_batch = &blocks[cursor..end];
+        for parent_batch in request_batches {
             let transactions: Vec<TransactionWire> = self.post(
                 "/api/block/batchAppendBlock",
                 json!({
@@ -897,7 +1037,6 @@ impl HttpSiyuanTransport {
                 }
                 ids.push(operation.id);
             }
-            cursor = end;
         }
         Ok(ids)
     }
@@ -1339,6 +1478,66 @@ fn validate_query(value: &str) -> Result<(), ClientError> {
     } else {
         Ok(())
     }
+}
+
+fn managed_node_marker_regex(query: &str) -> Result<Option<String>, ClientError> {
+    const PREFIX: &str = "vibespace-context-node:v1 map=";
+    let Some(marker) = query.strip_prefix(PREFIX) else {
+        return Ok(None);
+    };
+    let Some((map_id, node_id)) = marker.split_once(" node=") else {
+        return Err(ClientError::InvalidQuery);
+    };
+    if map_id.is_empty()
+        || map_id.len() > 200
+        || !map_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        || node_id.is_empty()
+        || node_id.len() > 500
+        || !is_encode_uri_component(node_id)
+    {
+        return Err(ClientError::InvalidQuery);
+    }
+
+    let mut regex = String::with_capacity(query.len().saturating_mul(2));
+    for ch in query.chars() {
+        if r"\.+*?()|[]{}^$".contains(ch) {
+            regex.push('\\');
+        }
+        regex.push(ch);
+    }
+    if regex.len() > MAX_QUERY_BYTES {
+        return Err(ClientError::InvalidQuery);
+    }
+    Ok(Some(regex))
+}
+
+fn is_encode_uri_component(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')'
+            )
+        {
+            index += 1;
+            continue;
+        }
+        if byte == b'%'
+            && index + 2 < bytes.len()
+            && bytes[index + 1].is_ascii_hexdigit()
+            && bytes[index + 2].is_ascii_hexdigit()
+        {
+            index += 3;
+            continue;
+        }
+        return false;
+    }
+    true
 }
 
 fn validate_notebook_name(value: &str) -> Result<(), ClientError> {
@@ -1903,6 +2102,171 @@ mod tests {
         assert!(!request.contains("/api/query/sql"));
         assert!(!request.contains(token.as_str()));
         server.join().unwrap();
+    }
+
+    #[test]
+    fn native_managed_marker_search_uses_literal_regex_mode() {
+        let token = "m".repeat(32);
+        // `node` is the real encodeURIComponent form. It deliberately retains
+        // Go-RE2 metacharacters that must be escaped before method-3 search.
+        let marker = "vibespace-context-node:v1 map=map-1 node=path%3Afile.*(thing)";
+        let response = json!({
+            "code": 0,
+            "msg": "",
+            "data": {
+                "blocks": [{
+                    "id": "marker-block",
+                    "box": "20260820-notebook",
+                    "path": "/20260820-maproot/20260820-child.sy",
+                    "content": marker,
+                }],
+                "matchedBlockCount": 1,
+                "pageCount": 1,
+                "docMode": false,
+            },
+        })
+        .to_string();
+        let (port, requests, server) = mock_http_server(vec![
+            r#"{"code":0,"msg":"","data":null}"#.to_owned(),
+            response,
+        ]);
+        let client =
+            SiyuanClient::new(true, HttpSiyuanTransport::new(port, token.clone()).unwrap());
+        let results = client.search_blocks(marker, 50).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content, marker);
+
+        let login = requests.recv().unwrap();
+        let request = requests.recv().unwrap();
+        assert!(login.starts_with("POST /api/system/loginAuth HTTP/1.1"));
+        assert!(request.starts_with("POST /api/search/fullTextSearchBlock HTTP/1.1"));
+        // The mock server captures headers and body without retaining the blank
+        // separator line; the first JSON object is the request body.
+        let body_start = request.find('{').expect("search request body");
+        let body = &request[body_start..];
+        let body: Value = serde_json::from_str(body).expect("search JSON body");
+        assert_eq!(body["method"], 3);
+        assert_eq!(
+            body["query"],
+            r"vibespace-context-node:v1 map=map-1 node=path%3Afile\.\*\(thing\)"
+        );
+        assert_eq!(body["page"], 1);
+        assert_eq!(body["pageSize"], 50);
+        assert!(!request.contains(token.as_str()));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn native_managed_marker_search_pages_and_fails_closed_over_requested_limit() {
+        let marker = "vibespace-context-node:v1 map=map-1 node=path%3Afile.*(thing)";
+        let page_response = |blocks: Value| {
+            json!({
+                "code": 0,
+                "msg": "",
+                "data": {
+                    "blocks": blocks,
+                    "matchedBlockCount": 3,
+                    "pageCount": 2,
+                    "docMode": false,
+                },
+            })
+            .to_string()
+        };
+        let block = |id: &str| {
+            json!({
+                "id": id,
+                "box": "20260820-notebook",
+                "path": "/20260820-maproot/20260820-child.sy",
+                "content": marker,
+            })
+        };
+        let (port, requests, server) = mock_http_server(vec![
+            r#"{"code":0,"msg":"","data":null}"#.to_owned(),
+            page_response(json!([block("child-1"), block("child-2")])),
+            page_response(json!([block("child-3")])),
+        ]);
+        let client = SiyuanClient::new(
+            true,
+            HttpSiyuanTransport::new(port, "m".repeat(32)).unwrap(),
+        );
+
+        assert_eq!(
+            client.search_blocks(marker, 2),
+            Err(ClientError::ResponseTooLarge)
+        );
+
+        let _login = requests.recv().unwrap();
+        for (expected_page, request) in [1, 2]
+            .into_iter()
+            .zip([requests.recv().unwrap(), requests.recv().unwrap()])
+        {
+            let body_start = request.find('{').expect("search request body");
+            let body: Value = serde_json::from_str(&request[body_start..]).unwrap();
+            assert_eq!(body["method"], 3);
+            assert_eq!(body["page"], expected_page);
+            assert_eq!(body["pageSize"], 2);
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn native_managed_marker_search_rejects_raw_candidate_scan_over_global_cap() {
+        let marker = "vibespace-context-node:v1 map=map-1 node=path%3Afile";
+        let response = json!({
+            "code": 0,
+            "msg": "",
+            "data": {
+                "blocks": [{
+                    "id": "child-1",
+                    "box": "20260820-notebook",
+                    "path": "/20260820-maproot/20260820-child.sy",
+                    "content": marker,
+                }],
+                "matchedBlockCount": 101,
+                "pageCount": 3,
+                "docMode": false,
+            },
+        })
+        .to_string();
+        let (port, requests, server) = mock_http_server(vec![
+            r#"{"code":0,"msg":"","data":null}"#.to_owned(),
+            response,
+        ]);
+        let client = SiyuanClient::new(
+            true,
+            HttpSiyuanTransport::new(port, "n".repeat(32)).unwrap(),
+        );
+
+        assert_eq!(
+            client.search_blocks(marker, 50),
+            Err(ClientError::ResponseTooLarge)
+        );
+        let _login = requests.recv().unwrap();
+        let request = requests.recv().unwrap();
+        let body_start = request.find('{').expect("search request body");
+        let body: Value = serde_json::from_str(&request[body_start..]).unwrap();
+        assert_eq!(body["method"], 3);
+        assert_eq!(body["page"], 1);
+        assert_eq!(body["pageSize"], 50);
+        assert!(requests.try_recv().is_err());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn native_managed_marker_search_requires_exact_bounded_marker_shape() {
+        assert_eq!(managed_node_marker_regex("ordinary search"), Ok(None));
+        assert_eq!(
+            managed_node_marker_regex("vibespace-context-node:v1 map=map-1 node=../not-encoded"),
+            Err(ClientError::InvalidQuery)
+        );
+        let long_marker = format!(
+            "vibespace-context-node:v1 map=map-1 node={}",
+            "x.".repeat(200)
+        );
+        assert_eq!(
+            managed_node_marker_regex(&long_marker),
+            Err(ClientError::InvalidQuery)
+        );
     }
 
     #[test]
@@ -2634,6 +2998,126 @@ mod tests {
             assert!(!request.contains(&token));
             assert!(!request.to_ascii_lowercase().contains("authorization:"));
         }
+        server.join().unwrap();
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn native_batch_append_splits_same_parent_requests_by_count_and_bytes_preserving_id_order() {
+        let response_for_ids = |range: std::ops::Range<usize>| {
+            let transactions = range
+                .map(|index| {
+                    format!(
+                        r#"{{"doOperations":[{{"action":"insert","id":"child-{index}","parentID":"map-root"}}]}}"#
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(r#"{{"code":0,"msg":"","data":[{transactions}]}}"#)
+        };
+        let (port, requests, server) = mock_http_server(vec![
+            r#"{"code":0,"msg":"","data":null}"#.to_owned(),
+            r#"{"code":0,"msg":"","data":{"box":"20260820-notebook","path":"/map.sy","rootID":"map-root"}}"#.to_owned(),
+            response_for_ids(0..8),
+            response_for_ids(8..10),
+            response_for_ids(10..11),
+        ]);
+        let client = SiyuanClient::new(
+            true,
+            HttpSiyuanTransport::new(port, "s".repeat(48)).unwrap(),
+        );
+        let mut blocks = (0..9)
+            .map(|index| AppendBlockInput {
+                parent_id: "map-root".to_owned(),
+                markdown: format!("small-{index}"),
+            })
+            .collect::<Vec<_>>();
+        blocks.extend((9..11).map(|index| AppendBlockInput {
+            parent_id: "map-root".to_owned(),
+            markdown: format!(
+                "large-{index}:{}",
+                char::from(b'a' + index as u8).to_string().repeat(20 * 1024)
+            ),
+        }));
+
+        let ids = client
+            .batch_append_blocks("20260820-notebook", "map-root", &blocks)
+            .expect("large same-parent inputs are split into bounded requests");
+        assert_eq!(
+            ids,
+            (0..11)
+                .map(|index| format!("child-{index}"))
+                .collect::<Vec<_>>()
+        );
+
+        let captured = (0..5).map(|_| requests.recv().unwrap()).collect::<Vec<_>>();
+        let batch_requests = captured
+            .iter()
+            .filter(|request| request.contains("/api/block/batchAppendBlock"))
+            .collect::<Vec<_>>();
+        assert_eq!(batch_requests.len(), 3);
+        let expected_sizes = [8, 2, 1];
+        let mut expected_block_index = 0;
+        for (request, expected_size) in batch_requests.iter().zip(expected_sizes) {
+            let body_start = request.find('{').expect("batch request JSON body");
+            let body: Value = serde_json::from_str(&request[body_start..]).unwrap();
+            let requested_blocks = body["blocks"].as_array().unwrap();
+            assert_eq!(requested_blocks.len(), expected_size);
+            let markdown_bytes = requested_blocks
+                .iter()
+                .map(|block| block["data"].as_str().unwrap().len())
+                .sum::<usize>();
+            assert!(markdown_bytes <= 32 * 1024);
+            for block in requested_blocks {
+                assert_eq!(block["parentID"], "map-root");
+                assert_eq!(
+                    block["data"].as_str().unwrap(),
+                    blocks[expected_block_index].markdown
+                );
+                expected_block_index += 1;
+            }
+        }
+        assert_eq!(expected_block_index, blocks.len());
+        server.join().unwrap();
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn native_batch_append_does_not_retry_when_response_size_is_ambiguous() {
+        let oversized_response = format!(
+            r#"{{"code":0,"msg":"","data":"{}"}}"#,
+            "x".repeat(MAX_HTTP_RESPONSE_BYTES as usize + 1)
+        );
+        let (port, requests, server) = mock_http_server(vec![
+            r#"{"code":0,"msg":"","data":null}"#.to_owned(),
+            r#"{"code":0,"msg":"","data":{"box":"20260820-notebook","path":"/map.sy","rootID":"map-root"}}"#.to_owned(),
+            oversized_response,
+        ]);
+        let client = SiyuanClient::new(
+            true,
+            HttpSiyuanTransport::new(port, "u".repeat(48)).unwrap(),
+        );
+
+        assert_eq!(
+            client.batch_append_blocks(
+                "20260820-notebook",
+                "map-root",
+                &[AppendBlockInput {
+                    parent_id: "map-root".to_owned(),
+                    markdown: "<!-- vibespace-context-node:v1 map=map-1 node=ambiguous -->\n# Node"
+                        .to_owned(),
+                }],
+            ),
+            Err(ClientError::ResponseTooLarge)
+        );
+        let captured = (0..3).map(|_| requests.recv().unwrap()).collect::<Vec<_>>();
+        assert_eq!(
+            captured
+                .iter()
+                .filter(|request| request.contains("/api/block/batchAppendBlock"))
+                .count(),
+            1
+        );
         server.join().unwrap();
         assert!(requests.try_recv().is_err());
     }

@@ -10,6 +10,7 @@ import { Target, BrainCircuit, Users, ShieldCheck, ClipboardCheck } from 'lucide
 import { db } from '@/lib/db';
 import { chatRepo, terminalSessionRepo } from '@/lib/db/repositories';
 import { subscribeDiscoveredConnectionModels } from '@/lib/ai/connectionCatalog';
+import { refreshAccessibleChatModelCatalog } from '@/lib/ai/useAccessibleChatModels';
 import type { Chat } from '@/types/chat';
 import type { ProjectId, WorkspaceId } from '@/types/common';
 import type { TerminalSession } from '@/types/terminal';
@@ -275,20 +276,44 @@ export function CaoMissionPanel({
     : '';
   const profileDirty = !identityMatches(savedProfile, selectedIdentity);
 
-  const setIdentity = (identity: CaoExecutionIdentity | undefined) => {
+  const setIdentity = (
+    identity: CaoExecutionIdentity | undefined,
+    options: { explicit?: boolean; profileUpdatedAt?: number | null } = {},
+  ) => {
     if (identity) update('choice', identity);
+    const explicit = Boolean(identity && options.explicit);
+    update('choiceExplicit', explicit);
+    update(
+      'choiceProfileUpdatedAt',
+      explicit ? (options.profileUpdatedAt ?? savedProfile?.updatedAt ?? null) : null,
+    );
     setBackend(identity?.backend ?? '');
     setConnectionId(identity?.connectionId ?? '');
     setModelId(identity?.modelId ?? '');
     setReasoningEffort(identity?.reasoningEffort ?? '');
   };
 
-  const refreshCatalog = async (requestedEpoch = scopeEpoch.current) => {
+  const refreshCatalog = async (requestedEpoch = scopeEpoch.current, forceDiscovery = false) => {
     const isCurrent = () => requestedEpoch === scopeEpoch.current;
     setCatalogBusy(true);
     setCatalogError('');
     setNotice('');
     try {
+      if (forceDiscovery) {
+        // Discovery can stall on an external CLI. A verified live catalog read
+        // remains authoritative, so do not leave the wizard disabled forever.
+        let deadline: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            refreshAccessibleChatModelCatalog(),
+            new Promise<void>((resolve) => {
+              deadline = setTimeout(resolve, 12_000);
+            }),
+          ]);
+        } finally {
+          if (deadline) clearTimeout(deadline);
+        }
+      }
       const nextCatalog = await readLiveCaoExecutionCatalog({
         accountId: scope.accountId,
         workspaceId: scope.workspaceId,
@@ -296,11 +321,13 @@ export function CaoMissionPanel({
       if (!isCurrent()) return;
       setCatalog(nextCatalog);
       let persisted: CaoExecutionProfile | undefined;
+      let profileReadSucceeded = false;
       try {
         persisted = await loadCaoExecutionProfile(db, {
           accountId: scope.accountId,
           workspaceId: scope.workspaceId,
         });
+        profileReadSucceeded = true;
       } catch (cause) {
         setCatalogError(errorText(cause));
       }
@@ -308,16 +335,27 @@ export function CaoMissionPanel({
       const persistedEntry = persisted
         ? nextCatalog.entries.find((entry) => identityMatches(persisted, entry))
         : undefined;
-      const retainedChoice = readCaoDraft(caoDraftKey(scope)).choice;
+      const retainedDraft = readCaoDraft(caoDraftKey(scope));
+      const retainedChoiceIsCurrent =
+        profileReadSucceeded &&
+        retainedDraft.choiceExplicit === true &&
+        (retainedDraft.choiceProfileUpdatedAt ?? null) === (persisted?.updatedAt ?? null);
+      const retainedChoiceEntry = retainedChoiceIsCurrent
+        ? nextCatalog.entries.find(
+            (entry) => retainedDraft.choice && sameIdentity(entry, retainedDraft.choice),
+          )
+        : undefined;
       const initial =
-        nextCatalog.entries.find(
-          (entry) => retainedChoice && sameIdentity(entry, retainedChoice),
-        ) ??
+        retainedChoiceEntry ??
         persistedEntry ??
-        nextCatalog.entries[0];
-      setIdentity(initial);
-      setSavedProfile(persistedEntry ? persisted : undefined);
-      if (!initial) setCatalogError('No verified live CAO execution route is available.');
+        (profileReadSucceeded && !persisted ? nextCatalog.entries[0] : undefined);
+      setIdentity(initial, {
+        explicit: Boolean(retainedChoiceEntry),
+        profileUpdatedAt: persisted?.updatedAt ?? null,
+      });
+      setSavedProfile(profileReadSucceeded ? persisted : undefined);
+      if (!initial && profileReadSucceeded)
+        setCatalogError('No verified live CAO execution route is available.');
     } catch (cause) {
       if (!isCurrent()) return;
       setCatalog(undefined);
@@ -330,13 +368,35 @@ export function CaoMissionPanel({
   };
 
   useEffect(() => {
+    const retainedChoice = draft.choice;
+    if (
+      !retainedChoice ||
+      draft.choiceExplicit !== true ||
+      (draft.choiceProfileUpdatedAt ?? null) !== (savedProfile?.updatedAt ?? null)
+    )
+      return;
+    setBackend(retainedChoice.backend);
+    setConnectionId(retainedChoice.connectionId);
+    setModelId(retainedChoice.modelId);
+    setReasoningEffort(retainedChoice.reasoningEffort);
+  }, [
+    draft.choice?.backend,
+    draft.choice?.connectionId,
+    draft.choice?.modelId,
+    draft.choice?.reasoningEffort,
+    draft.choiceExplicit,
+    draft.choiceProfileUpdatedAt,
+    savedProfile?.updatedAt,
+  ]);
+
+  useEffect(() => {
     const epoch = ++scopeEpoch.current;
     setMission(undefined);
     setBusy(false);
     setNotice('');
     setError('');
     setScopeUnavailable(false);
-    void refreshCatalog(epoch);
+    void refreshCatalog(epoch, true);
     // The scope object is intentionally projected to its stable ownership keys.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope.accountId, scope.workspaceId, scope.projectId]);
@@ -405,6 +465,7 @@ export function CaoMissionPanel({
       await persistCaoExecutionProfile(db, nextProfile);
       if (epoch === scopeEpoch.current) {
         setSavedProfile(nextProfile);
+        setIdentity(selectedIdentity);
         setNotice('CAO brain profile saved for this account and workspace.');
         return true;
       }
@@ -595,7 +656,10 @@ export function CaoMissionPanel({
   const stepIcons = [Target, BrainCircuit, Users, ShieldCheck, ClipboardCheck];
   const showOverview = Boolean(mission && !editing);
   const persistedFailure =
-    showOverview && mission && 'failureReason' in mission && typeof mission.failureReason === 'string'
+    showOverview &&
+    mission &&
+    'failureReason' in mission &&
+    typeof mission.failureReason === 'string'
       ? errorText(new Error(mission.failureReason))
       : '';
   const displayedError = error || persistedFailure;
@@ -785,7 +849,10 @@ export function CaoMissionPanel({
                       entry.reasoningEffort === effort,
                   );
                   if (identity) {
-                    setIdentity(identity);
+                    setIdentity(identity, {
+                      explicit: true,
+                      profileUpdatedAt: savedProfile?.updatedAt ?? null,
+                    });
                     setError('');
                   } else
                     setError(
@@ -798,7 +865,7 @@ export function CaoMissionPanel({
                 size="sm"
                 variant="ghost"
                 disabled={catalogBusy || busy}
-                onClick={() => void refreshCatalog()}
+                onClick={() => void refreshCatalog(scopeEpoch.current, true)}
               >
                 {catalogBusy ? 'Refreshing…' : 'Refresh models'}
               </Button>

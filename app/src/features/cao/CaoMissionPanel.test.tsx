@@ -24,7 +24,10 @@ import {
 const mocks = vi.hoisted(() => ({
   targets: [] as unknown[],
   missionRows: [] as unknown[],
+  initialDraft: undefined as Record<string, unknown> | undefined,
+  currentDraft: undefined as Record<string, unknown> | undefined,
   readCatalog: vi.fn(),
+  refreshChatCatalog: vi.fn(),
   recoverScope: vi.fn(),
   loadProfile: vi.fn(),
   persistProfile: vi.fn(),
@@ -56,15 +59,51 @@ vi.mock('./CaoModelPicker', () => ({
     label,
     value,
     disabled,
+    allow,
+    onSelect,
   }: {
     label: string;
-    value?: { modelId: string };
+    value?: { modelId: string; providerId?: string; connectionId?: string };
     disabled?: boolean;
-  }) => (
-    <button aria-label={label} disabled={disabled}>
-      {value?.modelId ?? 'Choose a model'}
-    </button>
-  ),
+    allow?: (option: { provider: string; modelId: string; connectionId: string }) => boolean;
+    onSelect?: (
+      option: { provider: string; modelId: string; connectionId: string },
+      effort: string,
+    ) => void;
+  }) => {
+    const selectedOption = value
+      ? {
+          provider: value.providerId ?? '',
+          modelId: value.modelId,
+          connectionId: value.connectionId ?? '',
+        }
+      : undefined;
+    const visibleValue =
+      value && (!allow || (selectedOption && allow(selectedOption))) ? value : undefined;
+    return (
+      <>
+        <button aria-label={label} disabled={disabled}>
+          {visibleValue?.modelId ?? 'Choose a model'}
+        </button>
+        <button
+          type="button"
+          aria-label="Select alternate CAO route"
+          onClick={() =>
+            onSelect?.(
+              {
+                provider: 'alibaba',
+                modelId: 'deepseek-v4-flash-0731',
+                connectionId: 'opencode-cli',
+              },
+              'high',
+            )
+          }
+        >
+          Select alternate route
+        </button>
+      </>
+    );
+  },
 }));
 vi.mock('./CaoDeskScene', () => ({ CaoDeskScene: () => <div aria-label="Desk scene" /> }));
 vi.mock('@/features/settings/components/JevCredentialCard', () => ({
@@ -75,20 +114,33 @@ vi.mock('./missionDraft', async () => {
   const { useState } = await import('react');
   return {
     ...actual,
+    readCaoDraft: (key: string) =>
+      (mocks.currentDraft as import('./missionDraft').CaoSetupDraft | undefined) ??
+      actual.readCaoDraft(key),
     useCaoSetupDraft: () => {
-      const [draft, setDraft] = useState<import('./missionDraft').CaoSetupDraft>({
-        objective: '',
-        step: 0,
-        targets: [],
-        editing: false,
+      const [draft, setDraft] = useState<import('./missionDraft').CaoSetupDraft>(() => {
+        const initial = (mocks.initialDraft as
+          | import('./missionDraft').CaoSetupDraft
+          | undefined) ?? {
+          objective: '',
+          step: 0,
+          targets: [],
+          editing: false,
+        };
+        mocks.currentDraft = initial;
+        return initial;
       });
       return {
         draft,
         update: (field: keyof typeof draft, action: unknown) =>
-          setDraft((current) => ({
-            ...current,
-            [field]: typeof action === 'function' ? action(current[field]) : action,
-          })),
+          setDraft((current) => {
+            const next = {
+              ...current,
+              [field]: typeof action === 'function' ? action(current[field]) : action,
+            };
+            mocks.currentDraft = next;
+            return next;
+          }),
       };
     },
   };
@@ -99,6 +151,9 @@ vi.mock('@/lib/db/repositories', () => ({
   terminalSessionRepo: { listByProject: mocks.listTerminals },
 }));
 vi.mock('./productionLifecycle', () => ({ readLiveCaoExecutionCatalog: mocks.readCatalog }));
+vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
+  refreshAccessibleChatModelCatalog: mocks.refreshChatCatalog,
+}));
 vi.mock('./terminalControlProduction', () => ({ listCaoTerminals: mocks.listCaoTerminals }));
 vi.mock('./mission/productionController', () => ({
   caoProductionController: mocks.productionController,
@@ -177,6 +232,32 @@ const codexDiscoveryModel = {
   source: 'cli_model' as const,
   lastVerifiedAt: 100,
 };
+const savedCodexIdentity = {
+  backend: 'codex',
+  providerId: 'openai',
+  connectionId: 'openai-codex',
+  modelId: 'gpt-5.6-luna',
+  reasoningEffort: 'low',
+} as const;
+const unrelatedDeepSeekIdentity = {
+  backend: 'opencode',
+  providerId: 'alibaba',
+  connectionId: 'opencode-cli',
+  modelId: 'deepseek-v4-flash-0731',
+  reasoningEffort: 'high',
+} as const;
+const savedCodexProfile = {
+  schemaVersion: 1,
+  accountId: scope.accountId,
+  workspaceId: scope.workspaceId,
+  ...savedCodexIdentity,
+  catalogReceipt: { ...catalog, entries: [savedCodexIdentity] },
+  updatedAt: 100,
+};
+const mixedProfileCatalog: CaoLiveExecutionCatalog = {
+  ...catalog,
+  entries: [unrelatedDeepSeekIdentity, savedCodexIdentity],
+};
 const mission: CaoMission = {
   id: 'mission-1',
   schemaVersion: 1,
@@ -228,6 +309,8 @@ function renderPanel(overrides: Partial<CaoMissionController> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.initialDraft = undefined;
+  mocks.currentDraft = undefined;
   resetDiscoveredConnectionModelsForTests();
   localStorage.removeItem('vibespace.chat-reasoning.v1');
   localStorage.removeItem('vibespace.chat-runtime-settings.v1');
@@ -274,6 +357,7 @@ beforeEach(() => {
     },
   ];
   mocks.readCatalog.mockResolvedValue(catalog);
+  mocks.refreshChatCatalog.mockResolvedValue(undefined);
   mocks.loadProfile.mockResolvedValue(undefined);
   mocks.persistProfile.mockResolvedValue(undefined);
   mocks.database.cao_missions.toArray.mockResolvedValue([]);
@@ -354,6 +438,147 @@ async function advanceToTeam() {
 }
 
 describe('CAO mission entry', () => {
+  it('prefers the saved CAO route over an unmarked stale draft choice', async () => {
+    mocks.initialDraft = {
+      objective: 'Continue setup',
+      step: 1,
+      targets: [],
+      editing: false,
+      choice: unrelatedDeepSeekIdentity,
+    };
+    mocks.loadProfile.mockResolvedValue(savedCodexProfile);
+    mocks.readCatalog.mockResolvedValue(mixedProfileCatalog);
+
+    renderPanel();
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'CAO coordination model' }).textContent).toBe(
+        'gpt-5.6-luna',
+      ),
+    );
+  });
+
+  it('discards an explicit draft choice based on an older saved profile version', async () => {
+    mocks.initialDraft = {
+      objective: 'Continue setup',
+      step: 1,
+      targets: [],
+      editing: false,
+      choice: unrelatedDeepSeekIdentity,
+      choiceExplicit: true,
+      choiceProfileUpdatedAt: savedCodexProfile.updatedAt - 1,
+    };
+    mocks.loadProfile.mockResolvedValue(savedCodexProfile);
+    mocks.readCatalog.mockResolvedValue(mixedProfileCatalog);
+
+    renderPanel();
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'CAO coordination model' }).textContent).toBe(
+        'gpt-5.6-luna',
+      ),
+    );
+  });
+
+  it('does not select an unrelated first catalog route when the saved route is unavailable', async () => {
+    mocks.initialDraft = {
+      objective: 'Continue setup',
+      step: 1,
+      targets: [],
+      editing: false,
+    };
+    mocks.loadProfile.mockResolvedValue(savedCodexProfile);
+    mocks.readCatalog.mockResolvedValue({
+      ...catalog,
+      entries: [unrelatedDeepSeekIdentity],
+    });
+
+    renderPanel();
+
+    await waitFor(() => expect(mocks.readCatalog).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'CAO coordination model' }).textContent).toBe(
+        'Choose a model',
+      ),
+    );
+  });
+
+  it('preserves an explicitly changed draft route across refresh for the same saved profile', async () => {
+    mocks.initialDraft = {
+      objective: 'Continue setup',
+      step: 1,
+      targets: [],
+      editing: false,
+    };
+    mocks.loadProfile.mockResolvedValue(savedCodexProfile);
+    mocks.readCatalog.mockResolvedValue(mixedProfileCatalog);
+
+    renderPanel();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'CAO coordination model' }).textContent).toBe(
+        'gpt-5.6-luna',
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select alternate CAO route' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'CAO coordination model' }).textContent).toBe(
+        'deepseek-v4-flash-0731',
+      ),
+    );
+    mocks.readCatalog.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh models' }));
+
+    await waitFor(() => expect(mocks.readCatalog).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'CAO coordination model' }).textContent).toBe(
+      'deepseek-v4-flash-0731',
+    );
+  });
+
+  it('awaits live chat catalog discovery before reading CAO execution routes', async () => {
+    renderPanel();
+
+    await waitFor(() => expect(mocks.readCatalog).toHaveBeenCalledTimes(1));
+    expect(mocks.refreshChatCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshChatCatalog.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.readCatalog.mock.invocationCallOrder[0]!,
+    );
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'CAO mission objective' }), {
+      target: { value: 'Review the selected work' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('button', { name: 'Refresh models' });
+
+    mocks.refreshChatCatalog.mockClear();
+    mocks.readCatalog.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh models' }));
+    await waitFor(() => expect(mocks.readCatalog).toHaveBeenCalledTimes(1));
+    expect(mocks.refreshChatCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshChatCatalog.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.readCatalog.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('reads only verified live routes when external chat discovery never resolves', async () => {
+    mocks.refreshChatCatalog.mockImplementation(() => new Promise<void>(() => undefined));
+    vi.useFakeTimers();
+    try {
+      renderPanel();
+      expect(mocks.readCatalog).not.toHaveBeenCalled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(12_000);
+      });
+      expect(mocks.readCatalog).toHaveBeenCalledTimes(1);
+      expect(mocks.readCatalog).toHaveBeenCalledWith({
+        accountId: scope.accountId,
+        workspaceId: scope.workspaceId,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows a persisted launch failure when the mission panel is reopened', async () => {
     renderPanel({
       get: vi.fn(async () => ({

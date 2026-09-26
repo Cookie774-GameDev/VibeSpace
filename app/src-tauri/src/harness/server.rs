@@ -638,7 +638,7 @@ fn scoped_provider_config(
             "terminal_spawn": "ask",
             "terminal_write": "ask",
             "terminal_schedule": "ask",
-            "command_run": "ask",
+            "command_run": "deny",
             "profile_allAboutMe_update": "ask",
             "memory_learning_update": "ask",
             "context_attach": "ask",
@@ -651,112 +651,162 @@ fn scoped_provider_config(
             "app_navigate": "ask"
         }),
     );
-    let execution_agent = |description: &str,
-                           edit: &str,
-                           bash: &str,
-                           task: &str,
-                           mutation: &str| {
-        let mut permission = Map::new();
-        // Keep CLI-installed MCP/custom tools discoverable in full Agent mode.
-        // Unknown tools still require approval; restricted modes remain denied.
-        let native_tool_permission = if bash != "deny" && mutation != "deny" {
-            "ask"
-        } else {
-            "deny"
-        };
-        permission.insert("*".to_string(), json!(native_tool_permission));
-        permission.insert(
-            "read".to_string(),
-            json!({
-                "*": "allow",
-                "**/.env": "deny",
-                "**/.env.*": "deny",
-                "**/*.pem": "deny",
-                "**/*.key": "deny",
-                "**/id_rsa*": "deny",
-                "**/id_ed25519*": "deny",
-                "**/.ssh/**": "deny",
-                "**/.git-credentials": "deny",
-                "**/.netrc": "deny",
-                "**/cookies.sqlite": "deny",
-                "**/Login Data": "deny",
-                "**/Local State": "deny",
-                "**/credentials.json": "deny",
-                "**/service-account*.json": "deny"
-            }),
-        );
-        for name in [
-            "glob",
-            "grep",
-            "list",
-            "lsp",
-            "question",
-            "todo",
-            "todoread",
-            "todowrite",
-            "skill",
-            "webfetch",
-            "websearch",
-            "terminal_list",
-            "terminal_read",
-            "command_list",
-            "profile_allAboutMe_read",
-            "memory_learning_read",
-            "context_list",
-            "context_read",
-            "vibespace_context",
-            "skills_list",
-            "plugins_list",
-            "mcp_list",
-            "app_getState",
-        ] {
-            permission.insert(name.to_string(), json!("allow"));
-        }
-        for (name, action) in [("edit", edit), ("bash", bash), ("task", task)] {
-            permission.insert(name.to_string(), json!(action));
-        }
-        // Explicit Full access uses native authority; Review retains directory approvals.
-        permission.insert("external_directory".to_string(), json!(if bash == "allow" { "allow" } else { "ask" }));
-        permission.insert("doom_loop".to_string(), json!("deny"));
-        for name in [
-            "terminal_open",
-            "terminal_focus",
-            "terminal_spawn",
-            "terminal_write",
-            "terminal_schedule",
-            "command_run",
-            "profile_allAboutMe_update",
-            "memory_learning_update",
-            "context_attach",
-            "skills_load",
-            "plugins_run",
-            "mcp_run",
-            "tasks_create",
-            "tasks_update",
-            "schedule_create",
-            "app_navigate",
-        ] {
-            // Semantic gateway mutations need an observable native approval receipt.
-            permission.insert(name.to_string(), json!(if mutation == "deny" { "deny" } else { "ask" }));
-        }
+    let readonly_bash = |default_action: &str| {
         json!({
-            "description": description,
-            "mode": "primary",
-            // Omit prompt so OpenCode retains its provider-specific coding instructions.
-            // VibeSpace's protected contract is still supplied in each request's system field.
-            "permission": Value::Object(permission)
+            "*": default_action,
+            "pwd": "allow",
+            "ls": "allow",
+            "git status": "allow",
+            "git diff": "allow",
+            "git log": "allow"
         })
     };
+    let review_bash = || {
+        json!({
+            "*": "allow",
+            "rm *": "ask",
+            "rmdir *": "ask",
+            "del *": "ask",
+            "erase *": "ask",
+            "rd *": "ask",
+            "Remove-Item *": "ask",
+            "format *": "ask",
+            "diskpart *": "ask",
+            "sudo *": "ask",
+            "runas *": "ask",
+            "Start-Process *": "ask",
+            "git clean *": "ask",
+            "git reset *": "ask",
+            "git checkout -- *": "ask",
+            "git restore *": "ask",
+            "git push *": "ask",
+            "npm publish *": "ask",
+            "cargo publish *": "ask",
+            "gh repo delete *": "ask"
+        })
+    };
+    let execution_agent =
+        |description: &str, edit: &str, bash: Value, task: &str, mutation: &str| {
+            let mut permission = Map::new();
+            // Keep CLI-installed MCP/custom tools discoverable in full Agent mode.
+            // Unknown tools still require approval; restricted modes remain denied.
+            let bash_fully_allowed = bash.as_str() == Some("allow");
+            let bash_default_action = bash.as_str().or_else(|| {
+                bash.as_object()
+                    .and_then(|rules| rules.get("*"))
+                    .and_then(Value::as_str)
+            });
+            let bash_can_request_approval = matches!(bash_default_action, Some("ask" | "allow"));
+            let native_tool_permission = if bash_can_request_approval && mutation != "deny" {
+                "ask"
+            } else {
+                "deny"
+            };
+            permission.insert("*".to_string(), json!(native_tool_permission));
+            permission.insert(
+                "read".to_string(),
+                json!({
+                    "*": "allow",
+                    "**/.env": "deny",
+                    "**/.env.*": "deny",
+                    "**/*.pem": "deny",
+                    "**/*.key": "deny",
+                    "**/id_rsa*": "deny",
+                    "**/id_ed25519*": "deny",
+                    "**/.ssh/**": "deny",
+                    "**/.git-credentials": "deny",
+                    "**/.netrc": "deny",
+                    "**/cookies.sqlite": "deny",
+                    "**/Login Data": "deny",
+                    "**/Local State": "deny",
+                    "**/credentials.json": "deny",
+                    "**/service-account*.json": "deny"
+                }),
+            );
+            for name in [
+                "glob",
+                "grep",
+                "list",
+                "lsp",
+                "question",
+                "todo",
+                "todoread",
+                "todowrite",
+                "skill",
+                "webfetch",
+                "websearch",
+                "terminal_list",
+                "terminal_read",
+                "command_list",
+                "profile_allAboutMe_read",
+                "memory_learning_read",
+                "context_list",
+                "context_read",
+                "vibespace_context",
+                "skills_list",
+                "plugins_list",
+                "mcp_list",
+                "app_getState",
+            ] {
+                permission.insert(name.to_string(), json!("allow"));
+            }
+            for (name, action) in [("edit", json!(edit)), ("bash", bash), ("task", json!(task))] {
+                permission.insert(name.to_string(), action);
+            }
+            // Explicit Full access uses native authority; Review retains directory approvals.
+            permission.insert(
+                "external_directory".to_string(),
+                json!(if bash_fully_allowed { "allow" } else { "ask" }),
+            );
+            let review_permissions = mutation == "ask" && !bash_fully_allowed;
+            permission.insert(
+                "doom_loop".to_string(),
+                json!(if review_permissions { "ask" } else { "deny" }),
+            );
+            for name in [
+                "terminal_open",
+                "terminal_focus",
+                "terminal_spawn",
+                "terminal_write",
+                "terminal_schedule",
+                "profile_allAboutMe_update",
+                "memory_learning_update",
+                "context_attach",
+                "skills_load",
+                "plugins_run",
+                "mcp_run",
+                "tasks_create",
+                "tasks_update",
+                "schedule_create",
+                "app_navigate",
+            ] {
+                // Semantic gateway mutations need an observable native approval receipt.
+                permission.insert(
+                    name.to_string(),
+                    json!(if mutation == "deny" { "deny" } else { "ask" }),
+                );
+            }
+            // Command execution belongs to the provider's native CLI tools (bash/terminal),
+            // not this VibeSpace semantic gateway.
+            permission.insert("command_run".to_string(), json!("deny"));
+            json!({
+                "description": description,
+                "mode": "primary",
+                // Omit prompt so OpenCode retains its provider-specific coding instructions.
+                // VibeSpace's protected contract is still supplied in each request's system field.
+                "permission": Value::Object(permission)
+            })
+        };
     let readonly_agent = execution_agent(
         "Read-only VibeSpace Ask/Plan execution shell.",
         "deny",
-        "deny",
+        readonly_bash("deny"),
         "deny",
         "deny",
     );
     let mut reviewer_agent = execution_agent(
         "Independent VibeSpace reviewer: inspect the supplied deliverable and request approval to run verification commands.",
-        "deny", "ask", "deny", "deny",
+        "deny", readonly_bash("ask"), "deny", "deny",
     );
     reviewer_agent["mode"] = json!("subagent");
     reviewer_agent["prompt"] = json!("Independently review the complete supplied user request, references, deliverable and evidence. Preserve all files. Use native read/search tools and request approval through bash for scoped verification commands; do not create terminal panes. Never install dependencies, access the network, or modify files without explicit task authorization. Report actual checks, concrete defects and a strict score out of 100; never invent verification. Follow the parent-supplied scope and model/effort requirements.");
@@ -769,19 +819,19 @@ fn scoped_provider_config(
             "vibespace-readonly": readonly_agent,
             "vibespace-write": execution_agent(
                 "VibeSpace Agent shell with approved project file writes and no terminal authority.",
-                "ask", "deny", "deny", "ask"
+                "allow", readonly_bash("deny"), "deny", "ask"
             ),
             "vibespace-write-auto": execution_agent(
                 "One-run VibeSpace Agent shell with project file write authority and no terminal authority.",
-                "allow", "deny", "deny", "allow"
+                "allow", readonly_bash("deny"), "deny", "allow"
             ),
             "vibespace-full": execution_agent(
                 "VibeSpace Agent shell with explicit approval for project mutations.",
-                "ask", "ask", "ask", "ask"
+                "allow", review_bash(), "ask", "ask"
             ),
             "vibespace-full-auto": execution_agent(
                 "One-run VibeSpace Agent shell with eligible project mutation authority.",
-                "allow", "allow", "allow", "allow"
+                "allow", json!("allow"), "allow", "allow"
             )
         }),
     );
@@ -833,7 +883,7 @@ async function call(name, args, context) {
     throw new Error("VibeSpace Tool Gateway endpoint is invalid.")
   }
   const mutations = new Set(["terminal.open", "terminal.focus", "terminal.spawn", "terminal.write",
-    "terminal.schedule", "command.run", "profile.allAboutMe.update", "memory.learning.update",
+    "terminal.schedule", "profile.allAboutMe.update", "memory.learning.update",
     "context.attach", "skills.load", "plugins.run", "mcp.run", "tasks.create", "tasks.update",
     "schedule.create", "app.navigate"])
   if (mutations.has(name)) {
@@ -913,7 +963,6 @@ export const VibeSpaceToolGateway = async () => ({
     "terminal_read": define("terminal.read", "Read bounded output from a visible VibeSpace terminal.", { terminal: terminal(), maxChars: integer(50000).optional() }),
     "terminal_schedule": define("terminal.schedule", "Schedule a command in a visible VibeSpace terminal.", { terminal: terminal(), command: text(32768), runAt: text(128) }),
     "command_list": define("command.list", "List VibeSpace commands.", { limit: integer(100).optional() }),
-    "command_run": define("command.run", "Run one VibeSpace command.", { command: text(128), input: text(32768).optional() }),
     "profile_allAboutMe_read": define("profile.allAboutMe.read", "Read the guarded All About Me profile.", {}),
     "profile_allAboutMe_update": define("profile.allAboutMe.update", "Update the guarded All About Me profile.", { content: text(100000) }),
     "memory_learning_read": define("memory.learning.read", "Read bounded Jarvis Learning entries.", { limit: integer(100).optional() }),
@@ -1070,8 +1119,13 @@ trait ProcessLauncher {
 }
 
 #[cfg(any(windows, test))]
-fn select_windows_tool_shell(inherited_shell: Option<&std::ffi::OsStr>, candidates: &[PathBuf]) -> Option<PathBuf> {
-    if inherited_shell.is_some_and(|shell| !shell.is_empty()) { return None; }
+fn select_windows_tool_shell(
+    inherited_shell: Option<&std::ffi::OsStr>,
+    candidates: &[PathBuf],
+) -> Option<PathBuf> {
+    if inherited_shell.is_some_and(|shell| !shell.is_empty()) {
+        return None;
+    }
     candidates.iter().find(|path| path.is_file()).cloned()
 }
 
@@ -1079,15 +1133,23 @@ fn select_windows_tool_shell(inherited_shell: Option<&std::ffi::OsStr>, candidat
 fn preferred_windows_tool_shell() -> Option<PathBuf> {
     let inherited_shell = std::env::var_os("SHELL");
     let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("OPENCODE_GIT_BASH_PATH") { candidates.push(PathBuf::from(path)); }
-    for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
-        if let Some(root) = std::env::var_os(variable) { candidates.push(PathBuf::from(root).join("Git/bin/bash.exe")); }
+    if let Some(path) = std::env::var_os("OPENCODE_GIT_BASH_PATH") {
+        candidates.push(PathBuf::from(path));
     }
-    if let Some(root) = std::env::var_os("LOCALAPPDATA") { candidates.push(PathBuf::from(root).join("Programs/Git/bin/bash.exe")); }
+    for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(variable) {
+            candidates.push(PathBuf::from(root).join("Git/bin/bash.exe"));
+        }
+    }
+    if let Some(root) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(root).join("Programs/Git/bin/bash.exe"));
+    }
     if let Some(path) = std::env::var_os("PATH") {
         for directory in std::env::split_paths(&path) {
             if directory.join("git.exe").is_file() {
-                if let Some(parent) = directory.parent() { candidates.push(parent.join("bin/bash.exe")); }
+                if let Some(parent) = directory.parent() {
+                    candidates.push(parent.join("bin/bash.exe"));
+                }
             }
         }
     }
@@ -1125,7 +1187,9 @@ impl ProcessLauncher for ProductionLauncher {
         {
             // Avoid the upstream PowerShell native-command capture failure when no shell was selected.
             if let Some(shell) = preferred_windows_tool_shell() {
-                command.env("SHELL", &shell).env("OPENCODE_GIT_BASH_PATH", &shell);
+                command
+                    .env("SHELL", &shell)
+                    .env("OPENCODE_GIT_BASH_PATH", &shell);
             }
             let job = windows_process_tree::KillOnCloseJob::create()?;
             let child = windows_process_tree::spawn_contained(&mut command, &job)?;
@@ -1517,6 +1581,7 @@ enum OpenCodeTransportRoute {
     Config,
     ConfigProviders,
     CommandList,
+    SkillList,
     ProviderAuth,
     ProviderStatus,
     ProviderAuthorize {
@@ -1564,6 +1629,9 @@ enum OpenCodeTransportRoute {
     SessionDiff {
         session_id: String,
     },
+    SessionSummarize {
+        session_id: String,
+    },
     SessionPromptAsync {
         session_id: String,
     },
@@ -1601,7 +1669,9 @@ pub enum OpenCodeTransportStreamMessage {
         native_handoff_monotonic_us: u64,
     },
     Done,
-    Error { message: &'static str },
+    Error {
+        message: &'static str,
+    },
 }
 
 fn cancel_active_streams(inner: &mut ServerInner) {
@@ -1664,6 +1734,7 @@ fn transport_route_parts(
             (reqwest::Method::GET, "/config/providers".to_string())
         }
         OpenCodeTransportRoute::CommandList => (reqwest::Method::GET, "/command".to_string()),
+        OpenCodeTransportRoute::SkillList => (reqwest::Method::GET, "/skill".to_string()),
         OpenCodeTransportRoute::ProviderAuth => {
             (reqwest::Method::GET, "/provider/auth".to_string())
         }
@@ -1737,6 +1808,13 @@ fn transport_route_parts(
             reqwest::Method::GET,
             format!("/session/{}/diff", encoded_route_identifier(session_id)?),
         ),
+        OpenCodeTransportRoute::SessionSummarize { session_id } => (
+            reqwest::Method::POST,
+            format!(
+                "/session/{}/summarize",
+                encoded_route_identifier(session_id)?
+            ),
+        ),
         OpenCodeTransportRoute::SessionPromptAsync { session_id } => (
             reqwest::Method::POST,
             format!(
@@ -1782,6 +1860,7 @@ fn validate_transport_body(
         OpenCodeTransportRoute::Health
             | OpenCodeTransportRoute::ConfigProviders
             | OpenCodeTransportRoute::CommandList
+            | OpenCodeTransportRoute::SkillList
             | OpenCodeTransportRoute::ProviderAuth
             | OpenCodeTransportRoute::ProviderStatus
             | OpenCodeTransportRoute::McpStatus
@@ -2023,8 +2102,23 @@ fn validate_transport_body(
                 && bounded_string("model", true)
                 && bounded_string("variant", false)
                 && bounded_string("command", true)
-                && bounded_string("arguments", true)
+                && object
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .is_some_and(|arguments| {
+                        arguments.len() <= 8_192
+                            && !arguments.chars().any(char::is_control)
+                            && (object.get("command").and_then(Value::as_str) != Some("goal")
+                                || !arguments.trim().is_empty())
+                    })
                 && bounded_string("messageID", false)
+        }
+        OpenCodeTransportRoute::SessionSummarize { .. } => {
+            only_keys(&["providerID", "modelID", "auto"])
+                && (2..=3).contains(&object.len())
+                && bounded_string("providerID", true)
+                && bounded_string("modelID", true)
+                && object.get("auto").map_or(true, Value::is_boolean)
         }
         OpenCodeTransportRoute::SessionAbort { .. } => object.is_empty(),
         OpenCodeTransportRoute::SessionPermission { .. } => {
@@ -2623,12 +2717,12 @@ mod tests {
         native_oauth_provider_ids_from_bytes, probe_health_once, reserve_loopback_port,
         reuse_or_stop_existing, scoped_provider_config, server_status, sse_frame_boundary,
         start_retry_delay, start_server_attempt_with, stop_server, take_crashed_runtime,
-        transport_caller_allowed, transport_route_parts,
-        validate_transport_body, validate_transport_directory, write_scoped_config, ActiveStream,
-        CredentialSource, HealthWaiter, LocalModelSource, OpenCodeServerConnection,
-        OpenCodeServerState, OpenCodeTransportRequest, OpenCodeTransportRoute, OwnedProcess,
-        ProcessLauncher, ResolvedTrustedRuntime, RunningServer, RuntimeSource, ServerFailure,
-        ServerRuntimeEvent, StartClaim, CRASH_WINDOW, MAX_AUTOMATIC_RESTARTS,
+        transport_caller_allowed, transport_route_parts, validate_transport_body,
+        validate_transport_directory, write_scoped_config, ActiveStream, CredentialSource,
+        HealthWaiter, LocalModelSource, OpenCodeServerConnection, OpenCodeServerState,
+        OpenCodeTransportRequest, OpenCodeTransportRoute, OwnedProcess, ProcessLauncher,
+        ResolvedTrustedRuntime, RunningServer, RuntimeSource, ServerFailure, ServerRuntimeEvent,
+        StartClaim, CRASH_WINDOW, MAX_AUTOMATIC_RESTARTS,
     };
     use crate::harness::tool_gateway::ToolGatewayEndpoint;
     use base64::Engine as _;
@@ -2992,9 +3086,20 @@ mod tests {
         let fixture = FixtureRoot::new("windows-tool-shell");
         let valid = fixture.path().join("bash.exe");
         fs::write(&valid, b"fixture").unwrap();
-        let candidates = vec![fixture.path().join("missing.exe"), fixture.path().to_path_buf(), valid.clone()];
-        assert_eq!(super::select_windows_tool_shell(None, &candidates), Some(valid));
-        assert!(super::select_windows_tool_shell(Some(std::ffi::OsStr::new("custom-shell")), &candidates).is_none());
+        let candidates = vec![
+            fixture.path().join("missing.exe"),
+            fixture.path().to_path_buf(),
+            valid.clone(),
+        ];
+        assert_eq!(
+            super::select_windows_tool_shell(None, &candidates),
+            Some(valid)
+        );
+        assert!(super::select_windows_tool_shell(
+            Some(std::ffi::OsStr::new("custom-shell")),
+            &candidates
+        )
+        .is_none());
         assert!(super::select_windows_tool_shell(None, &[]).is_none());
     }
 
@@ -3021,35 +3126,101 @@ mod tests {
         assert_eq!(config["permission"]["task"], "deny");
         let reviewer = &config["agent"]["vibespace-reviewer"];
         assert_eq!(reviewer["mode"], "subagent");
-        assert_eq!(reviewer["permission"]["bash"], "ask");
+        assert_eq!(reviewer["permission"]["bash"]["*"], "ask");
+        assert_eq!(reviewer["permission"]["bash"]["git status"], "allow");
         for capability in ["*", "edit", "task", "terminal_spawn", "terminal_write"] {
             assert_eq!(reviewer["permission"][capability], "deny");
         }
         assert_eq!(reviewer["permission"]["read"]["**/.env"], "deny");
         for name in ["vibespace-full", "vibespace-full-auto"] {
-            assert_eq!(config["agent"][name]["permission"]["*"], "ask",
-                "{name} must expose native CLI tools through approval, not silently deny them");
+            assert_eq!(
+                config["agent"][name]["permission"]["*"], "ask",
+                "{name} must expose native CLI tools through approval, not silently deny them"
+            );
         }
-        for name in ["vibespace", "vibespace-readonly", "vibespace-write", "vibespace-write-auto"] {
-            assert_eq!(config["agent"][name]["permission"]["*"], "deny",
-                "{name} must not gain unknown tool authority");
+        for name in [
+            "vibespace",
+            "vibespace-readonly",
+            "vibespace-write",
+            "vibespace-write-auto",
+        ] {
+            assert_eq!(
+                config["agent"][name]["permission"]["*"], "deny",
+                "{name} must not gain unknown tool authority"
+            );
+        }
+        for name in [
+            "vibespace",
+            "vibespace-readonly",
+            "vibespace-write",
+            "vibespace-write-auto",
+        ] {
+            let bash = &config["agent"][name]["permission"]["bash"];
+            assert_eq!(
+                bash["*"], "deny",
+                "{name} must deny unspecified native shell commands"
+            );
+            for command in ["pwd", "ls", "git status", "git diff", "git log"] {
+                assert_eq!(
+                    bash[command], "allow",
+                    "{name} should allow safe command {command}"
+                );
+            }
         }
         assert!(reviewer.get("model").is_none());
         assert_eq!(config["permission"]["todo"], "allow");
         assert_eq!(config["permission"]["todoread"], "allow");
         assert_eq!(config["permission"]["todowrite"], "allow");
         assert_eq!(config["permission"]["external_directory"], "deny");
-        for name in ["vibespace", "vibespace-readonly", "vibespace-write", "vibespace-write-auto", "vibespace-full", "vibespace-full-auto", "vibespace-reviewer"] {
-            assert_eq!(config["agent"][name]["permission"]["external_directory"], if name == "vibespace-full-auto" { "allow" } else { "ask" }, "{name} must match the selected native access profile");
-            assert_eq!(config["agent"][name]["permission"]["doom_loop"], "deny");
-            assert!(config["agent"][name].get("steps").is_none(), "{name} must not truncate a long task at an app-defined step ceiling");
+        for name in [
+            "vibespace",
+            "vibespace-readonly",
+            "vibespace-write",
+            "vibespace-write-auto",
+            "vibespace-full",
+            "vibespace-full-auto",
+            "vibespace-reviewer",
+        ] {
+            assert_eq!(
+                config["agent"][name]["permission"]["command_run"], "deny",
+                "{name} must not expose VibeSpace command execution"
+            );
+            assert_eq!(
+                config["agent"][name]["permission"]["external_directory"],
+                if name == "vibespace-full-auto" {
+                    "allow"
+                } else {
+                    "ask"
+                },
+                "{name} must match the selected native access profile"
+            );
+            assert_eq!(
+                config["agent"][name]["permission"]["doom_loop"],
+                if matches!(name, "vibespace-write" | "vibespace-full") {
+                    "ask"
+                } else {
+                    "deny"
+                },
+                "{name} must only prompt for a repeated-action safety loop in Review mode"
+            );
+            assert!(
+                config["agent"][name].get("steps").is_none(),
+                "{name} must not truncate a long task at an app-defined step ceiling"
+            );
             if name != "vibespace-reviewer" {
-                assert!(config["agent"][name].get("prompt").is_none(), "{name} must preserve the native provider prompt");
+                assert!(
+                    config["agent"][name].get("prompt").is_none(),
+                    "{name} must preserve the native provider prompt"
+                );
             }
-            assert_eq!(config["agent"][name]["permission"]["read"]["**/.env"], "deny");
+            assert_eq!(
+                config["agent"][name]["permission"]["read"]["**/.env"],
+                "deny"
+            );
         }
         assert_eq!(config["permission"]["terminal_list"], "allow");
         assert_eq!(config["permission"]["terminal_write"], "ask");
+        assert_eq!(config["permission"]["command_run"], "deny");
         assert_eq!(config["permission"]["vibespace_context"], "allow");
         assert_eq!(config["permission"]["plugins_list"], "allow");
         assert_eq!(config["permission"]["plugins_run"], "ask");
@@ -3085,18 +3256,54 @@ mod tests {
         );
         assert_eq!(
             config["agent"]["vibespace-write"]["permission"]["edit"],
-            "ask"
+            "allow"
         );
         assert_eq!(
-            config["agent"]["vibespace-write"]["permission"]["bash"],
+            config["agent"]["vibespace-write"]["permission"]["bash"]["*"],
             "deny"
         );
         assert_eq!(
             config["agent"]["vibespace-full"]["permission"]["edit"],
+            "allow"
+        );
+        assert_eq!(
+            config["agent"]["vibespace-full"]["permission"]["bash"]["*"],
+            "allow"
+        );
+        let review_bash = &config["agent"]["vibespace-full"]["permission"]["bash"];
+        for pattern in [
+            "rm *",
+            "rmdir *",
+            "del *",
+            "erase *",
+            "rd *",
+            "Remove-Item *",
+            "format *",
+            "diskpart *",
+            "sudo *",
+            "runas *",
+            "Start-Process *",
+            "git clean *",
+            "git reset *",
+            "git checkout -- *",
+            "git restore *",
+            "git push *",
+            "npm publish *",
+            "cargo publish *",
+            "gh repo delete *",
+        ] {
+            assert_eq!(
+                review_bash[pattern], "ask",
+                "{pattern} should remain review-gated"
+            );
+        }
+        assert!(review_bash.get("npm test").is_none());
+        assert_eq!(
+            config["agent"]["vibespace-full"]["permission"]["external_directory"],
             "ask"
         );
         assert_eq!(
-            config["agent"]["vibespace-full"]["permission"]["bash"],
+            config["agent"]["vibespace-full"]["permission"]["doom_loop"],
             "ask"
         );
         assert_eq!(
@@ -3104,8 +3311,11 @@ mod tests {
             "allow"
         );
         assert_eq!(
-            config["agent"]["vibespace-full-auto"]["permission"]["plugins_run"],
-            "ask",
+            config["agent"]["vibespace-full-auto"]["permission"]["bash"],
+            "allow"
+        );
+        assert_eq!(
+            config["agent"]["vibespace-full-auto"]["permission"]["plugins_run"], "ask",
             "semantic gateway mutations still require an observable approval receipt"
         );
 
@@ -3118,6 +3328,7 @@ mod tests {
         for (wire_name, gateway_name) in [
             ("terminal_list", "terminal.list"),
             ("terminal_write", "terminal.write"),
+            ("terminal_schedule", "terminal.schedule"),
             ("context_read", "context.read"),
             ("vibespace_context", "vibespace_context"),
             ("plugins_list", "plugins.list"),
@@ -3127,6 +3338,7 @@ mod tests {
             ("profile_allAboutMe_update", "profile.allAboutMe.update"),
             ("memory_learning_update", "memory.learning.update"),
             ("app_getState", "app.getState"),
+            ("app_navigate", "app.navigate"),
         ] {
             assert!(plugin.contains(&format!("\"{wire_name}\": define(\"{gateway_name}\"")));
             assert!(wire_name
@@ -3135,6 +3347,8 @@ mod tests {
                     || character == '_'
                     || character == '-'));
         }
+        assert!(!plugin.contains("\"command_run\": define("));
+        assert!(!plugin.contains("command.run"));
         assert!(!plugin.contains("\"terminal.list\": define("));
         assert!(plugin.contains("context.sessionID"));
         assert!(plugin.contains("context.messageID"));
@@ -3547,6 +3761,52 @@ mod tests {
     }
 
     #[test]
+    fn managed_transport_routes_skill_list_as_scoped_readonly_get() {
+        let request: OpenCodeTransportRequest = serde_json::from_value(serde_json::json!({
+            "generation": "opencode-server-test",
+            "route": { "kind": "skill_list" },
+            "directory": "C:\\workspace"
+        }))
+        .unwrap();
+        assert!(matches!(request.route, OpenCodeTransportRoute::SkillList));
+        assert_eq!(request.directory.as_deref(), Some("C:\\workspace"));
+        assert!(validate_transport_directory(request.directory.as_deref()).is_ok());
+        let (method, path) = transport_route_parts(&request.route).unwrap();
+        assert_eq!(method, reqwest::Method::GET);
+        assert_eq!(path, "/skill");
+        assert!(validate_transport_body(&request.route, None).is_ok());
+        assert!(validate_transport_body(&request.route, Some("{}")).is_err());
+    }
+
+    #[test]
+    fn managed_transport_routes_legacy_session_summarize_with_typed_payload() {
+        let request: OpenCodeTransportRequest = serde_json::from_value(serde_json::json!({
+            "generation": "opencode-server-test",
+            "route": { "kind": "session_summarize", "sessionId": "session-1" },
+            "directory": "C:\\workspace",
+            "body": r#"{"providerID":"opencode","modelID":"model-low","auto":false}"#
+        }))
+        .unwrap();
+        let OpenCodeTransportRoute::SessionSummarize { session_id } = &request.route else {
+            panic!("expected a summarize route");
+        };
+        assert_eq!(session_id, "session-1");
+        assert_eq!(request.directory.as_deref(), Some("C:\\workspace"));
+        assert!(validate_transport_directory(request.directory.as_deref()).is_ok());
+        let (method, path) = transport_route_parts(&request.route).unwrap();
+        assert_eq!(method, reqwest::Method::POST);
+        assert_eq!(path, "/session/session-1/summarize");
+        assert!(validate_transport_body(&request.route, request.body.as_deref()).is_ok());
+        for invalid in [
+            r#"{"providerID":"opencode"}"#,
+            r#"{"providerID":"opencode","modelID":"model-low","auto":"false"}"#,
+            r#"{"providerID":"opencode","modelID":"model-low","unexpected":true}"#,
+        ] {
+            assert!(validate_transport_body(&request.route, Some(invalid)).is_err());
+        }
+        assert!(validate_transport_body(&request.route, None).is_err());
+    }
+    #[test]
     fn managed_transport_accepts_only_trusted_callers_and_allowlisted_routes() {
         assert!(transport_caller_allowed("main"));
         assert!(transport_caller_allowed("workbench-main"));
@@ -3636,6 +3896,43 @@ mod tests {
             })
             .unwrap();
         assert_eq!(question_reply_path, "/question/que%2Fexact/reply");
+    }
+
+    #[test]
+    fn managed_transport_custom_commands_allow_empty_arguments() {
+        let route = OpenCodeTransportRoute::SessionCommand {
+            session_id: "session-1".into(),
+        };
+        let custom = serde_json::json!({
+            "agent": "vibespace-full-auto",
+            "model": "openai/gpt-6-luna",
+            "variant": "low",
+            "command": "ch31-native-probe",
+            "arguments": ""
+        });
+        assert!(validate_transport_body(&route, Some(&custom.to_string())).is_ok());
+
+        let mut missing = custom.clone();
+        missing.as_object_mut().unwrap().remove("arguments");
+        assert!(validate_transport_body(&route, Some(&missing.to_string())).is_err());
+        for arguments in [
+            serde_json::json!(null),
+            serde_json::json!(false),
+            serde_json::json!(7),
+            serde_json::json!([]),
+            serde_json::json!("line\nbreak"),
+            serde_json::json!("x".repeat(8_193)),
+        ] {
+            let mut invalid = custom.clone();
+            invalid["arguments"] = arguments;
+            assert!(validate_transport_body(&route, Some(&invalid.to_string())).is_err());
+        }
+        for arguments in ["", "   "] {
+            let mut goal = custom.clone();
+            goal["command"] = serde_json::json!("goal");
+            goal["arguments"] = serde_json::json!(arguments);
+            assert!(validate_transport_body(&route, Some(&goal.to_string())).is_err());
+        }
     }
 
     #[test]
@@ -3742,16 +4039,24 @@ mod tests {
     #[test]
     fn cao_repair_mcp_oauth_routes_are_exact_and_encoded() {
         for (kind, method, suffix) in [
-            ("mcp_authenticate", reqwest::Method::POST, "/auth/authenticate"),
+            (
+                "mcp_authenticate",
+                reqwest::Method::POST,
+                "/auth/authenticate",
+            ),
             ("mcp_auth_remove", reqwest::Method::DELETE, "/auth"),
         ] {
             let route: super::OpenCodeTransportRoute = serde_json::from_value(
-                serde_json::json!({"kind": kind, "name": "supabase:readonly"})).unwrap();
+                serde_json::json!({"kind": kind, "name": "supabase:readonly"}),
+            )
+            .unwrap();
             let parts = super::transport_route_parts(&route).unwrap();
             assert_eq!(parts.0, method);
             assert_eq!(parts.1, format!("/mcp/supabase%3Areadonly{suffix}"));
             let invalid: super::OpenCodeTransportRoute = serde_json::from_value(
-                serde_json::json!({"kind": kind, "name": "unsafe\u{0}name"})).unwrap();
+                serde_json::json!({"kind": kind, "name": "unsafe\u{0}name"}),
+            )
+            .unwrap();
             assert!(super::transport_route_parts(&invalid).is_err());
         }
     }

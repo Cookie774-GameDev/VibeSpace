@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowLeft, ArrowRight, Check, HelpCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, HelpCircle, Mic, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { playUiSound } from '@/lib/sfx';
@@ -14,12 +14,26 @@ import type { MessageId, Part } from '@/types';
 import type { JarvisQuestion, JarvisQuestionAnswer, JarvisQuestionHarnessRoute } from './types';
 
 type QuestionBlockPart = Extract<Part, { kind: 'question_block' }>;
+const FOCUS_INLINE_QUESTION_EVENT = 'jarvis:question:focus-inline';
 
 export interface QuestionBlockCardProps {
   part: QuestionBlockPart;
   messageId?: MessageId;
   chatId?: string;
+  compact?: boolean;
+  /** Absolute Unix timestamp in milliseconds from actual native Codex metadata. */
+  deadlineAt?: number;
+  onDictationToggle?: (
+    answerInput: HTMLTextAreaElement,
+    commitQuestionAnswer: (value: string, caret: number) => void,
+  ) => void;
+  /** Clear the parent's temporary STT target on dismiss, step/status change, or unmount. */
+  onDictationCleanup?: () => void;
+  onDismiss?: () => void;
+  onReopen?: () => void;
 }
+
+export type InlineQuestionBlockCardProps = Omit<QuestionBlockCardProps, 'compact'>;
 
 interface QuestionDraft {
   selected: Record<string, string[]>;
@@ -78,6 +92,30 @@ function clearDraft(key: string) {
   }
 }
 
+function QuestionDeadline({ deadlineAt }: { deadlineAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const remainingSeconds = Math.max(0, Math.ceil((deadlineAt - now) / 1_000));
+  return (
+    <span
+      className="question-card__deadline text-metadata"
+      role="timer"
+      aria-label={
+        remainingSeconds > 0
+          ? `Answer deadline in ${remainingSeconds} seconds`
+          : 'Answer deadline reached'
+      }
+    >
+      {remainingSeconds > 0 ? `${remainingSeconds}s left` : 'Deadline reached'}
+    </span>
+  );
+}
+
 function answerLabel(question: JarvisQuestion, answer: JarvisQuestionAnswer): string {
   if (answer.skipped) return `${question.prompt}: skipped`;
   const choiceLabels = (answer.selectedOptionIds ?? [])
@@ -134,14 +172,28 @@ function sameHarnessRoute(
   });
 }
 
-export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCardProps) {
+export function QuestionBlockCard({
+  part,
+  messageId,
+  chatId,
+  compact = false,
+  deadlineAt,
+  onDictationToggle,
+  onDictationCleanup,
+  onDismiss,
+  onReopen,
+}: QuestionBlockCardProps) {
   const { block } = part;
   const draftKey = draftKeyFor(chatId, block.id);
   const initialDraft = useMemo(() => {
     if (block.status !== 'answered' || !block.answers?.length) return readDraft(draftKey);
     return {
-      selected: Object.fromEntries(block.answers.map(answer => [answer.questionId, answer.selectedOptionIds ?? []])),
-      text: Object.fromEntries(block.answers.map(answer => [answer.questionId, answer.text ?? ''])),
+      selected: Object.fromEntries(
+        block.answers.map((answer) => [answer.questionId, answer.selectedOptionIds ?? []]),
+      ),
+      text: Object.fromEntries(
+        block.answers.map((answer) => [answer.questionId, answer.text ?? '']),
+      ),
       activeIndex: 0,
     };
   }, [draftKey, block.status, block.answers]);
@@ -160,12 +212,78 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [inlineDismissed, setInlineDismissed] = useState(false);
+  const [focusInlineRequested, setFocusInlineRequested] = useState(false);
   const busyRef = useRef(false);
+  const inlineCardRef = useRef<HTMLElement | null>(null);
+  const answerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const dictationCleanupRef = useRef(onDictationCleanup);
+  dictationCleanupRef.current = onDictationCleanup;
+  const previousActiveQuestionIdRef = useRef<string | undefined>();
 
   const isPending = block.status === 'pending';
   const isWizard = total > 1;
   const activeQuestion = block.questions[activeIndex];
   const isLast = activeIndex >= total - 1;
+  const codexDeadlineAt =
+    compact &&
+    isPending &&
+    part.harness?.requestId.startsWith('que_codex_') &&
+    typeof deadlineAt === 'number' &&
+    Number.isSafeInteger(deadlineAt) &&
+    deadlineAt > 0
+      ? deadlineAt
+      : undefined;
+
+  useEffect(() => {
+    setInlineDismissed(false);
+    return () => dictationCleanupRef.current?.();
+  }, [block.id]);
+
+  useEffect(() => {
+    if (previousActiveQuestionIdRef.current !== activeQuestion?.id) {
+      if (previousActiveQuestionIdRef.current !== undefined) {
+        dictationCleanupRef.current?.();
+      }
+      previousActiveQuestionIdRef.current = activeQuestion?.id;
+    }
+  }, [activeQuestion?.id]);
+
+  useEffect(() => {
+    if (!isPending) {
+      dictationCleanupRef.current?.();
+      setInlineDismissed(false);
+    }
+  }, [isPending]);
+
+  useEffect(() => {
+    if (!compact || !isPending || !chatId) return;
+    const handleFocusInlineQuestion = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId?: string; blockId?: string }>).detail;
+      if (detail?.chatId !== chatId || detail.blockId !== block.id) return;
+      setInlineDismissed(false);
+      setFocusInlineRequested(true);
+    };
+    window.addEventListener(FOCUS_INLINE_QUESTION_EVENT, handleFocusInlineQuestion);
+    return () => window.removeEventListener(FOCUS_INLINE_QUESTION_EVENT, handleFocusInlineQuestion);
+  }, [block.id, chatId, compact, isPending]);
+
+  useEffect(() => {
+    if (!compact || !isPending || inlineDismissed || !focusInlineRequested) return;
+    const answerControl = inlineCardRef.current?.querySelector<HTMLElement>(
+      'textarea:not(:disabled), .question-card__option:not(:disabled)',
+    );
+    if (!answerControl) return;
+    answerControl.focus();
+    setFocusInlineRequested(false);
+  }, [
+    activeIndex,
+    compact,
+    customOpenByQuestion,
+    focusInlineRequested,
+    inlineDismissed,
+    isPending,
+  ]);
 
   useEffect(() => {
     if (!isPending) return;
@@ -498,6 +616,7 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
         {!question.options?.length ||
         (question.allowCustomResponse && customOpenByQuestion[question.id]) ? (
           <textarea
+            ref={compact && question.id === activeQuestion?.id ? answerTextareaRef : undefined}
             id={`question-custom-${question.id}`}
             aria-label={`Custom response for ${question.prompt}`}
             className="min-h-16 w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-secondary text-foreground outline-none focus:border-accent-cyan focus-visible:ring-2 focus-visible:ring-accent-cyan/40"
@@ -511,35 +630,152 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
             }}
           />
         ) : null}
+        {compact &&
+        isPending &&
+        question.id === activeQuestion?.id &&
+        onDictationToggle &&
+        (!question.options?.length || customOpenByQuestion[question.id]) ? (
+          <div className="question-card__dictation-row">
+            <span className="text-metadata text-muted-foreground">Voice answer</span>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Dictate answer"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                const answerInput = answerTextareaRef.current;
+                if (!answerInput) return;
+                onDictationToggle(answerInput, (value, caret) => {
+                  if (answerTextareaRef.current !== answerInput) return;
+                  setTextByQuestion((current) => ({ ...current, [question.id]: value }));
+                  requestAnimationFrame(() => {
+                    if (!answerInput.isConnected || answerInput.value !== value) return;
+                    answerInput.focus();
+                    const nextCaret = Math.min(Math.max(caret, 0), value.length);
+                    answerInput.setSelectionRange(nextCaret, nextCaret);
+                  });
+                });
+              }}
+            >
+              <Mic className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : null}
       </div>
     );
   };
 
+  const title = block.title ?? 'Jarvis needs a quick answer';
+
+  if (!compact && isPending) {
+    return (
+      <section className="question-card question-card--transcript-pending">
+        <span className="min-w-0 truncate text-secondary text-foreground" title={title}>
+          {title}
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="accent"
+          disabled={!chatId}
+          onClick={() => {
+            if (!chatId) return;
+            window.dispatchEvent(
+              new CustomEvent(FOCUS_INLINE_QUESTION_EVENT, {
+                detail: { chatId, blockId: block.id },
+              }),
+            );
+          }}
+        >
+          Answer question
+        </Button>
+      </section>
+    );
+  }
+
+  if (compact && isPending && inlineDismissed) {
+    return (
+      <section
+        ref={inlineCardRef}
+        className="question-card question-card--inline question-card--reopen"
+        data-inline-question-block-id={block.id}
+      >
+        <span className="min-w-0 truncate text-secondary text-foreground" title={title}>
+          {title}
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-label="Reopen question"
+          onClick={() => {
+            setInlineDismissed(false);
+            onReopen?.();
+          }}
+        >
+          Reopen
+        </Button>
+      </section>
+    );
+  }
+
   return (
-    <section className="question-card" aria-busy={busy}>
-      <div className="mb-3 flex items-start justify-between gap-2">
+    <section
+      ref={compact ? inlineCardRef : undefined}
+      className={cn('question-card', compact && 'question-card--inline')}
+      aria-busy={busy}
+      aria-label={compact ? 'Answer question' : undefined}
+      data-inline-question-block-id={compact ? block.id : undefined}
+    >
+      <div
+        className={cn(
+          'question-card__header mb-3 flex items-start justify-between gap-2',
+          compact && 'mb-2',
+        )}
+      >
         <div className="flex items-start gap-2">
           <div className="question-card__icon">
             <HelpCircle className="h-5 w-5" />
           </div>
           <div>
-            <div className="question-card__title text-foreground">
-              {block.title ?? 'Jarvis needs a quick answer'}
-            </div>
-            {block.description && (
+            <div className="question-card__title text-foreground">{title}</div>
+            {!compact && block.description && (
               <p className="text-secondary text-muted-foreground">{block.description}</p>
             )}
           </div>
         </div>
-        {isPending && (
-          <span className="question-card__count shrink-0 text-metadata text-muted-foreground">
-            Question {activeIndex + 1} of {total}
-          </span>
-        )}
+        <div className="question-card__header-actions flex shrink-0 items-center gap-1.5">
+          {codexDeadlineAt !== undefined && <QuestionDeadline deadlineAt={codexDeadlineAt} />}
+          {isPending && (
+            <span className="question-card__count shrink-0 text-metadata text-muted-foreground">
+              Question {activeIndex + 1} of {total}
+            </span>
+          )}
+          {compact && isPending && (
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Dismiss question"
+              disabled={busy}
+              onClick={() => {
+                setInlineDismissed(true);
+                dictationCleanupRef.current?.();
+                onDismiss?.();
+              }}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {isWizard && isPending && (
-        <div className="mb-3 flex gap-1" aria-hidden>
+        <div
+          className={cn('question-card__progress mb-3 flex gap-1', compact && 'mb-2')}
+          aria-hidden
+        >
           {block.questions.map((question, index) => (
             <span
               key={question.id}
@@ -556,7 +792,7 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
         </div>
       )}
 
-      <div className="flex flex-col gap-3">
+      <div className={cn('question-card__body flex flex-col gap-3', compact && 'gap-2')}>
         {isPending && isWizard && activeQuestion
           ? renderQuestion(activeQuestion, activeIndex)
           : block.questions.map((question, index) => renderQuestion(question, index))}
@@ -570,72 +806,88 @@ export function QuestionBlockCard({ part, messageId, chatId }: QuestionBlockCard
       {!isPending && (
         <p className="mt-2 text-secondary text-muted-foreground">
           {block.status === 'skipped'
-            ? 'Skipped.'
-            : block.status === 'cancelled'
-              ? 'Cancelled.'
+          ? 'Skipped.'
+          : block.status === 'cancelled'
+            ? 'Cancelled.'
+            : block.status === 'resolved'
+              ? 'No longer pending.'
+            : block.status === 'expired'
+              ? 'Expired.'
               : 'Answered.'}
         </p>
       )}
 
-      {isPending && <div className="question-card__footer flex flex-wrap items-center gap-2">
-        {isWizard && activeIndex > 0 && (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={busy || !isPending}
-            onClick={handleBack}
-          >
-            <ArrowLeft className="mr-1 h-3.5 w-3.5" />
-            Back
-          </Button>
-        )}
-        {isWizard && !isLast ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="accent"
-            disabled={busy || !isPending}
-            onClick={handleNext}
-          >
-            Next
-            <ArrowRight className="ml-1 h-3.5 w-3.5" />
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant="accent"
-            disabled={busy || !isPending}
-            onClick={handleContinue}
-          >
-            Submit
-          </Button>
-        )}
-        {canSkip && (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={busy || !isPending}
-            onClick={handleSkip}
-          >
-            Skip
-          </Button>
-        )}
-        {isPending && (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="text-muted-foreground"
-            disabled={busy}
-            onClick={handleCancel}
-          >
-            Cancel
-          </Button>
-        )}
-      </div>}
+      {isPending && (
+        <div
+          className={cn(
+            'question-card__footer flex flex-wrap items-center gap-2',
+            compact && 'gap-1.5',
+          )}
+        >
+          {isWizard && activeIndex > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={busy || !isPending}
+              onClick={handleBack}
+            >
+              <ArrowLeft className="mr-1 h-3.5 w-3.5" />
+              Back
+            </Button>
+          )}
+          {isWizard && !isLast ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="accent"
+              disabled={busy || !isPending}
+              onClick={handleNext}
+            >
+              Next
+              <ArrowRight className="ml-1 h-3.5 w-3.5" />
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="accent"
+              disabled={busy || !isPending}
+              onClick={handleContinue}
+            >
+              Submit
+            </Button>
+          )}
+          {canSkip && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={busy || !isPending}
+              onClick={handleSkip}
+            >
+              Skip
+            </Button>
+          )}
+          {isPending && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground"
+              disabled={busy}
+              onClick={handleCancel}
+            >
+              Cancel
+            </Button>
+          )}
+        </div>
+      )}
     </section>
   );
+}
+
+/** Compact pending question UI for the Composer. Keep it mounted after dismissal to show Reopen. */
+export function InlineQuestionBlockCard(props: InlineQuestionBlockCardProps) {
+  return <QuestionBlockCard {...props} compact />;
 }

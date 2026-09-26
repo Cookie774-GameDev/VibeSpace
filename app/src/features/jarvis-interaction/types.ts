@@ -34,6 +34,8 @@ export interface JarvisOpenCodeQuestionRoute {
   blockId: string;
   requestId: string;
   sessionId: string;
+  nativeRequestId?: string | number;
+  deadlineAt?: number;
   tool?: Readonly<{ messageId: string; callId: string }>;
   questions: readonly {
     questionId: string;
@@ -54,7 +56,7 @@ export interface JarvisQuestionBlock {
   originalRequest?: string;
   questions: JarvisQuestion[];
   answers?: JarvisQuestionAnswer[];
-  status: 'pending' | 'answered' | 'skipped' | 'cancelled';
+  status: 'pending' | 'answered' | 'skipped' | 'cancelled' | 'expired' | 'resolved';
 }
 
 export interface JarvisPlanReview {
@@ -87,6 +89,8 @@ export interface OpenCodeApprovalHarnessRoute {
   sessionId: string;
   approvalId: string;
   capability: string;
+  /** Display hint only. The live bridge validates the server-owned choices before writing. */
+  availableDecisions?: readonly ('accept' | 'acceptForSession' | 'decline' | 'cancel')[];
 }
 
 export interface JarvisPermissionRequest {

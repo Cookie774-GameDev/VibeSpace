@@ -43,7 +43,7 @@ export function createJarvisTerminalRegisteredActionDispatcher(
   return async (input) => {
     const actionId = input.registration.id;
     if (
-      !['terminal.create', 'terminal.run', 'terminal.start_cli'].includes(actionId) ||
+      !['terminal.create', 'terminal.start_cli'].includes(actionId) ||
       input.registration.version !== 1 ||
       input.registration.executor.kind !== 'builtin' ||
       input.registration.executor.registryActionId !== actionId
@@ -69,7 +69,7 @@ export function createJarvisTerminalRegisteredActionDispatcher(
       }
     } else {
       const keys = Reflect.ownKeys(input.params);
-      const commandKey = actionId === 'terminal.start_cli' ? 'cli' : 'command';
+      const commandKey = 'cli';
       if (
         keys.some(
           (key) =>
@@ -1263,19 +1263,20 @@ export function createJarvisCoreActions(resolveLegacy: LegacyResolver): ActionDe
       id: 'tool.create',
       category: 'custom',
       label: 'Create tool',
-      description: 'Create a reusable custom terminal command or multi-step workflow tool.',
+      description: 'Create a reusable multi-step workflow tool.',
       destructive: true,
       params: [
         { key: 'name', label: 'Tool name', type: 'string', required: true },
         { key: 'description', label: 'Description', type: 'string' },
-        { key: 'command', label: 'Terminal command', type: 'string' },
         { key: 'stepsJson', label: 'Workflow steps JSON', type: 'string' },
       ],
       run: (params, ctx) => {
-        const target = text(params, 'stepsJson')
-          ? 'custom.createWorkflowTool'
-          : 'custom.createTerminalCommand';
-        return runRequired(resolveLegacy, target, params, ctx);
+        if (!text(params, 'stepsJson')) {
+          return Promise.resolve(
+            fail('Workflow steps JSON is required; start native CLI tools with terminal.start_cli.'),
+          );
+        }
+        return runRequired(resolveLegacy, 'custom.createWorkflowTool', params, ctx);
       },
     },
     {

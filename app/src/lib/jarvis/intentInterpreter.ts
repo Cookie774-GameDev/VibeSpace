@@ -224,7 +224,7 @@ export function interpretJarvisRequest(raw: string): InterpretedJarvisRequest {
     return result(
       'file-work',
       'automatic',
-      [{ action: 'files.read', input: {}, deferred: true }],
+      [],
       'I’ll use only the local runtime and the attached file.',
     );
   }

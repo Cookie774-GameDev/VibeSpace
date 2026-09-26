@@ -114,6 +114,85 @@
   padding-top: 16px;
   border-top: 1px solid hsl(var(--border) / 0.7);
 }
+.question-card--transcript-pending {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+}
+.question-card--transcript-pending::before {
+  height: 2px;
+}
+.question-card--inline {
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 5px 18px -15px hsl(var(--foreground) / 0.3);
+}
+.question-card--inline::before {
+  height: 2px;
+}
+.question-card--inline .question-card__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+.question-card--inline .question-card__title {
+  font-size: 13px;
+  line-height: 1.35;
+}
+.question-card--inline .question-card__count {
+  padding: 3px 6px;
+}
+.question-card__header-actions {
+  min-height: 28px;
+}
+.question-card__deadline {
+  color: hsl(var(--accent-copper));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.question-card--inline .question-card__prompt {
+  margin: 7px 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.question-card--inline .question-card__options {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.question-card--inline .question-card__option {
+  min-height: 38px;
+  padding: 7px 9px;
+  gap: 8px;
+  border-radius: 9px;
+}
+.question-card--inline .question-card__marker {
+  flex-basis: 22px;
+  height: 22px;
+}
+.question-card--inline textarea {
+  min-height: 54px;
+}
+.question-card__dictation-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 5px;
+}
+.question-card__reopen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  gap: 10px;
+}
+.question-card--inline .question-card__footer {
+  margin-top: 8px;
+  padding-top: 8px;
+}
 @keyframes question-card-enter {
   from {
     opacity: 0;
@@ -137,6 +216,12 @@
     max-width: 95px;
     white-space: normal;
     text-align: right;
+  }
+  .question-card--inline {
+    padding: 9px 10px;
+  }
+  .question-card--inline .question-card__header-actions {
+    gap: 3px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

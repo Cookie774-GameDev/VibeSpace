@@ -425,3 +425,121 @@ describe('OpenCode RLM context tool adapter', () => {
     expect(deps.queryService.describe).not.toHaveBeenCalled();
   });
 });
+
+
+describe('OpenCode Context citation and cancellation boundaries', () => {
+  const pointer = {
+    id: 'ptr:rlm:fallback:0:64', recordId: 'record-fallback',
+    sourceVersion: `sha256:${HASH}`, contentHash: HASH, byteStart: 0, byteEnd: 64,
+  };
+  const searchResult = {
+    items: [{ record: { id: pointer.recordId, sourceId: 'source-fallback' }, pointer,
+      preview: 'Verified source fact', score: 1 }],
+    truncated: false,
+  };
+  const openResult = { record: { id: pointer.recordId }, pointer, text: 'Verified source fact', truncated: false };
+  const routes = [
+    { name: 'query retrieval', input: { operation: 'query', query: 'Search the previous decision' }, enabled: true },
+    { name: 'query RLM-disabled fallback', input: { operation: 'query', query: 'Investigate the entire project history' }, enabled: false },
+    { name: 'investigate RLM-disabled fallback', input: { operation: 'investigate', query: 'Investigate the entire project history' }, enabled: false },
+  ];
+  function storage(enabled = true) {
+    const values = new Map([['vibespace.rlm-preference.v1', JSON.stringify({
+      version: 1, userDefault: enabled, chats: {}, workspaces: {},
+    })]]);
+    const result = {
+      getItem: vi.fn((key: string) => values.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => { values.set(key, value); }),
+    };
+    vi.stubGlobal('localStorage', result);
+    return result;
+  }
+  function cleanup() {
+    clearToolGatewayContextCitationItems();
+    vi.unstubAllGlobals();
+  }
+
+  it.each(routes)('$name preserves retrieved citation handles in the exact session', async ({ input, enabled }) => {
+    clearToolGatewayContextCitationItems();
+    storage(enabled);
+    try {
+      const deps = dependencies();
+      const search = vi.fn(async () => searchResult);
+      const tool = createRlmOpenCodeTool({ ...deps, queryService: { ...deps.queryService, search }, now: () => 1_000 });
+      await expect(tool.execute(input, lease)).resolves.toBe(searchResult);
+      expect(search).toHaveBeenCalledTimes(1);
+      expect(deps.rlmRuntime.investigate).not.toHaveBeenCalled();
+      expect(consumeToolGatewayContextCitationItems('different-session')).toEqual([]);
+      expect(consumeToolGatewayContextCitationItems(lease.sessionId)).toEqual([
+        expect.objectContaining({ source: expect.objectContaining({
+          id: pointer.id, accountId: lease.accountId, projectId: lease.projectId,
+          uri: expect.stringContaining('vibespace:context/evidence/'),
+        }) }),
+      ]);
+    } finally { cleanup(); }
+  });
+
+  it.each(routes)('$name does not invent citation scope when no project is bound', async ({ input, enabled }) => {
+    clearToolGatewayContextCitationItems();
+    storage(enabled);
+    try {
+      const deps = dependencies();
+      const { projectId: _project, ...withoutProject } = lease;
+      const tool = createRlmOpenCodeTool({ ...deps, queryService: {
+        ...deps.queryService, search: vi.fn(async () => searchResult),
+      }, now: () => 1_000 });
+      await expect(tool.execute(input, withoutProject)).resolves.toBe(searchResult);
+      expect(consumeToolGatewayContextCitationItems(lease.sessionId)).toEqual([]);
+    } finally { cleanup(); }
+  });
+
+  it.each([
+    { operation: 'query', query: 'Hi Jarvis' },
+    ...routes.map(({ input }) => input),
+    { operation: 'describe' }, { operation: 'search', query: 'decision' },
+    { operation: 'open', pointer }, { operation: 'expand', pointer },
+    { operation: 'sources' }, { operation: 'timeline' }, { operation: 'checkpoint' },
+    { operation: 'related', recordId: pointer.recordId },
+    { operation: 'address', corpusId: 'fallback-corpus', position: '0' },
+  ])('rejects a pre-cancelled $operation before dispatch or success recording', async (input) => {
+    const stored = storage();
+    try {
+      const deps = dependencies();
+      const controller = new AbortController();
+      const reason = new Error('The user stopped this Context request.');
+      controller.abort(reason);
+      const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
+      await expect(tool.execute(input, lease, controller.signal)).rejects.toBe(reason);
+      for (const method of Object.values(deps.queryService)) expect(method).not.toHaveBeenCalled();
+      expect(deps.rlmRuntime.investigate).not.toHaveBeenCalled();
+      expect(stored.setItem).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
+  it.each([
+    ...routes,
+    { name: 'explicit search', input: { operation: 'search', query: 'decision' }, enabled: true },
+    { name: 'open', input: { operation: 'open', pointer }, enabled: true },
+    { name: 'expand', input: { operation: 'expand', pointer }, enabled: true },
+  ])('does not register late evidence after cancelling $name', async ({ input, enabled }) => {
+    clearToolGatewayContextCitationItems();
+    const stored = storage(enabled);
+    try {
+      const deps = dependencies();
+      let release!: (value: unknown) => void;
+      const pending = new Promise<unknown>((resolve) => { release = resolve; });
+      const method = input.operation === 'open' || input.operation === 'expand' ? input.operation : 'search';
+      const tool = createRlmOpenCodeTool({ ...deps, queryService: {
+        ...deps.queryService, [method]: vi.fn(async () => pending),
+      }, now: () => 1_000 });
+      const controller = new AbortController();
+      const reason = new Error('Cancelled during retrieval.');
+      const task = tool.execute(input, lease, controller.signal);
+      controller.abort(reason);
+      release(method === 'search' ? searchResult : openResult);
+      await expect(task).rejects.toBe(reason);
+      expect(consumeToolGatewayContextCitationItems(lease.sessionId)).toEqual([]);
+      expect(stored.setItem.mock.calls.every(([, value]) => JSON.parse(value).lastRunStatus !== 'ok')).toBe(true);
+    } finally { cleanup(); }
+  });
+});

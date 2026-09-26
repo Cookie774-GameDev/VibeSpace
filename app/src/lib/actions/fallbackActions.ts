@@ -1,6 +1,4 @@
 import type { ParsedActionProposal } from './types';
-import { defaultWriteFilePath, getCachedDefaultWriteDir } from './defaultWriteDir';
-import { isPathInsideRoot, joinPortablePath, normalizePortableAbsolutePath } from './filePolicy';
 
 let nextFallbackId = 1;
 
@@ -59,249 +57,6 @@ const NUMBER_WORDS: Record<string, number> = {
   ten: 10,
 };
 
-type ExactMultiFileCreateRequest =
-  | { kind: 'not_multi' }
-  | { kind: 'invalid' }
-  | {
-      kind: 'valid';
-      files: Array<{ path: string; content: string; root?: string }>;
-    };
-
-const WINDOWS_RESERVED_LEAF = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.[^.]*)?$/i;
-
-function isSafeAbsoluteDirectory(path: string): boolean {
-  const windowsPath = /^(?:[A-Za-z]:[\\/]|\\\\)/u.test(path);
-  if (
-    path.length === 0 ||
-    path.length > 32_768 ||
-    /[\u0000-\u001f]/u.test(path) ||
-    !/^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|\/)/u.test(path) ||
-    (windowsPath && /[<>"|?*]/u.test(path)) ||
-    (windowsPath && /:(?![\\/])/u.test(path.slice(2)))
-  ) {
-    return false;
-  }
-  return !path
-    .split(/[\\/]/u)
-    .some(
-      (segment) =>
-        segment === '.' ||
-        segment === '..' ||
-        (windowsPath && segment.length > 0 && /[. ]$/u.test(segment)),
-    );
-}
-
-function isSafeLeafFilename(name: string): boolean {
-  return (
-    name.length <= 255 &&
-    name.trim() === name &&
-    /^[A-Za-z0-9][A-Za-z0-9._ -]*$/u.test(name) &&
-    !name.includes('..') &&
-    !/[. ]$/u.test(name) &&
-    !WINDOWS_RESERVED_LEAF.test(name)
-  );
-}
-
-function trustedRootForBase(base: string, defaultWriteDir: string | null): string | null {
-  return defaultWriteDir !== null && isPathInsideRoot(base, defaultWriteDir)
-    ? defaultWriteDir
-    : null;
-}
-
-function exactMultiFileEntry(
-  base: string,
-  name: string,
-  content: string,
-  root: string | null,
-): { path: string; content: string; root?: string } | null {
-  const separator = /^[A-Za-z]:[\\/]|^\\\\/u.test(base) ? '\\' : '/';
-  const path = `${base}${separator}${name}`;
-  if (path.length > 32_768) return null;
-  return { path, content, ...(root ? { root } : {}) };
-}
-
-function hasExactlyOneTerminalLineEnding(content: string): boolean {
-  const lineEnding = content.match(/\r?\n$/u)?.[0];
-  if (!lineEnding) return false;
-  return !content.slice(0, -lineEnding.length).endsWith('\n');
-}
-
-function extractRawMultiFileEntries(
-  text: string,
-  count: number,
-  defaultWriteDir: string | null,
-): ExactMultiFileCreateRequest {
-  const baseMatches = [
-    ...text.matchAll(
-      /\bcreate\s+exactly\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+new\s+files?\s+in\s+`([^`\r\n]+)`/giu,
-    ),
-  ];
-  if (baseMatches.length !== 1) return { kind: 'invalid' };
-  const base = (baseMatches[0]?.[1] ?? '').replace(/[\\/]+$/u, '');
-  if (!isSafeAbsoluteDirectory(base)) return { kind: 'invalid' };
-
-  const declaredRootMatches = [...text.matchAll(/\buse root\s+`([^`\r\n]+)`/giu)];
-  if (declaredRootMatches.length > 1) return { kind: 'invalid' };
-  if (declaredRootMatches.length === 1) {
-    const declaredRoot = (declaredRootMatches[0]?.[1] ?? '').replace(/[\\/]+$/u, '');
-    if (!isSafeAbsoluteDirectory(declaredRoot) || !isPathInsideRoot(base, declaredRoot)) {
-      return { kind: 'invalid' };
-    }
-  }
-
-  const markers = [...text.matchAll(/^(\d{2})_([A-Za-z0-9][A-Za-z0-9._ -]*)$/gmu)];
-  if (markers.length !== count) return { kind: 'invalid' };
-
-  const seen = new Set<string>();
-  const terminalLineEndings = new Set<string>();
-  let aggregateContentLength = 0;
-  const trustedRoot = trustedRootForBase(base, defaultWriteDir);
-  const explicitlyRequiresFinalNewline =
-    /\bexact UTF-8 content below,\s*including the final newline\b/iu.test(text);
-  const files: Array<{ path: string; content: string; root?: string }> = [];
-  for (const [index, marker] of markers.entries()) {
-    const name = marker[0] ?? '';
-    const ordinal = Number(marker[1]);
-    const markerStart = marker.index;
-    if (markerStart === undefined) return { kind: 'invalid' };
-    let contentStart = markerStart + name.length;
-    const markerLineEnding = text.slice(contentStart).match(/^\r?\n/u)?.[0];
-    if (!markerLineEnding) return { kind: 'invalid' };
-    contentStart += markerLineEnding.length;
-    const contentEnd = markers[index + 1]?.index ?? text.length;
-    let content = text.slice(contentStart, contentEnd);
-    if (index < markers.length - 1) {
-      const separator = content.match(/(\r?\n)\1$/u)?.[1];
-      if (!separator) return { kind: 'invalid' };
-      content = content.slice(0, -separator.length);
-    }
-    let terminalLineEnding = content.match(/\r?\n$/u)?.[0];
-    if (!hasExactlyOneTerminalLineEnding(content)) {
-      const canRestoreTrimmedFinalNewline =
-        index === markers.length - 1 &&
-        explicitlyRequiresFinalNewline &&
-        terminalLineEnding === undefined &&
-        terminalLineEndings.size === 1;
-      if (!canRestoreTrimmedFinalNewline) return { kind: 'invalid' };
-      const inferredLineEnding = [...terminalLineEndings][0];
-      if (inferredLineEnding === undefined) return { kind: 'invalid' };
-      terminalLineEnding = inferredLineEnding;
-      content += inferredLineEnding;
-    }
-    if (terminalLineEnding === undefined) return { kind: 'invalid' };
-    terminalLineEndings.add(terminalLineEnding);
-    if (terminalLineEndings.size !== 1) return { kind: 'invalid' };
-    const collisionKey = name.toLocaleLowerCase('en-US');
-    aggregateContentLength += content.length;
-    if (
-      ordinal !== index + 1 ||
-      !isSafeLeafFilename(name) ||
-      seen.has(collisionKey) ||
-      content.trim().length === 0 ||
-      content.length > 200_000 ||
-      aggregateContentLength > 1_000_000
-    ) {
-      return { kind: 'invalid' };
-    }
-    seen.add(collisionKey);
-    const file = exactMultiFileEntry(base, name, content, trustedRoot);
-    if (!file) return { kind: 'invalid' };
-    files.push(file);
-  }
-
-  return { kind: 'valid', files };
-}
-
-type ExactMultiFileReadRequest =
-  | { kind: 'not_multi' }
-  | { kind: 'invalid' }
-  | { kind: 'valid'; paths: readonly string[] };
-
-function extractExactMultiFileReadRequest(text: string): ExactMultiFileReadRequest {
-  if (/\bcreate\s+exactly\b/i.test(text)) return { kind: 'not_multi' };
-  if (!/\bfiles\.read\b/i.test(text)) return { kind: 'not_multi' };
-  if (!/\b(?:read|inspect|review|audit|open|show|load|check)\b/i.test(text)) {
-    return { kind: 'not_multi' };
-  }
-  const paths = [
-    ...text.matchAll(
-      /\b([A-Za-z]:\\(?:[^\\\s\r\n:*?"<>|]+\\)*[^\\\s\r\n:*?"<>|]+\.[A-Za-z0-9]{1,12})\b/g,
-    ),
-  ].map((match) => match[1] ?? '');
-  const unique = [...new Set(paths.filter((path) => path.length > 0 && path.length <= 32_768))];
-  if (unique.length < 2) return { kind: 'not_multi' };
-  if (unique.length > 10) return { kind: 'invalid' };
-  return { kind: 'valid', paths: unique };
-}
-
-function extractExactMultiFileCreateRequest(
-  text: string,
-  defaultWriteDir: string | null,
-): ExactMultiFileCreateRequest {
-  const intentMatches = [
-    ...text.matchAll(
-      /\bcreate\s+exactly\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+new\s+files?\b/giu,
-    ),
-  ];
-  if (intentMatches.length === 0) return { kind: 'not_multi' };
-  if (intentMatches.length !== 1) return { kind: 'invalid' };
-
-  const countToken = intentMatches[0]?.[1]?.toLowerCase();
-  const count = countToken
-    ? /^\d+$/u.test(countToken)
-      ? Number(countToken)
-      : NUMBER_WORDS[countToken]
-    : undefined;
-  if (!Number.isSafeInteger(count) || count === undefined) return { kind: 'invalid' };
-  if (count === 1) return { kind: 'not_multi' };
-  if (count < 2 || count > 10) return { kind: 'invalid' };
-
-  const baseMatches = [...text.matchAll(/^[ \t]*Base directory:[ \t]*"([^"\r\n]+)"[ \t]*$/gimu)];
-  if (baseMatches.length === 0) {
-    return extractRawMultiFileEntries(text, count, defaultWriteDir);
-  }
-  if (baseMatches.length !== 1) return { kind: 'invalid' };
-  const rawBase = baseMatches[0]?.[1] ?? '';
-  if (!isSafeAbsoluteDirectory(rawBase)) return { kind: 'invalid' };
-  const base = rawBase.replace(/[\\/]+$/u, '');
-  if (!base) return { kind: 'invalid' };
-
-  const blockPattern =
-    /(?:^|\r?\n)[ \t]*(\d{1,2})\.[ \t]+Filename:[ \t]+`([^`\r\n]+)`[ \t]*\r?\n```[A-Za-z0-9_-]{0,32}\r?\n([\s\S]*?)(\r?\n)```[ \t]*(?=\r?\n|$)/gu;
-  const blocks = [...text.matchAll(blockPattern)];
-  const fenceCount = [...text.matchAll(/^[ \t]*```[^\r\n]*$/gmu)].length;
-  if (blocks.length !== count || fenceCount !== count * 2) return { kind: 'invalid' };
-
-  const seen = new Set<string>();
-  let aggregateContentLength = 0;
-  const files: Array<{ path: string; content: string; root?: string }> = [];
-  const trustedRoot = trustedRootForBase(base, defaultWriteDir);
-
-  for (const [index, block] of blocks.entries()) {
-    const ordinal = Number(block[1]);
-    const name = block[2] ?? '';
-    const content = `${block[3] ?? ''}${block[4] ?? ''}`;
-    const collisionKey = name.toLocaleLowerCase('en-US');
-    aggregateContentLength += content.length;
-    if (
-      ordinal !== index + 1 ||
-      !isSafeLeafFilename(name) ||
-      seen.has(collisionKey) ||
-      content.trim().length === 0 ||
-      content.length > 200_000 ||
-      aggregateContentLength > 1_000_000
-    ) {
-      return { kind: 'invalid' };
-    }
-    seen.add(collisionKey);
-    const file = exactMultiFileEntry(base, name, content, trustedRoot);
-    if (!file) return { kind: 'invalid' };
-    files.push(file);
-  }
-
-  return { kind: 'valid', files };
-}
-
 function readTerminalCount(value: string | undefined): number | null {
   if (!value) return null;
   const asNumber = /^\d+$/.test(value) ? Number(value) : NUMBER_WORDS[value];
@@ -332,25 +87,26 @@ function extractBulkOpenTerminalRequest(text: string): { count: number; command?
 }
 
 function extractSimpleOpenTerminalRequest(text: string): boolean {
-  if (extractSingleTerminalRunRequest(text)) return false;
+  if (
+    /\b(?:open|create|start|launch)\s+(?:a|one|1)\s+(?:new\s+)?terminal\b(?:\s+(?:and|then))?\s+(?:run|execute|type)\b/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
   if (extractBulkOpenTerminalRequest(normalized(text))) return false;
   return /\b(?:open|create|spawn|launch|start)\s+(?:me\s+)?(?:a|one|1)?\s*(?:new\s+)?(?:real\s+)?terminals?\b/.test(
     text,
   );
 }
 
-function extractSingleTerminalRunRequest(text: string): { command: string } | null {
+function extractSingleCliStartRequest(text: string): { cli: string } | null {
   const match =
-    /\b(?:open|create|start|launch)\s+(?:a|one|1)\s+(?:new\s+)?terminal\b(?:\s+(?:and|then))?\s+(?:run|execute|type)\s+([\s\S]+)$/i.exec(
+    /\b(?:open|create|start|launch)\s+(?:a|one|1)\s+(?:new\s+)?terminal\b(?:\s+(?:and|then))?\s+(?:run|execute|type)\s+(opencode|open-code|claude(?:\s+code)?|codex|gemini)\b/i.exec(
       text.trim(),
     );
-  const command = match?.[1]
-    ?.replace(/^(?:this\s+)?exact\s+(?:powershell|shell|terminal)?\s*command\s*:\s*/i, '')
-    ?.replace(/\b(?:please|okay|ok)\b[.!?\s]*$/i, '')
-    .replace(/[.!?]+$/u, '')
-    .trim();
-  if (!command || command.length > 4_096) return null;
-  return { command };
+  const cli = match?.[1]?.toLowerCase().replace('open-code', 'opencode').replace(/\s+code$/, '');
+  return cli ? { cli } : null;
 }
 
 function extractBulkCloseTerminalRequest(text: string): { count: number } | null {
@@ -579,36 +335,6 @@ function extractAgentRunRequest(text: string): { task: string; agentId: string }
  * Keep this intentionally narrow: it should only cover obvious app-control
  * requests where a real registered action already exists.
  */
-/**
- * Tiny local models often emit a valid `command.run` (or other non-file)
- * card for an explicit files.create request. Prefer the deterministic
- * files.create fallback so Test03-style write turns stay on the approved
- * filesystem path.
- */
-export function shouldReplaceModelActionsWithFileCreateFallback(
-  modelActionIds: readonly string[],
-  fallbackProposals: readonly { action_id: string }[],
-): boolean {
-  if (fallbackProposals.length === 0) return false;
-  if (!fallbackProposals.every((proposal) => proposal.action_id === 'files.create')) {
-    return false;
-  }
-  const modelFileCreates = modelActionIds.filter((id) => id === 'files.create').length;
-  return fallbackProposals.length > modelFileCreates;
-}
-
-export function shouldReplaceModelActionsWithFileReadFallback(
-  modelActionIds: readonly string[],
-  fallbackProposals: readonly { action_id: string }[],
-): boolean {
-  if (fallbackProposals.length === 0) return false;
-  if (!fallbackProposals.every((proposal) => proposal.action_id === 'files.read')) {
-    return false;
-  }
-  const modelFileReads = modelActionIds.filter((id) => id === 'files.read').length;
-  return fallbackProposals.length > modelFileReads;
-}
-
 export function inferFallbackActionProposals(
   userText: string,
   assistantText: string,
@@ -627,22 +353,6 @@ export function inferFallbackActionProposals(
   // narration as a separate filesystem approval.
   if (/^\s*Call the real `vibespace_context` function\b/u.test(userText)) {
     return proposals;
-  }
-
-  const defaultWriteDir = getCachedDefaultWriteDir();
-  const exactMultiFileCreate = extractExactMultiFileCreateRequest(userText, defaultWriteDir);
-  if (exactMultiFileCreate.kind === 'invalid') return proposals;
-  if (exactMultiFileCreate.kind === 'valid') {
-    return exactMultiFileCreate.files.map((file) =>
-      proposal('files.create', file, `Write ${file.path} after user approval.`),
-    );
-  }
-  const exactMultiFileRead = extractExactMultiFileReadRequest(userText);
-  if (exactMultiFileRead.kind === 'invalid') return proposals;
-  if (exactMultiFileRead.kind === 'valid') {
-    return exactMultiFileRead.paths.map((path) =>
-      proposal('files.read', { path }, `Read ${path} after user approval.`),
-    );
   }
 
   const agentRun = extractAgentRunRequest(userText);
@@ -706,19 +416,19 @@ export function inferFallbackActionProposals(
     return proposals;
   }
 
-  const singleTerminalRun = extractSingleTerminalRunRequest(userText);
-  if (singleTerminalRun) {
+  const singleCliStart = extractSingleCliStartRequest(userText);
+  if (singleCliStart) {
     proposals.push(
       proposal(
-        'terminal.run',
-        singleTerminalRun,
-        `Open one terminal pane and run ${singleTerminalRun.command} after user approval.`,
+        'terminal.start_cli',
+        singleCliStart,
+        `Start the native ${singleCliStart.cli} CLI in a new terminal after user approval.`,
       ),
     );
     return proposals;
   }
 
-  if (extractSimpleOpenTerminalRequest(userText)) {
+  if (extractSimpleOpenTerminalRequest(user)) {
     proposals.push(
       proposal(
         'terminal.bulkOpen',
@@ -776,263 +486,5 @@ export function inferFallbackActionProposals(
     );
   }
 
-  const fileRead = extractFileReadRequest(userText);
-  if (fileRead) {
-    proposals.push(
-      proposal('files.read', { path: fileRead.path }, `Read ${fileRead.path} after user approval.`),
-    );
-  }
-
-  const fileEdit = extractFileEditRequest(userText);
-  if (fileEdit) {
-    proposals.push(
-      proposal(
-        'files.edit',
-        { path: fileEdit.path, content: fileEdit.content },
-        `Replace ${fileEdit.path} after user approval.`,
-      ),
-    );
-    return proposals;
-  }
-
-  const fileWrite = extractFileWriteRequest(userText, assistantText, {
-    defaultDir: defaultWriteDir,
-    workingDirectory: options.workingDirectory,
-  });
-  if (fileWrite) {
-    const usesDefaultRoot =
-      defaultWriteDir !== null && isPathInsideRoot(fileWrite.path, defaultWriteDir);
-    const trustedRoot = fileWrite.root ?? (usesDefaultRoot ? defaultWriteDir : null);
-    proposals.push(
-      proposal(
-        'files.create',
-        {
-          path: fileWrite.path,
-          content: fileWrite.content,
-          ...(trustedRoot ? { root: trustedRoot } : {}),
-        },
-        `Write ${fileWrite.path} after user approval.`,
-      ),
-    );
-  }
-
   return proposals.slice(0, 3);
-}
-
-function matchAbsolutePath(raw: string): RegExpMatchArray | null {
-  const quoted = raw.match(/["'“”]((?:[A-Za-z]:[\\/][^"'“”]+|\\\\[^"'“”]+|\/[^"'“”]+))["'“”]/);
-  if (quoted) return quoted;
-  const unquoted = raw.match(
-    /(?:^|[\s([{])((?:[A-Za-z]:[\\/][^\s"'“”]+|\\\\[^\s"'“”]+|\/[^\s"'“”]+))/,
-  );
-  const path = unquoted?.[1];
-  if (path?.startsWith('/') && !path.slice(1).includes('/') && !/\.[a-z0-9]{1,12}$/i.test(path)) {
-    return null;
-  }
-  return unquoted;
-}
-
-export function extractFileEditRequest(userText: string): { path: string; content: string } | null {
-  const raw = userText.trim();
-  if (
-    !/\b(?:update|replace|overwrite|edit|modify)\b/i.test(raw) ||
-    !/\b(?:existing|entire|whole|contents?)\b/i.test(raw)
-  ) {
-    return null;
-  }
-  const pathMatch = matchAbsolutePath(raw);
-  const path = pathMatch?.[1]?.replace(/[.,;:]+$/, '').trim();
-  if (!path || path.length > 32_768) return null;
-  const contentMatch = raw.match(
-    /\b(?:contents?\s+with|contains?|containing|says?)\s+exactly\s*:\s*([\s\S]+)$/i,
-  );
-  const content = contentMatch?.[1]?.trim();
-  if (content === undefined || content.length > 1_000_000) return null;
-  return { path, content };
-}
-
-export function extractFileReadRequest(userText: string): { path: string } | null {
-  const raw = userText.trim();
-  const pathMatch = matchAbsolutePath(raw);
-  const intentText = pathMatch ? raw.replace(pathMatch[0], ' ') : raw;
-  if (!/\b(read|inspect|review|audit|open|show|load|check)\b/i.test(intentText)) return null;
-  if (!/\b(file|path|contents?|directly)\b/i.test(intentText) && !/\.[a-z0-9]{1,12}\b/i.test(raw)) {
-    return null;
-  }
-  let path = pathMatch?.[1]?.replace(/[.,;:]+$/, '').trim();
-  if (!path || path.length > 32_768) return null;
-  const pathLeaf = path.split(/[\\/]/).at(-1) ?? '';
-  if (!/\.[a-z0-9]{1,12}$/i.test(pathLeaf)) {
-    const directoryPath = path;
-    const requestedFilename = [
-      ...raw.matchAll(/\b([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9]{1,12})\b/g),
-    ]
-      .map((match) => match[1])
-      .find((filename) => filename && !directoryPath.includes(filename));
-    if (requestedFilename) {
-      path = `${directoryPath.replace(/[\\/]+$/u, '')}${directoryPath.includes('\\') ? '\\' : '/'}${requestedFilename}`;
-    }
-  }
-  if (path.length > 32_768) return null;
-  return { path };
-}
-
-/**
- * Infer a files.create proposal when the user clearly asks to create a text
- * file. Absolute path preferred; if missing, use the general default folder
- * (the allowed Jarvis Projects root). Tiny local models often refuse in prose
- * instead of emitting the action block — this is the safety net.
- */
-export function extractFileWriteRequest(
-  userText: string,
-  assistantText = '',
-  options?: { defaultDir?: string | null; workingDirectory?: string | null },
-): { path: string; content: string; root?: string } | null {
-  const raw = userText.trim();
-  if (!raw) return null;
-  const pathMatch = matchAbsolutePath(raw);
-  const mentionedFilenames = new Set(
-    [...raw.matchAll(/\b[A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9]{1,12}\b/g)].map((match) =>
-      match[0].toLowerCase(),
-    ),
-  );
-  const mentionsCurrentWorkingDirectory = /\bcurrent working directory\b/iu.test(raw);
-  // A prose request for a multi-file project is agent work, not authority to
-  // invent one unrelated default-file write after the provider finishes.
-  if (!pathMatch && mentionedFilenames.size > 1) return null;
-  // A path is data, not intent. In particular, read targets such as
-  // native-write-proof.txt must not manufacture a second files.create action.
-  const intentText = pathMatch ? raw.replace(pathMatch[0], ' ') : raw;
-  const lower = intentText.toLowerCase();
-  if (
-    /\b(?:make|perform)\s+no\s+(?:edits?|changes?)\b/i.test(raw) ||
-    /\b(?:do not|don't)\s+(?:edit|write|create|modify)\b/i.test(raw)
-  ) {
-    return null;
-  }
-  if (
-    /\b(?:ledger|status summary|qualification report)\b/i.test(raw) &&
-    /\b(?:pass|fail|present|absent)\b/i.test(raw) &&
-    !/(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s"'“”]+/u.test(raw)
-  ) {
-    return null;
-  }
-
-  // Must look like a create/write intent
-  if (!/\b(make|create|write|save|generate|draft)\b/.test(lower)) return null;
-  if (!/\b(file|txt|document|story|note|script)\b/.test(lower) && !/\.[a-z0-9]{1,8}\b/i.test(raw)) {
-    // still allow "write X to C:\path\file.txt"
-    if (!/\b(to|at|into|here)\b/.test(lower)) return null;
-  }
-
-  // Absolute Windows / UNC / POSIX path, optionally quoted
-  let path: string;
-  let root: string | undefined;
-  if (pathMatch?.[1]) {
-    path = pathMatch[1].replace(/[.,;:]+$/, '').trim();
-    if (!path) return null;
-    // If path is a directory (no extension), invent a sensible filename
-    if (!/\.[a-z0-9]{1,12}$/i.test(path.split(/[\\/]/).pop() || '')) {
-      const wantsTxt = /\b(txt|text|story|note|document)\b/i.test(raw);
-      const name = wantsTxt ? 'jarvis-note.txt' : 'jarvis-file.txt';
-      path = path.replace(/[\\/]+$/, '') + (path.includes('\\') ? `\\${name}` : `/${name}`);
-    }
-  } else if (mentionsCurrentWorkingDirectory) {
-    const filenameMatches = [
-      ...raw.matchAll(/\b[A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9]{1,12}\b/gu),
-    ];
-    const uniqueFilenames = new Map<string, string>();
-    let unsafeReference = false;
-    for (const match of filenameMatches) {
-      const filename = match[0];
-      const start = match.index ?? -1;
-      if (start < 0 || /[\\/.]/u.test(raw[start - 1] ?? '') || !isSafeLeafFilename(filename)) {
-        unsafeReference = true;
-        continue;
-      }
-      uniqueFilenames.set(filename.toLowerCase(), filename);
-    }
-    if (unsafeReference || uniqueFilenames.size !== 1) return null;
-    const requestedFilename = uniqueFilenames.values().next().value;
-    if (typeof requestedFilename !== 'string') return null;
-    const requestedWorkingDirectory = options?.workingDirectory?.trim() ?? '';
-    const portableWorkingDirectory = requestedWorkingDirectory.match(
-      /^\\\\\?\\([A-Za-z]:[\\/].*)$/u,
-    )?.[1];
-    const normalizedWorkingDirectory = normalizePortableAbsolutePath(
-      portableWorkingDirectory ?? requestedWorkingDirectory,
-    );
-    if (!normalizedWorkingDirectory) return null;
-    root = normalizedWorkingDirectory;
-    path = joinPortablePath(normalizedWorkingDirectory, requestedFilename);
-  } else {
-    // No path given — place a general file in the default write folder
-    if (!/\b(file|txt|document|story|note|script)\b/.test(lower)) return null;
-    const wantsTxt = /\b(txt|text|story|note|document)\b/i.test(raw);
-    const name = wantsTxt ? 'jarvis-note.txt' : 'jarvis-file.txt';
-    path = defaultWriteFilePath(name, options?.defaultDir ?? getCachedDefaultWriteDir());
-  }
-
-  // Content: after "write/about" or remaining prose without the path/make-file boilerplate
-  let content = '';
-  const pathToken = pathMatch?.[0] ?? '';
-  const exactSingleNewlineMatches = [
-    ...raw.matchAll(
-      /\bcontaining\s+exactly\s+([^\r\n]{1,199999}?)\s+followed\s+by\s+(?:exactly\s+)?one\s+newline\b/giu,
-    ),
-  ];
-  if (root) {
-    if (exactSingleNewlineMatches.length !== 1) return null;
-    const captured = exactSingleNewlineMatches[0]?.[1]?.trim() ?? '';
-    const paired = captured.match(/^(?:`([^`]*)`|"([^"]*)"|'([^']*)'|“([^”]*)”)$/u);
-    const exactContent = paired
-      ? (paired.slice(1).find((value) => value !== undefined) ?? '')
-      : captured;
-    if (!exactContent || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(exactContent)) {
-      return null;
-    }
-    content = `${exactContent}\n`;
-  }
-  const explicitContentMatch = raw.match(
-    /\b(?:that\s+)?(?:contains?|containing|says?)\s+(?:exactly\s*)?:\s*([\s\S]+)$/i,
-  );
-  const aboutMatch =
-    explicitContentMatch ??
-    raw.match(/\b(?:write|about|with|containing|that says?)\b[:\s]+([\s\S]+)/i);
-  if (!content && aboutMatch?.[1]) {
-    content = explicitContentMatch
-      ? explicitContentMatch[1].trim()
-      : aboutMatch[1]
-          .replace(pathToken, ' ')
-          .replace(/["'“”]/g, ' ')
-          .replace(/\bok(ay)?\b/gi, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-  }
-
-  if (!content || (content.length < 8 && !root)) {
-    // Strip path and boilerplate; use leftover as content seed
-    content = raw
-      .replace(pathToken, ' ')
-      .replace(
-        /\b(make|create|write|save|generate|draft)\b[\s\S]{0,40}\b(file|txt|document)\b/gi,
-        ' ',
-      )
-      .replace(/\b(right\s+here|here|okay|please|and)\b/gi, ' ')
-      .replace(/["'“”]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  if (!content) {
-    content = 'Created by Jarvis.';
-  }
-
-  // If the model already refused, still propose the write so the user can Approve
-  void assistantText;
-
-  // Cap content for safety
-  if (content.length > 200_000) content = content.slice(0, 200_000);
-
-  return { path, content, ...(root ? { root } : {}) };
 }

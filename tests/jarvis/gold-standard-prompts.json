@@ -336,7 +336,7 @@
       "prompt": "In offline mode, summarize the attached local file.",
       "expectedIntent": "file-work",
       "expectedResponseStyle": "concise local result or truthful capability error",
-      "expectedAction": "files.read",
+      "expectedAction": null,
       "expectedPermission": "automatic",
       "completionCriteria": ["local runtime only", "attachment handled when supported"],
       "forbiddenBehavior": ["cloud request", "silent provider switch"],

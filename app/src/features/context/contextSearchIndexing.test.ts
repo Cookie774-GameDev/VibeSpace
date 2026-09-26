@@ -79,6 +79,33 @@ function dependencies(contents: Record<string, string>, port = nativePort()) {
 }
 
 describe('bounded Context search index population', () => {
+  it('indexes a NuttX-scale 5,734-file map through bounded native batches', async () => {
+    const nodes = Array.from({ length: 5_734 }, (_, index) => ({
+      id: `node-${index}`, kind: 'file', title: `${index}.c`, path: `${index}.c`,
+    }));
+    const deps = dependencies({});
+    const nativeDelete = vi.mocked(deps.port.deleteDocuments).getMockImplementation()!;
+    vi.mocked(deps.port.deleteDocuments).mockImplementation(async (accountId, mapId, documentIds) => {
+      if (documentIds.length > 1_000) throw new Error('native_delete_limit_exceeded');
+      return nativeDelete(accountId, mapId, documentIds);
+    });
+    deps.stat.mockImplementation(async (path) => ({
+      ok: true, path, kind: 'file', size: 1, modifiedMs: 1,
+      sha256: `sha256:${HASH_A}`,
+    }));
+    deps.read.mockImplementation(async (path) => ({ ok: true, path, content: 'x' }));
+    deps.hash.mockResolvedValue(`sha256:${HASH_A}`);
+
+    const result = await createContextSearchIndexPopulationPort(deps)
+      .populateCreatedMap('account-1', map(nodes));
+
+    expect(result).toMatchObject({ documentCount: 5_734, status: 'ready' });
+    const batches = vi.mocked(deps.port.replaceDocuments).mock.calls.map((call) => call[2]);
+    expect(batches).toHaveLength(Math.ceil(5_734 / 64));
+    expect(batches.every((batch) => batch.length > 0 && batch.length <= 64)).toBe(true);
+    expect(vi.mocked(deps.port.deleteDocuments).mock.calls.every((call) => call[2].length <= 1_000)).toBe(true);
+  });
+
   it('accepts a native Windows verbatim drive root without weakening the snapshot gate', async () => {
     const deps = dependencies({});
     const target = {
@@ -96,6 +123,20 @@ describe('bounded Context search index population', () => {
     });
     expect(deps.stat).not.toHaveBeenCalled();
     expect(deps.read).not.toHaveBeenCalled();
+  });
+
+  it('retries a transient Windows Tantivy commit denial for the same document batch', async () => {
+    const deps = dependencies({ 'C:\\repo\\a.txt': 'alpha' });
+    const normalReplace = vi.mocked(deps.port.replaceDocuments).getMockImplementation()!;
+    vi.mocked(deps.port.replaceDocuments).mockImplementationOnce(async () => {
+      throw new Error('context_search_commit: IoError PermissionDenied: Access is denied.');
+    });
+    vi.mocked(deps.port.replaceDocuments).mockImplementationOnce(normalReplace);
+
+    await expect(createContextSearchIndexPopulationPort(deps).populateCreatedMap(
+      'account-1', map([{ id: 'node-a', kind: 'file', title: 'a.txt', path: 'a.txt' }]),
+    )).resolves.toMatchObject({ status: 'ready', documentCount: 1 });
+    expect(deps.port.replaceDocuments).toHaveBeenCalledTimes(2);
   });
 
   it('indexes admitted files deterministically with stable physical hashes', async () => {
@@ -128,7 +169,7 @@ describe('bounded Context search index population', () => {
     });
   });
 
-  it('keeps every native batch at eight documents and four MiB', async () => {
+  it('keeps every native batch at 64 documents and four MiB', async () => {
     const nodes = Array.from({ length: 17 }, (_, index) => ({
       id: `node-${String(index).padStart(2, '0')}`,
       kind: 'file',
@@ -157,7 +198,7 @@ describe('bounded Context search index population', () => {
     expect(
       batches.every(
         (batch) =>
-          batch.length <= 8 &&
+        batch.length <= 64 &&
           batch.reduce(
             (sum, document) => sum + new TextEncoder().encode(document.body).length,
             0,
@@ -316,22 +357,35 @@ describe('bounded Context search index population', () => {
     }
   });
 
-  it('rejects denied sources and maps beyond the native document cap', async () => {
+  it('keeps discovered secret nodes out of the derivative index and bounds map size', async () => {
     const denied = dependencies({ 'C:\\repo\\.env': 'API_KEY=not-indexable' });
     await expect(
       createContextSearchIndexPopulationPort(denied).populateCreatedMap(
         'account-1',
         map([{ id: 'node-env', kind: 'file', title: '.env', path: '.env' }]),
       ),
-    ).rejects.toThrow('context_search_index_source_denied');
+    ).resolves.toMatchObject({ status: 'ready', documentCount: 0 });
     expect(denied.port.replaceDocuments).not.toHaveBeenCalled();
+
+    const mixed = dependencies({
+      'C:\\repo\\a.txt': 'ordinary source',
+      'C:\\repo\\b.sh': 'PASSWORD=example',
+    });
+    await expect(createContextSearchIndexPopulationPort(mixed).populateCreatedMap(
+      'account-1', map([
+        { id: 'node-a', kind: 'file', title: 'a.txt', path: 'a.txt' },
+        { id: 'node-b', kind: 'file', title: 'b.sh', path: 'b.sh' },
+      ]),
+    )).resolves.toMatchObject({ status: 'ready', documentCount: 1 });
+    expect(vi.mocked(mixed.port.replaceDocuments).mock.calls[0]?.[2].map(item => item.documentId))
+      .toEqual(['node-a']);
 
     const excessive = dependencies({});
     await expect(
       createContextSearchIndexPopulationPort(excessive).populateCreatedMap(
         'account-1',
         map(
-          Array.from({ length: 1_001 }, (_, index) => ({
+          Array.from({ length: 10_001 }, (_, index) => ({
             id: `node-${index}`,
             kind: 'file',
             title: `${index}.txt`,

@@ -710,6 +710,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   const directGeometryGesture = React.useRef<CanvasDirectGeometryGesture | null>(null);
   const blockElements = React.useRef(new Map<string, HTMLElement>());
   const workspaceRef = React.useRef<HTMLElement>(null);
+  const pendingNewNoteFocusBlockId = React.useRef<string | null>(null);
   const [CAMERA_VIEWPORT, setViewport] = React.useState<{ width: number; height: number }>(
     DEFAULT_CAMERA_VIEWPORT,
   );
@@ -793,6 +794,19 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   ]);
 
   React.useEffect(() => {
+    const newNoteBlockId = pendingNewNoteFocusBlockId.current;
+    if (newNoteBlockId) {
+      const article = blockElements.current.get(newNoteBlockId);
+      const editor = article?.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Edit note block"]',
+      );
+      if (!editor) return;
+      pendingNewNoteFocusBlockId.current = null;
+      editor.focus();
+      editor.select();
+      return;
+    }
+
     const blockId = pendingSearchFocusBlockId.current;
     if (!blockId) return;
     const element = blockElements.current.get(blockId);
@@ -2042,6 +2056,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
       blockNumber = sequence.current;
       blockId = `${documentRef.current.id}-${kind}-${blockNumber}`;
     } while (blockById(documentRef.current, blockId));
+    if (kind === 'note') pendingNewNoteFocusBlockId.current = blockId;
     const content =
       kind === 'heading'
         ? ({ kind, level: 2, text: `New heading ${blockNumber}` } as const)

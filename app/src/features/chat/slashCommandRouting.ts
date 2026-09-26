@@ -119,6 +119,6 @@ type ReferenceCommand = keyof typeof REFERENCE_LABELS;
 
 export function buildVibeSpaceReferenceRequest(command: ReferenceCommand, request = ''): string {
   const reference = `Context references: /${command} references ${REFERENCE_LABELS[command]}.`;
-  const boundedRequest = request.replace(/\s+/gu, ' ').trim();
-  return boundedRequest ? `${reference} User request: ${boundedRequest}` : reference;
+  // Code indentation, line breaks and quoted spacing belong to the user's request.
+  return request.trim() ? `${reference} User request: ${request}` : reference;
 }

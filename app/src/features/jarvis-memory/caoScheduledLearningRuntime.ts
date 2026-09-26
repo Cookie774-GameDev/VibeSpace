@@ -404,7 +404,7 @@ export async function runManualCaoLearningChecks(
     .forEach((scope) => uniqueScopes.set(scopeKey(scope), scope));
   const scopes = [...uniqueScopes.values()];
   const projectId = deps.getProjectId?.();
-  if (scopes.length === 0 && projectId) {
+  if (projectId && !scopes.some((scope) => scope.projectId === projectId)) {
     scopes.push({ accountId: account.accountId, workspaceId, projectId,
       scheduleId: 'cao-manual-project', targetId: 'jarvis-cao', scheduleAnchorAt: 0 });
   }

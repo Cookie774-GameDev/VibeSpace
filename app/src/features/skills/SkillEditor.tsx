@@ -40,6 +40,27 @@ function parseTools(raw: string): string[] {
     .filter(Boolean);
 }
 
+function syncInstructionBlock(body: string, previous: string, next: string): string {
+  const oldText = previous.trim();
+  const newText = next.trim();
+  if (!body.trim()) return newText ? `## Runtime instructions\n\n${newText}` : body;
+
+  if (oldText) {
+    for (const heading of ['## Instructions', '## Runtime instructions']) {
+      const block = `${heading}\n\n${oldText}`;
+      const start = body.indexOf(block);
+      if (start < 0 || body.indexOf(block, start + block.length) >= 0) continue;
+      const before = body.slice(0, start);
+      const after = body.slice(start + block.length);
+      if ((before && !before.endsWith('\n\n')) || (after && !after.startsWith('\n\n'))) {
+        continue;
+      }
+      return `${before}${newText ? `${heading}\n\n${newText}` : ''}${after}`;
+    }
+  }
+  return newText ? `${body.trimEnd()}\n\n## Runtime instructions\n\n${newText}` : body;
+}
+
 export function SkillEditor({ manifest, onSaved, onDeleted }: SkillEditorProps) {
   const id = manifest.catalogId ?? manifest.name;
   const [emoji, setEmoji] = React.useState(manifest.emoji ?? '✨');
@@ -85,6 +106,12 @@ export function SkillEditor({ manifest, onSaved, onDeleted }: SkillEditorProps) 
   }, []);
 
   const previewHtml = React.useMemo(() => renderSkillMarkdown(body), [body]);
+  const previewSeparateInstructions = addendum.trim().length > 0 && !body.includes(addendum.trim());
+
+  const updateInstructions = (next: string) => {
+    setBody((current) => syncInstructionBlock(current, addendum, next));
+    setAddendum(next);
+  };
 
   const buildDraftManifest = (): SkillManifest => ({
     ...manifest,
@@ -212,7 +239,7 @@ export function SkillEditor({ manifest, onSaved, onDeleted }: SkillEditorProps) 
             <div className="eyebrow mb-1.5">Runtime instructions</div>
             <Textarea
               value={addendum}
-              onChange={(e) => setAddendum(e.target.value)}
+              onChange={(e) => updateInstructions(e.target.value)}
               className="min-h-[100px] text-sm leading-relaxed"
               placeholder="Injected into chat when user picks this skill via /skills"
             />
@@ -263,8 +290,15 @@ export function SkillEditor({ manifest, onSaved, onDeleted }: SkillEditorProps) 
           <div
             data-monochrome-surface="skill-preview"
             className="text-body text-foreground rounded-xl border border-border bg-paper/40 p-5 shadow-soft [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-panel [html[data-theme=monochrome]_&]:shadow-none"
-            dangerouslySetInnerHTML={{ __html: previewHtml }}
-          />
+          >
+            {previewSeparateInstructions ? (
+              <div className="mb-4 border-b border-border pb-4">
+                <div className="eyebrow mb-2">Runtime instructions</div>
+                <p className="whitespace-pre-wrap leading-relaxed">{addendum}</p>
+              </div>
+            ) : null}
+            <div dangerouslySetInnerHTML={{ __html: previewHtml }} />
+          </div>
         </TabsContent>
       </Tabs>
 

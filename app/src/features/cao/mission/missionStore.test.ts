@@ -197,6 +197,88 @@ describe('CAO mission store', () => {
     ).rejects.toThrow('cao_mission_payload_invalid');
   });
 
+  it('round-trips bounded Sentinel decisions and rejects foreign or unsafe receipts', async () => {
+    const rows = new Map<string, any>();
+    const store = createCaoMissionStore({
+      async get(id) {
+        return rows.get(id);
+      },
+      async insertIfAbsent(row) {
+        if (rows.has(row.id)) return false;
+        rows.set(row.id, row);
+        return true;
+      },
+      async put(row) {
+        rows.set(row.id, row);
+      },
+      async list(accountId, workspaceId) {
+        return [...rows.values()].filter(
+          (row) => row.accountId === accountId && row.workspaceId === workspaceId,
+        );
+      },
+    });
+    const receipt = {
+      missionId: 'receipt-mission',
+      targetId: 'chat-1',
+      targetRevision: 2,
+      observedAt: 10,
+      trigger: 'sweep' as const,
+      action: 'noop' as const,
+      reasonCode: 'healthy_noop',
+    };
+    const worker = {
+      targetId: 'chat-1',
+      kind: 'chat' as const,
+      assignment: 'Inspect the project',
+      ownedPaths: [],
+      status: 'running' as const,
+      lastObservedRevision: 2,
+      sentinelReceipts: [receipt],
+    };
+    const withReceipt = {
+      ...mission,
+      id: 'receipt-mission',
+      status: 'running' as const,
+      workers: [worker],
+    };
+    await store.save(withReceipt);
+    await expect(
+      store.get({ accountId: 'a', workspaceId: 'w', projectId: 'p', missionId: 'receipt-mission' }),
+    ).resolves.toEqual(withReceipt);
+    await expect(store.save({ ...withReceipt, id: 'foreign-receipt' })).rejects.toThrow(
+      'cao_mission_payload_invalid',
+    );
+    await expect(
+      store.save({
+        ...withReceipt,
+        id: 'unsafe-receipt',
+        workers: [
+          {
+            ...worker,
+            sentinelReceipts: [
+              { ...receipt, missionId: 'unsafe-receipt', reasonCode: 'api-key:secret' },
+            ],
+          },
+        ],
+      }),
+    ).rejects.toThrow('cao_mission_payload_invalid');
+    await expect(
+      store.save({
+        ...withReceipt,
+        id: 'oversized-receipts',
+        workers: [
+          {
+            ...worker,
+            sentinelReceipts: Array.from({ length: 257 }, () => ({
+              ...receipt,
+              missionId: 'oversized-receipts',
+            })),
+          },
+        ],
+      }),
+    ).rejects.toThrow('cao_mission_payload_invalid');
+  });
+
   it('keeps two production store instances from overwriting a same-id mission across scopes', async () => {
     const database: JarvisDexie = createJarvisDb(
       `cao-mission-${crypto.randomUUID()}`,

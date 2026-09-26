@@ -748,7 +748,6 @@ pub async fn ollama_chat_stream(
     .map_err(|error| format!("worker: {error}"))?
 }
 
-
 #[cfg(test)]
 mod performance_tests {
     use super::*;
@@ -759,33 +758,46 @@ mod performance_tests {
     fn status_reads_leave_the_calling_thread_and_preserve_errors() {
         let caller = std::thread::current().id();
         tauri::async_runtime::block_on(async {
-            let worker = run_status_read(|| Ok(std::thread::current().id())).await.unwrap();
+            let worker = run_status_read(|| Ok(std::thread::current().id()))
+                .await
+                .unwrap();
             assert_ne!(caller, worker);
-            assert_eq!(run_status_read(|| Err::<(), _>("original error".to_owned())).await,
-                Err("original error".to_owned()));
+            assert_eq!(
+                run_status_read(|| Err::<(), _>("original error".to_owned())).await,
+                Err("original error".to_owned())
+            );
             assert!(!ollama_ping(Some("https://example.com".to_owned())).await);
-            assert_eq!(ollama_list_models(Some("https://example.com".to_owned())).await.err(),
-                Some("invalid_base_url".to_owned()));
+            assert_eq!(
+                ollama_list_models(Some("https://example.com".to_owned()))
+                    .await
+                    .err(),
+                Some("invalid_base_url".to_owned())
+            );
         });
     }
 
     #[test]
     fn status_reads_bound_active_workers_and_return_every_result() {
-        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
         let active = Arc::new(AtomicUsize::new(0));
         let peak = Arc::new(AtomicUsize::new(0));
         tauri::async_runtime::block_on(async {
-            let jobs: Vec<_> = (0..12).map(|index| {
-                let active = Arc::clone(&active);
-                let peak = Arc::clone(&peak);
-                tauri::async_runtime::spawn(run_status_read(move || {
-                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
-                    peak.fetch_max(count, Ordering::SeqCst);
-                    std::thread::sleep(Duration::from_millis(5));
-                    active.fetch_sub(1, Ordering::SeqCst);
-                    Ok(index)
-                }))
-            }).collect();
+            let jobs: Vec<_> = (0..12)
+                .map(|index| {
+                    let active = Arc::clone(&active);
+                    let peak = Arc::clone(&peak);
+                    tauri::async_runtime::spawn(run_status_read(move || {
+                        let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(count, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(5));
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok(index)
+                    }))
+                })
+                .collect();
             for (index, job) in jobs.into_iter().enumerate() {
                 assert_eq!(job.await.unwrap().unwrap(), index);
             }
@@ -814,7 +826,9 @@ mod performance_tests {
                 };
                 connections += 1;
                 stream.set_nonblocking(false).unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
                 while responses < 2 {
                     let mut header = Vec::new();
                     let mut byte = [0];
@@ -824,9 +838,15 @@ mod performance_tests {
                             _ => break,
                         }
                     }
-                    if !header.ends_with(b"\r\n\r\n") { break; }
+                    if !header.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
                     responses += 1;
-                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n{responses}").unwrap();
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n{responses}"
+                    )
+                    .unwrap();
                     stream.flush().unwrap();
                 }
             }
@@ -834,16 +854,29 @@ mod performance_tests {
             connections
         });
         for expected in ["1", "2"] {
-            let response = build_client(15).unwrap().get(format!("http://{address}/status"))
-                .send().unwrap().text().unwrap();
+            let response = build_client(15)
+                .unwrap()
+                .get(format!("http://{address}/status"))
+                .send()
+                .unwrap()
+                .text()
+                .unwrap();
             assert_eq!(response, expected, "responses must remain fresh");
         }
-        assert_eq!(server.join().unwrap(), 1, "repeated reads should reuse one connection");
+        assert_eq!(
+            server.join().unwrap(),
+            1,
+            "repeated reads should reuse one connection"
+        );
     }
 
     #[test]
     fn endpoint_restrictions_are_preserved() {
-        for endpoint in ["https://127.0.0.1:11434", "http://example.com", "file:///tmp/model"] {
+        for endpoint in [
+            "https://127.0.0.1:11434",
+            "http://example.com",
+            "file:///tmp/model",
+        ] {
             assert!(!check_ollama_api(endpoint, 5));
         }
     }

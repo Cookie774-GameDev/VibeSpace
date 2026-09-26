@@ -18,8 +18,13 @@ mod tests {
         child.env("CODEX_CLI_PATH", "C:/protected/codex.exe");
         let selected = Path::new("D:/managed/codex.exe");
         bind_codex_executable(&mut child, selected);
-        let actual = child.get_envs().find(|(key, _)| *key == OsStr::new("CODEX_CLI_PATH"));
-        assert_eq!(actual, Some((OsStr::new("CODEX_CLI_PATH"), Some(selected.as_os_str()))));
+        let actual = child
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new("CODEX_CLI_PATH"));
+        assert_eq!(
+            actual,
+            Some((OsStr::new("CODEX_CLI_PATH"), Some(selected.as_os_str())))
+        );
         assert_eq!(std::env::var_os("CODEX_CLI_PATH"), before);
     }
 }

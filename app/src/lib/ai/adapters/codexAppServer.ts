@@ -40,6 +40,8 @@ export interface CodexApprovalControlRequest {
 export interface CodexQuestionControlRequest {
   type: 'question';
   requestId: string;
+  nativeRequestId?: string | number;
+  deadlineAt?: number;
   threadId: string;
   turnId: string;
   itemId: string;
@@ -74,7 +76,7 @@ export type CodexControlRequest =
   | CodexTurnBindingControlRequest
   | { type: 'plan_delta'; itemId: string; delta: string }
   | { type: 'plan_snapshot'; itemId: string; text: string }
-  | { type: 'resolved'; requestId: string };
+  | { type: 'resolved'; requestId: string | number };
 
 export interface CodexAppServerProjection {
   recognized: boolean;
@@ -126,6 +128,11 @@ function safeIdentifier(value: unknown): string | undefined {
   const text = typeof value === 'number' ? String(value) : typeof value === 'string' ? value : '';
   if (!text || text.length > MAX_IDENTIFIER || UNSAFE_CONTROL.test(text)) return undefined;
   return text;
+}
+
+function safeNativeRequestId(value: unknown): string | number | undefined {
+  if (typeof value === 'string') return safeIdentifier(value);
+  return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined;
 }
 
 function safePublicText(value: unknown, maximum = MAX_PUBLIC_TEXT): string | undefined {
@@ -415,8 +422,13 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
   return [];
 }
 
-function normalizeQuestion(message: Record<string, unknown>, params: Record<string, unknown>) {
-  const requestId = safeIdentifier(message.id);
+function normalizeQuestion(
+  message: Record<string, unknown>,
+  params: Record<string, unknown>,
+  options: CodexAppServerProjectionOptions,
+) {
+  const nativeRequestId = safeNativeRequestId(message.id);
+  const requestId = safeIdentifier(nativeRequestId);
   const sessionId = safeIdentifier(params.threadId);
   const turnId = safeIdentifier(params.turnId);
   const itemId = safeIdentifier(params.itemId);
@@ -480,6 +492,19 @@ function normalizeQuestion(message: Record<string, unknown>, params: Record<stri
     return projection([{ type: 'error', message: 'Codex returned a malformed question request.' }]);
   }
 
+  const autoResolutionMs = params.autoResolutionMs;
+  const receivedAt =
+    typeof options.capturedAt === 'number' && Number.isFinite(options.capturedAt)
+      ? options.capturedAt
+      : Date.now();
+  const deadlineAt =
+    typeof autoResolutionMs === 'number' &&
+    Number.isFinite(autoResolutionMs) &&
+    autoResolutionMs >= 0 &&
+    Number.isFinite(receivedAt + autoResolutionMs)
+      ? receivedAt + autoResolutionMs
+      : undefined;
+
   return projection(
     [
       {
@@ -487,6 +512,8 @@ function normalizeQuestion(message: Record<string, unknown>, params: Record<stri
         request: {
           id: requestId,
           sessionId,
+          nativeRequestId,
+          ...(deadlineAt !== undefined ? { deadlineAt } : {}),
           questions: questions.map(({ id: _id, ...question }) => question),
           tool: { messageId: turnId, callId: itemId },
         },
@@ -496,6 +523,8 @@ function normalizeQuestion(message: Record<string, unknown>, params: Record<stri
       {
         type: 'question',
         requestId,
+        nativeRequestId,
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
         threadId: sessionId,
         turnId,
         itemId,
@@ -545,7 +574,7 @@ function normalizeApproval(
       : {}),
     ...(cwdLabel ? { cwdLabel } : {}),
     ...(fileLabels.length > 0 ? { fileLabels } : {}),
-    ...(availableDecisions.length > 0 ? { availableDecisions } : {}),
+    ...(Array.isArray(params.availableDecisions) ? { availableDecisions } : {}),
     ...(requestedPermissions ? { requestedPermissions } : {}),
   };
   return projection(
@@ -678,13 +707,13 @@ export function normalizeCodexAppServerMessage(
     }
     return projection(item ? normalizeItem(item, method) : []);
   }
-  if (method === 'item/tool/requestUserInput') return normalizeQuestion(message, params);
+  if (method === 'item/tool/requestUserInput') return normalizeQuestion(message, params, options);
 
   const kind = approvalKind(method);
   if (kind) return normalizeApproval(message, params, kind);
 
   if (method === 'serverRequest/resolved') {
-    const requestId = safeIdentifier(params.requestId);
+    const requestId = safeNativeRequestId(params.requestId);
     return projection([], requestId ? [{ type: 'resolved', requestId }] : []);
   }
 

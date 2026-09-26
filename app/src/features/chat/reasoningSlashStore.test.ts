@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { resolveReasoningPolicy } from '@/lib/ai/reasoningControls';
 import {
   clearChatReasoningPreferences,
   buildReasoningSlashPickerState,
@@ -79,18 +80,75 @@ describe('per-chat reasoning slash preferences', () => {
     expect(stored.chats['chat-139']).toMatchObject({ effortOverride: 'low' });
   });
 
-  it('builds model-aware effort options and reports the snapped active value', () => {
+  it('builds model-aware effort options and reports a supported active value', () => {
     const state = buildReasoningSlashPickerState({
       command: 'effort',
       selection: {
         providerId: 'google',
         modelId: 'gemini-2.5-pro',
       },
-      preference: { mode: 'normal', effortOverride: 'minimal' },
+      preference: { mode: 'normal', effortOverride: 'low' },
     });
     expect(state.options.map(({ id }) => id)).toEqual(['auto', 'low', 'medium', 'high']);
     expect(state.selectedId).toBe('low');
     expect(state.error).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: 'a saved level below the supported range',
+      selection: { providerId: 'google', modelId: 'gemini-2.5-pro' },
+      requested: 'minimal',
+    },
+    {
+      label: 'Ultra on the distinct Luna effort range',
+      selection: {
+        providerId: 'openai',
+        modelId: 'gpt-5.6-luna',
+        connectionId: 'openai-codex',
+      },
+      requested: 'ultra',
+    },
+    {
+      label: 'a saved level above a single-effort model',
+      selection: {
+        providerId: 'openai',
+        modelId: 'gpt-5.3-codex-spark',
+        connectionId: 'openai-codex',
+      },
+      requested: 'high',
+    },
+  ] as const)(
+    'does not mark a substitute active when dispatch rejects $label',
+    ({ selection, requested }) => {
+      writeChatReasoningEffort('chat-stale', requested, localStorage);
+      const preference = readChatReasoningPreference('chat-stale', localStorage);
+      expect(() => resolveReasoningPolicy({ selection, preference })).toThrow('is unsupported');
+
+      const state = buildReasoningSlashPickerState({
+        command: 'effort',
+        selection,
+        preference,
+      });
+
+      expect(state.selectedId).toBe('');
+      expect(state.options.some(({ id }) => id === requested)).toBe(false);
+      expect(state.options.some(({ id }) => id === 'auto')).toBe(true);
+      // An error replaces the option list in the existing picker. Keep the
+      // valid choices visible so the user can explicitly repair the selection.
+      expect(state.error).toBeUndefined();
+      expect(readChatReasoningPreference('chat-stale', localStorage)).toEqual(preference);
+      expect(preference.effortOverride).toBe(requested);
+    },
+  );
+
+  it('marks Auto active only when there is no saved effort override', () => {
+    const state = buildReasoningSlashPickerState({
+      command: 'effort',
+      selection: { providerId: 'google', modelId: 'gemini-2.5-pro' },
+      preference: { mode: 'normal', effortOverride: null },
+    });
+    expect(state.selectedId).toBe('auto');
   });
 
   it('keeps all three policy modes available even when the model has no effort control', () => {

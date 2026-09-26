@@ -4,6 +4,7 @@ import { ModeIndicator } from './ModeIndicator';
 import {
   readAgentApprovalMode,
   readPermissionAccess,
+  setAgentApprovalMode,
   setApproveAllForRun,
   setPermissionAccess,
 } from './permissionAccessStore';
@@ -25,6 +26,23 @@ describe('ModeIndicator', () => {
     expect(readAgentApprovalMode('chat-full')).toBe('full');
     expect(onSelectMode).toHaveBeenCalledWith('agent');
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('visually marks the selected Agent access profile', () => {
+    setAgentApprovalMode('chat-profile', 'review');
+    render(<ModeIndicator mode="agent" chatId="chat-profile" onSelectMode={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Agent Mode/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Agent Mode/i }));
+
+    const full = screen.getByRole('option', { name: /Full access/i });
+    const review = screen.getByRole('option', { name: /Review risky actions/i });
+    expect(full.getAttribute('aria-selected')).toBe('false');
+    expect(review.getAttribute('aria-selected')).toBe('true');
+    expect(full.className).toContain('border-transparent');
+    expect(review.className).toContain('border-accent-cyan/45');
+    expect(screen.getAllByText('Active')).toHaveLength(1);
+    expect(review.textContent).toContain('Active');
   });
 
   it('offers only Agent, Plan, and Ask, then applies Plan read-only access and closes', async () => {

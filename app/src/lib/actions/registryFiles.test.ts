@@ -1,285 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useAuthStore } from '@/stores/auth';
+import { describe, expect, it } from 'vitest';
 import type { CanonicalFileActionEvidence } from '@/lib/jarvis/artifactProducerAdapters';
-import { FILE_ACTIONS, isCanonicalFileArtifactResult } from './registryFiles';
+import { getBuiltinAction } from './registry';
+import { isCanonicalFileArtifactResult } from './registryFiles';
 
-const fsMocks = vi.hoisted(() => ({
-  createDirectory: vi.fn(),
-  createTextFileWithContent: vi.fn(),
-  readTextFile: vi.fn(),
-  readTextFileSample: vi.fn(),
-  writeTextFile: vi.fn(),
-}));
-
-const pathMocks = vi.hoisted(() => ({
-  downloadDir: vi.fn(),
-}));
-
-vi.mock('@/lib/fs', async () => ({
-  ...(await vi.importActual<typeof import('@/lib/fs')>('@/lib/fs')),
-  ...fsMocks,
-}));
-
-vi.mock('@tauri-apps/api/path', () => pathMocks);
-
-vi.mock('@/features/files/projectFiles', async () => ({
-  ...(await vi.importActual<typeof import('@/features/files/projectFiles')>(
-    '@/features/files/projectFiles',
-  )),
-  getStoredProjectRoot: vi.fn(() => 'C:\\Projects\\FarmLife'),
-  getJarvisRootDir: vi.fn(async () => 'C:\\Users\\viper\\AppData\\Roaming\\VibeSpace'),
-  getJarvisProjectsDir: vi.fn(
-    async () => 'C:\\Users\\viper\\AppData\\Roaming\\VibeSpace\\Projects',
-  ),
-}));
-
-describe('project file actions', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    useAuthStore.setState({ projectId: 'project_1' as never });
-    fsMocks.createDirectory.mockResolvedValue({ ok: true, path: 'ok' });
-    fsMocks.createTextFileWithContent.mockResolvedValue({ ok: true, path: 'ok' });
-    fsMocks.readTextFile.mockResolvedValue({ ok: true, path: 'ok', content: 'old' });
-    fsMocks.readTextFileSample.mockResolvedValue({ ok: true, path: 'ok', content: 'sample' });
-    fsMocks.writeTextFile.mockResolvedValue({ ok: true, path: 'ok' });
-    pathMocks.downloadDir.mockResolvedValue('C:\\Users\\viper\\Downloads\\');
-  });
-
-  it('creates new content atomically without an overwrite call', async () => {
-    const action = FILE_ACTIONS.find((item) => item.id === 'files.create')!;
-    const result = await action.run(
-      {
-        path: 'C:\\Projects\\FarmLife\\dogs.md',
-        root: 'C:\\Projects\\FarmLife',
-        content: '# Dogs',
-      },
-      { source: 'ai' },
-    );
-    expect(result.ok).toBe(true);
-    expect(result).toMatchObject({
-      ok: true,
-      data: {
-        operation: 'create',
-        path: 'C:\\Projects\\FarmLife\\dogs.md',
-        contentSha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
-        sizeBytes: 6,
-      },
-    });
-    expect(fsMocks.createTextFileWithContent).toHaveBeenCalledWith(
-      'C:\\Projects\\FarmLife\\dogs.md',
-      '# Dogs',
-      { root: 'C:\\Projects\\FarmLife' },
-    );
-    expect(fsMocks.writeTextFile).not.toHaveBeenCalled();
-  });
-
-  it('surfaces a collision and never redirects content', async () => {
-    fsMocks.createTextFileWithContent.mockResolvedValue({
-      ok: false,
-      path: 'dogs.md',
-      error: { code: 'already_exists' },
-    });
-    const action = FILE_ACTIONS.find((item) => item.id === 'files.create')!;
-    const result = await action.run(
-      {
-        path: 'C:\\Projects\\FarmLife\\dogs.md',
-        root: 'C:\\Projects\\FarmLife',
-        content: 'new',
-      },
-      { source: 'ai' },
-    );
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(/already exists/i) });
-    expect(fsMocks.writeTextFile).not.toHaveBeenCalled();
-  });
-
-  it('rejects paths outside the active or default project root', async () => {
-    const action = FILE_ACTIONS.find((item) => item.id === 'files.create')!;
-    const result = await action.run(
-      {
-        path: 'C:\\Windows\\dogs.md',
-        root: 'C:\\Projects\\FarmLife',
-        content: 'no',
-      },
-      { source: 'ai' },
-    );
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(/outside/i) });
-    expect(fsMocks.createTextFileWithContent).not.toHaveBeenCalled();
-  });
-
-  it('normalizes safe dot segments but rejects traversal before any filesystem call', async () => {
-    const action = FILE_ACTIONS.find((item) => item.id === 'files.create')!;
-    const safe = await action.run(
-      {
-        path: 'C:/Projects/FarmLife/docs/../dogs.md',
-        root: 'c:\\projects\\FarmLife\\.',
-        content: 'safe',
-      },
-      { source: 'ai' },
-    );
-    expect(safe.ok).toBe(true);
-    expect(fsMocks.createTextFileWithContent).toHaveBeenCalledWith(
-      'C:\\Projects\\FarmLife\\dogs.md',
-      'safe',
-      { root: 'C:\\projects\\FarmLife' },
-    );
-
-    vi.clearAllMocks();
-    const escaped = await action.run(
-      {
-        path: 'C:\\Projects\\FarmLife\\..\\private\\dogs.md',
-        root: 'C:\\Projects\\FarmLife',
-        content: 'blocked',
-      },
-      { source: 'ai' },
-    );
-    expect(escaped).toEqual({ ok: false, error: expect.stringMatching(/outside|invalid/i) });
-    expect(fsMocks.createDirectory).not.toHaveBeenCalled();
-    expect(fsMocks.createTextFileWithContent).not.toHaveBeenCalled();
-
-    const rootedRelative = await action.run(
-      {
-        path: '\\Projects\\FarmLife\\dogs.md',
-        root: 'C:\\Projects\\FarmLife',
-        content: 'blocked',
-      },
-      { source: 'ai' },
-    );
-    expect(rootedRelative).toEqual({
-      ok: false,
-      error: expect.stringMatching(/absolute|invalid/i),
-    });
-    expect(fsMocks.createDirectory).not.toHaveBeenCalled();
-    expect(fsMocks.createTextFileWithContent).not.toHaveBeenCalled();
-  });
-
-  it('requires an existing file before edit writes', async () => {
-    fsMocks.readTextFile.mockResolvedValue({
-      ok: false,
-      path: 'missing.md',
-      error: { code: 'not_found' },
-    });
-    const action = FILE_ACTIONS.find((item) => item.id === 'files.edit')!;
-    const result = await action.run(
-      {
-        path: 'C:\\Projects\\FarmLife\\missing.md',
-        root: 'C:\\Projects\\FarmLife',
-        content: 'new',
-      },
-      { source: 'ai' },
-    );
-    expect(result.ok).toBe(false);
-    expect(fsMocks.writeTextFile).not.toHaveBeenCalled();
-  });
-
-  it('reads a child of the OS-resolved Downloads folder with the strict native boundary', async () => {
-    const action = FILE_ACTIONS.find((item) => item.id === 'files.read')!;
-
-    const result = await action.run(
-      { path: 'C:\\Users\\viper\\Downloads\\dogs_story_500_words.txt' },
-      { source: 'ai' },
-    );
-
-    expect(result).toEqual({
-      ok: true,
-      summary: 'Read C:\\Users\\viper\\Downloads\\dogs_story_500_words.txt.',
-      data: {
-        path: 'C:\\Users\\viper\\Downloads\\dogs_story_500_words.txt',
-        content: 'sample',
-      },
-    });
-    expect(pathMocks.downloadDir).toHaveBeenCalledOnce();
-    expect(fsMocks.readTextFileSample).toHaveBeenCalledWith(
-      'C:\\Users\\viper\\Downloads\\dogs_story_500_words.txt',
-      48_000,
-      {
-        root: 'C:\\Users\\viper\\Downloads',
-        strictProjectBoundary: true,
-      },
-    );
-  });
-
-  it('rejects Downloads siblings, traversal, and caller-forged roots before filesystem access', async () => {
-    const action = FILE_ACTIONS.find((item) => item.id === 'files.read')!;
-
-    for (const params of [
-      { path: 'C:\\Users\\viper\\Downloadz\\dogs_story_500_words.txt' },
-      { path: 'C:\\Users\\viper\\Downloads\\..\\Desktop\\dogs_story_500_words.txt' },
-      {
-        path: 'D:\\Forged\\Downloads\\dogs_story_500_words.txt',
-        root: 'D:\\Forged\\Downloads',
-      },
-      {
-        path: 'C:\\Users\\viper\\Downloads\\dogs_story_500_words.txt',
-        root: 'C:\\Users\\viper\\Downloads',
-      },
+describe('retired VibeSpace file and arbitrary shell actions', () => {
+  it('keeps file I/O and arbitrary shell executors out of the built-in registry', () => {
+    for (const id of [
+      'files.read',
+      'files.create',
+      'files.edit',
+      'terminal.run',
+      'terminal.powershell',
+      'custom.createTerminalCommand',
     ]) {
-      const result = await action.run(params, { source: 'ai' });
-      expect(result).toEqual({
-        ok: false,
-        error: expect.stringMatching(/outside|requested folder/i),
-      });
+      expect(getBuiltinAction(id), `${id} is not a public VibeSpace action`).toBeUndefined();
     }
-
-    expect(fsMocks.readTextFileSample).not.toHaveBeenCalled();
-  });
-
-  it('keeps Downloads read-only and never expands create or edit authority', async () => {
-    const downloadsPath = 'C:\\Users\\viper\\Downloads\\dogs_story_500_words.txt';
-    const create = FILE_ACTIONS.find((item) => item.id === 'files.create')!;
-    const edit = FILE_ACTIONS.find((item) => item.id === 'files.edit')!;
-
-    await expect(
-      create.run({ path: downloadsPath, content: 'blocked' }, { source: 'ai' }),
-    ).resolves.toEqual({ ok: false, error: expect.stringMatching(/outside/i) });
-    await expect(
-      edit.run({ path: downloadsPath, content: 'blocked' }, { source: 'ai' }),
-    ).resolves.toEqual({ ok: false, error: expect.stringMatching(/outside/i) });
-
-    expect(fsMocks.createDirectory).not.toHaveBeenCalled();
-    expect(fsMocks.createTextFileWithContent).not.toHaveBeenCalled();
-    expect(fsMocks.readTextFile).not.toHaveBeenCalled();
-    expect(fsMocks.writeTextFile).not.toHaveBeenCalled();
-  });
-
-  it('fails closed when the strict native Downloads read detects a symlink escape', async () => {
-    fsMocks.readTextFileSample.mockResolvedValue({
-      ok: false,
-      path: 'C:\\Users\\viper\\Downloads\\linked\\secret.txt',
-      error: { code: 'symlink_blocked' },
-    });
-    const action = FILE_ACTIONS.find((item) => item.id === 'files.read')!;
-
-    const result = await action.run(
-      { path: 'C:\\Users\\viper\\Downloads\\linked\\secret.txt' },
-      { source: 'ai' },
-    );
-
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(/symbolic link/i) });
-    expect(fsMocks.readTextFileSample).toHaveBeenCalledWith(
-      'C:\\Users\\viper\\Downloads\\linked\\secret.txt',
-      48_000,
-      {
-        root: 'C:\\Users\\viper\\Downloads',
-        strictProjectBoundary: true,
-      },
-    );
-  });
-
-  it('preserves existing active-project reads without invoking Downloads authority', async () => {
-    const action = FILE_ACTIONS.find((item) => item.id === 'files.read')!;
-
-    const result = await action.run(
-      { path: 'C:\\Projects\\FarmLife\\notes.txt' },
-      { source: 'ai' },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(pathMocks.downloadDir).not.toHaveBeenCalled();
-    expect(fsMocks.readTextFileSample).toHaveBeenCalledWith(
-      'C:\\Projects\\FarmLife\\notes.txt',
-      48_000,
-      { root: 'C:\\Projects\\FarmLife' },
-    );
+    for (const id of ['file.search', 'terminal.start_cli', 'terminal.sendToRefs', 'terminal.sendAll']) {
+      expect(getBuiltinAction(id), `${id} remains available`).toBeDefined();
+    }
   });
 });
 
@@ -348,29 +86,6 @@ describe('canonical file artifact result truth', () => {
     }
   });
 
-  it('attaches an explicitly requested created file after persistence succeeds', async () => {
-    const attached = vi.fn();
-    window.addEventListener('jarvis:file:attach', attached);
-    const action = FILE_ACTIONS.find((item) => item.id === 'files.create')!;
-
-    const result = await action.run(
-      {
-        path: 'C:\\Projects\\FarmLife\\docs\\generated\\goal.md',
-        root: 'C:\\Projects\\FarmLife',
-        content: '# Goal',
-        attachToChat: true,
-      },
-      { source: 'ai' },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(attached).toHaveBeenCalledOnce();
-    expect((attached.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
-      path: 'C:\\Projects\\FarmLife\\docs\\generated\\goal.md',
-    });
-    window.removeEventListener('jarvis:file:attach', attached);
-  });
-
   it('accepts only exact persisted patch and rollback receipts', () => {
     const patchEvidence = Object.freeze({
       ...evidence,
@@ -399,28 +114,14 @@ describe('canonical file artifact result truth', () => {
           ok: true,
           summary: 'Rolled back.',
           data: {
-            path: receipt.path,
-            restoredSha256: receipt.beforeSha256,
-            changedPaths: receipt.changedPaths,
-            previewId: receipt.previewId,
-            artifactRef: receipt.rollbackArtifactRef,
+            path: 'src/auth.ts',
+            changedPaths: ['src/auth.ts'],
+            previewId: 'patch-request-1',
+            artifactRef: 'jartifact_rollback-1',
+            restoredSha256: `sha256:${'c'.repeat(64)}`,
           },
         },
       ),
     ).toBe(true);
-    expect(
-      isCanonicalFileArtifactResult(patchEvidence, {
-        ok: true,
-        summary: 'False paths.',
-        data: { ...receipt, changedPaths: ['src/other.ts'] },
-      }),
-    ).toBe(false);
-    expect(
-      isCanonicalFileArtifactResult(patchEvidence, {
-        ok: true,
-        summary: 'False hash.',
-        data: { ...receipt, afterSha256: 'not-a-hash' },
-      }),
-    ).toBe(false);
   });
 });

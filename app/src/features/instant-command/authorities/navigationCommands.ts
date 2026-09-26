@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/toast';
 import { useFullscreenStore } from '@/features/fullscreen/fullscreenStore';
 import { APP_ROUTES, type Route } from '@/features/navigation/routeSchema';
 import { isSettingsTab, type SettingsTab } from '@/features/settings/settingsPrefetch';
@@ -33,6 +34,7 @@ export type NavigationAuthorityPort = Readonly<{
   openLauncher: () => void;
   setFullscreen: (enabled: boolean) => Promise<boolean>;
   readRouterStatus?: () => RouterStatusSnapshot;
+  showRouterStatus?: (message: string) => void;
 }>;
 
 const ROUTES = new Set<string>(APP_ROUTES);
@@ -75,6 +77,7 @@ const defaultPort: NavigationAuthorityPort = {
   openLauncher: () => useUIStore.getState().setLauncherOpen(true),
   setFullscreen: (enabled) => useFullscreenStore.getState().requestSystemActive(enabled),
   readRouterStatus,
+  showRouterStatus: (message) => { toast.info('Local command router', message, 8_000); },
 };
 
 function success(message: string): InstantResult {
@@ -139,7 +142,12 @@ async function executeNavigationCommandUnsafe(
     return success(`Opened ${route}.`);
   }
   if (request.id === 'status.show') {
-    return executeRouterStatusCommand(request, port.readRouterStatus ?? readRouterStatus, signal);
+    const result = await executeRouterStatusCommand(request, port.readRouterStatus ?? readRouterStatus, signal);
+    if (signal?.aborted) return invalid('The instant command deadline elapsed.');
+    // Command-only receipts deliberately omit result text. Present this validated
+    // local read through the existing UI, without dispatching a provider turn.
+    if (result.ok) port.showRouterStatus?.(result.message);
+    return result;
   }
   if (request.id === 'page.back') {
     port.goBack();

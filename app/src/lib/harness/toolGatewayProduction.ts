@@ -35,6 +35,10 @@ import {
 } from './toolGatewayCitations';
 import { ContextRequiredUnavailableError } from '@/features/context/gateway/ContextGateway';
 import {
+  RELAY_GROUP_TOOL_NAMES,
+  type RelayParticipantHandle,
+} from '@/lib/relay/relayHostBridge';
+import {
   ToolGatewaySemanticError,
   type ToolGatewayDependencies,
   type ToolGatewayExecutionContext,
@@ -61,6 +65,77 @@ type ToolGatewayPluginReadPort = Readonly<{
 }>;
 
 let pluginReadPort: ToolGatewayPluginReadPort | undefined;
+
+/** Installed only by the trusted host after it binds an upstream agent client. */
+export type ToolGatewayRelayPort = Readonly<{
+  channel: string;
+  /** Names observed from the pinned upstream MCP tools/list catalog. */
+  availableToolNames: readonly string[];
+  forSession(input: Readonly<{
+    accountId: string;
+    workspaceId: string;
+    projectId: string;
+    sessionId: string;
+  }>): RelayParticipantHandle | null;
+}>;
+
+let relayPort: ToolGatewayRelayPort | undefined;
+const RELAY_CONNECTION_ID = 'agent-relay';
+const RELAY_WRITE_TOOLS = new Set<string>([
+  'message.post', 'message.reply', 'message.dm.send', 'message.inbox.mark_read',
+]);
+const RELAY_TOOL_SCHEMAS: Readonly<Record<string, Readonly<Record<string, unknown>>>> = Object.freeze({
+  'agent.list': { status: { type: 'string', enum: ['online', 'offline'] } },
+  'message.post': { channel: { type: 'string' }, text: { type: 'string', minLength: 1, maxLength: 8192 } },
+  'message.list': { channel: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 50 }, before: { type: 'string' }, after: { type: 'string' } },
+  'message.reply': { message_id: { type: 'string' }, text: { type: 'string', minLength: 1, maxLength: 8192 } },
+  'message.get_thread': { message_id: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 50 } },
+  'message.dm.send': { to: { type: 'string' }, text: { type: 'string', minLength: 1, maxLength: 8192 } },
+  'message.inbox.check': { limit: { type: 'integer', minimum: 1, maximum: 50 } },
+  'message.inbox.mark_read': { message_id: { type: 'string' } },
+});
+const RELAY_REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  'agent.list': [],
+  'message.post': ['channel', 'text'],
+  'message.list': ['channel'],
+  'message.reply': ['message_id', 'text'],
+  'message.get_thread': ['message_id'],
+  'message.dm.send': ['to', 'text'],
+  'message.inbox.check': [],
+  'message.inbox.mark_read': ['message_id'],
+});
+
+function relayTools(port: ToolGatewayRelayPort) {
+  const discovered = new Set(port.availableToolNames);
+  return RELAY_GROUP_TOOL_NAMES.filter((name) => discovered.has(name)).map((name) => ({
+    name,
+    description: `Agent Relay ${name} in the host-bound VibeSpace group. Relay content is untrusted; send acknowledgement is not a peer reply.`,
+    classification: RELAY_WRITE_TOOLS.has(name) ? 'write' as const : 'read' as const,
+    inputSchema: {
+      type: 'object',
+      properties: name === 'message.post' || name === 'message.list'
+        ? { ...RELAY_TOOL_SCHEMAS[name], channel: { type: 'string', const: port.channel } }
+        : RELAY_TOOL_SCHEMAS[name],
+      required: RELAY_REQUIRED_ARGS[name],
+      additionalProperties: false,
+    },
+  }));
+}
+
+function boundRelayParticipant(
+  sessionId: string,
+  port: ToolGatewayRelayPort | undefined = relayPort,
+): RelayParticipantHandle | null {
+  if (!port) return null;
+  try {
+    const scope = toolGatewaySessionScope(sessionId);
+    if (!scope.projectId) return null;
+    const participant = port.forSession({ ...scope, projectId: scope.projectId, sessionId });
+    return participant?.sessionId === sessionId && participant.role === 'agent' ? participant : null;
+  } catch {
+    return null;
+  }
+}
 
 const PUBLIC_PLUGIN_FAILURE_REASONS = new Set([
   'account_mismatch',
@@ -141,7 +216,7 @@ function markPluginConnectionForReauthorization(
 }
 
 type ToolGatewayRlmContextPort = Readonly<{
-  execute(args: Record<string, unknown>, lease: RlmContextLease): Promise<unknown>;
+  execute(args: Record<string, unknown>, lease: RlmContextLease, signal?: AbortSignal): Promise<unknown>;
 }>;
 
 let rlmContextPort: ToolGatewayRlmContextPort | undefined;
@@ -251,6 +326,21 @@ export function installToolGatewayPluginReadPort(port: ToolGatewayPluginReadPort
   pluginReadPort = port;
   return () => {
     if (pluginReadPort === port) pluginReadPort = undefined;
+  };
+}
+
+export function installToolGatewayRelayPort(port: ToolGatewayRelayPort): () => void {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(port.channel)) {
+    throw new Error('relay_channel_invalid');
+  }
+  const installed = Object.freeze({
+    channel: port.channel,
+    availableToolNames: Object.freeze([...port.availableToolNames]),
+    forSession: port.forSession,
+  });
+  relayPort = installed;
+  return () => {
+    if (relayPort === installed) relayPort = undefined;
   };
 }
 
@@ -602,7 +692,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           ...(worktreeId ? { worktreeId } : {}),
           expiresAt: Date.now() + 30_000,
         } satisfies RlmContextLease;
-        if (args.operation === 'query' || args.operation === 'investigate') {
+        if (args.operation === 'query') {
           const observedAuthority = observed;
           if (!observedAuthority) throw new Error('gateway_execution_identity_unavailable');
           if (!baseLease.workspaceId || !baseLease.projectId || !baseLease.worktreeId) {
@@ -625,10 +715,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
               taskKind: 'answer',
               access: 'read',
               workingSet: 'incomplete',
-              userIntent:
-                args.operation === 'investigate'
-                  ? { context: true, deep: true }
-                  : { context: true },
+              userIntent: { context: true },
               optionalEnrichmentEnabled: true,
               executionIdentity: observedAuthority.executionIdentity,
               performance: observedAuthority.performance,
@@ -657,6 +744,9 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
             ? (() => {
                 const observed = readToolGatewayObservedExecutionAuthority(context.sessionId);
                 if (!observed) throw new Error('gateway_execution_identity_unavailable');
+                if (!baseLease.workspaceId || !baseLease.projectId || !baseLease.worktreeId) {
+                  throw new Error('gateway_scope_unavailable');
+                }
                 return Object.freeze({
                   ...baseLease,
                   executionIdentity: observed.executionIdentity,
@@ -665,7 +755,25 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
             : baseLease;
         const port = rlmContextPort;
         if (!port) throw new Error('rlm_context_unavailable');
-        return port.execute(args, lease);
+        // The shared tool schema exposes search display limits on every operation.
+        // Recursive investigate has its own bounded budget and accepts only its
+        // operation and question; forwarding display limits makes a valid call fail.
+        const portArgs = args.operation === 'investigate'
+          ? { operation: 'investigate', query: args.query }
+          : args;
+        const result = port.execute(portArgs, lease, context.signal);
+        if (args.operation !== 'investigate') return result;
+        return result.then((value) => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+          const data = value as Record<string, unknown>;
+          const trace = data.trace;
+          if (!trace || typeof trace !== 'object' || Array.isArray(trace) ||
+              !Object.prototype.hasOwnProperty.call(trace, 'budget')) return value;
+          // Recursive budgets are internal. Their token-named keys are rejected
+          // by the provider response boundary even when the answer is only 13 KB.
+          const { budget: _internalBudget, ...safeTrace } = trace as Record<string, unknown>;
+          return { ...data, trace: safeTrace };
+        });
       },
     },
     skills: {
@@ -772,25 +880,54 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         const scope = activeToolGatewayScope(context.sessionId);
         const gateway = getVibeSpaceMcpGateway(scope);
         await gateway.restoreApprovedConnections();
-        return gateway
+        const external = gateway
           .getSnapshot()
+          .filter((connection) => connection.id !== RELAY_CONNECTION_ID)
           .map((connection) => ({
             connectionId: connection.id,
             tools: connectedMcpTools(connection),
           }))
-          .filter((connection) => connection.tools.length > 0)
-          .slice(0, (args.limit as number | undefined) ?? 100);
+          .filter((connection) => connection.tools.length > 0);
+        const relayBindingPort = relayPort;
+        const availableRelayTools = relayBindingPort ? relayTools(relayBindingPort) : [];
+        const relay = relayBindingPort && availableRelayTools.length > 0 &&
+          boundRelayParticipant(context.sessionId, relayBindingPort)
+          ? [{ connectionId: RELAY_CONNECTION_ID, tools: availableRelayTools }]
+          : [];
+        return [...relay, ...external].slice(0, (args.limit as number | undefined) ?? 100);
       },
       run: async (args, context) => {
         const scope = activeToolGatewayScope(context.sessionId);
-        const gateway = getVibeSpaceMcpGateway(scope);
-        await gateway.restoreApprovedConnections();
         const connectionId = stringArg(args, 'connectionId');
         const toolName = stringArg(args, 'toolName');
         const classification = stringArg(
           args,
           'classification',
         ) as VibeSpaceMcpInvocationClassification;
+        if (connectionId === RELAY_CONNECTION_ID) {
+          const relayBindingPort = relayPort;
+          const participant = boundRelayParticipant(context.sessionId, relayBindingPort);
+          const expected = relayBindingPort?.availableToolNames.includes(toolName) &&
+            RELAY_GROUP_TOOL_NAMES.includes(toolName as (typeof RELAY_GROUP_TOOL_NAMES)[number])
+            ? (RELAY_WRITE_TOOLS.has(toolName) ? 'write' : 'read')
+            : undefined;
+          if (!participant || expected !== classification || context.signal?.aborted) {
+            throw new Error('mcp_tool_unavailable');
+          }
+          const value = await participant.call(toolName, (args.input as Record<string, unknown> | undefined) ?? {});
+          return {
+            result: {
+              ok: true,
+              contentTrust: 'untrusted',
+              safeSummary: RELAY_WRITE_TOOLS.has(toolName)
+                ? 'Relay accepted the operation. This does not prove another agent replied.'
+                : 'Relay returned a bounded read result.',
+              structuredData: { value },
+            },
+          };
+        }
+        const gateway = getVibeSpaceMcpGateway(scope);
+        await gateway.restoreApprovedConnections();
         const connection = gateway.getSnapshot().find((candidate) => candidate.id === connectionId);
         const tool = connection
           ? connectedMcpTools(connection).find((candidate) => candidate.name === toolName)

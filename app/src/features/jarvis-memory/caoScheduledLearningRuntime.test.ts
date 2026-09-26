@@ -366,3 +366,34 @@ it('runs a manual review for the current project when no schedules exist', async
  expect(result.status).toBe('completed');
  expect(run).toHaveBeenCalledWith({scope:{accountId:'account',workspaceId:'workspace',projectId:'project',scheduleId:'cao-manual-project',targetId:'jarvis-cao',scheduleAnchorAt:0},trigger:'manual_force'});
 });
+
+it('includes the current project in a manual review when scheduled scopes belong elsewhere', async () => {
+  const otherProjectEvent = supervisionEvent({ id: 'event-other-project', projectId: 'project-b' });
+  const run = vi.fn(async () => ({ status: 'completed' as const }));
+  const result = await runManualCaoLearningChecks({
+    getAccountIdentity: () => ({ accountId: SCOPE.accountId }),
+    getWorkspaceId: () => SCOPE.workspaceId,
+    getProjectId: () => SCOPE.projectId,
+    listEvents: async () => [otherProjectEvent],
+    recover: async () => null,
+    run,
+  });
+
+  expect(result).toEqual({ status: 'completed' });
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(run).toHaveBeenNthCalledWith(1, {
+    scope: { ...SCOPE, projectId: 'project-b' },
+    trigger: 'manual_force',
+  });
+  expect(run).toHaveBeenNthCalledWith(2, {
+    scope: {
+      accountId: SCOPE.accountId,
+      workspaceId: SCOPE.workspaceId,
+      projectId: SCOPE.projectId,
+      scheduleId: 'cao-manual-project',
+      targetId: 'jarvis-cao',
+      scheduleAnchorAt: 0,
+    },
+    trigger: 'manual_force',
+  });
+});

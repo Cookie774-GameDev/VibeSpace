@@ -62,7 +62,43 @@ export interface SlashCommandDef {
   hasOptions?: boolean;
   /** Runtime that owns this command's picker exposure. Unscoped commands are shared. */
   backend?: 'codex' | 'opencode';
+  /** Stable owner and source for native commands that share a slash token. */
+  owner?: 'vibespace' | 'codex' | 'opencode';
+  source?: string;
+  /** Exact upstream identifier; `cmd` remains the text token used by legacy callers. */
+  commandIdentifier?: string;
+  executionCapability?: 'session-command' | 'requires-native-cli-ui';
 }
+
+function encodeSlashIdentityPart(value: string): string {
+  try {
+    return encodeURIComponent(value);
+  } catch {
+    const codeUnits = Array.from({ length: value.length }, (_, index) =>
+      value.charCodeAt(index).toString(16).padStart(4, '0'),
+    );
+    return `utf16-${codeUnits.join('-')}`;
+  }
+}
+
+/** Stable identity for React, accessibility, selection and native-owner disambiguation. */
+export function slashCommandCompositeKey(command: SlashCommandDef): string {
+  const owner = command.owner ?? command.backend ?? 'vibespace';
+  const source = command.source ?? (command.backend ? 'harness' : 'vibespace');
+  const identifier = command.commandIdentifier ?? command.cmd;
+  return [owner, source, identifier].map(encodeSlashIdentityPart).join(':');
+}
+
+function slashCommandCategory(command: SlashCommandDef): string {
+  return (
+    command.backend ??
+    (command.owner === 'codex' || command.owner === 'opencode'
+      ? command.owner
+      : (command.category ?? 'utility'))
+  );
+}
+
+const MAX_VISIBLE_SLASH_COMMANDS = 128;
 
 export const SLASH_CMD_ALIASES: Readonly<Record<string, string>> = SLASH_COMMAND_ALIASES;
 
@@ -472,8 +508,8 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
 
 const CATEGORY_LABELS: Record<string, string> = {
   chat: 'Chat context',
-  codex: 'Custom commands · Codex',
-  opencode: 'Custom commands · OpenCode',
+  codex: 'Harness commands · Codex',
+  opencode: 'Harness commands · OpenCode',
   navigation: 'Navigation',
   utility: 'Utility',
 };
@@ -482,7 +518,7 @@ const CATEGORY_ORDER = ['chat', 'codex', 'opencode', 'navigation', 'utility'];
 
 export function orderSlashCommandsForDisplay(commands: SlashCommandDef[]): SlashCommandDef[] {
   const grouped = commands.reduce<Record<string, SlashCommandDef[]>>((acc, cmd) => {
-    const cat = cmd.backend ?? cmd.category ?? 'utility';
+    const cat = slashCommandCategory(cmd);
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(cmd);
     return acc;
@@ -508,8 +544,11 @@ export function resolveSlashCommandSelection(
 export interface SlashCommandTypeaheadProps {
   commands: SlashCommandDef[];
   selectedCmd: string;
+  /** Optional exact owner/source selection; required when duplicate slash names are present. */
+  selectedCommandKey?: string;
   query: string;
   onHoverCmd?: (cmd: string) => void;
+  onHoverCommand?: (command: SlashCommandDef) => void;
   onSelect: (cmd: SlashCommandDef) => void;
   /** Dense sizing for pet mini-panel / narrow composer. */
   compact?: boolean;
@@ -527,7 +566,16 @@ export const SlashCommandTypeahead = forwardRef<
   SlashCommandTypeaheadRef,
   SlashCommandTypeaheadProps
 >(function SlashCommandTypeahead(
-  { commands, selectedCmd, query, onHoverCmd, onSelect, compact = false },
+  {
+    commands,
+    selectedCmd,
+    selectedCommandKey,
+    query,
+    onHoverCmd,
+    onHoverCommand,
+    onSelect,
+    compact = false,
+  },
   ref,
 ) {
   const listRef = useRef<HTMLDivElement>(null);
@@ -538,39 +586,62 @@ export const SlashCommandTypeahead = forwardRef<
   const dropdownMotion = resolveDropdownMotion(reducedMotion, dropdownTransition);
   // Live scale — re-renders when the mini panel is resized while menu is open.
   const panelScale = useLivePanelUiScale(compact);
-  const displayCommands = orderSlashCommandsForDisplay(commands);
-  const activeDescendantId = displayCommands.some((command) => command.cmd === selectedCmd)
-    ? `${listboxId}-option-${selectedCmd}`
-    : undefined;
+  const orderedCommands = orderSlashCommandsForDisplay(commands);
+  const visibleCounts = new Map<string, number>();
+  const displayCommands = orderedCommands.filter((command) => {
+    const category = slashCommandCategory(command);
+    const visibleCount = visibleCounts.get(category) ?? 0;
+    if (visibleCount >= MAX_VISIBLE_SLASH_COMMANDS) return false;
+    visibleCounts.set(category, visibleCount + 1);
+    return true;
+  });
+  const overflowCount = orderedCommands.length - displayCommands.length;
+  const selectedCommand = displayCommands.find((command) =>
+    selectedCommandKey
+      ? slashCommandCompositeKey(command) === selectedCommandKey
+      : command.cmd === selectedCmd,
+  );
+  const selectedKey = selectedCommand ? slashCommandCompositeKey(selectedCommand) : undefined;
+  const activeDescendantId = selectedKey ? `${listboxId}-option-${selectedKey}` : undefined;
+
+  const hoverCommand = (command: SlashCommandDef) => {
+    onHoverCmd?.(command.cmd);
+    onHoverCommand?.(command);
+  };
+  const selectCommand = (command: SlashCommandDef) => {
+    if (command.executionCapability === 'requires-native-cli-ui') return;
+    onSelect(command);
+  };
 
   useImperativeHandle(ref, () => ({
     moveUp: () => {
       if (displayCommands.length === 0) return;
-      const i = displayCommands.findIndex((c) => c.cmd === selectedCmd);
+      const i = displayCommands.findIndex((c) => slashCommandCompositeKey(c) === selectedKey);
       const next = displayCommands[(i - 1 + displayCommands.length) % displayCommands.length]!;
-      onHoverCmd?.(next.cmd);
+      hoverCommand(next);
     },
     moveDown: () => {
       if (displayCommands.length === 0) return;
-      const i = displayCommands.findIndex((c) => c.cmd === selectedCmd);
+      const i = displayCommands.findIndex((c) => slashCommandCompositeKey(c) === selectedKey);
       const next = displayCommands[(i + 1) % displayCommands.length]!;
-      onHoverCmd?.(next.cmd);
+      hoverCommand(next);
     },
     selectCurrent: () => {
-      const cmd = displayCommands.find((c) => c.cmd === selectedCmd) ?? displayCommands[0];
-      if (cmd) onSelect(cmd);
+      const command =
+        selectedCommand ?? displayCommands.find((c) => c.cmd === selectedCmd) ?? displayCommands[0];
+      if (command) selectCommand(command);
     },
     getListboxId: () => listboxId,
     getActiveDescendantId: () => activeDescendantId,
   }));
 
   useEffect(() => {
-    if (!listRef.current || !selectedCmd) return;
-    scrollPickerItemIntoView(listRef.current, `[data-value="${selectedCmd}"]`);
-  }, [selectedCmd]);
+    if (!listRef.current || !selectedKey) return;
+    scrollPickerItemIntoView(listRef.current, `[data-value="${selectedKey}"]`);
+  }, [selectedKey]);
 
   const groupedCommands = displayCommands.reduce<Record<string, SlashCommandDef[]>>((acc, cmd) => {
-    const cat = cmd.backend ?? cmd.category ?? 'utility';
+    const cat = slashCommandCategory(cmd);
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(cmd);
     return acc;
@@ -646,17 +717,30 @@ export const SlashCommandTypeahead = forwardRef<
                 </div>
                 {cmds.map((c) => {
                   const Icon = c.icon;
-                  const isSelected = selectedCmd === c.cmd;
+                  const commandKey = slashCommandCompositeKey(c);
+                  const isSelected = selectedKey === commandKey;
+                  const description = [
+                    c.source,
+                    c.executionCapability === 'requires-native-cli-ui'
+                      ? 'Requires native CLI UI'
+                      : undefined,
+                    c.description,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
 
                   return (
                     <div
-                      key={c.cmd}
-                      id={`${listboxId}-option-${c.cmd}`}
+                      key={commandKey}
+                      id={`${listboxId}-option-${commandKey}`}
                       role="option"
                       aria-selected={isSelected}
-                      data-value={c.cmd}
-                      onClick={() => onSelect(c)}
-                      onMouseEnter={() => onHoverCmd?.(c.cmd)}
+                      aria-disabled={
+                        c.executionCapability === 'requires-native-cli-ui' ? true : undefined
+                      }
+                      data-value={commandKey}
+                      onClick={() => selectCommand(c)}
+                      onMouseEnter={() => hoverCommand(c)}
                       className={cn(
                         'mx-1 flex cursor-pointer items-center gap-2 rounded-[7px] border px-2.5 py-1.5',
                         'transition-all duration-100',
@@ -677,11 +761,11 @@ export const SlashCommandTypeahead = forwardRef<
                       )}
                       <span className="min-w-0 flex-1">
                         <span className="block truncate">
-                          {c.label ?? c.displayCommand ?? `/${c.cmd}`}
+                          {c.label ?? c.displayCommand ?? `/${c.commandIdentifier ?? c.cmd}`}
                         </span>
                         <span className="block truncate text-[9px] text-muted-foreground/75">
                           {c.label && c.displayCommand ? `${c.displayCommand} · ` : ''}
-                          {c.description}
+                          {description}
                         </span>
                       </span>
                       {c.hasOptions && (
@@ -695,6 +779,11 @@ export const SlashCommandTypeahead = forwardRef<
           })
         )}
       </div>
+      {overflowCount > 0 && (
+        <div role="status" className="px-3 py-2 text-center text-[9px] text-muted-foreground">
+          {overflowCount} more commands match. Keep typing to narrow results.
+        </div>
+      )}
 
       <div className="flex items-center gap-2 border-t border-border bg-panel/90 px-3 py-1.5 text-[9px] text-muted-foreground">
         <span>

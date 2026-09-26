@@ -2086,9 +2086,14 @@
   background-size: 12px 12px;
 }
 .workbench-wallpaper-preview--image,
-.workbench-wallpaper-preview--video,
-.workbench-wallpaper-preview--pack {
+.workbench-wallpaper-preview--video {
   background: linear-gradient(145deg, hsl(var(--muted)), hsl(var(--background)));
+}
+.workbench-wallpaper-preview--nightfall {
+  background:
+    radial-gradient(circle at 20% 18%, hsl(22 72% 38% / 0.48), transparent 36%),
+    radial-gradient(circle at 75% 82%, hsl(270 45% 32% / 0.4), transparent 38%),
+    linear-gradient(145deg, hsl(220 30% 7%), hsl(18 28% 9%));
 }
 .workbench-wallpaper-controls {
   display: flex;

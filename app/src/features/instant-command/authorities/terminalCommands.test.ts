@@ -144,7 +144,12 @@ describe('executeTerminalCommand', () => {
     expect(JSON.stringify(dispatchFailure)).not.toContain('private dispatch detail');
   });
 
-  it.each(['terminal.destroy', 'terminal.open\u0000', `terminal.${'x'.repeat(100)}`])(
+  it.each([
+    'terminal.destroy',
+    'terminal.open\u0000',
+    `terminal.${'x'.repeat(100)}`,
+    'terminal.run_saved_command',
+  ])(
     'rejects an unknown or malformed command before reading targets: %s',
     async (id) => {
       const port = authority();

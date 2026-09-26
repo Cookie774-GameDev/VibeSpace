@@ -42,6 +42,8 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
     () => undefined,
   );
   const effectiveStatus = request.status === 'pending' ? acknowledgedStatus ?? request.status : request.status;
+  const isDecisionOffered = (decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel') =>
+    !request.harness?.availableDecisions || request.harness.availableDecisions.includes(decision);
   const [editOpen, setEditOpen] = useState(false);
   const [instruction, setInstruction] = useState('');
   const [busy, setBusy] = useState(false);
@@ -181,7 +183,10 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
         await respondToPersistentOpenCodeApproval({
           sessionId: request.harness.sessionId,
           approvalId: request.harness.approvalId,
-          response: 'reject',
+          response:
+            status === 'cancelled' && request.harness.approvalId.startsWith('codex-approval-')
+              ? 'cancel'
+              : 'reject',
           route: request.harness,
         });
         recordOpenCodeApprovalStatus(request.harness.sessionId, request.harness.approvalId, status);
@@ -235,28 +240,28 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
       data-testid="permission-request"
       data-approval-id={request.harness?.approvalId ?? request.id}
       data-approval-status={effectiveStatus}
-      className="w-full rounded-xl border border-border bg-elevated/70 px-3 py-2 text-xs shadow-sm"
+      className="w-full max-w-[34rem] rounded-lg border border-border bg-elevated/70 px-2.5 py-1.5 text-xs shadow-sm"
     >
-      <div className="mb-1.5 flex items-start gap-2">
-        <div className="rounded-full border border-destructive/40 bg-destructive/10 p-1">
-          <ShieldAlert className="h-3.5 w-3.5 text-destructive" />
+      <div className="mb-1 flex items-start gap-1.5">
+        <div className="rounded-full border border-destructive/40 bg-destructive/10 p-0.5">
+          <ShieldAlert className="h-3 w-3 text-destructive" />
         </div>
         <div>
           <div className="text-xs font-semibold text-foreground">{request.title}</div>
-          <p className="text-xs leading-snug text-muted-foreground">{request.description}</p>
+          <p className="text-[11px] leading-snug text-muted-foreground">{request.description}</p>
         </div>
       </div>
-      <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[10px]">
-        <span className="rounded-full border border-border bg-background px-2 py-0.5">
+      <div className="mb-1 flex flex-wrap items-center gap-1 text-[10px]">
+        <span className="rounded-full border border-border bg-background px-1.5 py-0.5">
           Risk: {request.risk}
         </span>
-        <span className="rounded-full border border-border bg-background px-2 py-0.5">
+        <span className="rounded-full border border-border bg-background px-1.5 py-0.5">
           Action: {request.action}
         </span>
         {request.targets?.map((target) => (
           <span
             key={target}
-            className="rounded-full border border-border bg-background px-2 py-0.5"
+            className="rounded-full border border-border bg-background px-1.5 py-0.5"
           >
             {target}
           </span>
@@ -291,52 +296,62 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
           </Button>
         </div>
       )}
-      <div className="flex flex-wrap gap-1.5 [&_button]:h-7 [&_button]:px-2 [&_button]:text-[11px]">
-        <Button
-          type="button"
-          size="sm"
-          variant="accent"
-          disabled={busy || effectiveStatus !== 'pending'}
-          onClick={() => void approve('approved')}
-        >
-          Approve once
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          disabled={busy || effectiveStatus !== 'pending'}
-          onClick={() => void approve('approved_plan')}
-        >
-          Approve all safe changes
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          disabled={busy || effectiveStatus !== 'pending'}
-          onClick={() => setEditOpen((open) => !open)}
-        >
-          Edit request
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={busy || effectiveStatus !== 'pending'}
-          onClick={() => void reject('denied')}
-        >
-          Deny
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={busy || effectiveStatus !== 'pending'}
-          onClick={() => void reject('cancelled')}
-        >
-          Cancel
-        </Button>
+      <div className="flex flex-wrap gap-1 [&_button]:h-6 [&_button]:px-1.5 [&_button]:text-[10px]">
+        {isDecisionOffered('accept') && (
+          <Button
+            type="button"
+            size="sm"
+            variant="accent"
+            disabled={busy || effectiveStatus !== 'pending'}
+            onClick={() => void approve('approved')}
+          >
+            Approve once
+          </Button>
+        )}
+        {isDecisionOffered('acceptForSession') && (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={busy || effectiveStatus !== 'pending'}
+            onClick={() => void approve('approved_plan')}
+          >
+            Approve all safe changes
+          </Button>
+        )}
+        {isDecisionOffered('decline') && (
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={busy || effectiveStatus !== 'pending'}
+              onClick={() => setEditOpen((open) => !open)}
+            >
+              Edit request
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={busy || effectiveStatus !== 'pending'}
+              onClick={() => void reject('denied')}
+            >
+              Deny
+            </Button>
+          </>
+        )}
+        {isDecisionOffered('cancel') && (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={busy || effectiveStatus !== 'pending'}
+            onClick={() => void reject('cancelled')}
+          >
+            Cancel
+          </Button>
+        )}
       </div>
     </section>
   );

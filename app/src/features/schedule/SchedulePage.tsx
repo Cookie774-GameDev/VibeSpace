@@ -1855,7 +1855,7 @@ export function SchedulePage() {
                       No accessible {cliFilter === 'codex' ? 'Codex' : 'OpenCode'} CLI models are connected.
                     </p>
                   ) : null}
-                  {jarvisModelOptions.length > 0 ? (
+                  {modelPickerGroups.length > 0 ? (
                     <Popover
                       open={modelPickerOpen && !editingToken?.caoSupervision}
                       onOpenChange={(open) => {
@@ -1903,7 +1903,7 @@ export function SchedulePage() {
                         />
                       </PopoverContent>
                     </Popover>
-                  ) : savedJarvisRoute ? (
+                  ) : cliFilter !== 'all' ? null : savedJarvisRoute ? (
                     <div className="rounded-md border border-dashed border-border bg-background/50 px-2.5 py-2 text-metadata text-muted-foreground">
                       Saved route: {jarvisModelDisplay}. This edit keeps that exact identity;
                       connect it again before its next run.

@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prejarvis": "node ../scripts/visual-monochrome/generate-theme-contract.mjs --check",
+    "prejarvis": "node ../scripts/visual-monochrome/generate-theme-contract.mjs --check && node scripts/prepare-ponytail.mjs --check",
     "jarvis": "vite",
-    "prebuild": "node ../scripts/visual-monochrome/generate-theme-contract.mjs --check",
+    "prebuild": "node ../scripts/visual-monochrome/generate-theme-contract.mjs --check && node scripts/prepare-ponytail.mjs --check",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",

@@ -78,6 +78,10 @@ export interface ProviderQuestionRequest {
   /** Exact OpenCode session that owns this blocking question request. */
   sessionId: string;
   questions: readonly ProviderQuestionPrompt[];
+  /** Original Codex JSON-RPC response identity, retained for native receipts. */
+  nativeRequestId?: string | number;
+  /** Native receive-time deadline; absent when the server supplies no timeout. */
+  deadlineAt?: number;
   /** Exact optional native tool-call binding; never contains tool input or output. */
   tool?: Readonly<{ messageId: string; callId: string }>;
 }
@@ -152,6 +156,7 @@ export type ProviderEvent =
     }
   | { type: 'tool_output'; callId: string; output: Readonly<PublicToolOutput> }
   | { type: 'question'; request: ProviderQuestionRequest }
+  | { type: 'question-resolved'; requestId: string; sessionId: string }
   | { type: 'model'; modelId: string }
   | { type: 'usage'; usage: UsageSnapshot }
   | { type: 'warning'; message: string }
@@ -235,6 +240,12 @@ export interface ProviderRequest {
   modelId?: string;
   /** Native-revalidated Codex route authority for Codex-backed turns only. */
   codexRoute?: CodexResolvedProviderRoute;
+  /** Exact enabled native Codex skills from this cwd's skills/list response. */
+  codexSkills?: readonly import('./codexAppServerProtocol').CodexDiscoveredSkill[];
+  /** Exact selected references revalidated against the active OpenCode skill catalog. */
+  nativeSkillRefs?: readonly import('@/lib/harness/OpenCodeTurnCoordinator').OpenCodeNativeSkillReference[];
+  /** Native skills/changed refresh for the active Codex working directory. */
+  onCodexSkillsChanged?: (entry: import('./codexAppServerProtocol').CodexSkillsListEntry) => void | Promise<void>;
   /** Immutable request/run identity used to retain exact failure correlation. */
   protectedAttempt?: Readonly<{
     accountId: string;
@@ -252,6 +263,14 @@ export interface ProviderRequest {
   /** Existing persistent session required before a protected follow-up may be sent. */
   expectedSessionId?: string;
   sessionId?: string;
+  /** Exact acknowledged native submission; never synthesize a fresh turn for it. */
+  nativeQueuedSubmission?: Readonly<{
+    submissionId: string;
+    clientUserMessageId: string;
+    threadId: string;
+    addedDuringTurnId: string;
+    previousTurnCompleted: boolean;
+  }>;
   /** Exact per-turn VibeSpace controls; adapters must reject unsupported values. */
   runtimeSettings?: import('@/features/chat/runtime/chatRuntimeCommandController').ChatRuntimeSettings;
   interactionMode?: import('@/lib/permissions/OpenCodePermissionProfile').InteractionMode;
@@ -266,6 +285,8 @@ export interface ProviderRequest {
     sessionId: string;
     parentSessionId?: string;
   }) => void | Promise<void>;
+  /** Provider-native controls available only while this exact persistent turn is active. */
+  onLiveTurnControl?: (control: ProviderLiveTurnControl | null) => void;
   /** Explicit connection-qualified tool availability for the turn. */
   tools?: Readonly<Record<string, boolean>>;
   signal?: AbortSignal;
@@ -275,6 +296,15 @@ export interface ProviderRequest {
       | { kind: 'sdk_chunk'; observedAt: number },
   ) => void;
   onActionDispatch?: (input: { observedAt: number }) => void;
+}
+
+export interface ProviderLiveTurnControl {
+  steer(input: { clientUserMessageId: string; text: string; skills?: readonly import('./codexAppServerProtocol').CodexDiscoveredSkill[] }): Promise<void>;
+  enqueue(input: { clientUserMessageId: string; text: string; skills?: readonly import('./codexAppServerProtocol').CodexDiscoveredSkill[] }): Promise<{
+    submissionId: string;
+    threadId: string;
+    turnId: string;
+  }>;
 }
 
 /**

@@ -40,18 +40,28 @@ function healthState(
   connection: PluginConnection | undefined,
 ): PluginRuntimeContract['health']['state'] {
   if (!connection || connection.state === 'not_connected') return 'not-connected';
-  if (connection.state === 'needs_setup') return 'setup-required';
+  if (
+    connection.state === 'needs_setup' ||
+    connection.state === 'reauthorize' ||
+    connection.state === 'expired'
+  ) return 'setup-required';
   if (connection.state === 'error') return 'unhealthy';
-  return connection.enabled ? 'healthy' : 'disabled';
+  if (connection.state !== 'connected') return 'not-connected';
+  return connection.enabled === true ? 'healthy' : 'disabled';
 }
 
 export function getPluginRuntimeContract(
   accountId: string,
   manifest: PluginManifest,
 ): PluginRuntimeContract {
-  const exactConnection = selectPluginConnectionsForAccount(usePluginStore.getState(), accountId)[
+  const storedConnection = selectPluginConnectionsForAccount(usePluginStore.getState(), accountId)[
     manifest.id
   ];
+  const exactConnection =
+    storedConnection &&
+    storedConnection.accountId === accountId && storedConnection.pluginId === manifest.id
+      ? storedConnection
+      : undefined;
   const configured = new Set(exactConnection?.configuredFields ?? []);
   const missingFields = manifest.fields
     .filter((field) => field.required && !configured.has(field.id))

@@ -340,6 +340,34 @@ async function drain(iterator: AsyncIterator<ProviderEvent>): Promise<void> {
 }
 
 describe('persistent OpenCode question transport authority', () => {
+  it('revalidates selected native skill references through the scoped catalog before dispatch', async () => {
+    configureManagedQuestionTransport([]);
+    const transport = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation((generation, path, init, timeout) =>
+      path.startsWith('/skill?')
+        ? Promise.resolve(jsonResponse([{ name: 'fixture-skill', location: 'C:/workspace/.agents/skills/fixture-skill/SKILL.md', description: 'Fixture skill.' }]))
+        : transport(generation, path, init, timeout));
+    const request: ProviderRequest = {
+      ...questionProviderRequest('request-selected-native-skill'),
+      systemPrompt: 'Keep the original system instructions.',
+      nativeSkillRefs: [{ origin: 'codex', name: 'fixture-skill', path: 'C:/workspace/.agents/skills/fixture-skill/SKILL.md', executionHost: 'local', sourceRevision: 'fixture-revision' }],
+    };
+    const iterator = openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]();
+    try {
+      await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'session', sessionId: 'ses_question_exact' } });
+      const catalog = nativeOpenCodeMocks.request.mock.calls.find(([, path]) => path.startsWith('/skill?'));
+      expect(catalog?.[1]).toContain('directory=');
+      const sent = nativeOpenCodeMocks.request.mock.calls.find(([, path]) => path.includes('/prompt_async'));
+      const body = JSON.parse(String(sent?.[2]?.body));
+      expect(body.system).toContain(request.systemPrompt);
+      expect(body.system).toContain('fixture-skill');
+      expect(body.tools.skill).toBe(true);
+      expect(body.parts).toEqual([{ type: 'text', text: request.prompt }]);
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
   it('uses a bounded one-minute retry window for retryable rate limits', () => {
     expect(shouldStopOpenCodeRateLimitRetry(10_000, 10_000 + OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS - 1)).toBe(false);
     expect(shouldStopOpenCodeRateLimitRetry(10_000, 10_000 + OPENCODE_RATE_LIMIT_RETRY_WINDOW_MS)).toBe(true);

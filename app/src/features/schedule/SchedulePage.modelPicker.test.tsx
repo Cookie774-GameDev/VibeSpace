@@ -259,6 +259,21 @@ describe('SchedulePage Jarvis Action model picker', () => {
     );
   });
 
+  it('hides an empty CLI-filtered picker without changing the selected model', async () => {
+    render(<SchedulePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Jarvis Action$/i }));
+    const selectedModel = screen.getByText(/Selected:/).textContent;
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenCode CLI' }));
+
+    expect(screen.getByRole('status').textContent).toContain(
+      'No accessible OpenCode CLI models are connected.',
+    );
+    expect(screen.queryByRole('button', { name: /action model/i })).toBeNull();
+    expect(screen.getByText(/Selected:/).textContent).toBe(selectedModel);
+  });
+
   it('selects and persists an exact alternative route from one logical model row', async () => {
     const baseRoute = {
       id: 'opencode-cli:openai/gpt-5.6-sol',

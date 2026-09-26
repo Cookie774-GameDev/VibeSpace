@@ -57,10 +57,27 @@ export function buildAddendumText(): string {
 
   let customs: ActionDef[] = [];
   try {
-    customs = useToolStore
-      .getState()
+    const tools = useToolStore.getState();
+    const retiredActionIds = new Set([
+      'files.read',
+      'files.create',
+      'files.edit',
+      'terminal.run',
+      'terminal.powershell',
+    ]);
+    const retiredCustomIds = new Set(
+      tools
+        .list()
+        .filter(
+          (tool) =>
+            retiredActionIds.has(tool.baseAction) ||
+            tool.steps?.some((step) => retiredActionIds.has(step.action)),
+        )
+        .map((tool) => `custom.${tool.slug}`),
+    );
+    customs = tools
       .toActionDefs()
-      .filter((a) => a.exposeToAI !== false);
+      .filter((action) => action.exposeToAI !== false && !retiredCustomIds.has(action.id));
   } catch {
     customs = [];
   }
@@ -94,9 +111,10 @@ export function buildAddendumText(): string {
     '',
     'Rules:',
     '- These actions work no matter which model powers this chat (Ollama, Gemini, Claude, etc.).',
-    '- When the user asks you to DO something in the app (open terminals, navigate, run a command),',
+    '- When the user asks you to change app state (open terminals, navigate, send input to an existing terminal),',
     '  emit an action block — do not pretend you already did it.',
     '- Do not answer app-control requests with JavaScript, shell snippets, pseudocode, or manual instructions.',
+    '- For file reads, edits, writes, and arbitrary commands, use the connected native CLI; do not invent a VibeSpace action id for them.',
     '- A good app-control reply is one short sentence plus the required `action` block.',
     '- To make, create, draft, or edit an agent or skill with Jarvis, use `creator.start` with `{"kind":"agent"}` or `{"kind":"skill"}`. This opens the guided creator; it does not save anything until the user applies and saves.',
     '- Use only ids from the list below; do not invent ids.',
@@ -105,32 +123,22 @@ export function buildAddendumText(): string {
     '- Always provide a one-sentence `rationale` so the user sees why.',
     '- The user clicks **Approve** to run mutating actions (open panes, send commands, navigate). Until approved, treat mutating actions as not yet executed.',
     '- Reading or summarizing an attached terminal transcript does not require approval and never means you lack authorization.',
-    '- New file requests use `files.create`, never `files.edit`. Use the resolved preferred destination and include that allowed root in `root`.',
-    '- `files.create` never overwrites. If it reports an existing-file collision, ask with a question card whether to update, create a numbered copy, or rename.',
-    '- Use `files.edit` only when the user explicitly asked to update or replace that exact existing file.',
-    '- Infer obvious extensions from the request and active project (`.py`, `.ps1`, `.html`, `.tsx`, `.md`, etc.); ask only when file type materially changes the result.',
-    '- Never redirect requested content into another existing file and never claim a file exists until the approved file action succeeds.',
     '- When clarification is required, emit one `jarvis_question` block with at most three questions. Each question must have exactly three preset options and allow a custom response.',
-    '- To save a reusable command for later, use `custom.createTerminalCommand` or',
-    '  `custom.createWorkflowTool` — still requires user approval first.',
+    '- To save a reusable workflow for later, use `custom.createWorkflowTool` — still requires user approval first.',
     '- Terminal basics: "open terminals" means create new panes. "run a command in all terminals" means send text into existing panes. Never reuse one existing pane when the user asked for multiple new panes.',
-    '- Prefer `terminal.powershell` for PowerShell scripts on Windows. It uses encoded-command transport after approval; omit `timeoutMs` for long-running servers.',
     '- Chat slash commands (/terminals, /context, /plug, /skills) attach workspace context to THIS chat turn — they do not mean "open the page" or "edit the page UI". Use the attachment or transcript already in context.',
     '- Slash surface targeting: when the user writes `/surface action` (e.g., `/terminals close 5 terminals`), the `/surface` prefix tells you which workspace area the task targets — emit the appropriate action block. Do not treat it as navigation-only or explain-the-page-only.',
     '- To close terminal panes, use `terminal.bulkClose` with `{"count": N}`. For "close all terminals", use count 10 (the max).',
     '- If the user attached/dragged a terminal, its transcript is already in your context — inspect and summarize it directly. Never claim you lack authorization to read attached terminals.',
     '- For "inspect this terminal" with an attachment, answer from the transcript first. Use `terminal.inspect` only when you need to refresh refs or the transcript block is missing.',
     '- If the user attached/dragged a terminal and asks to type or run something there, use `terminal.sendToRefs` with the paneId/sessionId from the attached-terminal context. Do not open a new pane.',
-    '- For "run/send/type this in every terminal", use `terminal.sendAll`; for "open a new terminal and run", use `terminal.run` or `terminal.bulkOpen`.',
+    '- For "run/send/type this in every terminal", use `terminal.sendAll`; for native CLI tools, use `terminal.start_cli` or `terminal.bulkOpen`.',
     '- Jarvis supports up to 10 terminal panes. Requests for 10 are valid and should not be rejected as too many.',
     '- For "open 5 terminals with opencode" (or any bulk count), use `terminal.bulkOpen` with params like `{"count":5,"command":"opencode"}` or the preset `terminal.bulkOpen.5` — the user must click **Approve** before panes open.',
     '- `terminal.bulkOpen`, `terminal.claude`, and `terminal.opencode` are destructive: always include a clear rationale and wait for approval.',
     '- For COMBINED requests ("close all terminals, open 10 with claude, five as code agents with prompt X and five as reviewers with prompt Y"), emit ONE `terminal.orchestrate` block: `{"closeExisting":true,"command":"claude","rolesJson":"[{\\"count\\":5,\\"agentSlug\\":\\"code-agent\\",\\"prompt\\":\\"...\\"},{\\"count\\":5,\\"agentSlug\\":\\"code-reviewer\\",\\"prompt\\":\\"...\\"}]"}`. Role prompts are delivered through AGENTS.md briefing files, never typed into the shell. One approval covers the whole plan.',
     '- Plugin attachments are capability descriptors only. Credentials never appear in prompts; only literal actions in the registered security catalog are executable.',
-    '- Desktop files: use `files.read` to sample an existing text file, `files.create` for a new text file, and `files.edit` only for an explicitly requested existing file. These are real approval-gated filesystem actions in the VibeSpace desktop app — do not claim you cannot read or write files.',
-    '- If the user wants a file but gives no path, use the Default write folder from context (the allowed Jarvis Projects root) with a clear filename. Do not refuse for "unknown location".',
     '- Important missing decisions: emit a fenced `jarvis_question` JSON block so the app shows a question card. Answers return as structured context — then continue with an action or answer.',
-    '- PowerShell: use `shell.powershell` with `{"command":"..."}` (or `terminal.run`) after approval. Do not tell the user to run commands manually when an action exists.',
     '- Do not claim a plugin tool ran unless a literal registered action returned a result.',
     '- Skills: the user can type `/skills` and choose a skill for the current turn. If they ask by voice or text which skills exist, use the Available skills section below.',
     '- Avoid triple-backticks inside `params` values; they break the fence.',

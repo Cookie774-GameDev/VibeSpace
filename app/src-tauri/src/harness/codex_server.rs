@@ -1,3 +1,6 @@
+use crate::activity_diagnostics_store::{
+    append_codex_start_stderr_diagnostic_at, CodexStderrCategory,
+};
 use crate::cli_bridge::CliBridgeState;
 use crate::harness::managed_codex_app_server::{
     codex_app_server_handshake, CodexAppServerFrameDecoder, CODEX_APP_SERVER_MAX_FRAME_BYTES,
@@ -5,9 +8,7 @@ use crate::harness::managed_codex_app_server::{
 use crate::harness::managed_codex_proxy_runtime::{
     materialize_isolated_profile, seal_reviewed_opencodex_runtime, SealedReviewedOpenCodexRuntime,
 };
-use crate::harness::managed_codex_route::{
-    revalidate_translation_route, ManagedCodexRouteState,
-};
+use crate::harness::managed_codex_route::{revalidate_translation_route, ManagedCodexRouteState};
 #[path = "managed_codex_connected_provider.rs"]
 pub(super) mod connected_provider;
 use serde::{Deserialize, Serialize};
@@ -63,7 +64,9 @@ impl CodexAppServerStartRequest {
                 "translation:{}:{}:{}",
                 self.connection_id,
                 self.route_handle.as_deref().unwrap_or("missing"),
-                self.configuration_generation.as_deref().unwrap_or("missing")
+                self.configuration_generation
+                    .as_deref()
+                    .unwrap_or("missing")
             ),
             CodexNativeRouteKind::DirectResponses => format!("direct:{}", self.connection_id),
         }
@@ -88,7 +91,9 @@ pub enum CodexAppServerStreamMessage {
         native_handoff_monotonic_us: u64,
     },
     Done,
-    Error { message: &'static str },
+    Error {
+        message: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,7 +129,6 @@ fn validate_start_request(
         return Err("Codex owner identity is invalid.".to_string());
     }
     if !valid_identifier(&request.model_id, 256) {
-
         return Err("Codex model identity is invalid.".to_string());
     }
     if !valid_identifier(&request.connection_id, 256) {
@@ -142,15 +146,26 @@ fn validate_start_request(
         }
         CodexNativeRouteKind::OpenCodexTranslation => {
             let valid = request.connection_id != "openai-codex"
-                && request.account_id.as_deref().is_some_and(|value| valid_identifier(value, 256))
-                && request.route_handle.as_deref().is_some_and(|value| valid_identifier(value, 256))
-                && request.configuration_generation.as_deref().is_some_and(|value| valid_identifier(value, 256));
+                && request
+                    .account_id
+                    .as_deref()
+                    .is_some_and(|value| valid_identifier(value, 256))
+                && request
+                    .route_handle
+                    .as_deref()
+                    .is_some_and(|value| valid_identifier(value, 256))
+                && request
+                    .configuration_generation
+                    .as_deref()
+                    .is_some_and(|value| valid_identifier(value, 256));
             if !valid {
                 return Err("Codex translation route metadata is invalid.".to_string());
             }
         }
         CodexNativeRouteKind::DirectResponses => {
-            return Err("Codex direct Responses route is not yet semantically verified.".to_string());
+            return Err(
+                "Codex direct Responses route is not yet semantically verified.".to_string(),
+            );
         }
     }
     Ok(())
@@ -181,7 +196,12 @@ where
     }
     Ok(CodexLaunchRequest {
         executable,
-        arguments: ["--enable".to_string(), "default_mode_request_user_input".to_string(), "app-server".to_string(), "--stdio".to_string()],
+        arguments: [
+            "--enable".to_string(),
+            "default_mode_request_user_input".to_string(),
+            "app-server".to_string(),
+            "--stdio".to_string(),
+        ],
     })
 }
 
@@ -414,7 +434,7 @@ pub struct RunningCodexServer {
     receiver: Option<mpsc::Receiver<ReaderMessage>>,
     buffered_frames: VecDeque<Value>,
     reader_task: Option<thread::JoinHandle<()>>,
-    stderr_task: Option<thread::JoinHandle<()>>,
+    stderr_task: Option<thread::JoinHandle<CodexStderrCategory>>,
     active_stream: Option<ActiveStream>,
     process: OwnedProcessGuard,
     proxy_process: Option<OwnedProcessGuard>,
@@ -607,16 +627,94 @@ fn spawn_stdout_reader<R: Read + Send + 'static>(
     })
 }
 
-fn spawn_stderr_drain<R: Read + Send + 'static>(mut stderr: R) -> thread::JoinHandle<()> {
+#[derive(Debug, Default)]
+struct CodexStderrSummary {
+    saw_bytes: bool,
+    category: Option<CodexStderrCategory>,
+}
+
+impl CodexStderrSummary {
+    fn observe(&mut self, chunk: &[u8]) {
+        if chunk.is_empty() {
+            return;
+        }
+        self.saw_bytes = true;
+        let contains_any = |patterns: &[&[u8]]| {
+            patterns.iter().any(|pattern| {
+                chunk
+                    .windows(pattern.len())
+                    .any(|window| window.eq_ignore_ascii_case(pattern))
+            })
+        };
+        let detected = if contains_any(&[b"authentication", b"unauthorized", b"login required"]) {
+            CodexStderrCategory::Authentication
+        } else if contains_any(&[b"rate limit", b"usage limit", b"quota exceeded"]) {
+            CodexStderrCategory::RateLimit
+        } else if contains_any(&[b"network", b"connection refused", b"dns", b"timed out"]) {
+            CodexStderrCategory::Network
+        } else if contains_any(&[b"permission denied", b"access denied"]) {
+            CodexStderrCategory::Permission
+        } else if contains_any(&[b"configuration", b"config.toml", b"config error"]) {
+            CodexStderrCategory::Configuration
+        } else {
+            CodexStderrCategory::Other
+        };
+        let priority = |category: CodexStderrCategory| match category {
+            CodexStderrCategory::Authentication => 6,
+            CodexStderrCategory::RateLimit => 5,
+            CodexStderrCategory::Network => 4,
+            CodexStderrCategory::Permission => 3,
+            CodexStderrCategory::Configuration => 2,
+            CodexStderrCategory::Other => 1,
+            CodexStderrCategory::Unavailable => 0,
+            CodexStderrCategory::Empty => 0,
+        };
+        if self
+            .category
+            .is_none_or(|current| priority(detected) > priority(current))
+        {
+            self.category = Some(detected);
+        }
+    }
+
+    fn category(&self) -> CodexStderrCategory {
+        if !self.saw_bytes {
+            CodexStderrCategory::Empty
+        } else {
+            self.category.unwrap_or(CodexStderrCategory::Other)
+        }
+    }
+}
+
+fn spawn_stderr_drain<R: Read + Send + 'static>(
+    mut stderr: R,
+) -> thread::JoinHandle<CodexStderrCategory> {
     thread::spawn(move || {
         let mut chunk = [0_u8; 8 * 1024];
+        let mut summary = CodexStderrSummary::default();
         loop {
             match stderr.read(&mut chunk) {
-                Ok(0) | Err(_) => return,
-                Ok(_) => {}
+                Ok(0) => return summary.category(),
+                Err(_) => {
+                    return if summary.saw_bytes {
+                        summary.category()
+                    } else {
+                        CodexStderrCategory::Unavailable
+                    }
+                }
+                Ok(bytes) => summary.observe(&chunk[..bytes]),
             }
         }
     })
+}
+
+fn remember_stderr_failure_category(
+    target: &Arc<Mutex<Option<CodexStderrCategory>>>,
+    category: CodexStderrCategory,
+) {
+    if let Ok(mut captured) = target.lock() {
+        *captured = Some(category);
+    }
 }
 
 fn launch_server(
@@ -626,10 +724,14 @@ fn launch_server(
     caller_label: String,
     owner_id: String,
     route_identity: String,
+    stderr_failure_category: Arc<Mutex<Option<CodexStderrCategory>>>,
     proxy: Option<(OwnedProcessGuard, PathBuf, SealedReviewedOpenCodexRuntime)>,
 ) -> Result<RunningCodexServer, String> {
     let (proxy, codex_home) = match proxy {
-        Some((process, home, runtime)) => (Some(LaunchProxyLifecycle::new(process, runtime)), Some(home)),
+        Some((process, home, runtime)) => (
+            Some(LaunchProxyLifecycle::new(process, runtime)),
+            Some(home),
+        ),
         None => (None, None),
     };
     let mut command = Command::new(&launch.executable);
@@ -651,12 +753,20 @@ fn launch_server(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|_| "Codex app-server process could not be started.".to_string())?;
+    let mut child = command.spawn().map_err(|_| {
+        remember_stderr_failure_category(
+            &stderr_failure_category,
+            CodexStderrCategory::Unavailable,
+        );
+        "Codex app-server process could not be started.".to_string()
+    })?;
     let mut stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => {
+            remember_stderr_failure_category(
+                &stderr_failure_category,
+                CodexStderrCategory::Unavailable,
+            );
             let _ = child.kill();
             let _ = child.wait();
             return Err("Codex app-server stdin is unavailable.".to_string());
@@ -665,6 +775,10 @@ fn launch_server(
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
+            remember_stderr_failure_category(
+                &stderr_failure_category,
+                CodexStderrCategory::Unavailable,
+            );
             let _ = child.kill();
             let _ = child.wait();
             return Err("Codex app-server stdout is unavailable.".to_string());
@@ -673,6 +787,10 @@ fn launch_server(
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
         None => {
+            remember_stderr_failure_category(
+                &stderr_failure_category,
+                CodexStderrCategory::Unavailable,
+            );
             let _ = child.kill();
             let _ = child.wait();
             return Err("Codex app-server stderr is unavailable.".to_string());
@@ -703,7 +821,8 @@ fn launch_server(
         Ok(handshake) => handshake,
         Err(error) => {
             let _ = process.stop();
-            let _ = stderr_task.join();
+            let stderr_category = stderr_task.join().unwrap_or(CodexStderrCategory::Other);
+            remember_stderr_failure_category(&stderr_failure_category, stderr_category);
             return Err(error);
         }
     };
@@ -711,7 +830,10 @@ fn launch_server(
     let (sender, receiver) = mpsc::sync_channel(READER_CHANNEL_CAPACITY);
     let reader_task = spawn_stdout_reader(reader, handshake.decoder, sender);
     let (proxy_process, proxy_runtime) = proxy
-        .map(|proxy| { let (process, runtime) = proxy.into_parts(); (Some(process), Some(runtime)) })
+        .map(|proxy| {
+            let (process, runtime) = proxy.into_parts();
+            (Some(process), Some(runtime))
+        })
         .unwrap_or((None, None));
     Ok(RunningCodexServer {
         executable_id,
@@ -834,7 +956,9 @@ fn isolated_codex_instance_root(storage_root: &Path, process_id: u32, owner_id: 
     // A changing loopback port must not discard this chat's native caches and
     // sessions. Keep separate homes for every app process and chat owner.
     let owner_key = format!("{:x}", Sha256::digest(owner_id.as_bytes()));
-    storage_root.join("instances").join(format!("{process_id}-{owner_key}"))
+    storage_root
+        .join("instances")
+        .join(format!("{process_id}-{owner_key}"))
 }
 
 fn start_owned_opencodex(
@@ -845,7 +969,10 @@ fn start_owned_opencodex(
 ) -> Result<(OwnedProcessGuard, PathBuf, SealedReviewedOpenCodexRuntime), String> {
     let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .map_err(|_| "Could not reserve a private OpenCodex endpoint.")?;
-    let port = reservation.local_addr().map_err(|_| "Could not read the OpenCodex endpoint.")?.port();
+    let port = reservation
+        .local_addr()
+        .map_err(|_| "Could not read the OpenCodex endpoint.")?
+        .port();
     let app_data = app
         .path()
         .app_data_dir()
@@ -896,9 +1023,11 @@ fn start_owned_opencodex(
     // interactive CLI adds unrelated startup work before its bounded wait.
     // The same upstream identity checks and readiness deadline still apply.
     let mut ready = Command::new(&runtime.bun_executable);
-    let ready_module = url::Url::from_file_path(runtime.source_entrypoint.with_file_name("ready.ts"))
-        .map_err(|_| "The reviewed OpenCodex readiness module is unavailable.".to_string())?;
-    let liveness_module = ready_module.join("../server/proxy-liveness.ts")
+    let ready_module =
+        url::Url::from_file_path(runtime.source_entrypoint.with_file_name("ready.ts"))
+            .map_err(|_| "The reviewed OpenCodex readiness module is unavailable.".to_string())?;
+    let liveness_module = ready_module
+        .join("../server/proxy-liveness.ts")
         .map_err(|_| "The reviewed OpenCodex discovery module is unavailable.".to_string())?;
     // Discovery needs only the port already assigned to this owned proxy. Avoid
     // another process loading/hardening its complete configuration on cold start.
@@ -924,7 +1053,9 @@ fn start_owned_opencodex(
     configure(&mut ready);
     if !run_bounded_ready_probe(ready, OPENCODEX_READY_TIMEOUT + Duration::from_secs(15)) {
         let _ = proxy.stop();
-        return Err("OpenCodex did not prove readiness within the bounded startup wait.".to_string());
+        return Err(
+            "OpenCodex did not prove readiness within the bounded startup wait.".to_string(),
+        );
     }
     if sealed_runtime.revalidate().is_err() {
         let _ = proxy.stop();
@@ -980,7 +1111,9 @@ fn start_internal(
             )?)
         }
         CodexNativeRouteKind::DirectResponses => {
-            return Err("Codex direct Responses route is not yet semantically verified.".to_string());
+            return Err(
+                "Codex direct Responses route is not yet semantically verified.".to_string(),
+            );
         }
     };
 
@@ -1001,13 +1134,19 @@ fn start_internal(
                     generation: running.generation.clone(),
                 });
             }
-            return Err("Codex app-server is already active for another owner or route.".to_string());
+            return Err(
+                "Codex app-server is already active for another owner or route.".to_string(),
+            );
         }
         retire_exited_running(&mut inner.running)?;
     }
 
     let cli_state = app.state::<CliBridgeState>();
+    let stderr_failure_category = Arc::new(Mutex::new(None));
     let running = retry_uninitialized_start(|| {
+        if let Ok(mut category) = stderr_failure_category.lock() {
+            *category = None;
+        }
         let launch = resolve_launch_request(&request.executable_id, |executable_id| {
             cli_state.resolve_trusted_executable(executable_id)
         })?;
@@ -1025,7 +1164,9 @@ fn start_internal(
                 )?)
             }
             CodexNativeRouteKind::DirectResponses => {
-                return Err("Codex direct Responses route is not yet semantically verified.".to_string());
+                return Err(
+                    "Codex direct Responses route is not yet semantically verified.".to_string(),
+                );
             }
         };
         launch_server(
@@ -1035,9 +1176,29 @@ fn start_internal(
             caller_label.to_string(),
             request.owner_id.clone(),
             route_identity.clone(),
+            stderr_failure_category.clone(),
             proxy,
         )
-    })?;
+    });
+    let running = match running {
+        Ok(running) => running,
+        Err(error) => {
+            let category = stderr_failure_category
+                .lock()
+                .ok()
+                .and_then(|mut category| category.take());
+            if let Some(category) = category {
+                if let Ok(log_directory) = app.path().app_log_dir() {
+                    let _ = append_codex_start_stderr_diagnostic_at(
+                        &log_directory.join("diagnostics"),
+                        &request.model_id,
+                        category,
+                    );
+                }
+            }
+            return Err(error);
+        }
+    };
     let generation = running.generation.clone();
     inner.running = Some(running);
     Ok(CodexAppServerStartResponse { generation })
@@ -1066,8 +1227,16 @@ pub async fn codex_app_server_stream(
 ) -> Result<(), String> {
     let caller = webview.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
-        stream_internal(&app.state::<CodexAppServerState>(), &caller, generation, stream_id, on_event)
-    }).await.map_err(|_| "Codex app-server stream worker failed.".to_string())?
+        stream_internal(
+            &app.state::<CodexAppServerState>(),
+            &caller,
+            generation,
+            stream_id,
+            on_event,
+        )
+    })
+    .await
+    .map_err(|_| "Codex app-server stream worker failed.".to_string())?
 }
 
 fn stream_internal(
@@ -1116,15 +1285,12 @@ fn stream_internal(
                 sequence,
                 native_handoff_wall_us: crate::activity_diagnostics_store::native_wall_us()
                     .unwrap_or_default(),
-                native_handoff_monotonic_us:
-                    crate::activity_diagnostics_store::native_monotonic_us(),
+                native_handoff_monotonic_us: crate::activity_diagnostics_store::native_monotonic_us(
+                ),
             }
         };
         for frame in buffered_frames {
-            if task_cancelled.load(Ordering::Acquire)
-                || on_event
-                    .send(timed_frame(frame))
-                    .is_err()
+            if task_cancelled.load(Ordering::Acquire) || on_event.send(timed_frame(frame)).is_err()
             {
                 return;
             }
@@ -1136,10 +1302,7 @@ fn stream_internal(
             }
             match receiver.recv_timeout(Duration::from_millis(50)) {
                 Ok(ReaderMessage::Frame(frame)) => {
-                    if on_event
-                        .send(timed_frame(frame))
-                        .is_err()
-                    {
+                    if on_event.send(timed_frame(frame)).is_err() {
                         return;
                     }
                 }
@@ -1179,8 +1342,15 @@ pub async fn codex_app_server_write(
 ) -> Result<(), String> {
     let caller = webview.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
-        write_internal(&app.state::<CodexAppServerState>(), &caller, generation, message)
-    }).await.map_err(|_| "Codex app-server write worker failed.".to_string())?
+        write_internal(
+            &app.state::<CodexAppServerState>(),
+            &caller,
+            generation,
+            message,
+        )
+    })
+    .await
+    .map_err(|_| "Codex app-server write worker failed.".to_string())?
 }
 
 fn write_internal(
@@ -1239,10 +1409,16 @@ pub async fn codex_app_server_stop(
     let caller = webview.label().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         stop_internal(&app.state::<CodexAppServerState>(), &caller, &generation)
-    }).await.map_err(|_| "Codex app-server stop worker failed.".to_string())?
+    })
+    .await
+    .map_err(|_| "Codex app-server stop worker failed.".to_string())?
 }
 
-fn stop_internal(state: &CodexAppServerState, caller: &str, generation: &str) -> Result<bool, String> {
+fn stop_internal(
+    state: &CodexAppServerState,
+    caller: &str,
+    generation: &str,
+) -> Result<bool, String> {
     if !caller_allowed(caller) {
         return Err("Codex app-server caller is not authorized.".to_string());
     }
@@ -1283,24 +1459,54 @@ mod tests {
     fn isolated_codex_homes_reuse_only_the_exact_process_and_chat() {
         let root = std::path::Path::new("D:/managed");
         let first = super::isolated_codex_instance_root(root, 101, "chat-one");
-        assert_eq!(first, super::isolated_codex_instance_root(root, 101, "chat-one"));
-        assert_ne!(first, super::isolated_codex_instance_root(root, 102, "chat-one"));
-        assert_ne!(first, super::isolated_codex_instance_root(root, 101, "chat-two"));
+        assert_eq!(
+            first,
+            super::isolated_codex_instance_root(root, 101, "chat-one")
+        );
+        assert_ne!(
+            first,
+            super::isolated_codex_instance_root(root, 102, "chat-one")
+        );
+        assert_ne!(
+            first,
+            super::isolated_codex_instance_root(root, 101, "chat-two")
+        );
         let untrusted = super::isolated_codex_instance_root(root, 101, "../../other\\chat");
         assert_eq!(untrusted.parent(), Some(root.join("instances").as_path()));
-        assert_eq!(untrusted.file_name().unwrap().to_str().unwrap().len(), 4 + 64);
+        assert_eq!(
+            untrusted.file_name().unwrap().to_str().unwrap().len(),
+            4 + 64
+        );
     }
 
     #[test]
     fn background_control_helpers_preserve_caller_and_generation_validation() {
         let state = super::CodexAppServerState::default();
         for caller in ["pet-overlay", ""] {
-            assert!(super::write_internal(&state, caller, "valid-generation".into(), serde_json::json!({})).unwrap_err().contains("caller"));
-            assert!(super::stop_internal(&state, caller, "valid-generation").unwrap_err().contains("caller"));
+            assert!(super::write_internal(
+                &state,
+                caller,
+                "valid-generation".into(),
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .contains("caller"));
+            assert!(super::stop_internal(&state, caller, "valid-generation")
+                .unwrap_err()
+                .contains("caller"));
         }
         for generation in ["", "../foreign"] {
-            assert!(super::write_internal(&state, "main", generation.into(), serde_json::json!({})).unwrap_err().contains("generation"));
-            assert!(super::stop_internal(&state, "main", generation).unwrap_err().contains("generation"));
+            assert!(super::write_internal(
+                &state,
+                "main",
+                generation.into(),
+                serde_json::json!({})
+            )
+            .unwrap_err()
+            .contains("generation"));
+            assert!(super::stop_internal(&state, "main", generation)
+                .unwrap_err()
+                .contains("generation"));
         }
     }
 
@@ -1317,7 +1523,10 @@ mod tests {
         });
         assert_eq!(result, Ok(42));
         assert_eq!(attempts, 2);
-        for error in ["Codex app-server ended before initialization.", "Codex app-server rejected initialization."] {
+        for error in [
+            "Codex app-server ended before initialization.",
+            "Codex app-server rejected initialization.",
+        ] {
             let mut attempts = 0;
             let result: Result<(), String> = super::retry_uninitialized_start(|| {
                 attempts += 1;
@@ -1328,6 +1537,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn stderr_drain_keeps_only_a_fixed_redacted_category() {
+        let sample = b"Authentication failed for api_key=private_fixture_value";
+        let category = super::spawn_stderr_drain(std::io::Cursor::new(sample.to_vec()))
+            .join()
+            .expect("stderr drain joins");
+        assert_eq!(category, CodexStderrCategory::Authentication);
+        assert!(!format!("{category:?}").contains("private_fixture_value"));
+
+        let empty = super::spawn_stderr_drain(std::io::Cursor::new(Vec::<u8>::new()))
+            .join()
+            .expect("empty stderr drain joins");
+        assert_eq!(empty, CodexStderrCategory::Empty);
+    }
+
     use super::*;
 
     #[cfg(windows)]
@@ -1336,14 +1560,20 @@ mod tests {
         let make_probe = |script: &str| {
             let mut command = Command::new("powershell.exe");
             command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
-            command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
             command
         };
         assert!(run_bounded_ready_probe(
             make_probe("[System.Threading.Thread]::Sleep(3500); exit 0"),
             Duration::from_secs(15),
         ));
-        assert!(!run_bounded_ready_probe(make_probe("exit 7"), Duration::from_secs(15)));
+        assert!(!run_bounded_ready_probe(
+            make_probe("exit 7"),
+            Duration::from_secs(15)
+        ));
         let started = Instant::now();
         assert!(!run_bounded_ready_probe(
             make_probe("[System.Threading.Thread]::Sleep(30000)"),
@@ -1470,14 +1700,20 @@ mod tests {
             "configurationGeneration": "generation-01"
         }))
         .expect("valid translated wire request");
-        assert_eq!(translated_wire.route_kind, CodexNativeRouteKind::OpenCodexTranslation);
+        assert_eq!(
+            translated_wire.route_kind,
+            CodexNativeRouteKind::OpenCodexTranslation
+        );
 
         let slash_without_route = CodexAppServerStartRequest {
             model_id: "custom/vendor-model".to_string(),
             ..official.clone()
         };
         assert!(validate_start_request("main", &slash_without_route).is_ok());
-        assert_eq!(slash_without_route.route_identity(), "official:openai-codex");
+        assert_eq!(
+            slash_without_route.route_identity(),
+            "official:openai-codex"
+        );
 
         let direct = CodexAppServerStartRequest {
             connection_id: "custom-responses".to_string(),
@@ -1500,7 +1736,11 @@ mod tests {
         .is_err());
 
         for (caller, executable_id, owner_id) in [
-            ("pet-overlay", "cli-executable-0000000000000001", "chat_session-01"),
+            (
+                "pet-overlay",
+                "cli-executable-0000000000000001",
+                "chat_session-01",
+            ),
             ("main", "../codex.exe", "chat_session-01"),
             ("main", "cli-executable-0000000000000001", "bad owner"),
             ("main", "cli-executable-0000000000000001", ""),
@@ -1532,7 +1772,15 @@ mod tests {
         .expect("trusted launch");
 
         assert_eq!(launch.executable, trusted);
-        assert_eq!(launch.arguments, ["--enable", "default_mode_request_user_input", "app-server", "--stdio"]);
+        assert_eq!(
+            launch.arguments,
+            [
+                "--enable",
+                "default_mode_request_user_input",
+                "app-server",
+                "--stdio"
+            ]
+        );
         assert!(resolve_launch_request("cli-executable-missing", |_| {
             Err("executableId is not registered".to_string())
         })

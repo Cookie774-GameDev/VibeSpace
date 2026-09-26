@@ -14,17 +14,17 @@ import {
 } from './dictationFailures';
 
 /**
- * VibeSpace global dictation overlay (Ctrl+Space).
+ * VibeSpace global dictation overlay (the configured global shortcut).
  *
  * Transcribes through the same STT pipeline as VibeSpace chat (local
- * faster-whisper / Web Speech / Deepgram / Groq per Settings) and pastes the
+ * faster-whisper / Web Speech / Deepgram per Settings) and pastes the
  * transcript into the focused app. Never routes through OS dictation (Win+H).
  */
 
 type OverlayState = 'ready' | 'starting' | 'listening' | 'transcribing' | 'pasting' | 'error';
 
 const STATE_HINT: Record<OverlayState, string> = {
-  ready: 'Ctrl+Space · VibeSpace STT',
+  ready: 'VibeSpace STT',
   starting: 'Starting microphone…',
   listening: 'Listening…',
   transcribing: 'Transcribing…',
@@ -43,7 +43,9 @@ export function GlobalDictationOverlay({
   const [partial, setPartial] = React.useState('');
   const [finalText, setFinalText] = React.useState('');
   const [errorMessage, setErrorMessage] = React.useState('');
+  const [statusMessage, setStatusMessage] = React.useState('');
   const [engineLabel, setEngineLabel] = React.useState('');
+  const [closeMenuOpen, setCloseMenuOpen] = React.useState(false);
   const levelRef = React.useRef(0);
   const sessionRef = React.useRef<GlobalDictationSession | null>(null);
   // Delivery can fail after recognition succeeds. Keep that take for the next
@@ -65,6 +67,7 @@ export function GlobalDictationOverlay({
     pendingPasteRef.current = '';
     setPartial('');
     setFinalText('');
+    setStatusMessage('');
     latestInterimRef.current = '';
     levelRef.current = 0;
   }, []);
@@ -90,6 +93,7 @@ export function GlobalDictationOverlay({
           ? `${confirmed} ${interim}`
           : confirmed || interim || pendingPasteRef.current;
       teardownSession();
+      setStatusMessage('');
       updateState('error');
       setErrorMessage(
         pendingPasteRef.current
@@ -115,6 +119,7 @@ export function GlobalDictationOverlay({
     const generation = ++generationRef.current;
     const current = () => generationRef.current === generation;
     clearedTextRef.current = '';
+    setCloseMenuOpen(false);
     resetTranscript();
     setErrorMessage('');
     updateState('starting');
@@ -131,11 +136,15 @@ export function GlobalDictationOverlay({
           latestInterimRef.current = text;
           setPartial(text);
         },
+        onStatus: (message) => {
+          if (current()) setStatusMessage(message);
+        },
         onFinal: (text) => {
           if (!current()) return;
           if (clearedTextRef.current && text.startsWith(clearedTextRef.current))
             text = text.slice(clearedTextRef.current.length).trim();
           latestInterimRef.current = '';
+          setStatusMessage('');
           setFinalText(text);
           setPartial(text);
         },
@@ -200,6 +209,7 @@ export function GlobalDictationOverlay({
     const text = pendingPasteRef.current;
     if (!text) {
       resetTranscript();
+      setCloseMenuOpen(false);
       updateState('ready');
       void invoke('dictation_cancel').catch(() => undefined);
       void getCurrentWindow()
@@ -216,6 +226,7 @@ export function GlobalDictationOverlay({
       await invoke('dictation_paste_text', { text });
       if (generationRef.current === generation) {
         resetTranscript();
+        setCloseMenuOpen(false);
         updateState('ready');
       }
     } catch (err) {
@@ -232,15 +243,26 @@ export function GlobalDictationOverlay({
   }, [failVisible, finalText, resetTranscript, updateState]);
   finalizeRef.current = confirmAndPaste;
 
-  const cancelAndHide = React.useCallback(() => {
+  const cancelAndHide = React.useCallback(async () => {
     teardownSession();
     resetTranscript();
     setErrorMessage('');
+    setCloseMenuOpen(false);
     updateState('ready');
     void invoke('dictation_cancel').catch(() => undefined);
-    void getCurrentWindow()
-      .hide()
-      .catch(() => undefined);
+    // Hiding must not wait for native target cleanup or a provider callback.
+    // A transient native window failure should still close on the same click.
+    try {
+      await getCurrentWindow().hide();
+    } catch {
+      try {
+        await getCurrentWindow().hide();
+      } catch {
+        updateState('error');
+        setErrorMessage('Could not close dictation. Click Close or press Esc to retry.');
+        setCloseMenuOpen(true);
+      }
+    }
   }, [resetTranscript, teardownSession, updateState]);
 
   /** Clear the transcript but keep dictating. */
@@ -305,7 +327,7 @@ export function GlobalDictationOverlay({
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        cancelAndHide();
+        void cancelAndHide();
       }
       if (
         (event.key === 'Enter' || event.key === ' ') &&
@@ -314,6 +336,7 @@ export function GlobalDictationOverlay({
         !event.metaKey &&
         !event.altKey
       ) {
+        if (event.target instanceof HTMLElement && event.target.closest('button')) return;
         event.preventDefault();
         if (sessionRef.current || pendingPasteRef.current) void confirmAndPaste();
         else if (stateRef.current === 'error') void start();
@@ -330,12 +353,18 @@ export function GlobalDictationOverlay({
   const hint =
     state === 'error'
       ? errorMessage
-      : partial || (state === 'ready' ? `${dictationHotkey} · VibeSpace STT` : STATE_HINT[state]);
+      : statusMessage ||
+        partial ||
+        (state === 'ready' ? `${dictationHotkey} · VibeSpace STT` : STATE_HINT[state]);
   return (
     <div
       data-tauri-drag-region
       data-monochrome-surface="global-dictation"
       aria-label="VibeSpace Dictation — drag to move"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setCloseMenuOpen(true);
+      }}
       title={`${hint}${engineLabel ? ` · ${engineLabel}` : ''}\nSpace / ${dictationHotkey}: finish · Esc: cancel · Drag to move`}
       className={cn(
         'flex h-[30px] w-[120px] cursor-grab items-center gap-2 overflow-hidden rounded-full border-0 bg-background px-2 shadow-none outline-none active:cursor-grabbing',
@@ -356,19 +385,30 @@ export function GlobalDictationOverlay({
         draggable={false}
         className="pointer-events-none h-[18px] w-[18px] shrink-0 rounded-full"
       />
-      <div aria-hidden="true" className="pointer-events-none min-w-0 flex-1 [&_canvas]:!h-5">
-        {listening ? (
-          <DictationLevelMeter levelRef={levelRef} />
-        ) : (
-          <div
-            className={cn(
-              'h-px rounded-full bg-accent-copper/50',
-              state === 'error' && 'bg-destructive',
-              busy && 'opacity-40',
-            )}
-          />
-        )}
-      </div>
+      {closeMenuOpen ? (
+        <button
+          type="button"
+          aria-label="Close dictation menu"
+          onClick={() => void cancelAndHide()}
+          className="min-w-0 flex-1 rounded-full bg-muted px-1 py-0.5 text-center text-[11px] font-medium leading-none text-foreground hover:bg-accent focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring [html[data-theme=monochrome]_&]:rounded-sm"
+        >
+          Close
+        </button>
+      ) : (
+        <div aria-hidden="true" className="pointer-events-none min-w-0 flex-1 [&_canvas]:!h-5">
+          {listening ? (
+            <DictationLevelMeter levelRef={levelRef} />
+          ) : (
+            <div
+              className={cn(
+                'h-px rounded-full bg-accent-copper/50',
+                state === 'error' && 'bg-destructive',
+                busy && 'opacity-40',
+              )}
+            />
+          )}
+        </div>
+      )}
       <div className="sr-only">
         <span>VibeSpace Dictation</span>
         <span role="status">{hint}</span>
@@ -381,7 +421,7 @@ export function GlobalDictationOverlay({
         >
           Retry
         </button>
-        <button type="button" onClick={cancelAndHide} aria-label="Close dictation">
+        <button type="button" onClick={() => void cancelAndHide()} aria-label="Close dictation">
           Close
         </button>
         <button

@@ -363,8 +363,8 @@ describe('compileJarvisPrompt', () => {
 
   it('teaches external models the textual approval action contract without native tools', async () => {
     const exposed = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).listExposed();
-    const filesCreate = exposed.find((schema) => schema.id === 'files.create');
-    expect(filesCreate).toBeDefined();
+    const agentRun = exposed.find((schema) => schema.id === 'agent.run');
+    expect(agentRun).toBeDefined();
     const compiled = compileJarvisPrompt(
       await envelope({
         interactionMode: 'agent',
@@ -377,7 +377,7 @@ describe('compileJarvisPrompt', () => {
         }),
         capabilities: createJarvisCapabilitySnapshot({
           ...capabilitySnapshot(),
-          actionSchemas: [filesCreate!],
+          actionSchemas: [agentRun!],
         }),
       }),
     );
@@ -389,7 +389,7 @@ describe('compileJarvisPrompt', () => {
     expect(capabilityLayer).toContain('Native provider tools being unavailable');
     expect(capabilityLayer).toContain('```action');
     expect(capabilityLayer).toContain(
-      '{"id":"files.create","params":{"path":"<value>","content":"<value>"},"rationale":"<one-sentence reason>"}',
+      '{"id":"agent.run","params":{"task":"<value>"},"rationale":"<one-sentence reason>"}',
     );
     expect(capabilityLayer).toContain('must approve');
     expect(capabilityLayer).toContain('verified executor result');
@@ -423,7 +423,7 @@ describe('compileJarvisPrompt', () => {
     expect(compiled.layers[0]!.content).toBe(regular.layers[0]!.content);
     expect(compiled.layers[1]!.content).toBe(regular.layers[1]!.content);
     expect(compiled.layers[5]!.content).toContain('Supplied invoice total: 374.');
-    expect(regular.layers[2]!.content).toContain('"id":"files.create"');
+    expect(regular.layers[2]!.content).toContain('"id":"agent.run"');
   });
 
   it('fits the complete production action catalog without dropping admitted schemas', async () => {

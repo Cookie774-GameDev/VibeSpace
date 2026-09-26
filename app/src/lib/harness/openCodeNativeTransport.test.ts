@@ -95,6 +95,64 @@ describe('native OpenCode transport', () => {
     });
     await expect(nativeOpenCodeRequest('generation', '/permission', { method: 'POST' }, 5000, bridge)).rejects.toThrow(/route/i);
   });
+  it('routes the scoped native skill catalog as a read-only GET', async () => {
+    const invoke = vi.fn(async () => ({ status: 200, statusText: 'OK', body: '[]' }));
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    const response = await nativeOpenCodeRequest(
+      'generation',
+      '/skill?directory=C%3A%5Cproject',
+      { method: 'GET' },
+      5_000,
+      bridge,
+    );
+    expect(response.status).toBe(200);
+    expect(invoke).toHaveBeenCalledWith('opencode_server_request', {
+      request: expect.objectContaining({
+        generation: 'generation',
+        route: { kind: 'skill_list' },
+        directory: 'C:\\project',
+      }),
+    });
+    await expect(
+      nativeOpenCodeRequest(
+        'generation',
+        '/skill?directory=C%3A%5Cproject&unexpected=true',
+        { method: 'GET' },
+        5_000,
+        bridge,
+      ),
+    ).rejects.toThrow(/query is invalid/u);
+    await expect(
+      nativeOpenCodeRequest('generation', '/skill', { method: 'POST', body: '{}' }, 5_000, bridge),
+    ).rejects.toThrow(/route is invalid/u);
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+  it('routes legacy session summarize with the scoped directory and typed native path', async () => {
+    const body = JSON.stringify({ providerID: 'opencode', modelID: 'model-low', auto: false });
+    const invoke = vi.fn(async () => ({ status: 200, statusText: 'OK', body: 'true' }));
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    const response = await nativeOpenCodeRequest(
+      'generation',
+      '/session/session-1/summarize?directory=C%3A%5Cworkspace',
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body },
+      5_000,
+      bridge,
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith('opencode_server_request', {
+      request: expect.objectContaining({
+        generation: 'generation',
+        route: { kind: 'session_summarize', sessionId: 'session-1' },
+        directory: 'C:\\workspace',
+        body,
+      }),
+    });
+    await expect(
+      nativeOpenCodeRequest('generation', '/session/session-1/summarize', {}, 5_000, bridge),
+    ).rejects.toThrow(/route is invalid/u);
+    expect(invoke).toHaveBeenCalledOnce();
+  });
   it('settles a pending native request promptly on caller cancellation', async () => {
     const controller = new AbortController();
     const invoke = vi.fn(() => new Promise<never>(() => {}));

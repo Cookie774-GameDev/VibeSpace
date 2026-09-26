@@ -567,7 +567,9 @@ impl From<&PtyHandle> for KillTarget {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn terminal_child_killer(child: &(dyn Child + Send + Sync)) -> Result<Box<dyn ChildKiller + Send + Sync>, String> {
+fn terminal_child_killer(
+    child: &(dyn Child + Send + Sync),
+) -> Result<Box<dyn ChildKiller + Send + Sync>, String> {
     Ok(child.clone_killer())
 }
 
@@ -593,11 +595,16 @@ impl ChildKiller for WindowsTerminalKiller {
 }
 
 #[cfg(target_os = "windows")]
-fn terminal_child_killer(child: &(dyn Child + Send + Sync)) -> Result<Box<dyn ChildKiller + Send + Sync>, String> {
+fn terminal_child_killer(
+    child: &(dyn Child + Send + Sync),
+) -> Result<Box<dyn ChildKiller + Send + Sync>, String> {
     use std::os::windows::io::BorrowedHandle;
-    let raw = child.as_raw_handle().ok_or_else(|| "terminal: process handle unavailable".to_string())?;
+    let raw = child
+        .as_raw_handle()
+        .ok_or_else(|| "terminal: process handle unavailable".to_string())?;
     // SAFETY: the child still owns raw while it is borrowed and duplicated.
-    let handle = unsafe { BorrowedHandle::borrow_raw(raw) }.try_clone_to_owned()
+    let handle = unsafe { BorrowedHandle::borrow_raw(raw) }
+        .try_clone_to_owned()
         .map_err(|_| "terminal: process handle duplication failed".to_string())?;
     Ok(Box::new(WindowsTerminalKiller(Arc::new(handle))))
 }
@@ -1070,17 +1077,33 @@ pub async fn terminal_claude_continuity_prepare(
     shell: Option<String>,
 ) -> Result<crate::terminal_continuity::PreparedClaude, String> {
     use tauri::Manager;
-    if crate::runtime_profile::resolve_from_env()? != crate::runtime_profile::RuntimeProfile::Ordinary {
+    if crate::runtime_profile::resolve_from_env()?
+        != crate::runtime_profile::RuntimeProfile::Ordinary
+    {
         return Err("terminal continuity is disabled in this runtime profile".into());
     }
-    let root = app.path().app_data_dir().map_err(|_| "continuity profile unavailable")?
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "continuity profile unavailable")?
         .join("terminal-cli-continuity");
     let executable = std::env::current_exe().map_err(|_| "continuity executable unavailable")?;
     let powershell = is_powershell(&pick_default_shell(shell));
     let cwd = cwd.unwrap_or_else(default_terminal_cwd);
-    spawn_blocking(move || crate::terminal_continuity::prepare(
-        &root, &executable, &account_id, &project_id, &pane_id, std::path::Path::new(&cwd), restore, powershell,
-    )).await.map_err(|_| "continuity preparation interrupted".to_string())?
+    spawn_blocking(move || {
+        crate::terminal_continuity::prepare(
+            &root,
+            &executable,
+            &account_id,
+            &project_id,
+            &pane_id,
+            std::path::Path::new(&cwd),
+            restore,
+            powershell,
+        )
+    })
+    .await
+    .map_err(|_| "continuity preparation interrupted".to_string())?
 }
 
 /// Spawn a new PTY-backed child process and return its session id. The reader
@@ -1393,17 +1416,27 @@ pub fn terminal_validate_directory(path: String) -> Result<String, String> {
 fn cao_agent_message(command: &str, data: &str) -> Result<String, String> {
     // Only a directly spawned CLI is safe: its exit cannot expose a shell prompt.
     let normalized = command.replace('\\', "/");
-    let executable = normalized.rsplit('/').next().unwrap_or("").to_ascii_lowercase();
+    let executable = normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if !matches!(executable.as_str(), "opencode" | "opencode.exe") {
         return Err("terminal: CAO messages require a directly launched OpenCode agent".into());
     }
     let message = data.trim();
-    if message.is_empty() || message.len() > 32000 || message.starts_with('/')
-        || message.chars().any(|c| c.is_control() && c != '\n' && c != '\t')
+    if message.is_empty()
+        || message.len() > 32000
+        || message.starts_with('/')
+        || message
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t')
     {
         return Err("terminal: invalid CAO agent message".into());
     }
-    Ok(format!("\u{1b}[200~[CAO acting for user]\n{message}\u{1b}[201~\r"))
+    Ok(format!(
+        "\u{1b}[200~[CAO acting for user]\n{message}\u{1b}[201~\r"
+    ))
 }
 
 #[tauri::command]
@@ -1432,7 +1465,9 @@ pub async fn terminal_write(
                 return Err("terminal: CAO process binding required".into());
             }
             cao_agent_message(&h.info.command, &data)?
-        } else { data };
+        } else {
+            data
+        };
         (h.writer.clone(), data)
     };
     spawn_blocking(move || {
@@ -1645,14 +1680,21 @@ mod tests {
 
     #[test]
     fn cao_messages_cannot_become_shell_input_or_tui_commands() {
-        for command in ["powershell.exe", "cmd.exe", "opencode.exe -NoExit", "opencode.exe; powershell"] {
+        for command in [
+            "powershell.exe",
+            "cmd.exe",
+            "opencode.exe -NoExit",
+            "opencode.exe; powershell",
+        ] {
             assert!(super::cao_agent_message(command, "Build the game").is_err());
         }
         for message in ["", "/exit", "\u{1b}[201~exit", "hello\rquit", "hello\u{3}"] {
             assert!(super::cao_agent_message("opencode.exe", message).is_err());
         }
-        assert_eq!(super::cao_agent_message("C:\\agents\\opencode.exe", "Build\nand test").unwrap(),
-            "\u{1b}[200~[CAO acting for user]\nBuild\nand test\u{1b}[201~\r");
+        assert_eq!(
+            super::cao_agent_message("C:\\agents\\opencode.exe", "Build\nand test").unwrap(),
+            "\u{1b}[200~[CAO acting for user]\nBuild\nand test\u{1b}[201~\r"
+        );
     }
 
     fn exit_process_binding() -> NativeProcessBinding {
@@ -1926,15 +1968,33 @@ mod tests {
     #[test]
     fn windows_cao_cloned_killer_reports_real_delivery() {
         use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-        let pair = native_pty_system().openpty(PtySize { rows: 10, cols: 40, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 10,
+                cols: 40,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
         let mut command = CommandBuilder::new("powershell.exe");
-        command.args(["-NoLogo", "-NoProfile", "-Command", "Start-Sleep -Seconds 10"]);
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "Start-Sleep -Seconds 10",
+        ]);
         let mut child = pair.slave.spawn_command(command).unwrap();
         let mut killer = super::terminal_child_killer(child.as_ref()).unwrap();
         let delivered = killer.kill();
         let exited = child.wait().unwrap();
-        assert!(!exited.success(), "The disposable child must have been terminated");
-        assert!(delivered.is_ok(), "Real Windows signal delivery must return success: {delivered:?}");
+        assert!(
+            !exited.success(),
+            "The disposable child must have been terminated"
+        );
+        assert!(
+            delivered.is_ok(),
+            "Real Windows signal delivery must return success: {delivered:?}"
+        );
     }
 
     #[test]

@@ -84,6 +84,27 @@ describe('QueuedMessagesBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete queued message' }));
     expect(onDelete).toHaveBeenCalledWith('q_1');
   });
+  it('labels an OpenCode stop-and-follow-up action with its next-turn behavior', () => {
+    const onSendNow = vi.fn();
+    render(
+      <QueuedMessagesBar
+        messages={queued}
+        steerMode="stop-followup"
+        onEdit={vi.fn()}
+        onSendNow={onSendNow}
+        onDelete={vi.fn()}
+        onStartMultitask={vi.fn()}
+      />,
+    );
+    const action = screen.getByRole('button', { name: 'Stop current reply and follow up' });
+    expect(action.getAttribute('title')).toBe(
+      'Stop the active OpenCode reply and send this message as the next turn.',
+    );
+    expect(action.textContent).toContain('Follow up');
+    fireEvent.click(action);
+    expect(onSendNow).toHaveBeenCalledWith('q_1');
+    expect(screen.queryByRole('button', { name: 'Steer queued message' })).toBeNull();
+  });
   it('keeps model switches on the existing stop-and-restart action', () => {
     const restart = vi.fn(),
       steer = vi.fn();

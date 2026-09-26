@@ -22,6 +22,7 @@ def test_jwt_verifier_accepts_a_matching_rsa_jwk_without_python_jose() -> None:
     jwks = {"keys": [_rsa_jwk(private_key.public_key(), "bridge-key")]}
     token = jwt.encode(
         {
+            "iss": "https://example.test/auth/v1",
             "sub": "user-1",
             "aud": "authenticated",
             "exp": int(time.time()) + 300,
@@ -31,7 +32,7 @@ def test_jwt_verifier_accepts_a_matching_rsa_jwk_without_python_jose() -> None:
         headers={"kid": "bridge-key"},
     )
 
-    verifier = JwtVerifier("https://example.test/jwks")
+    verifier = JwtVerifier("https://example.test/auth/v1/.well-known/jwks.json")
 
     async def fetch_jwks() -> dict:
         return jwks
@@ -46,12 +47,17 @@ def test_jwt_verifier_accepts_a_matching_rsa_jwk_without_python_jose() -> None:
 def test_jwt_verifier_rejects_unknown_kid_before_signature_work() -> None:
     private_key = rsa.generate_private_key(public_exponent=65_537, key_size=2048)
     token = jwt.encode(
-        {"sub": "user-1", "aud": "authenticated", "exp": int(time.time()) + 300},
+        {
+            "iss": "https://example.test/auth/v1",
+            "sub": "user-1",
+            "aud": "authenticated",
+            "exp": int(time.time()) + 300,
+        },
         private_key,
         algorithm="RS256",
         headers={"kid": "missing-key"},
     )
-    verifier = JwtVerifier("https://example.test/jwks")
+    verifier = JwtVerifier("https://example.test/auth/v1/.well-known/jwks.json")
 
     async def fetch_jwks() -> dict:
         return {"keys": []}
@@ -65,11 +71,29 @@ def test_jwt_verifier_rejects_unknown_kid_before_signature_work() -> None:
         raise AssertionError("unknown JWK kid must fail closed")
 
 
-@pytest.mark.parametrize('failure', ['expired', 'no_expiry', 'no_subject', 'wrong_audience', 'tampered', 'hmac', 'algorithm_mismatch'])
+@pytest.mark.parametrize(
+    'failure',
+    [
+        'expired',
+        'no_expiry',
+        'no_subject',
+        'wrong_audience',
+        'tampered',
+        'hmac',
+        'algorithm_mismatch',
+        'wrong_issuer',
+        'no_issuer',
+    ],
+)
 def test_jwt_verifier_rejects_invalid_authority(failure: str) -> None:
     private_key = rsa.generate_private_key(public_exponent=65_537, key_size=2048)
     public_jwk = _rsa_jwk(private_key.public_key(), 'bridge-key')
-    claims = {'sub': 'user-1', 'aud': 'authenticated', 'exp': int(time.time()) + 300}
+    claims = {
+        'iss': 'https://example.test/auth/v1',
+        'sub': 'user-1',
+        'aud': 'authenticated',
+        'exp': int(time.time()) + 300,
+    }
     if failure == 'expired':
         claims['exp'] = int(time.time()) - 30
     elif failure == 'no_expiry':
@@ -78,6 +102,10 @@ def test_jwt_verifier_rejects_invalid_authority(failure: str) -> None:
         del claims['sub']
     elif failure == 'wrong_audience':
         claims['aud'] = 'another-service'
+    elif failure == 'wrong_issuer':
+        claims['iss'] = 'https://attacker.example/auth/v1'
+    elif failure == 'no_issuer':
+        del claims['iss']
     elif failure == 'algorithm_mismatch':
         public_jwk['alg'] = 'RS512'
     algorithm = 'HS256' if failure == 'hmac' else 'RS256'
@@ -87,7 +115,7 @@ def test_jwt_verifier_rejects_invalid_authority(failure: str) -> None:
         parts = token.split('.')
         parts[2] = ('A' if parts[2][0] != 'A' else 'B') + parts[2][1:]
         token = '.'.join(parts)
-    verifier = JwtVerifier('https://example.test/jwks')
+    verifier = JwtVerifier('https://example.test/auth/v1/.well-known/jwks.json')
 
     async def fetch_jwks() -> dict:
         return {'keys': [public_jwk]}
@@ -96,3 +124,16 @@ def test_jwt_verifier_rejects_invalid_authority(failure: str) -> None:
     with pytest.raises(PermissionError) as rejected:
         asyncio.run(verifier.verify(token))
     assert token not in str(rejected.value)
+
+
+def test_jwt_verifier_rejects_malformed_token_without_disclosing_it() -> None:
+    verifier = JwtVerifier('https://example.test/auth/v1/.well-known/jwks.json')
+
+    async def fetch_jwks() -> dict:
+        return {'keys': []}
+
+    verifier._fetch_jwks = fetch_jwks  # type: ignore[method-assign]
+    malformed_token = 'not-a-valid-jwt'
+    with pytest.raises(PermissionError, match='malformed_token') as rejected:
+        asyncio.run(verifier.verify(malformed_token))
+    assert malformed_token not in str(rejected.value)

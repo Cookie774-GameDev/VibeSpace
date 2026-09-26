@@ -477,7 +477,7 @@ function eventReceipt(event: ChatActivityEvent): AssistantActivityReceipt {
     ...(event.toolDetails ? { toolDetails: event.toolDetails } : {}),
     ...(toolName ? { toolName } : {}),
     ...(event.providerCallId ? { callId: safeText(event.providerCallId, 256) } : {}),
-    ...(toolName ? pluginAttribution(toolName) : {}),
+    ...(toolName ? pluginAttribution(toolName, publicAttributionArguments(event.toolDetails)) : {}),
     status: event.status,
     ts: event.ts,
     ...(durationMs === undefined ? {} : { durationMs }),

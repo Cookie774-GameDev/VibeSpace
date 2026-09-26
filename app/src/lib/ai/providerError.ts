@@ -134,7 +134,7 @@ function readString(source: Record<string, unknown> | undefined, ...keys: string
 
 function readMessage(error: unknown, source: Record<string, unknown> | undefined): string | undefined {
   return boundedText(source?.message, MAX_MESSAGE_LENGTH) ??
-    boundedText(error instanceof Error ? error.message : undefined, MAX_MESSAGE_LENGTH);
+    boundedText(typeof error === 'string' ? error : record(error)?.message, MAX_MESSAGE_LENGTH);
 }
 
 function readCause(error: unknown): unknown {
@@ -195,6 +195,8 @@ export function providerErrorDetails(
   let details: ProviderErrorContext = { ...fallback };
   for (let depth = 0; depth < 4 && current; depth += 1) {
     const source = sourceOf(current);
+    const message = readMessage(current, source);
+    if (message) details = { ...details, message };
     if (source) {
       const sourceCode = readString(source, 'code', 'errorCode', 'error_code');
       const sourceProviderId = readString(source, 'providerId', 'provider', 'provider_id');
@@ -210,7 +212,6 @@ export function providerErrorDetails(
       const sourceResetAt = boundedNumber(source.resetAt ?? source.reset_at ?? source.resetsAt);
       details = {
         ...details,
-        ...(readMessage(current, source) ? { message: readMessage(current, source) } : {}),
         // This is an internal attempt wrapper marker, not a provider error
         // code. Keep it on the raw Error for execution classification, while
         // allowing an upstream code from the cause to survive in the public

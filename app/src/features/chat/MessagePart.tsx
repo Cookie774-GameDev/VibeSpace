@@ -661,6 +661,18 @@ export function MessagePart({
       // Application metadata belongs to the session status, not user prose.
       return null;
 
+    case 'codex_native_queue_receipt':
+      if (part.state === 'started') return null;
+      return (
+        <div role="status" className="text-metadata text-muted-foreground">
+          {part.state === 'review_required'
+            ? 'Queued Codex turn needs review before retry.'
+            : part.state === 'starting'
+              ? 'Starting queued Codex turn…'
+              : 'Queued on Codex. If this chat closes, review before retrying.'}
+        </div>
+      );
+
     default: {
       // Exhaustive check - new Part kinds will surface here at compile time.
       const _exhaustive: never = part;

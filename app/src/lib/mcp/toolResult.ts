@@ -45,6 +45,9 @@ const MAX_VALUE_ARRAY = 24;
 const MAX_VALUE_STRING_CHARS = 512;
 const REDACTION_GUARD_CHARS = 256;
 const UNSAFE_TEXT_CHARACTERS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+// Tool bodies and audited arguments may contain ordinary text whitespace.
+// Keep other controls and formatting characters forbidden; labels remain single-line.
+const UNSAFE_MULTILINE_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}]/u;
 const SAFE_MIME = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$/u;
 const SAFE_KEY = /^[A-Za-z_][A-Za-z0-9_.-]{0,79}$/u;
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -135,12 +138,14 @@ function boundedText(
   maxChars: number,
   state: CopyState,
   required = true,
+  multiline = false,
 ): string | undefined {
   if (value === undefined && !required) return undefined;
   if (typeof value !== 'string') throw invalidResult();
   const inputWasTruncated = value.length > maxChars;
   const trimmed = redactMcpText(value.slice(0, maxChars + REDACTION_GUARD_CHARS)).trim();
-  if ((!trimmed && required) || UNSAFE_TEXT_CHARACTERS.test(trimmed)) throw invalidResult();
+  const unsafeCharacters = multiline ? UNSAFE_MULTILINE_CHARACTERS : UNSAFE_TEXT_CHARACTERS;
+  if ((!trimmed && required) || unsafeCharacters.test(trimmed)) throw invalidResult();
   if (!inputWasTruncated && trimmed.length <= maxChars) return trimmed;
   state.truncatedValues += 1;
   return `${trimmed.slice(0, Math.max(0, maxChars - 1))}…`;
@@ -204,7 +209,7 @@ function copySafeValue(
   if (typeof value === 'string') {
     const inputWasTruncated = value.length > MAX_VALUE_STRING_CHARS;
     const redacted = redactMcpText(value.slice(0, MAX_VALUE_STRING_CHARS + REDACTION_GUARD_CHARS));
-    if (UNSAFE_TEXT_CHARACTERS.test(redacted)) throw invalidResult();
+    if (UNSAFE_MULTILINE_CHARACTERS.test(redacted)) throw invalidResult();
     if (!inputWasTruncated && redacted.length <= MAX_VALUE_STRING_CHARS) return redacted;
     state.truncatedValues += 1;
     return `${redacted.slice(0, MAX_VALUE_STRING_CHARS - 1)}…`;
@@ -345,7 +350,7 @@ export function normalizeExternalMcpToolResult(value: unknown): NormalizedExtern
       return;
     }
     const remaining = Math.min(MAX_TEXT_EXCERPT_CHARS, MAX_TEXT_CHARS - aggregateTextChars);
-    const text = boundedText(rawText, remaining, state);
+    const text = boundedText(rawText, remaining, state, true, true);
     textExcerpts.push(text!);
     aggregateTextChars += text!.length;
   };

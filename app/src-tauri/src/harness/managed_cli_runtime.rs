@@ -18,7 +18,11 @@ pub(crate) const CODEX_CODE_MODE_HOST_SHA256: &str =
 pub(crate) const CODEX_CODE_MODE_HOST_MISSING: &str = "Managed Codex code-mode helper is missing.";
 
 pub(crate) fn inspect_codex_code_mode_host(root: &Path) -> Result<(), &'static str> {
-    if !root.join(CODEX_CODE_MODE_HOST).try_exists().map_err(|_| "Managed Codex code-mode helper is unavailable.")? {
+    if !root
+        .join(CODEX_CODE_MODE_HOST)
+        .try_exists()
+        .map_err(|_| "Managed Codex code-mode helper is unavailable.")?
+    {
         return Err(CODEX_CODE_MODE_HOST_MISSING);
     }
     let file = regular_file_within(root, CODEX_CODE_MODE_HOST)
@@ -369,7 +373,10 @@ fn closure_file_hashes(files: &[(String, PathBuf)]) -> Option<Vec<String>> {
                 std::thread::Builder::new()
                     .name("runtime-integrity".to_string())
                     .spawn_scoped(scope, move || {
-                        chunk.iter().map(|(_, path)| file_sha256(path)).collect::<Option<Vec<_>>>()
+                        chunk
+                            .iter()
+                            .map(|(_, path)| file_sha256(path))
+                            .collect::<Option<Vec<_>>>()
                     })
                     .ok()?,
             );
@@ -576,8 +583,7 @@ pub fn inspect_managed_runtime(
 mod tests {
     use super::{
         closure_file_hashes, confirm_managed_runtime_probe, file_sha256, inspect_managed_runtime,
-        opencodex_closure_sha256,
-        ManagedCliProbe, ManagedCliReadiness, ManagedRuntimeReceipt,
+        opencodex_closure_sha256, ManagedCliProbe, ManagedCliReadiness, ManagedRuntimeReceipt,
     };
     use crate::harness::managed_cli_manifest::{embedded_managed_release, ManagedCliKind};
     use sha2::{Digest, Sha256};
@@ -641,9 +647,15 @@ mod tests {
             files.push((name, path));
         }
         let expected = "f0fe7803474cd520153b4b3b1f75f27808027d41a238fcda3601f08665fa1a2b";
-        assert_eq!(opencodex_closure_sha256(root.path()).as_deref(), Some(expected));
+        assert_eq!(
+            opencodex_closure_sha256(root.path()).as_deref(),
+            Some(expected)
+        );
         fs::write(root.path().join("file-069.txt"), "changed").expect("mutate last file");
-        assert_ne!(opencodex_closure_sha256(root.path()).as_deref(), Some(expected));
+        assert_ne!(
+            opencodex_closure_sha256(root.path()).as_deref(),
+            Some(expected)
+        );
         files[35].1 = root.path().join("missing.txt");
         assert_eq!(closure_file_hashes(&files), None);
     }
@@ -970,9 +982,15 @@ mod cao_codex_helper_tests {
     fn missing_or_modified_code_mode_host_cannot_be_ready() {
         let root = std::env::temp_dir().join(format!("cao-codex-helper-{}", nanoid::nanoid!(12)));
         std::fs::create_dir(&root).unwrap();
-        assert_eq!(super::inspect_codex_code_mode_host(&root), Err(super::CODEX_CODE_MODE_HOST_MISSING));
+        assert_eq!(
+            super::inspect_codex_code_mode_host(&root),
+            Err(super::CODEX_CODE_MODE_HOST_MISSING)
+        );
         std::fs::write(root.join(super::CODEX_CODE_MODE_HOST), b"untrusted helper").unwrap();
-        assert_eq!(super::inspect_codex_code_mode_host(&root), Err("Managed Codex code-mode helper integrity failed."));
+        assert_eq!(
+            super::inspect_codex_code_mode_host(&root),
+            Err("Managed Codex code-mode helper integrity failed.")
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

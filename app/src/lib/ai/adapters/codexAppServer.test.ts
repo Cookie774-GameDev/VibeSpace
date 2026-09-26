@@ -314,10 +314,17 @@ describe('Codex app-server structured event normalization', () => {
       },
     });
     expect(question.events).toHaveLength(1);
+    const questionEvent = question.events.find((event) => event.type === 'question');
+    expect(questionEvent).toMatchObject({
+      type: 'question',
+      request: { id: '7', nativeRequestId: 7 },
+    });
+    expect(questionEvent?.request).not.toHaveProperty('deadlineAt');
     expect(question.controls).toMatchObject([
       {
         type: 'question',
         requestId: '7',
+        nativeRequestId: 7,
         threadId: 'thr_123',
         turnId: 'turn_1',
         itemId: 'question_1',
@@ -406,6 +413,51 @@ describe('Codex app-server structured event normalization', () => {
     for (const privateValue of ['Get-Content', 'TOPSECRET', 'C:\\private']) {
       expect(serializedApproval).not.toContain(privateValue);
     }
+  });
+
+  it('anchors a supplied native question timeout to the captured receive time', () => {
+    const capturedAt = 1_760_000_000_000;
+    const question = normalizeCodexAppServerMessage(
+      {
+        id: 42,
+        method: 'item/tool/requestUserInput',
+        params: {
+          threadId: 'thr_123',
+          turnId: 'turn_1',
+          itemId: 'question_1',
+          autoResolutionMs: 1_500,
+          questions: [
+            {
+              id: 'q1',
+              header: 'Choice',
+              question: 'Which option?',
+              isOther: false,
+              options: [{ label: 'A', description: 'Option A' }],
+            },
+          ],
+        },
+      },
+      { capturedAt },
+    );
+
+    expect(question.events).toMatchObject([
+      {
+        type: 'question',
+        request: {
+          id: '42',
+          nativeRequestId: 42,
+          deadlineAt: capturedAt + 1_500,
+        },
+      },
+    ]);
+    expect(question.controls).toMatchObject([
+      {
+        type: 'question',
+        requestId: '42',
+        nativeRequestId: 42,
+        deadlineAt: capturedAt + 1_500,
+      },
+    ]);
   });
 
   it('summarizes permission requests without exposing requested paths', () => {
@@ -701,6 +753,19 @@ describe('Codex app-server structured event normalization', () => {
       recognized: false,
       events: [],
       controls: [],
+    });
+  });
+
+  it('preserves the numeric type of a native request id when it resolves', () => {
+    expect(
+      normalizeCodexAppServerMessage({
+        method: 'serverRequest/resolved',
+        params: { threadId: 'thr_123', requestId: 42 },
+      }),
+    ).toEqual({
+      recognized: true,
+      events: [],
+      controls: [{ type: 'resolved', requestId: 42 }],
     });
   });
 });

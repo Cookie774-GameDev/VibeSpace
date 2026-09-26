@@ -37,6 +37,7 @@ PIN_HASH_LEN = 32
 SUPPORTED_JWT_ALGORITHMS = frozenset(
     {"RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "EdDSA"}
 )
+SUPABASE_JWKS_SUFFIX = "/.well-known/jwks.json"
 
 
 # ============================================================================
@@ -158,9 +159,15 @@ class JwtVerifier:
 
     jwks_url: str
     audience: str = "authenticated"
+    issuer: str = field(init=False)
     _jwks_cache: Optional[dict] = field(default=None, init=False)
     _jwks_cache_ts: float = field(default=0.0, init=False)
     _jwks_ttl: float = field(default=3600.0, init=False)
+
+    def __post_init__(self) -> None:
+        if not self.jwks_url.endswith(SUPABASE_JWKS_SUFFIX):
+            raise ValueError("jwks_url must be the Supabase Auth JWKS endpoint")
+        self.issuer = self.jwks_url[: -len(SUPABASE_JWKS_SUFFIX)]
 
     async def _fetch_jwks(self) -> dict:
         now = time.time()
@@ -201,8 +208,14 @@ class JwtVerifier:
                 token,
                 signing_key.key,
                 algorithms=[algorithm],
+                issuer=self.issuer,
                 audience=self.audience,
-                options={"verify_aud": True, "verify_exp": True, "require": ["exp", "sub", "aud"]},
+                options={
+                    "verify_iss": True,
+                    "verify_aud": True,
+                    "verify_exp": True,
+                    "require": ["exp", "sub", "aud", "iss"],
+                },
             )
         except PermissionError:
             raise
@@ -225,7 +238,7 @@ def get_jwt_verifier() -> JwtVerifier:
         # for projects with asymmetric (RSA/EC) JWT signing enabled. For
         # legacy HS256 projects, this verifier doesn't apply -- use the
         # SERVICE_ROLE secret directly to verify HS256 tokens.
-        jwks_url = f"{s.SUPABASE_URL}/auth/v1/.well-known/jwks.json"
+        jwks_url = f"{s.SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
         _jwt_verifier = JwtVerifier(jwks_url=jwks_url)
     return _jwt_verifier
 

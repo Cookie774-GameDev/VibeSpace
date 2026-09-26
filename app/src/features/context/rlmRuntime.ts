@@ -88,6 +88,7 @@ export interface RlmRuntimeResult extends RlmSynthesis {
 
 export type RlmRuntimeErrorCode =
   | 'cancelled'
+  | 'abort_unconfirmed'
   | 'wall_time_exceeded'
   | 'budget_invalid'
   | 'execution_identity_invalid'
@@ -107,6 +108,7 @@ export class RlmRuntimeError extends Error {
 interface RlmContextTools {
   search: ContextQueryService['search'];
   open: ContextQueryService['open'];
+  expand?: ContextQueryService['expand'];
 }
 
 function positiveInteger(value: number, allowZero = false): boolean {
@@ -192,34 +194,145 @@ function trimUtf8(value: string, maximumBytes: number): string {
 }
 
 function retrievalQuery(question: string): string {
-  const bracketed = question.match(/\[([^\]]{1,1024})\]/u)?.[1]?.trim();
+  // Keep run metadata and tool-policy instructions for the child, but do not
+  // let those lines displace source terms in the bounded physical search.
+  const semanticQuestion = question.split(/\r?\n/u).map((line) => {
+    // A provider may send the marker and source question on one line. Remove
+    // only the marker; dropping that line loses the entire retrieval query.
+    const content = line.trim()
+      .replace(/^(?:(?:ROOT_NUTTX|NUTTX_R27|NUTTX_RLM)_[A-Z0-9_]{4,})(?::\s*|\s+)/u, '')
+      .replace(/\s+(?:Use only (?:the )?(?:active )?SiYuan Context Map\b|Answer from mapped source\b)[\s\S]*$/iu, '');
+    return /^NuttX source-grounded question \d+\.$/iu.test(content) ? '' : content;
+  }
+  ).filter((line) =>
+    !/^Use only (?:the )?(?:active )?SiYuan Context Map\b.*\bvibespace_context\b/iu.test(line),
+  ).join(' ').trim() || question;
+  // An explicitly requested source must survive semantic query shortening.
+  // The repository validates named paths; prose such as "Focus on" remains a
+  // retrieval hint and continues through the existing symbol/macro strategy.
+  if (/\bsource\s+(?:file|path)\s+[`"']?(?:[\w.-]+[\\/])+[\w.-]+\.[\w]+/iu.test(semanticQuestion)) {
+    return semanticQuestion;
+  }
+  const bracketed = semanticQuestion.match(/\[([^\]]{1,1024})\]/u)?.[1]?.trim();
   const normalized = bracketed?.replace(/\s+/gu, ' ');
-  return normalized && !normalized.includes('"') ? `"${normalized}"` : normalized || question;
+  if (normalized) return !normalized.includes('"') ? `"${normalized}"` : normalized;
+  // A precise code symbol is a stronger source anchor than surrounding chat
+  // instructions, run markers, or requests for citations. Keep the full
+  // question for child analysis; only the physical retrieval query narrows.
+  const symbol = semanticQuestion.match(/`([A-Za-z_][A-Za-z0-9_]{2,127})`/u)?.[1];
+  if (symbol && symbol.length >= 6 && !/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/u.test(symbol)) {
+    return symbol;
+  }
+  // Providers sometimes remove backticks and append an unverified file guess.
+  // A C-style macro in the question is a more stable index anchor than that
+  // guessed path; the child still receives the complete original question.
+  const macro = semanticQuestion.match(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/u)?.[0];
+  if (macro) {
+    const sentence = semanticQuestion.split(/[.!?]/u).find((part) => part.includes(macro)) ?? '';
+    // Source names commonly join a hyphenated "pseudo-files" style domain
+    // noun; that compound is more selective than a generic API verb.
+    const compoundFile = sentence.match(/\b([A-Za-z]{4,})-files?\b/iu)?.[1];
+    if (compoundFile) return `${macro} ${compoundFile}file`;
+    // A short generic API name such as `open` is useful only with the more
+    // discriminating flag that follows it in the same source question.
+    if (symbol && symbol.length < 6 && sentence.includes(`\`${symbol}\``)) {
+      return `${macro} ${symbol}`;
+    }
+    const contextWords = sentence.slice(sentence.indexOf(macro) + macro.length)
+      .match(/\b[A-Za-z][A-Za-z0-9_-]{2,}\b/gu)?.slice(-2) ?? [];
+    return [macro, ...contextWords].join(' ');
+  }
+  const firstSentence = semanticQuestion.split(/[.!?]/u)[0] ?? semanticQuestion;
+  const acronym = firstSentence.match(/\b[A-Z]{2,}\b/u);
+  if (acronym && acronym.index !== undefined) {
+    const before = firstSentence.slice(0, acronym.index).match(/\b([A-Za-z]{5,})\s*$/u)?.[1];
+    if (/\bcallback\b/iu.test(firstSentence) && /\ballocat(?:e|ion|ing)\b/iu.test(firstSentence)) {
+      return [before, acronym[0], 'callback', 'allocate'].filter(Boolean).join(' ');
+    }
+    const afterWords = firstSentence.slice(acronym.index + acronym[0].length)
+      .match(/\b[A-Za-z][A-Za-z-]{2,}\b/gu)
+      ?.flatMap((word) => word.split('-')) ?? [];
+    const after = afterWords.map((word, index) => ({ word, index }))
+      .filter(({ word }) => !/^(?:file|helper|implementation|request|ordinary|return|when|what|which|the|and|has|been)$/iu.test(word));
+    const first = after[0];
+    const second = after[1]?.index === (first?.index ?? -2) + 1 ? after[1] : undefined;
+    const subject = [before && !/^(?:about|which|their|where|under|before|after)$/iu.test(before) ? before : '',
+      acronym[0], first?.word,
+      second?.word.replace(/([^aeiou])ies$/iu, '$1y')].filter((word): word is string => Boolean(word));
+    // Keep a later named callback when the question asks about its allocation;
+    // otherwise the first generic send/receive noun points at buffer code.
+    if (/\bcallback\b/iu.test(firstSentence) && !subject.some((word) => /^callback$/iu.test(word))) {
+      subject.push('callback');
+    }
+    return subject.join(' ');
+  }
+  const subject = firstSentence.match(/\b(?:in|with)\s+(?:an?\s+)?([A-Za-z-]{5,})[\s\S]*?\bactive\s+([A-Za-z-]{5,})\b/iu);
+  // An alternative build mode can be the discriminating source clue. Keep
+  // both sides of "or" instead of collapsing the question to two nouns.
+  if (subject && !/\bor\b/iu.test(subject[0])) {
+    return `${subject[1]} ${subject[2]}`;
+  }
+  return semanticQuestion;
 }
 
 function abortError(signal: AbortSignal, timedOut: boolean): RlmRuntimeError {
   return new RlmRuntimeError(timedOut ? 'wall_time_exceeded' : 'cancelled', String(signal.reason));
 }
 
+const CHILD_ABORT_ACK_TIMEOUT_MS = 5_000;
+
 async function abortable<T>(
-  work: Promise<T>,
+  startWork: () => Promise<T>,
   signal: AbortSignal,
   timedOut: () => boolean,
+  abortAcknowledgementTimeoutMs = 0,
 ): Promise<T> {
   if (signal.aborted) throw abortError(signal, timedOut());
+
+  let work: Promise<T>;
+  try {
+    work = startWork();
+  } catch (error) {
+    throw error;
+  }
+
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(abortError(signal, timedOut()));
+    let settled = false;
+    let acknowledgementTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (complete: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      if (acknowledgementTimer !== undefined) clearTimeout(acknowledgementTimer);
+      complete();
+    };
+    const onAbort = () => {
+      if (abortAcknowledgementTimeoutMs <= 0) {
+        finish(() => reject(abortError(signal, timedOut())));
+        return;
+      }
+      acknowledgementTimer = setTimeout(() => {
+        finish(() => reject(new RlmRuntimeError(
+          'abort_unconfirmed',
+          'rlm_abort_acknowledgement_timeout',
+        )));
+      }, abortAcknowledgementTimeoutMs);
+    };
     signal.addEventListener('abort', onAbort, { once: true });
     work.then(
       (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
+        finish(() => {
+          if (signal.aborted) reject(abortError(signal, timedOut()));
+          else resolve(value);
+        });
       },
       (error) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
+        const unconfirmedAbort =
+          error instanceof RlmRuntimeError && error.code === 'abort_unconfirmed';
+        finish(() => reject(unconfirmedAbort || !signal.aborted ? error : abortError(signal, timedOut())));
       },
     );
+    if (signal.aborted) onAbort();
   });
 }
 
@@ -265,19 +378,29 @@ export function createRlmRuntime(dependencies: {
     const events: RlmTraceEvent[] = [];
     const usage = { subcalls: 0, toolCalls: 0, openBytes: 0, maxDepthReached: 0 };
     let budgetExhausted = false;
+    let abortUnconfirmedError: RlmRuntimeError | undefined;
+    let workerPromises: Promise<void>[] = [];
     const event = (type: RlmTraceEventType, depth: number, detail?: string) => {
       events.push({ type, at: Date.now(), depth, ...(detail ? { detail } : {}) });
     };
 
     try {
+      if (signal.aborted) throw abortError(signal, timedOut);
       const searchQuery = retrievalQuery(input.question);
+      // Leave room in the bounded tool budget for a source follow-up. Opening
+      // every search hit consumed all twelve calls before the child analysis
+      // could reach decisive nearby branches in large mapped files.
+      // A compact one- or two-symbol probe has a sharper index rank; four
+      // sources leave more of the tool and wall budget for reading the branch.
+      const searchCap = searchQuery.trim().split(/\s+/u).length <= 2 ? 4 : 6;
+      const initialSearchLimit = Math.min(searchCap, Math.max(1, budget.maxToolCalls - 3));
       event('root_started', 0, `run=${runId}`);
       usage.toolCalls += 1;
       const found = await abortable(
-        dependencies.contextTools.search({
+        () => dependencies.contextTools.search({
           scope: input.scope,
           query: searchQuery,
-          limit: Math.max(1, budget.maxToolCalls - 1),
+          limit: initialSearchLimit,
           signal,
         }),
         signal,
@@ -296,17 +419,35 @@ export function createRlmRuntime(dependencies: {
           break;
         }
         usage.toolCalls += 1;
+        const remaining = budget.maxOpenBytes - usage.openBytes;
+        const pointerStart = item.pointer.byteStart;
+        const pointerEnd = item.pointer.byteEnd;
+        const hasByteBounds = typeof pointerStart === 'number'
+          && typeof pointerEnd === 'number' && pointerEnd > pointerStart;
+        const pointerBytes = hasByteBounds ? pointerEnd - pointerStart : remaining;
+        const expansionSpace = remaining - pointerBytes;
+        // Two line-numbered source excerpts share one child input window. For a
+        // named allocation, keep both excerpts short enough that the branch at
+        // the second pointer survives prompt construction.
+        const allocationFocus = /\bcallback allocate\b/iu.test(searchQuery);
+        const windowBytes = Math.min(allocationFocus ? 10_240 : 20_480, Math.max(0, expansionSpace));
+        const beforeBytes = Math.min(allocationFocus ? 4_096 : 8_192,
+          Math.floor(windowBytes * 0.8), Math.max(0, pointerStart ?? 0));
+        const afterBytes = Math.min(16_384, Math.max(0, windowBytes - beforeBytes));
+        // Search pointers are short excerpts. Expanding the already issued
+        // authority includes preceding acquisition/guard branches as well as
+        // following cleanup, without granting a new path or exceeding the budget.
         const opened = await abortable(
-          dependencies.contextTools.open({
-            scope: input.scope,
-            pointer: item.pointer,
-            maxBytes: budget.maxOpenBytes - usage.openBytes,
-            signal,
-          }),
+          () => dependencies.contextTools.expand && hasByteBounds && expansionSpace > 0
+            ? dependencies.contextTools.expand({
+                scope: input.scope, pointer: item.pointer, beforeBytes, afterBytes, signal,
+              })
+            : dependencies.contextTools.open({
+                scope: input.scope, pointer: item.pointer, maxBytes: remaining, signal,
+              }),
           signal,
           () => timedOut,
         );
-        const remaining = budget.maxOpenBytes - usage.openBytes;
         const text = trimUtf8(opened.text, remaining);
         const openedBytes = byteLength(text);
         if (openedBytes === 0) continue;
@@ -349,6 +490,7 @@ export function createRlmRuntime(dependencies: {
         question: string,
         depth: number,
       ): Promise<void> => {
+        if (signal.aborted) throw abortError(signal, timedOut);
         if (depth > budget.maxDepth || usage.subcalls >= budget.maxSubcalls) {
           budgetExhausted = true;
           return;
@@ -362,7 +504,7 @@ export function createRlmRuntime(dependencies: {
         );
         try {
           const analysis = await abortable(
-            dependencies.childRunner({
+            () => dependencies.childRunner({
               question,
               evidence: narrowEvidence,
               sourcePointers: narrowEvidence.map((item) => item.pointer),
@@ -380,6 +522,7 @@ export function createRlmRuntime(dependencies: {
             }),
             signal,
             () => timedOut,
+            Math.min(CHILD_ABORT_ACK_TIMEOUT_MS, budget.maxWallTimeMs),
           );
           const normalized = { ...analysis, depth };
           childAnalyses.push(normalized);
@@ -392,6 +535,10 @@ export function createRlmRuntime(dependencies: {
             await runChild(narrowEvidence, followup, depth + 1);
           }
         } catch (error) {
+          if (error instanceof RlmRuntimeError && error.code === 'abort_unconfirmed') {
+            abortUnconfirmedError ??= error;
+            throw error;
+          }
           if (signal.aborted) throw abortError(signal, timedOut);
           if (
             error instanceof RlmRuntimeError &&
@@ -406,6 +553,7 @@ export function createRlmRuntime(dependencies: {
 
       const worker = async () => {
         while (true) {
+          if (signal.aborted) throw abortError(signal, timedOut);
           if (usage.subcalls >= budget.maxSubcalls) {
             budgetExhausted = nextPartition < work.length;
             return;
@@ -417,14 +565,11 @@ export function createRlmRuntime(dependencies: {
         }
       };
       const workerCount = Math.min(budget.maxConcurrentSubcalls, budget.maxSubcalls, work.length);
-      await abortable(
-        Promise.all(Array.from({ length: workerCount }, () => worker())),
-        signal,
-        () => timedOut,
-      );
+      workerPromises = Array.from({ length: workerCount }, () => worker());
+      await Promise.all(workerPromises);
 
       const synthesis = await abortable(
-        dependencies.synthesize({
+        () => dependencies.synthesize({
           question: input.question,
           scope: input.scope,
           evidence,
@@ -456,6 +601,18 @@ export function createRlmRuntime(dependencies: {
       };
     } catch (error) {
       if (signal.aborted) {
+        // Promise.all rejects on the first worker, while another active child
+        // may still be confirming the same cancellation. Wait only for the
+        // worker calls already in flight; workers check the signal before
+        // claiming another partition.
+        const remainingWorkers = await Promise.allSettled(workerPromises);
+        const unconfirmedWorker = remainingWorkers.find((result) =>
+          result.status === 'rejected' && result.reason instanceof RlmRuntimeError
+          && result.reason.code === 'abort_unconfirmed');
+        const unconfirmed = abortUnconfirmedError
+          ?? (error instanceof RlmRuntimeError && error.code === 'abort_unconfirmed' ? error : undefined)
+          ?? (unconfirmedWorker?.status === 'rejected' ? unconfirmedWorker.reason as RlmRuntimeError : undefined);
+        if (unconfirmed) throw unconfirmed;
         event(timedOut ? 'wall_time_exceeded' : 'cancelled', 0);
         throw abortError(signal, timedOut);
       }

@@ -11,6 +11,7 @@ import {
   Folder,
   Plug,
   UserRound,
+  BookOpen,
 } from 'lucide-react';
 import { useThemeMotionTransition } from '@/features/appearance/themeMotion';
 import { cn } from '@/lib/utils';
@@ -25,7 +26,8 @@ export type TokenType =
   | 'folder'
   | 'model'
   | 'agent'
-  | 'plugin';
+  | 'plugin'
+  | 'native-skill';
 
 export interface InputTokenProps {
   type: TokenType;
@@ -49,6 +51,7 @@ const TOKEN_ICONS: Record<TokenType, typeof FileText> = {
   model: Zap,
   agent: UserRound,
   plugin: Plug,
+  'native-skill': BookOpen,
 };
 
 const SPRING = 'spring' as const;
@@ -60,7 +63,8 @@ export const InputToken = forwardRef<HTMLDivElement, InputTokenProps>(function I
 ) {
   const Icon = TOKEN_ICONS[type];
   const isCommand = type === 'command';
-  const isSkill = isCommand && /^\/skills(?::|\b)/iu.test(label.trim());
+  const isNativeSkill = type === 'native-skill';
+  const isSkill = isNativeSkill || (isCommand && /^\/skills(?::|\b)/iu.test(label.trim()));
   const tokenTransition = useThemeMotionTransition(TOKEN_TRANSITION);
   const filterTransition =
     'duration' in tokenTransition && tokenTransition.duration === 0
@@ -75,17 +79,18 @@ export const InputToken = forwardRef<HTMLDivElement, InputTokenProps>(function I
       exit={{ opacity: 0, scale: 0.85, y: -6, filter: 'blur(1px)' }}
       transition={{ ...tokenTransition, filter: filterTransition }}
       data-composer-token-theme="native"
-      data-composer-token-kind={isSkill ? 'skill' : type}
+      data-composer-token-kind={isNativeSkill ? 'native-skill' : isSkill ? 'skill' : type}
       className={cn(
         'relative inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/80 bg-muted/65 px-2 py-0.5',
         'text-[11px] font-medium leading-4 text-foreground/90',
         isCommand && !isSkill && 'border-accent-copper/35 bg-accent-copper/10',
         isSkill &&
           'gap-1 border-border/55 bg-muted/45 px-1.5 text-foreground/82 hover:border-border/80 hover:bg-muted/60',
+        isNativeSkill && 'border-sky-500/45 bg-sky-500/12 text-sky-800 dark:text-sky-200',
         'transition-colors duration-150 hover:border-foreground/20 hover:bg-muted/85',
         className,
       )}
-      title={isSkill ? `Attached skill: ${label}` : isCommand ? `Confirmed: ${label}` : label}
+      title={isNativeSkill ? `Native CLI skill selected: ${label}` : isSkill ? `Attached skill: ${label}` : isCommand ? `Confirmed: ${label}` : label}
     >
       {onActivate ? (
         <button

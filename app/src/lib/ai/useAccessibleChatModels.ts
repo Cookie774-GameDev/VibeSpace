@@ -133,19 +133,31 @@ function filterModelPickerOptionForBackend(
   if (routes.length === 0) return undefined;
   if (!alternativeRoutes) return option;
 
+  const nativeCodexIndex =
+    backend === 'codex'
+      ? routes.findIndex(
+          (route) =>
+            route.connectionId === CODEX_CLI_CONNECTION.id && route.available !== false,
+        )
+      : -1;
+  const orderedRoutes =
+    nativeCodexIndex > 0
+      ? [routes[nativeCodexIndex]!, ...routes.filter((_, index) => index !== nativeCodexIndex)]
+      : routes;
+
   const logicalLabel = option.label.split(' · ')[0]?.trim() || option.label;
-  if (routes.length === 1) {
-    return { ...routes[0]!, label: logicalLabel };
+  if (orderedRoutes.length === 1) {
+    return { ...orderedRoutes[0]!, label: logicalLabel };
   }
 
-  const preferred = routes[0]!;
-  const allFree = routes.every((route) => route.isFree === true);
+  const preferred = orderedRoutes[0]!;
+  const allFree = orderedRoutes.every((route) => route.isFree === true);
   return {
     ...preferred,
     label: logicalLabel,
     pricingStatus: allFree ? 'free' : 'unknown',
     isFree: allFree,
-    alternativeRoutes: routes.map((route) => ({
+    alternativeRoutes: orderedRoutes.map((route) => ({
       ...route,
       label: modelRouteLabel(logicalLabel, route.modeLabel, routes.length),
     })),
@@ -188,10 +200,9 @@ function modelRouteOwner(modelId: string, providerId: unknown): string | undefin
 
 /**
  * Resolve a stale exact selection to the same logical model on the selected
- * chat backend. The picker deliberately keeps connection identity exact, so a
- * Codex route such as `gpt-5.6-luna` must become the live OpenCode route
- * `openai/gpt-5.6-luna` before dispatch rather than being sent through the
- * wrong connection and rejected later by the runtime guard.
+ * chat backend. When switching from the managed OpenCode connection to Codex,
+ * prefer a unique native Codex route for the same model if one is available;
+ * otherwise retain the supported managed bridge route.
  */
 export function findBackendModelPickerRoute(
   selection: Readonly<{
@@ -213,9 +224,12 @@ export function findBackendModelPickerRoute(
 
   const currentConnectionId =
     typeof selection.connectionId === 'string' ? selection.connectionId : undefined;
+  const preferNativeCodexRoute =
+    backend === 'codex' && currentConnectionId === OPENCODE_CLI_CONNECTION.id;
   if (
     currentConnectionId &&
-    isModelPickerRouteCompatibleWithBackend({ connectionId: currentConnectionId }, backend)
+    isModelPickerRouteCompatibleWithBackend({ connectionId: currentConnectionId }, backend) &&
+    !preferNativeCodexRoute
   ) {
     return undefined;
   }
@@ -227,6 +241,15 @@ export function findBackendModelPickerRoute(
   );
   const selectionOwner = modelRouteOwner(selection.modelId, selection.providerId);
   if (!selectionOwner) return undefined;
+  if (preferNativeCodexRoute) {
+    const nativeCodexMatches = compatible.filter(
+      (option) =>
+        option.connectionId === CODEX_CLI_CONNECTION.id &&
+        modelRouteLeaf(option.modelId) === modelRouteLeaf(selection.modelId as string) &&
+        modelRouteOwner(option.modelId, option.provider) === selectionOwner,
+    );
+    if (nativeCodexMatches.length === 1) return nativeCodexMatches[0];
+  }
   const exact = compatible.filter(
     (option) =>
       option.modelId === selection.modelId &&
@@ -330,6 +353,26 @@ export function connectionRouteProviderLabel(
 export const OPEN_CODE_MODEL_CATALOG_REFRESH_EVENT = 'vibespace:open-code-model-catalog-refresh';
 export const OPEN_CODE_CATALOG_EVIDENCE_EVENT = 'vibespace:open-code-catalog-evidence';
 export const OPEN_CODE_CATALOG_EVIDENCE_ATTRIBUTE = 'data-vibespace-opencode-catalog-evidence';
+
+const accessibleChatModelRefreshHandlers = new Set<() => Promise<void>>();
+let accessibleChatModelRefreshInFlight: Promise<void> | undefined;
+
+/** Refresh the mounted chat catalog before a caller reads its verified CLI routes. */
+export function refreshAccessibleChatModelCatalog(): Promise<void> {
+  const refresh = [...accessibleChatModelRefreshHandlers].at(-1);
+  if (!refresh) {
+    return Promise.reject(new Error('The live chat model catalog is not mounted.'));
+  }
+  if (accessibleChatModelRefreshInFlight) return accessibleChatModelRefreshInFlight;
+
+  const pending = refresh().finally(() => {
+    if (accessibleChatModelRefreshInFlight === pending) {
+      accessibleChatModelRefreshInFlight = undefined;
+    }
+  });
+  accessibleChatModelRefreshInFlight = pending;
+  return pending;
+}
 
 export type OpenCodeCatalogRefreshReason =
   | 'initial'
@@ -1400,7 +1443,123 @@ export function useAccessibleChatModels() {
     };
   }, [openCodeReady, openCodeRuntimeAuthority.revision, connectionRevision, catalogRevision]);
 
-  const refreshModels = useCallback(() => requestOpenCodeModelCatalogRefresh(), []);
+  const refreshModels = useCallback(async () => {
+    await ensureExternalConnectionAutoDetection({ force: true }).catch(() => undefined);
+
+    const isLiveCliReady = (connectionId: string): boolean => {
+      const session = readConnectionSessionPickerStates()[connectionId];
+      return (
+        !useAuthStore.getState().offlineMode &&
+        isConnectionSessionChecked(connectionId) &&
+        session?.available === true &&
+        session.auth === 'authenticated'
+      );
+    };
+    const codexReadyNow = isLiveCliReady(CODEX_CLI_CONNECTION.id);
+    const openCodeAuthority = currentOpenCodeRuntimeCatalogAuthority();
+    const openCodeReadyNow =
+      isLiveCliReady(OPENCODE_CLI_CONNECTION.id) && openCodeAuthority.ready;
+
+    if (!codexReadyNow) {
+      setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, []);
+    }
+    if (!openCodeReadyNow) {
+      setDiscoveredConnectionModels(OPENCODE_CLI_CONNECTION.id, []);
+      clearOpenCodeCatalogEvidence();
+      setOpenCodeCatalog({
+        generation: -1,
+        accountGeneration: openCodeAccountGeneration,
+        models: [],
+      });
+    }
+
+    const expectedAccountGeneration = openCodeAccountGeneration;
+    const expectedGeneration = openCodeReadyNow
+      ? invalidateOpenCodeModelCatalog('requested')
+      : undefined;
+    if (openCodeReadyNow) invalidateOpenCodePersistentModelCache();
+    if (codexReadyNow) invalidateCodexPersistentModelCache();
+
+    const codexLoad = codexReadyNow
+      ? (codexPersistentAdapter.listModels?.() ?? Promise.resolve([]))
+      : Promise.resolve(undefined);
+    const openCodeLoad = openCodeReadyNow
+      ? loadOpenCodeModels(true)
+      : Promise.resolve(undefined);
+    const [codexResult, openCodeResult] = await Promise.allSettled([codexLoad, openCodeLoad]);
+
+    const currentCodexReady = isLiveCliReady(CODEX_CLI_CONNECTION.id);
+    if (!currentCodexReady) {
+      setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, []);
+    } else if (
+      codexResult.status === 'fulfilled' &&
+      codexResult.value &&
+      codexResult.value.length > 0
+    ) {
+      const verifiedAt = Date.now();
+      setDiscoveredConnectionModels(
+        CODEX_CLI_CONNECTION.id,
+        codexResult.value.map((model) => ({
+          id: model.id,
+          label: model.label,
+          ...(model.variants ? { variants: model.variants } : {}),
+          ...(model.defaultReasoningEffort
+            ? { defaultReasoningEffort: model.defaultReasoningEffort }
+            : {}),
+          source: 'cli_model' as const,
+          lastVerifiedAt: verifiedAt,
+        })),
+      );
+    }
+
+    const currentOpenCodeAuthority = currentOpenCodeRuntimeCatalogAuthority();
+    const currentOpenCodeReady =
+      isLiveCliReady(OPENCODE_CLI_CONNECTION.id) && currentOpenCodeAuthority.ready;
+    if (!currentOpenCodeReady) {
+      setDiscoveredConnectionModels(OPENCODE_CLI_CONNECTION.id, []);
+      clearOpenCodeCatalogEvidence();
+      setOpenCodeCatalog({
+        generation: -1,
+        accountGeneration: openCodeAccountGeneration,
+        models: [],
+      });
+    } else if (
+      expectedGeneration !== undefined &&
+      expectedGeneration === openCodeCatalogGeneration &&
+      expectedAccountGeneration === openCodeAccountGeneration &&
+      currentOpenCodeAuthority.generation === openCodeAuthority.generation &&
+      openCodeResult.status === 'fulfilled' &&
+      openCodeResult.value &&
+      openCodeResult.value.length > 0
+    ) {
+      const verifiedAt = Date.now();
+      const models = openCodeResult.value;
+      setOpenCodeCatalog({
+        generation: expectedGeneration,
+        accountGeneration: expectedAccountGeneration,
+        models,
+      });
+      setDiscoveredConnectionModels(
+        OPENCODE_CLI_CONNECTION.id,
+        models.map((model) => ({
+          id: model.id,
+          label: model.label,
+          ...(model.variants ? { variants: model.variants } : {}),
+          source: 'opencode_refresh' as const,
+          lastVerifiedAt: model.lastVerifiedAt ?? verifiedAt,
+        })),
+      );
+      if (openCodeModelCache?.generation === expectedGeneration) {
+        publishOpenCodeCatalogEvidence(openCodeModelCache, expectedAccountGeneration);
+      }
+    }
+  }, []);
+  useEffect(() => {
+    accessibleChatModelRefreshHandlers.add(refreshModels);
+    return () => {
+      accessibleChatModelRefreshHandlers.delete(refreshModels);
+    };
+  }, [refreshModels]);
   const ollamaSignature = ollamaOptions.map((option) => option.id).join('\0');
 
   const groups = useMemo(() => {

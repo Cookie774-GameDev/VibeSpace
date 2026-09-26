@@ -131,12 +131,15 @@ pub async fn siyuan_list_notebooks(
 ) -> Result<SiyuanNotebooksResponse, String> {
     let runtime = state.inner().clone();
     run_read(move || {
-        let transport = runtime.runtime_transport(&project_id).map_err(public_error)?;
+        let transport = runtime
+            .runtime_transport(&project_id)
+            .map_err(public_error)?;
         SiyuanClient::new(true, transport)
             .list_notebooks()
             .map(|notebooks| SiyuanNotebooksResponse { notebooks })
             .map_err(client_error)
-    }).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -188,12 +191,15 @@ pub async fn siyuan_get_block(
 ) -> Result<SiyuanBlockResponse, String> {
     let runtime = state.inner().clone();
     run_read(move || {
-        let transport = runtime.runtime_transport(&project_id).map_err(public_error)?;
+        let transport = runtime
+            .runtime_transport(&project_id)
+            .map_err(public_error)?;
         SiyuanClient::new(true, transport)
             .get_block(&id)
             .map(|block| SiyuanBlockResponse { block })
             .map_err(client_error)
-    }).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -392,10 +398,18 @@ mod tests {
     fn read_worker_leaves_the_calling_thread_and_preserves_results() {
         let caller = std::thread::current().id();
         tauri::async_runtime::block_on(async {
-            assert_ne!(caller, run_read(|| Ok(std::thread::current().id())).await.unwrap());
-            assert_eq!(run_read(|| Ok(vec!["one", "two"])).await.unwrap(), vec!["one", "two"]);
-            assert_eq!(run_read(|| Err::<(), _>("original error".to_owned())).await,
-                Err("original error".to_owned()));
+            assert_ne!(
+                caller,
+                run_read(|| Ok(std::thread::current().id())).await.unwrap()
+            );
+            assert_eq!(
+                run_read(|| Ok(vec!["one", "two"])).await.unwrap(),
+                vec!["one", "two"]
+            );
+            assert_eq!(
+                run_read(|| Err::<(), _>("original error".to_owned())).await,
+                Err("original error".to_owned())
+            );
         });
     }
 

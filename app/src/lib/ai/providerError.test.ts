@@ -13,6 +13,39 @@ import { JarvisProviderAttemptFailureError } from './providerAttemptEvidence';
 
 describe('provider error boundary', () => {
   it.each([
+    { name: 'native string rejection', wrap: (message: string): unknown => message },
+    { name: 'string cause', wrap: (message: string): unknown => new Error('Attempt wrapper', { cause: message }) },
+    { name: 'plain details envelope', wrap: (message: string): unknown => ({ message, details: { code: 'upstream_rejected' } }) },
+    { name: 'protected attempt string cause', wrap: (message: string): unknown => new JarvisProviderAttemptFailureError({
+      kind: 'response_started_transport_failure', accountId: 'account-fixture', runId: 'run-fixture',
+      requestId: 'request-fixture', attemptNumber: 1, responseStarted: true, chunkCount: 1,
+      actionDispatchCount: 0, failureCategory: 'provider_transport_failure', failedAt: 100,
+    }, message) },
+  ])('preserves safe provider text from $name', ({ wrap }) => {
+    const route = {
+      providerId: 'opencode', modelId: 'openai/gpt-5.6-luna', connectionId: 'opencode-cli',
+      requestId: 'request-verified', runId: 'run-verified',
+    };
+    const details = providerErrorDetails(wrap('You have reached the weekly usage limit.\napi_key=fixture-private-value'), route);
+    expect(details).toMatchObject({ ...route, message: 'You have reached the weekly usage limit.\napi_key=[REDACTED]' });
+    expect(presentProviderError(details).title).toBe('Usage limit reached');
+    expect(JSON.stringify(details)).not.toContain('fixture-private-value');
+    expect(providerErrorDetails(wrap('x'.repeat(5_000)), route).message).toHaveLength(2_048);
+    expect(Object.isFrozen(details)).toBe(true);
+  });
+
+  it('preserves a specific string failure instead of a later generic session status', () => {
+    expect(richestProviderErrorDetails([
+      'Specific native rejection.', { message: 'OpenCode session failed.' },
+    ]).message).toBe('Specific native rejection.');
+  });
+
+  it('keeps nested details text preferred and blank string causes on the safe fallback', () => {
+    expect(providerErrorDetails({ message: 'outer', details: { message: 'inner', code: 'upstream' } }))
+      .toMatchObject({ message: 'inner', code: 'upstream' });
+    expect(providerErrorDetails('   ', { message: 'Verified fallback.' }).message).toBe('Verified fallback.');
+  });
+  it.each([
     { code: '429', message: 'Too Many Requests.' },
     { code: 'rate_limit_exceeded', message: 'The provider rejected the request.' },
   ])('recognizes a temporary provider rate limit: %j', (details) => {

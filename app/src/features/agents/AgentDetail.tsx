@@ -323,8 +323,14 @@ export function AgentDetail() {
             <div className="flex items-center justify-between mb-2">
               <div className="text-ui-strong text-foreground">{promptLabel}</div>
               <div className="text-metadata text-muted-foreground">
-                {(displayedPrompt ?? '').length.toLocaleString()} chars · ~
-                {Math.ceil((displayedPrompt ?? '').length / 4).toLocaleString()} tokens
+                {displayedPrompt === null ? (
+                  <span aria-live="polite">Loading…</span>
+                ) : (
+                  <>
+                    {displayedPrompt.length.toLocaleString()} chars · ~
+                    {Math.ceil(displayedPrompt.length / 4).toLocaleString()} tokens
+                  </>
+                )}
               </div>
             </div>
             {displayedPrompt === null ? (

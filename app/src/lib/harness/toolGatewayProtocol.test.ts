@@ -30,6 +30,21 @@ describe('tool gateway protocol', () => {
     ).toThrow();
   });
 
+  it('does not expose the VibeSpace custom command runner while retaining terminal messaging', () => {
+    expect(TOOL_GATEWAY_CATALOG).not.toContain('command.run');
+    expect(TOOL_GATEWAY_CATALOG).toContain('terminal.write');
+    expect(() =>
+      parseToolGatewayRequest(
+        request({ tool: 'command.run', args: { command: 'open-settings' } }),
+      ),
+    ).toThrow();
+    expect(
+      parseToolGatewayRequest(
+        request({ tool: 'terminal.write', args: { terminal: 4, command: 'git status' } }),
+      ),
+    ).toMatchObject({ tool: 'terminal.write', args: { terminal: 4, command: 'git status' } });
+  });
+
   it('accepts every exact catalog entry with its minimal valid arguments', () => {
     const argumentsByTool: Record<(typeof TOOL_GATEWAY_CATALOG)[number], object> = {
       'terminal.list': {},
@@ -40,7 +55,6 @@ describe('tool gateway protocol', () => {
       'terminal.read': { terminal: 4 },
       'terminal.schedule': { terminal: 4, command: 'npm test', runAt: '2026-08-12T10:00:00Z' },
       'command.list': {},
-      'command.run': { command: 'open-settings' },
       'profile.allAboutMe.read': {},
       'profile.allAboutMe.update': { content: '# All About Me' },
       'memory.learning.read': {},

@@ -16,6 +16,8 @@
  * and lets the consumer wire up the real repo at app boot time.
  */
 import type { Agent, AgentId, Chat, EventId, Message, MessageId, Part } from '@/types';
+import { dispatchRuntimeNativeSteer, nativeSteerFailureDisposition } from './nativeSteer';
+import type { ProviderLiveTurnControl } from './adapters/types';
 import { flushSync } from 'react-dom';
 import { providerPartialUsage } from './providerPartialUsage';
 import type { ChatId, ProjectId } from '@/types/common';
@@ -80,6 +82,7 @@ import {
   bindCanonicalTurnProvider,
   failCanonicalTurn,
 } from '@/features/chat/runtime/turn/turnController';
+import { getLatestTurnByChatId } from '@/features/chat/runtime/turn/turnStore';
 import {
   MANDATORY_CONTEXT_EVIDENCE_DIRECTIVE_MARKER,
   parseDirectContextEvidenceContinuation,
@@ -88,10 +91,7 @@ import {
   requestsReadOnlyContextTool,
 } from '@/lib/jarvis/contextToolIntent';
 import { applyAvailableActions, parseActionBlocks, autoApprovePendingActions } from '@/lib/actions';
-import {
-  inferFallbackActionProposals,
-  shouldReplaceModelActionsWithFileCreateFallback,
-} from '@/lib/actions/fallbackActions';
+import { inferFallbackActionProposals } from '@/lib/actions/fallbackActions';
 import { routeDefaultContextQuery } from '@/features/context/adaptiveContextRouter';
 import { resolveRlmEnabled } from '@/features/context/rlmPreferenceStore';
 import { contextTerminalCoordinationIntent, COORDINATION_READ_TOOLS } from '@/features/local-command-bridge/modelCoordinationPolicy';
@@ -362,6 +362,7 @@ import {
 import { localIntelligenceTelemetryRuntime } from './intelligenceTelemetryRuntime';
 import { browserGoalLaunchRuntime } from '@/features/browser/browserGoalLaunchRuntime';
 import { projectOpenCodeLiveToolActivity } from './openCodeLiveToolActivity';
+import { resolveNativeQuestionPart } from './openCodeQuestionProjection';
 
 /** Resolve only the live-catalog lookup key; never rewrite the captured dispatch identity. */
 export function liveVariantLookupForChatSelection(selection: {
@@ -656,7 +657,13 @@ type KernelQuestionProjectionPort = Readonly<{
   accountId: string;
   runId: string;
   requestId: string;
+  chatId: string;
+  nativeQueuedSubmission?: NonNullable<SendDetail['nativeQueuedSubmission']>;
+  codexSkills?: SendDetail['codexSkills'];
+  nativeSkillRefs?: SendDetail['nativeSkillRefs'];
   project(part: Extract<Part, { kind: 'question_block' | 'permission_request' }>): Promise<void>;
+  resolve(resolution: Readonly<{ requestId: string; sessionId: string }>): Promise<void>;
+  bindNativeControl(control: ProviderLiveTurnControl | null): void;
 }>;
 
 const activeKernelQuestionProjectionPorts = new Map<string, KernelQuestionProjectionPort>();
@@ -1764,6 +1771,17 @@ export async function installJarvisKernelRuntimeHost(
         hasCommittedUserMessage: true,
         chatCreatedAt: providerChat?.created_at ?? providerRun.createdAt,
       }).backend;
+      const nativeTurnPort = activeKernelQuestionProjectionPorts.get(providerInput.runId);
+      if (nativeTurnPort && (
+        nativeTurnPort.accountId !== providerInput.accountId ||
+        nativeTurnPort.runId !== providerInput.runId ||
+        nativeTurnPort.requestId !== providerInput.requestId ||
+        nativeTurnPort.chatId !== providerChatId ||
+        (nativeTurnPort.nativeQueuedSubmission && providerBackend !== 'codex')
+      )) {
+        throw new Error('kernel_native_turn_control_scope_mismatch');
+      }
+      const nativeQueuedSubmission = nativeTurnPort?.nativeQueuedSubmission;
       let preparedDisposed = false;
       const preparedPreviews = new Set<ReturnType<typeof createPublicStreamProjection>>();
       if (
@@ -1957,6 +1975,17 @@ export async function installJarvisKernelRuntimeHost(
                   messages: [...providerInput.messages],
                   chatId: providerChatId,
                   backend: providerBackend,
+                  codexSkills: providerBackend === 'codex' ? nativeTurnPort?.codexSkills : undefined,
+                  nativeSkillRefs: providerBackend === 'opencode' ? nativeTurnPort?.nativeSkillRefs : undefined,
+                  onCodexSkillsChanged: providerBackend === 'codex' ? (entry) => {
+                    window.dispatchEvent(new CustomEvent('jarvis:codex-skills-changed', {
+                      detail: { chatId: providerChatId, entry },
+                    }));
+                  } : undefined,
+                  ...(nativeQueuedSubmission ? {
+                    nativeQueuedSubmission,
+                    expectedSessionId: nativeQueuedSubmission.threadId,
+                  } : {}),
                   interactionMode: providerInput.interactionMode,
                   connectionId: providerInput.model.connectionId,
                   accountId: providerInput.accountId,
@@ -1989,6 +2018,21 @@ export async function installJarvisKernelRuntimeHost(
                     attemptNumber: providerInput.attemptNumber,
                   },
                   signal,
+                  onLiveTurnControl: providerBackend === 'codex'
+                    ? (control) => {
+                        const port = activeKernelQuestionProjectionPorts.get(providerInput.runId);
+                        if (!port) return;
+                        if (
+                          port.accountId !== providerInput.accountId ||
+                          port.runId !== providerInput.runId ||
+                          port.requestId !== providerInput.requestId ||
+                          port.chatId !== providerChatId
+                        ) {
+                          throw new Error('kernel_native_turn_control_scope_mismatch');
+                        }
+                        port.bindNativeControl(control);
+                      }
+                    : undefined,
                   onProviderWarning: (message) => {
                     if (signal.aborted || !currentPreviewScope()) return;
                     setLiveAgentActivityRunPhase(providerInput.runId, {
@@ -2083,6 +2127,14 @@ export async function installJarvisKernelRuntimeHost(
                     bindPersistentOpenCodeQuestionRoute(projection.route);
                     await port.project(projection.part);
                     signal.throwIfAborted();
+                  },
+                  onQuestionResolved: async (resolution) => {
+                    signal.throwIfAborted();
+                    const port = activeKernelQuestionProjectionPorts.get(providerInput.runId);
+                    if (!port || port.accountId !== providerInput.accountId || port.requestId !== providerInput.requestId) {
+                      throw new Error('kernel_provider_question_scope_unavailable');
+                    }
+                    await port.resolve(resolution);
                   },
                   onToolActivity: async (activity) => {
                     signal.throwIfAborted();
@@ -2540,38 +2592,7 @@ export async function installJarvisKernelRuntimeHost(
               parts: Object.freeze([...envelope.parts, ...checklistParts]),
             })
           : envelope;
-      if (hasNativeTimeline) return envelopeWithChecklist;
-      const { inferFallbackActionProposals, shouldReplaceModelActionsWithFileReadFallback } =
-        await import('@/lib/actions/fallbackActions');
-      const existingIds = envelopeWithChecklist.parts
-        .filter(
-          (part): part is Extract<(typeof envelope.parts)[number], { kind: 'action_proposal' }> =>
-            part.kind === 'action_proposal',
-        )
-        .map((part) => part.action_id);
-      const fallback = inferFallbackActionProposals(
-        request.userText,
-        envelopeWithChecklist.displayText,
-      );
-      if (!shouldReplaceModelActionsWithFileReadFallback(existingIds, fallback)) {
-        return envelopeWithChecklist;
-      }
-      return {
-        ...envelopeWithChecklist,
-        mode: 'approval_required',
-        parts: [
-          { kind: 'text' as const, text: envelopeWithChecklist.displayText },
-          ...checklistParts,
-          ...fallback.map((proposal) => ({
-            kind: 'action_proposal' as const,
-            call_id: proposal.call_id,
-            action_id: proposal.action_id,
-            params: proposal.params,
-            rationale: proposal.rationale,
-            status: 'pending' as const,
-          })),
-        ],
-      };
+      return envelopeWithChecklist;
     },
     takeProviderArtifactDrafts(raw) {
       const drafts = providerArtifactDrafts.get(raw);
@@ -3021,6 +3042,8 @@ export interface SendDetail {
   /** Runtime-captured resolved agent; retained only for exact CAO resume checks. */
   resumeAgentAuthority?: { agentId: string; revision: number };
   queueIfBusy?: boolean;
+  /** Native Codex queue/add receipt bound to the exact preceding turn. */
+  nativeQueuedSubmission?: NonNullable<import('./adapters/types').ProviderRequest['nativeQueuedSubmission']>;
   /** Chat the message belongs to. */
   chatId: string;
   /** Stable caller-visible message key used to cancel this exact in-flight turn. */
@@ -3065,6 +3088,8 @@ export interface SendDetail {
   pluginIds?: string[];
   /** Skill ids selected via /skills for this turn. */
   skillIds?: string[];
+  codexSkills?: import('./adapters/types').ProviderRequest['codexSkills'];
+  nativeSkillRefs?: import('./adapters/types').ProviderRequest['nativeSkillRefs'];
   /** Force an AllAboutMe.md learning revision after this Jarvis turn. */
   forceAllAboutMeUpdate?: boolean;
   /** Current Jarvis interaction mode for this turn. */
@@ -3288,10 +3313,21 @@ export interface ResumeDetail {
 export interface SteerDetail {
   chatId: string;
   text: string;
+  codexSkills?: import('./adapters/types').ProviderRequest['codexSkills'];
   /** Called only after the replacement user turn is durably accepted. */
   onAccepted?: (cancellationKey: MessageId) => void;
+  /** Stable id used to correlate this queued item with Codex's acknowledgement. */
+  clientUserMessageId?: string;
   /** Called when the steer cannot be accepted without changing its exact scope. */
   onRejected?: () => void;
+  /** Native acceptance is unknown or confirmed but local persistence failed; do not retry. */
+  onBlocked?: () => void;
+}
+
+/** Native Codex queue request; the visible row is removed only after durable acceptance. */
+export interface QueueDetail extends SteerDetail {
+  /** Native ack happened, but local reconciliation could not finish. Never retry automatically. */
+  onBlocked?: (savedMessageId?: MessageId) => void;
 }
 
 /** @internal Exact-control handoff used by the live steer listener and focused tests. */
@@ -3332,6 +3368,8 @@ export interface RuntimeOptions {
   resumeEventName?: string;
   /** Override the steer event name (default: `jarvis:steer`). */
   steerEventName?: string;
+  /** Override the native queue event name (default: `jarvis:queue`). */
+  queueEventName?: string;
   /**
    * Throttle for streaming DB writes during chunk delivery. Default 120 ms keeps
    * visible streaming smooth without saturating the message store on long runs.
@@ -3427,9 +3465,9 @@ const JARVIS_CHAT_ACTION_OVERLAY = [
   '## Jarvis app actions',
   '',
   'Rules:',
-  '- If the user asks you to change the app, navigate, open terminals, run commands, or create schedules, say the result briefly and emit a fenced `action` block when an action exists.',
-  '- You can inspect and change code through the listed `files.read`, `files.create`, `files.edit`, and terminal actions. Do not broadly claim that you cannot code, read files, edit files, run tests, or use terminals when those actions are present.',
-  '- For coding work, inspect the relevant file first, propose only the required approval-gated mutations, then verify the result with an appropriate focused command and report the exact files and evidence. Never claim an action ran before its approved result exists.',
+  '- For VibeSpace app controls such as settings, navigation, Context Maps, terminal messaging, and schedules, use the available app action when needed and report its actual result.',
+  '- For reading or writing project files and running commands, use the native tools of the selected Codex or OpenCode CLI. Follow that CLI’s permission prompts. Do not emit VibeSpace file or command action proposals.',
+  '- For coding work, inspect the relevant file with the native CLI, make only the requested changes, run a focused native CLI verification command, and report the exact files and evidence. Never claim a tool ran before its result exists.',
   '- Never answer app-control requests with JavaScript, shell snippets, pseudocode, or instructions for the user to run manually.',
   '- Never emit raw `{action}` macros. Use fenced JSON action blocks only.',
   '- Mutating app actions do not run until the user clicks Approve, so never claim they already happened.',
@@ -3609,6 +3647,11 @@ export function prepareOpenCodeMessagesForInteractionMode(
   // A coordinator also needs live targets and skills. Do not replace its task
   // with a Context-only investigation or claim it is not a delegated workflow.
   if (contextTerminalCoordinationIntent(userText)) return messages;
+  // Explicit operation arguments are the user's tool contract, not a request
+  // for the optional investigation rewrite. Preserve their order and budgets.
+  if (/\boperation["'`]?\s*(?:[:=]\s*)?["'`]?(?:query|describe|search|open|expand|address|related|timeline|sources|checkpoint|investigate)\b/iu.test(userText)) {
+    return messages;
+  }
   // The investigation convenience wrapper must not override a user's narrower
   // retrieval workflow, including a single search or an explicit tool budget.
   if (/\b(?:do not|don't|never)\s+(?:call\s+)?(?:an?\s+)?investigat(?:e|ion)\b/iu.test(userText)) {
@@ -3789,6 +3832,9 @@ function openCodePermissionRequest(
       sessionId: approval.sessionId,
       approvalId: approval.id,
       capability: approval.capability,
+      ...(approval.availableDecisions
+        ? { availableDecisions: [...approval.availableDecisions] }
+        : {}),
     },
   };
 }
@@ -4348,6 +4394,15 @@ function toLLMMessages(
  * wrote, and the AI sees the same context on the next turn so it can
  * self-correct rather than silently retrying broken JSON.
  */
+const REMOVED_VIBESPACE_CLI_ACTION_IDS = new Set([
+  'files.read', 'files.create', 'files.edit', 'files.write', 'files.patch',
+  'command.run', 'terminal.run', 'terminal.powershell', 'custom.createTerminalCommand',
+]);
+
+function isRemovedVibeSpaceCliAction(actionId: string): boolean {
+  return REMOVED_VIBESPACE_CLI_ACTION_IDS.has(actionId);
+}
+
 function textToParts(
   text: string,
   userText?: string,
@@ -4381,7 +4436,9 @@ function textToParts(
   if (!result.hasActionBlocks) {
     const fallbackProposals =
       userText && interactionMode === 'agent' && fallbackOptions.inferActions !== false
-        ? inferFallbackActionProposals(userText, text, fallbackOptions)
+        ? inferFallbackActionProposals(userText, text, fallbackOptions).filter(
+            (proposal) => !isRemovedVibeSpaceCliAction(proposal.action_id),
+          )
         : [];
     if (fallbackProposals.length === 0) return [{ kind: 'text', text }];
     const actionLabel = fallbackProposals
@@ -4414,6 +4471,13 @@ function textToParts(
       continue;
     }
     if (seg.ok) {
+      if (isRemovedVibeSpaceCliAction(seg.proposal.action_id)) {
+        parts.push({
+          kind: 'text',
+          text: `[Action unavailable: ${seg.proposal.action_id}. Use the selected native CLI tools for file and command work.]`,
+        });
+        continue;
+      }
       parts.push({
         kind: 'action_proposal',
         call_id: seg.proposal.call_id,
@@ -4429,18 +4493,12 @@ function textToParts(
       text: `[Action error] ${seg.error}\n\n${seg.raw}`,
     });
   }
-  const hasValidAction = result.segments.some((seg) => seg.kind === 'action' && seg.ok);
-  const modelActionIds = result.segments
-    .filter((seg): seg is Extract<(typeof result.segments)[number], { kind: 'action'; ok: true }> =>
-      Boolean(seg.kind === 'action' && seg.ok),
-    )
-    .map((seg) => seg.proposal.action_id);
+  const hasValidAction = parts.some((part) => part.kind === 'action_proposal');
   if (userText && interactionMode === 'agent' && fallbackOptions.inferActions !== false) {
-    const fallbackProposals = inferFallbackActionProposals(userText, text, fallbackOptions);
-    const replaceValidCommandWithFileCreate =
-      hasValidAction &&
-      shouldReplaceModelActionsWithFileCreateFallback(modelActionIds, fallbackProposals);
-    if (fallbackProposals.length > 0 && (replaceValidCommandWithFileCreate || !hasValidAction)) {
+    const fallbackProposals = inferFallbackActionProposals(userText, text, fallbackOptions).filter(
+      (proposal) => !isRemovedVibeSpaceCliAction(proposal.action_id),
+    );
+    if (fallbackProposals.length > 0 && !hasValidAction) {
       const actionLabel = fallbackProposals
         .map(({ action_id, rationale }) => rationale?.trim() || action_id)
         .join(' ');
@@ -5310,6 +5368,7 @@ export function startRuntimeListener(
   const cancelEventName = options.cancelEventName ?? 'jarvis:cancel';
   const resumeEventName = options.resumeEventName ?? 'jarvis:resume';
   const steerEventName = options.steerEventName ?? 'jarvis:steer';
+  const queueEventName = options.queueEventName ?? 'jarvis:queue';
   const flushIntervalMs = options.flushIntervalMs ?? 16;
   const stopPromptForgeContextBridge = installPromptForgeContextRetrievalBridge(window);
 
@@ -5318,13 +5377,63 @@ export function startRuntimeListener(
   const acceptedApprovalContinuations = new Set<string>();
   const controllersByChatId = new Map<string, Set<AbortController>>();
   const queuedNativeDelegations = new Map<string, SendDetail[]>();
+  const nativeQueueReceiptPart = (
+    queued: NonNullable<SendDetail['nativeQueuedSubmission']>,
+    state: Extract<Part, { kind: 'codex_native_queue_receipt' }>['state'],
+  ): Extract<Part, { kind: 'codex_native_queue_receipt' }> => ({
+    kind: 'codex_native_queue_receipt', version: 1, state,
+    submissionId: queued.submissionId,
+    threadId: queued.threadId,
+    addedDuringTurnId: queued.addedDuringTurnId,
+    clientUserMessageId: queued.clientUserMessageId,
+  });
+  const setNativeQueueMessageState = async (
+    send: SendDetail,
+    state: Extract<Part, { kind: 'codex_native_queue_receipt' }>['state'],
+  ): Promise<void> => {
+    const queued = send.nativeQueuedSubmission;
+    const messageId = send.cancellationKey;
+    if (!queued || !messageId) throw new Error('Native queue receipt identity is unavailable.');
+    const messages = await bindings.getMessages(send.chatId as ChatId);
+    const message = messages.find((item) => item.id === messageId && item.role === 'user');
+    const receipt = message?.parts.find((part) =>
+      part.kind === 'codex_native_queue_receipt' &&
+      part.submissionId === queued.submissionId &&
+      part.threadId === queued.threadId &&
+      part.clientUserMessageId === queued.clientUserMessageId);
+    if (!message || !receipt) throw new Error('Accepted native queue receipt was not persisted.');
+    await bindings.updateMessage(message.id, {
+      parts: message.parts.map((part) => part === receipt ? nativeQueueReceiptPart(queued, state) : part),
+    });
+  };
+  const markNativeQueueForReview = (send: SendDetail): void => {
+    void trackListenerOwnedTask(setNativeQueueMessageState(send, 'review_required').catch((error) => {
+      devConsole.log({ channel: 'ai', level: 'warn',
+        message: 'Native Codex queue review state could not be saved',
+        detail: { chatId: String(send.chatId), error: safeErrorMessage(error) } });
+    }));
+  };
+  const preserveNativeQueuedDelegations = (chatId: string): void => {
+    const native = (queuedNativeDelegations.get(chatId) ?? [])
+      .filter((send) => Boolean(send.nativeQueuedSubmission));
+    if (native.length) queuedNativeDelegations.set(chatId, native);
+    else queuedNativeDelegations.delete(chatId);
+  };
   const activeSendDetails = new Map<AbortController, SendDetail>();
+  const activeBackendByController = new Map<AbortController, ChatBackend>();
+  const liveTurnControls = new Map<AbortController, ProviderLiveTurnControl>();
+  const nativeSteersInFlight = new Set<string>();
+  const nativeSteersAcknowledged = new Set<string>();
+  const nativeQueuesInFlight = new Set<string>();
+  const nativeQueuesAcknowledged = new Set<string>();
+  const completedNativeTurns = new WeakMap<AbortController, boolean>();
   const suspendedSendDetails = new Map<string, SendDetail>();
   const pendingSteersByChatId = new Map<string, SteerDetail & { send: SendDetail }>();
   const canonicalCancellations = new Map<MessageId, () => Promise<unknown>>();
   const canonicalCancellationOwners = new Map<AbortController, () => Promise<unknown>>();
   const activeSendTasks = new Set<Promise<void>>();
   const activeOwnedTasks = new Set<Promise<unknown>>();
+  let runtimeStopped = false;
   let defaultShadowDepsPromise: Promise<JarvisShadowCompilationDeps> | null = null;
 
   const trackListenerOwnedTask = <T>(task: Promise<T>): Promise<T> => {
@@ -5358,6 +5467,8 @@ export function startRuntimeListener(
   const detachControllerFromChat = (controller: AbortController): void => {
     const detail = activeSendDetails.get(controller);
     activeSendDetails.delete(controller);
+    activeBackendByController.delete(controller);
+    liveTurnControls.delete(controller);
     if (!detail) return;
     const chatId = String(detail.chatId);
     const controllers = controllersByChatId.get(chatId);
@@ -5403,7 +5514,7 @@ export function startRuntimeListener(
   };
 
   const abortAllTrackedRuns = (): number => {
-    queuedNativeDelegations.clear();
+    for (const chatId of queuedNativeDelegations.keys()) preserveNativeQueuedDelegations(chatId);
     const count = activeControllers.size;
     for (const requestCancellation of new Set(canonicalCancellationOwners.values())) {
       cancellationTaskTracker.request(requestCancellation);
@@ -5411,6 +5522,10 @@ export function startRuntimeListener(
     for (const controller of activeControllers) controller.abort();
     controllersByChatId.clear();
     activeSendDetails.clear();
+    activeBackendByController.clear();
+    liveTurnControls.clear();
+    nativeSteersInFlight.clear();
+    nativeSteersAcknowledged.clear();
     inFlight.clear();
     canonicalCancellations.clear();
     canonicalCancellationOwners.clear();
@@ -5491,10 +5606,42 @@ export function startRuntimeListener(
     }
 
     const cancellationKey = detail.cancellationKey ?? null;
+    const authState = useAuthStore.getState();
+    const requestAcceptedAt = Date.now();
+    const previousCanonicalRunId = getLatestTurnByChatId(String(chatId))?.identity.runId;
     const dispatchCurrentRunState = (
       status: 'running' | 'done' | 'error' | 'cancelled',
       errorCode?: string,
-    ): void => dispatchRunState(chatId, status, errorCode, cancellationKey);
+    ): void => {
+      if (status === 'cancelled' && cancellationKey) {
+        const accountId = resolveAccountIdentity(authState)?.accountId;
+        const currentAccountId = resolveAccountIdentity(useAuthStore.getState())?.accountId;
+        // An old account's cancellation cannot publish into the current account.
+        if (!accountId || accountId !== currentAccountId) return;
+        {
+          const current = getLatestTurnByChatId(String(chatId));
+          // Ownership, not wall-clock order: consecutive requests can share a
+          // millisecond, and the system clock can move backwards during preparation.
+          if (current && (current.identity.accountId !== accountId ||
+            (current.cancellationKey !== String(cancellationKey) &&
+              current.identity.runId !== previousCanonicalRunId))) return;
+          if (current?.cancellationKey !== String(cancellationKey)) {
+            // Preparation can stop before a kernel run exists. Retain that real
+            // client request's terminal state in the same canonical checkpoint,
+            // without inventing a provider run, usage, or assistant response.
+            beginCanonicalTurn({
+              accountId,
+              ...(authState.workspaceId ? { workspaceId: String(authState.workspaceId) } : {}),
+              chatId: String(chatId),
+              runId: `preparation:${cancellationKey}`,
+              requestId: String(cancellationKey),
+              attempt: 1,
+            }, { at: requestAcceptedAt, cancellationKey: String(cancellationKey) });
+          }
+        }
+      }
+      dispatchRunState(chatId, status, errorCode, cancellationKey);
+    };
     if (cancellationKey && inFlight.has(cancellationKey)) {
       devConsole.log({
         channel: 'ai',
@@ -5507,6 +5654,7 @@ export function startRuntimeListener(
       return;
     }
     const controller = new AbortController();
+    let providerTurnCompleted = false;
     // Bind the authority to this request before any asynchronous repository,
     // context, or model-resolution work can observe a changed active scope.
     // A null claim is an intentional fail-closed snapshot; undefined remains
@@ -5523,6 +5671,7 @@ export function startRuntimeListener(
     if (cancellationKey) inFlight.set(cancellationKey, controller);
     const releaseOperationTracking = (): void => {
       const releasedChatId = String(activeSendDetails.get(controller)?.chatId ?? '');
+      completedNativeTurns.set(controller, providerTurnCompleted);
       if (cancellationKey && inFlight.get(cancellationKey) === controller) {
         inFlight.delete(cancellationKey);
       }
@@ -5532,13 +5681,23 @@ export function startRuntimeListener(
       detachControllerFromChat(controller);
       if (releasedChatId && (controllersByChatId.get(releasedChatId)?.size ?? 0) === 0) {
         const queued = queuedNativeDelegations.get(releasedChatId);
-        const next = queued?.shift();
+        let next = queued?.shift();
+        while (next?.nativeQueuedSubmission && (!providerTurnCompleted || runtimeStopped)) {
+          markNativeQueueForReview(next);
+          next = queued?.shift();
+        }
         if (!queued?.length) queuedNativeDelegations.delete(releasedChatId);
-        if (next)
+        if (next && !runtimeStopped) {
+          if (next.nativeQueuedSubmission) {
+            next.nativeQueuedSubmission = {
+              ...next.nativeQueuedSubmission,
+              previousTurnCompleted: providerTurnCompleted,
+            };
+          }
           queueMicrotask(() =>
             window.dispatchEvent(new CustomEvent(sendEventName, { detail: next })),
           );
-        else void dispatchAcceptedSteer(releasedChatId);
+        } else if (!runtimeStopped) void dispatchAcceptedSteer(releasedChatId);
       }
     };
     // Preparation is already cancellable work; expose Stop before any native/context wait.
@@ -5619,7 +5778,6 @@ export function startRuntimeListener(
       });
     };
 
-    const authState = useAuthStore.getState();
     let chatRecord: Chat | undefined;
     let chatBackendAffinity: Awaited<ReturnType<typeof lockChatBackendForDispatch>>;
     let continuationProviderText: string | undefined;
@@ -5638,6 +5796,7 @@ export function startRuntimeListener(
       releaseOperationTracking();
       return;
     }
+    activeBackendByController.set(controller, chatBackendAffinity.backend);
     if (controller.signal.aborted) {
       devConsole.log({
         channel: 'ai',
@@ -5649,6 +5808,24 @@ export function startRuntimeListener(
       dispatchCurrentRunState('cancelled');
       releaseOperationTracking();
       return;
+    }
+    if (detail.nativeQueuedSubmission) {
+      try {
+        if (!detail.nativeQueuedSubmission.previousTurnCompleted) {
+          await setNativeQueueMessageState(detail, 'review_required');
+          throw new Error('Codex predecessor did not complete; queued submission needs review.');
+        }
+        // Persist the uncertain-start state before writing thread/queue/start.
+        // A listener restart never guesses whether this submission was consumed.
+        await setNativeQueueMessageState(detail, 'starting');
+      } catch (error) {
+        devConsole.log({ channel: 'ai', level: 'warn',
+          message: 'Native Codex queued turn could not start safely',
+          detail: { chatId: String(chatId), error: safeErrorMessage(error) } });
+        dispatchCurrentRunState('error', 'codex_native_queue_needs_review');
+        releaseOperationTracking();
+        return;
+      }
     }
     if (detail.approvalContinuation) {
       const continuation = detail.approvalContinuation;
@@ -6663,13 +6840,11 @@ export function startRuntimeListener(
     } catch {
       historyBeforeDispatch = [];
     }
-    // Token-saver/Ponytail instructions are large (~5.3k chars) and re-read
-    // through the provider cache every turn. On continuation turns the model
-    // already retains them in chat context, so re-injecting them only inflates
-    // per-turn prompt cost without changing behavior. Inject on the first
-    // logical turn and skip only when a prior persisted turn exists.
-    const isContinuationTurn = hasPriorPersistedTurn(historyBeforeDispatch, detail.cancellationKey);
-    if (reasoningPolicy?.executionInstructions && !isContinuationTurn) {
+    // Execution mode is captured for this dispatch, so it must be represented
+    // in every request, including a continuation after the user changes mode.
+    // This is rebuilt from the base agent prompt per request (never appended to
+    // persisted chat/session state), keeping exactly one active policy layer.
+    if (reasoningPolicy?.executionInstructions) {
       runnable = {
         ...runnable,
         system_prompt: [runnable.system_prompt, reasoningPolicy.executionInstructions]
@@ -6786,6 +6961,10 @@ export function startRuntimeListener(
     let shadowCompilation: Extract<JarvisShadowCompilationResult, { ok: true }> | null = null;
     let activeShadowDeps: JarvisShadowCompilationDeps | null = null;
     const liveOpenCodePermissions: Array<Extract<Part, { kind: 'permission_request' }>> = [];
+    const currentOpenCodeApprovals = new Map<string, { sessionId: string; approvalId: string }>();
+    const rememberCurrentOpenCodeApproval = (sessionId: string, approvalId: string) => {
+      currentOpenCodeApprovals.set(JSON.stringify([sessionId, approvalId]), { sessionId, approvalId });
+    };
     const liveOpenCodeQuestions: Array<Extract<Part, { kind: 'question_block' }>> = [];
     const liveOpenCodeTools = new Map<
       string,
@@ -7438,6 +7617,26 @@ export function startRuntimeListener(
               accountId: turn.accountId,
               runId: turn.run.id,
               requestId: turn.attempt.requestId,
+              chatId: String(chatId),
+              codexSkills: detail.codexSkills?.map((skill) => Object.freeze({ ...skill })),
+              nativeSkillRefs: detail.nativeSkillRefs?.map((skill) => Object.freeze({ ...skill })),
+              ...(detail.nativeQueuedSubmission ? {
+                nativeQueuedSubmission: { ...detail.nativeQueuedSubmission },
+              } : {}),
+              bindNativeControl(control) {
+                if (
+                  activeKernelQuestionProjectionPorts.get(turn.run.id) !== questionProjectionPort ||
+                  controller.signal.aborted ||
+                  controllersByChatId.get(String(chatId))?.has(controller) !== true ||
+                  activeSendDetails.get(controller)?.chatId !== chatId ||
+                  activeBackendByController.get(controller) !== 'codex'
+                ) {
+                  liveTurnControls.delete(controller);
+                  return;
+                }
+                if (control) liveTurnControls.set(controller, control);
+                else liveTurnControls.delete(controller);
+              },
               async project(part) {
                 controller.signal.throwIfAborted();
                 const projectionId =
@@ -7448,12 +7647,29 @@ export function startRuntimeListener(
                   throw new Error('kernel_provider_question_duplicate');
                 }
                 projectedQuestionBlockIds.add(projectionId);
+                if (part.kind === 'permission_request' && part.request.harness?.protocol === 'opencode-approval-v1') {
+                  rememberCurrentOpenCodeApproval(part.request.harness.sessionId, part.request.harness.approvalId);
+                }
                 await bindings.appendMessage({
                   chat_id: chatId as ChatId,
                   role: 'assistant',
                   parts: [structuredClone(part)],
                 });
                 controller.signal.throwIfAborted();
+              },
+              async resolve(resolution) {
+                controller.signal.throwIfAborted();
+                const messages = await bindings.getMessages(chatId);
+                for (const message of messages) {
+                  let changed = false;
+                  const parts = message.parts.map((part) => {
+                    if (part.kind !== 'question_block' || !projectedQuestionBlockIds.has(`question:${part.block.id}`)) return part;
+                    const next = resolveNativeQuestionPart(part, resolution);
+                    changed ||= next !== part;
+                    return next;
+                  });
+                  if (changed) await bindings.updateMessage(message.id, { parts });
+                }
               },
             });
             activeKernelQuestionProjectionPorts.set(turn.run.id, questionProjectionPort);
@@ -7521,6 +7737,7 @@ export function startRuntimeListener(
               if (activeKernelQuestionProjectionPorts.get(turn.run.id) === questionProjectionPort) {
                 activeKernelQuestionProjectionPorts.delete(turn.run.id);
               }
+              liveTurnControls.delete(controller);
               releaseLiveRun();
             }
             setLiveAgentActivityPhase(chatId, agentActivityId, {
@@ -7708,7 +7925,18 @@ export function startRuntimeListener(
             subtitle: `${canonicalProviderId}/${canonicalModelId}`,
             ts: Date.now(),
           });
+          if (detail.nativeQueuedSubmission) {
+            try {
+              await setNativeQueueMessageState(detail, 'started');
+            } catch (error) {
+              markNativeQueueForReview(detail);
+              devConsole.log({ channel: 'ai', level: 'warn',
+                message: 'Native Codex queue completed but receipt finalization needs review',
+                detail: { chatId: String(chatId), error: safeErrorMessage(error) } });
+            }
+          }
           dispatchCurrentRunState('done');
+          providerTurnCompleted = true;
           updateStructuredAgentStatus(detail.structuredContext, 'done', 'Finished');
           void notifyDone(
             'jarvis',
@@ -7992,8 +8220,24 @@ export function startRuntimeListener(
         providerTools['mcp.list'] === true || providerTools['mcp.run'] === true;
       let caoProviderSessionId: string | null = null;
       let caoCompletionEvidence: Readonly<ProviderCompletionEvidence> | null = null;
+      activeBackendByController.set(controller, chatBackendAffinity.backend);
       const providerRequest: RunAgentRequest = {
         backend: chatBackendAffinity.backend,
+        ...(detail.nativeQueuedSubmission ? {
+          nativeQueuedSubmission: detail.nativeQueuedSubmission,
+          expectedSessionId: detail.nativeQueuedSubmission.threadId,
+        } : {}),
+        codexSkills: detail.codexSkills,
+        nativeSkillRefs: detail.nativeSkillRefs,
+        onCodexSkillsChanged: (entry) => {
+          window.dispatchEvent(new CustomEvent('jarvis:codex-skills-changed', {
+            detail: { chatId: String(chatId), entry },
+          }));
+        },
+        onLiveTurnControl: (control) => {
+          if (control) liveTurnControls.set(controller, control);
+          else liveTurnControls.delete(controller);
+        },
         agent: runnable,
         chatId: String(chatId),
         requestId: String(placeholder.id),
@@ -8159,6 +8403,7 @@ export function startRuntimeListener(
             }
           : {}),
         onApprovalRequested: async (approval: VibeSpaceApproval) => {
+          rememberCurrentOpenCodeApproval(approval.sessionId, approval.id);
           if (
             liveOpenCodePermissions.some(
               (part) =>
@@ -8225,6 +8470,20 @@ export function startRuntimeListener(
           await bindings.updateMessage(placeholder.id, {
             parts: currentOpenCodeStreamingParts(),
           });
+        },
+        onQuestionResolved: async (resolution) => {
+          controller.signal.throwIfAborted();
+          let changed = false;
+          for (let index = 0; index < liveOpenCodeQuestions.length; index += 1) {
+            const previous = liveOpenCodeQuestions[index];
+            if (!previous) continue;
+            const next = resolveNativeQuestionPart(previous, resolution);
+            if (next !== previous) { liveOpenCodeQuestions[index] = next; changed = true; }
+          }
+          if (!changed) return;
+          cancelPendingFlush();
+          await settleStreamingWrites();
+          await bindings.updateMessage(placeholder.id, { parts: currentOpenCodeStreamingParts() });
         },
         onToolActivity: async (toolActivity) => {
           controller.signal.throwIfAborted();
@@ -8686,7 +8945,18 @@ export function startRuntimeListener(
             : `${response.provider}/${response.model} · ${response.usage.provenance === 'estimated' ? 'Estimated ' : ''}${response.usage.input_tokens}+${response.usage.output_tokens} tokens`,
         ts: Date.now(),
       });
+      if (detail.nativeQueuedSubmission) {
+        try {
+          await setNativeQueueMessageState(detail, 'started');
+        } catch (error) {
+          markNativeQueueForReview(detail);
+          devConsole.log({ channel: 'ai', level: 'warn',
+            message: 'Native Codex queue completed but receipt finalization needs review',
+            detail: { chatId: String(chatId), error: safeErrorMessage(error) } });
+        }
+      }
       dispatchCurrentRunState('done');
+      providerTurnCompleted = true;
       updateStructuredAgentStatus(detail.structuredContext, 'done', 'Finished');
 
       devConsole.log({
@@ -8709,13 +8979,14 @@ export function startRuntimeListener(
         deriveChatTitle(finalText) || 'The AI response is complete.',
       );
     } catch (err) {
+      if (detail.nativeQueuedSubmission) markNativeQueueForReview(detail);
       stopStreamingVoiceTurn();
       // Cancel any pending flush before stamping the suffix or it'll overwrite us.
       cancelPendingFlush();
       await settleStreamingWrites();
 
       const aborted = controller.signal.aborted || isAbortError(err);
-      const providerError =
+      const rawProviderError =
         !aborted && isProviderRuntimeError(err)
           ? providerErrorDetails(err, {
               providerId: runnable.model.provider,
@@ -8724,6 +8995,19 @@ export function startRuntimeListener(
               ...(placeholderId ? { requestId: String(placeholderId) } : {}),
             })
           : undefined;
+
+      const currentPermissionDenied = rawProviderError?.code === 'opencode_stopped_after_tool_error' &&
+        [...currentOpenCodeApprovals.values()].some(({ sessionId, approvalId }) =>
+          readOpenCodeApprovalStatus(sessionId, approvalId) === 'denied',
+        );
+      const providerError = currentPermissionDenied && rawProviderError
+        ? {
+            ...rawProviderError,
+            code: 'opencode_permission_denied',
+            message: 'You denied the native permission request. The action was stopped.',
+            retryable: false,
+          }
+        : rawProviderError;
 
       await mirrorShadowOutcome(aborted ? 'cancelled' : 'failed', true);
 
@@ -8757,7 +9041,9 @@ export function startRuntimeListener(
             parts: [
               {
                 kind: 'text',
-                text: 'The reply could not finish. Check the selected model and request settings, then try again.',
+                text: providerError?.code === 'opencode_permission_denied'
+                  ? providerError.message
+                  : 'The reply could not finish. Check the selected model and request settings, then try again.',
               },
               ...(providerError ? [{ kind: 'provider_error' as const, error: providerError }] : []),
             ],
@@ -8838,7 +9124,7 @@ export function startRuntimeListener(
       const c = inFlight.get(targetMessageId);
       if (c) {
         const owner = activeSendDetails.get(c);
-        if (owner) queuedNativeDelegations.delete(String(owner.chatId));
+        if (owner) preserveNativeQueuedDelegations(String(owner.chatId));
         preserveStoppedTurn(c);
         abortTrackedRun(targetMessageId, c);
         for (const [messageId, owner] of inFlight) {
@@ -8859,7 +9145,7 @@ export function startRuntimeListener(
     }
     if (detail?.chatId) {
       const chatId = String(detail.chatId);
-      queuedNativeDelegations.delete(chatId);
+      preserveNativeQueuedDelegations(chatId);
       const controllers = [...(controllersByChatId.get(chatId) ?? [])];
       for (const controller of controllers) {
         preserveStoppedTurn(controller);
@@ -8949,6 +9235,89 @@ export function startRuntimeListener(
     window.dispatchEvent(new CustomEvent(sendEventName, { detail: resumed }));
   };
 
+  const handleQueue = (e: Event) => {
+    const detail = (e as CustomEvent<QueueDetail>).detail;
+    const chatId = String(detail?.chatId ?? '').trim();
+    const text = String(detail?.text ?? '').trim();
+    const clientUserMessageId = String(detail?.clientUserMessageId ?? '').trim();
+    const controllers = [...(controllersByChatId.get(chatId) ?? [])];
+    const controller = controllers.length === 1 ? controllers[0] : undefined;
+    const activeSend = controller ? activeSendDetails.get(controller) : undefined;
+    const control = controller ? liveTurnControls.get(controller) : undefined;
+    const queueKey = `${chatId}:${clientUserMessageId}`;
+    if (!chatId || !text || !clientUserMessageId || !controller || !activeSend || !control ||
+        activeBackendByController.get(controller) !== 'codex' ||
+        nativeQueuesInFlight.has(queueKey) || nativeQueuesAcknowledged.has(queueKey) ||
+        (queuedNativeDelegations.get(chatId)?.length ?? 0) >= 100) {
+      safelyRejectSteer(detail ?? {});
+      return;
+    }
+    nativeQueuesInFlight.add(queueKey);
+    let nativeAcknowledged = false;
+    void trackListenerOwnedTask(control.enqueue({ clientUserMessageId, text,
+      ...(detail.codexSkills?.length ? { skills: detail.codexSkills } : {}) }).then(async (receipt) => {
+      nativeAcknowledged = true;
+      nativeQueuesAcknowledged.add(queueKey);
+      const nativeQueuedSubmission: NonNullable<SendDetail['nativeQueuedSubmission']> = {
+        submissionId: receipt.submissionId,
+        clientUserMessageId,
+        threadId: receipt.threadId,
+        addedDuringTurnId: receipt.turnId,
+        previousTurnCompleted: false,
+      };
+      const userMessage = await bindings.appendMessage({
+        chat_id: chatId as ChatId,
+        role: 'user',
+        parts: [{ kind: 'text', text }, nativeQueueReceiptPart(nativeQueuedSubmission, 'pending')],
+      });
+      if (runtimeStopped) {
+        await setNativeQueueMessageState({
+          ...activeSend, chatId, cancellationKey: userMessage.id, nativeQueuedSubmission,
+        }, 'review_required');
+        detail.onBlocked?.(userMessage.id);
+        return;
+      }
+      const next: SendDetail = {
+        ...activeSend,
+        chatId,
+        text,
+        codexSkills: detail.codexSkills,
+        modelText: undefined,
+        localCommandContext: undefined,
+        cancellationKey: userMessage.id,
+        queueIfBusy: true,
+        nativeQueuedSubmission,
+      };
+      if (controllersByChatId.get(chatId)?.has(controller) === true) {
+        const queued = queuedNativeDelegations.get(chatId) ?? [];
+        queued.push(next);
+        queuedNativeDelegations.set(chatId, queued);
+      } else {
+        next.nativeQueuedSubmission = {
+          ...next.nativeQueuedSubmission!,
+          previousTurnCompleted: completedNativeTurns.get(controller) === true,
+        };
+        if (next.nativeQueuedSubmission.previousTurnCompleted) {
+          queueMicrotask(() => window.dispatchEvent(new CustomEvent(sendEventName, { detail: next })));
+        } else {
+          markNativeQueueForReview(next);
+        }
+      }
+      try { detail.onAccepted?.(userMessage.id); } catch { /* Durable message is authoritative. */ }
+    }).catch((error) => {
+      if (nativeAcknowledged) {
+        try { detail.onBlocked?.(); } catch { /* Native ack remains authoritative. */ }
+      } else safelyRejectSteer(detail);
+      devConsole.log({
+        channel: 'ai', level: 'warn',
+        message: nativeAcknowledged
+          ? 'Native Codex queue accepted but local reconciliation is blocked'
+          : 'Native Codex queue was rejected before acceptance',
+        detail: { chatId, error: safeErrorMessage(error) },
+      });
+    }).finally(() => nativeQueuesInFlight.delete(queueKey)));
+  };
+
   const handleSteer = (e: Event) => {
     const detail = (e as CustomEvent<SteerDetail>).detail;
     const chatId = String(detail?.chatId ?? '').trim();
@@ -8959,6 +9328,61 @@ export function startRuntimeListener(
       .filter((send): send is SendDetail => send !== undefined);
     if (!chatId || !text || active.length !== 1 || pendingSteersByChatId.has(chatId)) {
       safelyRejectSteer(detail ?? {});
+      return;
+    }
+    const controller = controllers[0];
+    const backend = controller ? activeBackendByController.get(controller) : undefined;
+    const nativeControl = controller ? liveTurnControls.get(controller) : undefined;
+    if (backend === 'codex') {
+      const clientUserMessageId = String(detail?.clientUserMessageId ?? '').trim();
+      const nativeSteerKey = `${chatId}:${clientUserMessageId}`;
+      if (
+        !controller || !nativeControl || !clientUserMessageId || !active[0]?.cancellationKey ||
+        nativeSteersInFlight.has(nativeSteerKey) || nativeSteersAcknowledged.has(nativeSteerKey)
+      ) {
+        safelyRejectSteer(detail ?? {});
+        return;
+      }
+      nativeSteersInFlight.add(nativeSteerKey);
+      void dispatchRuntimeNativeSteer({
+        control: nativeControl,
+        clientUserMessageId,
+        chatId,
+        text,
+        skills: detail.codexSkills,
+        isStillActive: () =>
+          controllersByChatId.get(chatId)?.has(controller) === true &&
+          liveTurnControls.get(controller) === nativeControl,
+        appendUserMessage: bindings.appendMessage,
+        onNativeAck: () => nativeSteersAcknowledged.add(nativeSteerKey),
+        acceptedCancellationKey: active[0]!.cancellationKey!,
+        onAccepted: detail.onAccepted,
+      }).catch((error) => {
+        const disposition = nativeSteerFailureDisposition(error, nativeSteersAcknowledged.has(nativeSteerKey));
+        if (disposition === 'review_required') {
+          try { detail.onBlocked?.(); } catch { /* Never retry an ambiguous native steer. */ }
+        } else safelyRejectSteer(detail);
+        devConsole.log({
+          channel: 'ai',
+          level: 'warn',
+          message: disposition === 'review_required' && !nativeSteersAcknowledged.has(nativeSteerKey)
+            ? 'Native Codex steer outcome is unknown; review required'
+            : disposition === 'review_required'
+              ? 'Native Codex steer was accepted but local persistence is blocked'
+              : 'Native Codex steer rejected before durable persistence',
+          detail: { chatId, error: safeErrorMessage(error) },
+        });
+      }).finally(() => nativeSteersInFlight.delete(nativeSteerKey));
+      return;
+    }
+    if (backend !== 'opencode') {
+      safelyRejectSteer(detail ?? {});
+      devConsole.log({
+        channel: 'ai',
+        level: 'warn',
+        message: 'AI steer rejected before backend readiness',
+        detail: { chatId, backend: backend ?? 'unresolved' },
+      });
       return;
     }
     pendingSteersByChatId.set(chatId, { ...detail, chatId, text, send: { ...active[0]! } });
@@ -8997,15 +9421,23 @@ export function startRuntimeListener(
   window.addEventListener(cancelEventName, handleCancel as EventListener);
   window.addEventListener(resumeEventName, handleResume as EventListener);
   window.addEventListener(steerEventName, handleSteer as EventListener);
+  window.addEventListener(queueEventName, handleQueue as EventListener);
 
   const stop = (() => {
+    runtimeStopped = true;
     window.removeEventListener(sendEventName, handleSendEvent);
     window.removeEventListener(cancelEventName, handleCancel as EventListener);
     window.removeEventListener(resumeEventName, handleResume as EventListener);
     window.removeEventListener(steerEventName, handleSteer as EventListener);
+    window.removeEventListener(queueEventName, handleQueue as EventListener);
     stopPromptForgeContextBridge();
     for (const pending of pendingSteersByChatId.values()) safelyRejectSteer(pending);
     pendingSteersByChatId.clear();
+    for (const queued of queuedNativeDelegations.values()) {
+      for (const send of queued) {
+        if (send.nativeQueuedSubmission) markNativeQueueForReview(send);
+      }
+    }
     queuedNativeDelegations.clear();
     abortAllTrackedRuns();
   }) as RuntimeListenerStop;

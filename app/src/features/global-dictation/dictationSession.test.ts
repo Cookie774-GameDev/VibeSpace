@@ -200,6 +200,99 @@ describe('createGlobalDictationSession engine resolution', () => {
     }
   });
 
+  it('keeps the take and transcribes it locally when Web Speech cannot reach its service', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);
+    const wav = new Blob(['captured local audio'], { type: 'audio/wav' });
+    const stopMeter = vi.fn();
+    mocks.composer.startBatchAudioRecorder.mockResolvedValueOnce({
+      captureWav: () => wav,
+      stop: stopMeter,
+    });
+    const onStatus = vi.fn();
+    const onFinal = vi.fn();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+
+    const session = await createSelectedSttSession({ onStatus, onFinal, onError, onClose });
+    try {
+      mocks.voiceHandlers.get('voice:error')?.({
+        kind: 'network',
+        message: formatVoiceFailure('network'),
+      } as never);
+      await vi.waitFor(() =>
+        expect(onStatus).toHaveBeenCalledWith(expect.stringContaining('Whisper')),
+      );
+      expect(mocks.composer.startBatchAudioRecorder).toHaveBeenLastCalledWith(
+        expect.any(Function),
+        expect.any(Function),
+        { retainAudio: true },
+      );
+      expect(onError).not.toHaveBeenCalled();
+
+      await session.stop();
+
+      expect(mocks.composer.transcribeFasterWhisper).toHaveBeenCalledWith(wav, 'small');
+      expect(onFinal).toHaveBeenCalledWith('local text');
+      expect(onError).not.toHaveBeenCalled();
+      expect(stopMeter).toHaveBeenCalledOnce();
+      expect(onClose).toHaveBeenCalledOnce();
+      expect(readSpeechHistory()[0]).toMatchObject({ text: 'local text', status: 'completed' });
+    } finally {
+      session.cancel();
+    }
+  });
+
+  it('keeps the original Web Speech network error when no local model is installed', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    mocks.fasterWhisper.checkInstalled.mockResolvedValue(false);
+    const onStatus = vi.fn();
+    const onError = vi.fn();
+    const stopMeter = vi.fn();
+    mocks.composer.startBatchAudioRecorder.mockResolvedValueOnce({
+      captureWav: () => new Blob(['captured local audio'], { type: 'audio/wav' }),
+      stop: stopMeter,
+    });
+    const session = await createSelectedSttSession({ onStatus, onError });
+    try {
+      mocks.voiceHandlers.get('voice:error')?.({
+        kind: 'network',
+        message: formatVoiceFailure('network'),
+      } as never);
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(formatVoiceFailure('network')));
+
+      expect(onStatus).not.toHaveBeenCalled();
+      expect(mocks.composer.transcribeFasterWhisper).not.toHaveBeenCalled();
+      expect(stopMeter).toHaveBeenCalledOnce();
+    } finally {
+      session.cancel();
+    }
+  });
+
+  it('discards captured fallback audio when the user cancels instead of finishing', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);
+    const stopMeter = vi.fn();
+    mocks.composer.startBatchAudioRecorder.mockResolvedValueOnce({
+      captureWav: () => new Blob(['captured local audio'], { type: 'audio/wav' }),
+      stop: stopMeter,
+    });
+    const onStatus = vi.fn();
+    const onClose = vi.fn();
+    const session = await createSelectedSttSession({ onStatus, onClose });
+
+    mocks.voiceHandlers.get('voice:error')?.({
+      kind: 'network',
+      message: formatVoiceFailure('network'),
+    } as never);
+    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledOnce());
+    session.cancel();
+
+    expect(stopMeter).toHaveBeenCalledOnce();
+    expect(mocks.composer.transcribeFasterWhisper).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it('waits for the browser final result after stop before returning the transcript', async () => {
     mocks.voiceService.isSupported.mockReturnValue(true);
     const session = await createSelectedSttSession();

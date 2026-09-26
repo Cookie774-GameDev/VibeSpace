@@ -27,13 +27,11 @@ import {
   contextTreeFromPersistenceState,
   ensureContextPersistence,
 } from '@/features/context/contextPersistence';
-import { useToolStore, slugify } from '@/features/tools/toolStore';
-import { runAction } from '@/lib/actions';
 import { useWorkbenchStore } from '@/features/workbench/store';
 import { formatJarvisVerifiedNarration } from '@/lib/jarvis/response/templates';
 import { formatUserDateTime } from '@/lib/timeFormat';
 import type { AgentId, ProjectId, WorkspaceId } from '@/types/common';
-import type { AssistantIntent, AssistantResult } from './intents';
+import { NATIVE_CLI_COMMANDS, type AssistantIntent, type AssistantResult } from './intents';
 
 /** Cap on bulk operations from a single command. Keeps "open 4 terminals"
  * from accidentally becoming "open 9999 terminals" if a user fat-fingers. */
@@ -208,6 +206,12 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
         // Empty command falls back to the user's default shell label so
         // the row has a non-empty title in the eventual terminal panel.
         const command = intent.command?.trim() || '';
+        if (
+          command &&
+          !NATIVE_CLI_COMMANDS.some((nativeCommand) => nativeCommand === command.toLowerCase())
+        ) {
+          return fail('Only supported native CLI launchers can start in a new terminal.');
+        }
         const titleBase = command || 'shell';
         if (projectId) useAuthStore.getState().setProjectId(projectId);
         for (let i = 0; i < count; i++) {
@@ -221,55 +225,6 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
         const cmdNote = command ? ` running ${command}` : '';
         const projNote = intent.project ? ` in '${intent.project}'` : '';
         return ok(`Opened ${count} ${verb}${cmdNote}${projNote}.`);
-      }
-
-      // ----------------------------------------------------------------
-      case 'run_in_terminals': {
-        const command = intent.command.trim();
-        if (!command) return fail('Tell me which command to run.');
-        broadcastTerminalCommand({ command, label: command });
-        useUIStore.getState().setRoute('terminal');
-        return ok(`Running '${command}' in all terminal panes.`);
-      }
-
-      // ----------------------------------------------------------------
-      case 'create_custom_command': {
-        const name = intent.name.trim();
-        const command = intent.command.trim();
-        if (!name || !command) return fail('Custom commands need a name and a command to run.');
-        const tool = useToolStore.getState().create({
-          name,
-          description: `Run ${command} in a new terminal pane.`,
-          baseAction: 'terminal.run',
-          params: {
-            command,
-            label: name,
-            ...(intent.cwd ? { cwd: intent.cwd } : {}),
-          },
-        });
-        return ok(`Created command '${name}' as custom.${tool.slug}.`);
-      }
-
-      // ----------------------------------------------------------------
-      case 'run_custom_command': {
-        const name = intent.name.trim();
-        if (!name) return fail('Tell me which custom command to run.');
-        const tools = useToolStore.getState().list();
-        const normalized = name.toLowerCase();
-        const slug = slugify(name);
-        const tool =
-          tools.find((item) => item.slug === slug) ??
-          tools.find((item) => item.name.trim().toLowerCase() === normalized) ??
-          tools.find((item) => item.name.trim().toLowerCase().includes(normalized));
-        if (!tool) return fail(`No custom command named '${name}'. Create it first.`);
-        const result = await runAction(
-          `custom.${tool.slug}`,
-          {},
-          { source: 'user' },
-          { emitToast: false },
-        );
-        if (!result.ok) return fail(result.error);
-        return ok(result.summary ?? `Ran '${tool.name}'.`);
       }
 
       // ----------------------------------------------------------------
@@ -546,7 +501,7 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
                 .join(', ')}?`
             : '';
         return fail(
-          `I didn't catch that. Try: 'create project tiger then open 4 terminals', 'create command dev server to run npm run dev', 'call me at 3pm', or 'message me: build is done'.${hint}`,
+          `I didn't catch that. Try: 'create project tiger then open 4 terminals with opencode', 'ask claude to fix the tests', 'call me at 3pm', or 'message me: build is done'.${hint}`,
         );
       }
     }

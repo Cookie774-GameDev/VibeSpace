@@ -1,4 +1,5 @@
 import type { CaoTargetKind, CaoTargetSnapshot } from '../sentinel/types';
+import type { CaoSentinelDecisionReceipt } from '../sentinel/sentinelRuntime';
 
 export type CaoMissionStatus =
   | 'planning'
@@ -20,6 +21,8 @@ export type CaoMissionWorker = Readonly<{
   ownedPaths: readonly string[];
   status: 'assigned' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
   lastObservedRevision: number | null;
+  /** Bounded, secret-free final Sentinel decisions for native mission evidence. */
+  sentinelReceipts?: readonly CaoSentinelDecisionReceipt[];
   /** Exact authority proposal awaiting user approval, when status is waiting. */
   proposalId?: string;
   /** Durable single-consumer reservation while that proposal is being approved. */

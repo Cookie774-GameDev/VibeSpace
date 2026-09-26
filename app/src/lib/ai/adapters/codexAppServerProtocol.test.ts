@@ -4,13 +4,28 @@ import {
   buildCodexApprovalResponse,
   buildCodexModelListRequest,
   buildCodexQuestionResponse,
+  buildCodexSkillsListRequest,
+  buildCodexSkillsRefreshRequest,
+  buildCodexSkillUserInputs,
   buildCodexThreadResumeRequest,
   buildCodexThreadStartRequest,
+  buildCodexThreadQueueAddRequest,
+  buildCodexThreadQueueListRequest,
+  buildCodexThreadQueueStartRequest,
+  buildCodexThreadReadRequest,
+  buildCodexTurnSteerRequest,
   buildCodexTurnInterruptRequest,
   buildCodexTurnStartRequest,
   validateCodexModelListResponse,
+  validateCodexSkillsListResponse,
+  isCodexSkillsChangedNotification,
   validateCodexThreadStartResponse,
+  validateCodexThreadQueueAddResponse,
+  validateCodexThreadQueueListResponse,
+  validateCodexThreadQueueStartResponse,
+  validateCodexTurnSteerResponse,
   type CodexBackendIdentity,
+  type CodexDiscoveredSkill,
 } from './codexAppServerProtocol';
 
 const IDENTITY: CodexBackendIdentity = {
@@ -70,7 +85,10 @@ describe('Codex app-server request protocol', () => {
       mode: { kind: 'ask' as const },
       text: 'System instructions.\n\nUser:\r\n\tHello',
     };
-    expect(buildCodexTurnStartRequest(input).params.input[0].text).toBe(input.text);
+    expect(buildCodexTurnStartRequest(input).params.input[0]).toMatchObject({
+      type: 'text',
+      text: input.text,
+    });
     expect(() => buildCodexTurnStartRequest({ ...input, text: 'hello\u0000world' })).toThrow(
       'text',
     );
@@ -536,6 +554,92 @@ describe('Codex app-server request protocol', () => {
       }),
     ).toThrow(/identifier/iu);
   });
+
+  it('builds native steer against the expected active turn and validates its required identifiers', () => {
+    expect(buildCodexTurnSteerRequest({
+      requestId: 'steer_1', threadId: 'thread_1', expectedTurnId: 'turn_1',
+      clientUserMessageId: 'message_2', text: 'Continue with the focused fix.',
+    })).toEqual({
+      id: 'steer_1', method: 'turn/steer', params: {
+        threadId: 'thread_1', expectedTurnId: 'turn_1', clientUserMessageId: 'message_2',
+        input: [{ type: 'text', text: 'Continue with the focused fix.', text_elements: [] }],
+      },
+    });
+    for (const field of ['threadId', 'expectedTurnId', 'clientUserMessageId'] as const) {
+      expect(() => buildCodexTurnSteerRequest({
+        requestId: 'steer_1', threadId: 'thread_1', expectedTurnId: 'turn_1',
+        clientUserMessageId: 'message_2', text: 'Steer', [field]: 'bad\nvalue',
+      })).toThrow(/identifier/iu);
+    }
+    expect(() => buildCodexTurnSteerRequest({
+      requestId: 'steer_1', threadId: 'thread_1', expectedTurnId: 'turn_1',
+      clientUserMessageId: 'message_2', text: 'bad\u0000text',
+    })).toThrow(/text/iu);
+    expect(validateCodexTurnSteerResponse({
+      id: 'steer_1', result: { turnId: 'turn_1' },
+    }, 'steer_1', 'turn_1')).toEqual({ ok: true, turnId: 'turn_1' });
+    expect(validateCodexTurnSteerResponse({
+      id: 'steer_1', result: { turnId: 'turn_other' },
+    }, 'steer_1', 'turn_1')).toMatchObject({ ok: false, reason: 'turn_mismatch' });
+  });
+
+  it('builds provider-native queue additions and validates add/list receipts', () => {
+    expect(buildCodexThreadReadRequest({ requestId: 'thread_read_1', threadId: 'thread_1' })).toEqual({
+      id: 'thread_read_1', method: 'thread/read', params: { threadId: 'thread_1', includeTurns: true },
+    });
+    expect(buildCodexThreadQueueListRequest({ requestId: 'queue_list_1', threadId: 'thread_1', cursor: 'next/page=' })).toEqual({
+      id: 'queue_list_1', method: 'thread/queue/list', params: { threadId: 'thread_1', cursor: 'next/page=' },
+    });
+    expect(() => buildCodexThreadQueueListRequest({ requestId: 'queue_list_1', threadId: 'thread_1', cursor: 'bad\n' })).toThrow(/cursor/u);
+    expect(buildCodexThreadQueueAddRequest({
+      requestId: 'queue_add_1', threadId: 'thread_1', clientUserMessageId: 'message_3', text: 'Next task',
+    })).toEqual({
+      id: 'queue_add_1', method: 'thread/queue/add', params: {
+        threadId: 'thread_1', clientUserMessageId: 'message_3',
+        input: [{ type: 'text', text: 'Next task', text_elements: [] }],
+      },
+    });
+    expect(validateCodexThreadQueueAddResponse({
+      id: 'queue_add_1', result: { queuedSubmission: {
+        id: 'submission_1', clientUserMessageId: 'message_3',
+        input: [{ type: 'text', text: 'Next task', text_elements: [] }],
+      } },
+    }, 'queue_add_1', 'message_3')).toMatchObject({ ok: true, submissionId: 'submission_1' });
+    expect(validateCodexThreadQueueAddResponse({
+      id: 'queue_add_1', result: { queuedSubmission: {
+        id: 'submission_1', clientUserMessageId: 'wrong_message', input: [],
+      } },
+    }, 'queue_add_1', 'message_3')).toMatchObject({ ok: false, reason: 'invalid_response' });
+    expect(validateCodexThreadQueueListResponse({
+      id: 'queue_list_1', result: { data: [{
+        id: 'submission_1', clientUserMessageId: 'message_3', input: [],
+      }], nextCursor: null },
+    }, 'queue_list_1')).toMatchObject({ ok: true, submissions: [{ id: 'submission_1', clientUserMessageId: 'message_3' }], nextCursor: null });
+    expect(validateCodexThreadQueueListResponse({
+      id: 'queue_list_1', result: { data: [{ id: 'bad\nidentifier', clientUserMessageId: 'message_3', input: [] }], nextCursor: null },
+    }, 'queue_list_1')).toMatchObject({ ok: false, reason: 'invalid_response' });
+    expect(validateCodexThreadQueueListResponse({
+      id: 'wrong', result: { data: [], nextCursor: null },
+    }, 'queue_list_1')).toMatchObject({ ok: false, reason: 'request_mismatch' });
+    expect(buildCodexThreadQueueStartRequest({
+      requestId: 'queue_start_1', threadId: 'thread_1', queuedSubmissionId: 'submission_1',
+    })).toEqual({
+      id: 'queue_start_1', method: 'thread/queue/start', params: {
+        threadId: 'thread_1', queuedSubmissionId: 'submission_1',
+      },
+    });
+    expect(buildCodexThreadQueueStartRequest({
+      requestId: 'queue_start_1', threadId: 'thread_1',
+    })).toEqual({
+      id: 'queue_start_1', method: 'thread/queue/start', params: { threadId: 'thread_1' },
+    });
+    expect(validateCodexThreadQueueStartResponse({
+      id: 'queue_start_1', result: { turn: { id: 'turn_1', status: 'inProgress' } },
+    }, 'queue_start_1')).toMatchObject({ ok: true, turnId: 'turn_1', turnStatus: 'inProgress' });
+    expect(validateCodexThreadQueueStartResponse({
+      id: 'queue_start_1', result: { turn: { id: 'turn_1', status: 'unknown' } },
+    }, 'queue_start_1')).toMatchObject({ ok: false, reason: 'invalid_response' });
+  });
 });
 
 describe('Codex app-server model capability protocol', () => {
@@ -640,5 +744,104 @@ describe('Codex app-server model capability protocol', () => {
         IDENTITY,
       ),
     ).toEqual({ ok: false, reason: 'invalid_response', field: 'data' });
+  });
+});
+
+describe('Codex native skill protocol', () => {
+  const cwd = 'C:\\workspace\\game';
+  const skill: CodexDiscoveredSkill = {
+    cwd,
+    name: 'safe-fast-fix',
+    description: 'Implement focused fixes.',
+    shortDescription: 'Focused fixes',
+    path: 'C:\\Users\\viper\\.codex\\skills\\safe-fast-fix\\SKILL.md',
+    scope: 'user',
+    enabled: true,
+    pluginId: null,
+  };
+
+  it('requests native skill discovery for exact active working directories', () => {
+    expect(buildCodexSkillsListRequest({
+      requestId: 'skills_1',
+      cwds: [cwd],
+      forceReload: true,
+    })).toEqual({
+      id: 'skills_1',
+      method: 'skills/list',
+      params: { cwds: [cwd], forceReload: true },
+    });
+    expect(() => buildCodexSkillsListRequest({ requestId: 'skills_1', cwds: ['relative/project'] }))
+      .toThrow(/absolute safe path/iu);
+    expect(() => buildCodexSkillsListRequest({ requestId: 'skills_1', cwds: [cwd, 'c:/WORKSPACE/GAME'] }))
+      .toThrow(/unique/iu);
+    expect(buildCodexSkillsRefreshRequest({ requestId: 'skills_refresh', cwds: [cwd] })).toEqual({
+      id: 'skills_refresh', method: 'skills/list', params: { cwds: [cwd], forceReload: true },
+    });
+  });
+
+  it('validates the exact native response while preserving disabled skills and per-directory errors', () => {
+    const response = validateCodexSkillsListResponse({
+      id: 'skills_1',
+      result: {
+        data: [{
+          cwd,
+          skills: [skill, { ...skill, name: 'disabled-skill', enabled: false }],
+          errors: [{ path: 'C:\\workspace\\game\\.agents\\skills\\broken\\SKILL.md', message: 'Invalid metadata.' }],
+        }],
+      },
+    }, 'skills_1', [cwd]);
+    expect(response).toEqual({
+      ok: true,
+      entries: [{
+        cwd,
+        skills: [skill, { ...skill, name: 'disabled-skill', enabled: false }],
+        errors: [{ cwd, path: 'C:\\workspace\\game\\.agents\\skills\\broken\\SKILL.md', message: 'Invalid metadata.' }],
+      }],
+    });
+    expect(validateCodexSkillsListResponse({ id: 'other', result: { data: [] } }, 'skills_1', [cwd]))
+      .toMatchObject({ ok: false, reason: 'request_mismatch' });
+    expect(validateCodexSkillsListResponse({
+      id: 'skills_1', result: { data: [{ cwd: 'C:\\other', skills: [skill], errors: [] }] },
+    }, 'skills_1', [cwd]))
+      .toMatchObject({ ok: false, reason: 'cwd_mismatch' });
+    expect(validateCodexSkillsListResponse({
+      id: 'skills_1', result: { data: [{ cwd, skills: [{ ...skill, path: 'C:\\workspace\\..\\outside\\SKILL.md' }], errors: [] }] },
+    }, 'skills_1', [cwd])).toMatchObject({ ok: false, reason: 'invalid_response', field: 'skill.path' });
+  });
+
+  it('emits only enabled exact discovered paths as native UserInput skill references', () => {
+    expect(buildCodexSkillUserInputs('Please use this skill.', [skill])).toEqual([
+      { type: 'text', text: 'Please use this skill.', text_elements: [] },
+      { type: 'skill', name: 'safe-fast-fix', path: skill.path },
+    ]);
+    expect(() => buildCodexSkillUserInputs('Use it.', [{ ...skill, enabled: false }])).toThrow(/disabled/iu);
+    expect(() => buildCodexSkillUserInputs('Use it.', [skill, skill])).toThrow(/unique/iu);
+    expect(() => buildCodexSkillUserInputs('Use it.', [{ ...skill, path: 'not-a-path' }])).toThrow(/absolute safe path/iu);
+  });
+
+  it('recognizes the native skill-change invalidation notification only', () => {
+    expect(isCodexSkillsChangedNotification({ method: 'skills/changed', params: {} })).toBe(true);
+    expect(isCodexSkillsChangedNotification({ method: 'skills/changed', params: { cwd: 'C:/work' } })).toBe(false);
+    expect(isCodexSkillsChangedNotification({ method: 'skills/list', params: {} })).toBe(false);
+  });
+
+  it('carries native skill references through turn start, steer, and queue input', () => {
+    const refs = [skill];
+    const mode = { kind: 'ask' as const };
+    const start = buildCodexTurnStartRequest({
+      requestId: 'turn_skill', threadId: 'thread_1', clientUserMessageId: 'message_1',
+      identity: IDENTITY, mode, text: 'Start with this skill.', skills: refs,
+    });
+    expect(start.params.input).toEqual(buildCodexSkillUserInputs('Start with this skill.', refs));
+    const steer = buildCodexTurnSteerRequest({
+      requestId: 'steer_skill', threadId: 'thread_1', expectedTurnId: 'turn_1',
+      clientUserMessageId: 'message_2', text: 'Continue with this skill.', skills: refs,
+    });
+    expect(steer.params.input).toEqual(buildCodexSkillUserInputs('Continue with this skill.', refs));
+    const queue = buildCodexThreadQueueAddRequest({
+      requestId: 'queue_skill', threadId: 'thread_1', clientUserMessageId: 'message_3',
+      text: 'Use this skill next.', skills: refs,
+    });
+    expect(queue.params.input).toEqual(buildCodexSkillUserInputs('Use this skill next.', refs));
   });
 });

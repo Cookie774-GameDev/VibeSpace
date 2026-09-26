@@ -202,25 +202,14 @@ export function buildReasoningSlashPickerState({
       error: 'The selected model does not expose an adjustable reasoning effort.',
     };
   }
-  const effortOrder: readonly ReasoningEffort[] = [
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'ultra',
-    'max',
-  ];
-  const selectedEffort = preference.effortOverride
-    ? capabilities.supportedEfforts.includes(preference.effortOverride)
+  // Dispatch rejects unsupported overrides rather than snapping them to another
+  // effort. Do not mark a substitute active; keep valid choices available for
+  // an explicit user selection without rewriting the saved preference.
+  const selectedEffort =
+    preference.effortOverride !== null &&
+    capabilities.supportedEfforts.includes(preference.effortOverride)
       ? preference.effortOverride
-      : [...capabilities.supportedEfforts].sort(
-          (left, right) =>
-            Math.abs(effortOrder.indexOf(left) - effortOrder.indexOf(preference.effortOverride!)) -
-              Math.abs(
-                effortOrder.indexOf(right) - effortOrder.indexOf(preference.effortOverride!),
-              ) || effortOrder.indexOf(left) - effortOrder.indexOf(right),
-        )[0]
-    : null;
+      : null;
   return {
     options: [
       {
@@ -234,6 +223,6 @@ export function buildReasoningSlashPickerState({
         description: `${effort[0]!.toUpperCase() + effort.slice(1)} reasoning effort.`,
       })),
     ],
-    selectedId: preference.effortOverride === null ? 'auto' : (selectedEffort ?? 'auto'),
+    selectedId: preference.effortOverride === null ? 'auto' : (selectedEffort ?? ''),
   };
 }

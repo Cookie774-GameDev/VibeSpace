@@ -9,6 +9,7 @@ const MAX_DETAIL_BYTES = 4 * MAX_PUBLIC_TOOL_OUTPUT_BYTES;
 const MAX_DETAIL_NODES = 65_536;
 const MAX_DETAIL_DEPTH = 32;
 const MAX_CHANGES = 64;
+const CONTEXT_INTERNAL_KEYS = new Set(['requestId', 'receiptId', 'scopeRevision']);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const ANSI = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/gu;
@@ -88,7 +89,9 @@ export function publicToolOutput(
 }
 
 /** A single bounded public boundary shared by native tool adapters. */
-export function publicToolDetails(value: Readonly<Record<string, unknown>>): Readonly<PublicToolDetails> {
+export function publicToolDetails(
+  value: Readonly<Record<string, unknown>>, omitJsonKeys?: ReadonlySet<string>,
+): Readonly<PublicToolDetails> {
   const input = record(value);
   if (!input) return Object.freeze({ truncated: true });
   let remaining = MAX_DETAIL_BYTES;
@@ -128,6 +131,7 @@ export function publicToolDetails(value: Readonly<Record<string, unknown>>): Rea
       const keys = Object.keys(source);
       for (const key of keys.slice(0, MAX_DETAIL_NODES)) {
         if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+        if (omitJsonKeys?.has(key)) { redacted = true; continue; }
         const name = text(key, 256);
         if (SECRET_KEY.test(key) || isSensitiveMcpKey(key)) { redacted = true; result[name] = '[redacted: credentials]'; }
         else result[name] = json(source[key], depth + 1);
@@ -238,6 +242,7 @@ export function openCodeToolDetails(tool: string, value: unknown): Readonly<Publ
   let displayInput: unknown = state?.input;
   let displayOutput: unknown = state?.output;
   let internalFieldsOmitted = false;
+  let contextOutputTruncated = false;
   if ((tool === 'todowrite' || tool === 'todoread') && input) {
     displayInput = { todos: Array.isArray(input.todos) ? input.todos.slice(0, 128).map(value => {
       const todo = record(value);
@@ -250,20 +255,18 @@ export function openCodeToolDetails(tool: string, value: unknown): Readonly<Publ
     displayInput = publicInput;
     internalFieldsOmitted = true;
   }
-  if (tool === 'vibespace_context' && typeof displayOutput === 'string') {
-    if (displayOutput.length <= 1024 * 1024) {
+  if (tool === 'vibespace_context') {
+    if (typeof displayOutput !== 'string' || displayOutput.length <= 1024 * 1024) {
       try {
-        const envelope = record(JSON.parse(displayOutput));
-        if (envelope) {
-          const { requestId: _request, ...publicEnvelope } = envelope;
-          const data = record(publicEnvelope.data);
-          if (data) {
-            const { receiptId: _receipt, scopeRevision: _scope, ...publicData } = data;
-            publicEnvelope.data = publicData;
-            internalFieldsOmitted ||= 'receiptId' in data || 'scopeRevision' in data;
-          }
-          internalFieldsOmitted ||= 'requestId' in envelope;
-          displayOutput = JSON.stringify(publicEnvelope);
+        const envelope: unknown = typeof displayOutput === 'string' ? JSON.parse(displayOutput) : displayOutput;
+        if (envelope !== null && typeof envelope === 'object') {
+          // Nested provider envelopes cross the same bounded, accessor-safe JSON
+          // boundary as other results. Only Context transport fields are omitted.
+          const projected = publicToolDetails({ result: envelope }, CONTEXT_INTERNAL_KEYS);
+          internalFieldsOmitted ||= projected.redacted === true;
+          contextOutputTruncated ||= projected.truncated === true;
+          displayOutput = typeof displayOutput === 'string'
+            ? JSON.stringify(projected.result) : projected.result;
         }
       } catch { /* Plain tool errors still cross the normal public-text boundary. */ }
     } else {
@@ -296,7 +299,8 @@ export function openCodeToolDetails(tool: string, value: unknown): Readonly<Publ
   const changes = isEdit && metadataFiles
     ? metadataFiles.map((raw, index) => {
         const file = record(raw);
-        const fileDiff = typeof file?.diff === 'string' ? file.diff : undefined;
+        const fileDiff = typeof file?.diff === 'string' ? file.diff
+          : typeof file?.patch === 'string' ? file.patch : undefined;
         const fileContent = typeof file?.content === 'string' ? file.content : undefined;
         return {
           path: file?.path ?? file?.filePath,
@@ -318,8 +322,12 @@ export function openCodeToolDetails(tool: string, value: unknown): Readonly<Publ
       : undefined;
   const details = publicToolDetails({ arguments: displayInput, command: input?.command ?? input?.cmd,
     cwd: input?.workdir ?? input?.cwd, output: displayOutput,
-    outputComplete: state?.status === 'completed' || state?.status === 'error',
+    result: typeof displayOutput === 'string' ? undefined : displayOutput,
+    outputComplete: (state?.status === 'completed' || state?.status === 'error') && !contextOutputTruncated,
     error: state?.error, exitCode: metadata?.exit ?? metadata?.exitCode ?? metadata?.exit_code,
     durationMs: metadata?.durationMs, changes });
-  return internalFieldsOmitted ? Object.freeze({ ...details, redacted: true }) : details;
+  return internalFieldsOmitted || contextOutputTruncated ? Object.freeze({ ...details,
+    ...(internalFieldsOmitted ? { redacted: true } : {}),
+    ...(contextOutputTruncated ? { truncated: true } : {}),
+  }) : details;
 }

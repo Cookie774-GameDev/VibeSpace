@@ -1,7 +1,8 @@
 export function normalizeSiyuanFilesystemPath(value: string): string {
   const slashNormalized = value.replace(/\\/gu, '/');
   const verbatimDrive = /^(?:\/\/\?\/|\/\?\/)([A-Za-z]:\/.*)$/u.exec(slashNormalized);
-  return verbatimDrive?.[1] ?? slashNormalized;
+  const legacyDrive = /^\/([A-Za-z]:\/.*)$/u.exec(slashNormalized);
+  return verbatimDrive?.[1] ?? legacyDrive?.[1] ?? slashNormalized;
 }
 
 export function canonicalSiyuanAuthorityRoot(value: string): string {

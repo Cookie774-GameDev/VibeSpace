@@ -1,5 +1,13 @@
 import { createRef } from 'react';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProviderConnection } from '@/lib/ai/adapters/types';
@@ -140,6 +148,119 @@ describe('ModelPickerTypeahead smoke transports', () => {
     const surface = container.querySelector<HTMLElement>('.jarvis-slash-dropdown');
     expect(surface).not.toBeNull();
     expect(surface?.style.opacity).not.toBe('0');
+  });
+
+  it('scrolls a long model catalog with the mouse wheel', () => {
+    render(<ModelPickerTypeahead groups={[]} selectedId="" onSelect={vi.fn()} />);
+    const list = screen.getByRole('listbox', { name: 'Available AI models' });
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(list, 'clientHeight', { configurable: true, value: 280 });
+    fireEvent.wheel(list, { deltaY: 240, deltaMode: 0 });
+    expect(list.scrollTop).toBe(240);
+  });
+
+  it('normalizes line and page wheel deltas while preserving browser zoom gestures', () => {
+    render(<ModelPickerTypeahead groups={[]} selectedId="" onSelect={vi.fn()} />);
+    const list = screen.getByRole('listbox', { name: 'Available AI models' });
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(list, 'clientHeight', { configurable: true, value: 280 });
+
+    fireEvent.wheel(list, { deltaY: 2, deltaMode: WheelEvent.DOM_DELTA_LINE });
+    expect(list.scrollTop).toBe(32);
+    fireEvent.wheel(list, { deltaY: 1, deltaMode: WheelEvent.DOM_DELTA_PAGE });
+    expect(list.scrollTop).toBe(312);
+
+    const zoomGesture = fireEvent.wheel(list, {
+      deltaY: 120,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      ctrlKey: true,
+    });
+    expect(list.scrollTop).toBe(312);
+    expect(zoomGesture).toBe(true);
+  });
+
+  it('moves the active model by a visible page from the focused search field without selecting', () => {
+    const openCode = connection('opencode-cli', 'external-cli');
+    const options = Array.from({ length: 8 }, (_, index) => ({
+      id: `page-model-${index}`,
+      provider: 'vibespace-kernel-smoke' as never,
+      modelId: `page-model-${index}`,
+      label: `Page model ${index}`,
+      connection: openCode,
+      available: index !== 2,
+    }));
+    const onSelect = vi.fn();
+    let highlightedId = 'page-model-0';
+    const picker = () => (
+      <ModelPickerTypeahead
+        groups={[
+          {
+            id: 'provider:page-test',
+            provider: 'vibespace-kernel-smoke' as never,
+            label: 'Page test',
+            options,
+          },
+        ]}
+        selectedId={highlightedId}
+        activeProvider={'vibespace-kernel-smoke' as never}
+        activeModel="page-model-0"
+        onHoverId={(id) => {
+          highlightedId = id;
+        }}
+        onSelect={onSelect}
+      />
+    );
+    const { rerender } = render(picker());
+    const listbox = screen.getByRole('listbox', { name: 'Available AI models' });
+    const searchbox = screen.getByRole('searchbox', { name: 'Search providers and models' });
+    Object.defineProperty(listbox, 'clientHeight', {
+      configurable: true,
+      value: 140,
+    });
+    Object.defineProperty(listbox, 'scrollHeight', {
+      configurable: true,
+      value: 560,
+    });
+    const rows = Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"][data-value]'));
+    rows.forEach((row, index) => {
+      Object.defineProperty(row, 'offsetTop', { configurable: true, value: index * 70 });
+      Object.defineProperty(row, 'offsetHeight', { configurable: true, value: 70 });
+      row.scrollIntoView = vi.fn();
+    });
+    const activeValue = () => {
+      const activeId = listbox.getAttribute('aria-activedescendant');
+      return activeId ? document.getElementById(activeId)?.getAttribute('data-value') : null;
+    };
+    const pressPage = (key: 'PageDown' | 'PageUp') => {
+      const event = createEvent.keyDown(searchbox, { key, bubbles: true, cancelable: true });
+      fireEvent(searchbox, event);
+      rerender(picker());
+      expect(event.defaultPrevented).toBe(true);
+    };
+
+    expect(activeValue()).toBe('page-model-0');
+    searchbox.focus();
+    pressPage('PageDown');
+    expect(activeValue()).toBe('page-model-3');
+    expect(document.activeElement).toBe(searchbox);
+    expect(
+      document
+        .getElementById(listbox.getAttribute('aria-activedescendant')!)
+        ?.getAttribute('aria-disabled'),
+    ).not.toBe('true');
+    expect(rows[3]?.scrollIntoView).toHaveBeenCalled();
+    expect(rows[0]?.getAttribute('aria-selected')).toBe('true');
+    expect(rows[3]?.getAttribute('aria-selected')).toBe('false');
+
+    pressPage('PageDown');
+    expect(activeValue()).toBe('page-model-5');
+    pressPage('PageDown');
+    expect(activeValue()).toBe('page-model-7');
+    pressPage('PageDown');
+    expect(activeValue()).toBe('page-model-7');
+    pressPage('PageUp');
+    expect(activeValue()).toBe('page-model-5');
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('immediately hides and disables a retained closed picker while restoring trigger focus', async () => {
@@ -592,6 +713,61 @@ describe('ModelPickerTypeahead smoke transports', () => {
       openCode,
       'medium',
     );
+  });
+
+  it('does not choose a stale OpenCode route when Codex is the highlighted logical row', () => {
+    const codex = { ...connection('openai-codex', 'external-cli'), providerId: 'openai' };
+    const openCode = { ...connection('opencode-cli', 'external-cli'), providerId: 'opencode' };
+    const codexRoute = {
+      id: 'openai-codex:gpt-6-luna',
+      provider: 'openai' as const,
+      modelId: 'gpt-6-luna',
+      label: 'GPT-6 Luna',
+      connection: codex,
+      available: true,
+    };
+    const openCodeRoute = {
+      id: 'opencode-cli:openai/gpt-6-luna',
+      provider: 'opencode' as never,
+      modelId: 'openai/gpt-6-luna',
+      label: 'GPT-6 Luna',
+      connection: openCode,
+      available: true,
+    };
+    const onSelect = vi.fn();
+    const ref = createRef<ModelPickerTypeaheadRef>();
+    render(
+      <ModelPickerTypeahead
+        ref={ref}
+        groups={[
+          {
+            provider: 'openai',
+            label: 'OpenAI',
+            options: [
+              {
+                ...codexRoute,
+                alternativeRoutes: [codexRoute, openCodeRoute],
+              },
+            ],
+          },
+        ]}
+        selectedId={openCodeRoute.id}
+        onSelect={onSelect}
+      />,
+    );
+
+    expect(
+      screen
+        .getByRole('listbox', { name: 'Available AI models' })
+        .getAttribute('aria-activedescendant'),
+    ).toContain('openai-codex:gpt-6-luna');
+    act(() => ref.current?.selectCurrent());
+    expect(screen.getByRole('listbox', { name: 'GPT-6 Luna route options' })).not.toBeNull();
+    fireEvent.click(
+      document.querySelector('[role="option"][data-value="openai-codex:gpt-6-luna"]')!,
+    );
+    fireEvent.click(screen.getByRole('option', { name: /^auto/i }));
+    expect(onSelect).toHaveBeenCalledWith('openai', 'gpt-6-luna', codex, 'auto');
   });
 
   it('contains animated effort glyphs and the Ultra root effect inside its own row', () => {

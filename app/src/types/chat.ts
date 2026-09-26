@@ -61,6 +61,15 @@ export type JarvisArtifactMessageRef = {
  */
 export type Part =
   | {
+      kind: 'codex_native_queue_receipt';
+      version: 1;
+      state: 'pending' | 'starting' | 'started' | 'review_required';
+      submissionId: string;
+      threadId: string;
+      addedDuringTurnId: string;
+      clientUserMessageId: string;
+    }
+  | {
       kind: 'local_command_receipt';
       version: 1;
       modelDispatch: 'skipped';

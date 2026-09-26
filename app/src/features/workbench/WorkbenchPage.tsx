@@ -47,6 +47,12 @@ import { listNativeApps, pickNativeAppExecutable, type NativeAppDescriptor } fro
 import { openNativeAppPanel } from './nativeAppPanels';
 import { mergeNativeAppPins, readNativeAppPins, updateNativeAppPin } from './nativeAppPins';
 import { setWorkbenchNativeWindowTitle } from './window';
+import {
+  closeRelayActiveContext,
+  openRelayActiveContext,
+  updateRelayActiveContext,
+  type RelayActiveContext,
+} from '@/lib/tauri';
 import type { WorkbenchPanelKind } from './types';
 import type { PluginManifest } from '@/features/plugins';
 import { DEFAULT_WORKBENCH_NAME } from './workbenchName';
@@ -66,8 +72,61 @@ type ArtifactChoice = Readonly<{
 
 export function WorkbenchPage() {
   const setRoute = useUIStore((state) => state.setRoute);
+  const activeChatId = useUIStore((state) => state.activeChatId);
   const accountId = useAuthStore((state) => resolveAccountIdentity(state)?.accountId ?? '');
+  const workspaceId = useAuthStore((state) => state.workspaceId);
   const projectId = useAuthStore((state) => state.projectId);
+  const relayContext = React.useMemo<RelayActiveContext | null>(() => {
+    if (!accountId || !projectId || !activeChatId) return null;
+    return {
+      accountId,
+      workspaceId: workspaceId ? String(workspaceId) : null,
+      projectId: String(projectId),
+      chatId: String(activeChatId),
+    };
+  }, [accountId, activeChatId, projectId, workspaceId]);
+  const relayContextRef = React.useRef(relayContext);
+  relayContextRef.current = relayContext;
+  const relayOwnerRef = React.useRef<string | null>(null);
+  const relayRevisionRef = React.useRef(0);
+  React.useEffect(() => {
+    let disposed = false;
+    void openRelayActiveContext()
+      .then(async (owner) => {
+        if (!owner) return;
+        relayOwnerRef.current = owner.ownerHandle;
+        if (disposed) {
+          await closeRelayActiveContext(owner.ownerHandle, ++relayRevisionRef.current).catch(
+            () => undefined,
+          );
+          return;
+        }
+        await updateRelayActiveContext(
+          owner.ownerHandle,
+          ++relayRevisionRef.current,
+          relayContextRef.current,
+        ).catch(() => undefined);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      if (relayOwnerRef.current) {
+        void closeRelayActiveContext(relayOwnerRef.current, ++relayRevisionRef.current).catch(
+          () => undefined,
+        );
+        relayOwnerRef.current = null;
+      }
+    };
+  }, []);
+  React.useEffect(() => {
+    // A renderer selection is only mirrored cache state; Relay send/stop must
+    // obtain separate native authorization before it can act on this scope.
+    const owner = relayOwnerRef.current;
+    if (!owner) return;
+    void updateRelayActiveContext(owner, ++relayRevisionRef.current, relayContext).catch(
+      () => undefined,
+    );
+  }, [relayContext]);
   const pinnedPluginIds = usePluginStore((state) =>
     selectPinnedPluginIdsForAccount(state, accountId),
   );

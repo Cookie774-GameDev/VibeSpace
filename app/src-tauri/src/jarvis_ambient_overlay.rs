@@ -115,8 +115,7 @@ fn validate_snapshot(
     {
         return Err("jarvis_ambient_snapshot_invalid".to_owned());
     }
-    if snapshot.prewarm
-        && (snapshot.state != JarvisAmbientState::Idle || snapshot_active(snapshot))
+    if snapshot.prewarm && (snapshot.state != JarvisAmbientState::Idle || snapshot_active(snapshot))
     {
         return Err("jarvis_ambient_prewarm_invalid".to_owned());
     }
@@ -339,7 +338,11 @@ fn reconcile_latest(app: &AppHandle) -> Result<(), String> {
 // Tauri's builder dispatches the native operations itself. Coalesce updates
 // while it builds, then reconcile the latest accepted intent.
 fn schedule_reconcile(app: &AppHandle) -> Result<(), String> {
-    if app.state::<JarvisAmbientOverlayState>().2.swap(true, Ordering::AcqRel) {
+    if app
+        .state::<JarvisAmbientOverlayState>()
+        .2
+        .swap(true, Ordering::AcqRel)
+    {
         return Ok(());
     }
     let worker_app = app.clone();
@@ -347,21 +350,30 @@ fn schedule_reconcile(app: &AppHandle) -> Result<(), String> {
         .name("jarvis-aura-reconcile".into())
         .spawn(move || {
             let intent = || {
-                worker_app.state::<JarvisAmbientOverlayState>().0.lock().ok()
+                worker_app
+                    .state::<JarvisAmbientOverlayState>()
+                    .0
+                    .lock()
+                    .ok()
                     .map(|inner| (inner.snapshot.revision, inner.ready.clone()))
             };
             let intent_before = intent();
             if let Err(error) = reconcile_latest(&worker_app) {
                 eprintln!("[jarvis-aura] reconciliation failed: {error}");
             }
-            worker_app.state::<JarvisAmbientOverlayState>().2.store(false, Ordering::Release);
+            worker_app
+                .state::<JarvisAmbientOverlayState>()
+                .2
+                .store(false, Ordering::Release);
             if intent_before != intent() {
                 let _ = schedule_reconcile(&worker_app);
             }
         })
         .map(|_| ())
         .map_err(|_| {
-            app.state::<JarvisAmbientOverlayState>().2.store(false, Ordering::Release);
+            app.state::<JarvisAmbientOverlayState>()
+                .2
+                .store(false, Ordering::Release);
             "jarvis_ambient_reconcile_worker_failed".to_owned()
         })
 }
@@ -530,8 +542,13 @@ mod tests {
             .expect("renderer-ready command exists");
         let tests_start = source.rfind("#[cfg(test)]").expect("tests are bounded");
 
-        let scheduler = source.split("fn schedule_reconcile(app:").nth(1).unwrap()
-            .split("#[tauri::command]").next().unwrap();
+        let scheduler = source
+            .split("fn schedule_reconcile(app:")
+            .nth(1)
+            .unwrap()
+            .split("#[tauri::command]")
+            .next()
+            .unwrap();
         assert!(scheduler.contains(".spawn(move ||"));
         assert!(scheduler.contains("reconcile_latest(&worker_app)"));
         assert!(!scheduler.contains("run_on_main_thread"));
