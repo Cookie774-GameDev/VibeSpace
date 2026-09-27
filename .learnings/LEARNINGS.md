@@ -271,3 +271,56 @@ Use cached CLI discovery for ordinary opens, reserve force reload for Refresh, b
 - Tags: native-skill-picker, busy-route, responsiveness
 
 ---
+
+## [LRN-20260927-CH33A] best_practice
+
+**Logged**: 2026-09-27T07:28:00Z
+**Priority**: high
+**Status**: resolved
+**Area**: tests
+
+### Summary
+A verified native process can still display a failed page when its Vite dev server is down.
+
+### Details
+After rebuilding official C1, the jarvis/WebView parent, original profile, and CDP 9223 identity all matched. The main WebView showed chrome-error because localhost:5173 refused connections. The actual native main URL was the root path, while the QA helper assumed a chat query route. Starting the original Vite server and reloading that same main WebView restored the persisted chat; no replacement browser or app instance was needed.
+
+### Suggested Action
+Before a one-time native send, verify process/profile/CDP, the actual Tauri main label, live dev URL, and loaded chat state. Treat a chrome-error page as a serving failure rather than a changed app identity.
+
+### Metadata
+- Source: error
+- Related Files: app/src-tauri/tauri.conf.json; work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH33/preflight.cjs
+- Tags: native-playwright, vite, identity, one-time-send
+- Pattern-Key: native.qa.devserver_preflight
+
+---
+
+## [LRN-20260927-CH33B] best_practice
+
+**Logged**: 2026-09-27T07:28:00Z
+**Priority**: critical
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Review shell approval needs a restrictive default because interpreters can write without matching obvious destructive-command patterns.
+
+### Details
+The generated OpenCode Review bash policy allowed wildcard commands and asked only for selected destructive prefixes. A native PowerShell Set-Content command wrote the disposable fixture with no approval card. Changing the generated and frontend Review policies to ask by default, with exact safe-read allowances, produced a native bash permission card; Approve once then allowed exactly one fixture write. Full access behavior remained separate.
+
+### Suggested Action
+Keep generated harness rules and frontend permission projections aligned. Test a native interpreter write, the approval decision, and the file side effect, not only pattern matching.
+
+### Metadata
+- Source: error
+- Related Files: app/src-tauri/src/harness/server.rs; app/src/lib/permissions/OpenCodePermissionProfile.ts
+- Tags: opencode, review, authority, native-approval
+- Pattern-Key: harness.review_shell_default
+
+### Resolution
+- **Resolved**: 2026-09-27T07:23:00Z
+- **Commit**: 93fc9458e7017b9501d5720ed43737c8ed283f14
+- **Evidence**: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH33/native-review-once2-1790493753307.json
+
+---
