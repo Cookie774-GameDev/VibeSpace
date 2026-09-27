@@ -1,0 +1,52 @@
+{
+  "startedAt": "2026-09-27T18:12:46.594Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "936b62ca54646209d472da71b619e9af0767f902f5815331520d9f869635da03",
+  "stage": "complete",
+  "sent": true,
+  "actedOnUi": true,
+  "mainUrl": "http://localhost:5173/?route=chat",
+  "priorChatId": "cht_FzcZsVyq81uEPMPL",
+  "prior": {
+    "status": "Complete",
+    "draftLength": 28,
+    "draftSha256": "b3d5c643752ad80328a9ddf96e5630a9c99de8eed272e83800b7fc675f68c349",
+    "pending": 0
+  },
+  "before": {
+    "mode": "ask",
+    "status": "Complete",
+    "draftLength": 0,
+    "userCount": 9,
+    "assistantCount": 9
+  },
+  "selectedMode": "ask",
+  "selectedChat": "cht_-zkkf_r46zzuxB3L",
+  "selectedModeButton": "Ask Mode. Open mode picker.",
+  "selectedMessageCount": 20,
+  "sentAt": "2026-09-27T18:12:51.783Z",
+  "after": {
+    "status": "Complete",
+    "mode": "ask",
+    "newUsers": [
+      {
+        "id": "msg_dVGXQ8Vajns8ewCl",
+        "textSha256": "936b62ca54646209d472da71b619e9af0767f902f5815331520d9f869635da03"
+      }
+    ],
+    "newAssistants": [
+      {
+        "id": "msg_jreq_62cd235d-5e06-431b-816b-04742f063d94",
+        "textSha256": "4aa00cdd2adf3a2a9110b874e371e40235d33160b61a6e71c2d9307b5ab672fc",
+        "hasMarker": true,
+        "toolNames": []
+      }
+    ]
+  },
+  "observationLatencyMs": 10976,
+  "passed": true,
+  "restoredPriorChat": true,
+  "restoredDraftSha256": "b3d5c643752ad80328a9ddf96e5630a9c99de8eed272e83800b7fc675f68c349",
+  "restoredDraftMatches": true,
+  "finishedAt": "2026-09-27T18:13:05.102Z"
+}

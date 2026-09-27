@@ -1,0 +1,19 @@
+{
+  "startedAt": "2026-09-27T18:11:27.373Z",
+  "stage": "complete",
+  "actedOnUi": false,
+  "metadata": {
+    "chatId": "cht_FzcZsVyq81uEPMPL",
+    "selectedMode": "agent",
+    "ownedCodexMode": "ask",
+    "status": "Complete",
+    "lastMessageAt": 1790529024321,
+    "messageRoleCounts": {
+      "user": 2,
+      "assistant": 2
+    },
+    "questionStatusCounts": {},
+    "draftLength": 28
+  },
+  "finishedAt": "2026-09-27T18:11:29.197Z"
+}

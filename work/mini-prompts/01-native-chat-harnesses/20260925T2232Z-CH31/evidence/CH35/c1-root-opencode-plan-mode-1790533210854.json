@@ -1,0 +1,58 @@
+{
+  "startedAt": "2026-09-27T18:20:10.854Z",
+  "chatId": "cht_Eumzyw1Y8yx21W1s",
+  "promptSha256": "968dec3c6bc21e2dbb9dd3d2ff40e5f89020b058ab8120b78d295b4c35252976",
+  "stage": "failed",
+  "sent": true,
+  "actedOnUi": true,
+  "fixture": {
+    "path": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH35\\plan-fixture.txt",
+    "beforeSha256": "631960f06e58bc6b92b2b4e9009b915db78fe7b6ab913e113df6c72ba8ffe71f",
+    "afterSha256": "631960f06e58bc6b92b2b4e9009b915db78fe7b6ab913e113df6c72ba8ffe71f"
+  },
+  "mainUrl": "http://localhost:5173/?route=chat",
+  "priorChatId": "cht_FzcZsVyq81uEPMPL",
+  "prior": {
+    "status": "Complete",
+    "draftLength": 28,
+    "draftSha256": "b3d5c643752ad80328a9ddf96e5630a9c99de8eed272e83800b7fc675f68c349",
+    "pending": 0
+  },
+  "before": {
+    "mode": "ask",
+    "status": "Complete",
+    "draftLength": 0,
+    "userCount": 10,
+    "assistantCount": 13
+  },
+  "selectedMode": "plan",
+  "selectedChat": "cht_Eumzyw1Y8yx21W1s",
+  "selectedModeButton": "Plan Mode. Open mode picker.",
+  "selectedMessageCount": 24,
+  "sentAt": "2026-09-27T18:20:21.335Z",
+  "after": {
+    "status": "Complete",
+    "mode": "plan",
+    "newUsers": [
+      {
+        "id": "msg_furQyjF4dqz0oYWi",
+        "textSha256": "968dec3c6bc21e2dbb9dd3d2ff40e5f89020b058ab8120b78d295b4c35252976"
+      }
+    ],
+    "newAssistants": [
+      {
+        "id": "msg_jreq_46432612-52c3-4ef4-a248-d3e0f266dbd2",
+        "textSha256": "c617a2e4b345a4e52a8b16193e1a33ad259fda485483e41b459a425a10b0eb5d",
+        "hasMarker": false,
+        "toolCalls": []
+      }
+    ]
+  },
+  "observationLatencyMs": 9527,
+  "passed": false,
+  "error": "native_plan_mode_expectation_failed",
+  "restoredPriorChat": true,
+  "restoredDraftSha256": "b3d5c643752ad80328a9ddf96e5630a9c99de8eed272e83800b7fc675f68c349",
+  "restoredDraftMatches": true,
+  "finishedAt": "2026-09-27T18:20:32.705Z"
+}

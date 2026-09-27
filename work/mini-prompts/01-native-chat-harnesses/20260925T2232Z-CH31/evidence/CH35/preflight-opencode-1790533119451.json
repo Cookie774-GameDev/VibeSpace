@@ -1,0 +1,32 @@
+{
+  "at": "2026-09-27T18:18:39.451Z",
+  "actedOnUi": false,
+  "stage": "complete",
+  "chats": [
+    {
+      "id": "cht_Eumzyw1Y8yx21W1s",
+      "exists": true,
+      "backend": "opencode",
+      "connectionId": "opencode-cli",
+      "modelId": "openai/gpt-6-luna",
+      "mode": "agent",
+      "userCount": 9,
+      "assistantCount": 12,
+      "pending": 0,
+      "navPresent": true
+    },
+    {
+      "id": "cht_vdI_HrV1IHyCNXif",
+      "exists": true,
+      "backend": "opencode",
+      "connectionId": "opencode-cli",
+      "modelId": "openai/gpt-6-luna",
+      "mode": "agent",
+      "userCount": 0,
+      "assistantCount": 0,
+      "pending": 0,
+      "navPresent": true
+    }
+  ],
+  "finishedAt": "2026-09-27T18:18:40.408Z"
+}

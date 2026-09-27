@@ -1,0 +1,32 @@
+{
+  "at": "2026-09-27T18:16:55.590Z",
+  "actedOnUi": false,
+  "stage": "complete",
+  "tool": [
+    {
+      "keys": [
+        "kind",
+        "tool",
+        "call_id",
+        "details",
+        "args"
+      ],
+      "name": "read",
+      "input": {
+        "path": "plan-fixture.txt"
+      },
+      "callId": "exec-ad4fb54b-79be-48bc-aec7-52508bda651f",
+      "detailKeys": [
+        "arguments",
+        "command",
+        "cwd",
+        "output",
+        "exitCode",
+        "durationMs"
+      ],
+      "resultStatus": null,
+      "outputHasMarker": true
+    }
+  ],
+  "finishedAt": "2026-09-27T18:16:55.763Z"
+}

@@ -1,0 +1,36 @@
+{
+  "startedAt": "2026-09-27T18:14:27.051Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "968dec3c6bc21e2dbb9dd3d2ff40e5f89020b058ab8120b78d295b4c35252976",
+  "stage": "failed",
+  "sent": false,
+  "actedOnUi": true,
+  "fixture": {
+    "path": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH35\\plan-fixture.txt",
+    "beforeSha256": "631960f06e58bc6b92b2b4e9009b915db78fe7b6ab913e113df6c72ba8ffe71f"
+  },
+  "mainUrl": "http://localhost:5173/?route=chat",
+  "priorChatId": "cht_FzcZsVyq81uEPMPL",
+  "prior": {
+    "status": "Complete",
+    "draftLength": 28,
+    "draftSha256": "b3d5c643752ad80328a9ddf96e5630a9c99de8eed272e83800b7fc675f68c349",
+    "pending": 0
+  },
+  "before": {
+    "mode": "ask",
+    "status": "Complete",
+    "draftLength": 0,
+    "userCount": 10,
+    "assistantCount": 10
+  },
+  "selectedMode": "ask",
+  "selectedChat": "cht_-zkkf_r46zzuxB3L",
+  "selectedModeButton": "Plan Mode. Open mode picker.",
+  "selectedMessageCount": 22,
+  "error": "ask_mode_selection_failed_or_dispatched",
+  "restoredPriorChat": true,
+  "restoredDraftSha256": "b3d5c643752ad80328a9ddf96e5630a9c99de8eed272e83800b7fc675f68c349",
+  "restoredDraftMatches": true,
+  "finishedAt": "2026-09-27T18:14:42.577Z"
+}

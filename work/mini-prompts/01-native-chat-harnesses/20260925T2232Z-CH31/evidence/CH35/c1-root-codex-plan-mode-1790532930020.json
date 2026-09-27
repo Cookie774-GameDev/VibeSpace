@@ -1,0 +1,64 @@
+{
+  "startedAt": "2026-09-27T18:15:30.020Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "968dec3c6bc21e2dbb9dd3d2ff40e5f89020b058ab8120b78d295b4c35252976",
+  "stage": "complete",
+  "sent": true,
+  "actedOnUi": true,
+  "fixture": {
+    "path": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH35\\plan-fixture.txt",
+    "beforeSha256": "631960f06e58bc6b92b2b4e9009b915db78fe7b6ab913e113df6c72ba8ffe71f",
+    "afterSha256": "631960f06e58bc6b92b2b4e9009b915db78fe7b6ab913e113df6c72ba8ffe71f"
+  },
+  "mainUrl": "http://localhost:5173/?route=chat",
+  "priorChatId": "cht_FzcZsVyq81uEPMPL",
+  "prior": {
+    "status": "Complete",
+    "draftLength": 28,
+    "draftSha256": "b3d5c643752ad80328a9ddf96e5630a9c99de8eed272e83800b7fc675f68c349",
+    "pending": 0
+  },
+  "before": {
+    "mode": "plan",
+    "status": "Complete",
+    "draftLength": 0,
+    "userCount": 10,
+    "assistantCount": 10
+  },
+  "selectedMode": "plan",
+  "selectedChat": "cht_-zkkf_r46zzuxB3L",
+  "selectedModeButton": "Plan Mode. Open mode picker.",
+  "selectedMessageCount": 22,
+  "sentAt": "2026-09-27T18:15:39.112Z",
+  "after": {
+    "status": "Complete",
+    "mode": "plan",
+    "newUsers": [
+      {
+        "id": "msg_cK9MWsycThn6Ujfn",
+        "textSha256": "968dec3c6bc21e2dbb9dd3d2ff40e5f89020b058ab8120b78d295b4c35252976"
+      }
+    ],
+    "newAssistants": [
+      {
+        "id": "msg_jreq_db2d52ee-4a41-4356-a6ed-8d656aae2ece",
+        "textSha256": "ee24103f0cfe62bdfc2cc5cfd69794a85d21dabcf669cd8ffe1acf2a480071de",
+        "hasMarker": true,
+        "toolCalls": [
+          {
+            "name": "unknown",
+            "input": {
+              "path": "plan-fixture.txt"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "observationLatencyMs": 29184,
+  "passed": true,
+  "restoredPriorChat": true,
+  "restoredDraftSha256": "b3d5c643752ad80328a9ddf96e5630a9c99de8eed272e83800b7fc675f68c349",
+  "restoredDraftMatches": true,
+  "finishedAt": "2026-09-27T18:16:09.772Z"
+}

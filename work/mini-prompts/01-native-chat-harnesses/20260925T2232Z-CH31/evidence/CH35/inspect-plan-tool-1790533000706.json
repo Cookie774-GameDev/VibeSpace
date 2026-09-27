@@ -1,0 +1,23 @@
+{
+  "at": "2026-09-27T18:16:40.706Z",
+  "actedOnUi": false,
+  "stage": "complete",
+  "tool": [
+    {
+      "keys": [
+        "kind",
+        "tool",
+        "call_id",
+        "details",
+        "args"
+      ],
+      "name": null,
+      "input": {
+        "path": "plan-fixture.txt"
+      },
+      "resultStatus": null,
+      "outputHasMarker": true
+    }
+  ],
+  "finishedAt": "2026-09-27T18:16:40.996Z"
+}

@@ -1,0 +1,181 @@
+{
+  "requestId": "CH35-EVIDENCE-20260927-01",
+  "threadId": "01a0de85-fa71-7da1-b1ea-9e194ec9af65",
+  "branch": "integration/UnifiedChungus-final",
+  "head": "0ebb5cbe867956f14fed51235aa1942e26d3481a",
+  "at": "2026-09-27T18:26:41.4203539Z",
+  "fileCount": 34,
+  "files": [
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/events/CH35.jsonl",
+      "bytes": 1907,
+      "sha256": "1368EA70982F68DA9B9289DA4C0FE03725C15F0F9F3B4A15454AC80CEB5E2A24"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-codex-ask-mode-1790532766594.json",
+      "bytes": 1541,
+      "sha256": "09E48B55D2D0B56E895C2876139AAD758B96AC65BEDF9A5150470FABAE2C7EF0"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-codex-ask-mode-once.json",
+      "bytes": 824,
+      "sha256": "59FB5C81AB90AF525FF725419D7D911C0F922945EB87A4A6702073D5CABDA19F"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-codex-ask-mode.cjs",
+      "bytes": 11243,
+      "sha256": "0311B89FCBFD47C26BAA6C1F24425BCE49574C9BE23AD45D6526C3D36F6EA968"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-codex-plan-mode-1790532867051.json",
+      "bytes": 1298,
+      "sha256": "ECD19EC6AFAFEB572D21D43FD170E6BF47775571C7B8C20D21B0BBDE725EE4FB"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-codex-plan-mode-1790532930020.json",
+      "bytes": 2048,
+      "sha256": "B372CE79DD25BFD40F94EA38B483B928845FDE53A332BDEDEFDEC8CBE14BA26E"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-codex-plan-mode-once.json",
+      "bytes": 905,
+      "sha256": "2C98AE11B8DDA6371F58BF73F366AEE10409A286A8CE0F51FB40C30B557A4209"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-codex-plan-mode.cjs",
+      "bytes": 12194,
+      "sha256": "AC20B9854A3DBBE5F37CB4B50D8A2E36DFDBFC99C0A72B7E0D4A37BC13C5B5EC"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-current-run-metadata-1790532687373.json",
+      "bytes": 440,
+      "sha256": "5748E6E4C1939251919659F64C3FEF559046669126A7C9FDF4069BB8A05E4C64"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-current-run-metadata-1790532889057.json",
+      "bytes": 440,
+      "sha256": "284C158B25F6D45AB8F271201D0604260A5136DC8FBEA4B6C3FDF02AF0B77E19"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-current-run-metadata-1790532910149.json",
+      "bytes": 479,
+      "sha256": "CE698738FF2DB15661CCFAEB8B2E3CDF0BCFBD2E8831FD102F8DB1260BDD6807"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-current-run-metadata-1790533575328.json",
+      "bytes": 522,
+      "sha256": "BDFF31CE12E2CEE830C4318544E5861218BCB42F4D12F31B87A515B1DD33276F"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-current-run-metadata.cjs",
+      "bytes": 3079,
+      "sha256": "B3C848AE7DBC1AAA7A19A0EE724A231A43C11DAB5DDB538A06DF9841DEC22A0C"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-ask-mode-1790533155569.json",
+      "bytes": 1544,
+      "sha256": "C8BE030A830A8865E1571D031B0C40BC35C37AC4B919241E7E4A44FF019CA729"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-ask-mode-once.json",
+      "bytes": 1030,
+      "sha256": "08DD3C587F981AD9C5E8CE76851BEF15AAF5823407FDC62E4DB631CCBC2111E3"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-ask-mode.cjs",
+      "bytes": 11526,
+      "sha256": "42948C68B997AFFDC8EEBA9A4EC1A6370BA48F0C45A0EB63F4702406B8DE0950"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-plan-mode-1790533210854.json",
+      "bytes": 1954,
+      "sha256": "BE90492501EC77AE6D7F9CF80CB4941A9BCD48917FC9CCE92FD0D2DEDCB9645B"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-plan-mode-once.json",
+      "bytes": 1111,
+      "sha256": "86E4DE7DB9BAF43D4CD4A440AD9EAC8BEF9E62D8E404F5EDA8063C0C06E092C2"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-plan-mode.cjs",
+      "bytes": 12213,
+      "sha256": "FD7C9061F09330829DD8CFAC08689A6620DCE9F65CF58F489119617008787FC9"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-plan-native-read-1790533489262.json",
+      "bytes": 790,
+      "sha256": "AEB7DA69F4237364C562AEBA98D589712AF02FE3077D30F3E13357E7311302BD"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-plan-native-read.cjs",
+      "bytes": 12298,
+      "sha256": "7269A872ABD877390D273CB4652622D2CDCFA8AA86046C653D285E31890A6749"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-plan-project-1790533349836.json",
+      "bytes": 1871,
+      "sha256": "728B206F504890B8301F427D54F2442902859F107CEAC0306657C938233DB9A2"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-plan-project-once.json",
+      "bytes": 1192,
+      "sha256": "B383E7739610472E53057D7A836C45D869015C63D223F663300B5417A49A3C82"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/c1-root-opencode-plan-project.cjs",
+      "bytes": 12249,
+      "sha256": "6D2028769FF561C06C576E4F04F468A38BAEABF7F2074DA36BC0134EFCCED783"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/inspect-opencode-plan-1790533254189.json",
+      "bytes": 646,
+      "sha256": "562BCECB23639F4EDFC83DCD594466A0BD096B6F404AA1E01F03A640F22E619D"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/inspect-opencode-plan-1790533389315.json",
+      "bytes": 701,
+      "sha256": "ED921C99A0CB7479BF45624568B034F009850873280D4BD9D0F2C39B88C019D6"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/inspect-opencode-plan.cjs",
+      "bytes": 1765,
+      "sha256": "BFD31A5B4BDF0F3A8CAC117A6A6ED212103135C7885A1A6638882D25C88DD299"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/inspect-plan-tool-1790533000706.json",
+      "bytes": 406,
+      "sha256": "C7D99FB377025E063C69B8010F15215D93AEA396EEEB250D1AA39B50D78B229C"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/inspect-plan-tool-1790533015590.json",
+      "bytes": 614,
+      "sha256": "0A90F18FC04BED70D1E9887FA2C1980C0B99DF7F9020F759EA4F37F37C42B8EC"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/inspect-plan-tool.cjs",
+      "bytes": 2163,
+      "sha256": "E1E145A0A3A2E5512999FC2953ADB529C7C658DDA7BCB56A316B44B63DE922C4"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/plan-fixture.txt",
+      "bytes": 19,
+      "sha256": "631960F06E58BC6B92B2B4E9009B915DB78FE7B6AB913E113DF6C72BA8FFE71F"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/preflight-opencode-1790533119451.json",
+      "bytes": 732,
+      "sha256": "935CB531147D60190F6990FCE068FB16730937F20F7E94A2A60926306F21982B"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH35/preflight-opencode.cjs",
+      "bytes": 2555,
+      "sha256": "0DBC282AA2927870E173FD4CA19795ACBFE905E07E1E53AC95A04265B495A348"
+    },
+    {
+      "path": "work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/RESULT.md",
+      "bytes": 78099,
+      "sha256": "703C98E1B807E8E07EEA34B4CA24C40FD3C0E266DC3494F2A198A811D2044128"
+    }
+  ],
+  "excluded": "docs/AGENT_COORDINATION.md is shared dirty with peer append-only edits, not released as whole file"
+}

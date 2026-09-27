@@ -1,0 +1,23 @@
+{
+  "startedAt": "2026-09-27T18:26:15.328Z",
+  "stage": "complete",
+  "actedOnUi": false,
+  "metadata": {
+    "chatId": "cht_KJR-ZBI4Q7vzTgaP",
+    "selectedMode": "agent",
+    "ownedCodexMode": "ask",
+    "persistedOwnedCodexMode": "plan",
+    "status": "Running",
+    "lastMessageAt": 1790533544409,
+    "messageRoleCounts": {
+      "user": 1,
+      "assistant": 2
+    },
+    "questionStatusCounts": {
+      "pending": 1,
+      "answered": 1
+    },
+    "draftLength": 0
+  },
+  "finishedAt": "2026-09-27T18:26:15.587Z"
+}
