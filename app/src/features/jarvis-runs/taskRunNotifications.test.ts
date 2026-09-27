@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { JarvisEvent } from '@/lib/jarvis/contracts/execution';
 
 import { startJarvisTaskRunNotifications } from './taskRunNotifications';
+import { useJarvisTaskRunStore } from './taskRunStore';
+import { chatRepo, workspaceRepo } from '@/lib/db/repositories';
+import { jarvisRunRepo } from '@/lib/db/jarvisRepositories';
 
 const NOW = 1_784_435_200_000;
 
@@ -23,6 +26,59 @@ function event(seq: number, overrides: Partial<JarvisEvent> = {}): JarvisEvent {
 }
 
 describe('canonical Jarvis task notifications', () => {
+  it('includes the visible task and chat names without copying event text', async () => {
+    const store = useJarvisTaskRunStore.getState();
+    store.setAccountScope('account-alpha');
+    store.replaceCanonicalForAccount('account-alpha', [{
+      canonical: true,
+      runId: 'jrun-alpha',
+      chatId: 'chat-alpha',
+      status: 'completed',
+      goal: 'Polish the Workbench UI',
+      userVisibleSummary: 'Done',
+      progress: 100,
+      activeAgents: [],
+      activeTerminals: [],
+      updatedAt: new Date(NOW).toISOString(),
+      cancellable: false,
+      transportRetryAvailable: false,
+    }], {});
+    const runLookup = vi.spyOn(jarvisRunRepo, 'getById').mockResolvedValue({ accountId: 'account-alpha', chatId: 'chat-alpha', workspaceId: 'workspace-alpha' } as Awaited<ReturnType<typeof jarvisRunRepo.getById>>);
+    const lookup = vi.spyOn(chatRepo, 'getById').mockResolvedValue({ title: 'Design review', workspace_id: 'workspace-alpha' } as Awaited<ReturnType<typeof chatRepo.getById>>);
+    const workspaceLookup = vi.spyOn(workspaceRepo, 'getById').mockResolvedValue({ owner_id: 'account-alpha' } as Awaited<ReturnType<typeof workspaceRepo.getById>>);
+    let listener: (event: JarvisEvent) => void = () => undefined;
+    const notify = vi.fn(async () => undefined);
+    const stop = startJarvisTaskRunNotifications({
+      accountId: 'account-alpha',
+      subscribe: (next) => { listener = next; return () => undefined; },
+      notify,
+    });
+    listener(event(1, { status: 'completed' }));
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledOnce());
+    expect(notify).toHaveBeenCalledWith(
+      'Completed: Polish the Workbench UI',
+      'Chat: Design review. Open VibeSpace to view the verified result.',
+      'completed',
+      'jarvis-run:jrun-alpha',
+    );
+    expect(JSON.stringify(notify.mock.calls)).not.toMatch(/PRIVATE EVENT TITLE|PRIVATE SAFE SUMMARY/);
+    workspaceLookup.mockResolvedValue({ owner_id: 'account-beta' } as Awaited<ReturnType<typeof workspaceRepo.getById>>);
+    listener(event(2, { status: 'failed' }));
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
+    expect(notify).toHaveBeenNthCalledWith(
+      2,
+      'Failed: Polish the Workbench UI',
+      'Open VibeSpace to review the failure and next step.',
+      'failed',
+      undefined,
+    );
+    stop();
+    runLookup.mockRestore();
+    lookup.mockRestore();
+    workspaceLookup.mockRestore();
+    useJarvisTaskRunStore.getState().clearForTests();
+  });
+
   it('emits generic copy once per canonical run/sequence transition', async () => {
     let listener: (event: JarvisEvent) => void = () => undefined;
     const unsubscribe = vi.fn();

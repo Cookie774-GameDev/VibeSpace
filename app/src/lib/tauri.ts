@@ -83,6 +83,8 @@ export async function getRelayActiveContext(): Promise<RelayActiveContextSnapsho
 export interface NotifyOptions {
   /** Suppress sound on supported platforms. */
   silent?: boolean;
+  /** Select the Windows VibeSpace notification artwork. */
+  variant?: 'task_completed' | 'task_attention';
   /** Show an in-app toast when native/browser delivery is unavailable. */
   fallbackToast?: boolean;
   /** Optional click handler (browser Notification API only). */
@@ -165,7 +167,12 @@ export async function notify(
     try {
       permission = await requestNotificationPermission();
       if (permission === 'granted') {
-        await tauriInvoke('vibespace_notify', { title, body, silent: options.silent ?? false });
+        await tauriInvoke('vibespace_notify', {
+          title,
+          body,
+          silent: options.silent ?? false,
+          variant: options.variant ?? null,
+        });
         return {
           channel: 'native',
           permission,

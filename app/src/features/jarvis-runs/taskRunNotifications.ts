@@ -1,8 +1,14 @@
 import { notifyDone } from '@/lib/notifications';
 import type { JarvisEvent, JarvisRunStatus } from '@/lib/jarvis/contracts/execution';
 import { notify as nativeNotify } from '@/lib/tauri';
+import { chatRepo, workspaceRepo } from '@/lib/db/repositories';
+import { jarvisRunRepo } from '@/lib/db/jarvisRepositories';
+import { hasDetectedSecret } from '@/lib/security/secretDetector';
+import type { ChatId } from '@/types/common';
+import { useJarvisTaskRunStore } from './taskRunStore';
 
 interface TaskRunNotificationBindings {
+  accountId?: string;
   subscribe: (listener: (event: JarvisEvent) => void) => () => void;
   notify?: (
     title: string,
@@ -22,6 +28,34 @@ const COPY: Partial<Record<JarvisRunStatus, readonly [string, string]>> = {
   cancelled: ['Jarvis task cancelled', 'Open VibeSpace to view the verified cancellation.'],
 };
 
+const TASK_TITLE_PREFIX: Partial<Record<JarvisRunStatus, string>> = {
+  awaiting_approval: 'Approval needed',
+  partial: 'Input needed',
+  completed: 'Completed',
+  failed: 'Failed',
+  timed_out: 'Timed out',
+  cancelled: 'Cancelled',
+};
+
+function displayText(value: string | undefined, limit: number): string | undefined {
+  if (!value || hasDetectedSecret(value)) return undefined;
+  const text = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return text ? `${text.slice(0, limit)}${text.length > limit ? '…' : ''}` : undefined;
+}
+
+function notificationVariant(status: JarvisRunStatus) {
+  if (status === 'completed') return 'task_completed' as const;
+  if (
+    status === 'failed' ||
+    status === 'timed_out' ||
+    status === 'partial' ||
+    status === 'awaiting_approval'
+  ) {
+    return 'task_attention' as const;
+  }
+  return undefined;
+}
+
 async function defaultNotify(
   title: string,
   body: string,
@@ -31,6 +65,7 @@ async function defaultNotify(
   if (status === 'completed') {
     await notifyDone('tasks', title, body, {
       allowFallbackToast: true,
+      variant: notificationVariant(status),
       ...(completionIdentity ? { completionIdentity } : {}),
     });
     return;
@@ -40,7 +75,7 @@ async function defaultNotify(
       new CustomEvent('jarvis:task-notification', { detail: { title, status } }),
     );
   }
-  await nativeNotify(title, body, { fallbackToast: true });
+  await nativeNotify(title, body, { fallbackToast: true, variant: notificationVariant(status) });
 }
 
 export function startJarvisTaskRunNotifications(bindings: TaskRunNotificationBindings): () => void {
@@ -56,7 +91,40 @@ export function startJarvisTaskRunNotifications(bindings: TaskRunNotificationBin
     const copy = COPY[status];
     if (!copy) return;
     const completionIdentity = status === 'completed' ? `jarvis-run:${event.runId}` : undefined;
-    void Promise.resolve(notify(copy[0], copy[1], status, completionIdentity)).catch((error) => {
+    const state = useJarvisTaskRunStore.getState();
+    const send = async () => {
+      let title = copy[0];
+      let body = copy[1];
+      if (bindings.accountId && state.accountScope) {
+        const run = await jarvisRunRepo
+          .getById(bindings.accountId, event.runId)
+          .catch(() => undefined);
+        if (state.accountScope !== useJarvisTaskRunStore.getState().accountScope) return;
+        if (run?.accountId === bindings.accountId) {
+          const projection = useJarvisTaskRunStore.getState().runs[event.runId];
+          const taskName = projection?.canonical ? displayText(projection.goal, 48) : undefined;
+          if (taskName && taskName !== 'Jarvis task') {
+            title = `${TASK_TITLE_PREFIX[status] ?? copy[0]}: ${taskName}`;
+          }
+          if (run.chatId) {
+            const chat = await chatRepo.getById(run.chatId as ChatId).catch(() => undefined);
+            const workspace = chat
+              ? await workspaceRepo.getById(chat.workspace_id).catch(() => undefined)
+              : undefined;
+            if (state.accountScope !== useJarvisTaskRunStore.getState().accountScope) return;
+            if (
+              workspace?.owner_id === bindings.accountId &&
+              (!run.workspaceId || run.workspaceId === chat?.workspace_id)
+            ) {
+              const chatName = displayText(chat?.title, 56);
+              if (chatName) body = `Chat: ${chatName}. ${body}`;
+            }
+          }
+        }
+      }
+      await notify(title, body, status, completionIdentity);
+    };
+    void send().catch((error) => {
       if (bindings.onError) bindings.onError(error);
       else console.warn('[jarvis-task] notification unavailable', error);
     });

@@ -5,6 +5,7 @@ import {
   setTrayBadge,
   type NotificationPermissionState,
   type NotifyResult,
+  type NotifyOptions,
 } from '@/lib/tauri';
 import { assistantPersonaDisplayName } from '@/lib/assistantPersona';
 import { useAuthStore } from '@/stores/auth';
@@ -75,6 +76,8 @@ export interface NotifyDoneOptions {
   skipDedupe?: boolean;
   /** Stable non-secret identity shared by multiple presentations of one completion. */
   completionIdentity?: string;
+  /** Situation-specific native notification artwork. */
+  variant?: NotifyOptions['variant'];
 }
 
 export interface TestNotificationResult extends NotifyResult {
@@ -192,6 +195,7 @@ export async function notifyDone(
 
   const result = await notify(resolvedTitle, body, {
     silent: notificationSilent(),
+    variant: options.variant,
     fallbackToast: options.allowFallbackToast === true,
     onClick: () => {
       if (useUIStore.getState().notificationBadge) {

@@ -27,9 +27,20 @@ describe('native notification branding', () => {
       title: 'Jarvis task failed',
       body: 'Open VibeSpace to review the failure.',
       silent: true,
+      variant: null,
     });
     expect(mocks.invoke.mock.calls.some(([command]) => command === 'plugin:notification|notify')).toBe(false);
     expect(mocks.info).not.toHaveBeenCalled();
+  });
+
+  it('passes the task artwork choice to the native command', async () => {
+    await notify('Task complete', 'Chat: Design review', { variant: 'task_completed' });
+    expect(mocks.invoke).toHaveBeenCalledWith('vibespace_notify', {
+      title: 'Task complete',
+      body: 'Chat: Design review',
+      silent: false,
+      variant: 'task_completed',
+    });
   });
 
   it('keeps the in-app fallback when branded OS delivery fails', async () => {

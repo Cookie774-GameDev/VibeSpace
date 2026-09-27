@@ -247,6 +247,7 @@ export interface JarvisLegacyLifecycleAccountServices {
   setAccountScope(scope: string): void;
   replaceLegacyRuns(scope: string, runs: readonly JarvisTaskRun[]): void;
   startNotifications(input: {
+    accountId: string;
     subscribe: (listener: (event: JarvisEvent) => void) => () => void;
     onError?: (error: unknown) => void;
   }): () => void;
@@ -495,6 +496,7 @@ export async function startJarvisLegacyLifecycleAccountSession(input: {
     if (!input.isCurrent()) return stop;
     services.replaceLegacyRuns(accountScope, legacyRuns);
     stopNotifications = services.startNotifications({
+      accountId: input.accountId,
       subscribe(listener) {
         transitionListeners.add(listener);
         return () => transitionListeners.delete(listener);

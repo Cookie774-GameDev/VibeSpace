@@ -11,6 +11,7 @@ pub async fn vibespace_notify(
     title: String,
     body: Option<String>,
     silent: bool,
+    variant: Option<String>,
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -29,9 +30,9 @@ pub async fn vibespace_notify(
             let mut notification = plain_notification();
             // Artwork must never prevent a task result from reaching Notification Center.
             let mut has_artwork = false;
-            if let Ok((hero, icon)) = prepare_notification_artwork() {
+            if let Ok((hero, icon)) = prepare_notification_artwork(variant.as_deref()) {
                 notification = notification
-                    .hero(&hero, "VibeSpace warm sunset artwork")
+                    .hero(&hero, "VibeSpace notification artwork")
                     .icon(
                         &icon,
                         tauri_winrt_notification::IconCrop::Square,
@@ -55,6 +56,7 @@ pub async fn vibespace_notify(
     {
         use tauri_plugin_notification::NotificationExt;
         let _ = silent;
+        let _ = variant;
         let mut notification = app.notification().builder().title(title);
         if let Some(body) = body {
             notification = notification.body(body);
@@ -64,7 +66,9 @@ pub async fn vibespace_notify(
 }
 
 #[cfg(windows)]
-fn prepare_notification_artwork() -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+fn prepare_notification_artwork(
+    variant: Option<&str>,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     use std::{env, fs, path::Path};
 
     fn ensure_asset(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -79,9 +83,23 @@ fn prepare_notification_artwork() -> Result<(std::path::PathBuf, std::path::Path
         .map(std::path::PathBuf::from)?
         .join("VibeSpace/Notifications");
     fs::create_dir_all(&artwork_dir).map_err(|error| error.to_string())?;
-    let hero = artwork_dir.join("notification-hero.png");
+    let (hero_name, hero_bytes) = match variant {
+        Some("task_completed") => (
+            "notification-task-complete.png",
+            include_bytes!("../icons/notification-task-complete.png").as_slice(),
+        ),
+        Some("task_attention") => (
+            "notification-task-attention.png",
+            include_bytes!("../icons/notification-task-attention.png").as_slice(),
+        ),
+        _ => (
+            "notification-hero.png",
+            include_bytes!("../icons/notification-hero.png").as_slice(),
+        ),
+    };
+    let hero = artwork_dir.join(hero_name);
     let icon = artwork_dir.join("notification-icon.png");
-    ensure_asset(&hero, include_bytes!("../icons/notification-hero.png"))?;
+    ensure_asset(&hero, hero_bytes)?;
     ensure_asset(&icon, include_bytes!("../icons/icon.png"))?;
     Ok((hero, icon))
 }
