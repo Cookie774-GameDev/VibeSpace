@@ -1492,6 +1492,7 @@ export function Composer({
   const nativeCodexCommandInFlightRef = useRef(false);
   const [selectedCodexSkills, setSelectedCodexSkills] = useState<CodexDiscoveredSkill[]>([]);
   const [codexSkillCatalog, setCodexSkillCatalog] = useState<CodexSkillsListEntry | null>(null);
+  const nativeSkillCatalogAuthorityRef = useRef<string | null>(null);
   const [nativeSkillReferences, setNativeSkillReferences] = useState<readonly NativeSkillSelectionReference[] | undefined>();
   const [nativeSkillCtx, setNativeSkillCtx] = useState<NativeSkillMention | null>(null);
   const [nativeSkillLoading, setNativeSkillLoading] = useState(false);
@@ -1995,6 +1996,11 @@ export function Composer({
   const nativeSkillWorkingDirectory = chatBackendAffinity && projectId
     ? getStoredProjectRoot(projectId)
     : null;
+  const nativeSkillCatalogAuthorityKey = useMemo(() => JSON.stringify([
+    nativeSkillAccountId, workspaceId, projectId, String(chatId),
+    chatBackendAffinity?.backend, nativeSkillWorkingDirectory,
+  ]), [nativeSkillAccountId, workspaceId, projectId, chatId,
+    chatBackendAffinity?.backend, nativeSkillWorkingDirectory]);
   const nativeSkillScope = useMemo(() => nativeSkillAccountId && chatBackendAffinity ? {
     accountId: nativeSkillAccountId, workspaceId: workspaceId ?? null, projectId: projectId ?? null,
     chatId: String(chatId), harness: chatBackendAffinity.backend, executionHost: 'local',
@@ -2038,6 +2044,7 @@ export function Composer({
           workingDirectory: nativeSkillWorkingDirectory,
         });
         if (nativeSkillDiscoveryGenerationRef.current !== generation) return;
+        nativeSkillCatalogAuthorityRef.current = nativeSkillCatalogAuthorityKey;
         setCodexSkillCatalog({ cwd: nativeSkillWorkingDirectory, errors: [], skills: skills.map((skill) => ({
           cwd: nativeSkillWorkingDirectory, name: skill.name, path: skill.location,
           description: skill.description ?? '', enabled: true, scope: 'repo' as const, pluginId: null,
@@ -2051,39 +2058,47 @@ export function Composer({
       if (nativeSkillDiscoveryGenerationRef.current !== generation) return;
       const entry = entries.find((candidate) => candidate.cwd === nativeSkillWorkingDirectory);
       if (!entry) throw new Error('Codex did not return skills for this project folder.');
+      nativeSkillCatalogAuthorityRef.current = nativeSkillCatalogAuthorityKey;
       setCodexSkillCatalog(entry);
     } catch (error) {
       if (nativeSkillDiscoveryGenerationRef.current !== generation) return;
+      nativeSkillCatalogAuthorityRef.current = null;
       setCodexSkillCatalog(null);
       setNativeSkillError(error instanceof Error ? error.message : 'Native skills are unavailable.');
     } finally {
       if (nativeSkillDiscoveryGenerationRef.current === generation) setNativeSkillLoading(false);
     }
-  }, [chatBackendAffinity?.backend, nativeSkillWorkingDirectory]);
+  }, [chatBackendAffinity?.backend, nativeSkillWorkingDirectory, nativeSkillCatalogAuthorityKey]);
   useEffect(() => {
     nativeSkillDiscoveryGenerationRef.current += 1;
+    nativeSkillCatalogAuthorityRef.current = null;
     setCodexSkillCatalog(null);
     setSelectedCodexSkills([]);
     setNativeSkillCtx(null);
+    setNativeSkillLoading(false);
     setNativeSkillError(null);
-  }, [chatId, chatBackendAffinity?.backend, nativeSkillWorkingDirectory, nativeSkillAccountId, workspaceId]);
+  }, [chatId, chatBackendAffinity?.backend, nativeSkillWorkingDirectory, nativeSkillAccountId, workspaceId, projectId]);
   useEffect(() => {
     if (nativeSelection.entries.length > 0 && !codexSkillCatalog) void refreshNativeSkillCatalog();
   }, [nativeSelection.entries.length, codexSkillCatalog, refreshNativeSkillCatalog]);
   useEffect(() => {
     if (nativeSkillCtx === null) return;
+    if (codexSkillCatalog?.cwd === nativeSkillWorkingDirectory &&
+        nativeSkillCatalogAuthorityRef.current === nativeSkillCatalogAuthorityKey) return;
     void refreshNativeSkillCatalog();
-    return () => { nativeSkillDiscoveryGenerationRef.current += 1; };
-  }, [nativeSkillCtx?.start, refreshNativeSkillCatalog]);
+  }, [nativeSkillCtx?.start, codexSkillCatalog, nativeSkillWorkingDirectory,
+    nativeSkillCatalogAuthorityKey, refreshNativeSkillCatalog]);
+  useEffect(() => () => { nativeSkillDiscoveryGenerationRef.current += 1; }, []);
   useEffect(() => {
     const handleSkillsChanged = (event: Event) => {
       const detail = (event as CustomEvent<{ chatId?: string; entry?: CodexSkillsListEntry }>).detail;
       if (detail?.chatId !== String(chatId) || detail.entry?.cwd !== nativeSkillWorkingDirectory) return;
+      nativeSkillCatalogAuthorityRef.current = nativeSkillCatalogAuthorityKey;
       setCodexSkillCatalog(detail.entry);
     };
     window.addEventListener('jarvis:codex-skills-changed', handleSkillsChanged);
     return () => window.removeEventListener('jarvis:codex-skills-changed', handleSkillsChanged);
-  }, [chatId, nativeSkillWorkingDirectory]);
+  }, [chatId, nativeSkillWorkingDirectory, nativeSkillCatalogAuthorityKey]);
   const [contextMaps, setContextMaps] = useState<readonly ContextMapRecord[]>([]);
   const pluginAccountId = useAuthStore((s) => resolveAccountIdentity(s)?.accountId ?? '');
   const mentionDiscoveryOpen = mentionCtx !== null;

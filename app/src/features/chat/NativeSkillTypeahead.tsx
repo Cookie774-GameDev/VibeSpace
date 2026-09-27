@@ -8,7 +8,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, Sparkles } from 'lucide-react';
 import type {
   CodexDiscoveredSkill,
   CodexSkillDiscoveryError,
@@ -173,15 +173,23 @@ export const NativeSkillTypeahead = forwardRef<
   }
 
   return (
-    <section className="w-full overflow-hidden rounded-lg border border-border bg-panel shadow-lg">
-      <header className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-foreground">{harnessLabel} skills</h3>
-          <p className="text-xs text-muted-foreground">Choose a skill for this prompt</p>
+    <section
+      className="jarvis-slash-dropdown overflow-hidden rounded-[14px] border border-border-mid/80 bg-elevated/95 text-foreground shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_30px_hsl(var(--accent-copper)/0.1)] backdrop-blur-xl"
+      style={{ width: 'min(338px, 90vw)' }}
+    >
+      <header className="flex items-center justify-between gap-3 border-b border-border bg-panel/90 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-accent-copper/55 bg-background/70 text-accent-copper shadow-[inset_0_0_10px_hsl(var(--accent-copper)/0.28),0_0_13px_hsl(var(--accent-copper)/0.2)]">
+            <Sparkles aria-hidden="true" className="size-4" />
+          </span>
+          <span className="min-w-0">
+            <h3 className="truncate text-[17px] font-medium leading-5">$skill</h3>
+            <p className="text-xs leading-4 text-muted-foreground">Choose a skill for this prompt</p>
+          </span>
         </div>
         <button
           type="button"
-          className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-60"
+          className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-60"
           aria-label="Refresh skills"
           onClick={onRefresh}
           disabled={loading}
@@ -233,7 +241,7 @@ export const NativeSkillTypeahead = forwardRef<
         aria-activedescendant={activeOptionId}
         tabIndex={0}
         onKeyDown={onListKeyDown}
-        className="max-h-72 space-y-1 overflow-y-auto p-1.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="max-h-[238px] overflow-y-auto py-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         {filteredSkills.map((skill, index) => {
           const key = nativeSkillSelectionKey(skill);
@@ -249,7 +257,7 @@ export const NativeSkillTypeahead = forwardRef<
               aria-disabled={!available}
               tabIndex={-1}
               onMouseMove={() => {
-                if (!available) return;
+                if (!available || activeKeyRef.current === key) return;
                 activeKeyRef.current = key;
                 setActiveKey(key);
                 onHoverKey?.(key);
@@ -260,30 +268,36 @@ export const NativeSkillTypeahead = forwardRef<
                 setActiveKey(key);
                 onSelect(skill);
               }}
-              className={`cursor-pointer rounded-md border px-2.5 py-2 outline-none transition-colors ${
+              className={`mx-2 mb-1 cursor-pointer rounded-[12px] border px-3 py-2.5 outline-none transition-colors ${
                 key === effectiveActiveKey || key === selectedKey
-                  ? 'border-accent-cyan/60 bg-accent-cyan/10'
-                  : 'border-transparent hover:border-border hover:bg-accent/60'
+                  ? 'border-accent-copper/60 bg-accent-copper/12 shadow-[inset_0_0_0_1px_hsl(var(--foreground)/0.04),0_0_16px_hsl(var(--accent-copper)/0.1)]'
+                  : 'border-transparent hover:border-border hover:bg-muted/70'
               } ${available ? '' : 'cursor-not-allowed opacity-60'}`}
             >
-              <div className="flex min-w-0 items-start justify-between gap-3">
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium text-foreground">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/35 text-muted-foreground">
+                  <Sparkles aria-hidden="true" className="size-3.5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[15px] font-medium leading-5 text-foreground">
                     ${skill.name}
                   </span>
-                  <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">
+                  <span
+                    className="max-h-8 overflow-hidden text-xs leading-4 text-muted-foreground"
+                    style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}
+                  >
                     {description}
                   </span>
                 </span>
-                <span className="shrink-0 text-right">
+                <span className="shrink-0 self-start text-right">
                   <span
-                    className={`block text-[10px] font-semibold uppercase tracking-wide ${
+                    className={`block text-[10px] font-medium ${
                       available ? 'text-accent-cyan' : 'text-muted-foreground'
                     }`}
                   >
                     {available ? 'Available' : 'Unavailable'}
                   </span>
-                  <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                  <span className="block text-[10px] text-muted-foreground">
                     {harness === 'opencode'
                       ? /(?:^|[\\/])\.codex[\\/]skills[\\/]/iu.test(skill.path) ? 'Codex origin' : 'OpenCode'
                       : SCOPE_LABELS[skill.scope]}
@@ -291,7 +305,7 @@ export const NativeSkillTypeahead = forwardRef<
                 </span>
               </div>
               {!available && (discoveryError || !skill.enabled) && (
-                <span className="mt-1 block text-xs text-destructive">
+                <span className="ml-10 mt-1 block text-xs text-destructive">
                   {discoveryError || `Disabled in ${harnessLabel}`}
                 </span>
               )}
@@ -306,6 +320,11 @@ export const NativeSkillTypeahead = forwardRef<
           </p>
         )}
       </div>
+      <footer className="flex items-center gap-3 border-t border-border bg-panel/90 px-4 py-2.5 text-[11px] text-muted-foreground">
+        <span><kbd className="jarvis-kbd !text-foreground">up/down</kbd> nav</span>
+        <span><kbd className="jarvis-kbd !text-foreground">enter</kbd> select</span>
+        <span className="ml-auto"><kbd className="jarvis-kbd !text-foreground">esc</kbd></span>
+      </footer>
     </section>
   );
 });

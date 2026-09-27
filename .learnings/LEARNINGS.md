@@ -202,3 +202,49 @@ Before adding an authority predicate, inspect both its TypeScript shape and read
 - Source: conversation and verified repository source/tests
 - Related Files: app/src/lib/harness/toolGatewayAuthority.ts; work/mini-prompts/02-siyuan-rlm/20260925T22S2L8/c2-rlm-negative-controls.cjs; work/mini-prompts/02-siyuan-rlm/20260925T22S2L8/c2-native-invoke-observer.cjs
 - Tags: authority, fail-closed, DOM-identity, RLM
+
+## [LRN-20260926-SP26] best_practice
+
+**Logged**: 2026-09-26T17:10:11.4671918Z
+**Priority**: high
+**Status**: pending
+**Area**: tests
+
+### Summary
+Native WebView source-current testing needs a native build whose configured dev URL matches the served frontend origin.
+
+### Details
+The official C2 WebView on a 5173-built executable could navigate to the current source on localhost:5174 and still expose `window.__TAURI_INTERNALS__`, but VibeSpace's runtime profile handshake failed with "native query unavailable". The injected object alone did not prove working native commands. The C2 chat page became unusable until the native binary was rebuilt with devUrl 5174.
+
+### Suggested Action
+For isolated native QA, build and launch the assigned instance with a devUrl that matches its task-owned frontend server. Verify the process/profile/CDP identity and successful runtime profile handshake before accepting Playwright UI results. Preserve other instances and their servers.
+
+### Metadata
+- Source: error and verified native C2 Playwright observation
+- Related Files: app/src/lib/runtimeProfile.ts; work/skill-picker-20260926/root/tauri-c2-5174.json
+- Tags: native-app, build-identity, dev-url, profile-handshake
+
+---
+
+## [LRN-20260926-SP26B] correction
+
+**Logged**: 2026-09-26T23:52:00Z
+**Priority**: medium
+**Status**: resolved
+**Area**: workflow
+
+### Summary
+Keep executing independent verification and commit preparation while a long required test suite runs.
+
+### Details
+The user corrected repeated passive waiting during this task's full app suite. Native C2 keyboard QA, staged-diff review, and scoped commit preparation could proceed without changing the suite or another agent's files.
+
+### Suggested Action
+During long checks, choose the next independent task-owned verification or preparation step and report concrete progress. Poll the suite at checkpoints; do not pause useful work simply because a gate is still running.
+
+### Metadata
+- Source: user_feedback
+- Related Files: work/skill-picker-20260926/root/native-skill-keyboard.cjs
+- Tags: parallel-verification, native-qa, long-checks
+
+---

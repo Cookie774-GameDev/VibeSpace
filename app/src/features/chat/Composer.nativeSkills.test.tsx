@@ -164,3 +164,249 @@ it.each(['codex', 'opencode'] as const)('discovers the exact native %s skill and
   fireEvent.click(screen.getByRole('button', { name: 'Remove $review-diff' }));
   expect(screen.queryByLabelText('Selected native CLI skills')).toBeNull();
 });
+
+type SkillScopeFixture = {
+  accountId: string;
+  workspaceId: string;
+  projectId: string;
+  chatId: string;
+  harness: 'codex' | 'opencode';
+};
+
+function renderScopedComposer(scope: SkillScopeFixture) {
+  mocks.backend = scope.harness;
+  useAuthStore.setState({
+    localUserId: scope.accountId,
+    cloudSession: null,
+    workspaceId: scope.workspaceId as never,
+    projectId: scope.projectId as never,
+  });
+  return render(<TooltipProvider><Composer chatId={scope.chatId as never} /></TooltipProvider>);
+}
+
+function nativeSkillSelectionStorageKey(scope: SkillScopeFixture): string {
+  return `vibespace.nativeSkillSelection.v2:${encodeURIComponent(JSON.stringify({
+    accountId: scope.accountId,
+    workspaceId: scope.workspaceId,
+    projectId: scope.projectId,
+    chatId: scope.chatId,
+    harness: scope.harness,
+    executionHost: 'local',
+    workingDirectory: skill.cwd,
+  }))}`;
+}
+
+it.each(['codex', 'opencode'] as const)(
+  'reuses the live %s skill catalog across selection and another mention until Refresh',
+  async (backend) => {
+    mocks.backend = backend;
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    mocks.listSkills.mockResolvedValue([{ cwd: skill.cwd, skills: [skill], errors: [] }]);
+    mocks.listOpenCodeSkills.mockResolvedValue([
+      { name: skill.name, location: skill.path, description: skill.description },
+    ]);
+    useAuthStore.setState({
+      localUserId: 'skill-discovery-reuse-account',
+      cloudSession: null,
+      workspaceId: 'skill-discovery-reuse-workspace' as never,
+      projectId: 'skill-discovery-reuse-project' as never,
+    });
+
+    render(<TooltipProvider><Composer chatId={`skill-discovery-reuse-${backend}-chat` as never} /></TooltipProvider>);
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+    const discover = backend === 'codex' ? mocks.listSkills : mocks.listOpenCodeSkills;
+    fireEvent.change(input, { target: { value: '$rev', selectionStart: 4 } });
+    await waitFor(() => expect(discover).toHaveBeenCalledTimes(1));
+    const firstOption = await screen.findByRole('option', { name: /review-diff/u });
+    if (backend === 'codex') {
+      expect(mocks.listSkills).toHaveBeenNthCalledWith(1, {
+        workingDirectory: skill.cwd,
+        forceReload: true,
+      });
+    } else {
+      expect(mocks.listOpenCodeSkills).toHaveBeenNthCalledWith(1, {
+        accountId: 'skill-discovery-reuse-account',
+        workspaceId: 'skill-discovery-reuse-workspace',
+        projectId: 'skill-discovery-reuse-project',
+        workingDirectory: skill.cwd,
+      });
+    }
+
+    fireEvent.click(firstOption);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Remove $review-diff' })).toBeTruthy(),
+    );
+    expect(discover).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(input, { target: { value: '$rev', selectionStart: 4 } });
+    expect(await screen.findByRole('option', { name: /review-diff/u })).toBeTruthy();
+    expect(discover).toHaveBeenCalledTimes(1);
+
+    const refresh = screen.getByRole('button', { name: 'Refresh skills' });
+    await waitFor(() => expect(refresh.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(refresh);
+    await waitFor(() => expect(discover).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('option', { name: /review-diff/u })).toBeTruthy();
+  },
+);
+
+it('persists a native skill only for its exact account, workspace, project, chat, and harness scope', async () => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  mocks.listSkills.mockResolvedValue([{ cwd: skill.cwd, skills: [skill], errors: [] }]);
+  const originalScope: SkillScopeFixture = {
+    accountId: 'skill-scope-account',
+    workspaceId: 'skill-scope-workspace',
+    projectId: 'skill-scope-project',
+    chatId: 'skill-scope-chat',
+    harness: 'codex',
+  };
+  const otherScopes: SkillScopeFixture[] = [
+    { ...originalScope, accountId: 'skill-scope-other-account' },
+    { ...originalScope, workspaceId: 'skill-scope-other-workspace' },
+    { ...originalScope, projectId: 'skill-scope-other-project' },
+    { ...originalScope, chatId: 'skill-scope-other-chat' },
+    { ...originalScope, harness: 'opencode' },
+  ];
+  const ownedKeys = [originalScope, ...otherScopes].map(nativeSkillSelectionStorageKey);
+  ownedKeys.forEach((key) => localStorage.removeItem(key));
+
+  try {
+    const original = renderScopedComposer(originalScope);
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '$rev', selectionStart: 4 } });
+    const option = await screen.findByRole('option', { name: /review-diff/u });
+    fireEvent.click(option);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Remove $review-diff' })).toBeTruthy(),
+    );
+    const saved = localStorage.getItem(nativeSkillSelectionStorageKey(originalScope));
+    expect(saved).not.toBeNull();
+    expect(JSON.parse(saved!).scope).toEqual({
+      accountId: originalScope.accountId,
+      workspaceId: originalScope.workspaceId,
+      projectId: originalScope.projectId,
+      chatId: originalScope.chatId,
+      harness: originalScope.harness,
+      executionHost: 'local',
+      workingDirectory: skill.cwd,
+    });
+    expect(JSON.parse(saved!).entries).toHaveLength(1);
+    original.unmount();
+
+    for (const scope of otherScopes) {
+      const isolated = renderScopedComposer(scope);
+      expect(screen.queryByRole('button', { name: 'Remove $review-diff' })).toBeNull();
+      isolated.unmount();
+    }
+
+    const restored = renderScopedComposer(originalScope);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove $review-diff' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Remove $review-diff' }));
+    expect(screen.queryByRole('button', { name: 'Remove $review-diff' })).toBeNull();
+    restored.unmount();
+
+    renderScopedComposer(originalScope);
+    expect(screen.queryByRole('button', { name: 'Remove $review-diff' })).toBeNull();
+  } finally {
+    cleanup();
+    ownedKeys.forEach((key) => localStorage.removeItem(key));
+  }
+});
+it('clears loading after closing the skill picker during manual refresh', async () => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  const initialCatalog = [{ cwd: skill.cwd, skills: [skill], errors: [] }];
+  let resolveRefresh!: (entries: typeof initialCatalog) => void;
+  const pendingRefresh = new Promise<typeof initialCatalog>((resolve) => {
+    resolveRefresh = resolve;
+  });
+  mocks.listSkills.mockResolvedValueOnce(initialCatalog).mockReturnValueOnce(pendingRefresh);
+  useAuthStore.setState({
+    localUserId: 'skill-refresh-close-account',
+    cloudSession: null,
+    workspaceId: 'skill-refresh-close-workspace' as never,
+    projectId: 'skill-refresh-close-project' as never,
+  });
+
+  render(<TooltipProvider><Composer chatId={'skill-refresh-close-chat' as never} /></TooltipProvider>);
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: '$rev', selectionStart: 4 } });
+  expect(await screen.findByRole('option', { name: /review-diff/u })).toBeTruthy();
+  await waitFor(() => expect(mocks.listSkills).toHaveBeenCalledTimes(1));
+
+  const refresh = screen.getByRole('button', { name: 'Refresh skills' });
+  await waitFor(() => expect(refresh.hasAttribute('disabled')).toBe(false));
+  fireEvent.click(refresh);
+  await waitFor(() => expect(mocks.listSkills).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(refresh.hasAttribute('disabled')).toBe(true));
+
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(screen.queryByRole('listbox', { name: 'Codex skills' })).toBeNull();
+  fireEvent.change(input, { target: { value: 'ordinary prompt', selectionStart: 15 } });
+  fireEvent.keyUp(input, { key: 'm' });
+  await act(async () => {
+    resolveRefresh(initialCatalog);
+    await pendingRefresh;
+  });
+
+  fireEvent.change(input, { target: { value: '$rev', selectionStart: 4 } });
+  fireEvent.keyUp(input, { key: 'v' });
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Refresh skills' }).hasAttribute('disabled')).toBe(false),
+  );
+  expect(mocks.listSkills).toHaveBeenCalledTimes(2);
+});
+
+it('rediscovers OpenCode skills when project changes with the same working directory', async () => {
+  mocks.backend = 'opencode';
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  const firstProjectSkill = {
+    name: 'project-one-skill',
+    location: `${skill.cwd}\\.opencode\\skills\\project-one-skill\\SKILL.md`,
+    description: 'First project skill',
+  };
+  const secondProjectSkill = {
+    name: 'project-two-skill',
+    location: `${skill.cwd}\\.opencode\\skills\\project-two-skill\\SKILL.md`,
+    description: 'Second project skill',
+  };
+  mocks.listOpenCodeSkills
+    .mockResolvedValueOnce([firstProjectSkill])
+    .mockResolvedValueOnce([secondProjectSkill]);
+  useAuthStore.setState({
+    localUserId: 'skill-project-cache-account',
+    cloudSession: null,
+    workspaceId: 'skill-project-cache-workspace' as never,
+    projectId: 'skill-project-cache-one' as never,
+  });
+
+  render(<TooltipProvider><Composer chatId={'skill-project-cache-chat' as never} /></TooltipProvider>);
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: '$project-one', selectionStart: 12 } });
+  await waitFor(() => expect(mocks.listOpenCodeSkills).toHaveBeenCalledTimes(1));
+  expect(await screen.findByRole('option', { name: /project-one-skill/u })).toBeTruthy();
+  expect(mocks.listOpenCodeSkills).toHaveBeenNthCalledWith(1, {
+    accountId: 'skill-project-cache-account',
+    workspaceId: 'skill-project-cache-workspace',
+    projectId: 'skill-project-cache-one',
+    workingDirectory: skill.cwd,
+  });
+
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(screen.queryByRole('listbox', { name: 'OpenCode skills' })).toBeNull();
+  act(() => useAuthStore.setState({ projectId: 'skill-project-cache-two' as never }));
+  fireEvent.change(input, { target: { value: '$project-two', selectionStart: 12 } });
+
+  await waitFor(() => expect(mocks.listOpenCodeSkills).toHaveBeenCalledTimes(2));
+  expect(mocks.listOpenCodeSkills).toHaveBeenNthCalledWith(2, {
+    accountId: 'skill-project-cache-account',
+    workspaceId: 'skill-project-cache-workspace',
+    projectId: 'skill-project-cache-two',
+    workingDirectory: skill.cwd,
+  });
+  expect(await screen.findByRole('option', { name: /project-two-skill/u })).toBeTruthy();
+  expect(screen.queryByRole('option', { name: /project-one-skill/u })).toBeNull();
+});

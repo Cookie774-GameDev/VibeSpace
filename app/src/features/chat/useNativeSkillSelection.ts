@@ -177,7 +177,9 @@ export function useNativeSkillSelection({
     [storage],
   );
   const scopeKey = scopeKeyFor(scope);
-  const catalogKey = catalogKeyFor(catalog);
+  // Catalogs are immutable snapshots, so avoid serializing the full catalog again
+  // when selection state alone causes this hook to rerender.
+  const catalogKey = useMemo(() => catalogKeyFor(catalog), [catalog]);
   const [snapshot, setSnapshot] = useState<HookSnapshot>({
     scopeKey: null,
     catalogKey: null,

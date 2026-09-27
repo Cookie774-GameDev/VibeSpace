@@ -147,6 +147,29 @@ describe('native skill selection hook', () => {
     expect(result.result.current.selectedReferences).toEqual([]);
   });
 
+  it('does not rescan the same catalog to rebuild its key after selecting a skill', () => {
+    let mapCalls = 0;
+    const catalog = new Proxy([reference] as readonly NativeSkillSelectionReference[], {
+      get(target, property, receiver) {
+        if (property === 'map') mapCalls += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const storage = createMemoryStorage();
+    const result = renderHook(() => useNativeSkillSelection({ scope, catalog, storage }));
+    const mapCallsBeforeSelection = mapCalls;
+
+    act(() => {
+      expect(result.result.current.select(reference).ok).toBe(true);
+    });
+
+    // The store still maps the catalog once to revalidate persisted selections.
+    // The hook should reuse its catalog snapshot for the state update render.
+    expect(mapCalls - mapCallsBeforeSelection).toBe(1);
+    expect(result.result.current.canDispatch).toBe(true);
+    expect(result.result.current.selectedReferences).toEqual([reference]);
+  });
+
   it('builds a stable SHA-256 metadata fingerprint without retaining descriptor content', async () => {
     const base = {
       origin: 'opencode' as const,

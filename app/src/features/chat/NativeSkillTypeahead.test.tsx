@@ -65,14 +65,29 @@ describe('NativeSkillTypeahead', () => {
     expect(screen.getByRole('option', { name: /review-diff/i }).textContent).toContain('OpenCode');
   });
 
-  it('shows exact skill identity, description, scope, and blue availability with selected key', () => {
+  it('shows exact skill identity, description, scope, and available state', () => {
     renderPicker();
     const selected = screen.getByRole('option', { name: /deploy-preview/i });
     expect(selected.getAttribute('aria-selected')).toBe('true');
+    expect(selected.getAttribute('aria-disabled')).toBe('false');
     expect(screen.getByText('Deploy a preview')).toBeTruthy();
     expect(selected.textContent).toContain('Repo');
-    const available = selected.querySelector('.text-accent-cyan');
-    expect(available?.textContent).toBe('Available');
+    expect(selected.textContent).toContain('Available');
+  });
+
+  it('keeps a concise summary visible without expanding the full skill instructions', () => {
+    const fullDescription = 'A long skill manifest description that should not fill the picker row. '.repeat(8);
+    renderPicker({
+      skills: [{
+        ...skills[0]!,
+        description: fullDescription,
+        shortDescription: 'Ship a preview',
+      }],
+    });
+
+    const option = screen.getByRole('option', { name: /deploy-preview/i });
+    expect(option.textContent).toContain('Ship a preview');
+    expect(option.textContent).not.toContain(fullDescription);
   });
 
   it('filters the list by the typed query and selects by keyboard or mouse', () => {
@@ -81,6 +96,21 @@ describe('NativeSkillTypeahead', () => {
     const { rerender } = renderPicker({ query: 'current changes' });
     expect(screen.getAllByRole('option')).toHaveLength(1);
     expect(screen.getByRole('option', { name: /review-diff/i })).toBeTruthy();
+
+    rerender(
+      <NativeSkillTypeahead
+        query="$deploy"
+        skills={skills}
+        selectedKey={nativeSkillSelectionKey(skills[0])}
+        onHoverKey={onHoverKey}
+        onSelect={onSelect}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+    expect(screen.getByRole('option', { name: /deploy-preview/i })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('listbox', { name: 'Codex skills' }), { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledWith(skills[0]);
 
     rerender(
       <NativeSkillTypeahead
@@ -101,6 +131,37 @@ describe('NativeSkillTypeahead', () => {
     expect(onSelect).toHaveBeenLastCalledWith(skills[0]);
   });
 
+  it('keeps mouse hover notifications to one update per active option', () => {
+    const onHoverKey = vi.fn();
+    renderPicker({ onHoverKey });
+
+    const nextOption = screen.getByRole('option', { name: /review-diff/i });
+    fireEvent.mouseMove(nextOption);
+    fireEvent.mouseMove(nextOption);
+    fireEvent.mouseMove(nextOption);
+
+    expect(onHoverKey).toHaveBeenCalledOnce();
+    expect(onHoverKey).toHaveBeenCalledWith(nativeSkillSelectionKey(skills[1]));
+  });
+
+  it('supports Home and End and keeps the active descendant on the available option', () => {
+    const onSelect = vi.fn();
+    renderPicker({ onSelect });
+    const listbox = screen.getByRole('listbox', { name: 'Codex skills' });
+    const firstOption = screen.getByRole('option', { name: /deploy-preview/i });
+    const lastAvailableOption = screen.getByRole('option', { name: /review-diff/i });
+
+    fireEvent.keyDown(listbox, { key: 'End' });
+    expect(lastAvailableOption.getAttribute('aria-selected')).toBe('true');
+    expect(listbox.getAttribute('aria-activedescendant')).toBe(lastAvailableOption.id);
+    fireEvent.keyDown(listbox, { key: 'Enter' });
+    expect(onSelect).toHaveBeenLastCalledWith(skills[1]);
+
+    fireEvent.keyDown(listbox, { key: 'Home' });
+    expect(firstOption.getAttribute('aria-selected')).toBe('true');
+    expect(listbox.getAttribute('aria-activedescendant')).toBe(firstOption.id);
+  });
+
   it('exposes move/select and accessible listbox identity for Composer key handling', () => {
     const ref = createRef<ComponentRef<typeof NativeSkillTypeahead>>();
     const onSelect = vi.fn();
@@ -117,24 +178,36 @@ describe('NativeSkillTypeahead', () => {
 
   it('marks disabled skills unavailable and reports discovery errors with a refresh action', () => {
     const onRefresh = vi.fn();
+    const onSelect = vi.fn();
     const errors: CodexSkillDiscoveryError[] = [
-      { cwd: 'C:/workspace/app', path: 'C:/broken/SKILL.md', message: 'Permission denied' },
+      {
+        cwd: skills[1]!.cwd,
+        path: skills[1]!.path,
+        message: 'Permission denied',
+      },
     ];
-    renderPicker({ errors, onRefresh });
+    renderPicker({ errors, onRefresh, onSelect });
 
     expect(
       screen
         .getByRole('option', { name: /disabled-skill.*unavailable/i })
         .getAttribute('aria-disabled'),
     ).toBe('true');
-    expect(screen.getByText(/Permission denied/)).toBeTruthy();
+    const erroredOption = screen.getByRole('option', { name: /review-diff.*unavailable/i });
+    expect(erroredOption.getAttribute('aria-disabled')).toBe('true');
+    expect(erroredOption.textContent).toContain('Permission denied');
+    fireEvent.click(screen.getByRole('option', { name: /disabled-skill/i }));
+    fireEvent.click(erroredOption);
+    expect(onSelect).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh skills' }));
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 
   it('shows loading and list-level error states without claiming skills are ready', () => {
-    const { rerender } = renderPicker({ loading: true });
+    const onRefresh = vi.fn();
+    const { rerender } = renderPicker({ loading: true, onRefresh });
     expect(screen.getByRole('status').textContent).toMatch(/Loading skills/i);
+    expect((screen.getByRole('button', { name: 'Refresh skills' }) as HTMLButtonElement).disabled).toBe(true);
 
     rerender(
       <NativeSkillTypeahead
@@ -143,9 +216,11 @@ describe('NativeSkillTypeahead', () => {
         loading={false}
         error="Codex skill discovery failed"
         onSelect={vi.fn()}
-        onRefresh={vi.fn()}
+        onRefresh={onRefresh}
       />,
     );
     expect(screen.getByRole('alert').textContent).toContain('Codex skill discovery failed');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRefresh).toHaveBeenCalledOnce();
   });
 });
