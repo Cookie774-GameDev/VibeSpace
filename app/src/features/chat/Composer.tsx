@@ -2029,7 +2029,7 @@ export function Composer({
       }));
   }, [nativeSelection.entries, codexSkillCatalog, nativeSkillWorkingDirectory]);
   const nativeSkillDiscoveryGenerationRef = useRef(0);
-  const refreshNativeSkillCatalog = useCallback(async () => {
+  const refreshNativeSkillCatalog = useCallback(async (forceReload = false) => {
     if (!nativeSkillWorkingDirectory || !chatBackendAffinity) return;
     const generation = ++nativeSkillDiscoveryGenerationRef.current;
     setNativeSkillLoading(true);
@@ -2053,7 +2053,7 @@ export function Composer({
       }
       const entries = await codexPersistentAdapter.listSkills({
         workingDirectory: nativeSkillWorkingDirectory,
-        forceReload: true,
+        forceReload,
       });
       if (nativeSkillDiscoveryGenerationRef.current !== generation) return;
       const entry = entries.find((candidate) => candidate.cwd === nativeSkillWorkingDirectory);
@@ -2062,9 +2062,16 @@ export function Composer({
       setCodexSkillCatalog(entry);
     } catch (error) {
       if (nativeSkillDiscoveryGenerationRef.current !== generation) return;
-      nativeSkillCatalogAuthorityRef.current = null;
-      setCodexSkillCatalog(null);
-      setNativeSkillError(error instanceof Error ? error.message : 'Native skills are unavailable.');
+      // A failed refresh must not discard the last catalog for this exact
+      // chat/project authority while a native turn temporarily owns the CLI.
+      if (nativeSkillCatalogAuthorityRef.current !== nativeSkillCatalogAuthorityKey) {
+        nativeSkillCatalogAuthorityRef.current = null;
+        setCodexSkillCatalog(null);
+      }
+      const message = error instanceof Error ? error.message : '';
+      setNativeSkillError(message.includes('app-server is already active for another owner or route')
+        ? 'Skills are busy with another session. Retry shortly.'
+        : message || 'Native skills are unavailable.');
     } finally {
       if (nativeSkillDiscoveryGenerationRef.current === generation) setNativeSkillLoading(false);
     }
@@ -7569,7 +7576,7 @@ export function Composer({
                 selectedKey={selectedNativeSkillKey}
                 onHoverKey={setSelectedNativeSkillKey}
                 onSelect={insertNativeSkill}
-                onRefresh={() => void refreshNativeSkillCatalog()}
+                onRefresh={() => void refreshNativeSkillCatalog(true)}
               />
             ) : slashCtx !== null ? (
               <SlashCommandTypeahead

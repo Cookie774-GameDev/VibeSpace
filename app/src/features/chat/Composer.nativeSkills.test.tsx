@@ -148,7 +148,7 @@ it.each(['codex', 'opencode'] as const)('discovers the exact native %s skill and
   const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
   fireEvent.change(input, { target: { value: '$rev', selectionStart: 4 } });
   const option = await screen.findByRole('option', { name: /review-diff/u });
-  if (backend === 'codex') expect(mocks.listSkills).toHaveBeenCalledWith({ workingDirectory: skill.cwd, forceReload: true });
+  if (backend === 'codex') expect(mocks.listSkills).toHaveBeenCalledWith({ workingDirectory: skill.cwd, forceReload: false });
   else expect(mocks.listOpenCodeSkills).toHaveBeenCalledWith({ accountId: 'skill-test-account', workspaceId: 'skill-workspace', projectId: 'skill-project', workingDirectory: skill.cwd });
   await waitFor(() => {
     fireEvent.click(option);
@@ -222,7 +222,7 @@ it.each(['codex', 'opencode'] as const)(
     if (backend === 'codex') {
       expect(mocks.listSkills).toHaveBeenNthCalledWith(1, {
         workingDirectory: skill.cwd,
-        forceReload: true,
+        forceReload: false,
       });
     } else {
       expect(mocks.listOpenCodeSkills).toHaveBeenNthCalledWith(1, {
@@ -247,9 +247,44 @@ it.each(['codex', 'opencode'] as const)(
     await waitFor(() => expect(refresh.hasAttribute('disabled')).toBe(false));
     fireEvent.click(refresh);
     await waitFor(() => expect(discover).toHaveBeenCalledTimes(2));
+    if (backend === 'codex') expect(mocks.listSkills).toHaveBeenNthCalledWith(2, {
+      workingDirectory: skill.cwd,
+      forceReload: true,
+    });
     expect(screen.getByRole('option', { name: /review-diff/u })).toBeTruthy();
   },
 );
+
+it('hides native owner-route details when Codex skill discovery is busy', async () => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  mocks.listSkills.mockRejectedValue(new Error('Codex app-server is already active for another owner or route.'));
+  useAuthStore.setState({ localUserId: 'skill-owner-account', cloudSession: null,
+    workspaceId: 'skill-workspace' as never, projectId: 'skill-project' as never });
+  render(<TooltipProvider><Composer chatId={'skill-owner-chat' as never} /></TooltipProvider>);
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: '$rev', selectionStart: 4 } });
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toContain('Skills are busy with another session. Retry shortly.');
+  expect(alert.textContent).not.toContain('app-server');
+});
+
+it('keeps the exact live skill catalog usable when a manual refresh finds the native route busy', async () => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  mocks.listSkills.mockResolvedValueOnce([{ cwd: skill.cwd, skills: [skill], errors: [] }])
+    .mockRejectedValueOnce(new Error('Codex app-server is already active for another owner or route.'));
+  useAuthStore.setState({ localUserId: 'skill-busy-refresh-account', cloudSession: null,
+    workspaceId: 'skill-workspace' as never, projectId: 'skill-project' as never });
+  render(<TooltipProvider><Composer chatId={'skill-busy-refresh-chat' as never} /></TooltipProvider>);
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: '$rev', selectionStart: 4 } });
+  expect(await screen.findByRole('option', { name: /review-diff/u })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh skills' }));
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Skills are busy'));
+  fireEvent.click(screen.getByRole('option', { name: /review-diff/u }));
+  expect(await screen.findByRole('button', { name: 'Remove $review-diff' })).toBeTruthy();
+});
 
 it('persists a native skill only for its exact account, workspace, project, chat, and harness scope', async () => {
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);

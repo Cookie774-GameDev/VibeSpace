@@ -248,3 +248,26 @@ During long checks, choose the next independent task-owned verification or prepa
 - Tags: parallel-verification, native-qa, long-checks
 
 ---
+
+## [LRN-20260927-SF27] correction
+
+**Logged**: 2026-09-27T04:47:51Z
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+A compact skill picker still needs bounded native discovery and safe handling of an occupied Codex app-server.
+
+### Details
+The prior picker reused an in-memory catalog but first-open Codex discovery forced a reload, could wait behind a long turn, and displayed the native owner/route error verbatim. Recovering a remembered generation during read-only discovery would risk stopping an active turn, so preserve the native ownership boundary.
+
+### Suggested Action
+Use cached CLI discovery for ordinary opens, reserve force reload for Refresh, bound the lease wait, and present a short retry message for occupied native routes. Verify attach latency in the official native C2 app.
+
+### Metadata
+- Source: user_feedback
+- Related Files: app/src/features/chat/Composer.tsx; app/src/lib/ai/adapters/codexPersistent.ts
+- Tags: native-skill-picker, busy-route, responsiveness
+
+---

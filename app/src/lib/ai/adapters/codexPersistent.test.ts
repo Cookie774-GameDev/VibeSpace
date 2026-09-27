@@ -8,6 +8,7 @@ import {
   resolveCodexExecutable,
 } from './codexPersistent';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+import { codexTurnLease } from './codexTurnLease';
 
 const connection: ProviderConnection = {
   id: 'openai-codex',
@@ -213,6 +214,27 @@ function activeCancellationFixture(options?: {
 }
 
 describe('persistent Codex app-server adapter', () => {
+  it('bounds skill discovery behind an active turn without touching its native generation', async () => {
+    const releaseTurn = await codexTurnLease.acquire();
+    const start = vi.fn(async () => ({ generation: 'should-not-start' }));
+    const stop = vi.fn(async () => true);
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'official-codex' }),
+      start,
+      stop,
+      frames: () => { throw new Error('Discovery should never subscribe while the turn owns the lease.'); },
+      write: async () => { throw new Error('Discovery should never write while the turn owns the lease.'); },
+    });
+    try {
+      await expect(adapter.listSkills({ workingDirectory: 'C:\\workspace' }))
+        .rejects.toThrow('Skills are busy with another session. Retry shortly.');
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      releaseTurn();
+    }
+  });
+
   it('discovers skills through native skills/list for the exact requested cwd and supports forced refresh', async () => {
     const writes: Record<string, unknown>[] = [];
     const stopped: string[] = [];

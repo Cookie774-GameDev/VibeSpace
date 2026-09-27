@@ -876,7 +876,18 @@ async function listCodexSkills(
   workingDirectory: string,
   forceReload = true,
 ): Promise<readonly CodexSkillsListEntry[]> {
-  const release = await codexTurnLease.acquire();
+  // Catalog discovery must not sit behind a long-running turn indefinitely.
+  // Abort only this queued read; never stop another owner's native generation.
+  const leaseAbort = new AbortController();
+  const leaseTimeout = setTimeout(() => leaseAbort.abort(
+    new Error('Skills are busy with another session. Retry shortly.'),
+  ), 1_000);
+  let release: () => void;
+  try {
+    release = await codexTurnLease.acquire(leaseAbort.signal);
+  } finally {
+    clearTimeout(leaseTimeout);
+  }
   let generation: string | undefined;
   let iterator: AsyncIterator<NativeFrame> | undefined;
   const streamAbort = new AbortController();
