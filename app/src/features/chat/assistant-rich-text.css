@@ -266,6 +266,10 @@
   line-height: 1.58;
 }
 
+.assistant-rich-text__snippet--writing code {
+  font-family: inherit;
+}
+
 .assistant-rich-text__snippet--code pre {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.76rem;
