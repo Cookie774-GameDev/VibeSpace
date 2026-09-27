@@ -277,7 +277,9 @@ describe('OpenCodeTurnCoordinator', () => {
         openCode: {
           edit: { 'C:/project/**': 'allow' },
           bash: expect.objectContaining({
-            '*': 'allow',
+            '*': 'ask',
+            pwd: 'allow',
+            'git status': 'allow',
             'rm *': 'ask',
             'git reset *': 'ask',
             'git push *': 'ask',
