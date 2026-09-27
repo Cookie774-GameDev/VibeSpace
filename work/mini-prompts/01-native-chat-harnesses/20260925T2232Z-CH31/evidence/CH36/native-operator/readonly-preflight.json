@@ -1,0 +1,39 @@
+{
+  "startedAt": "2026-09-27T18:46:16.007Z",
+  "stage": "complete",
+  "actedOnUi": false,
+  "privacy": "No message/question text or draft content recorded.",
+  "nativePage": {
+    "label": "main",
+    "url": "http://localhost:5173/?route=chat",
+    "title": "VibeSpace"
+  },
+  "metadata": {
+    "chatId": null,
+    "chat": null,
+    "sessionStatus": "Not exposed",
+    "sessionStatusText": null,
+    "stopControlVisible": false,
+    "durableRuns": [],
+    "activeDurableRunCount": 0,
+    "questionCards": [],
+    "questionCount": 0,
+    "planCards": [],
+    "composer": {
+      "rect": null,
+      "frame": null,
+      "draftLength": null
+    },
+    "viewport": {
+      "width": 1536,
+      "height": 794,
+      "scrollX": 0,
+      "scrollY": 0,
+      "documentScrollHeight": 794,
+      "documentClientHeight": 794
+    },
+    "tauriBridge": true,
+    "viteResources": []
+  },
+  "finishedAt": "2026-09-27T18:46:20.458Z"
+}

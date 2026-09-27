@@ -98,6 +98,23 @@ describe('OpenCode question reply request contract', () => {
     ).toEqual({ answers: [['exact custom answer']] });
   });
 
+  it('gives an allowed custom answer precedence over a stale single-choice selection', () => {
+    const request = reply([
+      { questionId: 'q_single', selectedOptionIds: ['opt_alpha'], text: 'Retro pixel' },
+      { questionId: 'q_multi', selectedOptionIds: ['opt_red'] },
+    ]);
+
+    expect(request).toMatchObject({
+      authority: {
+        requestId: route.requestId,
+        sessionId: route.sessionId,
+        blockId: route.blockId,
+      },
+      path: `/question/${route.requestId}/reply`,
+      body: { answers: [['Retro pixel'], ['Red']] },
+    });
+  });
+
   it('builds the official reject request without a fabricated body', () => {
     const request = buildOpenCodeQuestionRejectRequest({
       route,
@@ -211,9 +228,9 @@ describe('OpenCode question reply request contract', () => {
       ],
     ],
     [
-      'selected and custom answers for a single question',
+      'custom text cannot conceal multiple single-choice selections',
       [
-        { questionId: 'q_single', selectedOptionIds: ['opt_alpha'], text: 'Custom' },
+        { questionId: 'q_single', selectedOptionIds: ['opt_alpha', 'opt_beta'], text: 'Custom' },
         { questionId: 'q_multi', selectedOptionIds: ['opt_red'] },
       ],
     ],
@@ -250,7 +267,7 @@ describe('OpenCode question reply request contract', () => {
         expectedSessionId: route.sessionId,
         blockId: route.blockId,
         answers: [
-          { questionId: 'q_single', text: 'Not allowed' },
+          { questionId: 'q_single', selectedOptionIds: ['opt_alpha'], text: 'Not allowed' },
           { questionId: 'q_multi', selectedOptionIds: ['opt_red'] },
         ],
       }),

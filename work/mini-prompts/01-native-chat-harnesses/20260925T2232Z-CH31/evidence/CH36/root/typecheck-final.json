@@ -1,0 +1,29 @@
+{
+  "utc": "2026-09-27T18:50:42.0898439Z",
+  "task": "PROMPT01-NATIVE-CHAT-CH36",
+  "head": "d51ee7b009bfce63c84af46f30b6640f6b165302",
+  "command": "npx tsc -p app/tsconfig.json --noEmit --incremental false --pretty false",
+  "exitCode": 0,
+  "output": "empty",
+  "files": [
+    {
+      "path": "app/src/features/jarvis-interaction/PlanReviewCard.tsx",
+      "sha256": "318079C4FA8E8715F757C8597E43613DA87F5A990FCFDF2055005DA5D43F8B45"
+    },
+    {
+      "path": "app/src/features/jarvis-interaction/PlanReviewCard.test.tsx",
+      "sha256": "1B2E94A0196B62CF4EE4638F0E8B71CA58587FB31624F3CD36DA3A13245A00D6"
+    },
+    {
+      "path": "app/src/lib/ai/openCodeQuestionReply.ts",
+      "sha256": "D0B7725FAEE566B44FFE1EDAC3C5B5A9C77F59F7FAF5CE9E61E03C6A4EF35C6A"
+    },
+    {
+      "path": "app/src/lib/ai/openCodeQuestionReply.test.ts",
+      "sha256": "8138E9F5F84F21FC63B40800F34112C90E63D408BF68ACF25FD7C4E46800F273"
+    }
+  ],
+  "scope": "App TypeScript graph, no output artifacts",
+  "nativeAcceptance": "pending",
+  "note": "Final combined source hashes matched stable preflight; peer app files may change independently."
+}

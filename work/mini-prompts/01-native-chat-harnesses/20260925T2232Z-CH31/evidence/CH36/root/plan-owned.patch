@@ -1,0 +1,119 @@
+diff --git a/app/src/features/jarvis-interaction/PlanReviewCard.test.tsx b/app/src/features/jarvis-interaction/PlanReviewCard.test.tsx
+index 83199799..6599cab1 100644
+--- a/app/src/features/jarvis-interaction/PlanReviewCard.test.tsx
++++ b/app/src/features/jarvis-interaction/PlanReviewCard.test.tsx
+@@ -1,4 +1,4 @@
+-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
++import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+ import { beforeEach, describe, expect, it, vi } from 'vitest';
+ import { PlanReviewCard } from './PlanReviewCard';
+ import type { Part } from '@/types/chat';
+@@ -256,7 +256,10 @@ describe('PlanReviewCard', () => {
+       fireEvent.click(screen.getByRole('button', { name: 'No — Cancel' }));
+     }
+     expect((await screen.findByRole('alert')).textContent).toMatch(/could not/i);
+-    expect((screen.getByRole('button', { name: 'Yes — Implement Plan' }) as HTMLButtonElement).disabled).toBe(false);
++    expect(
++      (screen.getByRole('button', { name: 'Yes — Implement Plan' }) as HTMLButtonElement)
++        .disabled,
++    ).toBe(false);
+     expect(window.dispatchEvent).not.toHaveBeenCalled();
+     fireEvent.click(screen.getByRole('button', { name: action === 'revision' ? 'Send Revision' : 'No — Cancel' }));
+     await waitFor(() => expect(repo.update).toHaveBeenCalledTimes(2));
+@@ -270,4 +273,33 @@ describe('PlanReviewCard', () => {
+ 
+     expect(container.querySelector('section')?.className).toContain('min-w');
+   });
++
++  it('opens the complete plan in a scrollable dialog above the chat composer', () => {
++    const longPlanPart = {
++      ...planPart,
++      plan: {
++        ...planPart.plan,
++        title: 'Long implementation plan',
++        summary: Array.from({ length: 30 }, (_, index) => `Detail ${index + 1}`).join('\n'),
++        steps: [...planPart.plan.steps, 'Final verification step'],
++      },
++    };
++    render(
++      <PlanReviewCard part={longPlanPart} messageId={'msg_1' as never} chatId="chat_1" />,
++    );
++
++    fireEvent.click(screen.getByRole('button', { name: 'View full plan' }));
++
++    const dialog = screen.getByRole('dialog', { name: 'Long implementation plan' });
++    expect(dialog.className).toContain('overflow-y-auto');
++    expect(within(dialog).getByText(/Detail 30/)).toBeTruthy();
++    expect(within(dialog).getByText('Final verification step')).toBeTruthy();
++    expect(within(dialog).getByText('Shared chat surface')).toBeTruthy();
++    expect(repo.update).not.toHaveBeenCalled();
++    expect(window.dispatchEvent).not.toHaveBeenCalled();
++
++    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
++    expect(screen.queryByRole('dialog')).toBeNull();
++    expect((screen.getByRole('button', { name: 'Yes — Implement Plan' }) as HTMLButtonElement).disabled).toBe(false);
++  });
+ });
+diff --git a/app/src/features/jarvis-interaction/PlanReviewCard.tsx b/app/src/features/jarvis-interaction/PlanReviewCard.tsx
+index 503bf9df..fa305bbf 100644
+--- a/app/src/features/jarvis-interaction/PlanReviewCard.tsx
++++ b/app/src/features/jarvis-interaction/PlanReviewCard.tsx
+@@ -1,6 +1,14 @@
+ import { useRef, useState } from 'react';
+ import { ClipboardList, Plus, RotateCcw, XCircle } from 'lucide-react';
+ import { Button } from '@/components/ui/button';
++import {
++  Dialog,
++  DialogContent,
++  DialogDescription,
++  DialogHeader,
++  DialogTitle,
++  DialogTrigger,
++} from '@/components/ui/dialog';
+ import { messageRepo } from '@/lib/db/repositories';
+ import type { MessageId, Part } from '@/types';
+ import { useJarvisInteractionStore } from './sessionStore';
+@@ -158,8 +166,42 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
+         <div className="rounded-full border border-accent-copper/40 bg-accent-copper/10 p-1">
+           <ClipboardList className="h-3.5 w-3.5 text-accent-copper" />
+         </div>
+-        <div>
++        <div className="min-w-0 flex-1">
+           <div className="text-ui-strong text-foreground">{plan.title}</div>
++          <Dialog>
++            <DialogTrigger asChild>
++              <Button type="button" size="sm" variant="ghost" className="my-1 px-0">
++                View full plan
++              </Button>
++            </DialogTrigger>
++            <DialogContent className="max-w-4xl max-h-[calc(100dvh-2rem)] overflow-y-auto">
++              <DialogHeader>
++                <DialogTitle>{plan.title}</DialogTitle>
++                <DialogDescription className="whitespace-pre-wrap break-words">
++                  {plan.summary}
++                </DialogDescription>
++              </DialogHeader>
++              <ol className="ml-5 list-decimal space-y-2 text-secondary text-foreground">
++                {plan.steps.map((step, index) => (
++                  <li key={`${plan.id}:full-step:${index}`} className="break-words">
++                    {step}
++                  </li>
++                ))}
++              </ol>
++              {plan.risks?.length ? (
++                <div className="rounded-md border border-border bg-background/60 px-3 py-2">
++                  <div className="text-metadata uppercase tracking-wide text-muted-foreground">Risks</div>
++                  <ul className="ml-5 list-disc text-secondary text-muted-foreground">
++                    {plan.risks.map((risk, index) => (
++                      <li key={`${plan.id}:full-risk:${index}`} className="break-words">
++                        {risk}
++                      </li>
++                    ))}
++                  </ul>
++                </div>
++              ) : null}
++            </DialogContent>
++          </Dialog>
+           <p className="whitespace-pre-wrap text-secondary text-muted-foreground">{plan.summary}</p>
+         </div>
+       </div>

@@ -1,6 +1,14 @@
 import { useRef, useState } from 'react';
 import { ClipboardList, Plus, RotateCcw, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { messageRepo } from '@/lib/db/repositories';
 import type { MessageId, Part } from '@/types';
 import { useJarvisInteractionStore } from './sessionStore';
@@ -158,8 +166,42 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
         <div className="rounded-full border border-accent-copper/40 bg-accent-copper/10 p-1">
           <ClipboardList className="h-3.5 w-3.5 text-accent-copper" />
         </div>
-        <div>
+        <div className="min-w-0 flex-1">
           <div className="text-ui-strong text-foreground">{plan.title}</div>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button type="button" size="sm" variant="ghost" className="my-1 px-0">
+                View full plan
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-4xl max-h-[calc(100dvh-2rem)] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{plan.title}</DialogTitle>
+                <DialogDescription className="whitespace-pre-wrap break-words">
+                  {plan.summary}
+                </DialogDescription>
+              </DialogHeader>
+              <ol className="ml-5 list-decimal space-y-2 text-secondary text-foreground">
+                {plan.steps.map((step, index) => (
+                  <li key={`${plan.id}:full-step:${index}`} className="break-words">
+                    {step}
+                  </li>
+                ))}
+              </ol>
+              {plan.risks?.length ? (
+                <div className="rounded-md border border-border bg-background/60 px-3 py-2">
+                  <div className="text-metadata uppercase tracking-wide text-muted-foreground">Risks</div>
+                  <ul className="ml-5 list-disc text-secondary text-muted-foreground">
+                    {plan.risks.map((risk, index) => (
+                      <li key={`${plan.id}:full-risk:${index}`} className="break-words">
+                        {risk}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </DialogContent>
+          </Dialog>
           <p className="whitespace-pre-wrap text-secondary text-muted-foreground">{plan.summary}</p>
         </div>
       </div>

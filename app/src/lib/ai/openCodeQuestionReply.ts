@@ -130,7 +130,8 @@ function answerValues(
   const selectedIds = answer.selectedOptionIds ?? [];
   if (
     selectedIds.length > question.options.length ||
-    new Set(selectedIds).size !== selectedIds.length
+    new Set(selectedIds).size !== selectedIds.length ||
+    (!question.multiple && selectedIds.length > 1)
   ) {
     return undefined;
   }
@@ -148,6 +149,7 @@ function answerValues(
   const values = question.options
     .filter((option) => selected.has(option.optionId))
     .map((option) => option.label);
+  if (custom && !question.multiple) return [custom];
   if (custom) values.push(custom);
   if (values.length === 0 || (!question.multiple && values.length !== 1)) return undefined;
   return values;

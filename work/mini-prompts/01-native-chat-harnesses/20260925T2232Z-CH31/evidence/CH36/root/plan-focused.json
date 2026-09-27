@@ -1,0 +1,24 @@
+{
+  "utc": "2026-09-27T18:45:41.1585684Z",
+  "task": "PROMPT01-NATIVE-CHAT-CH36-PLAN-VISIBILITY",
+  "branch": "integration/UnifiedChungus-final",
+  "head": "d51ee7b009bfce63c84af46f30b6640f6b165302",
+  "files": [
+    {
+      "path": "app/src/features/jarvis-interaction/PlanReviewCard.tsx",
+      "sha256": "318079C4FA8E8715F757C8597E43613DA87F5A990FCFDF2055005DA5D43F8B45"
+    },
+    {
+      "path": "app/src/features/jarvis-interaction/PlanReviewCard.test.tsx",
+      "sha256": "1B2E94A0196B62CF4EE4638F0E8B71CA58587FB31624F3CD36DA3A13245A00D6"
+    }
+  ],
+  "command": "npm --prefix app run test -- --run src/features/jarvis-interaction/PlanReviewCard.test.tsx",
+  "result": "PASS",
+  "testFiles": 1,
+  "tests": 16,
+  "diffCheck": "PASS",
+  "prettier": "Unmodified HEAD baselines of both files fail Prettier --check; scoped added formatting retained",
+  "native": "PENDING operator",
+  "notes": "Dialog content/close and unchanged approval authority covered by focused test; no full-suite or native completion claim."
+}

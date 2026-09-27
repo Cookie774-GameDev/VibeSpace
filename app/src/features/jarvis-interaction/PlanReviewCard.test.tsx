@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlanReviewCard } from './PlanReviewCard';
 import type { Part } from '@/types/chat';
@@ -256,7 +256,10 @@ describe('PlanReviewCard', () => {
       fireEvent.click(screen.getByRole('button', { name: 'No — Cancel' }));
     }
     expect((await screen.findByRole('alert')).textContent).toMatch(/could not/i);
-    expect((screen.getByRole('button', { name: 'Yes — Implement Plan' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      (screen.getByRole('button', { name: 'Yes — Implement Plan' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
     expect(window.dispatchEvent).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: action === 'revision' ? 'Send Revision' : 'No — Cancel' }));
     await waitFor(() => expect(repo.update).toHaveBeenCalledTimes(2));
@@ -269,5 +272,34 @@ describe('PlanReviewCard', () => {
     );
 
     expect(container.querySelector('section')?.className).toContain('min-w');
+  });
+
+  it('opens the complete plan in a scrollable dialog above the chat composer', () => {
+    const longPlanPart = {
+      ...planPart,
+      plan: {
+        ...planPart.plan,
+        title: 'Long implementation plan',
+        summary: Array.from({ length: 30 }, (_, index) => `Detail ${index + 1}`).join('\n'),
+        steps: [...planPart.plan.steps, 'Final verification step'],
+      },
+    };
+    render(
+      <PlanReviewCard part={longPlanPart} messageId={'msg_1' as never} chatId="chat_1" />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'View full plan' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Long implementation plan' });
+    expect(dialog.className).toContain('overflow-y-auto');
+    expect(within(dialog).getByText(/Detail 30/)).toBeTruthy();
+    expect(within(dialog).getByText('Final verification step')).toBeTruthy();
+    expect(within(dialog).getByText('Shared chat surface')).toBeTruthy();
+    expect(repo.update).not.toHaveBeenCalled();
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect((screen.getByRole('button', { name: 'Yes — Implement Plan' }) as HTMLButtonElement).disabled).toBe(false);
   });
 });

@@ -1,0 +1,61 @@
+{
+  "inspectedAt": "2026-09-27T18:52:23.886Z",
+  "nativePage": {
+    "label": "main",
+    "url": "http://localhost:5173/?route=chat",
+    "title": "VibeSpace"
+  },
+  "actedOnUi": false,
+  "composerHandling": "Only length and SHA-256 recorded; raw value stayed in page context.",
+  "state": {
+    "route": "chat",
+    "activeChatId": "cht_KJR-ZBI4Q7vzTgaP",
+    "activeChatPaneFound": true,
+    "activeChatPaneVisible": true,
+    "activeChatPaneFocused": true,
+    "visiblePaneCount": 1,
+    "chatMetadata": {
+      "providerId": "openai",
+      "modelId": "gpt-6-luna",
+      "backendAffinity": "codex",
+      "mode": "chat"
+    },
+    "composerDraft": {
+      "visible": true,
+      "length": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "durableRuns": [
+      {
+        "status": "running",
+        "source": "typed_chat",
+        "model": null,
+        "updatedAt": 1790534075129
+      },
+      {
+        "status": "running",
+        "source": "typed_chat",
+        "model": null,
+        "updatedAt": 1790533677999
+      },
+      {
+        "status": "completed",
+        "source": "typed_chat",
+        "model": null,
+        "updatedAt": 1790533630452
+      },
+      {
+        "status": "completed",
+        "source": "typed_chat",
+        "model": null,
+        "updatedAt": 1790533591831
+      }
+    ],
+    "activeDurableRunCount": 2,
+    "sessionStatus": "Failed",
+    "stopControlVisible": false,
+    "visiblePlanButtonCount": 2,
+    "totalPlanButtonCount": 2,
+    "inlineQuestionCount": 0
+  }
+}

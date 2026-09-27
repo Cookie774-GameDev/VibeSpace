@@ -1,0 +1,76 @@
+{
+  "capturedAt": "2026-09-27T18:47:24.545Z",
+  "actedOnUi": false,
+  "privacy": "Structural metadata only; no message text, question text, input values, or draft content recorded.",
+  "nativePage": {
+    "url": "http://localhost:5173/?route=chat",
+    "title": "VibeSpace"
+  },
+  "inventory": {
+    "title": "VibeSpace",
+    "rootFound": true,
+    "rootChildren": [
+      {
+        "tag": "DIV",
+        "id": null,
+        "className": "relative isolate flex h-full w-full flex-col overflow-hidden bg-background text-foreground",
+        "childCount": 1,
+        "role": null,
+        "testId": null
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "className": "contents [html[data-theme=monochrome]_&_*]:shadow-none",
+        "childCount": 0,
+        "role": null,
+        "testId": null
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "className": "contents [html[data-theme=monochrome]_&_*]:shadow-none",
+        "childCount": 0,
+        "role": null,
+        "testId": null
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "className": "contents [html[data-theme=monochrome]_&>canvas]:hidden",
+        "childCount": 1,
+        "role": null,
+        "testId": null
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "className": "fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none",
+        "childCount": 0,
+        "role": null,
+        "testId": null
+      }
+    ],
+    "visibleCounts": {
+      "main": 1,
+      "[role=\"main\"]": 0,
+      "nav": 0,
+      "[role=\"navigation\"]": 0,
+      "[data-testid^=\"chat-nav-row-\"]": 16,
+      "[data-composer-input=\"true\"]": 1,
+      "[data-composer-frame]": 1,
+      "[role=\"dialog\"]": 0,
+      "[role=\"alert\"]": 0,
+      "[data-inline-question-block-id]": 0,
+      "button": 182
+    },
+    "headings": [],
+    "pageScroll": {
+      "scrollHeight": 794,
+      "clientHeight": 794
+    },
+    "visibleControlTagCounts": {
+      "BUTTON": 80
+    }
+  }
+}
