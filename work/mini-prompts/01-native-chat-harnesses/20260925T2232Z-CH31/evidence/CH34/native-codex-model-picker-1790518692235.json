@@ -1,0 +1,37 @@
+{
+  "at": "2026-09-27T14:18:09.333Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "providerSend": false,
+  "before": {
+    "model": "opencode · opencode-go/deepseek-v4-flashhigh",
+    "draft": ""
+  },
+  "options": [
+    {
+      "value": "opencode-cli:azure/gpt-6-luna",
+      "disabled": "false",
+      "text": "GPT-6 Luna · Azure subscriptionAzure subscription · Ready"
+    },
+    {
+      "value": "openai-codex:gpt-6-luna",
+      "disabled": "false",
+      "text": "GPT-6-LunaCodex / ChatGPT subscription · Ready"
+    },
+    {
+      "value": "opencode-cli:opencode-go/gpt-6-luna",
+      "disabled": "false",
+      "text": "GPT-6 Luna · Opencode Go provider connectionOpencode Go provider connection · Ready"
+    },
+    {
+      "value": "opencode-cli:openrouter/openai/gpt-6-luna",
+      "disabled": "false",
+      "text": "GPT-6 Luna · OpenRouter provider connectionOpenRouter provider connection · Ready"
+    },
+    {
+      "value": "opencode-cli:openrouter/openai/gpt-6-luna-pro",
+      "disabled": "false",
+      "text": "GPT-6 Luna ProOpenRouter provider connection · Ready"
+    }
+  ],
+  "passed": true
+}

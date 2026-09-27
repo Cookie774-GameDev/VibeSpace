@@ -1,0 +1,27 @@
+{
+  "at": "2026-09-27T14:08:27.604Z",
+  "readOnly": true,
+  "dom": {
+    "url": "http://localhost:5173/?route=chat",
+    "readyState": "complete",
+    "title": "VibeSpace",
+    "bodyText": "",
+    "rootHTML": "<div id=\"root\"></div>",
+    "children": [
+      {
+        "tag": "DIV",
+        "id": "root",
+        "className": "",
+        "text": ""
+      },
+      {
+        "tag": "SCRIPT",
+        "id": "",
+        "className": "",
+        "text": ""
+      }
+    ],
+    "alerts": []
+  },
+  "screenshot": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH34\\native-main-render-diagnostic-1790518112743.png"
+}

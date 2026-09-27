@@ -1,0 +1,65 @@
+{
+  "at": "2026-09-27T13:23:52.598Z",
+  "readOnly": true,
+  "chatId": "cht_lWazHd9Rnq8FPmHo",
+  "blockId": "qb_opencode_1piqs8d0dgheqb",
+  "state": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "matchingQuestionParts": 1,
+    "blockStatus": "pending",
+    "protocol": "opencode-question-v1",
+    "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+    "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+    "selection": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "cardVisible": true,
+    "cardButtons": [
+      {
+        "ariaLabel": "Dismiss question",
+        "text": "",
+        "disabled": false
+      },
+      {
+        "ariaLabel": null,
+        "text": "01A good book",
+        "disabled": false
+      },
+      {
+        "ariaLabel": null,
+        "text": "02A film",
+        "disabled": false
+      },
+      {
+        "ariaLabel": null,
+        "text": "03Music",
+        "disabled": false
+      },
+      {
+        "ariaLabel": null,
+        "text": "04A walk",
+        "disabled": false
+      },
+      {
+        "ariaLabel": null,
+        "text": "Write my own answer",
+        "disabled": false
+      },
+      {
+        "ariaLabel": null,
+        "text": "Submit",
+        "disabled": false
+      },
+      {
+        "ariaLabel": null,
+        "text": "Cancel",
+        "disabled": false
+      }
+    ],
+    "cardTimerCount": 0,
+    "transcriptReopenCount": 0,
+    "openChatTabCount": 20
+  }
+}

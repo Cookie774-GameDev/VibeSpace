@@ -1,0 +1,91 @@
+{
+  "at": "2026-09-27T14:23:00.260Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "1f6291c4b54df8924f0029fe5d6f395b5a9e6862767e70bf58e51b4ef24e131a",
+  "recoveryOf": "native-codex-cancel-question-1790518873530.json",
+  "providerSendAttempted": true,
+  "cancelAttempted": true,
+  "stage": "complete",
+  "before": {
+    "navCurrent": "page",
+    "connection": "openai-codex:gpt-6-luna",
+    "backend": "codex",
+    "status": "Complete",
+    "draft": "Use your native question tool to ask me one harmless preference question with exactly two choices. Wait for my response. Do not edit files or run commands.",
+    "stopVisible": false,
+    "questions": [],
+    "messages": [
+      {
+        "id": "msg_63kvaqvBctx5mY6Z",
+        "role": "system"
+      },
+      {
+        "id": "msg_CuOiHfFONZPt-L9B",
+        "role": "user"
+      },
+      {
+        "id": "msg_V_yR4u_fSv0tJ9vo",
+        "role": "system"
+      },
+      {
+        "id": "msg__CfdXZU_GjoDb83p",
+        "role": "user"
+      }
+    ]
+  },
+  "pending": {
+    "status": "Running",
+    "stopVisible": true,
+    "questions": [
+      {
+        "messageId": "msg_TjCW5TSpLONJN2fs",
+        "id": "qb_opencode_1lt9swl0v7q1dj",
+        "status": "pending",
+        "requestId": null
+      }
+    ],
+    "messages": [
+      {
+        "id": "msg_TjCW5TSpLONJN2fs",
+        "role": "assistant",
+        "text": ""
+      },
+      {
+        "id": "msg_vhQcuZhejoL67gzX",
+        "role": "user",
+        "text": "Use your native question tool to ask me one harmless preference question with exactly two choices. Wait for my response. Do not edit files or run commands."
+      }
+    ]
+  },
+  "after": {
+    "status": "Cancelled",
+    "stopVisible": false,
+    "questions": [
+      {
+        "messageId": "msg_TjCW5TSpLONJN2fs",
+        "id": "qb_opencode_1lt9swl0v7q1dj",
+        "status": "pending",
+        "requestId": null
+      }
+    ],
+    "messages": [
+      {
+        "id": "msg_TjCW5TSpLONJN2fs",
+        "role": "assistant",
+        "text": ""
+      },
+      {
+        "id": "msg_jreq_847b9b76-31fd-4976-9559-9df69ce340ed",
+        "role": "assistant",
+        "text": "I’ll ask one preference question and wait for your choice, sir.\n[Incomplete response: generation cancelled.]"
+      },
+      {
+        "id": "msg_vhQcuZhejoL67gzX",
+        "role": "user",
+        "text": "Use your native question tool to ask me one harmless preference question with exactly two choices. Wait for my response. Do not edit files or run commands."
+      }
+    ]
+  },
+  "passed": true,
+  "finishedAt": "2026-09-27T14:24:08.545Z"
+}

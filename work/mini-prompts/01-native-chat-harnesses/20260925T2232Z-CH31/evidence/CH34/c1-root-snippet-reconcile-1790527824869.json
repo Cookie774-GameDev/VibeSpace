@@ -1,0 +1,26 @@
+{
+  "at": "2026-09-27T16:50:24.869Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "stage": "failed",
+  "providerSendAttempted": false,
+  "windowState": {
+    "wasMinimized": false
+  },
+  "screenshots": [
+    {
+      "name": "writing",
+      "file": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH34\\c1-root-snippet-writing-reconcile.png",
+      "width": 238.78750610351562,
+      "height": 93.30000305175781
+    },
+    {
+      "name": "code",
+      "file": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH34\\c1-root-snippet-code-reconcile.png",
+      "width": 238.78750610351562,
+      "height": 70.55000305175781
+    }
+  ],
+  "writingCopyClicked": true,
+  "error": "locator.waitFor: Timeout 5000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByTestId('chat-pane-cht_-zkkf_r46zzuxB3L').locator('[data-assistant-snippet=\"writing\"]').filter({ hasText: 'CH34_NATIVE_WRITING_7D2\\nCopy me exactly.' }).getByRole('button', { name: 'Copied text', exact: true }) to be visible\u001b[22m\n",
+  "finishedAt": "2026-09-27T16:50:31.332Z"
+}

@@ -1,0 +1,66 @@
+{
+  "startedAt": "2026-09-27T15:09:18.215Z",
+  "completedAt": "2026-09-27T15:09:22.642Z",
+  "native": {
+    "cdpEndpoint": "http://127.0.0.1:9223",
+    "selectedOrigin": "http://localhost:5173",
+    "selectedPath": "/",
+    "singleMainTarget": true,
+    "appRootMountedBefore": true,
+    "tauriBridgePresent": true
+  },
+  "editorSafety": {
+    "visibleEditableCountBefore": 1,
+    "nonEmptyEditableCountBefore": 0,
+    "reloadAuthorizedAndPerformed": true
+  },
+  "before": {
+    "origin": "http://localhost:5173",
+    "pathname": "/",
+    "readyState": "complete",
+    "tauriBridgePresent": true,
+    "appRootMounted": true,
+    "visibleEditableCount": 1,
+    "nonEmptyEditableCount": 0,
+    "questionCardCount": 4,
+    "inlineDismissControlCount": 1,
+    "transcriptPendingCardCount": 3,
+    "reopenControlCount": 0,
+    "runtimeModuleLoaded": true
+  },
+  "servedRuntimeBefore": {
+    "status": 200,
+    "bytes": 1142180,
+    "sha256": "aafaf4d034f79ee74fc60135ccca1f0ef29fcccc7968bb09bcb6447a55ebe8e5",
+    "hasProjectedCancellationHelper": true,
+    "hasCancellationFailureMarker": true
+  },
+  "after": {
+    "origin": "http://localhost:5173",
+    "pathname": "/",
+    "readyState": "complete",
+    "tauriBridgePresent": true,
+    "appRootMounted": true,
+    "visibleEditableCount": 0,
+    "nonEmptyEditableCount": 0,
+    "questionCardCount": 0,
+    "inlineDismissControlCount": 0,
+    "transcriptPendingCardCount": 0,
+    "reopenControlCount": 0,
+    "runtimeModuleLoaded": false
+  },
+  "servedRuntimeAfter": {
+    "status": 200,
+    "bytes": 1142180,
+    "sha256": "aafaf4d034f79ee74fc60135ccca1f0ef29fcccc7968bb09bcb6447a55ebe8e5",
+    "hasProjectedCancellationHelper": true,
+    "hasCancellationFailureMarker": true
+  },
+  "checks": {
+    "currentSourceServed": true,
+    "reloadCompleted": true,
+    "rootMountedAfter": true,
+    "tauriBridgePresentAfter": true,
+    "noEditorContentIntroduced": true
+  }
+}

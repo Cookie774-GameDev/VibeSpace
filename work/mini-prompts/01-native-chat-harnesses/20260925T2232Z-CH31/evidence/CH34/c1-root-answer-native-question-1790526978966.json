@@ -1,0 +1,385 @@
+{
+  "at": "2026-09-27T16:36:18.967Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "blockId": "qb_opencode_0a1ftvv1cojj3d",
+  "requestId": "que_codex_629635e7-5b17-4fa2-ac80-966709bd2e20",
+  "stage": "complete",
+  "optionClicked": true,
+  "submitClicked": true,
+  "before": {
+    "navCurrent": "page",
+    "status": "Running",
+    "stopVisible": true,
+    "userCount": 8,
+    "assistantCount": 7,
+    "blocks": [
+      {
+        "messageId": "msg_-SVq9-_EDTqCAder",
+        "id": "qb_opencode_0klbb5d197liyf",
+        "status": "pending",
+        "requestId": "que_codex_7c0299aa-bbbe-44eb-86cb-77c7e1aa7b3c",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_0xsxvaw1rdi4sa",
+            "prompt": "For a quiet break, which do you prefer?",
+            "options": [
+              {
+                "id": "qo_opencode_1svp1qt12vaenf",
+                "label": "Tea"
+              },
+              {
+                "id": "qo_opencode_1slpg1u12lasyg",
+                "label": "Coffee"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      },
+      {
+        "messageId": "msg_EnSKyWfZnDNYhT7t",
+        "id": "qb_opencode_0a1ftvv1cojj3d",
+        "status": "pending",
+        "requestId": "que_codex_629635e7-5b17-4fa2-ac80-966709bd2e20",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_05bv9qu1t4ofao",
+            "prompt": "Which do you prefer for background music?",
+            "options": [
+              {
+                "id": "qo_opencode_1kti3qn0k51499",
+                "label": "Instrumental"
+              },
+              {
+                "id": "qo_opencode_1kjii1o0jv1ika",
+                "label": "With vocals"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      },
+      {
+        "messageId": "msg_HU6ptt5dnHouwkBO",
+        "id": "qb_opencode_1gpm49v10bvqf9",
+        "status": "cancelled",
+        "requestId": "que_codex_0bfac239-1ba6-4803-ad1d-5c5d95aa4f18",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_0lp979q0imtdkk",
+            "prompt": "For a scenic walk, which would you choose?",
+            "options": [
+              {
+                "id": "qo_opencode_0no7hbb1tkqnop",
+                "label": "Sunrise"
+              },
+              {
+                "id": "qo_opencode_0ne7vmc1tar1zq",
+                "label": "Sunset"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      },
+      {
+        "messageId": "msg_TjCW5TSpLONJN2fs",
+        "id": "qb_opencode_1lt9swl0v7q1dj",
+        "status": "pending",
+        "requestId": "que_codex_be2fb5de-3219-4ea4-9ff9-79ecc2631302",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_01fns3o0be1bp6",
+            "prompt": "Which reply style do you prefer?",
+            "options": [
+              {
+                "id": "qo_opencode_1uzr9891r92odn",
+                "label": "Concise"
+              },
+              {
+                "id": "qo_opencode_1uprnja1qz32oo",
+                "label": "Detailed"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      },
+      {
+        "messageId": "msg_XYnl05tadJD5gP_F",
+        "id": "qb_opencode_1lgscgf0i4yi19",
+        "status": "pending",
+        "requestId": "que_codex_be0315f5-c1ba-4b18-b690-676486072cbb",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_11x5z0y1x2bpzw",
+            "prompt": "Which do you prefer on a relaxed morning?",
+            "options": [
+              {
+                "id": "qo_opencode_1notceb19fpqhd",
+                "label": "Tea"
+              },
+              {
+                "id": "qo_opencode_1netqpc195q4se",
+                "label": "Coffee"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      },
+      {
+        "messageId": "msg_lyxDL63UbllhaoUt",
+        "id": "qb_opencode_0u4w5gi1yfb3y4",
+        "status": "cancelled",
+        "requestId": "que_codex_2dc895a6-8453-41e0-9606-66dbe419a9b9",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_1g3tvkj0bakoc1",
+            "prompt": "Which do you prefer watching?",
+            "options": [
+              {
+                "id": "qo_opencode_1lprita0msjik8",
+                "label": "Sunrise"
+              },
+              {
+                "id": "qo_opencode_1lzr4i90n2j497",
+                "label": "Sunset"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      }
+    ],
+    "target": {
+      "messageId": "msg_EnSKyWfZnDNYhT7t",
+      "id": "qb_opencode_0a1ftvv1cojj3d",
+      "status": "pending",
+      "requestId": "que_codex_629635e7-5b17-4fa2-ac80-966709bd2e20",
+      "protocol": "opencode-question-v1",
+      "questions": [
+        {
+          "id": "q_opencode_05bv9qu1t4ofao",
+          "prompt": "Which do you prefer for background music?",
+          "options": [
+            {
+              "id": "qo_opencode_1kti3qn0k51499",
+              "label": "Instrumental"
+            },
+            {
+              "id": "qo_opencode_1kjii1o0jv1ika",
+              "label": "With vocals"
+            }
+          ]
+        }
+      ],
+      "answers": []
+    }
+  },
+  "submitAt": "2026-09-27T16:36:28.330Z",
+  "after": {
+    "navCurrent": "page",
+    "status": "Complete",
+    "stopVisible": false,
+    "userCount": 8,
+    "assistantCount": 8,
+    "blocks": [
+      {
+        "messageId": "msg_-SVq9-_EDTqCAder",
+        "id": "qb_opencode_0klbb5d197liyf",
+        "status": "pending",
+        "requestId": "que_codex_7c0299aa-bbbe-44eb-86cb-77c7e1aa7b3c",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_0xsxvaw1rdi4sa",
+            "prompt": "For a quiet break, which do you prefer?",
+            "options": [
+              {
+                "id": "qo_opencode_1svp1qt12vaenf",
+                "label": "Tea"
+              },
+              {
+                "id": "qo_opencode_1slpg1u12lasyg",
+                "label": "Coffee"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      },
+      {
+        "messageId": "msg_EnSKyWfZnDNYhT7t",
+        "id": "qb_opencode_0a1ftvv1cojj3d",
+        "status": "answered",
+        "requestId": "que_codex_629635e7-5b17-4fa2-ac80-966709bd2e20",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_05bv9qu1t4ofao",
+            "prompt": "Which do you prefer for background music?",
+            "options": [
+              {
+                "id": "qo_opencode_1kti3qn0k51499",
+                "label": "Instrumental"
+              },
+              {
+                "id": "qo_opencode_1kjii1o0jv1ika",
+                "label": "With vocals"
+              }
+            ]
+          }
+        ],
+        "answers": [
+          {
+            "questionId": "q_opencode_05bv9qu1t4ofao",
+            "selectedOptionIds": [
+              "qo_opencode_1kti3qn0k51499"
+            ],
+            "text": "",
+            "skipped": false
+          }
+        ]
+      },
+      {
+        "messageId": "msg_HU6ptt5dnHouwkBO",
+        "id": "qb_opencode_1gpm49v10bvqf9",
+        "status": "cancelled",
+        "requestId": "que_codex_0bfac239-1ba6-4803-ad1d-5c5d95aa4f18",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_0lp979q0imtdkk",
+            "prompt": "For a scenic walk, which would you choose?",
+            "options": [
+              {
+                "id": "qo_opencode_0no7hbb1tkqnop",
+                "label": "Sunrise"
+              },
+              {
+                "id": "qo_opencode_0ne7vmc1tar1zq",
+                "label": "Sunset"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      },
+      {
+        "messageId": "msg_TjCW5TSpLONJN2fs",
+        "id": "qb_opencode_1lt9swl0v7q1dj",
+        "status": "pending",
+        "requestId": "que_codex_be2fb5de-3219-4ea4-9ff9-79ecc2631302",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_01fns3o0be1bp6",
+            "prompt": "Which reply style do you prefer?",
+            "options": [
+              {
+                "id": "qo_opencode_1uzr9891r92odn",
+                "label": "Concise"
+              },
+              {
+                "id": "qo_opencode_1uprnja1qz32oo",
+                "label": "Detailed"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      },
+      {
+        "messageId": "msg_XYnl05tadJD5gP_F",
+        "id": "qb_opencode_1lgscgf0i4yi19",
+        "status": "pending",
+        "requestId": "que_codex_be0315f5-c1ba-4b18-b690-676486072cbb",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_11x5z0y1x2bpzw",
+            "prompt": "Which do you prefer on a relaxed morning?",
+            "options": [
+              {
+                "id": "qo_opencode_1notceb19fpqhd",
+                "label": "Tea"
+              },
+              {
+                "id": "qo_opencode_1netqpc195q4se",
+                "label": "Coffee"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      },
+      {
+        "messageId": "msg_lyxDL63UbllhaoUt",
+        "id": "qb_opencode_0u4w5gi1yfb3y4",
+        "status": "cancelled",
+        "requestId": "que_codex_2dc895a6-8453-41e0-9606-66dbe419a9b9",
+        "protocol": "opencode-question-v1",
+        "questions": [
+          {
+            "id": "q_opencode_1g3tvkj0bakoc1",
+            "prompt": "Which do you prefer watching?",
+            "options": [
+              {
+                "id": "qo_opencode_1lprita0msjik8",
+                "label": "Sunrise"
+              },
+              {
+                "id": "qo_opencode_1lzr4i90n2j497",
+                "label": "Sunset"
+              }
+            ]
+          }
+        ],
+        "answers": []
+      }
+    ],
+    "target": {
+      "messageId": "msg_EnSKyWfZnDNYhT7t",
+      "id": "qb_opencode_0a1ftvv1cojj3d",
+      "status": "answered",
+      "requestId": "que_codex_629635e7-5b17-4fa2-ac80-966709bd2e20",
+      "protocol": "opencode-question-v1",
+      "questions": [
+        {
+          "id": "q_opencode_05bv9qu1t4ofao",
+          "prompt": "Which do you prefer for background music?",
+          "options": [
+            {
+              "id": "qo_opencode_1kti3qn0k51499",
+              "label": "Instrumental"
+            },
+            {
+              "id": "qo_opencode_1kjii1o0jv1ika",
+              "label": "With vocals"
+            }
+          ]
+        }
+      ],
+      "answers": [
+        {
+          "questionId": "q_opencode_05bv9qu1t4ofao",
+          "selectedOptionIds": [
+            "qo_opencode_1kti3qn0k51499"
+          ],
+          "text": "",
+          "skipped": false
+        }
+      ]
+    }
+  },
+  "answerLatencyMs": 7153,
+  "passed": true,
+  "finishedAt": "2026-09-27T16:36:35.483Z"
+}

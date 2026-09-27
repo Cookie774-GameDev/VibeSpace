@@ -1,0 +1,129 @@
+{
+  "at": "2026-09-27T13:56:04.068Z",
+  "chatId": "cht_Eumzyw1Y8yx21W1s",
+  "skillName": "ch31-codex-secondary",
+  "promptSha256": "14ce51e158699d27201943fe2bcf58c194f3985379b7ba465ac605db3082bebd",
+  "stage": "complete",
+  "providerSendAttempted": true,
+  "resumedFrom": "native-opencode-codex-skill-load-1790516889570.json",
+  "recoveredC1": "native-c1-recovery-relaunch-20260927T135455349Z.json",
+  "before": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "route": "opencode-cli:openai/gpt-6-luna",
+    "status": "Complete",
+    "draft": "$ch31-codex-secondary Use the selected native skill through the native skill tool. State the exact marker it instructs you to report. Do not edit files, run shell commands, or browse.",
+    "selectedSkillText": "$ch31-codex-secondaryCodex · Selected",
+    "users": 6,
+    "assistants": 9,
+    "messages": [
+      {
+        "id": "msg_0hzjIrlxaXcrkf2K",
+        "role": "user"
+      },
+      {
+        "id": "msg_1p8KlijCSdgGk7V1",
+        "role": "user"
+      },
+      {
+        "id": "msg_2mLtb_bn0zCbXTa2",
+        "role": "user"
+      },
+      {
+        "id": "msg_469LPOOQDNP7peLi",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_DAingMI8uJeUzXgx",
+        "role": "system"
+      },
+      {
+        "id": "msg_LB_Bz0g82DAmwA9Y",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_Vil-348uBfCOLhbF",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_cuxClFpX6LHUBkPV",
+        "role": "user"
+      },
+      {
+        "id": "msg_fUWUDwKvG7s_Kg1r",
+        "role": "user"
+      },
+      {
+        "id": "msg_jreq_0f15891d-a32d-4e3c-8b26-4f5053d3c497",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_2edc9181-8e51-46da-819b-5f96d86c146e",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_93dee56b-71c9-41d0-b369-2256afaccc1f",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_94f71cb2-0084-4eb4-a063-d1c4dccd9da6",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_d40e7d87-d238-4c06-bf27-c6942af397f7",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_e1e38789-ff88-4c00-a26a-b72401ca7661",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_s_WesJWfrrJkY1G9",
+        "role": "user"
+      }
+    ]
+  },
+  "after": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "route": "opencode-cli:openai/gpt-6-luna",
+    "status": "Complete",
+    "draft": "",
+    "selectedSkillText": "$ch31-codex-secondaryCodex · Selected",
+    "users": 7,
+    "assistants": 10,
+    "messages": [
+      {
+        "id": "msg_e8cDROl5gO9yfFl_",
+        "role": "user",
+        "text": "$ch31-codex-secondary Use the selected native skill through the native skill tool. State the exact marker it instructs you to report. Do not edit files, run shell commands, or browse.",
+        "tools": [],
+        "errors": []
+      },
+      {
+        "id": "msg_jreq_7fd4a0bc-6e13-46eb-ba30-11dfb45a7cd8",
+        "role": "assistant",
+        "text": "The marker is `CH31_CODEX_SECONDARY_54F8`, sir.",
+        "tools": [
+          {
+            "kind": "tool_call",
+            "name": "skill",
+            "callId": "opencode-tool-1",
+            "status": null
+          },
+          {
+            "kind": "tool_result",
+            "name": null,
+            "callId": "opencode-tool-1",
+            "status": "completed"
+          }
+        ],
+        "errors": []
+      }
+    ]
+  },
+  "toolNames": [
+    "skill"
+  ],
+  "markerInAssistant": true,
+  "passed": true,
+  "finishedAt": "2026-09-27T13:56:16.667Z"
+}

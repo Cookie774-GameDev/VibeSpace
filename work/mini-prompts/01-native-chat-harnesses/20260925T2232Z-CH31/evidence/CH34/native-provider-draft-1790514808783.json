@@ -1,0 +1,42 @@
+{
+  "at": "2026-09-27T13:13:08.203Z",
+  "stage": "switch-codex",
+  "cdpPort": 9223,
+  "providerSend": false,
+  "pageUrl": "http://localhost:5173/?route=chat",
+  "resumedFrom": "native-provider-draft-1790514711321.json",
+  "created": {
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "userCount": 0,
+    "assistantCount": 0,
+    "pendingPermissions": 0,
+    "runStatus": null,
+    "draftLength": 0,
+    "draftSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "modelSelection": {
+      "mode": "single",
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "drafted": {
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "userCount": 0,
+    "assistantCount": 0,
+    "pendingPermissions": 0,
+    "runStatus": null,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "modelSelection": {
+      "mode": "single",
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "failure": "locator.waitFor: Timeout 20000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('dialog', { name: 'Choose AI model', exact: true }).locator('[role=\"listbox\"]').first().locator('[role=\"option\"][data-value=\"openai-codex:gpt-6-luna\"]') to be visible\u001b[22m\n",
+  "finishedAt": "2026-09-27T13:13:28.783Z"
+}

@@ -1,0 +1,23 @@
+{
+  "at": "2026-09-27T16:43:16.600Z",
+  "stage": "complete",
+  "actedOnWindow": false,
+  "state": {
+    "label": "main",
+    "minimized": false,
+    "visible": true,
+    "inner": {
+      "width": 1920,
+      "height": 991
+    },
+    "outer": {
+      "width": 1938,
+      "height": 1038
+    },
+    "viewport": {
+      "width": 240,
+      "height": 94
+    }
+  },
+  "finishedAt": "2026-09-27T16:43:30.662Z"
+}

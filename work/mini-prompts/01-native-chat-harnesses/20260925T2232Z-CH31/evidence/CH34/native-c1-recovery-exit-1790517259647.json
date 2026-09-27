@@ -1,0 +1,13 @@
+{
+  "at": "2026-09-27T13:53:59.275Z",
+  "chatId": "cht_Eumzyw1Y8yx21W1s",
+  "reason": "main renderer unresponsive; same-process recovery",
+  "expectedPromptHash": "14ce51e158699d27201943fe2bcf58c194f3985379b7ba465ac605db3082bebd",
+  "exitRequested": true,
+  "before": {
+    "users": 6,
+    "assistants": 9
+  },
+  "promptMatches": 0,
+  "finishedAt": "2026-09-27T13:54:19.647Z"
+}

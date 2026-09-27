@@ -1,0 +1,30 @@
+{
+  "at": "2026-09-27T13:36:15.607Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "originalChatId": "cht_lWazHd9Rnq8FPmHo",
+  "providerSend": false,
+  "stage": "attach",
+  "initial": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "title": "New chat 8",
+    "backend": "codex",
+    "messages": [
+      {
+        "id": "msg_V_yR4u_fSv0tJ9vo",
+        "role": "system",
+        "text": "Unknown slash command: /skils. Try /help.",
+        "localReceipt": false
+      },
+      {
+        "id": "msg__CfdXZU_GjoDb83p",
+        "role": "user",
+        "text": "HI",
+        "localReceipt": false
+      }
+    ],
+    "draft": null
+  },
+  "failure": "exact_codex_fixture_state_required",
+  "finishedAt": "2026-09-27T13:36:16.771Z"
+}

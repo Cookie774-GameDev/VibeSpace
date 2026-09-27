@@ -1,0 +1,20 @@
+{
+  "at": "2026-09-27T17:19:08.5948318Z",
+  "head": "d3f0dcb49ca68b56f3a431fc48cc733c772b5473",
+  "dist": {
+    "fileCount": 746,
+    "bytes": 95398504.0,
+    "decimalMB": 95.4,
+    "binaryMiB": 90.98,
+    "latestWriteUtc": "2026-09-27T16:42:48.1698889Z"
+  },
+  "installer": {
+    "name": "VibeSpace_1.5.0_x64_en-US.msi",
+    "bytes": 299375206,
+    "decimalMB": 299.38,
+    "binaryMiB": 285.51,
+    "lastWriteUtc": "2026-09-27T08:24:01.655Z"
+  },
+  "sourceMatched": false,
+  "reason": "Dist predates later chat CSS and installer predates current source; snapshot measurement only"
+}

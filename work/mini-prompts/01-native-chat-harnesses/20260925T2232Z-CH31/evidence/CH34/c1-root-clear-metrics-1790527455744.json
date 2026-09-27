@@ -1,0 +1,27 @@
+{
+  "at": "2026-09-27T16:44:15.744Z",
+  "stage": "complete",
+  "before": {
+    "viewport": {
+      "width": 240,
+      "height": 94
+    },
+    "nativeInner": {
+      "width": 1920,
+      "height": 991
+    },
+    "minimized": false
+  },
+  "after": {
+    "viewport": {
+      "width": 240,
+      "height": 94
+    },
+    "nativeInner": {
+      "width": 1920,
+      "height": 991
+    },
+    "minimized": false
+  },
+  "finishedAt": "2026-09-27T16:44:17.068Z"
+}

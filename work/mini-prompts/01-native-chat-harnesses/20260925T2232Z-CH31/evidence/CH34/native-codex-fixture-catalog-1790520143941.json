@@ -1,0 +1,5 @@
+{
+  "at": "2026-09-27T14:42:23.914Z",
+  "readOnly": true,
+  "failure": "browserType.connectOverCDP: connect ECONNREFUSED 127.0.0.1:9223\nCall log:\n\u001b[2m  - <ws preparing> retrieving websocket url from http://127.0.0.1:9223\u001b[22m\n"
+}

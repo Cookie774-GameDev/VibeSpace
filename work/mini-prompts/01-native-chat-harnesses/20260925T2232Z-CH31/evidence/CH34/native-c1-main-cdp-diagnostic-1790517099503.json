@@ -1,0 +1,12 @@
+{
+  "at": "2026-09-27T13:51:19.427Z",
+  "readOnly": true,
+  "port": 9223,
+  "target": {
+    "id": "5999B38293668FBBFAB3C3E075DCFCA3",
+    "url": "http://localhost:5173/?route=chat",
+    "title": "VibeSpace"
+  },
+  "frameTreeFailure": "Page.getFrameTree_timeout",
+  "runtimeFailure": "Runtime.evaluate_timeout"
+}

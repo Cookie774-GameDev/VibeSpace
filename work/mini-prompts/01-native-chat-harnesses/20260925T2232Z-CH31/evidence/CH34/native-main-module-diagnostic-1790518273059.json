@@ -1,0 +1,859 @@
+{
+  "at": "2026-09-27T14:11:11.201Z",
+  "readOnly": true,
+  "dom": {
+    "readyState": "complete",
+    "bodyText": "",
+    "paneCount": 0,
+    "nav": [
+      {
+        "name": "http://localhost:5173/?route=chat",
+        "duration": 814.8000000044703,
+        "loadEventEnd": 814.8000000044703,
+        "domContentLoadedEventEnd": 814.4000000059605
+      }
+    ],
+    "resources": [
+      {
+        "name": "/src/features/doctor/StorageDoctorNotice.tsx?t=1790517565783",
+        "duration": 8289,
+        "start": 7350,
+        "size": 300,
+        "responseEnd": 15639
+      },
+      {
+        "name": "/src/lib/accountIdentity.ts?t=1790517565783",
+        "duration": 8302,
+        "start": 7350,
+        "size": 300,
+        "responseEnd": 15653
+      },
+      {
+        "name": "/src/lib/db/jarvisRepositories.ts",
+        "duration": 8315,
+        "start": 7350,
+        "size": 300,
+        "responseEnd": 15665
+      },
+      {
+        "name": "/src/lib/jarvis/persistenceCoordinator.ts",
+        "duration": 8309,
+        "start": 7350,
+        "size": 300,
+        "responseEnd": 15659
+      },
+      {
+        "name": "/src/lib/jarvis/identity.ts",
+        "duration": 8322,
+        "start": 7350,
+        "size": 300,
+        "responseEnd": 15673
+      },
+      {
+        "name": "/src/lib/jarvis/executionJournal/legacyTaskRunAdapter.ts",
+        "duration": 8328,
+        "start": 7350,
+        "size": 300,
+        "responseEnd": 15678
+      },
+      {
+        "name": "/src/lib/jarvis/executionJournal/legacyActivityProjection.ts",
+        "duration": 8335,
+        "start": 7350,
+        "size": 300,
+        "responseEnd": 15685
+      },
+      {
+        "name": "/src/lib/jarvis/executionJournal/index.ts",
+        "duration": 8335,
+        "start": 7351,
+        "size": 300,
+        "responseEnd": 15686
+      },
+      {
+        "name": "/src/features/voice/voiceResponseRecovery.ts",
+        "duration": 8335,
+        "start": 7351,
+        "size": 300,
+        "responseEnd": 15686
+      },
+      {
+        "name": "/src/lib/cloudSyncQueueOwner.ts",
+        "duration": 8349,
+        "start": 7351,
+        "size": 300,
+        "responseEnd": 15700
+      },
+      {
+        "name": "/src/lib/jarvis/builtinAgents.ts",
+        "duration": 8355,
+        "start": 7351,
+        "size": 300,
+        "responseEnd": 15707
+      },
+      {
+        "name": "/src/features/agents/index.ts?t=1790517565783",
+        "duration": 8354,
+        "start": 7351,
+        "size": 300,
+        "responseEnd": 15705
+      },
+      {
+        "name": "/src/features/chat/chatLifecycle.ts?t=1790517565783",
+        "duration": 8371,
+        "start": 7351,
+        "size": 300,
+        "responseEnd": 15722
+      },
+      {
+        "name": "/src/features/chat/monochromeFixture.ts",
+        "duration": 8376,
+        "start": 7352,
+        "size": 300,
+        "responseEnd": 15728
+      },
+      {
+        "name": "/src/lib/hotkeys.ts",
+        "duration": 8383,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15736
+      },
+      {
+        "name": "/src/features/fullscreen/index.ts?t=1790517565783",
+        "duration": 8407,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15760
+      },
+      {
+        "name": "/src/features/dev-console/index.ts?t=1790517565783",
+        "duration": 8410,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15762
+      },
+      {
+        "name": "/src/features/opencode-system-log/index.ts?t=1790517565783",
+        "duration": 8410,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15763
+      },
+      {
+        "name": "/src/features/context/siyuan/SiyuanIndexJobHost.tsx?t=1790517565783",
+        "duration": 8423,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15776
+      },
+      {
+        "name": "/src/features/terminals/terminalScheduler.ts?t=1790517565783",
+        "duration": 8433,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15786
+      },
+      {
+        "name": "/src/features/terminals/terminalExecutionStore.ts?t=1790517565783",
+        "duration": 8445,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15798
+      },
+      {
+        "name": "/src/features/terminals/index.ts?t=1790517565783",
+        "duration": 8444,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15797
+      },
+      {
+        "name": "/src/lib/harness/ToolGatewayHost.tsx?t=1790517565783",
+        "duration": 8471,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15824
+      },
+      {
+        "name": "/src/features/schedule/jarvisScheduleRunner.ts?t=1790517565783",
+        "duration": 8480,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15833
+      },
+      {
+        "name": "/src/features/call/thirdParty/scheduledCallRunner.ts",
+        "duration": 8485,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15838
+      },
+      {
+        "name": "/src/features/benchmarks/BenchmarkRefreshHost.tsx",
+        "duration": 8527,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15881
+      },
+      {
+        "name": "/src/features/updates/UpdateWarningHost.tsx?t=1790517565783",
+        "duration": 8520,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15873
+      },
+      {
+        "name": "/src/lib/persistence/workspaceFlush.ts",
+        "duration": 8554,
+        "start": 7353,
+        "size": 300,
+        "responseEnd": 15907
+      },
+      {
+        "name": "/src/features/global-dictation/GlobalDictationOverlay.tsx?t=1790517565783",
+        "duration": 8555,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 15908
+      },
+      {
+        "name": "/src/features/jarvis-ambient/index.ts?t=1790517565783",
+        "duration": 8593,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 15946
+      },
+      {
+        "name": "/src/features/plugins/managementContext.tsx",
+        "duration": 8643,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 15996
+      },
+      {
+        "name": "/src/lib/jarvis/smoke/config.ts",
+        "duration": 8656,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 16009
+      },
+      {
+        "name": "/src/lib/jarvis/smoke/KernelSmokeBindingHost.tsx?t=1790517565783",
+        "duration": 8655,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 16009
+      },
+      {
+        "name": "/src/lib/concurrency/boundedMap.ts",
+        "duration": 8697,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 16050
+      },
+      {
+        "name": "/src/lib/runtimeProfile.ts",
+        "duration": 8681,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 16035
+      },
+      {
+        "name": "/src/stability/canonicalProjectionBudget.ts",
+        "duration": 8699,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 16053
+      },
+      {
+        "name": "/src/features/settings/settingsTabMemory.ts?t=1790517565783",
+        "duration": 8864,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 16218
+      },
+      {
+        "name": "/src/lib/ai/connectionCatalog.ts",
+        "duration": 8867,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 16221
+      },
+      {
+        "name": "/src/features/context/migration.ts",
+        "duration": 8873,
+        "start": 7354,
+        "size": 300,
+        "responseEnd": 16228
+      },
+      {
+        "name": "/src/lib/jev/client.ts",
+        "duration": 8940,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16294
+      },
+      {
+        "name": "/src/lib/jev/settings.ts?t=1790517565783",
+        "duration": 8960,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16315
+      },
+      {
+        "name": "/src/lib/jev/usageEventWriter.ts",
+        "duration": 8960,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16315
+      },
+      {
+        "name": "/src/features/cao/executionProfile.ts",
+        "duration": 8985,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16339
+      },
+      {
+        "name": "/src/features/cao/mission/missionStore.ts",
+        "duration": 8985,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16339
+      },
+      {
+        "name": "/src/features/cao/mission/productionController.ts?t=1790517565783",
+        "duration": 8996,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16350
+      },
+      {
+        "name": "/src/features/cao/sentinel/chatSnapshotAdapter.ts",
+        "duration": 9003,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16358
+      },
+      {
+        "name": "/src/features/cao/sentinel/terminalSnapshotAdapter.ts",
+        "duration": 9002,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16357
+      },
+      {
+        "name": "/src/features/cao/sentinel/sentinelScheduler.ts",
+        "duration": 9019,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16374
+      },
+      {
+        "name": "/src/features/cao/sentinel/sentinelRuntime.ts",
+        "duration": 9027,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16382
+      },
+      {
+        "name": "/src/lib/sfx/soundRegistry.ts",
+        "duration": 9027,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16382
+      },
+      {
+        "name": "/src/lib/sfx/playUiSound.ts?t=1790517565783",
+        "duration": 9035,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16391
+      },
+      {
+        "name": "/src/lib/sfx/GlobalUiSoundHost.tsx?t=1790517565783",
+        "duration": 9045,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16400
+      },
+      {
+        "name": "/src/stability/stabilityDiagnostics.ts",
+        "duration": 9053,
+        "start": 7355,
+        "size": 300,
+        "responseEnd": 16408
+      },
+      {
+        "name": "/node_modules/.vite/deps/@tauri-apps_api_event.js?v=dbb94cbd",
+        "duration": 9048,
+        "start": 7355,
+        "size": 0,
+        "responseEnd": 16403
+      },
+      {
+        "name": "/node_modules/.vite/deps/@tauri-apps_api_window.js?v=dbb94cbd",
+        "duration": 9069,
+        "start": 7355,
+        "size": 0,
+        "responseEnd": 16424
+      },
+      {
+        "name": "/node_modules/.vite/deps/@tauri-apps_api_core.js?v=dbb94cbd",
+        "duration": 9070,
+        "start": 7356,
+        "size": 0,
+        "responseEnd": 16426
+      },
+      {
+        "name": "/src/lib/diagnostics/appActivityLog.ts",
+        "duration": 9070,
+        "start": 7356,
+        "size": 300,
+        "responseEnd": 16425
+      },
+      {
+        "name": "/src/lib/diagnostics/activityLogPersistence.ts",
+        "duration": 9088,
+        "start": 7356,
+        "size": 300,
+        "responseEnd": 16443
+      },
+      {
+        "name": "/src/lib/diagnostics/activityDiagnosticContract.ts",
+        "duration": 9085,
+        "start": 7356,
+        "size": 300,
+        "responseEnd": 16441
+      },
+      {
+        "name": "/src/features/opencode-system-log/opencodeSystemLog.ts",
+        "duration": 9096,
+        "start": 7356,
+        "size": 300,
+        "responseEnd": 16452
+      },
+      {
+        "name": "/src/features/opencode-system-log/opencodeSystemLog.css",
+        "duration": 9113,
+        "start": 7356,
+        "size": 300,
+        "responseEnd": 16469
+      },
+      {
+        "name": "/src/components/ui/button.tsx",
+        "duration": 9115,
+        "start": 7356,
+        "size": 300,
+        "responseEnd": 16471
+      },
+      {
+        "name": "/src/features/dev-console/store.ts",
+        "duration": 9122,
+        "start": 7356,
+        "size": 300,
+        "responseEnd": 16478
+      },
+      {
+        "name": "/src/lib/security/secretDetector.ts",
+        "duration": 9125,
+        "start": 7356,
+        "size": 300,
+        "responseEnd": 16481
+      },
+      {
+        "name": "/src/features/fullscreen/fullscreenStore.ts",
+        "duration": 8821,
+        "start": 7683,
+        "size": 300,
+        "responseEnd": 16504
+      },
+      {
+        "name": "/src/features/appearance/themeContract.generated.ts",
+        "duration": 8167,
+        "start": 8338,
+        "size": 300,
+        "responseEnd": 16505
+      },
+      {
+        "name": "/src/features/workbench/types.ts",
+        "duration": 8022,
+        "start": 8489,
+        "size": 300,
+        "responseEnd": 16512
+      },
+      {
+        "name": "/src/features/workbench/templates.ts",
+        "duration": 8041,
+        "start": 8490,
+        "size": 300,
+        "responseEnd": 16530
+      },
+      {
+        "name": "/src/features/workbench/persistence.ts",
+        "duration": 8075,
+        "start": 8490,
+        "size": 300,
+        "responseEnd": 16565
+      },
+      {
+        "name": "/src/features/files/projectFiles.ts",
+        "duration": 8066,
+        "start": 8490,
+        "size": 300,
+        "responseEnd": 16556
+      },
+      {
+        "name": "/src/features/workbench/workbenchName.ts",
+        "duration": 8062,
+        "start": 8490,
+        "size": 300,
+        "responseEnd": 16552
+      },
+      {
+        "name": "/src/features/preview/previewDevices.ts",
+        "duration": 8082,
+        "start": 8490,
+        "size": 300,
+        "responseEnd": 16572
+      },
+      {
+        "name": "/src/features/workbench/editorPreview.ts",
+        "duration": 8075,
+        "start": 8490,
+        "size": 300,
+        "responseEnd": 16565
+      },
+      {
+        "name": "/src/features/taskbar-usage/taskbarUsageModel.ts",
+        "duration": 8085,
+        "start": 8505,
+        "size": 300,
+        "responseEnd": 16590
+      },
+      {
+        "name": "/src/features/taskbar-usage/UsageSyncAge.tsx",
+        "duration": 8088,
+        "start": 8505,
+        "size": 300,
+        "responseEnd": 16593
+      },
+      {
+        "name": "/src/features/taskbar-usage/ProviderUsageRow.tsx",
+        "duration": 8088,
+        "start": 8505,
+        "size": 300,
+        "responseEnd": 16593
+      },
+      {
+        "name": "/src/features/taskbar-usage/taskbarPlacement.ts",
+        "duration": 8075,
+        "start": 8541,
+        "size": 300,
+        "responseEnd": 16616
+      },
+      {
+        "name": "/src/lib/tauri.ts?t=1790517565783",
+        "duration": 7445,
+        "start": 9172,
+        "size": 300,
+        "responseEnd": 16617
+      },
+      {
+        "name": "/src/features/taskbar-usage/providerUsageRegistry.ts",
+        "duration": 7455,
+        "start": 9172,
+        "size": 300,
+        "responseEnd": 16627
+      },
+      {
+        "name": "/src/lib/ai/adapters/claude.ts",
+        "duration": 7271,
+        "start": 9375,
+        "size": 300,
+        "responseEnd": 16647
+      },
+      {
+        "name": "/src/lib/ai/adapters/codex.ts",
+        "duration": 7272,
+        "start": 9375,
+        "size": 300,
+        "responseEnd": 16647
+      },
+      {
+        "name": "/src/lib/ai/adapters/copilot.ts",
+        "duration": 7276,
+        "start": 9375,
+        "size": 300,
+        "responseEnd": 16651
+      },
+      {
+        "name": "/src/lib/ai/adapters/gemini.ts",
+        "duration": 7279,
+        "start": 9375,
+        "size": 300,
+        "responseEnd": 16654
+      },
+      {
+        "name": "/src/lib/ai/adapters/opencodePersistent.ts?t=1790517565783",
+        "duration": 7297,
+        "start": 9376,
+        "size": 300,
+        "responseEnd": 16673
+      },
+      {
+        "name": "/src/lib/ai/adapters/qwen.ts",
+        "duration": 7292,
+        "start": 9376,
+        "size": 300,
+        "responseEnd": 16667
+      },
+      {
+        "name": "/src/lib/ai/adapters/nativeCatalog.ts",
+        "duration": 6558,
+        "start": 10110,
+        "size": 300,
+        "responseEnd": 16667
+      },
+      {
+        "name": "/src/lib/ai/adapters/opencode.ts",
+        "duration": 6567,
+        "start": 10110,
+        "size": 300,
+        "responseEnd": 16677
+      },
+      {
+        "name": "/src/lib/ai/adapters/cliBridge.ts",
+        "duration": 6571,
+        "start": 10110,
+        "size": 300,
+        "responseEnd": 16681
+      },
+      {
+        "name": "/src/lib/ai/models.ts?t=1790517565783",
+        "duration": 6221,
+        "start": 10471,
+        "size": 300,
+        "responseEnd": 16693
+      },
+      {
+        "name": "/src/lib/ai/agentProviderOptions.ts?t=1790517565783",
+        "duration": 6226,
+        "start": 10471,
+        "size": 300,
+        "responseEnd": 16697
+      },
+      {
+        "name": "/src/lib/ai/providers/kernelSmoke.ts",
+        "duration": 6234,
+        "start": 10471,
+        "size": 300,
+        "responseEnd": 16706
+      },
+      {
+        "name": "/src/lib/utils.ts",
+        "duration": 6239,
+        "start": 10471,
+        "size": 300,
+        "responseEnd": 16710
+      },
+      {
+        "name": "/src/lib/ai/stacks/presets.ts",
+        "duration": 6183,
+        "start": 10535,
+        "size": 300,
+        "responseEnd": 16718
+      },
+      {
+        "name": "/src/lib/ai/providerModelCatalog.ts?t=1790517565783",
+        "duration": 6184,
+        "start": 10535,
+        "size": 300,
+        "responseEnd": 16719
+      },
+      {
+        "name": "/src/lib/security/secureApiKeys.ts",
+        "duration": 6196,
+        "start": 10536,
+        "size": 300,
+        "responseEnd": 16732
+      },
+      {
+        "name": "/src/features/voice/voiceConversation.ts",
+        "duration": 6197,
+        "start": 10536,
+        "size": 300,
+        "responseEnd": 16732
+      },
+      {
+        "name": "/src/features/voice/voiceTurnCommit.ts",
+        "duration": 6209,
+        "start": 10536,
+        "size": 300,
+        "responseEnd": 16745
+      },
+      {
+        "name": "/src/lib/ai/modelSelection.ts?t=1790517565783",
+        "duration": 6210,
+        "start": 10536,
+        "size": 300,
+        "responseEnd": 16746
+      },
+      {
+        "name": "/src/lib/features/hiveProductGate.ts",
+        "duration": 6210,
+        "start": 10536,
+        "size": 300,
+        "responseEnd": 16745
+      },
+      {
+        "name": "/src/features/composer-stt/catalog.ts",
+        "duration": 6230,
+        "start": 10536,
+        "size": 300,
+        "responseEnd": 16766
+      },
+      {
+        "name": "/src/lib/assistantPersona.ts?t=1790517565783",
+        "duration": 6228,
+        "start": 10536,
+        "size": 300,
+        "responseEnd": 16764
+      },
+      {
+        "name": "/src/features/prompt-forge/contracts.ts",
+        "duration": 6232,
+        "start": 10537,
+        "size": 300,
+        "responseEnd": 16769
+      },
+      {
+        "name": "/src/features/prompt-forge/modelSelection.ts?t=1790517565783",
+        "duration": 6241,
+        "start": 10537,
+        "size": 300,
+        "responseEnd": 16778
+      },
+      {
+        "name": "/src/lib/harness/CredentialHydrationSnapshot.ts",
+        "duration": 6250,
+        "start": 10538,
+        "size": 300,
+        "responseEnd": 16788
+      },
+      {
+        "name": "/src/lib/db/repositories.ts",
+        "duration": 2139,
+        "start": 14658,
+        "size": 300,
+        "responseEnd": 16797
+      },
+      {
+        "name": "/node_modules/.vite/deps/chunk-KISAMODO.js?v=dbb94cbd",
+        "duration": 2084,
+        "start": 14700,
+        "size": 0,
+        "responseEnd": 16784
+      },
+      {
+        "name": "/src/features/voice/speechSynthesis.ts?t=1790517565783",
+        "duration": 1982,
+        "start": 14815,
+        "size": 300,
+        "responseEnd": 16796
+      },
+      {
+        "name": "/src/features/voice/providers/jarvisHighLocal.ts",
+        "duration": 1985,
+        "start": 14815,
+        "size": 300,
+        "responseEnd": 16800
+      },
+      {
+        "name": "/src/features/voice/audioPlayback.ts",
+        "duration": 1996,
+        "start": 14816,
+        "size": 300,
+        "responseEnd": 16812
+      },
+      {
+        "name": "/src/features/voice/modelManager.ts",
+        "duration": 1995,
+        "start": 14817,
+        "size": 300,
+        "responseEnd": 16812
+      },
+      {
+        "name": "/src/features/voice/TtsService.ts?t=1790517565783",
+        "duration": 1997,
+        "start": 14817,
+        "size": 300,
+        "responseEnd": 16815
+      },
+      {
+        "name": "/src/features/voice/providers/deepgramTts.ts",
+        "duration": 2004,
+        "start": 14817,
+        "size": 300,
+        "responseEnd": 16822
+      },
+      {
+        "name": "/src/features/voice/VoiceService.ts",
+        "duration": 2007,
+        "start": 14817,
+        "size": 300,
+        "responseEnd": 16825
+      },
+      {
+        "name": "/src/features/voice/store.ts",
+        "duration": 2019,
+        "start": 14817,
+        "size": 300,
+        "responseEnd": 16836
+      },
+      {
+        "name": "/node_modules/.vite/deps/chunk-DUWVDU2D.js?v=dbb94cbd",
+        "duration": 1996,
+        "start": 14866,
+        "size": 0,
+        "responseEnd": 16863
+      },
+      {
+        "name": "/src/features/auth/AuthGate.tsx?t=1790517565783",
+        "duration": 2082,
+        "start": 14884,
+        "size": 300,
+        "responseEnd": 16966
+      },
+      {
+        "name": "/src/features/auth/OtpCodeInput.tsx",
+        "duration": 2082,
+        "start": 14884,
+        "size": 300,
+        "responseEnd": 16966
+      },
+      {
+        "name": "/src/features/auth/authErrors.ts",
+        "duration": 2101,
+        "start": 14884,
+        "size": 300,
+        "responseEnd": 16985
+      },
+      {
+        "name": "/src/features/auth/authValidation.ts",
+        "duration": 2101,
+        "start": 14884,
+        "size": 300,
+        "responseEnd": 16985
+      },
+      {
+        "name": "/src/lib/supabase.ts",
+        "duration": 2089,
+        "start": 14907,
+        "size": 300,
+        "responseEnd": 16996
+      }
+    ]
+  }
+}

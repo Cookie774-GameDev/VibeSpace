@@ -1,0 +1,19 @@
+{
+  "at": "2026-09-27T13:34:00.867Z",
+  "stage": "navigate",
+  "targetChatId": "cht_D8GQG9qj9GYHFoNZ",
+  "sourceChatId": "cht_lWazHd9Rnq8FPmHo",
+  "providerSend": false,
+  "before": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "targetTitle": "Use the selected ch31-codex-native skill throug…",
+    "sourceTitle": "Use your native question tool to ask me one har…",
+    "targetProjectId": "prj_ybjv0yXnrGkGhAQY",
+    "targetBackend": "codex",
+    "targetUsers": 19,
+    "targetAssistants": 10
+  },
+  "initialDraft": "$plugin-creator ",
+  "failure": "codex_fixture_draft_not_empty",
+  "finishedAt": "2026-09-27T13:34:03.416Z"
+}

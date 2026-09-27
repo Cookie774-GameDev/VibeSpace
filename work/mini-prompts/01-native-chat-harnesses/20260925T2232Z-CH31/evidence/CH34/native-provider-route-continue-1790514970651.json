@@ -1,0 +1,27 @@
+{
+  "at": "2026-09-27T13:16:10.371Z",
+  "stage": "attach",
+  "chatId": "cht_vdI_HrV1IHyCNXif",
+  "providerSend": false,
+  "previousAttempts": [
+    "native-provider-draft-1790514711321.json",
+    "native-provider-draft-1790514808783.json"
+  ],
+  "before": {
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": null,
+    "userCount": 0,
+    "assistantCount": 0,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "selection": {
+      "mode": "single",
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "failure": "exact_unsent_fixture_draft_required",
+  "finishedAt": "2026-09-27T13:16:10.651Z"
+}

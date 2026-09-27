@@ -1,0 +1,10 @@
+{
+    "at":  "2026-09-27T13:54:55.3490917Z",
+    "executable":  "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\app\\src-tauri\\target\\debug\\jarvis.exe",
+    "profile":  "C:\\Users\\viper\\AppData\\Local\\ai.jarvis.desktop\\EBWebView",
+    "pid":  15544,
+    "webviewPid":  35128,
+    "executableSha256":  "526A980B05D48DFF6F27BF7ACC4C892E452A869F90B464369584C04B5C4D9CA8",
+    "passed":  true,
+    "failure":  null
+}

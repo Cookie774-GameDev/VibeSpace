@@ -1,0 +1,19 @@
+{
+  "measuredAtUtc": "2026-09-27T16:10:19.9553008Z",
+  "label": "existing generated artifacts baseline; pre-SU01 final build; not source-matched production evidence",
+  "appDist": {
+    "path": "app/dist",
+    "fileCount": 746,
+    "bytes": 95395087,
+    "decimalMB": 95.4,
+    "mebibytes": 90.98,
+    "newestFileWriteLocal": "2026-09-27T10:58:53.1787367-05:00"
+  },
+  "installer": {
+    "path": "app/src-tauri/target/release/bundle/msi/VibeSpace_1.5.0_x64_en-US.msi",
+    "bytes": 299375206,
+    "decimalMB": 299.38,
+    "mebibytes": 285.51,
+    "lastWriteLocal": "2026-09-27T03:24:01.6550000-05:00"
+  }
+}

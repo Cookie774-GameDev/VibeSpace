@@ -1,0 +1,79 @@
+{
+  "startedAt": "2026-09-27T17:00:23.184Z",
+  "endpoint": "http://127.0.0.1:9223",
+  "expectedAppPid": 24748,
+  "expectedWebViewPid": 28964,
+  "stage": "complete",
+  "actedOnUi": false,
+  "pageCount": 2,
+  "observations": [
+    {
+      "href": "http://localhost:5173/index.html?view=dictation",
+      "label": "dictation",
+      "visible": "visible",
+      "readyState": "complete",
+      "viewport": {
+        "width": 134,
+        "height": 38,
+        "dpr": 1.25
+      },
+      "activePaneRects": [],
+      "activeChatPanes": [],
+      "fixture": null,
+      "currentNavRows": [],
+      "sessionStatuses": [],
+      "modelButtons": [],
+      "composers": [],
+      "sendButtons": [],
+      "snippetCount": 0,
+      "snippets": [],
+      "codeFenceCount": 0,
+      "questionCardCount": 0
+    },
+    {
+      "href": "http://localhost:5173/?route=chat",
+      "label": "main",
+      "visible": "visible",
+      "readyState": "complete",
+      "viewport": {
+        "width": 1536,
+        "height": 794,
+        "dpr": 1.25
+      },
+      "activePaneRects": [
+        {
+          "id": "chat-pane-cht_5rAdGa6DdE1Z7_Qg",
+          "width": 1296,
+          "height": 697.6000366210938,
+          "parentWidth": 1296
+        }
+      ],
+      "activeChatPanes": [
+        "chat-pane-cht_5rAdGa6DdE1Z7_Qg"
+      ],
+      "fixture": null,
+      "currentNavRows": [
+        "chat-nav-row-cht_5rAdGa6DdE1Z7_Qg"
+      ],
+      "sessionStatuses": [
+        "Running"
+      ],
+      "modelButtons": [
+        "OpenAI · gpt-6-lunaauto"
+      ],
+      "composers": [
+        {
+          "visible": true,
+          "disabled": false,
+          "draftLength": 0
+        }
+      ],
+      "sendButtons": [],
+      "snippetCount": 0,
+      "snippets": [],
+      "codeFenceCount": 0,
+      "questionCardCount": 2
+    }
+  ],
+  "finishedAt": "2026-09-27T17:00:23.652Z"
+}

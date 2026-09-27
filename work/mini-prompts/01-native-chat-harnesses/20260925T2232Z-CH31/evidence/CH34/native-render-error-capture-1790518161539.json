@@ -1,0 +1,122 @@
+{
+  "at": "2026-09-27T14:09:12.905Z",
+  "readOnly": true,
+  "errors": [],
+  "console": [
+    {
+      "type": "warning",
+      "text": "IPC custom protocol failed, Tauri will now use the postMessage interface instead TypeError: Failed to fetch"
+    },
+    {
+      "type": "warning",
+      "text": "IPC custom protocol failed, Tauri will now use the postMessage interface instead TypeError: Failed to fetch\n    at patchedFetch (http://localhost:5173/src/features/dev-console/patchers.ts:89:25)\n    at Object.sendIpcMessage (<anonymous>:83:7)\n    at Object.<anonymous> (<anonymous>:177:38)\n    at action (<anonymous>:336:38)\n    at <anonymous>:345:11\n    at new Promise (<anonymous>)\n    at Object.value (<anonymous>:325:14)\n    at invoke (http://localhost:5173/node_modules/.vite/deps/chunk-N7XNJV4S.js?v=dbb94cbd:109:37)\n    at _unlisten (http://localhost:5173/node_modules/.vite/deps/chunk-BLKRPNAV.js?v=dbb94cbd:28:9)\n    at http://localhost:5173/node_modules/.vite/deps/chunk-BLKRPNAV.js?v=dbb94cbd:41:24"
+    },
+    {
+      "type": "warning",
+      "text": "IPC custom protocol failed, Tauri will now use the postMessage interface instead TypeError: Failed to fetch"
+    },
+    {
+      "type": "warning",
+      "text": "IPC custom protocol failed, Tauri will now use the postMessage interface instead TypeError: Failed to fetch\n    at patchedFetch (http://localhost:5173/src/features/dev-console/patchers.ts:89:25)\n    at Object.sendIpcMessage (<anonymous>:83:7)\n    at Object.<anonymous> (<anonymous>:177:38)\n    at action (<anonymous>:336:38)\n    at <anonymous>:345:11\n    at new Promise (<anonymous>)\n    at Object.value (<anonymous>:325:14)\n    at invoke (http://localhost:5173/node_modules/.vite/deps/chunk-N7XNJV4S.js?v=dbb94cbd:109:37)\n    at http://localhost:5173/src/lib/jarvis/kernelHost.ts:211:15"
+    },
+    {
+      "type": "warning",
+      "text": "IPC custom protocol failed, Tauri will now use the postMessage interface instead TypeError: Failed to fetch\n    at patchedFetch (http://localhost:5173/src/features/dev-console/patchers.ts:89:25)\n    at Object.sendIpcMessage (<anonymous>:83:7)\n    at Object.<anonymous> (<anonymous>:177:38)\n    at action (<anonymous>:336:38)\n    at <anonymous>:345:11\n    at new Promise (<anonymous>)\n    at Object.value (<anonymous>:325:14)\n    at invoke (http://localhost:5173/node_modules/.vite/deps/chunk-N7XNJV4S.js?v=dbb94cbd:109:37)\n    at http://localhost:5173/src/lib/diagnostics/activityLogLifecycle.ts:74:46\n    at http://localhost:5173/src/lib/diagnostics/activityLogLifecycle.ts:78:12"
+    },
+    {
+      "type": "warning",
+      "text": "IPC custom protocol failed, Tauri will now use the postMessage interface instead TypeError: Failed to fetch\n    at patchedFetch (http://localhost:5173/src/features/dev-console/patchers.ts:89:25)\n    at Object.sendIpcMessage (<anonymous>:83:7)\n    at Object.<anonymous> (<anonymous>:177:38)\n    at action (<anonymous>:336:38)\n    at <anonymous>:345:11\n    at new Promise (<anonymous>)\n    at Object.value (<anonymous>:325:14)\n    at invoke (http://localhost:5173/node_modules/.vite/deps/chunk-N7XNJV4S.js?v=dbb94cbd:109:37)\n    at _unlisten (http://localhost:5173/node_modules/.vite/deps/chunk-BLKRPNAV.js?v=dbb94cbd:28:9)\n    at http://localhost:5173/node_modules/.vite/deps/chunk-BLKRPNAV.js?v=dbb94cbd:41:24"
+    },
+    {
+      "type": "warning",
+      "text": "IPC custom protocol failed, Tauri will now use the postMessage interface instead TypeError: Failed to fetch\n    at patchedFetch (http://localhost:5173/src/features/dev-console/patchers.ts:89:25)\n    at Object.sendIpcMessage (<anonymous>:83:7)\n    at Object.<anonymous> (<anonymous>:177:38)\n    at action (<anonymous>:336:38)\n    at <anonymous>:345:11\n    at new Promise (<anonymous>)\n    at Object.value (<anonymous>:325:14)\n    at invoke (http://localhost:5173/node_modules/.vite/deps/chunk-N7XNJV4S.js?v=dbb94cbd:109:37)\n    at _unlisten (http://localhost:5173/node_modules/.vite/deps/chunk-BLKRPNAV.js?v=dbb94cbd:28:9)\n    at http://localhost:5173/node_modules/.vite/deps/chunk-BLKRPNAV.js?v=dbb94cbd:41:24"
+    },
+    {
+      "type": "warning",
+      "text": "IPC custom protocol failed, Tauri will now use the postMessage interface instead TypeError: Failed to fetch\n    at patchedFetch (http://localhost:5173/src/features/dev-console/patchers.ts:89:25)\n    at Object.sendIpcMessage (<anonymous>:83:7)\n    at Object.<anonymous> (<anonymous>:177:38)\n    at action (<anonymous>:336:38)\n    at <anonymous>:345:11\n    at new Promise (<anonymous>)\n    at Object.value (<anonymous>:325:14)\n    at invoke (http://localhost:5173/node_modules/.vite/deps/chunk-N7XNJV4S.js?v=dbb94cbd:109:37)\n    at _unlisten (http://localhost:5173/node_modules/.vite/deps/chunk-BLKRPNAV.js?v=dbb94cbd:28:9)\n    at http://localhost:5173/node_modules/.vite/deps/chunk-BLKRPNAV.js?v=dbb94cbd:41:24"
+    },
+    {
+      "type": "warning",
+      "text": "IPC custom protocol failed, Tauri will now use the postMessage interface instead TypeError: Failed to fetch\n    at patchedFetch (http://localhost:5173/src/features/dev-console/patchers.ts:89:25)\n    at Object.sendIpcMessage (<anonymous>:83:7)\n    at Object.<anonymous> (<anonymous>:177:38)\n    at action (<anonymous>:336:38)\n    at <anonymous>:345:11\n    at new Promise (<anonymous>)\n    at Object.value (<anonymous>:325:14)\n    at invoke (http://localhost:5173/node_modules/.vite/deps/chunk-N7XNJV4S.js?v=dbb94cbd:109:37)\n    at _unlisten (http://localhost:5173/node_modules/.vite/deps/chunk-BLKRPNAV.js?v=dbb94cbd:28:9)\n    at http://localhost:5173/node_modules/.vite/deps/chunk-BLKRPNAV.js?v=dbb94cbd:41:24"
+    },
+    {
+      "type": "warning",
+      "text": "[TAURI] Couldn't find callback id 3335623196. This might happen when the app is reloaded while Rust is running an asynchronous operation."
+    },
+    {
+      "type": "warning",
+      "text": "[TAURI] Couldn't find callback id 4035527879. This might happen when the app is reloaded while Rust is running an asynchronous operation."
+    },
+    {
+      "type": "warning",
+      "text": "[TAURI] Couldn't find callback id 4278672542. This might happen when the app is reloaded while Rust is running an asynchronous operation."
+    },
+    {
+      "type": "warning",
+      "text": "[TAURI] Couldn't find callback id 460494794. This might happen when the app is reloaded while Rust is running an asynchronous operation."
+    },
+    {
+      "type": "warning",
+      "text": "[TAURI] Couldn't find callback id 74055524. This might happen when the app is reloaded while Rust is running an asynchronous operation."
+    },
+    {
+      "type": "warning",
+      "text": "[TAURI] Couldn't find callback id 769990537. This might happen when the app is reloaded while Rust is running an asynchronous operation."
+    },
+    {
+      "type": "warning",
+      "text": "[TAURI] Couldn't find callback id 3451034349. This might happen when the app is reloaded while Rust is running an asynchronous operation."
+    },
+    {
+      "type": "warning",
+      "text": "[TAURI] Couldn't find callback id 1770763216. This might happen when the app is reloaded while Rust is running an asynchronous operation."
+    },
+    {
+      "type": "warning",
+      "text": "[TAURI] Couldn't find callback id 1287723242. This might happen when the app is reloaded while Rust is running an asynchronous operation."
+    }
+  ],
+  "requests": [
+    {
+      "url": "http://ipc.localhost/refresh_app_branding",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://ipc.localhost/plugin%3Aevent%7Cunlisten",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://ipc.localhost/cli_bridge_scan",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://ipc.localhost/release_kernel_host",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://ipc.localhost/activity_diagnostics_append",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://ipc.localhost/plugin%3Aevent%7Cunlisten",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://ipc.localhost/plugin%3Aevent%7Cunlisten",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://ipc.localhost/plugin%3Aevent%7Cunlisten",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://ipc.localhost/plugin%3Aevent%7Cunlisten",
+      "failure": "net::ERR_ABORTED"
+    }
+  ],
+  "dom": {
+    "rootLength": 428,
+    "bodyText": "Opening VibeSpace\n\nLoading your workspace…",
+    "paneCount": 0
+  }
+}

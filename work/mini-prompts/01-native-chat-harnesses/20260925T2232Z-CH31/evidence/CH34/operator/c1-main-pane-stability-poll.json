@@ -1,0 +1,113 @@
+{
+  "startedAt": "2026-09-27T15:49:26.032Z",
+  "completedAt": "2026-09-27T15:49:34.211Z",
+  "cdpEndpoint": "http://127.0.0.1:9223",
+  "mainTargetCount": 1,
+  "mainFrameNavigations": 0,
+  "contextErrors": 0,
+  "stableSamples": 10,
+  "totalSamples": 10,
+  "samples": [
+    {
+      "at": "2026-09-27T15:49:26.846Z",
+      "readyState": "complete",
+      "activeChatMatches": true,
+      "paneVisible": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "runStatus": "Cancelled",
+      "questionCardCount": 5
+    },
+    {
+      "at": "2026-09-27T15:49:27.362Z",
+      "readyState": "complete",
+      "activeChatMatches": true,
+      "paneVisible": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "runStatus": "Cancelled",
+      "questionCardCount": 5
+    },
+    {
+      "at": "2026-09-27T15:49:29.609Z",
+      "readyState": "complete",
+      "activeChatMatches": true,
+      "paneVisible": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "runStatus": "Cancelled",
+      "questionCardCount": 5
+    },
+    {
+      "at": "2026-09-27T15:49:30.129Z",
+      "readyState": "complete",
+      "activeChatMatches": true,
+      "paneVisible": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "runStatus": "Cancelled",
+      "questionCardCount": 5
+    },
+    {
+      "at": "2026-09-27T15:49:30.637Z",
+      "readyState": "complete",
+      "activeChatMatches": true,
+      "paneVisible": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "runStatus": "Cancelled",
+      "questionCardCount": 5
+    },
+    {
+      "at": "2026-09-27T15:49:31.160Z",
+      "readyState": "complete",
+      "activeChatMatches": true,
+      "paneVisible": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "runStatus": "Cancelled",
+      "questionCardCount": 5
+    },
+    {
+      "at": "2026-09-27T15:49:31.701Z",
+      "readyState": "complete",
+      "activeChatMatches": true,
+      "paneVisible": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "runStatus": "Cancelled",
+      "questionCardCount": 5
+    },
+    {
+      "at": "2026-09-27T15:49:32.328Z",
+      "readyState": "complete",
+      "activeChatMatches": true,
+      "paneVisible": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "runStatus": "Cancelled",
+      "questionCardCount": 5
+    },
+    {
+      "at": "2026-09-27T15:49:33.680Z",
+      "readyState": "complete",
+      "activeChatMatches": true,
+      "paneVisible": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "runStatus": "Cancelled",
+      "questionCardCount": 5
+    },
+    {
+      "at": "2026-09-27T15:49:34.210Z",
+      "readyState": "complete",
+      "activeChatMatches": true,
+      "paneVisible": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "runStatus": "Cancelled",
+      "questionCardCount": 5
+    }
+  ],
+  "stableForFiveSeconds": true
+}

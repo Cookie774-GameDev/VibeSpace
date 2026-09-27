@@ -1,0 +1,48 @@
+{
+  "startedAt": "2026-09-27T16:33:46.240Z",
+  "endpoint": "http://127.0.0.1:9223",
+  "expectedAppPid": 24748,
+  "expectedWebViewPid": 28964,
+  "stage": "complete",
+  "actedOnUi": false,
+  "pageCount": 2,
+  "observations": [
+    {
+      "href": "http://localhost:5173/index.html?view=dictation",
+      "label": "dictation",
+      "visible": "visible",
+      "readyState": "complete",
+      "activeChatPanes": [],
+      "fixture": null,
+      "currentNavRows": [],
+      "sessionStatuses": [],
+      "modelButtons": [],
+      "snippetCount": 0,
+      "codeFenceCount": 0,
+      "questionCardCount": 0
+    },
+    {
+      "href": "http://localhost:5173/?route=chat",
+      "label": "main",
+      "visible": "visible",
+      "readyState": "complete",
+      "activeChatPanes": [
+        "chat-pane-cht_-zkkf_r46zzuxB3L"
+      ],
+      "fixture": null,
+      "currentNavRows": [
+        "chat-nav-row-cht_-zkkf_r46zzuxB3L"
+      ],
+      "sessionStatuses": [
+        "Failed"
+      ],
+      "modelButtons": [
+        "OpenAI · gpt-6-lunalow"
+      ],
+      "snippetCount": 0,
+      "codeFenceCount": 0,
+      "questionCardCount": 6
+    }
+  ],
+  "finishedAt": "2026-09-27T16:33:46.625Z"
+}

@@ -1,0 +1,131 @@
+{
+  "at": "2026-09-27T13:16:39.917Z",
+  "stage": "complete",
+  "chatId": "cht_vdI_HrV1IHyCNXif",
+  "providerSend": false,
+  "previousAttempts": [
+    "native-provider-draft-1790514711321.json",
+    "native-provider-draft-1790514808783.json"
+  ],
+  "before": {
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "opencode",
+    "userCount": 0,
+    "assistantCount": 0,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "selection": {
+      "mode": "single",
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "codexRuntime": {
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "codex",
+    "userCount": 0,
+    "assistantCount": 0,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "selection": {
+      "mode": "single",
+      "providerId": "openai",
+      "modelId": "gpt-6-luna",
+      "connectionId": "openai-codex"
+    }
+  },
+  "codexOptions": [
+    {
+      "value": "opencode-cli:azure/gpt-6-luna",
+      "disabled": "false"
+    },
+    {
+      "value": "openai-codex:gpt-6-luna",
+      "disabled": "false"
+    },
+    {
+      "value": "opencode-cli:opencode-go/gpt-6-luna",
+      "disabled": "false"
+    },
+    {
+      "value": "opencode-cli:openrouter/openai/gpt-6-luna",
+      "disabled": "false"
+    },
+    {
+      "value": "opencode-cli:openrouter/openai/gpt-6-luna-pro",
+      "disabled": "false"
+    }
+  ],
+  "codex": {
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "codex",
+    "userCount": 0,
+    "assistantCount": 0,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "selection": {
+      "mode": "single",
+      "providerId": "openai",
+      "modelId": "gpt-6-luna",
+      "connectionId": "openai-codex"
+    }
+  },
+  "openCodeRuntime": {
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "opencode",
+    "userCount": 0,
+    "assistantCount": 0,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "selection": {
+      "mode": "single",
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "opencodeOptions": [
+    {
+      "value": "opencode-cli:azure/gpt-6-luna",
+      "disabled": "false"
+    },
+    {
+      "value": "opencode-cli:openai/gpt-6-luna",
+      "disabled": "false"
+    },
+    {
+      "value": "opencode-cli:opencode-go/gpt-6-luna",
+      "disabled": "false"
+    },
+    {
+      "value": "opencode-cli:openrouter/openai/gpt-6-luna",
+      "disabled": "false"
+    },
+    {
+      "value": "opencode-cli:openrouter/openai/gpt-6-luna-pro",
+      "disabled": "false"
+    }
+  ],
+  "after": {
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "opencode",
+    "userCount": 0,
+    "assistantCount": 0,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "selection": {
+      "mode": "single",
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "passed": true,
+  "finishedAt": "2026-09-27T13:16:44.272Z"
+}

@@ -1,0 +1,23 @@
+{
+  "at": "2026-09-27T13:34:27.169Z",
+  "stage": "restore",
+  "targetChatId": "cht_-zkkf_r46zzuxB3L",
+  "sourceChatId": "cht_lWazHd9Rnq8FPmHo",
+  "providerSend": false,
+  "before": {
+    "activeChatId": "cht_D8GQG9qj9GYHFoNZ",
+    "targetTitle": "New chat 8",
+    "sourceTitle": "Use your native question tool to ask me one har…",
+    "targetProjectId": "prj_ybjv0yXnrGkGhAQY",
+    "targetBackend": "codex",
+    "targetUsers": 1,
+    "targetAssistants": 0
+  },
+  "initialDraft": "",
+  "picker": {
+    "slashOptions": [],
+    "mcpButtons": []
+  },
+  "passed": true,
+  "finishedAt": "2026-09-27T13:34:36.255Z"
+}

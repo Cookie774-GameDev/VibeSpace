@@ -1,0 +1,31 @@
+{
+  "at": "2026-09-27T13:55:09.954Z",
+  "port": 9223,
+  "readOnly": true,
+  "pages": [
+    {
+      "url": "http://localhost:5173/?route=chat",
+      "closed": false,
+      "dom": {
+        "label": "main",
+        "readyState": "complete",
+        "title": "VibeSpace",
+        "bodyChildCount": 2,
+        "paneCount": 1,
+        "currentPath": "/?route=chat"
+      }
+    },
+    {
+      "url": "http://localhost:5173/index.html?view=dictation",
+      "closed": false,
+      "dom": {
+        "label": "dictation",
+        "readyState": "complete",
+        "title": "VibeSpace",
+        "bodyChildCount": 2,
+        "paneCount": 0,
+        "currentPath": "/index.html?view=dictation"
+      }
+    }
+  ]
+}

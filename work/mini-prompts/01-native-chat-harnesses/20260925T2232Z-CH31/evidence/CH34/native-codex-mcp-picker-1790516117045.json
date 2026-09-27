@@ -1,0 +1,40 @@
+{
+  "at": "2026-09-27T13:35:06.947Z",
+  "stage": "restore",
+  "targetChatId": "cht_-zkkf_r46zzuxB3L",
+  "sourceChatId": "cht_lWazHd9Rnq8FPmHo",
+  "providerSend": false,
+  "before": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "targetTitle": "New chat 8",
+    "sourceTitle": "Use your native question tool to ask me one har…",
+    "targetProjectId": "prj_ybjv0yXnrGkGhAQY",
+    "targetBackend": "codex",
+    "targetUsers": 1,
+    "targetAssistants": 0
+  },
+  "initialDraft": "",
+  "targetRoute": {
+    "backend": "codex",
+    "selectedConnection": "opencode-cli",
+    "selectedModel": "opencode-go/deepseek-v4-flash"
+  },
+  "picker": {
+    "slashListVisible": true,
+    "slashOptions": [
+      {
+        "text": "/mcpapp-server · Show Codex MCP server status through its native app-server",
+        "value": "codex:app-server:mcp",
+        "label": null
+      },
+      {
+        "text": "/mcpOpen MCP connections and custom server management",
+        "value": "vibespace:vibespace:mcp",
+        "label": null
+      }
+    ],
+    "mcpButtons": []
+  },
+  "passed": true,
+  "finishedAt": "2026-09-27T13:35:17.045Z"
+}

@@ -1,0 +1,30 @@
+{
+  "at": "2026-09-27T16:30:45.354Z",
+  "targetChatId": "cht_-zkkf_r46zzuxB3L",
+  "stage": "failed",
+  "navigated": true,
+  "mainUrl": "http://localhost:5173/?route=chat",
+  "before": {
+    "activeChatId": "cht_-L-b1h0vcyBLa427",
+    "status": "Complete",
+    "draftLength": 0,
+    "composerFocused": false,
+    "stopVisible": false
+  },
+  "after": {
+    "activeChatId": "cht_-L-b1h0vcyBLa427",
+    "navCurrent": "page",
+    "backend": "codex",
+    "connectionId": "openai-codex",
+    "modelId": "gpt-6-luna",
+    "selectedRoute": {
+      "connectionId": "opencode-cli",
+      "modelId": "openai/gpt-6-luna"
+    },
+    "status": "Failed",
+    "draftLength": 0,
+    "stopVisible": false
+  },
+  "error": "codex_fixture_not_ready_after_navigation",
+  "finishedAt": "2026-09-27T16:30:51.523Z"
+}

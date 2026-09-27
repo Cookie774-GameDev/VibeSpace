@@ -1,0 +1,127 @@
+{
+  "at": "2026-09-27T13:43:18.065Z",
+  "chatId": "cht_Eumzyw1Y8yx21W1s",
+  "promptSha256": "8f9cf7a99ace5a74c8f4ac7f5e26a6c54c1e8b7937d47d371360a9a519ed7930",
+  "stage": "complete",
+  "providerSendAttempted": true,
+  "expectedBackend": "opencode",
+  "expectedModel": "openai/gpt-6-luna",
+  "before": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "opencode",
+    "selection": {
+      "connectionId": "opencode-cli",
+      "modelId": "openai/gpt-6-luna"
+    },
+    "status": "Complete",
+    "draftLength": 0,
+    "userCount": 5,
+    "assistantCount": 8,
+    "messages": [
+      {
+        "id": "msg_0hzjIrlxaXcrkf2K",
+        "role": "user"
+      },
+      {
+        "id": "msg_1p8KlijCSdgGk7V1",
+        "role": "user"
+      },
+      {
+        "id": "msg_2mLtb_bn0zCbXTa2",
+        "role": "user"
+      },
+      {
+        "id": "msg_469LPOOQDNP7peLi",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_DAingMI8uJeUzXgx",
+        "role": "system"
+      },
+      {
+        "id": "msg_LB_Bz0g82DAmwA9Y",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_Vil-348uBfCOLhbF",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_cuxClFpX6LHUBkPV",
+        "role": "user"
+      },
+      {
+        "id": "msg_fUWUDwKvG7s_Kg1r",
+        "role": "user"
+      },
+      {
+        "id": "msg_jreq_0f15891d-a32d-4e3c-8b26-4f5053d3c497",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_2edc9181-8e51-46da-819b-5f96d86c146e",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_94f71cb2-0084-4eb4-a063-d1c4dccd9da6",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_d40e7d87-d238-4c06-bf27-c6942af397f7",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_e1e38789-ff88-4c00-a26a-b72401ca7661",
+        "role": "assistant"
+      }
+    ],
+    "pendingPermissions": 0
+  },
+  "after": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "opencode",
+    "selection": {
+      "connectionId": "opencode-cli",
+      "modelId": "openai/gpt-6-luna"
+    },
+    "status": "Complete",
+    "draftLength": 0,
+    "userCount": 6,
+    "assistantCount": 9,
+    "messages": [
+      {
+        "id": "msg_jreq_93dee56b-71c9-41d0-b369-2256afaccc1f",
+        "role": "assistant",
+        "text": "Unavailable. No connected read-only Blender MCP scene-information or object-listing tool is exposed here.",
+        "toolParts": [
+          {
+            "kind": "tool_call",
+            "name": "list_mcp_resources",
+            "callId": "opencode-tool-1",
+            "status": null
+          },
+          {
+            "kind": "tool_result",
+            "name": null,
+            "callId": "opencode-tool-1",
+            "status": "completed"
+          }
+        ],
+        "errors": []
+      },
+      {
+        "id": "msg_s_WesJWfrrJkY1G9",
+        "role": "user",
+        "text": "Use the connected Blender MCP server for one read-only query: call its scene-information or object-listing tool once, then report the tool name and how many objects it returned. Do not create, edit, delete, save, run shell commands, or use VibeSpace custom mcp",
+        "toolParts": [],
+        "errors": []
+      }
+    ],
+    "pendingPermissions": 0
+  },
+  "mcpToolCalls": [],
+  "passed": false,
+  "finishedAt": "2026-09-27T13:43:38.185Z"
+}

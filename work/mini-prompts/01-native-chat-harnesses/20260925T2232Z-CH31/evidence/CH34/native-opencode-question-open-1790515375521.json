@@ -1,0 +1,82 @@
+{
+  "at": "2026-09-27T13:22:42.729Z",
+  "lane": "opencode",
+  "cdpPort": 9223,
+  "promptSha256": "15e2b30013ef73ab607ae0ae31cf1d689d462e8eb918e9b021aeb8b532656cd6",
+  "stage": "await-question",
+  "sendAttempted": true,
+  "source": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "opencode",
+    "connectionId": "opencode-cli",
+    "modelId": "openai/gpt-6-luna",
+    "selectedRoute": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "userCount": 5,
+    "assistantCount": 8,
+    "toolNames": [],
+    "blocks": [],
+    "runStatus": "Complete",
+    "draftLength": 0
+  },
+  "chatId": "cht_lWazHd9Rnq8FPmHo",
+  "before": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "opencode",
+    "connectionId": null,
+    "modelId": null,
+    "selectedRoute": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "userCount": 0,
+    "assistantCount": 0,
+    "toolNames": [],
+    "blocks": [],
+    "runStatus": null,
+    "draftLength": 0
+  },
+  "observed": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "opencode",
+    "connectionId": null,
+    "modelId": null,
+    "selectedRoute": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "userCount": 1,
+    "assistantCount": 1,
+    "toolNames": [],
+    "blocks": [
+      {
+        "messageId": "msg_MS51WkXFISaq-rRq",
+        "blockId": "qb_opencode_1piqs8d0dgheqb",
+        "status": "pending",
+        "questionCount": 1,
+        "optionCounts": [
+          4
+        ],
+        "protocol": "opencode-question-v1",
+        "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+        "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+        "nativeRequestId": null,
+        "autoResolutionMs": null
+      }
+    ],
+    "runStatus": "Running",
+    "draftLength": 0
+  },
+  "pendingCount": 1,
+  "nativeQuestionCardVisible": true,
+  "failure": "genuine_native_question_not_observed",
+  "finishedAt": "2026-09-27T13:22:55.521Z"
+}

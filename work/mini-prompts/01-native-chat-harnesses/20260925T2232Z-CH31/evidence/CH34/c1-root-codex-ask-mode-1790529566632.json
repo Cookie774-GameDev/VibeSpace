@@ -1,0 +1,29 @@
+{
+  "startedAt": "2026-09-27T17:19:26.632Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "22c9404986c96852afc8c6d4d2ef8ef4a39ef786c3a248bec93d016d2404ff8e",
+  "stage": "failed",
+  "sent": false,
+  "actedOnUi": true,
+  "mainUrl": "http://localhost:5173/?route=chat",
+  "priorChatId": "cht_FzcZsVyq81uEPMPL",
+  "prior": {
+    "status": "Complete",
+    "draftLength": 0,
+    "pending": 0
+  },
+  "before": {
+    "mode": "agent",
+    "status": "Complete",
+    "draftLength": 0,
+    "userCount": 9,
+    "assistantCount": 9
+  },
+  "selectedMode": "agent",
+  "selectedChat": "cht_-zkkf_r46zzuxB3L",
+  "selectedModeButton": "Ask Mode. Open mode picker.",
+  "selectedMessageCount": 20,
+  "error": "ask_mode_selection_failed_or_dispatched",
+  "restoredPriorChat": true,
+  "finishedAt": "2026-09-27T17:19:36.223Z"
+}

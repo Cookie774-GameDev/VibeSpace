@@ -1,0 +1,85 @@
+{
+  "at": "2026-09-27T13:47:59.225Z",
+  "chatId": "cht_Eumzyw1Y8yx21W1s",
+  "skillName": "ch31-codex-secondary",
+  "promptSha256": "14ce51e158699d27201943fe2bcf58c194f3985379b7ba465ac605db3082bebd",
+  "stage": "send-once",
+  "providerSendAttempted": true,
+  "before": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "route": "opencode-cli:openai/gpt-6-luna",
+    "status": "Complete",
+    "draft": "$ch31-codex-secondary ",
+    "selectedSkillText": "$ch31-codex-secondaryCodex · Selected",
+    "users": 6,
+    "assistants": 9,
+    "messages": [
+      {
+        "id": "msg_0hzjIrlxaXcrkf2K",
+        "role": "user"
+      },
+      {
+        "id": "msg_1p8KlijCSdgGk7V1",
+        "role": "user"
+      },
+      {
+        "id": "msg_2mLtb_bn0zCbXTa2",
+        "role": "user"
+      },
+      {
+        "id": "msg_469LPOOQDNP7peLi",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_DAingMI8uJeUzXgx",
+        "role": "system"
+      },
+      {
+        "id": "msg_LB_Bz0g82DAmwA9Y",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_Vil-348uBfCOLhbF",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_cuxClFpX6LHUBkPV",
+        "role": "user"
+      },
+      {
+        "id": "msg_fUWUDwKvG7s_Kg1r",
+        "role": "user"
+      },
+      {
+        "id": "msg_jreq_0f15891d-a32d-4e3c-8b26-4f5053d3c497",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_2edc9181-8e51-46da-819b-5f96d86c146e",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_93dee56b-71c9-41d0-b369-2256afaccc1f",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_94f71cb2-0084-4eb4-a063-d1c4dccd9da6",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_d40e7d87-d238-4c06-bf27-c6942af397f7",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_jreq_e1e38789-ff88-4c00-a26a-b72401ca7661",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_s_WesJWfrrJkY1G9",
+        "role": "user"
+      }
+    ]
+  },
+  "failure": "locator.click: Timeout 10000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: 'Send message', exact: true })\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" data-state=\"closed\" aria-label=\"Send message\" class=\"inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 bg-accent-gradient text-white shadow-[0_0_12px_-2px_hsl(var(--accent-cyan)/0.5)] hover:shadow-[0_0_18px_-2px_hsl(var(--accent-violet)/0.6)] transition-shadow h-6 w-6 [&_svg]:size-3.5 shrink-0\">…</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n",
+  "finishedAt": "2026-09-27T13:48:09.570Z"
+}

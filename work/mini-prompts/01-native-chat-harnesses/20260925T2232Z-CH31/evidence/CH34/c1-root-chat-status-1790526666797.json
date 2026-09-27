@@ -1,0 +1,147 @@
+{
+  "at": "2026-09-27T16:31:06.797Z",
+  "actedOnUi": false,
+  "stage": "complete",
+  "mainUrl": "http://localhost:5173/?route=chat",
+  "chats": {
+    "activeChatId": "cht_-L-b1h0vcyBLa427",
+    "selectedRoute": {
+      "connectionId": "opencode-cli",
+      "modelId": "openai/gpt-6-luna"
+    },
+    "chats": [
+      {
+        "chatId": "cht_-zkkf_r46zzuxB3L",
+        "exists": true,
+        "createdAt": 1790483318853,
+        "updatedAt": 1790524427001,
+        "backendAffinity": {
+          "version": 1,
+          "backend": "codex",
+          "locked": true,
+          "selectedAt": 1790483321165,
+          "lockedAt": 1790483329397
+        },
+        "userCount": 7,
+        "assistantCount": 6,
+        "questions": [
+          {
+            "id": "qb_opencode_0klbb5d197liyf",
+            "status": "pending",
+            "requestId": "que_codex_7c0299aa-bbbe-44eb-86cb-77c7e1aa7b3c"
+          },
+          {
+            "id": "qb_opencode_1gpm49v10bvqf9",
+            "status": "cancelled",
+            "requestId": "que_codex_0bfac239-1ba6-4803-ad1d-5c5d95aa4f18"
+          },
+          {
+            "id": "qb_opencode_1lt9swl0v7q1dj",
+            "status": "pending",
+            "requestId": "que_codex_be2fb5de-3219-4ea4-9ff9-79ecc2631302"
+          },
+          {
+            "id": "qb_opencode_1lgscgf0i4yi19",
+            "status": "pending",
+            "requestId": "que_codex_be0315f5-c1ba-4b18-b690-676486072cbb"
+          },
+          {
+            "id": "qb_opencode_0u4w5gi1yfb3y4",
+            "status": "cancelled",
+            "requestId": "que_codex_2dc895a6-8453-41e0-9606-66dbe419a9b9"
+          }
+        ],
+        "snippetCandidates": [],
+        "recentRuns": [
+          {
+            "id": "jrun_d7747132-40ee-4453-81f5-5b0bf736577d",
+            "status": "cancelled",
+            "createdAt": 1790524414697,
+            "updatedAt": 1790525253433
+          },
+          {
+            "id": "jrun_59a79ad6-e5ce-42b6-88cd-7d5830af0a5d",
+            "status": "cancelled",
+            "createdAt": 1790522120762,
+            "updatedAt": 1790522130639
+          },
+          {
+            "id": "jrun_07de3e02-f83d-4d13-850a-038d014e0684",
+            "status": "running",
+            "createdAt": 1790521162136,
+            "updatedAt": 1790521162268
+          }
+        ]
+      },
+      {
+        "chatId": "cht_-L-b1h0vcyBLa427",
+        "exists": true,
+        "createdAt": 1790526246937,
+        "updatedAt": 1790526361457,
+        "backendAffinity": {
+          "version": 1,
+          "backend": "opencode",
+          "locked": true,
+          "selectedAt": 1790526246937,
+          "lockedAt": 1790526280854
+        },
+        "userCount": 2,
+        "assistantCount": 3,
+        "questions": [
+          {
+            "id": "qb_opencode_0er14kc040k4le",
+            "status": "answered",
+            "requestId": "que_0e3afd0a9001LpdcUltd5u67jA"
+          }
+        ],
+        "snippetCandidates": [],
+        "recentRuns": [
+          {
+            "id": "jrun_71c41c11-06dc-4321-8a7a-12e602b7cc3e",
+            "status": "completed",
+            "createdAt": 1790526339782,
+            "updatedAt": 1790526361457
+          },
+          {
+            "id": "jrun_973a3172-13bc-4342-8dc1-9aeb4636d5bb",
+            "status": "completed",
+            "createdAt": 1790526281546,
+            "updatedAt": 1790526313509
+          }
+        ]
+      },
+      {
+        "chatId": "cht_lWazHd9Rnq8FPmHo",
+        "exists": true,
+        "createdAt": 1790515362901,
+        "updatedAt": 1790515777295,
+        "backendAffinity": {
+          "version": 1,
+          "backend": "opencode",
+          "locked": true,
+          "selectedAt": 1790515362901,
+          "lockedAt": 1790515364207
+        },
+        "userCount": 1,
+        "assistantCount": 2,
+        "questions": [
+          {
+            "id": "qb_opencode_1piqs8d0dgheqb",
+            "status": "cancelled",
+            "requestId": "que_0e3086c74001lHWf67cHC5QbVa"
+          }
+        ],
+        "snippetCandidates": [],
+        "recentRuns": [
+          {
+            "id": "jrun_a3489669-8f78-4a7b-9bd8-f67f9127669b",
+            "status": "failed",
+            "createdAt": 1790515364748,
+            "updatedAt": 1790515777163
+          }
+        ]
+      }
+    ]
+  },
+  "finishedAt": "2026-09-27T16:31:07.092Z"
+}

@@ -1,0 +1,117 @@
+{
+  "at": "2026-09-27T13:32:25.354Z",
+  "readOnly": true,
+  "state": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "selection": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "projectRootPresent": true,
+    "runtimeVersion": "1.18.32",
+    "runtimeGenerationPresent": true,
+    "chats": [
+      {
+        "id": "cht_lWazHd9Rnq8FPmHo",
+        "title": "Use your native question tool to ask me one har…",
+        "connection": null,
+        "model": null,
+        "updatedAt": 1790515777295
+      },
+      {
+        "id": "cht_vdI_HrV1IHyCNXif",
+        "title": "New chat 9",
+        "connection": null,
+        "model": null,
+        "updatedAt": 1790515004131
+      },
+      {
+        "id": "cht_Eumzyw1Y8yx21W1s",
+        "title": "Use the native shell tool to run exactly rm --…",
+        "connection": null,
+        "model": null,
+        "updatedAt": 1790495124808
+      },
+      {
+        "id": "cht_pG2NQ_AEqMIczRCU",
+        "title": "Change the contents of the disposable test file…",
+        "connection": null,
+        "model": null,
+        "updatedAt": 1790487784010
+      },
+      {
+        "id": "cht_UzNpPTTyfVyNcLj4",
+        "title": "New chat 7",
+        "connection": null,
+        "model": null,
+        "updatedAt": 1790483436526
+      },
+      {
+        "id": "cht_-zkkf_r46zzuxB3L",
+        "title": "New chat 8",
+        "connection": null,
+        "model": null,
+        "updatedAt": 1790483380012
+      },
+      {
+        "id": "cht_JVhaDtOtdl8K3TjD",
+        "title": "Agent Relay integration check RL01-50b1abe2-6bc…",
+        "connection": null,
+        "model": null,
+        "updatedAt": 1790482789791
+      },
+      {
+        "id": "cht_RrOdt_cIdtozLjmP",
+        "title": "Agent Relay linked-reply check RL01-50b1abe2-6b…",
+        "connection": null,
+        "model": null,
+        "updatedAt": 1790466613912
+      },
+      {
+        "id": "cht_D8GQG9qj9GYHFoNZ",
+        "title": "Use the selected ch31-codex-native skill throug…",
+        "connection": null,
+        "model": null,
+        "updatedAt": 1790434064818
+      },
+      {
+        "id": "cht_W7gxFNRhCkgD8IgM",
+        "title": "New chat 4",
+        "connection": null,
+        "model": null,
+        "updatedAt": 1790414266533
+      }
+    ],
+    "commands": {
+      "status": 200,
+      "ok": true,
+      "count": 10,
+      "names": [
+        "init",
+        "review",
+        "ch31-native-probe",
+        "goal",
+        "customize-opencode",
+        "ch31-opencode-native",
+        "kimi-webbridge",
+        "typesafe-ai",
+        "ch31-codex-secondary",
+        "ch31-codex-native"
+      ]
+    },
+    "mcp": {
+      "status": 200,
+      "ok": true,
+      "count": 5,
+      "names": [
+        "blender",
+        "mcp-unity",
+        "supabase",
+        "stripe",
+        "cloudflare"
+      ]
+    },
+    "runStatus": "Failed"
+  }
+}

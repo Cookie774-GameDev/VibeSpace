@@ -1,0 +1,39 @@
+{
+  "at": "2026-09-27T14:12:32.027Z",
+  "chatId": "cht_Eumzyw1Y8yx21W1s",
+  "assistantId": "msg_jreq_59355a0b-b8f1-4cc0-b469-c0ce8f3d4ca3",
+  "mode": "read-only reconciliation of earlier native reload",
+  "providerSend": false,
+  "before": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "assistantCount": 1,
+    "userCount": 9,
+    "totalMessages": 22,
+    "toolParts": [
+      {
+        "id": "opencode-tool-1",
+        "tool": "read",
+        "args": {
+          "path": "native-d-marker.txt"
+        }
+      }
+    ]
+  },
+  "disclosureCount": 1,
+  "activity": {
+    "disclosures": 8,
+    "readRows": [
+      {
+        "status": "done",
+        "text": "Read fileTool: readCall: opencode-tool-1native-d-marker.txtArguments<path>D:\\VibeSpace-Testing\\Chat01-CH31-fixtures\\native-d-marker.txt</path>\n<type>file</type>\n<content>\n1: CH31_D_NATIVE_READ_9A64\n\n(End of file - total 1 lines)\n</content>OutputResult",
+        "tool": "read",
+        "callId": "opencode-tool-1"
+      }
+    ],
+    "detailText": [
+      "Read fileTool: readCall: opencode-tool-1native-d-marker.txtArguments<path>D:\\VibeSpace-Testing\\Chat01-CH31-fixtures\\native-d-marker.txt</path>\n<type>file</type>\n<content>\n1: CH31_D_NATIVE_READ_9A64\n\n(End of file - total 1 lines)\n</content>OutputResultInput 16,120Exact response metadataOutput 63Exact response metadata"
+    ]
+  },
+  "passed": true,
+  "finishedAt": "2026-09-27T14:12:41.953Z"
+}

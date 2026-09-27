@@ -1,0 +1,35 @@
+{
+  "at": "2026-09-27T14:13:45.058Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "providerSend": false,
+  "state": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "selection": "opencode-cli:openai/gpt-6-luna",
+    "status": "Complete",
+    "effort": "high",
+    "draft": "",
+    "stopVisible": false,
+    "pendingQuestions": 0,
+    "pendingPermissions": 0,
+    "ids": [
+      {
+        "id": "msg_63kvaqvBctx5mY6Z",
+        "role": "system"
+      },
+      {
+        "id": "msg_CuOiHfFONZPt-L9B",
+        "role": "user"
+      },
+      {
+        "id": "msg_V_yR4u_fSv0tJ9vo",
+        "role": "system"
+      },
+      {
+        "id": "msg__CfdXZU_GjoDb83p",
+        "role": "user"
+      }
+    ]
+  },
+  "passed": false,
+  "finishedAt": "2026-09-27T14:14:10.516Z"
+}

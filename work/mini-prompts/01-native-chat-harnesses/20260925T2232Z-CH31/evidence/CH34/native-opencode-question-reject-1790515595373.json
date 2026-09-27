@@ -1,0 +1,31 @@
+{
+  "at": "2026-09-27T13:26:24.922Z",
+  "chatId": "cht_lWazHd9Rnq8FPmHo",
+  "blockId": "qb_opencode_1piqs8d0dgheqb",
+  "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+  "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+  "source": "native-opencode-question-open-1790515375521.json",
+  "stage": "dismiss",
+  "providerSend": false,
+  "before": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "userCount": 1,
+    "assistantCount": 1,
+    "matchingQuestionParts": 1,
+    "blockStatus": "pending",
+    "protocol": "opencode-question-v1",
+    "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+    "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+    "selectedRoute": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "runStatus": "Running"
+  },
+  "draftSha256": "ca8119adce15aabfdd6463c17c9b1233129a977dd2e7f92879750857ce955dcf",
+  "micButtonCount": 1,
+  "failure": "locator.waitFor: Timeout 10000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-inline-question-block-id=\"qb_opencode_1piqs8d0dgheqb\"]') to be hidden\u001b[22m\n\u001b[2m    23 × locator resolved to visible <section data-inline-question-block-id=\"qb_opencode_1piqs8d0dgheqb\" class=\"question-card question-card--inline question-card--reopen\">…</section>\u001b[22m\n",
+  "finishedAt": "2026-09-27T13:26:35.373Z"
+}

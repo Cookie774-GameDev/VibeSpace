@@ -1,0 +1,18 @@
+{
+  "startedAt": "2026-09-27T17:15:46.836Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "22c9404986c96852afc8c6d4d2ef8ef4a39ef786c3a248bec93d016d2404ff8e",
+  "stage": "failed",
+  "sent": false,
+  "actedOnUi": true,
+  "mainUrl": "http://localhost:5173/?route=chat",
+  "priorChatId": "cht_FzcZsVyq81uEPMPL",
+  "prior": {
+    "status": "Complete",
+    "draftLength": 0,
+    "pending": 0
+  },
+  "error": "page.waitForFunction: Timeout 15000ms exceeded.",
+  "restoredPriorChat": false,
+  "finishedAt": "2026-09-27T17:16:05.044Z"
+}

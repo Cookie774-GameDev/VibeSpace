@@ -1,0 +1,86 @@
+{
+  "at": "2026-09-27T14:50:54.571Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "badeda16ec575170673e945a4807a900bdf60cca4ecdd39692ada5446af107f9",
+  "providerSendAttempted": true,
+  "cancelAttempted": false,
+  "stage": "sent",
+  "before": {
+    "navCurrent": "page",
+    "connection": "openai-codex:gpt-6-luna",
+    "backend": "codex",
+    "status": "Cancelled",
+    "draft": "",
+    "stopVisible": false,
+    "questions": [
+      {
+        "messageId": "msg_TjCW5TSpLONJN2fs",
+        "id": "qb_opencode_1lt9swl0v7q1dj",
+        "status": "pending",
+        "requestId": null
+      }
+    ],
+    "messages": [
+      {
+        "id": "msg_63kvaqvBctx5mY6Z",
+        "role": "system"
+      },
+      {
+        "id": "msg_CuOiHfFONZPt-L9B",
+        "role": "user"
+      },
+      {
+        "id": "msg_TjCW5TSpLONJN2fs",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_V_yR4u_fSv0tJ9vo",
+        "role": "system"
+      },
+      {
+        "id": "msg__CfdXZU_GjoDb83p",
+        "role": "user"
+      },
+      {
+        "id": "msg_jreq_847b9b76-31fd-4976-9559-9df69ce340ed",
+        "role": "assistant"
+      },
+      {
+        "id": "msg_vhQcuZhejoL67gzX",
+        "role": "user"
+      }
+    ]
+  },
+  "pending": {
+    "status": "Running",
+    "stopVisible": true,
+    "questions": [
+      {
+        "messageId": "msg_-SVq9-_EDTqCAder",
+        "id": "qb_opencode_0klbb5d197liyf",
+        "status": "pending",
+        "requestId": null
+      },
+      {
+        "messageId": "msg_TjCW5TSpLONJN2fs",
+        "id": "qb_opencode_1lt9swl0v7q1dj",
+        "status": "pending",
+        "requestId": null
+      }
+    ],
+    "newMessages": [
+      {
+        "id": "msg_-SVq9-_EDTqCAder",
+        "role": "assistant",
+        "text": ""
+      },
+      {
+        "id": "msg_P07CCFsFTu0r9sT3",
+        "role": "user",
+        "text": "Use your native question tool to ask me one new harmless preference question about tea or coffee with exactly two choices. Wait for my response. Do not edit files or run commands."
+      }
+    ]
+  },
+  "failure": "new_native_codex_question_and_stop_not_both_visible",
+  "finishedAt": "2026-09-27T14:51:22.466Z"
+}

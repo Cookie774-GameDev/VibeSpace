@@ -1,0 +1,60 @@
+{
+  "at": "2026-09-27T15:23:24.206Z",
+  "lane": "native-codex-luna-question-answer",
+  "cdpEndpoint": "http://127.0.0.1:9223",
+  "target": "http://localhost:5173/",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "15e2b30013ef73ab607ae0ae31cf1d689d462e8eb918e9b021aeb8b532656cd6",
+  "snapshot": {
+    "activeChatMatches": true,
+    "backend": "codex",
+    "connectionId": "openai-codex",
+    "modelId": "gpt-6-luna",
+    "paneVisible": true,
+    "runStatus": "Cancelled",
+    "stopVisible": false,
+    "draftLength": 0,
+    "userCount": 6,
+    "currentPromptUserCount": 0,
+    "assistantCount": 5,
+    "questions": [
+      {
+        "messageId": "msg_-SVq9-_EDTqCAder",
+        "id": "qb_opencode_0klbb5d197liyf",
+        "status": "pending",
+        "protocol": "opencode-question-v1",
+        "requestId": "que_codex_7c0299aa-bbbe-44eb-86cb-77c7e1aa7b3c"
+      },
+      {
+        "messageId": "msg_TjCW5TSpLONJN2fs",
+        "id": "qb_opencode_1lt9swl0v7q1dj",
+        "status": "pending",
+        "protocol": "opencode-question-v1",
+        "requestId": "que_codex_be2fb5de-3219-4ea4-9ff9-79ecc2631302"
+      },
+      {
+        "messageId": "msg_XYnl05tadJD5gP_F",
+        "id": "qb_opencode_1lgscgf0i4yi19",
+        "status": "pending",
+        "protocol": "opencode-question-v1",
+        "requestId": "que_codex_be0315f5-c1ba-4b18-b690-676486072cbb"
+      },
+      {
+        "messageId": "msg_lyxDL63UbllhaoUt",
+        "id": "qb_opencode_0u4w5gi1yfb3y4",
+        "status": "cancelled",
+        "protocol": "opencode-question-v1",
+        "requestId": "que_codex_2dc895a6-8453-41e0-9606-66dbe419a9b9"
+      }
+    ],
+    "sourceStatus": 200,
+    "sourceBytes": 1142180,
+    "sourceSha256": "d7fe453b1c8f73ec6e504f22fa37ac9a0e2ff617da2f8a44e600459b8465df13",
+    "sourceHasCanonicalCancellation": true,
+    "sendGuardExists": false,
+    "answerGuardExists": false
+  },
+  "oldPendingCount": 3,
+  "oneTimeGuardsAbsent": true,
+  "safeToProceed": false
+}

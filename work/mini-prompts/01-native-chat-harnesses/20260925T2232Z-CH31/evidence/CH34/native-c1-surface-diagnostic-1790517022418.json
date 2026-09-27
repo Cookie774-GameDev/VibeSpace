@@ -1,0 +1,19 @@
+{
+  "at": "2026-09-27T13:50:02.344Z",
+  "port": 9223,
+  "readOnly": true,
+  "pages": [
+    {
+      "url": "http://localhost:5173/index.html?view=dictation",
+      "closed": false,
+      "dom": {
+        "label": "dictation",
+        "readyState": "complete",
+        "title": "VibeSpace",
+        "bodyChildCount": 2,
+        "paneCount": 0,
+        "currentPath": "/index.html?view=dictation"
+      }
+    }
+  ]
+}

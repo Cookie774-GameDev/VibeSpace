@@ -1,0 +1,43 @@
+{
+  "at": "2026-09-27T13:13:58.799Z",
+  "readOnly": true,
+  "state": {
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "dialogVisible": true,
+    "search": null,
+    "listLabel": "Available AI models",
+    "options": [
+      {
+        "value": "opencode-cli:azure/gpt-6-luna",
+        "effort": null,
+        "disabled": "false",
+        "label": "GPT-6 Luna · Azure subscriptionAzure subscription · Ready"
+      },
+      {
+        "value": "opencode-cli:openai/gpt-6-luna",
+        "effort": null,
+        "disabled": "false",
+        "label": "GPT-6-LunaOpenAI provider connection · ReadyactiveFree>"
+      },
+      {
+        "value": "opencode-cli:opencode-go/gpt-6-luna",
+        "effort": null,
+        "disabled": "false",
+        "label": "GPT-6 Luna · Opencode Go provider connectionOpencode Go provider connection · Ready"
+      },
+      {
+        "value": "opencode-cli:openrouter/openai/gpt-6-luna",
+        "effort": null,
+        "disabled": "false",
+        "label": "GPT-6 Luna · OpenRouter provider connectionOpenRouter provider connection · Ready"
+      },
+      {
+        "value": "opencode-cli:openrouter/openai/gpt-6-luna-pro",
+        "effort": null,
+        "disabled": "false",
+        "label": "GPT-6 Luna ProOpenRouter provider connection · Ready"
+      }
+    ],
+    "draftLength": 51
+  }
+}

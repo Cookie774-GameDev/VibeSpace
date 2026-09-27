@@ -1,0 +1,21 @@
+{
+  "atUtc": "2026-09-27T16:45:17.4736214Z",
+  "appPid": 24748,
+  "windowPid": 24748,
+  "handle": 656884,
+  "wasMinimized": false,
+  "before": {
+    "left": -7,
+    "width": 1550,
+    "height": 830,
+    "top": -7
+  },
+  "resizeDown": true,
+  "resizeRestore": true,
+  "after": {
+    "left": -7,
+    "width": 1550,
+    "height": 830,
+    "top": -7
+  }
+}

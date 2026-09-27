@@ -1,0 +1,96 @@
+{
+  "startedAt": "2026-09-27T16:45:28.973Z",
+  "endpoint": "http://127.0.0.1:9223",
+  "expectedAppPid": 24748,
+  "expectedWebViewPid": 28964,
+  "stage": "complete",
+  "actedOnUi": false,
+  "pageCount": 2,
+  "observations": [
+    {
+      "href": "http://localhost:5173/index.html?view=dictation",
+      "label": "dictation",
+      "visible": "visible",
+      "readyState": "complete",
+      "viewport": {
+        "width": 134,
+        "height": 38,
+        "dpr": 1.25
+      },
+      "activePaneRects": [],
+      "activeChatPanes": [],
+      "fixture": null,
+      "currentNavRows": [],
+      "sessionStatuses": [],
+      "modelButtons": [],
+      "composers": [],
+      "sendButtons": [],
+      "snippetCount": 0,
+      "snippets": [],
+      "codeFenceCount": 0,
+      "questionCardCount": 0
+    },
+    {
+      "href": "http://localhost:5173/?route=chat",
+      "label": "main",
+      "visible": "visible",
+      "readyState": "complete",
+      "viewport": {
+        "width": 240,
+        "height": 94,
+        "dpr": 1.25
+      },
+      "activePaneRects": [
+        {
+          "id": "chat-pane-cht_-zkkf_r46zzuxB3L",
+          "width": 0,
+          "height": 0,
+          "parentWidth": 0
+        }
+      ],
+      "activeChatPanes": [],
+      "fixture": null,
+      "currentNavRows": [
+        "chat-nav-row-cht_-zkkf_r46zzuxB3L"
+      ],
+      "sessionStatuses": [
+        "Complete"
+      ],
+      "modelButtons": [
+        "OpenAI · gpt-6-lunalow"
+      ],
+      "composers": [
+        {
+          "visible": true,
+          "disabled": false,
+          "draftLength": 0
+        }
+      ],
+      "sendButtons": [
+        {
+          "label": "Send message",
+          "visible": true,
+          "disabled": true
+        }
+      ],
+      "snippetCount": 2,
+      "snippets": [
+        {
+          "kind": "writing",
+          "width": 1.600000023841858,
+          "height": 149.6999969482422,
+          "copyLabel": "Copy text"
+        },
+        {
+          "kind": "typescript",
+          "width": 1.600000023841858,
+          "height": 188.85000610351562,
+          "copyLabel": "Copy code"
+        }
+      ],
+      "codeFenceCount": 2,
+      "questionCardCount": 7
+    }
+  ],
+  "finishedAt": "2026-09-27T16:45:29.870Z"
+}

@@ -1,0 +1,12 @@
+{
+  "lane": "CH34 full app Vitest",
+  "startedAtApproxUtc": "2026-09-27T15:05:31Z",
+  "interruptedAtUtc": "2026-09-27T15:50:54Z",
+  "command": "npm --prefix app run test",
+  "exitCodeAfterCtrlC": 1,
+  "completed": false,
+  "finalSuiteGate": "UNRUN",
+  "observedFailure": "src/stores/auth.test.ts: three voice provider assertions failed after peer auth and voice source changed during this run",
+  "reasonForInterrupt": "The input tree changed during execution, so this run cannot prove the final source; retaining the log and freeing memory for official native C1 acceptance. Rerun after peer integration settles.",
+  "log": "evidence/CH34/full-suite-canonical.log"
+}

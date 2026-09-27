@@ -1,0 +1,56 @@
+{
+  "startedAt": "2026-09-27T15:43:24.779Z",
+  "completedAt": "2026-09-27T15:43:25.141Z",
+  "cdpEndpoint": "http://127.0.0.1:9223",
+  "mainTargetCount": 1,
+  "sampleCount": 1,
+  "first": {
+    "at": "2026-09-27T15:43:24.885Z",
+    "activeChatMatches": true,
+    "appRootMounted": true,
+    "panePresent": true,
+    "paneVisible": true,
+    "composerPresent": true,
+    "composerVisible": true,
+    "draftLength": 0,
+    "sessionStatusPresent": true,
+    "runStatus": "Cancelled",
+    "stopVisible": false,
+    "questionCardCount": 5,
+    "inlineOptionCount": 2
+  },
+  "samples": [
+    {
+      "at": "2026-09-27T15:43:24.885Z",
+      "activeChatMatches": true,
+      "appRootMounted": true,
+      "panePresent": true,
+      "paneVisible": true,
+      "composerPresent": true,
+      "composerVisible": true,
+      "draftLength": 0,
+      "sessionStatusPresent": true,
+      "runStatus": "Cancelled",
+      "stopVisible": false,
+      "questionCardCount": 5,
+      "inlineOptionCount": 2
+    }
+  ],
+  "last": {
+    "at": "2026-09-27T15:43:25.105Z",
+    "activeChatMatches": true,
+    "appRootMounted": true,
+    "panePresent": true,
+    "paneVisible": true,
+    "composerPresent": true,
+    "composerVisible": true,
+    "draftLength": 0,
+    "sessionStatusPresent": true,
+    "runStatus": "Cancelled",
+    "stopVisible": false,
+    "questionCardCount": 5,
+    "inlineOptionCount": 2
+  },
+  "paneHydrated": true,
+  "safeIdleFixture": true
+}

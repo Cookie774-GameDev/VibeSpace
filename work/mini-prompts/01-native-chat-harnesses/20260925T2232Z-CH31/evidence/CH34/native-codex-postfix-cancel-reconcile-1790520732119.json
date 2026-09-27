@@ -1,0 +1,178 @@
+{
+  "at": "2026-09-27T14:52:06.220Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "newQuestionId": "qb_opencode_0klbb5d197liyf",
+  "stopAttempted": true,
+  "before": {
+    "navCurrent": "page",
+    "status": "Running",
+    "stopVisible": true,
+    "questions": [
+      {
+        "messageId": "msg_-SVq9-_EDTqCAder",
+        "block": {
+          "id": "qb_opencode_0klbb5d197liyf",
+          "title": "Drink",
+          "questions": [
+            {
+              "id": "q_opencode_0xsxvaw1rdi4sa",
+              "prompt": "For a quiet break, which do you prefer?",
+              "type": "single",
+              "options": [
+                {
+                  "id": "qo_opencode_1svp1qt12vaenf",
+                  "label": "Tea",
+                  "description": "A cup of tea."
+                },
+                {
+                  "id": "qo_opencode_1slpg1u12lasyg",
+                  "label": "Coffee",
+                  "description": "A cup of coffee."
+                }
+              ],
+              "required": true,
+              "allowSkip": false,
+              "allowCustomResponse": true
+            }
+          ],
+          "status": "pending"
+        }
+      },
+      {
+        "messageId": "msg_TjCW5TSpLONJN2fs",
+        "block": {
+          "id": "qb_opencode_1lt9swl0v7q1dj",
+          "title": "Reply style",
+          "questions": [
+            {
+              "id": "q_opencode_01fns3o0be1bp6",
+              "prompt": "Which reply style do you prefer?",
+              "type": "single",
+              "options": [
+                {
+                  "id": "qo_opencode_1uzr9891r92odn",
+                  "label": "Concise",
+                  "description": "Keep answers brief and direct."
+                },
+                {
+                  "id": "qo_opencode_1uprnja1qz32oo",
+                  "label": "Detailed",
+                  "description": "Include more context and explanation."
+                }
+              ],
+              "required": true,
+              "allowSkip": false,
+              "allowCustomResponse": true
+            }
+          ],
+          "status": "pending"
+        }
+      }
+    ],
+    "newUsers": [
+      {
+        "id": "msg_CuOiHfFONZPt-L9B",
+        "text": "/mcp"
+      },
+      {
+        "id": "msg_P07CCFsFTu0r9sT3",
+        "text": "Use your native question tool to ask me one new harmless preference question about tea or coffee with exactly two choices. Wait for my response. Do not edit files or run commands."
+      },
+      {
+        "id": "msg__CfdXZU_GjoDb83p",
+        "text": "HI"
+      },
+      {
+        "id": "msg_vhQcuZhejoL67gzX",
+        "text": "Use your native question tool to ask me one harmless preference question with exactly two choices. Wait for my response. Do not edit files or run commands."
+      }
+    ]
+  },
+  "after": {
+    "navCurrent": "page",
+    "status": "Cancelled",
+    "stopVisible": false,
+    "questions": [
+      {
+        "messageId": "msg_-SVq9-_EDTqCAder",
+        "block": {
+          "id": "qb_opencode_0klbb5d197liyf",
+          "title": "Drink",
+          "questions": [
+            {
+              "id": "q_opencode_0xsxvaw1rdi4sa",
+              "prompt": "For a quiet break, which do you prefer?",
+              "type": "single",
+              "options": [
+                {
+                  "id": "qo_opencode_1svp1qt12vaenf",
+                  "label": "Tea",
+                  "description": "A cup of tea."
+                },
+                {
+                  "id": "qo_opencode_1slpg1u12lasyg",
+                  "label": "Coffee",
+                  "description": "A cup of coffee."
+                }
+              ],
+              "required": true,
+              "allowSkip": false,
+              "allowCustomResponse": true
+            }
+          ],
+          "status": "pending"
+        }
+      },
+      {
+        "messageId": "msg_TjCW5TSpLONJN2fs",
+        "block": {
+          "id": "qb_opencode_1lt9swl0v7q1dj",
+          "title": "Reply style",
+          "questions": [
+            {
+              "id": "q_opencode_01fns3o0be1bp6",
+              "prompt": "Which reply style do you prefer?",
+              "type": "single",
+              "options": [
+                {
+                  "id": "qo_opencode_1uzr9891r92odn",
+                  "label": "Concise",
+                  "description": "Keep answers brief and direct."
+                },
+                {
+                  "id": "qo_opencode_1uprnja1qz32oo",
+                  "label": "Detailed",
+                  "description": "Include more context and explanation."
+                }
+              ],
+              "required": true,
+              "allowSkip": false,
+              "allowCustomResponse": true
+            }
+          ],
+          "status": "pending"
+        }
+      }
+    ],
+    "newUsers": [
+      {
+        "id": "msg_CuOiHfFONZPt-L9B",
+        "text": "/mcp"
+      },
+      {
+        "id": "msg_P07CCFsFTu0r9sT3",
+        "text": "Use your native question tool to ask me one new harmless preference question about tea or coffee with exactly two choices. Wait for my response. Do not edit files or run commands."
+      },
+      {
+        "id": "msg__CfdXZU_GjoDb83p",
+        "text": "HI"
+      },
+      {
+        "id": "msg_vhQcuZhejoL67gzX",
+        "text": "Use your native question tool to ask me one harmless preference question with exactly two choices. Wait for my response. Do not edit files or run commands."
+      }
+    ]
+  },
+  "passed": false,
+  "finishedAt": "2026-09-27T14:52:12.119Z"
+}

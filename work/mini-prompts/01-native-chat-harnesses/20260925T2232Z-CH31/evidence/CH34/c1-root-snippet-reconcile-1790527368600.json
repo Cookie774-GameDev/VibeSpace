@@ -1,0 +1,12 @@
+{
+  "at": "2026-09-27T16:42:48.600Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "stage": "failed",
+  "providerSendAttempted": false,
+  "windowState": {
+    "wasMinimized": true
+  },
+  "error": "source_chat_not_visible",
+  "windowRestoreError": "page.evaluate: window.minimize not allowed on window \"main\", webview \"main\", URL: local\n\nallowed on: [windows: \"pet-mini-panel\", URL: local]\n\nreferenced by: capability: pet-mini-panel, permission: allow-minimize",
+  "finishedAt": "2026-09-27T16:42:51.265Z"
+}

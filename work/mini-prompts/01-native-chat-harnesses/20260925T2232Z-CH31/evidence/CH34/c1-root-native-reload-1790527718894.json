@@ -1,0 +1,50 @@
+{
+  "startedAt": "2026-09-27T16:48:38.894Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "stage": "complete",
+  "providerSendAttempted": false,
+  "before": {
+    "viewport": [
+      1536,
+      794
+    ],
+    "status": [
+      "Complete"
+    ],
+    "currentChat": "chat-nav-row-cht_-zkkf_r46zzuxB3L",
+    "snippetKinds": [
+      "writing",
+      "typescript"
+    ],
+    "draft": "",
+    "expectedChat": "cht_-zkkf_r46zzuxB3L"
+  },
+  "after": {
+    "viewport": [
+      1536,
+      794
+    ],
+    "navCurrent": "chat-nav-row-cht_-zkkf_r46zzuxB3L",
+    "paneRect": {
+      "width": 1296,
+      "height": 697.6000366210938
+    },
+    "snippetRects": [
+      {
+        "kind": "writing",
+        "width": 238.78750610351562,
+        "height": 93.30000305175781
+      },
+      {
+        "kind": "typescript",
+        "width": 238.78750610351562,
+        "height": 70.55000305175781
+      }
+    ],
+    "status": [
+      "Complete"
+    ],
+    "draft": ""
+  },
+  "finishedAt": "2026-09-27T16:48:53.758Z"
+}

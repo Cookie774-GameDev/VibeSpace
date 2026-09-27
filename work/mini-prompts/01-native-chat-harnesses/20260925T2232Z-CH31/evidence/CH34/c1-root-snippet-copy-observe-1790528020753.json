@@ -1,0 +1,50 @@
+{
+  "startedAt": "2026-09-27T16:53:40.753Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "stage": "complete",
+  "providerSendAttempted": false,
+  "before": {
+    "current": "chat-nav-row-cht_-zkkf_r46zzuxB3L",
+    "draft": "",
+    "status": [
+      "Complete"
+    ]
+  },
+  "writing": {
+    "clipboardAvailable": true,
+    "isSecureContext": true,
+    "clickMs": 280,
+    "after": {
+      "labels": [
+        {
+          "label": "Copy text",
+          "time": 301641
+        },
+        {
+          "label": "Copied text",
+          "time": 301669
+        }
+      ],
+      "clipboardMatch": true
+    }
+  },
+  "typescript": {
+    "clipboardAvailable": true,
+    "isSecureContext": true,
+    "clickMs": 339,
+    "after": {
+      "labels": [
+        {
+          "label": "Copy code",
+          "time": 303071.7000000011
+        },
+        {
+          "label": "Copied code",
+          "time": 303157.5999999996
+        }
+      ],
+      "clipboardMatch": true
+    }
+  },
+  "finishedAt": "2026-09-27T16:53:43.561Z"
+}

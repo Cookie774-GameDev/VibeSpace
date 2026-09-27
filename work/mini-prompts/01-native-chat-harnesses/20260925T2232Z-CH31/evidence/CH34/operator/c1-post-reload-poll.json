@@ -1,0 +1,16 @@
+{
+  "at": "2026-09-27T15:12:56.371Z",
+  "selectedPageCount": 1,
+  "state": {
+    "path": "http://localhost:5173/",
+    "appRootMounted": true,
+    "tauriBridgePresent": true,
+    "chatPaneCount": 1,
+    "chatNavRowCount": 10,
+    "questionCardCount": 4,
+    "transcriptPendingCardCount": 3,
+    "inlineDismissControlCount": 1,
+    "composerCount": 1,
+    "runtimeModuleLoaded": true
+  }
+}

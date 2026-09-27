@@ -1,0 +1,33 @@
+{
+  "at": "2026-09-27T14:46:05.787Z",
+  "readOnly": true,
+  "chats": [
+    {
+      "id": "cht_-zkkf_r46zzuxB3L",
+      "title": "Use your native question tool to ask me one har…",
+      "archived": false,
+      "connection": "openai-codex:gpt-6-luna",
+      "users": 3,
+      "pendingQuestions": 1,
+      "pendingPermissions": 0
+    },
+    {
+      "id": "cht_D8GQG9qj9GYHFoNZ",
+      "title": "Use the selected ch31-codex-native skill throug…",
+      "archived": false,
+      "connection": "openai-codex:gpt-6-luna",
+      "users": 19,
+      "pendingQuestions": 0,
+      "pendingPermissions": 0
+    },
+    {
+      "id": "cht_JVhaDtOtdl8K3TjD",
+      "title": "Agent Relay integration check RL01-50b1abe2-6bc…",
+      "archived": false,
+      "connection": "openai-codex:gpt-6-luna",
+      "users": 7,
+      "pendingQuestions": 0,
+      "pendingPermissions": 0
+    }
+  ]
+}

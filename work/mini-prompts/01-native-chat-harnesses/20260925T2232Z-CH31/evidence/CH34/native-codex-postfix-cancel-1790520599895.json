@@ -1,0 +1,10 @@
+{
+  "at": "2026-09-27T14:49:59.585Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "badeda16ec575170673e945a4807a900bdf60cca4ecdd39692ada5446af107f9",
+  "providerSendAttempted": false,
+  "cancelAttempted": false,
+  "stage": "attach",
+  "failure": "fixed_runtime_source_not_served",
+  "finishedAt": "2026-09-27T14:49:59.895Z"
+}

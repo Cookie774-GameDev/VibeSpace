@@ -1,0 +1,17 @@
+{
+  "startedAt": "2026-09-27T17:16:11.904Z",
+  "stage": "complete",
+  "actedOnUi": false,
+  "metadata": {
+    "chatId": "cht_FzcZsVyq81uEPMPL",
+    "status": "Complete",
+    "lastMessageAt": 1790529024321,
+    "messageRoleCounts": {
+      "user": 2,
+      "assistant": 2
+    },
+    "questionStatusCounts": {},
+    "draftLength": 0
+  },
+  "finishedAt": "2026-09-27T17:16:12.948Z"
+}

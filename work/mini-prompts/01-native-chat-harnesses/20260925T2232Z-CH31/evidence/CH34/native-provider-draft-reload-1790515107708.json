@@ -1,0 +1,38 @@
+{
+  "at": "2026-09-27T13:18:23.918Z",
+  "source": "native-provider-route-continue-1790515004272.json",
+  "providerSend": false,
+  "stage": "reload",
+  "before": {
+    "windowLabel": "main",
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "fixtureProjectId": "prj_ybjv0yXnrGkGhAQY",
+    "fixtureBackend": "opencode",
+    "users": 0,
+    "assistants": 0,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "selection": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "afterReload": {
+    "windowLabel": "main",
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "fixtureProjectId": "prj_ybjv0yXnrGkGhAQY",
+    "fixtureBackend": "opencode",
+    "users": 0,
+    "assistants": 0,
+    "draftLength": null,
+    "draftSha256": null,
+    "selection": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "failure": "reload_lost_route_or_draft",
+  "finishedAt": "2026-09-27T13:18:27.708Z"
+}

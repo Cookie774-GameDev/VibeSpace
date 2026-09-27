@@ -1,0 +1,30 @@
+{
+  "at": "2026-09-27T13:26:43.632Z",
+  "readOnly": true,
+  "chatId": "cht_lWazHd9Rnq8FPmHo",
+  "blockId": "qb_opencode_1piqs8d0dgheqb",
+  "state": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "matchingQuestionParts": 1,
+    "blockStatus": "pending",
+    "protocol": "opencode-question-v1",
+    "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+    "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+    "selection": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "cardVisible": true,
+    "cardButtons": [
+      {
+        "ariaLabel": "Reopen question",
+        "text": "Reopen",
+        "disabled": false
+      }
+    ],
+    "cardTimerCount": 0,
+    "transcriptReopenCount": 0,
+    "openChatTabCount": 20
+  }
+}

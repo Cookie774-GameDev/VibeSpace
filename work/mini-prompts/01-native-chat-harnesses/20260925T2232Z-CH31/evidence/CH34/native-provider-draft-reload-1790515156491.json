@@ -1,0 +1,58 @@
+{
+  "at": "2026-09-27T13:19:13.691Z",
+  "source": "native-provider-route-continue-1790515004272.json",
+  "providerSend": false,
+  "stage": "complete",
+  "before": {
+    "windowLabel": "main",
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "fixtureProjectId": "prj_ybjv0yXnrGkGhAQY",
+    "fixtureBackend": "opencode",
+    "users": 0,
+    "assistants": 0,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "selection": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "reconciledFrom": [
+    "native-provider-draft-reload-1790515107708.json",
+    "preflight-1790515118876.json"
+  ],
+  "afterReload": {
+    "windowLabel": "main",
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "fixtureProjectId": "prj_ybjv0yXnrGkGhAQY",
+    "fixtureBackend": "opencode",
+    "users": 0,
+    "assistants": 0,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "selection": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "afterSwitch": {
+    "windowLabel": "main",
+    "activeChatId": "cht_vdI_HrV1IHyCNXif",
+    "fixtureProjectId": "prj_ybjv0yXnrGkGhAQY",
+    "fixtureBackend": "opencode",
+    "users": 0,
+    "assistants": 0,
+    "draftLength": 51,
+    "draftSha256": "eef12d1fbb66309644a85c8593410ba39c3b86b1e9034afc5ed0f20603608385",
+    "selection": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "restoredOriginalChat": true,
+  "passed": true,
+  "finishedAt": "2026-09-27T13:19:16.491Z"
+}

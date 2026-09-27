@@ -1,0 +1,23 @@
+{
+  "at": "2026-09-27T14:05:13.019Z",
+  "cdpPort": 9223,
+  "pageUrl": "http://localhost:5173/?route=chat",
+  "state": {
+    "windowLabel": "main",
+    "route": "chat",
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "selectedProjectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "opencode",
+    "connection": "opencode-cli",
+    "model": "openai/gpt-6-luna",
+    "effort": "low",
+    "runStatus": "done",
+    "userCount": 9,
+    "assistantCount": 12,
+    "pendingPermissions": 0,
+    "draftLength": 0,
+    "stopVisible": false
+  },
+  "passed": true
+}

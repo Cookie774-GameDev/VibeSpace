@@ -1,0 +1,128 @@
+{
+  "at": "2026-09-27T16:38:28.467Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "b29efb280338509ff246e8a343cdebe4f1c8015a0ef96f2d95982e246dedaa1a",
+  "expectedWritingSha256": "f705c9fceeded2db2fe5183eed704c62acf02d4f95bafdbca745923c67978ac7",
+  "expectedCodeSha256": "07ec0395d3cb4af1c4c5ebbf72d42c2e7b2f7458315c40e2987661a8cf97f970",
+  "stage": "failed",
+  "sent": true,
+  "before": {
+    "navCurrent": "page",
+    "backend": "codex",
+    "connectionId": "openai-codex",
+    "modelId": "gpt-6-luna",
+    "status": "Complete",
+    "stopVisible": false,
+    "draft": "",
+    "users": [
+      {
+        "id": "msg_2EoYtouwgZh0iCFL",
+        "hash": "9683e8bf983e61a9d8bb697fdbb849619d56d1f4267000e2958b2f93d83affa6"
+      },
+      {
+        "id": "msg_CuOiHfFONZPt-L9B",
+        "hash": "88fe637beab867e285c088d60d6cc3b3a3bd3823dcabb84f087145eed24b8944"
+      },
+      {
+        "id": "msg_I_XSu1410_QvvfnT",
+        "hash": "48eb3285a20773ed885f16dc0c9db5eea126b4b1fa5f0a08e0fc5a30f8685c10"
+      },
+      {
+        "id": "msg_P07CCFsFTu0r9sT3",
+        "hash": "badeda16ec575170673e945a4807a900bdf60cca4ecdd39692ada5446af107f9"
+      },
+      {
+        "id": "msg_SkCm7tUDmbnwVp9t",
+        "hash": "26fd05782d2dfe5260fb151de29fd75d0e38d5bd40abe8298879685a5fd4ba84"
+      },
+      {
+        "id": "msg__CfdXZU_GjoDb83p",
+        "hash": "cd6f6854353f68f47c9c93217c5084bc66ea1af918ae1518a2d715a1885e1fcb"
+      },
+      {
+        "id": "msg_peBy7QfgX2qDcE5r",
+        "hash": "15e2b30013ef73ab607ae0ae31cf1d689d462e8eb918e9b021aeb8b532656cd6"
+      },
+      {
+        "id": "msg_vhQcuZhejoL67gzX",
+        "hash": "1f6291c4b54df8924f0029fe5d6f395b5a9e6862767e70bf58e51b4ef24e131a"
+      }
+    ],
+    "assistants": [
+      {
+        "id": "msg_-SVq9-_EDTqCAder",
+        "toolCount": 0
+      },
+      {
+        "id": "msg_EnSKyWfZnDNYhT7t",
+        "toolCount": 0
+      },
+      {
+        "id": "msg_HU6ptt5dnHouwkBO",
+        "toolCount": 0
+      },
+      {
+        "id": "msg_TjCW5TSpLONJN2fs",
+        "toolCount": 0
+      },
+      {
+        "id": "msg_XYnl05tadJD5gP_F",
+        "toolCount": 0
+      },
+      {
+        "id": "msg_jreq_847b9b76-31fd-4976-9559-9df69ce340ed",
+        "toolCount": 0
+      },
+      {
+        "id": "msg_jreq_f84dfd44-ae7d-47d5-bc18-63bc3385e51c",
+        "toolCount": 0
+      },
+      {
+        "id": "msg_lyxDL63UbllhaoUt",
+        "toolCount": 0
+      }
+    ],
+    "renderedSnippets": 0
+  },
+  "sentAt": "2026-09-27T16:38:33.227Z",
+  "after": {
+    "status": "Complete",
+    "newUsers": [
+      {
+        "id": "msg_XRJVEO6---7sH9Ki",
+        "hash": "b29efb280338509ff246e8a343cdebe4f1c8015a0ef96f2d95982e246dedaa1a"
+      }
+    ],
+    "newAssistants": [
+      {
+        "id": "msg_jreq_07818186-1946-4ec2-bf6d-f6f93de46fda",
+        "textLength": 100,
+        "textHash": "7efeb362533d7a6eff722f744d671d8084d942d7d5aeab7605871cdfb987decb",
+        "toolCount": 0,
+        "hasWriting": true,
+        "hasCode": true
+      }
+    ],
+    "renderedSnippets": 2
+  },
+  "visual": {
+    "writing": {
+      "label": "Writing",
+      "body": "CH34_NATIVE_WRITING_7D2\nCopy me exactly.",
+      "fontFamily": "\"Segoe UI\", Inter, ui-sans-serif, system-ui, sans-serif",
+      "backgroundImage": "linear-gradient(145deg, rgb(41, 40, 38), rgb(32, 31, 30) 76%)",
+      "borderRadius": "11.52px",
+      "copyLabel": "Copy text"
+    },
+    "code": {
+      "label": "typescript",
+      "body": "const ch34NativeSnippet = 42;",
+      "fontFamily": "\"JetBrains Mono\", ui-monospace, SFMono-Regular, Menlo, monospace",
+      "backgroundImage": "linear-gradient(145deg, rgb(41, 40, 38), rgb(32, 31, 30) 76%)",
+      "borderRadius": "11.52px",
+      "copyLabel": "Copy code"
+    }
+  },
+  "error": "locator.screenshot: Timeout 9942.585ms exceeded.\nCall log:\n\u001b[2m  - taking element screenshot\u001b[22m\n\u001b[2m  - waiting for fonts to load...\u001b[22m\n\u001b[2m  - fonts loaded\u001b[22m\n\u001b[2m  - attempting scroll into view action\u001b[22m\n\u001b[2m    - waiting for element to be stable\u001b[22m\n",
+  "finishedAt": "2026-09-27T16:39:13.501Z"
+}

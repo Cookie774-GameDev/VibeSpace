@@ -1,0 +1,104 @@
+{
+  "measuredAtUtc": "2026-09-27T16:27:10.8738395Z",
+  "command": "node app/node_modules/vite/bin/vite.js build <absolute app root> --outDir <fresh operator path> --emptyOutDir",
+  "root": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\app",
+  "outDir": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH34\\operator\\isolated-vite-dist-20260927T162653Z",
+  "cacheDir": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH34\\operator\\isolated-vite-cache-20260927T162653Z",
+  "logPath": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH34\\operator\\isolated-vite-build-20260927T162653Z.log",
+  "exitCode": 1,
+  "buildStartedUtc": "2026-09-27T16:27:01.3920671Z",
+  "buildFinishedUtc": "2026-09-27T16:27:08.8208904Z",
+  "buildLatencyMs": 7425,
+  "freeMemoryAtStartGiB": 2.39,
+  "environment": {
+    "TAURI_ENV_PLATFORM": "windows",
+    "TAURI_ENV_DEBUG": null,
+    "VIBESPACE_VITE_CACHE_DIR": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH34\\operator\\isolated-vite-cache-20260927T162653Z",
+    "buildMode": "production; sourcemap disabled"
+  },
+  "headBefore": "d7f105406974dea70fe5edf77bd8b90e3161a8f9",
+  "headAfter": "d7f105406974dea70fe5edf77bd8b90e3161a8f9",
+  "sourceBefore": {
+    "appSrcFileCount": 4153,
+    "appSrcBytes": 77787188,
+    "fingerprintSha256": "2D54E7732E983E934876A917584E2D3D69DF36296C78A25D83B7810A98C84F44"
+  },
+  "sourceAfter": {
+    "appSrcFileCount": 4153,
+    "appSrcBytes": 77787188,
+    "fingerprintSha256": "2D54E7732E983E934876A917584E2D3D69DF36296C78A25D83B7810A98C84F44"
+  },
+  "sourceChangedDuringBuild": false,
+  "changedSourcePaths": [],
+  "criticalSourceHashesBefore": {
+    "app/package.json": "53708CCF9452B83B2337CD514FEA1356EFD4975D1282739E8B5A865E8DDB07F7",
+    "app/vite.config.ts": "54E94C145B991B426E48A223FA0541C6CA83E344D440D67C3611C351BAAE13FF",
+    "app/src/features/chat/assistant-rich-text.css": "C909475365D3185741684C737AD42305CD4342E4889CED20A6829E78E0F96738",
+    "app/src/lib/ai/runtime.ts": "989141133BD4C63E16D0CB235C2FE8BEBF17608ED16F31E98BBF43A1C0611E81",
+    "app/src/features/chat/AssistantRichText.test.tsx": "75F7A822E3572BD18A5AACEF6FC77FF7B5F2F81B9058A2CB076D2D89E93D69C9",
+    "app/src/features/chat/AssistantRichText.tsx": "FBAF4ABE5BDA3D98C11573E5904DC428BC6EB014529EF44C626A9DCF3D96AEF3"
+  },
+  "criticalSourceHashesAfter": {
+    "app/package.json": "53708CCF9452B83B2337CD514FEA1356EFD4975D1282739E8B5A865E8DDB07F7",
+    "app/vite.config.ts": "54E94C145B991B426E48A223FA0541C6CA83E344D440D67C3611C351BAAE13FF",
+    "app/src/features/chat/assistant-rich-text.css": "C909475365D3185741684C737AD42305CD4342E4889CED20A6829E78E0F96738",
+    "app/src/lib/ai/runtime.ts": "989141133BD4C63E16D0CB235C2FE8BEBF17608ED16F31E98BBF43A1C0611E81",
+    "app/src/features/chat/AssistantRichText.test.tsx": "75F7A822E3572BD18A5AACEF6FC77FF7B5F2F81B9058A2CB076D2D89E93D69C9",
+    "app/src/features/chat/AssistantRichText.tsx": "FBAF4ABE5BDA3D98C11573E5904DC428BC6EB014529EF44C626A9DCF3D96AEF3"
+  },
+  "output": {
+    "fileCount": 0,
+    "bytes": 0,
+    "decimalMB": 0.0,
+    "mebibytes": 0.0,
+    "indexHtml": null,
+    "newestFileWriteUtc": null
+  },
+  "ap31DistBefore": {
+    "Exists": true,
+    "FileCount": 746,
+    "Bytes": 95395087,
+    "NewestFileWriteUtc": "2026-09-27T15:58:53.1787367Z"
+  },
+  "ap31DistAfter": {
+    "Exists": true,
+    "FileCount": 746,
+    "Bytes": 95395087,
+    "NewestFileWriteUtc": "2026-09-27T15:58:53.1787367Z"
+  },
+  "defaultViteCacheBefore": {
+    "Exists": true,
+    "FileCount": 219,
+    "Bytes": 37975048,
+    "NewestFileWriteUtc": "2026-09-27T16:26:45.4368313Z"
+  },
+  "defaultViteCacheAfter": {
+    "Exists": true,
+    "FileCount": 219,
+    "Bytes": 37975048,
+    "NewestFileWriteUtc": "2026-09-27T16:26:45.4368313Z"
+  },
+  "tsBuildInfoBefore": [
+    {
+      "Path": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\app\\tsconfig.tsbuildinfo",
+      "Bytes": 171432,
+      "Sha256": "92EAE57C8257280157C26B201E103B4130F227F9344FD9601BA5ADF93B731C72",
+      "LastWriteUtc": "2026-09-27T16:24:13.6882418Z"
+    }
+  ],
+  "tsBuildInfoAfter": [
+    {
+      "Path": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\app\\tsconfig.tsbuildinfo",
+      "Bytes": 171432,
+      "Sha256": "92EAE57C8257280157C26B201E103B4130F227F9344FD9601BA5ADF93B731C72",
+      "LastWriteUtc": "2026-09-27T16:24:13.6882418Z"
+    }
+  ],
+  "prebuildChecks": {
+    "themeContractExit": 0,
+    "themeContractMs": 764,
+    "ponytailCheckExit": 0,
+    "ponytailCheckMs": 995
+  },
+  "limitation": "Isolated Vite production bundle only; TypeScript tsc -b and npm build lifecycle not run because AP31 owns dist/incremental outputs."
+}

@@ -1,0 +1,56 @@
+{
+  "at": "2026-09-27T13:37:46.495Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "readOnly": true,
+  "priorAttempt": "native-codex-mcp-status-1790516202244.json",
+  "persisted": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "rows": [
+      {
+        "id": "msg_63kvaqvBctx5mY6Z",
+        "role": "system",
+        "text": "Codex MCP servers:\n• codex_app: unknown\n• codex_apps: unknown\n• cua_repl: unknown\n• node_repl: unknown"
+      },
+      {
+        "id": "msg_CuOiHfFONZPt-L9B",
+        "role": "user",
+        "text": "/mcp"
+      },
+      {
+        "id": "msg_V_yR4u_fSv0tJ9vo",
+        "role": "system",
+        "text": "Unknown slash command: /skils. Try /help."
+      },
+      {
+        "id": "msg__CfdXZU_GjoDb83p",
+        "role": "user",
+        "text": "HI"
+      }
+    ],
+    "visibleErrors": [
+      "Provider errorOpenCode stopped after a tool failed. Retry to continue this session.Code: opencode_stopped_after_tool_errorRoute: opencode/openai/gpt-6-lunaConnection: opencode-cliRetry: Retry may be availableRequest: jreq_0dd1c99c-7e69-4bba-82b8-6cfc"
+    ]
+  },
+  "nativeCall": {
+    "ok": true,
+    "elapsedMs": 4046,
+    "servers": [
+      {
+        "name": "codex_app",
+        "runtimeStatus": null
+      },
+      {
+        "name": "codex_apps",
+        "runtimeStatus": null
+      },
+      {
+        "name": "cua_repl",
+        "runtimeStatus": null
+      },
+      {
+        "name": "node_repl",
+        "runtimeStatus": null
+      }
+    ]
+  }
+}

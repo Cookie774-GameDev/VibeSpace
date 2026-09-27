@@ -1,0 +1,84 @@
+{
+  "at": "2026-09-27T14:25:55.693Z",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "readOnly": true,
+  "state": {
+    "navCurrent": "page",
+    "status": "Cancelled",
+    "stopVisible": false,
+    "questions": [
+      {
+        "messageId": "msg_TjCW5TSpLONJN2fs",
+        "blockId": "qb_opencode_1lt9swl0v7q1dj",
+        "status": "pending",
+        "options": [
+          2
+        ],
+        "harness": {
+          "protocol": "opencode-question-v1",
+          "requestId": "que_codex_be2fb5de-3219-4ea4-9ff9-79ecc2631302",
+          "nativeRequestId": 0,
+          "sessionId": "01a0e340-3d81-7630-8d78-b0b5d865a40a"
+        }
+      }
+    ],
+    "cardText": [
+      "Reply styleQuestion 1 of 11. Which reply style do you prefer?*01Concise02DetailedWrite my own answerSubmitCancel",
+      ""
+    ],
+    "messages": [
+      {
+        "id": "msg_63kvaqvBctx5mY6Z",
+        "role": "system",
+        "partKinds": [
+          "text"
+        ]
+      },
+      {
+        "id": "msg_CuOiHfFONZPt-L9B",
+        "role": "user",
+        "partKinds": [
+          "text",
+          "local_command_receipt"
+        ]
+      },
+      {
+        "id": "msg_TjCW5TSpLONJN2fs",
+        "role": "assistant",
+        "partKinds": [
+          "question_block"
+        ]
+      },
+      {
+        "id": "msg_V_yR4u_fSv0tJ9vo",
+        "role": "system",
+        "partKinds": [
+          "text"
+        ]
+      },
+      {
+        "id": "msg__CfdXZU_GjoDb83p",
+        "role": "user",
+        "partKinds": [
+          "text"
+        ]
+      },
+      {
+        "id": "msg_jreq_847b9b76-31fd-4976-9559-9df69ce340ed",
+        "role": "assistant",
+        "partKinds": [
+          "text",
+          "text"
+        ]
+      },
+      {
+        "id": "msg_vhQcuZhejoL67gzX",
+        "role": "user",
+        "partKinds": [
+          "text"
+        ]
+      }
+    ]
+  },
+  "screenshot": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\mini-prompts\\01-native-chat-harnesses\\20260925T2232Z-CH31\\evidence\\CH34\\native-codex-cancel-reconcile-1790519156563.png"
+}

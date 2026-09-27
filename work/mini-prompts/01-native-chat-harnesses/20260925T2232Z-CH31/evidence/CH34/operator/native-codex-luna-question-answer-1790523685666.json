@@ -1,0 +1,61 @@
+{
+  "at": "2026-09-27T15:41:04.846Z",
+  "lane": "native-codex-luna-question-answer",
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "promptSha256": "15e2b30013ef73ab607ae0ae31cf1d689d462e8eb918e9b021aeb8b532656cd6",
+  "stage": "preflight",
+  "providerSendAttempted": false,
+  "answerSubmitAttempted": false,
+  "before": {
+    "activeChatMatches": true,
+    "backend": "codex",
+    "connectionId": "openai-codex",
+    "modelId": "gpt-6-luna",
+    "selectedRoute": {
+      "connectionId": "openai-codex",
+      "providerId": "openai",
+      "modelId": "gpt-6-luna"
+    },
+    "runStatus": null,
+    "stopVisible": false,
+    "draftLength": null,
+    "userCount": 6,
+    "userIds": [
+      "msg_2EoYtouwgZh0iCFL",
+      "msg_CuOiHfFONZPt-L9B",
+      "msg_I_XSu1410_QvvfnT",
+      "msg_P07CCFsFTu0r9sT3",
+      "msg__CfdXZU_GjoDb83p",
+      "msg_vhQcuZhejoL67gzX"
+    ],
+    "assistantCount": 5,
+    "questions": [
+      {
+        "id": "qb_opencode_0klbb5d197liyf",
+        "status": "pending",
+        "protocol": "opencode-question-v1",
+        "requestId": "que_codex_7c0299aa-bbbe-44eb-86cb-77c7e1aa7b3c"
+      },
+      {
+        "id": "qb_opencode_1lt9swl0v7q1dj",
+        "status": "pending",
+        "protocol": "opencode-question-v1",
+        "requestId": "que_codex_be2fb5de-3219-4ea4-9ff9-79ecc2631302"
+      },
+      {
+        "id": "qb_opencode_1lgscgf0i4yi19",
+        "status": "pending",
+        "protocol": "opencode-question-v1",
+        "requestId": "que_codex_be0315f5-c1ba-4b18-b690-676486072cbb"
+      },
+      {
+        "id": "qb_opencode_0u4w5gi1yfb3y4",
+        "status": "cancelled",
+        "protocol": "opencode-question-v1",
+        "requestId": "que_codex_2dc895a6-8453-41e0-9606-66dbe419a9b9"
+      }
+    ]
+  },
+  "failure": "exact_idle_codex_luna_chat_required",
+  "finishedAt": "2026-09-27T15:41:25.665Z"
+}

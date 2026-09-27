@@ -1,0 +1,23 @@
+{
+  "at": "2026-09-27T13:23:06.528Z",
+  "cdpPort": 9223,
+  "pageUrl": "http://localhost:5173/?route=chat",
+  "state": {
+    "windowLabel": "main",
+    "route": "chat",
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "selectedProjectId": "prj_ybjv0yXnrGkGhAQY",
+    "backend": "opencode",
+    "connection": null,
+    "model": null,
+    "effort": "auto",
+    "runStatus": "running",
+    "userCount": 1,
+    "assistantCount": 1,
+    "pendingPermissions": 0,
+    "draftLength": 0,
+    "stopVisible": true
+  },
+  "passed": true
+}

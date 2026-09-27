@@ -1,0 +1,41 @@
+{
+  "at": "2026-09-27T13:11:50.656Z",
+  "stage": "create-fixture-chat",
+  "cdpPort": 9223,
+  "providerSend": false,
+  "pageUrl": "http://localhost:5173/?route=chat",
+  "before": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "userCount": 5,
+    "assistantCount": 8,
+    "pendingPermissions": 0,
+    "runStatus": "done",
+    "draftLength": 0,
+    "draftSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "modelSelection": {
+      "mode": "single",
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "created": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "userCount": 5,
+    "assistantCount": 8,
+    "pendingPermissions": 0,
+    "runStatus": "done",
+    "draftLength": null,
+    "draftSha256": null,
+    "modelSelection": {
+      "mode": "single",
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    }
+  },
+  "failure": "fresh_empty_fixture_chat_required",
+  "finishedAt": "2026-09-27T13:11:51.321Z"
+}

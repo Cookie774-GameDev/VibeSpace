@@ -1,0 +1,105 @@
+{
+  "at": "2026-09-27T13:29:13.268Z",
+  "chatId": "cht_lWazHd9Rnq8FPmHo",
+  "blockId": "qb_opencode_1piqs8d0dgheqb",
+  "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+  "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+  "source": "native-opencode-question-open-1790515375521.json",
+  "stage": "complete",
+  "providerSend": false,
+  "before": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "userCount": 1,
+    "assistantCount": 1,
+    "matchingQuestionParts": 1,
+    "blockStatus": "pending",
+    "protocol": "opencode-question-v1",
+    "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+    "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+    "selectedRoute": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "runStatus": "Running"
+  },
+  "resumedFrom": "native-opencode-question-reject-1790515595373.json",
+  "draftSha256": "ca8119adce15aabfdd6463c17c9b1233129a977dd2e7f92879750857ce955dcf",
+  "micButtonCount": 1,
+  "dismissed": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "userCount": 1,
+    "assistantCount": 1,
+    "matchingQuestionParts": 1,
+    "blockStatus": "pending",
+    "protocol": "opencode-question-v1",
+    "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+    "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+    "selectedRoute": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "runStatus": "Running"
+  },
+  "away": {
+    "activeChatId": "cht_Eumzyw1Y8yx21W1s",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "userCount": 1,
+    "assistantCount": 1,
+    "matchingQuestionParts": 1,
+    "blockStatus": "pending",
+    "protocol": "opencode-question-v1",
+    "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+    "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+    "selectedRoute": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "runStatus": "Complete"
+  },
+  "draftRestored": true,
+  "reopened": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "userCount": 1,
+    "assistantCount": 1,
+    "matchingQuestionParts": 1,
+    "blockStatus": "pending",
+    "protocol": "opencode-question-v1",
+    "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+    "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+    "selectedRoute": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "runStatus": "Running"
+  },
+  "observer": {
+    "installed": false
+  },
+  "after": {
+    "activeChatId": "cht_lWazHd9Rnq8FPmHo",
+    "projectId": "prj_ybjv0yXnrGkGhAQY",
+    "userCount": 1,
+    "assistantCount": 1,
+    "matchingQuestionParts": 1,
+    "blockStatus": "cancelled",
+    "protocol": "opencode-question-v1",
+    "requestId": "que_0e3086c74001lHWf67cHC5QbVa",
+    "sessionId": "ses_f1cf7b360ffeyTWrFEtjY0qVgu",
+    "selectedRoute": {
+      "providerId": "opencode",
+      "modelId": "openai/gpt-6-luna",
+      "connectionId": "opencode-cli"
+    },
+    "runStatus": "Running"
+  },
+  "observedNativeReject": null,
+  "passed": true,
+  "finishedAt": "2026-09-27T13:29:31.361Z"
+}

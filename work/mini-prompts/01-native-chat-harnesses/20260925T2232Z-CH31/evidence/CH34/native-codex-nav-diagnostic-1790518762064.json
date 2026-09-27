@@ -1,0 +1,67 @@
+{
+  "at": "2026-09-27T14:19:21.869Z",
+  "readOnly": true,
+  "chatId": "cht_-zkkf_r46zzuxB3L",
+  "dom": {
+    "active": "cht_Eumzyw1Y8yx21W1s",
+    "target": {
+      "title": "New chat 8",
+      "projectId": "prj_ybjv0yXnrGkGhAQY",
+      "workspaceId": "wks_oFy4hhSNsvUWHnHr",
+      "backendAffinity": {
+        "version": 1,
+        "backend": "codex",
+        "locked": true,
+        "selectedAt": 1790483321165,
+        "lockedAt": 1790483329397
+      },
+      "connection": {
+        "id": "openai-codex",
+        "adapterId": "codex-cli",
+        "providerId": "openai",
+        "displayName": "Codex CLI",
+        "mode": "external-cli",
+        "authSource": "codex-cli-session",
+        "capabilities": {
+          "text": true,
+          "images": false,
+          "files": false,
+          "tools": true,
+          "modelSelection": true,
+          "structuredOutput": true,
+          "streaming": true,
+          "cancellation": true,
+          "resumeSession": false,
+          "systemPrompt": false,
+          "workingDirectory": true,
+          "usage": true,
+          "subscriptionQuota": false,
+          "localOnly": false
+        },
+        "toolAllowlist": [
+          "vibespace_context"
+        ],
+        "promptTransport": "prefixed-preamble",
+        "enabled": true,
+        "modelId": "gpt-6-luna"
+      }
+    },
+    "nav": {
+      "text": "New chat 8Chat activity: needs attention",
+      "current": "page",
+      "visible": true,
+      "buttonText": "New chat 8",
+      "buttonCurrent": null,
+      "buttonVisible": true
+    },
+    "pane": {
+      "visible": true,
+      "text": "Interrupted request · outcome unknown. Review the existing result before retrying.CompleteLocal actions completed0 files+0-0——opencode-go/deepseek-v4-flash0 SubagentsYou11:28 PMHIUnknown slash command: /skils. Try /help.You08:36 AM/mcpCodex MCP servers:\n• codex_app: unknown\n• codex_apps: unknown\n• c",
+      "model": "OpenAI · gpt-6-lunalow",
+      "effort": "low",
+      "status": "Complete",
+      "draft": ""
+    },
+    "tabstrip": []
+  }
+}
