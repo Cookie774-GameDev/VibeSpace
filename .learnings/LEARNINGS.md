@@ -520,3 +520,27 @@ Use a single-quoted here-string or a structured file-write tool for literal Mark
 ### Resolution
 - **Evidence**: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/RESULT.md, CH34 broad suite scheduling checkpoint and its immediate correction.
 - **Pattern-Key**: workflow.powershell_literal_markdown_append
+
+---
+## [LRN-20260927-CH34G] error
+
+**Logged**: 2026-09-27T16:56:30Z
+
+**Priority**: high
+
+**Status**: open
+
+**Area**: workflow
+
+### Summary
+A path-scoped `git add` followed by an unqualified `git commit` included other agents' already-staged files in a shared worktree.
+
+### Details
+Commit `3d1c7d2989778adfef44c9b885048373d328bcf5` was intended for `app/src/features/chat/assistant-rich-text.css`, but the shared index contained 23 staged voice/auth/chat paths. The commit retained their file contents under an inaccurate CSS-only title. The voice owner was informed; no history rewrite or peer file reset was attempted.
+
+### Suggested Action
+In a shared worktree, inspect `git diff --cached --name-only` and commit only explicit owned paths with `git commit --only -- <paths>` or a carefully isolated index. Abort if the staged set changed unexpectedly; do not treat `git add -- <path>` as restricting a later plain commit.
+
+### Resolution
+- **Evidence**: commit `3d1c7d2989778adfef44c9b885048373d328bcf5`, `docs/AGENT_COORDINATION.md` CH34 incident checkpoint.
+- **Pattern-Key**: workflow.shared_git_index_unqualified_commit
