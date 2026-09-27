@@ -744,10 +744,14 @@ export function AgentManager() {
       let hasNewerProfileEdits = false;
       let profileWriteCompleted = !currentProfileDirty;
       let existingAgent: Agent | undefined;
-      if (currentProtectedJarvis || currentAgentDirty) {
+      if (currentAgentDirty) {
         existingAgent = await agentRepo.getById(selectedAgent.id);
       }
-      if (currentProtectedJarvis && (!existingAgent || !isProtectedJarvisAgent(existingAgent))) {
+      if (
+        currentProtectedJarvis &&
+        currentAgentDirty &&
+        (!existingAgent || !isProtectedJarvisAgent(existingAgent))
+      ) {
         throw new Error('Protected JARVIS agent row is unavailable.');
       }
       if (currentAgentDirty) {

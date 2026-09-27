@@ -106,3 +106,25 @@ Notification Center entry with the official V icon, and an active V taskbar
 button. The legacy J remains a separate app button.
 
 ---
+## [FEAT-20260927-WB28] themed_windows_notification_content
+
+**Logged**: 2026-09-27T16:16:00Z
+**Priority**: medium
+**Status**: in_progress
+**Area**: frontend
+
+### Requested Capability
+
+Windows notifications should carry VibeSpace's warm palette and branding throughout the visible content, beyond the sender name and app icon. Keep native delivery and Notification Center history.
+
+### Implementation Direction
+
+Use a full-width Windows toast hero image and official V icon. Windows owns the toast chrome/background color, so theme the supported image area rather than promising arbitrary shell recoloring. Verify the actual banner and Notification Center in official C2.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: app/src-tauri/src/notification_branding.rs, app/src-tauri/icons/notification-hero.svg
+- Tags: windows, notifications, branding, theme
+
+---

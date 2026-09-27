@@ -683,7 +683,7 @@ describe('AgentManager protected JARVIS profile lifecycle', () => {
         '',
       ),
     );
-    expect(agentRepo.getById).toHaveBeenCalledWith(protectedJarvis.id);
+    expect(agentRepo.getById).not.toHaveBeenCalled();
     expect(agentRepo.update).not.toHaveBeenCalled();
     expect(agentRepo.create).not.toHaveBeenCalled();
   });
@@ -741,23 +741,27 @@ describe('AgentManager protected JARVIS profile lifecycle', () => {
     expect(jarvisProfileRepo.updateCustomInstructions).not.toHaveBeenCalled();
   });
 
-  it('fails closed before a profile-only write when the protected row is missing', async () => {
+  it('saves profile-only instructions when the protected agent is present only in memory', async () => {
     const agentRepo = await repoMocks(protectedJarvis);
     const jarvisProfileRepo = await profileRepoMocks();
     vi.mocked(agentRepo.getById).mockResolvedValue(undefined);
     render(<AgentManager />);
 
     fireEvent.change(await screen.findByLabelText('Custom instructions'), {
-      target: { value: 'Must not persist.' },
+      target: { value: 'Save my instructions.' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save agent' }));
 
-    expect((await screen.findByRole('alert')).textContent).toContain(
-      'Protected JARVIS agent row is unavailable.',
+    await waitFor(() =>
+      expect(jarvisProfileRepo.updateCustomInstructions).toHaveBeenCalledWith(
+        'local-user-a',
+        'profile_local-user-a',
+        'Save my instructions.',
+      ),
     );
     expect(agentRepo.update).not.toHaveBeenCalled();
     expect(agentRepo.create).not.toHaveBeenCalled();
-    expect(jarvisProfileRepo.updateCustomInstructions).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('fails closed before either write when the persisted row is no longer protected', async () => {
