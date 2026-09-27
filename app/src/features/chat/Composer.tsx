@@ -379,6 +379,9 @@ import {
   type ModelPickerGroup,
   type ModelPickerOption,
 } from '@/lib/ai/useAccessibleChatModels';
+import { parseVoiceProviderOverrides } from '@/features/voice/voiceProviderSelection';
+import { startTypedAgentOverride } from '@/features/voice/voiceTypedAgentFlow';
+import { focusVoiceChat } from '@/features/voice/voiceChatRouting';
 import { openCodePersistentAdapter, listPersistentOpenCodeSkills } from '@/lib/ai/adapters/opencodePersistent';
 import type { ProviderDiscoveredModel } from '@/lib/ai/adapters/types';
 import { getProviderConnectionDescriptor, PROVIDER_CONNECTIONS } from '@/lib/ai/adapters/catalog';
@@ -4408,6 +4411,36 @@ export function Composer({
           )
         : null;
     const trimmed = draftText.trim();
+    const providerOverride = parseVoiceProviderOverrides(trimmed);
+    if (providerOverride) {
+      if (
+        attachedFiles.length || attachedImages.length || attachedTerminals.length ||
+        attachedPlugins.length || attachedContexts.length || attachedNotes.length ||
+        confirmedCommands.length || confirmedAgentMentions.length ||
+        confirmedCatalogReferences.length || pendingHandoff || options.handoffPayload
+      ) {
+        toast.warning('Provider override', 'Send this provider-routed task without other attachments.');
+        return false;
+      }
+      if (sending) return false;
+      setSending(true);
+      try {
+        const routedChatId = await startTypedAgentOverride({
+          parsed: providerOverride,
+          options: accessibleChatModels.flatOptions,
+          sourceChatId: String(chatId),
+        });
+        if (!overrideText) setText('');
+        playUiSound('chat_message_send');
+        focusVoiceChat(routedChatId);
+        return true;
+      } catch (error) {
+        toast.error('Provider override failed', error instanceof Error ? error.message : 'The task could not be routed.');
+        return false;
+      } finally {
+        setSending(false);
+      }
+    }
     const hasConfirmedCommands = confirmedCommands.length > 0;
     const hasConfirmedAgentMentions = confirmedAgentMentions.length > 0;
     const hasConfirmedCatalogReferences = confirmedCatalogReferences.length > 0;

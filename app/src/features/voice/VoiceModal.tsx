@@ -9,11 +9,7 @@ import { cn } from '@/lib/utils';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { messageRepo } from '@/lib/db';
 import { useChatMessages } from '@/features/chat/hooks';
-import {
-  ensureJarvisChatForVoice,
-  focusVoiceChat,
-  resolveVoiceChatTarget,
-} from './voiceChatRouting';
+import { ensureJarvisChatForProvider, focusVoiceChat } from './voiceChatRouting';
 import type { ChatId } from '@/types';
 import type { VoiceState } from './store';
 import { useVoiceStore } from './store';
@@ -35,7 +31,25 @@ import {
   type ContextGalaxySnapshot,
 } from '@/features/context/contextGalaxyRegistry';
 import { clampVoicePanelTranslation, shouldStartVoicePanelDrag } from './voicePanelDrag';
-import { handleVoiceModuleClosed, stopCurrentVoiceResponse } from './voiceRouter';
+import {
+  handleVoiceModuleClosed,
+  speakWithSettings,
+  stopCurrentVoiceResponse,
+} from './voiceRouter';
+import { useAccessibleChatModels } from '@/lib/ai/useAccessibleChatModels';
+import { modelSupportsVision } from '@/lib/ai/vision';
+import {
+  parseVoiceProviderOverrides,
+  resolveVoiceProviderSelection,
+} from './voiceProviderSelection';
+import { captureVoiceScreenAttachment } from './voiceScreenCapture';
+import {
+  buildVoiceMainResultSendDetail,
+  createVoiceAgentFlow,
+  type VoiceWorkerOutcome,
+} from './voiceAgentFlow';
+import { launchJarvisChatAgent } from '@/features/jarvis-interaction/agentRunner';
+import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
 import { resolveVoiceListenTimeoutMs } from './voiceConversation';
 import { createVoiceSessionBinding, newVoiceSessionId } from './voiceSessionBinding';
 import {
@@ -107,6 +121,57 @@ const VOICE_MESSAGE_SAVE_FAILURE = formatVoiceFailure(
 );
 const KERNEL_SMOKE_VOICE_FIXTURE_SHA256 =
   'b3bab750a95495ae54c457b54cb9a066147e36acc6a711e1a09ea05265c272f7';
+
+async function awaitVoiceWorkerResult(
+  parentChatId: string,
+  agentId: string,
+  childChatId: string,
+  signal?: AbortSignal,
+): Promise<VoiceWorkerOutcome> {
+  const status = await new Promise<'done' | 'blocked' | 'failed' | 'cancelled'>(
+    (resolve, reject) => {
+      let closed = false;
+      let unsubscribe: () => void = () => undefined;
+      const close = (value?: 'done' | 'blocked' | 'failed' | 'cancelled', error?: Error) => {
+        if (closed) return;
+        closed = true;
+        unsubscribe();
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', onAbort);
+        if (error) reject(error);
+        else if (value) resolve(value);
+      };
+      const check = () => {
+        const card = useJarvisInteractionStore
+          .getState()
+          .agentsForChat(parentChatId)
+          .find((candidate) => String(candidate.agentId) === agentId);
+        if (card && ['done', 'blocked', 'failed', 'cancelled'].includes(card.status)) {
+          close(card.status as 'done' | 'blocked' | 'failed' | 'cancelled');
+        }
+      };
+      const onAbort = () => close(undefined, new Error('Voice request cancelled.'));
+      const timeout = setTimeout(() => close('failed'), 10 * 60_000);
+      unsubscribe = useJarvisInteractionStore.subscribe(check);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      check();
+    },
+  );
+  const messages = await messageRepo.listByChat(childChatId as ChatId);
+  const final = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant' || message.role === 'agent');
+  const text = final?.parts
+    .filter((part) => part.kind === 'text')
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+  const card = useJarvisInteractionStore
+    .getState()
+    .agentsForChat(parentChatId)
+    .find((candidate) => String(candidate.agentId) === agentId);
+  return { status, text: text || card?.summary || card?.error || `Worker ${status}.` };
+}
 
 type SmokeSttState = 'idle' | 'transcribing' | 'submitted' | 'blocked_external';
 type SmokeSttBlocker =
@@ -206,6 +271,10 @@ function VoiceModalPanel() {
   const voiceCommitPhrase = useAuthStore((state) => state.voiceCommitPhrase);
   const fasterWhisperModel = useAuthStore((state) => state.fasterWhisperModel);
   const chatModelSelection = useAuthStore((state) => state.chatModelSelection);
+  const voiceMainAgentProvider = useAuthStore((state) => state.voiceMainAgentProvider);
+  const { flatOptions: accessibleModels } = useAccessibleChatModels();
+  const accessibleModelsRef = React.useRef(accessibleModels);
+  accessibleModelsRef.current = accessibleModels;
   const commandCenterBinding = useJarvisCommandCenterBinding();
   const [showCommandCenter, setShowCommandCenter] = React.useState(false);
   const [capturePending, setCapturePending] = React.useState(false);
@@ -247,6 +316,10 @@ function VoiceModalPanel() {
   const streamingReplyRef = React.useRef(false);
   const manuallyStoppedReplyRef = React.useRef(false);
   const flushUtteranceRef = React.useRef<(text: string) => void>(() => undefined);
+  const voiceAgentFlowRef = React.useRef<ReturnType<typeof createVoiceAgentFlow> | null>(null);
+  const voiceFlowActiveRef = React.useRef(false);
+  const voiceLaunchFailureRef = React.useRef<string | null>(null);
+  const [voiceFlowStatus, setVoiceFlowStatus] = React.useState('');
   const listeningArmedRef = React.useRef(false);
   const turnBusyRef = React.useRef(false);
   const [smokeSttState, setSmokeSttState] = React.useState<SmokeSttState>('idle');
@@ -577,15 +650,22 @@ function VoiceModalPanel() {
 
       const currentIdentity = resolveAccountIdentity(useAuthStore.getState());
       if (currentIdentity?.accountId !== requestedIdentity.accountId) return;
+      if (voiceFlowActiveRef.current) return;
 
-      const currentSession = useVoiceStore.getState().session;
-      if (currentSession) return;
-
-      const chatId = await ensureJarvisChatForVoice();
+      const chatId = await ensureJarvisChatForProvider(
+        useAuthStore.getState().voiceMainAgentProvider,
+      );
       if (disposed || !chatId) return;
 
       const confirmedIdentity = resolveAccountIdentity(useAuthStore.getState());
       if (confirmedIdentity?.accountId !== requestedIdentity.accountId) return;
+      const currentSession = useVoiceStore.getState().session;
+      if (
+        currentSession?.chatId === chatId &&
+        currentSession.accountId === requestedIdentity.accountId
+      )
+        return;
+      if (currentSession) useVoiceStore.getState().endSession(currentSession.sessionId);
 
       const binding = createVoiceSessionBinding({
         sessionId: newVoiceSessionId(),
@@ -600,7 +680,15 @@ function VoiceModalPanel() {
     });
 
     return () => void (disposed = true);
-  }, [agentRoster, cloudAccountId, localUserId, open, workspaceId]);
+  }, [
+    agentRoster,
+    cloudAccountId,
+    localUserId,
+    open,
+    workspaceId,
+    projectId,
+    voiceMainAgentProvider,
+  ]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -626,7 +714,7 @@ function VoiceModalPanel() {
     };
 
     const restartListening = () => {
-      if (turnBusyRef.current) return;
+      if (turnBusyRef.current || voiceFlowActiveRef.current) return;
       if (
         !useUIStore.getState().voiceModalOpen ||
         speakingRef.current ||
@@ -638,7 +726,7 @@ function VoiceModalPanel() {
       if (restartTimerRef.current !== null) window.clearTimeout(restartTimerRef.current);
       restartTimerRef.current = window.setTimeout(() => {
         restartTimerRef.current = null;
-        if (turnBusyRef.current) return;
+        if (turnBusyRef.current || voiceFlowActiveRef.current) return;
         if (
           !useUIStore.getState().voiceModalOpen ||
           speakingRef.current ||
@@ -688,81 +776,215 @@ function VoiceModalPanel() {
 
     const flushUtterance = (textOverride?: string) => {
       clearUtteranceTimers();
-      if (turnBusyRef.current) return;
+      if (turnBusyRef.current || voiceFlowActiveRef.current) return;
 
       const text = (textOverride ?? pendingUtteranceRef.current).trim();
       pendingUtteranceRef.current = '';
       if (!text) return;
 
       manuallyStoppedReplyRef.current = false;
+      voiceLaunchFailureRef.current = null;
       turnBusyRef.current = true;
       disarmPushToTalk();
       stopMicForTurn();
       useVoiceStore.getState().setState('thinking');
+      // Speak before DB/chat preparation so the acknowledgment is not held
+      // behind provider routing or a display-permission prompt.
+      void speakWithSettings('On it.').catch(() => undefined);
+      voiceFlowActiveRef.current = true;
       void (async () => {
-        const target = await resolveVoiceChatTarget(text);
-        if (!target) {
-          useVoiceStore.getState().setState('error', VOICE_CHAT_TARGET_FAILURE);
-          releaseTurnAndRestart();
-          return;
+        const auth = useAuthStore.getState();
+        const parsed = parseVoiceProviderOverrides(text);
+        const messageText = (parsed ? parsed.taskText : text).trim();
+        if (!messageText) throw new Error('Say a task after the provider instruction.');
+        const mainProvider = parsed?.providers.main ?? auth.voiceMainAgentProvider;
+        const workerProvider = parsed?.providers.worker ?? auth.voiceWorkerProvider;
+        // Resolve both live routes before accepting the task. A missing provider
+        // is an error, never a silent fallback to the other saved provider.
+        const mainRoute = resolveVoiceProviderSelection({
+          provider: mainProvider,
+          options: accessibleModelsRef.current,
+          preferredSelection: auth.chatModelSelection,
+        });
+        resolveVoiceProviderSelection({
+          provider: workerProvider,
+          options: accessibleModelsRef.current,
+          preferredSelection: auth.chatModelSelection,
+        });
+        if (parsed?.saveAsDefault) {
+          if (parsed.providers.main) auth.setVoiceMainAgentProvider(parsed.providers.main);
+          if (parsed.providers.worker) auth.setVoiceWorkerProvider(parsed.providers.worker);
         }
 
-        const boundSession = useVoiceStore.getState().session;
-        const chatId = target.agentId ? target.chatId : boundSession?.chatId;
-        const accountId = target.agentId ? undefined : boundSession?.accountId;
-        const voiceSessionId = target.agentId ? undefined : boundSession?.sessionId;
-        if (!chatId) {
-          useVoiceStore.getState().setState('error', VOICE_BOUND_CHAT_FAILURE);
-          releaseTurnAndRestart();
-          return;
+        const chatId = await ensureJarvisChatForProvider(mainProvider, messageText);
+        if (!chatId) throw new Error(VOICE_CHAT_TARGET_FAILURE);
+        const identity = resolveAccountIdentity(useAuthStore.getState());
+        if (!identity) throw new Error(VOICE_BOUND_CHAT_FAILURE);
+        const currentSession = useVoiceStore.getState().session;
+        if (currentSession?.chatId !== chatId || currentSession.accountId !== identity.accountId) {
+          if (currentSession) useVoiceStore.getState().endSession(currentSession.sessionId);
+          const binding = createVoiceSessionBinding({
+            sessionId: newVoiceSessionId(),
+            accountId: identity.accountId,
+            chatId,
+            startedAt: Date.now(),
+          });
+          if (!useVoiceStore.getState().beginSession(binding))
+            throw new Error(VOICE_BOUND_CHAT_FAILURE);
         }
         focusVoiceChat(chatId);
-        const messageText = target.messageText.trim();
-        if (!messageText) {
-          useVoiceStore.getState().setState('error', 'Say something for Jarvis to send.');
-          releaseTurnAndRestart();
-          return;
-        }
 
-        const auth = useAuthStore.getState();
         const modelCheck = validateSendModelAccess(
           messageText,
-          auth.chatModelSelection,
+          mainRoute.selection,
           modelSelectionContextFromAuth(auth),
           auth.stackCustomSteps,
           { voice: true },
         );
-        if (!modelCheck.ok) {
-          useVoiceStore.getState().setState('error', modelCheck.message);
-          releaseTurnAndRestart();
-          return;
-        }
+        if (!modelCheck.ok) throw new Error(modelCheck.message);
 
-        try {
-          await messageRepo.create({
-            chat_id: chatId as ChatId,
-            role: 'user',
-            parts: [{ kind: 'text', text: messageText }],
+        if (!voiceAgentFlowRef.current) {
+          voiceAgentFlowRef.current = createVoiceAgentFlow({
+            now: Date.now,
+            acknowledge: () => undefined,
+            persistUser: async (input) => {
+              await messageRepo.create({
+                chat_id: input.chatId as ChatId,
+                role: 'user',
+                parts: [{ kind: 'text', text: input.text }],
+              });
+            },
+            captureScreen: async (requestText, provider) => {
+              const route = resolveVoiceProviderSelection({
+                provider,
+                options: accessibleModelsRef.current,
+                preferredSelection: useAuthStore.getState().chatModelSelection,
+              });
+              if (
+                route.selection.mode !== 'single' ||
+                !modelSupportsVision(route.selection.providerId, route.selection.modelId)
+              ) {
+                return {
+                  ok: false,
+                  code: 'worker_model_no_vision',
+                  message:
+                    'The selected worker model cannot receive a screenshot; continuing with text.',
+                };
+              }
+              return captureVoiceScreenAttachment(requestText);
+            },
+            launchWorker: async (input) => {
+              const liveAuth = useAuthStore.getState();
+              const route = resolveVoiceProviderSelection({
+                provider: input.requestedProvider,
+                options: accessibleModelsRef.current,
+                preferredSelection: liveAuth.chatModelSelection,
+              });
+              const history = await messageRepo.listByChat(input.parentChatId as ChatId);
+              const recentContext = history
+                .slice(-8)
+                .map((message) => {
+                  const excerpt = message.parts
+                    .filter((part) => part.kind === 'text')
+                    .map((part) => part.text)
+                    .join(' ')
+                    .slice(0, 700);
+                  return excerpt ? `${message.role}: ${excerpt}` : '';
+                })
+                .filter(Boolean)
+                .join('\n')
+                .slice(-4_000);
+              const launched = await launchJarvisChatAgent({
+                parentChatId: input.parentChatId,
+                task: recentContext
+                  ? `${input.task}\n\nRecent parent conversation (context only; follow the current request):\n${recentContext}`
+                  : input.task,
+                modelLabel: route.modelLabel,
+                modelSelection: route.selection,
+                workerProvider: route.provider,
+                imageAttachments: input.imageAttachments,
+                recordParentCommand: false,
+              });
+              return { ...launched, actualProvider: route.provider };
+            },
+            waitForWorker: (input) =>
+              awaitVoiceWorkerResult(
+                input.parentChatId,
+                input.agentId,
+                input.childChatId,
+                input.signal,
+              ),
+            deliverMainResult: async (input) => {
+              const liveAuth = useAuthStore.getState();
+              const route = resolveVoiceProviderSelection({
+                provider: input.mainProvider,
+                options: accessibleModelsRef.current,
+                preferredSelection: liveAuth.chatModelSelection,
+              });
+              const binding = useVoiceStore.getState().session;
+              if (binding?.chatId !== input.chatId)
+                throw new Error('Voice session changed before the result.');
+              const detail = buildVoiceMainResultSendDetail({
+                delivery: input,
+                selection: route.selection,
+                voiceSession: binding,
+              });
+              window.dispatchEvent(new CustomEvent('jarvis:send', { detail }));
+            },
+            reportStatus: (status) => {
+              if (status.phase === 'launched') {
+                setVoiceFlowStatus(
+                  `Sent to ${status.provider === 'codex' ? 'Codex' : 'OpenCode'} worker`,
+                );
+              } else if (status.phase === 'capture_failed') {
+                setVoiceFlowStatus(status.message ?? 'Screen unavailable; sending text');
+              } else if (status.phase === 'launch_failed') {
+                voiceLaunchFailureRef.current = status.message ?? null;
+                setVoiceFlowStatus(status.message ?? 'Worker could not start');
+              } else if (status.phase === 'delivery_failed') {
+                setVoiceFlowStatus(status.message ?? 'Worker finished; result delivery failed');
+              } else if (status.phase === 'worker_terminal') {
+                setVoiceFlowStatus(
+                  `${status.provider === 'codex' ? 'Codex' : 'OpenCode'} worker: ${status.message}`,
+                );
+              }
+            },
           });
-          window.dispatchEvent(
-            new CustomEvent('jarvis:send', {
-              detail: {
-                chatId,
-                ...(accountId && voiceSessionId ? { accountId, voiceSessionId } : {}),
-                text: messageText,
-                agentId: target.agentId,
-                mentionedAgentIds: target.mentionedAgentIds,
-                speakReply: true,
-                autoApproveActions: auth.voiceAutoApproveActions,
-              },
-            }),
-          );
-        } catch {
-          toast.error('Voice message failed', VOICE_MESSAGE_SAVE_FAILURE);
-          useVoiceStore.getState().setState('error', VOICE_MESSAGE_SAVE_FAILURE);
+        }
+        const result = await voiceAgentFlowRef.current.run({
+          chatId,
+          text: messageText,
+          mainProvider,
+          workerProvider,
+        });
+        if (result.status === 'launch_failed') {
+          const saveFailed =
+            voiceLaunchFailureRef.current === 'The voice request could not be saved.';
+          const failure = saveFailed
+            ? VOICE_MESSAGE_SAVE_FAILURE
+            : 'I could not start the worker. The task was not sent.';
+          if (saveFailed) toast.error('Voice message failed', failure);
+          useVoiceStore.getState().setState('error', failure);
+          void speakWithSettings(failure).catch(() => undefined);
+          releaseTurnAndRestart();
+        } else if (result.status === 'delivery_failed') {
+          const failure = 'The worker finished, but I could not deliver the spoken result.';
+          useVoiceStore.getState().setState('error', failure);
+          void speakWithSettings(failure).catch(() => undefined);
           releaseTurnAndRestart();
         }
-      })();
+      })()
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : VOICE_MESSAGE_SAVE_FAILURE;
+          toast.error('Voice message failed', message);
+          setVoiceFlowStatus(message);
+          useVoiceStore.getState().setState('error', message);
+          void speakWithSettings('I could not start the task.').catch(() => undefined);
+          releaseTurnAndRestart();
+        })
+        .finally(() => {
+          voiceFlowActiveRef.current = false;
+        });
     };
     flushUtteranceRef.current = (text: string) => flushUtterance(text);
 
@@ -1080,6 +1302,14 @@ function VoiceModalPanel() {
         ) : null}
 
         {/* Command Center disclosure */}
+        {voiceFlowStatus ? (
+          <output
+            className="block border-t border-border/70 px-3 py-1 text-xs text-muted-foreground"
+            aria-live="polite"
+          >
+            {voiceFlowStatus}
+          </output>
+        ) : null}
         <div className="jarvis-command-disclosure relative z-[1] flex min-h-8 items-center justify-between gap-2 border-t border-border/70 px-2 [html[data-theme=monochrome]_&]:border-border [html[data-theme=monochrome]_&]:hover:bg-muted">
           <button
             ref={commandCenterDisclosureRef}

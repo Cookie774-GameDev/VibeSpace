@@ -3,6 +3,7 @@ import {
   detectExplicitVoiceAgentSlug,
   detectVoiceMention,
   ensureJarvisChatForVoice,
+  ensureJarvisChatForProvider,
   isJarvisChat,
   voiceMessageTextForAgentRoute,
 } from './voiceChatRouting';
@@ -35,6 +36,44 @@ const agents = {
   [jarvisAgent.id]: jarvisAgent,
   [criticAgent.id]: criticAgent,
 };
+
+describe('provider-bound Jarvis voice chats', () => {
+  it('creates a Codex chat with explicit backend affinity before its first message', async () => {
+    const previousAuth = useAuthStore.getState();
+    const previousAgents = useAgentStore.getState().agents;
+    useAuthStore.setState({
+      cloudSession: null,
+      localUserId: 'voice-provider-account',
+      workspaceId: 'voice-provider-workspace' as never,
+      projectId: null,
+    });
+    useAgentStore.setState({ agents: { [jarvisAgent.id]: jarvisAgent } });
+    vi.spyOn(db.chats, 'where').mockReturnValue({
+      equals: () => ({ toArray: async () => [] }),
+    } as never);
+    const create = vi.spyOn(chatRepo, 'createAuthorized').mockImplementation(
+      async (input) =>
+        ({
+          ...input,
+          id: 'chat-codex-voice',
+        }) as never,
+    );
+
+    try {
+      await expect(ensureJarvisChatForProvider('codex')).resolves.toBe('chat-codex-voice');
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend_affinity: expect.objectContaining({ backend: 'codex', locked: false }),
+        }),
+        expect.anything(),
+        expect.any(Function),
+      );
+    } finally {
+      useAuthStore.setState(previousAuth);
+      useAgentStore.setState({ agents: previousAgents });
+    }
+  });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

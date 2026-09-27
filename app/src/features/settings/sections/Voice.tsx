@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AudioLines, Check, Cloud, Download, HardDrive, Play, RefreshCw } from 'lucide-react';
-import { useAuthStore } from '@/stores/auth';
+import { useAuthStore, type VoiceAgentProvider } from '@/stores/auth';
 import type { PersonaPreset, VoiceEngine, VoicePresetId } from '@/types/common';
 import { PERSONAS } from '@/features/onboarding/steps/personas-data';
 import {
@@ -122,6 +122,10 @@ import { SpeechHistory } from '../components/SpeechHistory';
 export function Voice({ active = true }: { active?: boolean } = {}) {
   const persona = useAuthStore((s) => s.personaPreset);
   const setPersona = useAuthStore((s) => s.setPersona);
+  const voiceMainAgentProvider = useAuthStore((s) => s.voiceMainAgentProvider);
+  const setVoiceMainAgentProvider = useAuthStore((s) => s.setVoiceMainAgentProvider);
+  const voiceWorkerProvider = useAuthStore((s) => s.voiceWorkerProvider);
+  const setVoiceWorkerProvider = useAuthStore((s) => s.setVoiceWorkerProvider);
   const voicePreset = useAuthStore((s) => s.voicePreset);
   const setVoicePreset = useAuthStore((s) => s.setVoicePreset);
   const voiceEngine = useAuthStore((s) => s.voiceEngine);
@@ -414,6 +418,43 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
       </header>
 
       <SpeechHistory />
+      <section className="flex flex-col gap-4" aria-label="Voice agent providers">
+        <div>
+          <h3 className="text-ui-strong text-foreground">Voice agent providers</h3>
+          <p className="mt-1 text-metadata text-muted-foreground">
+            Choose independently which provider handles the Main Agent and the worker session. Both
+            default to Codex.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="text-secondary text-foreground">
+            Voice Main Agent provider
+            <select
+              aria-label="Voice Main Agent provider"
+              className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+              value={voiceMainAgentProvider}
+              onChange={(event) =>
+                setVoiceMainAgentProvider(event.target.value as VoiceAgentProvider)
+              }
+            >
+              <option value="codex">Codex</option>
+              <option value="opencode">OpenCode</option>
+            </select>
+          </label>
+          <label className="text-secondary text-foreground">
+            Voice Worker provider
+            <select
+              aria-label="Voice Worker provider"
+              className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+              value={voiceWorkerProvider}
+              onChange={(event) => setVoiceWorkerProvider(event.target.value as VoiceAgentProvider)}
+            >
+              <option value="codex">Codex</option>
+              <option value="opencode">OpenCode</option>
+            </select>
+          </label>
+        </div>
+      </section>
       <section className="flex flex-col gap-4">
         <div>
           <Label>Jarvis voice</Label>

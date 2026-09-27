@@ -16,6 +16,8 @@ import {
   selectJarvisChatForIntent,
   type JarvisChatScope,
 } from '@/features/chat/jarvisChatIntent';
+import { resolveChatBackendAffinity } from '@/lib/ai/backend/chatBackend';
+import type { VoiceAgentProvider } from './voiceProviderSelection';
 
 export interface VoiceChatTarget {
   chatId: ChatId;
@@ -213,6 +215,77 @@ export async function ensureJarvisChatForVoice(titleHint?: string): Promise<Chat
     if (!chat || !targetIsCurrent()) return null;
     intentStore.recordCreatedPrimary(intentScope, String(chat.id));
     return chat.id;
+  });
+}
+
+/** A voice Main Agent chat must be bound to its requested runtime before its first user turn. */
+export async function ensureJarvisChatForProvider(
+  provider: VoiceAgentProvider,
+  titleHint?: string,
+): Promise<ChatId | null> {
+  const auth = useAuthStore.getState();
+  const identity = resolveAccountIdentity(auth);
+  if (!auth.workspaceId || !identity) return null;
+  const captured = {
+    accountId: identity.accountId,
+    workspaceId: auth.workspaceId as WorkspaceId,
+    projectId: auth.projectId as ProjectId | null,
+  };
+  const key = JSON.stringify([captured, 'jarvis-provider', provider]);
+  return runVoiceChatSingleFlight(key, async () => {
+    const protectedJarvis = findProtectedJarvisAgent(
+      Object.values(useAgentStore.getState().agents),
+    );
+    const syncOwner = captureSyncQueueOwner();
+    const targetIsCurrent = () =>
+      voiceScopeIsCurrent(captured) &&
+      syncOwnerMatchesAccount(identity, syncOwner) &&
+      findProtectedJarvisAgent(Object.values(useAgentStore.getState().agents))?.id ===
+        protectedJarvis?.id;
+    if (!protectedJarvis || !targetIsCurrent()) return null;
+    const find = async () => {
+      const scoped = await listScopedChats(captured.workspaceId, captured.projectId);
+      const existing = scoped
+        .filter((chat) => isJarvisChat(chat, useAgentStore.getState().agents))
+        .filter((chat) => {
+          try {
+            return (
+              resolveChatBackendAffinity(chat.backend_affinity, {
+                hasCommittedUserMessage: false,
+                chatCreatedAt: chat.created_at,
+              }).backend === provider
+            );
+          } catch {
+            return false;
+          }
+        })
+        .sort((a, b) => b.updated_at - a.updated_at)[0];
+      return { scoped, existing };
+    };
+    let resolved = await find();
+    if (!targetIsCurrent()) return null;
+    if (resolved.existing) return resolved.existing.id;
+    resolved = await find();
+    if (!targetIsCurrent()) return null;
+    if (resolved.existing) return resolved.existing.id;
+    const chat = await chatRepo.createAuthorized(
+      {
+        workspace_id: captured.workspaceId,
+        project_id: captured.projectId ?? undefined,
+        title: titleHint?.trim() ? 'New chat' : `New chat ${resolved.scoped.length + 1}`,
+        mode: 'chat',
+        active_agent_ids: [protectedJarvis.id],
+        backend_affinity: {
+          version: 1,
+          backend: provider,
+          locked: false,
+          selectedAt: Date.now(),
+        },
+      },
+      syncOwner,
+      targetIsCurrent,
+    );
+    return chat && targetIsCurrent() ? chat.id : null;
   });
 }
 

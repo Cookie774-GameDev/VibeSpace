@@ -47,6 +47,7 @@ vi.mock('motion/react', () => ({
 }));
 vi.mock('./voiceChatRouting', () => ({
   ensureJarvisChatForVoice: vi.fn(async () => 'chat_voice'),
+  ensureJarvisChatForProvider: vi.fn(async () => 'chat_voice'),
   focusVoiceChat: vi.fn(),
   resolveVoiceChatTarget: vi.fn(async (text: string) => ({
     chatId: 'chat_voice',
@@ -57,7 +58,44 @@ vi.mock('./voiceChatRouting', () => ({
 vi.mock('./voiceRouter', () => ({
   handleVoiceModuleClosed: vi.fn(),
   stopCurrentVoiceResponse: vi.fn(),
+  speakWithSettings: vi.fn(async () => undefined),
 }));
+vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
+  useAccessibleChatModels: () => ({ flatOptions: [] }),
+}));
+vi.mock('./voiceProviderSelection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./voiceProviderSelection')>();
+  return {
+    ...actual,
+    resolveVoiceProviderSelection: vi.fn(({ provider }: { provider: string }) => ({
+      provider,
+      selection: { mode: 'single', providerId: 'groq', modelId: 'openai/gpt-oss-20b' },
+      modelLabel: 'Groq fixture',
+    })),
+  };
+});
+vi.mock('./voiceAgentFlow', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./voiceAgentFlow')>();
+  return {
+    ...actual,
+    createVoiceAgentFlow: (deps: import('./voiceAgentFlow').VoiceAgentFlowDependencies) => ({
+      run: async (input: import('./voiceAgentFlow').VoiceAgentRequest) => {
+        await deps.persistUser(input);
+        await deps.deliverMainResult({
+          chatId: input.chatId,
+          userText: input.text,
+          mainProvider: input.mainProvider,
+          workerProvider: input.workerProvider,
+          childChatId: 'child-smoke',
+          workerStatus: 'done',
+          workerText: 'Smoke worker result',
+          instruction: actual.VOICE_BRIEF_SYSTEM_INSTRUCTION,
+        });
+        return { status: 'main_dispatched' as const, duplicate: false, elapsedMs: 0 };
+      },
+    }),
+  };
+});
 
 async function renderVoice(flag: string) {
   vi.resetModules();

@@ -137,6 +137,67 @@ describe('composer STT defaults', () => {
   });
 });
 
+describe('voice agent provider preferences', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useAuthStore.setState({
+      voiceMainAgentProvider: 'codex',
+      voiceWorkerProvider: 'codex',
+    });
+  });
+
+  it('defaults both providers to Codex', () => {
+    expect(useAuthStore.getInitialState().voiceMainAgentProvider).toBe('codex');
+    expect(useAuthStore.getInitialState().voiceWorkerProvider).toBe('codex');
+  });
+
+  it('persists independent Main Agent and Worker provider choices', async () => {
+    useAuthStore.getState().setVoiceWorkerProvider('opencode');
+    expect(useAuthStore.getState().voiceWorkerProvider).toBe('opencode');
+    expect(useAuthStore.getState().voiceMainAgentProvider).toBe('codex');
+
+    useAuthStore.getState().setVoiceWorkerProvider('codex');
+    expect(useAuthStore.getState().voiceWorkerProvider).toBe('codex');
+    expect(useAuthStore.getState().voiceMainAgentProvider).toBe('codex');
+
+    useAuthStore.getState().setVoiceMainAgentProvider('opencode');
+    expect(useAuthStore.getState().voiceMainAgentProvider).toBe('opencode');
+    expect(useAuthStore.getState().voiceWorkerProvider).toBe('codex');
+
+    const persisted = window.localStorage.getItem('jarvis-auth') ?? '';
+    expect(persisted).toContain('"voiceMainAgentProvider":"opencode"');
+    expect(persisted).toContain('"voiceWorkerProvider":"codex"');
+
+    useAuthStore.setState({
+      voiceMainAgentProvider: 'codex',
+      voiceWorkerProvider: 'opencode',
+    });
+    window.localStorage.setItem('jarvis-auth', persisted);
+    await useAuthStore.persist.rehydrate();
+
+    expect(useAuthStore.getState().voiceMainAgentProvider).toBe('opencode');
+    expect(useAuthStore.getState().voiceWorkerProvider).toBe('codex');
+  });
+
+  it('normalizes an invalid provider from the previous persisted version to Codex', async () => {
+    window.localStorage.setItem(
+      'jarvis-auth',
+      JSON.stringify({
+        state: {
+          voiceMainAgentProvider: 'opencode',
+          voiceWorkerProvider: 'invalid-provider',
+        },
+        version: 18,
+      }),
+    );
+
+    await useAuthStore.persist.rehydrate();
+
+    expect(useAuthStore.getState().voiceMainAgentProvider).toBe('opencode');
+    expect(useAuthStore.getState().voiceWorkerProvider).toBe('codex');
+  });
+});
+
 describe('automatic model routing preference', () => {
   beforeEach(() => {
     window.localStorage.clear();

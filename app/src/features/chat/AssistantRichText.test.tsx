@@ -100,7 +100,7 @@ describe('AssistantRichText', () => {
       await waitFor(() => expect(writeText).toHaveBeenCalledWith('const answer = 42;'));
     } finally {
       if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
-      else delete (navigator as Navigator & { clipboard?: Clipboard }).clipboard;
+      else Reflect.deleteProperty(navigator, 'clipboard');
     }
   });
 

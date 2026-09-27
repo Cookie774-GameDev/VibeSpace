@@ -2,6 +2,9 @@ import { chatRepo as realChatRepo, messageRepo as realMessageRepo } from '@/lib/
 import { newChatId } from '@/lib/ids';
 import type { AgentId, ChatId } from '@/types/common';
 import type { ChatModelSelection } from '@/lib/ai/modelSelection';
+import { CODEX_CLI_CONNECTION, OPENCODE_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
+import { CHAT_BACKEND_AFFINITY_VERSION, type ChatBackend } from '@/lib/ai/backend/chatBackend';
+import type { ChatImageAttachment } from '@/lib/ai/vision';
 import { getStoredProjectRoot } from '@/features/files/projectFiles';
 import { browserChatStore } from '@/features/browser-chat/browserChatStore';
 import {
@@ -14,6 +17,7 @@ import { formatActiveChatCommandMessage } from '@/features/chat/chatActiveComman
 import { buildJarvisChatAgentPrompt, createJarvisChatAgentCard } from './agents';
 import { useJarvisInteractionStore } from './sessionStore';
 import type { JarvisChatAgent } from './types';
+import type { VoiceAgentProvider } from '@/features/voice/voiceProviderSelection';
 
 type ChatRepoLike = Pick<typeof realChatRepo, 'getById' | 'create'>;
 type MessageRepoLike = Pick<typeof realMessageRepo, 'create'>;
@@ -23,6 +27,12 @@ export interface LaunchJarvisChatAgentInput {
   task: string;
   modelLabel: string;
   modelSelection?: ChatModelSelection;
+  /** Exact execution backend for voice workers; omitted to preserve legacy callers. */
+  workerProvider?: VoiceAgentProvider;
+  /** Approved images, such as a single permitted screen capture, for the worker turn. */
+  imageAttachments?: readonly ChatImageAttachment[];
+  /** Voice already recorded the parent turn; false avoids a second synthetic command message. */
+  recordParentCommand?: boolean;
   jarvisAgentId?: AgentId | string;
   commandName?: 'multitask' | 'subagents';
   repos?: { chatRepo: ChatRepoLike; messageRepo: MessageRepoLike };
@@ -31,15 +41,46 @@ export interface LaunchJarvisChatAgentInput {
   createId?: (prefix: 'chat' | 'agent') => string;
 }
 
+function backendForVoiceProvider(provider: VoiceAgentProvider): ChatBackend {
+  return provider;
+}
+
+function providerLabel(provider: VoiceAgentProvider): 'Codex' | 'OpenCode' {
+  return provider === 'codex' ? 'Codex' : 'OpenCode';
+}
+
+function reportedModelLabel(provider: VoiceAgentProvider | undefined, modelLabel: string): string {
+  if (!provider) return modelLabel;
+  const prefix = `${providerLabel(provider)} · `;
+  return modelLabel.startsWith(prefix) ? modelLabel : `${prefix}${modelLabel}`;
+}
+
+function assertVoiceWorkerSelection(
+  provider: VoiceAgentProvider | undefined,
+  selection: ChatModelSelection | undefined,
+): void {
+  if (!provider) return;
+  const expectedConnectionId =
+    provider === 'codex' ? CODEX_CLI_CONNECTION.id : OPENCODE_CLI_CONNECTION.id;
+  if (selection?.mode !== 'single' || selection.connectionId !== expectedConnectionId) {
+    throw new Error(
+      `${providerLabel(provider)} worker provider does not match the selected model connection.`,
+    );
+  }
+}
+
 export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): Promise<{
   agentId: string;
   childChatId: string;
   agents: JarvisChatAgent[];
 }> {
+  assertVoiceWorkerSelection(input.workerProvider, input.modelSelection);
   const repos = input.repos ?? { chatRepo: realChatRepo, messageRepo: realMessageRepo };
   const dispatchEvent =
     input.dispatchEvent ?? ((event: CustomEvent) => window.dispatchEvent(event));
   const now = input.now ?? new Date().toISOString();
+  const selectedAt = Number.isFinite(Date.parse(now)) ? Date.parse(now) : Date.now();
+  const cardModelLabel = reportedModelLabel(input.workerProvider, input.modelLabel);
   const parent = await repos.chatRepo.getById(input.parentChatId as ChatId);
   if (!parent) throw new Error(`Parent chat ${input.parentChatId} not found`);
 
@@ -59,8 +100,26 @@ export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): 
       title: childTitle,
       mode: 'chat',
       active_agent_ids: input.jarvisAgentId ? [input.jarvisAgentId as AgentId] : [],
-      // Inherit parent connection so the child thread can resolve the same model.
-      ...(parent.connection ? { connection: parent.connection } : {}),
+      // A voice worker's route must match its durable backend affinity; other
+      // callers retain the existing parent-connection inheritance behavior.
+      ...(input.workerProvider
+        ? {
+            connection:
+              input.workerProvider === 'codex' ? CODEX_CLI_CONNECTION : OPENCODE_CLI_CONNECTION,
+          }
+        : parent.connection
+          ? { connection: parent.connection }
+          : {}),
+      ...(input.workerProvider
+        ? {
+            backend_affinity: {
+              version: CHAT_BACKEND_AFFINITY_VERSION,
+              backend: backendForVoiceProvider(input.workerProvider),
+              locked: false,
+              selectedAt,
+            },
+          }
+        : {}),
     });
     // Multitask/subagent children must always use VibeSpace native chat, never
     // inherit a sticky global Browser Chat engine preference.
@@ -72,7 +131,7 @@ export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): 
         parentChatId: input.parentChatId,
         childChatId,
         task: plan.task,
-        modelLabel: input.modelLabel,
+        modelLabel: cardModelLabel,
         modelSelection: input.modelSelection,
         now,
       }),
@@ -86,12 +145,14 @@ export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): 
   const firstCard = cards[0];
   if (!firstCard) throw new Error('No Jarvis agent cards were created');
   const commandName = input.commandName === 'subagents' ? 'subagents' : 'multitask';
-  await repos.messageRepo.create({
-    chat_id: input.parentChatId as ChatId,
-    role: 'user',
-    // Active command in use — not an attachment chip.
-    parts: [{ kind: 'text', text: formatActiveChatCommandMessage(commandName, input.task) }],
-  });
+  if (input.recordParentCommand !== false) {
+    await repos.messageRepo.create({
+      chat_id: input.parentChatId as ChatId,
+      role: 'user',
+      // Active command in use — not an attachment chip.
+      parts: [{ kind: 'text', text: formatActiveChatCommandMessage(commandName, input.task) }],
+    });
+  }
   await repos.messageRepo.create({
     chat_id: input.parentChatId as ChatId,
     role: 'assistant',
@@ -113,7 +174,7 @@ export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): 
           next = registerJarvisChatAgent(next, {
             agentId: String(card.agentId),
             name: card.name,
-            modelLabel: input.modelLabel,
+            modelLabel: cardModelLabel,
             chatId: card.childChatId,
             task: card.task,
             now,
@@ -130,10 +191,18 @@ export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): 
   // Without a child user message, toLLMMessages is empty and the worker thread fails.
   for (const card of cards) {
     const childPrompt = buildJarvisChatAgentPrompt(card.task);
+    const childParts = [
+      { kind: 'text' as const, text: childPrompt },
+      ...(input.imageAttachments ?? []).map((image) => ({
+        kind: 'image' as const,
+        url: `data:${image.mimeType};base64,${image.data}`,
+        alt: image.name,
+      })),
+    ];
     await repos.messageRepo.create({
       chat_id: card.childChatId as ChatId,
       role: 'user',
-      parts: [{ kind: 'text', text: childPrompt }],
+      parts: childParts,
     });
     useJarvisInteractionStore.getState().updateAgent(input.parentChatId, card.agentId, {
       status: 'thinking',
@@ -155,6 +224,8 @@ export async function launchJarvisChatAgent(input: LaunchJarvisChatAgentInput): 
               agentId: card.agentId,
               commandName: input.commandName ?? 'multitask',
               task: card.task,
+              ...(input.workerProvider ? { workerProvider: input.workerProvider } : {}),
+              screenshotAttached: Boolean(input.imageAttachments?.length),
               allTasks: cards.map((agent) => ({ agentId: agent.agentId, task: agent.task })),
             },
           },

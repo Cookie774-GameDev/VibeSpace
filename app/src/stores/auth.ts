@@ -71,6 +71,12 @@ import {
 import { DEFAULT_PROMPT_FORGE_MODEL_SELECTION } from '@/features/prompt-forge/modelSelection';
 import { CredentialHydrationSnapshot } from '@/lib/harness/CredentialHydrationSnapshot';
 
+export type VoiceAgentProvider = 'codex' | 'opencode';
+
+function normalizeVoiceAgentProvider(value: unknown): VoiceAgentProvider {
+  return value === 'opencode' ? 'opencode' : 'codex';
+}
+
 interface AuthState {
   /** Local-only profile (no cloud account) */
   localUserId: string | null;
@@ -111,6 +117,10 @@ interface AuthState {
   voicePreset: VoicePresetId;
   /** Restrict speech to installed voices when local mode is selected. */
   voiceEngine: VoiceEngine;
+  /** Provider for the Main Agent that handles voice requests. */
+  voiceMainAgentProvider: VoiceAgentProvider;
+  /** Provider for the worker session started by a voice request. */
+  voiceWorkerProvider: VoiceAgentProvider;
   /** Speak completed Jarvis replies, including normal typed conversations. */
   speakReplies: boolean;
   /**
@@ -195,6 +205,8 @@ interface AuthState {
   setPersona: (p: AuthState['personaPreset']) => void;
   setVoicePreset: (p: VoicePresetId) => void;
   setVoiceEngine: (engine: VoiceEngine) => void;
+  setVoiceMainAgentProvider: (provider: VoiceAgentProvider) => void;
+  setVoiceWorkerProvider: (provider: VoiceAgentProvider) => void;
   setSpeakReplies: (enabled: boolean) => void;
   setVoiceAutoListenOnOpen: (enabled: boolean) => void;
   setVoiceSilenceDelayMs: (ms: number) => void;
@@ -294,6 +306,8 @@ export const useAuthStore = create<AuthState>()(
       personaPreset: 'jarvis',
       voicePreset: 'jarvis-prime',
       voiceEngine: 'jarvis',
+      voiceMainAgentProvider: 'codex',
+      voiceWorkerProvider: 'codex',
       speakReplies: false,
       voiceAutoListenOnOpen: true,
       voiceSilenceDelayMs: VOICE_SILENCE_DELAY_MS_DEFAULT,
@@ -387,6 +401,10 @@ export const useAuthStore = create<AuthState>()(
       setPersona: (p) => set({ personaPreset: normalizeAssistantPersonaId(p) }),
       setVoicePreset: (p) => set({ voicePreset: p }),
       setVoiceEngine: (engine) => set({ voiceEngine: engine }),
+      setVoiceMainAgentProvider: (provider) =>
+        set({ voiceMainAgentProvider: normalizeVoiceAgentProvider(provider) }),
+      setVoiceWorkerProvider: (provider) =>
+        set({ voiceWorkerProvider: normalizeVoiceAgentProvider(provider) }),
       setSpeakReplies: (enabled) => set({ speakReplies: enabled }),
       setVoiceAutoListenOnOpen: (enabled) => set({ voiceAutoListenOnOpen: enabled }),
       setVoiceSilenceDelayMs: (ms) => set({ voiceSilenceDelayMs: clampVoiceSilenceDelayMs(ms) }),
@@ -522,6 +540,8 @@ export const useAuthStore = create<AuthState>()(
         personaPreset: s.personaPreset,
         voicePreset: s.voicePreset,
         voiceEngine: s.voiceEngine,
+        voiceMainAgentProvider: s.voiceMainAgentProvider,
+        voiceWorkerProvider: s.voiceWorkerProvider,
         speakReplies: s.speakReplies,
         voiceAutoListenOnOpen: s.voiceAutoListenOnOpen,
         voiceSilenceDelayMs: s.voiceSilenceDelayMs,
@@ -545,7 +565,7 @@ export const useAuthStore = create<AuthState>()(
         telemetryOptIn: s.telemetryOptIn,
         preferredConnectionIdByProviderFamily: s.preferredConnectionIdByProviderFamily,
       }),
-      version: 18,
+      version: 19,
       migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
@@ -692,6 +712,10 @@ export const useAuthStore = create<AuthState>()(
         }
         if (fromVersion < 18 || typeof state.promptForgeUseRlmContext !== 'boolean') {
           state.promptForgeUseRlmContext = true;
+        }
+        if (fromVersion < 19) {
+          state.voiceMainAgentProvider = normalizeVoiceAgentProvider(state.voiceMainAgentProvider);
+          state.voiceWorkerProvider = normalizeVoiceAgentProvider(state.voiceWorkerProvider);
         }
         return state;
       },

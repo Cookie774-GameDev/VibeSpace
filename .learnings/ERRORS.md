@@ -122,3 +122,31 @@ Run the MSI build serially against a stable dist directory after the frontend bu
 - Related Files: `work/agent-relay-lean-20260926/root/release-msi-build-final.log`, `work/agent-relay-lean-20260926/root/release-msi-build-stable.log`
 
 ---
+## [ERR-20260927-VP01] app_typecheck_exit_without_diagnostic
+
+**Logged**: 2026-09-27T15:27:49.6057959Z
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+An early app TypeScript check exited through npm without a compiler diagnostic while concurrent build work was active. The final task typecheck later passed.
+
+### Error
+`npm run typecheck` returned npm lifecycle code 4294967295 after roughly 55 seconds; only the script banner appeared.
+
+### Context
+- Command: `npm run typecheck`
+- Working directory: `app/`
+- Focused auth and Voice provider tests passed before that attempt.
+- A later integrated typecheck passed with exit 0 and no diagnostics.
+- No live app was started or tested.
+
+### Suggested Fix
+Run the project check after concurrent compiler/build work settles, and capture both the process exit and compiler stderr if the unexplained exit recurs.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: `app/src/stores/auth.ts`, `app/src/features/settings/sections/Voice.tsx`
+
+---

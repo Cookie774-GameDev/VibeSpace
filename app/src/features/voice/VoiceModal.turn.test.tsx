@@ -22,6 +22,7 @@ const routerMocks = vi.hoisted(() => ({
   handleVoiceModuleClosed: vi.fn(),
   syncVoiceModuleOpenState: vi.fn(),
   stopCurrentVoiceResponse: vi.fn(),
+  speakWithSettings: vi.fn(async () => undefined),
 }));
 
 const chatHookMocks = vi.hoisted(() => ({
@@ -34,6 +35,7 @@ const toastMocks = vi.hoisted(() => ({
 
 const chatRoutingMocks = vi.hoisted(() => ({
   ensureJarvisChatForVoice: vi.fn(async (): Promise<string | null> => 'chat_voice'),
+  ensureJarvisChatForProvider: vi.fn(async (): Promise<string | null> => 'chat_voice'),
   focusVoiceChat: vi.fn(),
   resolveVoiceChatTarget: vi.fn(async (text: string): Promise<MockVoiceChatTarget | null> => ({
     chatId: 'chat_voice',
@@ -100,6 +102,51 @@ vi.mock('@/lib/db', () => ({
 vi.mock('./voiceChatRouting', () => chatRoutingMocks);
 
 vi.mock('./voiceRouter', () => routerMocks);
+
+vi.mock('./voiceProviderSelection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./voiceProviderSelection')>();
+  return {
+    ...actual,
+    resolveVoiceProviderSelection: vi.fn(({ provider }: { provider: string }) => ({
+      provider,
+      selection: { mode: 'single', providerId: 'groq', modelId: 'openai/gpt-oss-20b' },
+      modelLabel: 'Groq fixture',
+    })),
+  };
+});
+
+vi.mock('./voiceAgentFlow', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./voiceAgentFlow')>();
+  return {
+    ...actual,
+    createVoiceAgentFlow: (deps: import('./voiceAgentFlow').VoiceAgentFlowDependencies) => ({
+      run: async (input: import('./voiceAgentFlow').VoiceAgentRequest) => {
+        try {
+          await deps.persistUser(input);
+        } catch {
+          deps.reportStatus({
+            phase: 'launch_failed',
+            chatId: input.chatId,
+            message: 'The voice request could not be saved.',
+            elapsedMs: 0,
+          });
+          return { status: 'launch_failed' as const, duplicate: false, elapsedMs: 0 };
+        }
+        await deps.deliverMainResult({
+          chatId: input.chatId,
+          userText: input.text,
+          mainProvider: input.mainProvider,
+          workerProvider: input.workerProvider,
+          childChatId: 'child-voice-test',
+          workerStatus: 'done',
+          workerText: 'Test worker result',
+          instruction: actual.VOICE_BRIEF_SYSTEM_INSTRUCTION,
+        });
+        return { status: 'main_dispatched' as const, duplicate: false, elapsedMs: 0 };
+      },
+    }),
+  };
+});
 
 import { VoiceModal } from './VoiceModal';
 import { messageRepo } from '@/lib/db';
@@ -208,6 +255,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     setReducedMotion(false);
     chatHookMocks.useChatMessages.mockReset().mockReturnValue([]);
     chatRoutingMocks.ensureJarvisChatForVoice.mockReset().mockResolvedValue('chat_voice');
+    chatRoutingMocks.ensureJarvisChatForProvider.mockReset().mockResolvedValue('chat_voice');
     chatRoutingMocks.focusVoiceChat.mockReset();
     chatRoutingMocks.resolveVoiceChatTarget
       .mockReset()
@@ -746,29 +794,23 @@ describe('VoiceModal hands-free turn-taking', () => {
   });
 
   it('retries voice-session binding when the agent roster hydrates after the modal opens', async () => {
-    chatRoutingMocks.ensureJarvisChatForVoice
+    chatRoutingMocks.ensureJarvisChatForProvider
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce('chat_voice');
 
     render(<VoiceModal />);
-    await waitFor(() => expect(chatRoutingMocks.ensureJarvisChatForVoice).toHaveBeenCalledOnce());
+    await waitFor(() => expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledOnce());
     expect(useVoiceStore.getState().session).toBeNull();
 
     act(() => useAgentStore.setState({ agents: {} }));
 
     await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
-    expect(chatRoutingMocks.ensureJarvisChatForVoice).toHaveBeenCalledTimes(2);
+    expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledTimes(2);
   });
 
-  it('does not attach protected account scope to an explicit non-Jarvis voice target', async () => {
+  it('keeps a spoken specialist mention in the provider-bound Main Agent flow', async () => {
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
-    chatRoutingMocks.resolveVoiceChatTarget.mockResolvedValueOnce({
-      chatId: 'chat_explicit_agent',
-      messageText: 'ask the builder',
-      agentId: 'agent_builder',
-      mentionedAgentIds: [],
-    });
 
     render(<VoiceModal />);
     await waitFor(() => expect(useVoiceStore.getState().session).not.toBeNull());
@@ -780,8 +822,8 @@ describe('VoiceModal hands-free turn-taking', () => {
 
     await waitFor(() => expect(send).toHaveBeenCalledOnce());
     const detail = (send.mock.calls[0]?.[0] as CustomEvent).detail;
-    expect(detail).toMatchObject({ chatId: 'chat_explicit_agent', agentId: 'agent_builder' });
-    expect(detail).not.toHaveProperty('accountId');
+    expect(detail).toMatchObject({ chatId: 'chat_voice', accountId: 'account-a' });
+    expect(detail).not.toHaveProperty('agentId');
     window.removeEventListener('jarvis:send', send as EventListener);
   });
 
@@ -868,11 +910,11 @@ describe('VoiceModal hands-free turn-taking', () => {
     expect(useVoiceStore.getState().errorMessage).not.toContain(
       'synthetic replacement shutdown detail',
     );
-    expect(chatRoutingMocks.ensureJarvisChatForVoice).toHaveBeenCalledOnce();
+    expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledOnce();
   });
 
   it('reports a safe templated failure when voice session startup throws', async () => {
-    chatRoutingMocks.ensureJarvisChatForVoice.mockRejectedValueOnce(
+    chatRoutingMocks.ensureJarvisChatForProvider.mockRejectedValueOnce(
       new Error('synthetic startup implementation detail'),
     );
 
@@ -897,7 +939,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     await act(async () => Promise.resolve());
 
     expect(useVoiceStore.getState().session).toBeNull();
-    expect(chatRoutingMocks.ensureJarvisChatForVoice).not.toHaveBeenCalled();
+    expect(chatRoutingMocks.ensureJarvisChatForProvider).not.toHaveBeenCalled();
   });
 
   it('reports a precise routing failure without persisting or sending when no target exists', async () => {
@@ -906,7 +948,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     vi.useFakeTimers();
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
-    chatRoutingMocks.resolveVoiceChatTarget.mockResolvedValueOnce(null);
+    chatRoutingMocks.ensureJarvisChatForProvider.mockResolvedValueOnce(null);
 
     try {
       act(() => emitVoice('voice:final', { text: 'unroutable request send it' }));
@@ -927,10 +969,10 @@ describe('VoiceModal hands-free turn-taking', () => {
     }
   });
 
-  it('reports a precise routing failure when the active voice session has no bound chat', async () => {
-    chatRoutingMocks.ensureJarvisChatForVoice.mockResolvedValueOnce(null);
+  it('binds a provider chat when the initial voice session had no chat', async () => {
+    chatRoutingMocks.ensureJarvisChatForProvider.mockResolvedValueOnce(null);
     render(<VoiceModal />);
-    await waitFor(() => expect(chatRoutingMocks.ensureJarvisChatForVoice).toHaveBeenCalledOnce());
+    await waitFor(() => expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledOnce());
     vi.useFakeTimers();
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
@@ -942,13 +984,9 @@ describe('VoiceModal hands-free turn-taking', () => {
         await Promise.resolve();
       });
 
-      expect(useVoiceStore.getState()).toMatchObject({
-        state: 'error',
-        errorMessage:
-          'The action failed, sir. Action: Voice message routing. Cause: The active voice session has no bound Jarvis chat.',
-      });
-      expect(messageRepo.create).not.toHaveBeenCalled();
-      expect(send).not.toHaveBeenCalled();
+      expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice');
+      expect(messageRepo.create).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledOnce();
     } finally {
       window.removeEventListener('jarvis:send', send as EventListener);
     }
@@ -1070,7 +1108,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     }>;
     expect(event.detail.text).toBe('help me plan');
     expect(event.detail.speakReply).toBe(true);
-    expect(event.detail.autoApproveActions).toBe(true);
+    expect(event.detail.autoApproveActions).toBe(false);
 
     window.removeEventListener('jarvis:send', send as EventListener);
   });
