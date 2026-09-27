@@ -5184,6 +5184,23 @@ async function cancelPersistedShadowRun(
 
 type OpenCodeQuestionPart = Extract<Part, { kind: 'question_block' }>;
 
+export function cancelPendingProjectedNativeQuestions(
+  parts: Part[],
+  projectedQuestionBlockIds: ReadonlySet<string>,
+): Part[] {
+  let changed = false;
+  const cancelled = parts.map((part) => {
+    if (
+      part.kind !== 'question_block' ||
+      part.block.status !== 'pending' ||
+      !projectedQuestionBlockIds.has(`question:${part.block.id}`)
+    ) return part;
+    changed = true;
+    return { ...part, block: { ...part.block, status: 'cancelled' as const } };
+  });
+  return changed ? cancelled : parts;
+}
+
 function boundedRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -7732,6 +7749,25 @@ export function startRuntimeListener(
                 kernelAssistantMessages = await bindings.getMessages(chatId);
               }
             } finally {
+              if (controller.signal.aborted && projectedQuestionBlockIds.size > 0) {
+                try {
+                  const messages = await bindings.getMessages(chatId);
+                  for (const message of messages) {
+                    const parts = cancelPendingProjectedNativeQuestions(
+                      message.parts,
+                      projectedQuestionBlockIds,
+                    );
+                    if (parts !== message.parts) await bindings.updateMessage(message.id, { parts });
+                  }
+                } catch (error) {
+                  devConsole.log({
+                    channel: 'ai',
+                    level: 'warn',
+                    message: 'Cancelled native question could not be saved',
+                    detail: { chatId: String(chatId), error: safeErrorMessage(error) },
+                  });
+                }
+              }
               if (detail.caoAuthority) bufferedCaoKernelRunKeys.delete(bufferedCaoKernelRun);
               approvalContinuationOutcomesByRun.delete(turn.run.id);
               if (activeKernelQuestionProjectionPorts.get(turn.run.id) === questionProjectionPort) {
@@ -8986,6 +9022,15 @@ export function startRuntimeListener(
       await settleStreamingWrites();
 
       const aborted = controller.signal.aborted || isAbortError(err);
+      if (aborted) {
+        liveOpenCodeQuestions.forEach((part, index) => {
+          if (part.block.status !== 'pending') return;
+          liveOpenCodeQuestions[index] = {
+            ...part,
+            block: { ...part.block, status: 'cancelled' },
+          };
+        });
+      }
       const rawProviderError =
         !aborted && isProviderRuntimeError(err)
           ? providerErrorDetails(err, {

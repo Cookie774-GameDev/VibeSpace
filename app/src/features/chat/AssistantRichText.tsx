@@ -31,6 +31,7 @@ type DiagramEdge = { from: string; to: string };
 type Fence = { language: string; marker: string };
 
 const DIAGRAM_LANGUAGES = new Set(['mermaid', 'graphviz', 'dot']);
+const PLAIN_SNIPPET_LANGUAGES = new Set(['plain', 'text', 'txt', 'plaintext', 'writing', 'md', 'markdown']);
 const SAFE_LINK_PROTOCOLS = new Set([
   'http:',
   'https:',
@@ -388,22 +389,28 @@ function AssistantDiagram({ language, value }: { language: string; value: string
   );
 }
 
-function AssistantCode({ language, value }: { language: string; value: string }) {
+function AssistantSnippet({ language, value }: { language: string; value: string }) {
+  const isWriting = !language || PLAIN_SNIPPET_LANGUAGES.has(language);
+  const label = isWriting ? 'Writing' : language;
   return (
-    <figure className="assistant-rich-text__code" data-assistant-code>
-      <div className="assistant-rich-text__code-header">
-        <span className="assistant-rich-text__eyebrow">Code</span>
-        <div className="assistant-rich-text__header-actions">
-          {language ? <span className="assistant-rich-text__language">{language}</span> : null}
-          <CopySourceButton value={value} label="code" />
-        </div>
+    <figure
+      className={cn(
+        'assistant-rich-text__snippet',
+        isWriting ? 'assistant-rich-text__snippet--writing' : 'assistant-rich-text__snippet--code',
+      )}
+      data-assistant-code
+      data-assistant-snippet={isWriting ? 'writing' : language}
+    >
+      <div className="assistant-rich-text__snippet-header">
+        <span className="assistant-rich-text__snippet-label">{label}</span>
+        <CopySourceButton value={value} label={isWriting ? 'text' : 'code'} iconOnly />
       </div>
       <pre><code>{value}</code></pre>
     </figure>
   );
 }
 
-function CopySourceButton({ value, label }: { value: string; label: string }) {
+function CopySourceButton({ value, label, iconOnly = false }: { value: string; label: string; iconOnly?: boolean }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -419,11 +426,23 @@ function CopySourceButton({ value, label }: { value: string; label: string }) {
   return (
     <button
       type="button"
-      className="assistant-rich-text__copy"
-      aria-label={`Copy ${label}`}
+      className={cn('assistant-rich-text__copy', iconOnly && 'assistant-rich-text__copy--icon')}
+      aria-label={copied ? `Copied ${label}` : `Copy ${label}`}
+      title={copied ? `Copied ${label}` : `Copy ${label}`}
       onClick={copy}
     >
-      {copied ? 'Copied' : 'Copy'}
+      {iconOnly ? (
+        copied ? (
+          <svg aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+            <path d="m3.25 8.25 3 3 6.5-6.5" />
+          </svg>
+        ) : (
+          <svg aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+            <rect x="5.25" y="2.75" width="8" height="9.5" rx="1.5" />
+            <path d="M10.75 12.25v.5a1.5 1.5 0 0 1-1.5 1.5h-6a1.5 1.5 0 0 1-1.5-1.5v-8a1.5 1.5 0 0 1 1.5-1.5h1" />
+          </svg>
+        )
+      ) : copied ? 'Copied' : 'Copy'}
     </button>
   );
 }
@@ -504,7 +523,7 @@ export function AssistantRichText({ text, live = false, className }: AssistantRi
           case 'quote':
             return <blockquote className="assistant-rich-text__quote" key={key}>{renderLines(block.lines, key)}</blockquote>;
           case 'code':
-            return <AssistantCode key={key} language={block.language} value={block.value} />;
+            return <AssistantSnippet key={key} language={block.language} value={block.value} />;
           case 'diagram':
             return <AssistantDiagram key={key} language={block.language} value={block.value} />;
           case 'table':

@@ -235,6 +235,7 @@ import {
   buildBroadRootAuditCorrectionGuidance,
   buildApprovalContinuationProviderText,
   buildExplicitRootCorrectionLengthGuidance,
+  cancelPendingProjectedNativeQuestions,
   responseAwaitsApproval,
   createCanonicalProviderEvidenceAuthority,
   createJarvisCommandCenterHostPort,
@@ -3554,6 +3555,139 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       stop();
       await stop.whenIdle();
     }
+  });
+
+  it('closes an unanswered native question when its owning turn is stopped', async () => {
+    const openCodeConnection = PROVIDER_CONNECTIONS.find(
+      (connection) => connection.id === 'opencode-cli',
+    )!;
+    useAuthStore.setState({
+      chatModelSelection: selectionFromOption(
+        openCodeConnection.providerId as ProviderId,
+        'opencode-go/deepseek-v4-flash-vision-exp',
+        openCodeConnection,
+      ),
+    });
+    const projection = projectOpenCodeQuestionEvent(
+      {
+        type: 'question',
+        request: {
+          id: 'que_runtime_cancel',
+          sessionId: 'ses_runtime_cancel',
+          questions: [{
+            header: 'Reply style',
+            prompt: 'Which reply style do you prefer?',
+            multiple: false,
+            allowCustomAnswer: true,
+            options: [{ label: 'Concise', description: 'Keep it brief.' }],
+          }],
+        },
+      },
+      'ses_runtime_cancel',
+    );
+    if (!projection) throw new Error('expected a valid native question projection');
+
+    const jarvis = agent('agent_native_question_cancel', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_native_question_cancel' as ChatId;
+    const userId = 'msg_native_question_cancel_user' as MessageId;
+    const placeholderId = 'msg_native_question_cancel_assistant' as MessageId;
+    const writes: Part[][] = [];
+    const updateMessage = vi.fn(async (_id: MessageId, patch: { parts?: Part[] }) => {
+      if (patch.parts) writes.push(structuredClone(patch.parts));
+    });
+    let providerInput!: Parameters<typeof mocks.runAgent>[0];
+    mocks.runAgent.mockImplementationOnce((input) => {
+      providerInput = input;
+      return new Promise((_, reject) => {
+        const rejectCancelled = () => reject(new DOMException('Native question stopped', 'AbortError'));
+        if (input.signal.aborted) rejectCancelled();
+        else input.signal.addEventListener('abort', rejectCancelled, { once: true });
+      });
+    });
+    const stop = trackListener(startRuntimeListener({
+      getAgentById: () => jarvis,
+      getAgentBySlug: () => jarvis,
+      getAgentForChat: vi.fn(async () => jarvis),
+      getMessages: vi.fn(async () => [{
+        id: userId,
+        chat_id: chatId,
+        role: 'user' as const,
+        parts: [{ kind: 'text' as const, text: 'Ask one preference question.' }],
+        created_at: 1,
+        updated_at: 1,
+      }]),
+      appendMessage: vi.fn(async (message) => ({
+        ...message,
+        id: placeholderId,
+        created_at: 2,
+        updated_at: 2,
+      })),
+      updateMessage,
+    }, { jarvisKernelMode: 'legacy', flushIntervalMs: 0 }));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId, text: 'Ask one preference question.', cancellationKey: userId,
+        interactionMode: 'agent',
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      await providerInput.onQuestionRequested?.(projection);
+      expect(writes.at(-1)?.some((part) =>
+        part.kind === 'question_block' && part.block.status === 'pending')).toBe(true);
+
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { messageId: userId } }));
+      await stop.whenIdle();
+      expect(writes.at(-1)?.find((part) => part.kind === 'question_block')).toEqual({
+        ...projection.part,
+        block: { ...projection.part.block, status: 'cancelled' },
+      });
+      expect(writes.at(-1)?.some((part) =>
+        part.kind === 'question_block' && part.block.status === 'pending')).toBe(false);
+    } finally {
+      stop();
+      await stop.whenIdle();
+    }
+  });
+
+  it('cancels only pending native questions projected by the stopped canonical turn', () => {
+    const projection = projectOpenCodeQuestionEvent({
+      type: 'question',
+      request: {
+        id: 'que_codex_cancel_scope',
+        nativeRequestId: 0,
+        sessionId: 'ses_codex_cancel_scope',
+        questions: [{
+          header: 'Drink',
+          prompt: 'Tea or coffee?',
+          multiple: false,
+          allowCustomAnswer: true,
+          options: [{ label: 'Tea', description: 'A cup of tea.' }],
+        }],
+      },
+    }, 'ses_codex_cancel_scope');
+    if (!projection) throw new Error('expected canonical native question projection');
+    const oldPending: Part = {
+      ...projection.part,
+      block: { ...projection.part.block, id: 'old-question' },
+    };
+    const answered: Part = {
+      ...projection.part,
+      block: { ...projection.part.block, id: 'answered-question', status: 'answered' },
+    };
+    const parts: Part[] = [oldPending, projection.part, answered];
+    const ids = new Set([
+      `question:${projection.part.block.id}`,
+      'question:answered-question',
+    ]);
+
+    const cancelled = cancelPendingProjectedNativeQuestions(parts, ids);
+    expect(cancelled).not.toBe(parts);
+    expect(cancelled[0]).toBe(oldPending);
+    expect(cancelled[1]).toEqual({
+      ...projection.part,
+      block: { ...projection.part.block, status: 'cancelled' },
+    });
+    expect(cancelled[2]).toBe(answered);
+    expect(cancelPendingProjectedNativeQuestions(cancelled, ids)).toBe(cancelled);
   });
 
   it('keeps one projected OpenCode question in the same placeholder through resolution and completion', async () => {

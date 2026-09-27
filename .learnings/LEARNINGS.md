@@ -352,3 +352,171 @@ In native Playwright helpers, enumerate CDP pages, inspect Tauri metadata for la
 - **Evidence**: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH33/native-process-restart-dedup-1790494344573.json
 
 ---
+
+## [LRN-20260927-CH34A] correction
+
+**Logged**: 2026-09-27T13:08:30Z
+**Priority**: high
+**Status**: pending
+**Area**: workflow
+
+### Summary
+Continue authorized Prompt 01 work after a passing slice; do not end the task because the broader acceptance matrix remains unverified.
+
+### Details
+The previous response closed CH33 after a verified OpenCode Review repair and passing suite, yet explicitly listed multiple unproven Prompt 01 requirements. The user corrected that early stop and required completion without routine questions. A green slice is a checkpoint, not completion of the assigned prompt.
+
+### Suggested Action
+After each verified slice, claim the next exact unlocked area and continue current-source native acceptance and focused repairs. Preserve partial receipts and mark externally unavailable paths honestly; end only when all feasible acceptance is exercised or a concrete external blocker remains.
+
+### Metadata
+- Source: user_feedback
+- Related Files: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/RESULT.md
+- Tags: scope, continuation, native-acceptance
+- See Also: LRN-20260927-CH33A
+- Pattern-Key: task.continue_partial_matrix
+
+---
+
+## [LRN-20260927-CH34B] best_practice
+
+**Logged**: 2026-09-27T13:20:00Z
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+For a new VibeSpace chat, switch the coding runtime before selecting that runtime's model, and wait for the chat and composer to settle after transitions.
+
+### Details
+The first native provider-draft helper queried a Codex option while the picker still showed only OpenCode routes. Its create and reload snapshots also briefly saw a stale chat or unmounted composer immediately after Playwright's wait predicate passed. The unsent chat stored no explicit backend affinity, so the correct displayed backend came from resolveChatBackendAffinity rather than a raw nullable field. Selecting the runtime first, then its model, and reconciling the same fixture after stable UI readiness passed with one unchanged 51-character draft and zero provider turns.
+
+### Suggested Action
+Native helpers should attest the main WebView, use persisted-affinity resolution for unsent chats, wait for both the active chat and visible composer, choose coding runtime before the model picker, and preserve once-only guards before retrying UI probes.
+
+### Metadata
+- Source: error
+- Related Files: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-provider-route-continue.cjs; work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-provider-draft-reload.cjs
+- Tags: native-playwright, provider-switch, draft, readiness
+- Pattern-Key: native.qa.route_switch_readiness
+
+### Resolution
+- **Resolved**: 2026-09-27T13:19:16Z
+- **Evidence**: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-provider-route-continue-1790515004272.json; work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-provider-draft-reload-1790515156491.json
+
+---
+
+## [LRN-20260927-CH34C] best_practice
+
+**Logged**: 2026-09-27T13:39:00Z
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Reconcile native asynchronous command and question UI actions from persisted state before repeating them.
+
+### Details
+Dismiss on a native OpenCode question kept the request pending and rendered a compact Reopen control; a helper incorrectly expected the card to disappear. A Codex `/mcp` picker click also produced its local user/system messages, but the helper's immediate database snapshot reported no fresh messages. Later read-only reconciliation found exactly one local receipt and one status response. The original failures and once-only attempt guards prevented a duplicate question rejection or command selection.
+
+### Suggested Action
+For native Playwright acceptance, assert the actual UI transition, then poll or independently reconcile persisted messages and request IDs after asynchronous handlers settle. Preserve the first failure receipt and attempt guard; do not repeat provider sends or authoritative actions merely because a test helper sampled too early.
+
+### Metadata
+- Source: error
+- Related Files: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-opencode-question-reject.cjs; work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-codex-mcp-status.cjs
+- Tags: native-playwright, async, deduplication, mcp, question
+- Pattern-Key: native.qa.reconcile_async_actions
+
+### Resolution
+- **Resolved**: 2026-09-27T13:38:19Z
+- **Evidence**: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-opencode-question-reject-1790515771361.json; work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-codex-mcp-diagnostic-1790516299399.json
+
+---
+
+## [LRN-20260927-CH34D] best_practice
+
+**Logged**: 2026-09-27T13:58:00Z
+**Priority**: high
+**Status**: resolved
+**Area**: native acceptance
+
+### Summary
+When the native main WebView stops responding, reconcile guarded sends through another WebView in the same original profile before restarting the app.
+
+### Details
+After a selected OpenCode skill Send click timed out, the official C1 main target stopped answering Playwright and direct CDP, while the dictation target and host process remained live. The dictation WebView shared IndexedDB with main and proved the exact guarded prompt had zero user messages. A graceful process-plugin exit from dictation and relaunch of the exact same binary/profile restored the main WebView. The unsent draft and selected Codex-origin skill chip persisted, and one guarded resume completed with a native skill tool call. Repeating Send blindly could have duplicated a delayed turn.
+
+### Suggested Action
+Keep a once-only guard before authoritative clicks. If main is unresponsive, verify process/profile identity and read persisted message IDs from a responsive same-profile native WebView; restart only the owned native instance when that read confirms no send, then reattest identity and reconcile the draft before one guarded resume.
+
+### Metadata
+- Source: error
+- Related Files: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-dictation-reconcile.cjs; work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-opencode-codex-skill-load.cjs
+- Tags: native-playwright, webview, process-restart, deduplication, skill
+- Pattern-Key: native.qa.hung_main_reconcile_restart
+
+### Resolution
+- **Resolved**: 2026-09-27T13:56:16Z
+- **Evidence**: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-dictation-reconcile-1790517170277.json; work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-mcp-chat-preflight-1790517333061.json; work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH34/native-opencode-codex-skill-load-1790517376667.json
+
+---
+## [LRN-20260927-CH34E] knowledge_gap
+
+**Logged**: 2026-09-27T15:07:00Z
+**Priority**: high
+**Status**: pending_verification
+**Area**: frontend
+
+### Summary
+A protected Codex native question is projected through the canonical kernel as a separate assistant message, while OpenCode's legacy question path updates the streaming placeholder.
+
+### Details
+The first Stop fix modified `liveOpenCodeQuestions` and passed a focused legacy-path test, but official C1 Codex still left its new native question pending after the run became Cancelled. Source tracing showed the canonical `KernelQuestionProjectionPort.project` appends its own row and tracks IDs in `projectedQuestionBlockIds`; the outer legacy catch never owns those parts. A second repair closes pending IDs from that exact canonical turn in its `finally`, leaving prior or answered questions unchanged. Native post-repair verification remains pending.
+
+### Suggested Action
+Before changing a shared native question lifecycle, trace the selected harness through its actual persistence path. Test the canonical and legacy paths separately, and require a native Stop/reopen receipt for a Codex claim.
+
+### Metadata
+- Source: error
+- Related Files: app/src/lib/ai/runtime.ts; app/src/lib/ai/runtime.test.ts
+- Tags: codex, native-question, cancellation, canonical-kernel, acceptance
+- Pattern-Key: chat.questions.canonical_vs_legacy_persistence
+
+---
+## [LRN-20260927-CH34E-VERIFY] resolution
+
+**Logged**: 2026-09-27T15:18:19.1183073Z
+**Status**: resolved
+**Area**: frontend
+
+The canonical-path repair described in LRN-20260927-CH34E passed official C1 native Playwright: one new Codex question was persisted pending, one Stop closed that exact new block as `cancelled` with the run `Cancelled`, and no duplicate user send. `evidence/CH34/operator/native-codex-canonical-cancel-v2-1790522131982.json` records the outcome and latency; prior pre-fix stale cards remain pending and were not migrated. Runtime tests 260/260, neighboring question tests 86/86, typecheck, and release-manifest 45/45 passed on this source. The distilled rule is to track and reconcile question IDs in the canonical kernel projection port, separately from legacy streaming-placeholder state.
+
+- Related: LRN-20260927-CH34E
+- Pattern-Key: chat.questions.canonical_vs_legacy_persistence
+
+---
+
+---
+## [LRN-20260927-CH34F] error
+
+**Logged**: 2026-09-27T15:52:00Z
+
+**Priority**: medium
+
+**Status**: resolved
+
+**Area**: workflow
+
+### Summary
+PowerShell double-quoted append text can interpret Markdown backticks as escapes, corrupting evidence paths.
+
+### Details
+An append-only RESULT checkpoint used a double-quoted PowerShell string containing backtick-delimited Markdown paths. The backtick before `evidence` became an escape character. The historical line was preserved and a following correction supplies both exact paths.
+
+### Suggested Action
+Use a single-quoted here-string or a structured file-write tool for literal Markdown, then read the appended tail before citing it.
+
+### Resolution
+- **Evidence**: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/RESULT.md, CH34 broad suite scheduling checkpoint and its immediate correction.
+- **Pattern-Key**: workflow.powershell_literal_markdown_append

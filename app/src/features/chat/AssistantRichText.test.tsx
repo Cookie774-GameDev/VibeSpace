@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AssistantRichText, parseAssistantBlocks, parseAssistantInline } from './AssistantRichText';
 
 describe('AssistantRichText', () => {
@@ -52,6 +52,56 @@ describe('AssistantRichText', () => {
     expect(screen.getByText('Source · mermaid')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy code' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy diagram source' })).toBeTruthy();
+  });
+
+  it('renders fenced plain text and code as compact labeled snippets with working copy', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      const { container } = render(
+        <AssistantRichText
+          text={[
+            'A normal sentence stays prose.',
+            '',
+            '```text',
+            'A small note to copy.',
+            '```',
+            '',
+            '```typescript',
+            'const answer = 42;',
+            '```',
+          ].join('\n')}
+        />,
+      );
+
+      expect(container.querySelector('.assistant-rich-text__paragraph')?.textContent).toBe(
+        'A normal sentence stays prose.',
+      );
+      expect(container.querySelectorAll('[data-assistant-snippet]')).toHaveLength(2);
+      expect(container.querySelector('[data-assistant-snippet="writing"]')?.textContent).toContain(
+        'A small note to copy.',
+      );
+      expect(container.querySelector('[data-assistant-snippet="typescript"]')?.textContent).toContain(
+        'const answer = 42;',
+      );
+      expect(screen.getByText('Writing')).toBeTruthy();
+      expect(screen.getByText('typescript')).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Copy text' }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith('A small note to copy.'));
+      const codeCopy = screen.getByRole('button', { name: 'Copy code' });
+      expect(codeCopy.querySelector('svg')).toBeTruthy();
+      fireEvent.click(codeCopy);
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith('const answer = 42;'));
+    } finally {
+      if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      else delete (navigator as Navigator & { clipboard?: Clipboard }).clipboard;
+    }
   });
 
   it('does not invent diagram cards for ordinary prose and keeps HTML inert', () => {
