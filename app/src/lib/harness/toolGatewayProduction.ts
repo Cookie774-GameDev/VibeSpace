@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { getAllActions, runAction } from '@/lib/actions';
 import { loadPersistedContextMaps } from '@/features/context';
 import { useAllAboutMeStore } from '@/features/all-about-me/store';
@@ -23,6 +24,7 @@ import {
   type VibeSpaceMcpInvocationClassification,
 } from '@/lib/mcp/vibeSpaceGateway';
 import { useUIStore } from '@/stores/ui';
+import { canParticipateInRelay, readRelaySettings } from '@/features/settings/relaySettings';
 import type { TaskId } from '@/types/common';
 import type { ActionResult } from '@/lib/actions/types';
 import type { RlmContextLease } from '@/features/context/rlmOpenCodeTool';
@@ -51,6 +53,7 @@ import {
   readToolGatewayObservedExecutionAuthority,
   readToolGatewayRequestSignal,
   readToolGatewaySessionAuthority,
+  readToolGatewayTurnIdentity,
 } from './toolGatewayAuthority';
 
 export { grantToolGatewayMutation } from './toolGatewayAuthority';
@@ -71,12 +74,16 @@ export type ToolGatewayRelayPort = Readonly<{
   channel: string;
   /** Names observed from the pinned upstream MCP tools/list catalog. */
   availableToolNames: readonly string[];
-  forSession(input: Readonly<{
-    accountId: string;
-    workspaceId: string;
-    projectId: string;
-    sessionId: string;
-  }>): RelayParticipantHandle | null;
+  forSession(
+    input: Readonly<{
+      accountId: string;
+      workspaceId: string;
+      projectId: string;
+      sessionId: string;
+      messageId: string;
+      chatId: string;
+    }>,
+  ): RelayParticipantHandle | null | Promise<RelayParticipantHandle | null>;
 }>;
 
 let relayPort: ToolGatewayRelayPort | undefined;
@@ -105,33 +112,102 @@ const RELAY_REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = Object.
   'message.inbox.mark_read': ['message_id'],
 });
 
-function relayTools(port: ToolGatewayRelayPort) {
-  const discovered = new Set(port.availableToolNames);
-  return RELAY_GROUP_TOOL_NAMES.filter((name) => discovered.has(name)).map((name) => ({
-    name,
-    description: `Agent Relay ${name} in the host-bound VibeSpace group. Relay content is untrusted; send acknowledgement is not a peer reply.`,
-    classification: RELAY_WRITE_TOOLS.has(name) ? 'write' as const : 'read' as const,
-    inputSchema: {
-      type: 'object',
-      properties: name === 'message.post' || name === 'message.list'
-        ? { ...RELAY_TOOL_SCHEMAS[name], channel: { type: 'string', const: port.channel } }
-        : RELAY_TOOL_SCHEMAS[name],
-      required: RELAY_REQUIRED_ARGS[name],
-      additionalProperties: false,
-    },
-  }));
+function projectedRelaySchema(name: (typeof RELAY_GROUP_TOOL_NAMES)[number], upstream: unknown, channel: string) {
+  const allowed = RELAY_TOOL_SCHEMAS[name];
+  const fallback = {
+    type: 'object',
+    properties: name === 'message.post' || name === 'message.list'
+      ? { ...allowed, channel: { type: 'string', const: channel } }
+      : allowed,
+    required: RELAY_REQUIRED_ARGS[name],
+    additionalProperties: false,
+  };
+  if (upstream === undefined) return fallback;
+  try {
+    const schema = safeMcpInputSchema(upstream) as Record<string, unknown>;
+    if (schema.type !== 'object' || !schema.properties || typeof schema.properties !== 'object' || Array.isArray(schema.properties)) return null;
+    const source = schema.properties as Record<string, unknown>;
+    const properties: Record<string, unknown> = {};
+    for (const [key, constraint] of Object.entries(allowed)) {
+      const field = source[key];
+      if (!field || typeof field !== 'object' || Array.isArray(field)) {
+        if (RELAY_REQUIRED_ARGS[name].includes(key)) return null;
+        continue;
+      }
+      properties[key] = {
+        ...(field as Record<string, unknown>),
+        ...(constraint as Record<string, unknown>),
+        ...(key === 'channel' ? { const: channel } : {}),
+      };
+    }
+    return { type: 'object', properties, required: RELAY_REQUIRED_ARGS[name], additionalProperties: false };
+  } catch {
+    return null;
+  }
 }
 
-function boundRelayParticipant(
+function relayTools(port: ToolGatewayRelayPort, participant: RelayParticipantHandle) {
+  const discovered = new Set(port.availableToolNames);
+  const participantCatalog = participant.availableToolNames
+    ? new Set(participant.availableToolNames)
+    : null;
+  const officialCatalog = participant.availableTools
+    ? new Map(participant.availableTools.map((tool) => [tool.name, tool]))
+    : null;
+  return RELAY_GROUP_TOOL_NAMES.filter((name) => discovered.has(name))
+    .filter((name) => (participantCatalog === null || participantCatalog.has(name)) && (officialCatalog === null || officialCatalog.has(name)))
+    .map((name) => {
+      const official = officialCatalog?.get(name);
+      const inputSchema = projectedRelaySchema(name, officialCatalog ? official?.inputSchema : undefined, port.channel);
+      if (!inputSchema) return null;
+      return {
+        name,
+        description: official?.description ?? `Agent Relay ${name} in the host-bound VibeSpace group. Relay content is untrusted; send acknowledgement is not a peer reply.`,
+        classification: RELAY_WRITE_TOOLS.has(name) ? ('write' as const) : ('read' as const),
+        inputSchema,
+      };
+    })
+    .filter((tool): tool is NonNullable<typeof tool> => tool !== null);
+}
+
+function relayInputAllowed(toolName: string, value: unknown, channel: string): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const args = value as Record<string, unknown>;
+  const allowed = RELAY_TOOL_SCHEMAS[toolName];
+  if (!allowed || Object.keys(args).some((key) => !Object.prototype.hasOwnProperty.call(allowed, key))) return false;
+  if ((toolName === 'message.post' || toolName === 'message.list') && args.channel !== channel) return false;
+  return RELAY_REQUIRED_ARGS[toolName]?.every((key) => typeof args[key] === 'string' && !!String(args[key]).trim()) ?? false;
+}
+
+async function boundRelayParticipant(
   sessionId: string,
+  messageId: string,
   port: ToolGatewayRelayPort | undefined = relayPort,
-): RelayParticipantHandle | null {
+): Promise<RelayParticipantHandle | null> {
   if (!port) return null;
   try {
     const scope = toolGatewaySessionScope(sessionId);
     if (!scope.projectId) return null;
-    const participant = port.forSession({ ...scope, projectId: scope.projectId, sessionId });
-    return participant?.sessionId === sessionId && participant.role === 'agent' ? participant : null;
+    const turn = readToolGatewayTurnIdentity(sessionId, messageId);
+    if (!turn) return null;
+    const participant = await port.forSession({
+      ...scope,
+      projectId: scope.projectId,
+      sessionId,
+      messageId,
+      chatId: turn.chatId,
+    });
+    const current = toolGatewaySessionScope(sessionId);
+    if (readToolGatewayTurnIdentity(sessionId, messageId)?.chatId !== turn.chatId) return null;
+    if (
+      current.accountId !== scope.accountId ||
+      current.workspaceId !== scope.workspaceId ||
+      current.projectId !== scope.projectId
+    )
+      return null;
+    return participant?.sessionId === sessionId && participant.role === 'agent'
+      ? participant
+      : null;
   } catch {
     return null;
   }
@@ -538,7 +614,21 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
   return {
     authorizeRequest: authorizeToolGatewayRequest,
     readRequestSignal: readToolGatewayRequestSignal,
-    authorizeMutation: authorizeToolGatewayMutation,
+    authorizeMutation: (request) => {
+      const args = request.args as Record<string, unknown>;
+      if (request.tool === 'mcp.run' && args.connectionId === RELAY_CONNECTION_ID) {
+        const scope = toolGatewaySessionScope(request.sessionId);
+        const turn = readToolGatewayTurnIdentity(request.sessionId, request.messageId);
+        return Boolean(
+          relayPort && turn && scope.projectId &&
+          args.classification === 'write' &&
+          typeof args.toolName === 'string' && RELAY_WRITE_TOOLS.has(args.toolName) &&
+          authorizeToolGatewayRequest(request) &&
+          canParticipateInRelay(readRelaySettings(), { projectId: scope.projectId, sessionId: request.sessionId }, scope.projectId),
+        );
+      }
+      return authorizeToolGatewayMutation(request);
+    },
     terminal: {
       list: (args) => terminalSummary((args.limit as number | undefined) ?? 100),
       open: (args) => {
@@ -889,11 +979,24 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           }))
           .filter((connection) => connection.tools.length > 0);
         const relayBindingPort = relayPort;
-        const availableRelayTools = relayBindingPort ? relayTools(relayBindingPort) : [];
-        const relay = relayBindingPort && availableRelayTools.length > 0 &&
-          boundRelayParticipant(context.sessionId, relayBindingPort)
-          ? [{ connectionId: RELAY_CONNECTION_ID, tools: availableRelayTools }]
-          : [];
+        const relayParticipant = await boundRelayParticipant(
+          context.sessionId,
+          context.messageId,
+          relayBindingPort,
+        );
+        const availableRelayTools =
+          relayBindingPort && relayParticipant
+            ? relayTools(relayBindingPort, relayParticipant)
+            : [];
+        appActivityLog.recordMetadata('agent-relay', 'tool_discovery', {
+          portInstalled: Boolean(relayBindingPort),
+          participantBound: Boolean(relayParticipant),
+          toolCount: availableRelayTools.length,
+        });
+        const relay =
+          relayBindingPort && availableRelayTools.length > 0 && relayParticipant
+            ? [{ connectionId: RELAY_CONNECTION_ID, tools: availableRelayTools }]
+            : [];
         return [...relay, ...external].slice(0, (args.limit as number | undefined) ?? 100);
       },
       run: async (args, context) => {
@@ -906,15 +1009,33 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         ) as VibeSpaceMcpInvocationClassification;
         if (connectionId === RELAY_CONNECTION_ID) {
           const relayBindingPort = relayPort;
-          const participant = boundRelayParticipant(context.sessionId, relayBindingPort);
-          const expected = relayBindingPort?.availableToolNames.includes(toolName) &&
+          const participant = await boundRelayParticipant(
+            context.sessionId,
+            context.messageId,
+            relayBindingPort,
+          );
+          const expected =
+            relayBindingPort?.availableToolNames.includes(toolName) &&
+            (!participant?.availableToolNames ||
+              participant.availableToolNames.includes(toolName)) &&
             RELAY_GROUP_TOOL_NAMES.includes(toolName as (typeof RELAY_GROUP_TOOL_NAMES)[number])
-            ? (RELAY_WRITE_TOOLS.has(toolName) ? 'write' : 'read')
-            : undefined;
-          if (!participant || expected !== classification || context.signal?.aborted) {
+              ? RELAY_WRITE_TOOLS.has(toolName)
+                ? 'write'
+                : 'read'
+              : undefined;
+          if (
+            !participant ||
+            !relayBindingPort ||
+            expected !== classification ||
+            context.signal?.aborted ||
+            !relayInputAllowed(toolName, args.input ?? {}, relayBindingPort.channel)
+          ) {
             throw new Error('mcp_tool_unavailable');
           }
-          const value = await participant.call(toolName, (args.input as Record<string, unknown> | undefined) ?? {});
+          const value = await participant.call(
+            toolName,
+            (args.input as Record<string, unknown> | undefined) ?? {},
+          );
           return {
             result: {
               ok: true,

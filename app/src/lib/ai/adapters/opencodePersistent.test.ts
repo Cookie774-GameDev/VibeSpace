@@ -94,6 +94,7 @@ import {
   authorizeToolGatewayRequest,
   captureToolGatewayAuthorityClaim,
   readToolGatewayObservedExecutionAuthority,
+  readToolGatewayTurnIdentity,
 } from '@/lib/harness/toolGatewayAuthority';
 import { useAuthStore } from '@/stores/auth';
 import type { ProjectId, WorkspaceId } from '@/types/common';
@@ -1082,30 +1083,38 @@ describe('persistent OpenCode question transport authority', () => {
       protocolVersion: 1 as const,
       requestId: 'early-context-request',
       sessionId: 'ses_question_exact',
-      messageId: 'early-message',
+      messageId: 'msg_early_message',
       tool: 'vibespace_context' as const,
       args: { operation: 'search', query: 'needle', limit: 3 },
     };
     let authorizedDuringSend = false;
-    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
-      if (args[1].includes('/prompt_async')) {
-        authorizedDuringSend = authorizeToolGatewayRequest(toolRequest);
-      }
-      return original(...args);
-    });
+    let turnIdentityDuringSend: { requestId: string; chatId: string } | null = null;
     const request = {
       ...questionProviderRequest('request-early-gateway'),
       projectId: 'project-question-test',
       tools: { vibespace_context: true },
     };
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (args[1].includes('/prompt_async')) {
+        authorizedDuringSend = authorizeToolGatewayRequest(toolRequest);
+        turnIdentityDuringSend = readToolGatewayTurnIdentity(
+          'ses_question_exact',
+          toolRequest.messageId,
+        );
+      }
+      return original(...args);
+    });
     const iterator = openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]();
     try {
       await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'session' } });
       expect(authorizedDuringSend).toBe(true);
+      expect(turnIdentityDuringSend).toEqual({ requestId: request.requestId, chatId: request.chatId });
     } finally {
       await iterator.return?.();
     }
     expect(authorizeToolGatewayRequest(toolRequest)).toBe(false);
+    expect(readToolGatewayTurnIdentity('ses_question_exact', request.requestId)).toBeNull();
+    expect(readToolGatewayTurnIdentity('ses_question_exact', toolRequest.messageId)).toBeNull();
   });
 
   it('uses an early captured gateway claim after project navigation before adapter capture', async () => {

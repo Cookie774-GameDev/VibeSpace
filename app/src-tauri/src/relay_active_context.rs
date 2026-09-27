@@ -12,6 +12,95 @@ use tauri::{State, WebviewWindow};
 pub struct RelayActiveContextState(Mutex<ContextState>);
 
 #[derive(Default)]
+pub struct RelayPolicyState(Mutex<RelayPolicy>);
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RelayCollaborationScope {
+    Off,
+    Project,
+    EntireApp,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RelayPolicy {
+    pub revision: u64,
+    pub scope: RelayCollaborationScope,
+    pub excluded_project_ids: Vec<String>,
+    pub excluded_session_ids: Vec<String>,
+}
+
+impl Default for RelayPolicy {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            scope: RelayCollaborationScope::Off,
+            excluded_project_ids: Vec::new(),
+            excluded_session_ids: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayPolicySnapshot {
+    pub revision: u64,
+    pub scope: RelayCollaborationScope,
+}
+
+impl RelayPolicy {
+    fn validate(&self) -> Result<(), String> {
+        if self.revision == 0
+            || self.excluded_project_ids.len() > 4096
+            || self.excluded_session_ids.len() > 4096
+            || self
+                .excluded_project_ids
+                .iter()
+                .chain(self.excluded_session_ids.iter())
+                .any(|value| !valid_id(value))
+        {
+            return Err("Relay policy is invalid.".into());
+        }
+        Ok(())
+    }
+
+    pub fn allows(&self, scope: &RelayActiveContext, session_id: &str) -> bool {
+        self.scope != RelayCollaborationScope::Off
+            && !self.excluded_project_ids.contains(&scope.project_id)
+            && !self.excluded_session_ids.iter().any(|id| id == session_id)
+    }
+}
+
+impl RelayPolicyState {
+    pub fn current(&self) -> Result<RelayPolicy, String> {
+        self.0
+            .lock()
+            .map(|policy| policy.clone())
+            .map_err(|_| "Relay policy state is busy.".into())
+    }
+
+    pub fn snapshot(&self) -> Result<RelayPolicySnapshot, String> {
+        let policy = self.0.lock().map_err(|_| "Relay policy state is busy.")?;
+        Ok(RelayPolicySnapshot {
+            revision: policy.revision,
+            scope: policy.scope,
+        })
+    }
+
+    pub fn set(&self, policy: RelayPolicy) -> Result<(RelayPolicy, RelayPolicy), String> {
+        policy.validate()?;
+        let mut current = self.0.lock().map_err(|_| "Relay policy state is busy.")?;
+        if policy.revision <= current.revision {
+            return Err("Relay policy update is stale.".into());
+        }
+        let previous = current.clone();
+        *current = policy.clone();
+        Ok((previous, policy))
+    }
+}
+
+#[derive(Default)]
 struct ContextState {
     generation: u64,
     owner_handle: Option<String>,
@@ -143,7 +232,7 @@ impl RelayActiveContextState {
         Ok(())
     }
 
-    fn current(&self) -> Result<RelayActiveContextSnapshot, String> {
+    pub fn current(&self) -> Result<RelayActiveContextSnapshot, String> {
         let state = self
             .0
             .lock()
@@ -212,6 +301,49 @@ mod tests {
             project_id: project_id.into(),
             chat_id: chat_id.into(),
         }
+    }
+
+    #[test]
+    fn relay_policy_defaults_off_and_rejects_stale_or_excluded_scopes() {
+        let state = RelayPolicyState::default();
+        let context = checked_context(update("project-a", "chat-a")).unwrap();
+        let mut policy = state.current().unwrap();
+        assert!(!policy.allows(&context, "session-a"));
+
+        policy.revision = 1;
+        policy.scope = RelayCollaborationScope::Project;
+        policy.excluded_project_ids = vec!["project-a".into()];
+        state.set(policy.clone()).unwrap();
+        assert!(!state.current().unwrap().allows(&context, "session-a"));
+        assert!(state.set(policy).is_err());
+
+        let mut enabled = state.current().unwrap();
+        enabled.revision = 2;
+        enabled.excluded_project_ids.clear();
+        enabled.excluded_session_ids = vec!["session-a".into()];
+        state.set(enabled.clone()).unwrap();
+        assert!(!enabled.allows(&context, "session-a"));
+        assert!(enabled.allows(&context, "session-b"));
+    }
+
+    #[test]
+    fn policy_snapshot_exposes_current_revision_and_scope_only() {
+        let state = RelayPolicyState::default();
+        assert_eq!(
+            serde_json::to_value(state.snapshot().unwrap()).unwrap(),
+            serde_json::json!({ "revision": 0, "scope": "off" })
+        );
+
+        let mut policy = state.current().unwrap();
+        policy.revision = 42;
+        policy.scope = RelayCollaborationScope::Project;
+        policy.excluded_project_ids = vec!["project-a".into()];
+        state.set(policy).unwrap();
+
+        assert_eq!(
+            serde_json::to_value(state.snapshot().unwrap()).unwrap(),
+            serde_json::json!({ "revision": 42, "scope": "project" })
+        );
     }
 
     #[test]

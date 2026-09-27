@@ -103,6 +103,7 @@
     "resources": [
       "resources/desktop-connector/*",
       "resources/intro/*",
+      "resources/relay-runtime/*",
       "../../docs/oss/dependency-lock.json",
       "../../docs/oss/grammar-license-inventory.md",
       "../../docs/oss/THIRD_PARTY_NOTICES.md",

@@ -1,0 +1,20 @@
+{
+  "name": "@vibespace/relay-runtime-g7m4",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@agent-relay/sdk": "12.4.1",
+    "@hono/node-server": "2.1.1",
+    "@relaycast/engine": "8.12.0",
+    "@relaycast/mcp": "8.12.0",
+    "hono": "4.11.9",
+    "ws": "8.18.0"
+  },
+  "scripts": {
+    "test": "node --test relay-runtime.test.mjs sdk-engine-acceptance.test.mjs",
+    "acceptance": "node sdk-engine-acceptance.mjs"
+  }
+}

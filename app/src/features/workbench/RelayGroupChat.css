@@ -28,3 +28,77 @@
 .relay-group-footer textarea:focus-visible { border-color: var(--accent-copper); }
 .relay-group-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .relay-group-actions .relay-group-muted { flex: 1; }
+
+.relay-group-backdrop { background: rgba(17, 20, 30, .56); backdrop-filter: blur(10px); }
+.relay-group-panel { width: min(690px, 100vw); background: radial-gradient(circle at 90% -5%, color-mix(in srgb, var(--accent-copper) 12%, transparent), transparent 35%), var(--background); box-shadow: -28px 0 80px rgba(10, 15, 25, .34); }
+.relay-group-header { padding: 21px 24px 18px; background: color-mix(in srgb, var(--panel) 82%, transparent); }
+.relay-group-emblem { width: 44px; height: 44px; border: 1px solid color-mix(in srgb, var(--accent-copper) 35%, transparent); box-shadow: 0 8px 22px color-mix(in srgb, var(--accent-copper) 13%, transparent); }
+.relay-group-eyebrow { display: block; margin-bottom: 3px; color: var(--accent-copper); font-size: 9px; font-weight: 800; letter-spacing: .16em; }
+.relay-group-heading h2 { font-size: 23px; letter-spacing: -.035em; }
+.relay-group-heading p { display: flex; align-items: center; gap: 5px; margin-top: 4px; }
+.relay-group-connection { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #8d939d; }
+.relay-group-connection--connected { background: #66cf9e; box-shadow: 0 0 0 4px rgba(102, 207, 158, .15); }
+.relay-group-connection--connecting { background: #e5b16d; animation: relay-pulse 1.4s ease-in-out infinite; }
+.relay-group-members { gap: 9px; min-height: 83px; padding: 12px 20px; scrollbar-width: thin; }
+.relay-group-member { max-width: 195px; min-width: 136px; padding: 6px 10px 6px 6px; text-align: left; cursor: pointer; border-color: color-mix(in srgb, var(--border) 75%, transparent); background: color-mix(in srgb, var(--panel) 92%, var(--background)); transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
+.relay-group-member:hover, .relay-group-member--selected { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent-copper) 52%, var(--border)); box-shadow: 0 6px 18px rgba(20, 15, 12, .12); }
+.relay-group-member:focus-visible, .relay-group-byline button:focus-visible { outline: 2px solid var(--accent-copper); outline-offset: 2px; }
+.relay-group-member-copy { display: grid; min-width: 0; flex: 1; }
+.relay-group-member-name { font-size: 11px; font-weight: 700; }
+.relay-group-member-caption { font-size: 10px; color: var(--muted-foreground); text-transform: capitalize; }
+.relay-avatar { display: grid; flex: none; place-items: center; overflow: hidden; border-radius: 11px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); }
+.relay-avatar svg { width: 100%; height: 100%; }
+.relay-avatar--0 { background: #ffe4cc; }.relay-avatar--1 { background: #e9d9ff; }.relay-avatar--2 { background: #d8f2f2; }.relay-avatar--3 { background: #ffe0e1; }.relay-avatar--4 { background: #fff0d3; }
+.relay-group-content { position: relative; display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.relay-group-timeline { flex: 1; min-width: 0; padding: 23px 24px; scroll-behavior: smooth; }
+.relay-group-message { position: relative; gap: 11px; margin-bottom: 20px; }
+.relay-group-message--reply { margin-left: 22px; padding-left: 13px; border-left: 2px solid color-mix(in srgb, var(--accent-copper) 30%, var(--border)); }
+.relay-group-reply-mark { position: absolute; left: -25px; top: 8px; display: grid; place-items: center; width: 18px; height: 18px; color: var(--accent-copper); }
+.relay-group-message-body { max-width: min(100%, 550px); padding: 10px 13px 11px; border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius: 4px 15px 15px 15px; background: color-mix(in srgb, var(--panel) 84%, var(--background)); }
+.relay-group-byline { margin: 0 0 6px; }.relay-group-byline button { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 750; text-align: left; }.relay-group-byline button:disabled { cursor: default; }
+.relay-group-byline time { margin-left: auto; font-size: 10px; }
+.relay-group-message-body p { font-size: 13px; line-height: 1.55; }
+.relay-group-reply-count { display: inline-block; margin-top: 8px; color: var(--accent-copper); font-size: 10px; font-weight: 700; }
+.relay-group-profile { width: min(270px, 44%); flex: none; overflow-y: auto; padding: 19px 18px; border-left: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 94%, var(--background)); }
+.relay-profile-top { display: flex; justify-content: space-between; align-items: start; margin-bottom: 13px; }.relay-profile-top .relay-avatar { border-radius: 18px; }
+.relay-group-profile h3 { overflow-wrap: anywhere; font-family: var(--font-display); font-size: 17px; font-weight: 750; line-height: 1.2; }
+.relay-profile-status { margin-top: 4px; color: var(--muted-foreground); font-size: 11px; text-transform: capitalize; }
+.relay-group-profile dl { display: grid; gap: 15px; margin-top: 25px; }.relay-profile-field dt { margin-bottom: 4px; color: var(--muted-foreground); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }.relay-profile-field dd { margin: 0; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.relay-profile-note { margin-top: 24px; padding-top: 13px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 10px; line-height: 1.5; }
+.relay-group-footer { padding: 14px 22px 18px; background: color-mix(in srgb, var(--panel) 75%, var(--background)); }
+.relay-group-footer textarea { min-height: 76px; padding: 12px 13px; background: var(--background); }
+.relay-group-actions { margin-top: 10px; }.relay-group-actions .relay-group-muted { display: inline-flex; align-items: center; gap: 4px; }
+.relay-group-parent-context { display: flex; align-items: flex-start; gap: 5px; margin: 0 0 7px; padding: 6px 8px; border-left: 2px solid color-mix(in srgb, var(--accent-copper) 45%, var(--border)); border-radius: 0 7px 7px 0; background: color-mix(in srgb, var(--panel) 78%, var(--background)); color: var(--muted-foreground); font-size: 10px; line-height: 1.3; }
+.relay-group-parent-context span { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.relay-group-parent-context svg { flex: none; margin-top: 1px; }
+.relay-group-message-actions { display: flex; align-items: center; gap: 10px; min-height: 23px; margin-top: 4px; }
+.relay-group-message-actions button { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; padding: 3px 5px; border-radius: 5px; color: var(--muted-foreground); font-size: 10px; font-weight: 700; }
+.relay-group-message-actions button:hover, .relay-group-message-actions button:focus-visible { color: var(--accent-copper); background: color-mix(in srgb, var(--accent-copper) 10%, transparent); }
+.relay-group-reply-preview { display: flex; align-items: center; gap: 7px; min-width: 0; margin-bottom: 8px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--accent-copper) 24%, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--accent-copper) 6%, var(--panel)); color: var(--muted-foreground); font-size: 11px; }
+.relay-group-reply-preview span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relay-group-reply-preview button { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: 5px; }
+.relay-group-reply-preview button:hover, .relay-group-reply-preview button:focus-visible { color: var(--foreground); background: var(--background); }
+@keyframes relay-pulse { 50% { opacity: .4; transform: scale(.8); } }
+@media (max-width: 610px) { .relay-group-profile { position: absolute; inset: 0 0 0 auto; z-index: 2; width: min(310px, 86%); box-shadow: -15px 0 35px rgba(0,0,0,.2); } .relay-group-panel { width: 100vw; } .relay-group-timeline { padding: 16px; } .relay-group-header { padding: 15px; } .relay-group-footer { padding: 12px 15px 16px; } }
+@media (prefers-reduced-motion: reduce) { .relay-group-member, .relay-group-timeline { transition: none; scroll-behavior: auto; } .relay-group-connection--connecting { animation: none; } }
+
+/* Compact Inspector edition with flowers drawn by the chat botanical canvas system. */
+.relay-group-backdrop--inspector { position: relative; inset: auto; z-index: auto; display: block; width: 100%; height: 100%; min-height: 0; background: transparent; backdrop-filter: none; }
+.relay-group-panel--inspector { width: 100%; min-width: 0; max-width: none; height: 100%; border: 0; box-shadow: none; background: linear-gradient(165deg, color-mix(in srgb, var(--panel) 70%, var(--background)), var(--background) 35%); }
+.relay-group-panel--inspector .relay-group-header { gap: 8px; padding: 12px 11px 10px; background: color-mix(in srgb, var(--panel) 84%, var(--background)); }
+.relay-group-panel--inspector .relay-group-emblem { width: 32px; height: 32px; border-radius: 10px; }
+.relay-group-panel--inspector .relay-group-heading h2 { font-size: 18px; }
+.relay-group-panel--inspector .relay-group-heading p { font-size: 10px; }
+.relay-group-panel--inspector .relay-group-members { min-height: 63px; padding: 8px 10px; }
+.relay-group-panel--inspector .relay-group-member { min-width: 118px; max-width: 142px; }
+.relay-group-panel--inspector .relay-group-timeline { position: relative; isolation: isolate; padding: 14px 11px 18px; }
+.relay-flower-backdrop { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; pointer-events: none; user-select: none; }
+.relay-group-panel--inspector .relay-group-message { gap: 7px; margin-bottom: 14px; }
+.relay-group-panel--inspector .relay-group-message--reply { margin-left: 10px; padding-left: 9px; }
+.relay-group-panel--inspector .relay-group-reply-mark { left: -21px; }
+.relay-group-panel--inspector .relay-group-message-body { padding: 9px 10px; background: color-mix(in srgb, var(--panel) 91%, var(--background)); backdrop-filter: blur(4px); }
+.relay-group-panel--inspector .relay-group-message-body p { font-size: 12px; }
+.relay-group-panel--inspector .relay-group-footer { padding: 10px 11px 12px; }
+.relay-group-panel--inspector .relay-group-footer textarea { min-height: 58px; }
+.relay-group-panel--inspector .relay-group-actions .relay-group-muted { font-size: 10px; }
+.relay-group-panel--inspector .relay-group-profile { position: absolute; inset: 0 0 0 auto; z-index: 3; width: min(290px, 94%); box-shadow: -12px 0 32px rgba(30, 32, 35, .14); }

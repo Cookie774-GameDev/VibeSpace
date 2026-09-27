@@ -2189,6 +2189,15 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       throw error;
     }
   })();
+  // Preserve only the trusted caller identity for the exact active provider turn.
+  // The fallback chatId below is for OpenCode session continuity and is not Relay authority.
+  const gatewayTurn = request.chatId
+    ? {
+        requestId: request.requestId,
+        chatId: request.chatId,
+        nativeToolMessageIds: true as const,
+      }
+    : undefined;
   const chatId = request.chatId?.trim() || request.sessionId?.trim() || request.requestId;
   if ([...activeRequests.values()].some((active) => active.chatId === chatId)) {
     reportPersistentTurnFailure('turn_binding');
@@ -2348,7 +2357,12 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     failureStage = 'session_authority';
     if (
       gatewayAuthority &&
-      !bindToolGatewaySessionAuthority(session.sessionId, gatewayAuthority, request.signal)
+      !bindToolGatewaySessionAuthority(
+        session.sessionId,
+        gatewayAuthority,
+        request.signal,
+        gatewayTurn,
+      )
     ) {
       throw new Error('Tool Gateway session authority changed before dispatch.');
     }
@@ -2465,7 +2479,12 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     failureStage = 'session_authority';
     if (
       gatewayAuthority &&
-      !bindToolGatewaySessionAuthority(dispatch.sessionId, gatewayAuthority, request.signal)
+      !bindToolGatewaySessionAuthority(
+        dispatch.sessionId,
+        gatewayAuthority,
+        request.signal,
+        gatewayTurn,
+      )
     ) {
       await client.abort(dispatch.sessionId).catch(() => undefined);
       throw new Error('Tool Gateway session authority changed before dispatch.');
@@ -2652,7 +2671,12 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       if (approvals?.requestId !== request.requestId || questions?.requestId !== request.requestId) return;
       const existing = activeApprovalSessions.get(child);
       if (existing && existing.requestId !== request.requestId) return;
-      if (gatewayAuthority && !bindToolGatewaySessionAuthority(child, gatewayAuthority, request.signal)) return;
+      if (
+        gatewayAuthority &&
+        !bindToolGatewaySessionAuthority(child, gatewayAuthority, request.signal, gatewayTurn)
+      ) {
+        return;
+      }
       activeApprovalSessions.set(child, approvals);
       activeQuestionSessions.set(child, questions);
       boundChildSessions.add(child);

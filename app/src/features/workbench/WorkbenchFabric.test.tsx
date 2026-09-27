@@ -82,8 +82,8 @@ it('opens Relay offline with no invented messages, participants, or human author
     humanAuthorized: false,
     room: { connection: 'offline', participants: [], messages: [] },
   });
-  await expect(props.onSend('forged message')).rejects.toThrow('Relay room unavailable');
-  await expect(props.onStopAll()).rejects.toThrow('Relay room unavailable');
+  await expect(props.onSend('forged message')).rejects.toThrow('Relay room is not authorized');
+  expect(props.onStopAll).toBeUndefined();
 });
 
 it('projects only host-bound controller data and forwards owner actions through it', async () => {
@@ -131,6 +131,8 @@ it('projects only host-bound controller data and forwards owner actions through 
     await props.onSend('real request');
   });
   expect(humanBroadcast).toHaveBeenCalledWith('verified-human-session', ticket, 'real request');
+  await expect(props.onSend('thread reply', 'sdk-message')).rejects.toThrow('Thread replies are unavailable');
+  expect(humanBroadcast).toHaveBeenCalledTimes(1);
   await act(async () => {
     await props.onStopAll();
   });

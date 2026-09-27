@@ -56,3 +56,69 @@ For Desktop Commander sessions on this host, check whether rg resolves before ca
 - Related Files: none
 
 ---
+
+## [ERR-20260926-RL1] plugin3_sse_probe_unavailable
+
+**Logged**: 2026-09-26T22:22:44Z
+**Priority**: medium
+**Status**: pending
+**Area**: infra
+
+### Summary
+Plugin 3 MCP filesystem/browser probes were unavailable during the Relay implementation startup.
+
+### Error
+```
+SSE probe returned HTTP 429 for list_directory and HTTP 404 for browser_session.
+```
+
+### Context
+- The user explicitly requested Plugin 3 for the current VibeSpace implementation.
+- Local repository and CDP 9223 checks continued through shell and native Playwright after recording the tool failure.
+- No Plugin 3 result was treated as successful evidence.
+
+### Suggested Fix
+Retry only when the service is available; use the repository's authorized local/native tools for read-only and implementation work in the meantime.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: work/agent-relay-lean-20260926/TEAM_LOG.md
+
+---
+## [ERR-20260927-RL2] relay_room_profile_enrichment_masked_live_room
+
+**Logged**: 2026-09-27T01:10:00Z
+**Priority**: medium
+**Status**: resolved
+**Area**: native-ui
+
+### Summary
+Optional local profile enrichment rejected during a native room refresh, causing the panel to show Offline although the authenticated Relay room and linked reply were available.
+
+### Resolution
+Keep profile enrichment best-effort at the Workbench boundary. The room still renders verified upstream messages and uses “Not shared” for unavailable profile fields. Native Playwright then showed the linked OpenCode reply, owner post and clickable profile.
+
+### Metadata
+- Reproducible: observed on C1 after restart
+- Related Files: `app/src/features/workbench/WorkbenchFabric.tsx`, `app/src/lib/relay/relayNativeRoomClient.ts`, `work/agent-relay-lean-20260926/root/native-relay-final-visual.log`
+
+---
+
+## [ERR-20260927-RL3] concurrent_frontend_build_changed_tauri_assets
+
+**Logged**: 2026-09-27T01:10:00Z
+**Priority**: medium
+**Status**: resolved
+**Area**: build
+
+### Summary
+A separate frontend build replaced hashed Vite files while release Tauri compilation embedded the dist directory; `tauri::generate_context!` failed to read a removed asset.
+
+### Resolution
+Run the MSI build serially against a stable dist directory after the frontend build completes. Preserve the failed log and verify the resulting installer before reporting its size.
+
+### Metadata
+- Reproducible: observed once during concurrent builds
+- Related Files: `work/agent-relay-lean-20260926/root/release-msi-build-final.log`, `work/agent-relay-lean-20260926/root/release-msi-build-stable.log`
+
+---

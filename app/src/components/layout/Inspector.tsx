@@ -113,6 +113,7 @@ import {
 import { usePinnedStore } from '@/features/inspector/pinnedStore';
 import { openExternal, isTauri } from '@/lib/tauri';
 import { TokenReactiveLoading } from '@/features/loading-animation';
+import { InspectorRelayPanel } from './InspectorRelayPanel';
 
 export interface InspectorToolInventoryItem {
   id: string;
@@ -233,6 +234,7 @@ export function Inspector() {
   const themeLayoutTransition = useThemeLayoutTransition(LEGACY_INSPECTOR_TRANSITION);
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
   const projectId = useAuthStore((s) => s.projectId);
+  const activeRelayChatId = useUIStore((s) => s.activeChatId);
   const assistantName = useAssistantPersonaName();
   const toggleInspector = useUIStore((s) => s.toggleInspector);
   const [inspectorChatId, setInspectorChatId] = React.useState<string | null>(null);
@@ -424,16 +426,17 @@ export function Inspector() {
           {/* NEW — route-context strip. Renders nothing for chat/agents. */}
           <RouteContextStrip workspaceId={workspaceId} />
 
-          {/* 6-tab strip — icon-only triggers; labels live in tooltips. */}
+          {/* Icon-only tabs; labels live in tooltips. */}
           <TooltipProvider delayDuration={400}>
             <div className="px-3 pt-3">
-              <TabsList className="grid h-9 w-full grid-cols-6 gap-0.5 p-0.5">
+              <TabsList className="grid h-9 w-full grid-cols-7 gap-0.5 p-0.5">
                 <InspectorTab value="jarvis" icon={Sparkles} label="Jarvis" />
                 <InspectorTab value="today" icon={Sun} label="Today" />
                 <InspectorTab value="context" icon={Boxes} label="Context" />
                 <InspectorTab value="tools" icon={Wrench} label="Tools" />
                 <InspectorTab value="trace" icon={GitBranch} label="Trace" />
                 <InspectorTab value="live" icon={Radar} label="Active Work" />
+                <InspectorTab value="relay" icon={MessageSquare} label="Agent Relay" />
               </TabsList>
             </div>
           </TooltipProvider>
@@ -590,6 +593,9 @@ export function Inspector() {
           </TabsContent>
           <TabsContent value="live" className="m-0 flex-1 overflow-auto px-4 py-3 scrollbar-hidden">
             {activeTab === 'live' ? <InspectorActiveWorkPanel workspaceId={workspaceId} /> : null}
+          </TabsContent>
+          <TabsContent value="relay" className="m-0 flex-1 min-h-0 overflow-hidden">
+            {activeTab === 'relay' ? <InspectorRelayPanel key={activeRelayChatId ?? 'no-chat'} projectId={projectId} chatId={activeRelayChatId} onClose={() => setActiveTab('today')} /> : null}
           </TabsContent>
         </Tabs>
       </div>

@@ -13,6 +13,7 @@ import {
   readToolGatewayObservedExecutionAuthority,
   readToolGatewayRequestSignal,
   readToolGatewaySessionAuthority,
+  readToolGatewayTurnIdentity,
   releaseToolGatewaySessionAuthority,
 } from './toolGatewayAuthority';
 
@@ -159,6 +160,77 @@ describe('tool gateway session authority', () => {
     expect(captured?.aborted).toBe(true);
     expect(bindToolGatewaySessionAuthority('owned-session', claim, owner.signal)).toBe(false);
     expect(bindToolGatewaySessionAuthority('owned-session', claim, new AbortController().signal)).toBe(true);
+  });
+
+  it('exposes only the exact active request identity and clears it on abort or release', () => {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    const owner = new AbortController();
+    const turn = { requestId: 'provider-request-a', chatId: 'chat-a' } as const;
+    expect(bindToolGatewaySessionAuthority('turn-session', claim, owner.signal, turn)).toBe(true);
+    expect(readToolGatewayTurnIdentity('turn-session', turn.requestId)).toEqual(turn);
+    expect(readToolGatewayTurnIdentity('turn-session', 'provider-request-b')).toBeNull();
+    expect(
+      bindToolGatewaySessionAuthority('turn-session', claim, owner.signal, {
+        ...turn,
+        chatId: 'chat-b',
+      }),
+    ).toBe(false);
+
+    owner.abort();
+    expect(readToolGatewayTurnIdentity('turn-session', turn.requestId)).toBeNull();
+
+    const releasedTurn = { requestId: 'provider-request-c', chatId: 'chat-c' } as const;
+    expect(
+      bindToolGatewaySessionAuthority('released-turn-session', claim, undefined, releasedTurn),
+    ).toBe(true);
+    expect(
+      readToolGatewayTurnIdentity('released-turn-session', releasedTurn.requestId),
+    ).toEqual(releasedTurn);
+    releaseToolGatewaySessionAuthority('released-turn-session');
+    expect(
+      readToolGatewayTurnIdentity('released-turn-session', releasedTurn.requestId),
+    ).toBeNull();
+  });
+
+  it('clears request identity across account/workspace authority transitions', () => {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    const turn = { requestId: 'provider-request-scope', chatId: 'chat-scope' } as const;
+    expect(
+      bindToolGatewaySessionAuthority('scope-turn-session', claim, undefined, turn),
+    ).toBe(true);
+
+    useAuthStore.setState({ workspaceId: 'workspace-b' as WorkspaceId });
+    expect(readToolGatewayTurnIdentity('scope-turn-session', turn.requestId)).toBeNull();
+    useAuthStore.setState({ workspaceId: 'workspace-a' as WorkspaceId });
+    expect(readToolGatewayTurnIdentity('scope-turn-session', turn.requestId)).toBeNull();
+  });
+
+  it('accepts native OpenCode message IDs only on explicitly opted-in turns', () => {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    const codexTurn = { requestId: 'jreq_codex', chatId: 'chat-codex' } as const;
+    expect(bindToolGatewaySessionAuthority('codex-turn-session', claim, undefined, codexTurn)).toBe(true);
+    expect(readToolGatewayTurnIdentity('codex-turn-session', 'jreq_codex')).toEqual(codexTurn);
+    expect(readToolGatewayTurnIdentity('codex-turn-session', 'msg_tool_call')).toBeNull();
+
+    const openCodeTurn = {
+      requestId: 'jreq_opencode',
+      chatId: 'chat-opencode',
+      nativeToolMessageIds: true,
+    } as const;
+    expect(
+      bindToolGatewaySessionAuthority('opencode-turn-session', claim, undefined, openCodeTurn),
+    ).toBe(true);
+    expect(readToolGatewayTurnIdentity('opencode-turn-session', 'jreq_opencode')).toEqual({
+      requestId: 'jreq_opencode',
+      chatId: 'chat-opencode',
+    });
+    expect(readToolGatewayTurnIdentity('opencode-turn-session', 'msg_tool_call')).toEqual({
+      requestId: 'jreq_opencode',
+      chatId: 'chat-opencode',
+    });
+    expect(readToolGatewayTurnIdentity('opencode-turn-session', 'message_tool_call')).toBeNull();
+    expect(readToolGatewayTurnIdentity('opencode-turn-session', 'msg_')).toBeNull();
+    expect(readToolGatewayTurnIdentity('opencode-turn-session', 'msg_tool call')).toBeNull();
   });
 
   it('binds a one-shot mutation grant to the exact terminal action and run call', () => {

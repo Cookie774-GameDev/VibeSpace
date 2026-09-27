@@ -2,8 +2,12 @@ import * as React from 'react';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { readRelaySettings, subscribeRelaySettings } from '@/features/settings/relaySettings';
+import { createRelayProductionClient } from '@/lib/relay/relayProductionClient';
+import { RelayActiveContextHost } from '@/lib/relay/RelayActiveContextHost';
 import {
   createProductionToolGatewayDependencies,
+  installToolGatewayRelayPort,
   installToolGatewayRlmContextPort,
 } from './toolGatewayProduction';
 import { productionRlmContextTool } from '@/features/context/contextRlmProduction';
@@ -62,6 +66,16 @@ export function ToolGatewayHost({ runtime: suppliedRuntime }: ToolGatewayHostPro
     let unlisten: (() => void) | undefined;
     const queues = new Map<string, Promise<void>>();
     const uninstallRlmContext = installToolGatewayRlmContextPort(productionRlmContextTool);
+    const relayClient =
+      typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+        ? createRelayProductionClient({
+            invoke: (command, args) => invoke(command, args),
+            readSettings: readRelaySettings,
+            subscribeSettings: subscribeRelaySettings,
+            installPort: installToolGatewayRelayPort,
+          })
+        : null;
+    relayClient?.start();
 
     const dispatch = async (request: ToolGatewayRequest): Promise<void> => {
       const response = await appActivityLog.trace('semantic-tool', request, () =>
@@ -105,9 +119,12 @@ export function ToolGatewayHost({ runtime: suppliedRuntime }: ToolGatewayHostPro
       disposed = true;
       unlisten?.();
       uninstallRlmContext();
+      void relayClient?.stop();
       queues.clear();
     };
   }, [runtime]);
 
-  return null;
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? (
+    <RelayActiveContextHost />
+  ) : null;
 }

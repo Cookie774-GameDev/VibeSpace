@@ -21,6 +21,13 @@ export type ToolGatewayAuthorityClaim = Readonly<{
 
 const sessionAuthorities = new Map<string, ToolGatewayAuthorityClaim>();
 const sessionSignals = new Map<string, AbortSignal>();
+export type ToolGatewayTurnIdentity = Readonly<{ requestId: string; chatId: string }>;
+export type ToolGatewayTurnBinding = ToolGatewayTurnIdentity & Readonly<{ nativeToolMessageIds?: true }>;
+const sessionTurnIdentities = new Map<string, ToolGatewayTurnBinding>();
+const sessionTurnAbortHandlers = new Map<
+  string,
+  Readonly<{ signal: AbortSignal; listener: () => void }>
+>();
 const capturedAuthorityClaims = new WeakSet<object>();
 export type ToolGatewayObservedExecutionAuthority = Readonly<{
   executionIdentity: Readonly<ExecutionIdentity>;
@@ -124,6 +131,7 @@ function ensureScopeObserver(): void {
           observedScope.workspaceId !== next.workspaceId))
     ) {
       generation += 1;
+      clearAllTurnIdentities();
     }
     observedScope = next;
   });
@@ -137,6 +145,52 @@ function currentAuthority(): ToolGatewayAuthorityClaim | null {
 
 function sameAuthority(left: ToolGatewayAuthorityClaim, right: ToolGatewayAuthorityClaim): boolean {
   return left.generation === right.generation && sameScope(left.scope, right.scope);
+}
+
+function safeTurnIdentityPart(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    value.trim() === value &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function safeOpenCodeMessageId(value: string): boolean {
+  return /^msg_[A-Za-z0-9_-]{1,508}$/u.test(value);
+}
+
+function immutableTurnIdentity(value: ToolGatewayTurnBinding): ToolGatewayTurnBinding | null {
+  return safeTurnIdentityPart(value.requestId) &&
+    safeTurnIdentityPart(value.chatId) &&
+    (value.nativeToolMessageIds === undefined || value.nativeToolMessageIds === true)
+    ? Object.freeze({
+        requestId: value.requestId,
+        chatId: value.chatId,
+        ...(value.nativeToolMessageIds ? { nativeToolMessageIds: true as const } : {}),
+      })
+    : null;
+}
+
+function sameTurnIdentity(
+  left: ToolGatewayTurnBinding | undefined,
+  right: ToolGatewayTurnBinding | undefined,
+): boolean {
+  return left?.requestId === right?.requestId &&
+    left?.chatId === right?.chatId &&
+    left?.nativeToolMessageIds === right?.nativeToolMessageIds;
+}
+
+function clearTurnIdentity(sessionId: string): void {
+  const handler = sessionTurnAbortHandlers.get(sessionId);
+  if (handler) handler.signal.removeEventListener('abort', handler.listener);
+  sessionTurnAbortHandlers.delete(sessionId);
+  sessionTurnIdentities.delete(sessionId);
+}
+
+function clearAllTurnIdentities(): void {
+  for (const sessionId of sessionTurnIdentities.keys()) clearTurnIdentity(sessionId);
 }
 
 function sameStableAuthority(
@@ -222,7 +276,14 @@ export function bindToolGatewaySessionAuthority(
   sessionId: string,
   expected: ToolGatewayAuthorityClaim,
   signal?: AbortSignal,
+  turn?: ToolGatewayTurnBinding,
 ): boolean {
+  let boundTurn: ToolGatewayTurnBinding | undefined;
+  if (turn !== undefined) {
+    const validTurn = immutableTurnIdentity(turn);
+    if (!validTurn) return false;
+    boundTurn = validTurn;
+  }
   const current = currentAuthority();
   if (
     !current ||
@@ -234,11 +295,52 @@ export function bindToolGatewaySessionAuthority(
   }
   const existing = sessionAuthorities.get(sessionId);
   if (existing) {
-    return sameAuthority(existing, expected) && sessionSignals.get(sessionId) === signal;
+    return sameAuthority(existing, expected) && sessionSignals.get(sessionId) === signal &&
+      sameTurnIdentity(sessionTurnIdentities.get(sessionId), boundTurn);
   }
   sessionAuthorities.set(sessionId, expected);
   if (signal) sessionSignals.set(sessionId, signal);
+  if (boundTurn) {
+    sessionTurnIdentities.set(sessionId, boundTurn);
+    if (signal) {
+      const listener = () => {
+        if (
+          sessionSignals.get(sessionId) === signal &&
+          sessionTurnIdentities.get(sessionId) === boundTurn
+        ) {
+          clearTurnIdentity(sessionId);
+        }
+      };
+      sessionTurnAbortHandlers.set(sessionId, { signal, listener });
+      signal.addEventListener('abort', listener, { once: true });
+    }
+  }
   return true;
+}
+
+/** Returns a chat identity for the exact provider request, or an opted-in OpenCode tool message ID. */
+export function readToolGatewayTurnIdentity(
+  sessionId: string,
+  requestOrMessageId: string,
+): ToolGatewayTurnIdentity | null {
+  if (!safeTurnIdentityPart(requestOrMessageId)) return null;
+  const current = currentAuthority();
+  const bound = sessionAuthorities.get(sessionId);
+  const turn = sessionTurnIdentities.get(sessionId);
+  if (sessionSignals.get(sessionId)?.aborted) {
+    clearTurnIdentity(sessionId);
+    return null;
+  }
+  const exactRequest = turn?.requestId === requestOrMessageId;
+  const optedInOpenCodeMessage =
+    turn?.nativeToolMessageIds === true && safeOpenCodeMessageId(requestOrMessageId);
+  return current &&
+    bound &&
+    turn &&
+    (exactRequest || optedInOpenCodeMessage) &&
+    sameStableAuthority(current, bound)
+    ? Object.freeze({ requestId: turn.requestId, chatId: turn.chatId })
+    : null;
 }
 
 export function readToolGatewayRequestSignal(request: ToolGatewayRequest): AbortSignal | undefined {
@@ -310,6 +412,7 @@ export function readToolGatewaySessionAuthority(
 }
 
 export function releaseToolGatewaySessionAuthority(sessionId: string): void {
+  clearTurnIdentity(sessionId);
   sessionAuthorities.delete(sessionId);
   sessionSignals.delete(sessionId);
   observedExecutionAuthorities.delete(sessionId);
@@ -465,6 +568,7 @@ export function authorizeToolGatewayMutation(request: ToolGatewayRequest): boole
 
 export function clearToolGatewayAuthorityForTests(): void {
   ensureScopeObserver();
+  clearAllTurnIdentities();
   sessionAuthorities.clear();
   sessionSignals.clear();
   observedExecutionAuthorities.clear();

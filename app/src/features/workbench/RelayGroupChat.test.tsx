@@ -47,3 +47,45 @@ it('keeps posting disabled while Relay is offline and shows no invented particip
   expect((screen.getByRole('button', { name: 'Send to group' }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByText('Luna')).toBeNull();
 });
+
+it('opens an agent profile with verified shared details and makes unknown fields explicit', () => {
+  render(<RelayGroupChat open room={{ ...room, participants: [
+    room.participants[0],
+    { ...room.participants[1], harness: 'OpenCode', model: 'gpt-6-luna', task: 'Checking Relay', files: ['relay.ts'], latestPrompt: 'Share status' },
+  ] }} humanAuthorized onClose={() => {}} onSend={() => {}} />);
+  expect(screen.queryByRole('button', { name: 'Stop agents' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'View Luna profile' }));
+  const profile = screen.getByLabelText('Luna profile');
+  expect(profile.textContent).toContain('OpenCode');
+  expect(profile.textContent).toContain('gpt-6-luna');
+  expect(profile.textContent).toContain('relay.ts');
+  expect(profile.textContent).toContain('Share status');
+  fireEvent.click(screen.getByRole('button', { name: 'View You profile' }));
+  expect(screen.getByLabelText('You profile').textContent).toContain('Not shared');
+});
+
+it('shows linked reply context and sends an Inspector reply to the selected message', async () => {
+  const send = vi.fn().mockResolvedValue(undefined);
+  render(<RelayGroupChat open presentation="inspector" room={{ ...room, messages: [
+    room.messages[0],
+    { id: 'm2', participantId: 'human-1', text: 'Thanks.', at: 2000, kind: 'message', parentId: 'm1' },
+  ] }} humanAuthorized onClose={() => {}} onSend={send} />);
+  expect(screen.getByRole('region', { name: 'Agent Relay group chat' })).toBeTruthy();
+  expect(screen.getByText('To Luna: I am checking the tests.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Reply to Luna' }));
+  expect(screen.getByText(/Replying to Luna/)).toBeTruthy();
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message Agent Relay' }), { target: { value: 'What did you find?' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send to group' }));
+  await waitFor(() => expect(send).toHaveBeenCalledWith('What did you find?', 'm1'));
+  expect(screen.queryByText(/Replying to Luna/)).toBeNull();
+});
+
+it('cancels a selected thread before sending a new room message', async () => {
+  const send = vi.fn().mockResolvedValue(undefined);
+  render(<RelayGroupChat open room={room} humanAuthorized onClose={() => {}} onSend={send} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Reply to Luna' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel reply' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message Agent Relay' }), { target: { value: 'New topic' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send to group' }));
+  await waitFor(() => expect(send).toHaveBeenCalledWith('New topic'));
+});

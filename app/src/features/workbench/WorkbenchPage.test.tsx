@@ -5,25 +5,13 @@ import { WorkbenchPage } from './WorkbenchPage';
 import { useWorkbenchStore } from './store';
 import { usePluginStore } from '@/features/plugins';
 import { useAuthStore } from '@/stores/auth';
-import { useUIStore } from '@/stores/ui';
 import type { ProjectId, WorkspaceId } from '@/types/common';
 import { jarvisArtifactRepo } from '@/lib/db/jarvisRepositories';
-import {
-  closeRelayActiveContext,
-  openRelayActiveContext,
-  updateRelayActiveContext,
-} from '@/lib/tauri';
 import type { JarvisArtifactV1 } from '@/features/jarvis-command-center/types';
 
 const PROJECT_A = 'project-a' as ProjectId;
 const PROJECT_B = 'project-b' as ProjectId;
 const PROJECT_C = 'project-c' as ProjectId;
-const relayContextMocks = vi.hoisted(() => ({
-  open: vi.fn(async () => ({ ownerHandle: 'native-owner' })),
-  update: vi.fn(async () => undefined),
-  close: vi.fn(async () => undefined),
-}));
-
 vi.mock('@/features/terminals/TerminalView', () => ({
   TerminalView: ({ onReady }: { onReady?: (id: string) => void }) => {
     React.useEffect(() => onReady?.('pty-test-session'), [onReady]);
@@ -31,12 +19,7 @@ vi.mock('@/features/terminals/TerminalView', () => ({
   },
 }));
 
-vi.mock('@/lib/tauri', () => ({
-  openExternal: vi.fn(async () => undefined),
-  openRelayActiveContext: relayContextMocks.open,
-  updateRelayActiveContext: relayContextMocks.update,
-  closeRelayActiveContext: relayContextMocks.close,
-}));
+vi.mock('@/lib/tauri', () => ({ openExternal: vi.fn(async () => undefined) }));
 
 vi.mock('@/features/chat', () => ({
   ChatThread: () => <div data-testid="workbench-chat-thread">Chat thread</div>,
@@ -47,9 +30,6 @@ vi.mock('@/features/chat', () => ({
 
 describe('WorkbenchPage', () => {
   beforeEach(() => {
-    relayContextMocks.open.mockClear();
-    relayContextMocks.update.mockClear();
-    relayContextMocks.close.mockClear();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => null);
     window.localStorage.clear();
     useWorkbenchStore.getState().resetWorkbench();
@@ -84,7 +64,7 @@ describe('WorkbenchPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Agent Relay group chat' }));
     expect(screen.getByRole('dialog', { name: 'Agent Relay group chat' })).toBeTruthy();
-    expect(screen.getByText('One room · Project · Offline')).toBeTruthy();
+    expect(screen.getByText('Relay is offline')).toBeTruthy();
     expect(screen.getByText('No participants connected.')).toBeTruthy();
     expect(screen.getByLabelText('Message Agent Relay')).toHaveProperty('disabled', true);
     expect(screen.queryByRole('button', { name: 'Stop agents' })).toBeNull();
@@ -97,66 +77,9 @@ describe('WorkbenchPage', () => {
       }),
     );
 
-    expect(screen.getByText('One room · Project · Offline')).toBeTruthy();
+    expect(screen.getByText('Relay is offline')).toBeTruthy();
     expect(screen.getByLabelText('Message Agent Relay')).toHaveProperty('disabled', true);
     expect(screen.queryByRole('button', { name: 'Stop agents' })).toBeNull();
-  });
-
-  it('mirrors only the selected app scope and clears it when the selection changes', async () => {
-    useAuthStore.setState({
-      workspaceId: 'workspace-a' as WorkspaceId,
-      projectId: PROJECT_A,
-    });
-    useUIStore.setState({ activeChatId: 'chat-a' });
-    const { unmount } = render(<WorkbenchPage />);
-    fireEvent.click(screen.getByRole('button', { name: 'Open Agent Relay group chat' }));
-
-    await waitFor(() => expect(relayContextMocks.update).toHaveBeenCalled());
-    expect(openRelayActiveContext).toHaveBeenCalledOnce();
-    expect(updateRelayActiveContext).toHaveBeenLastCalledWith('native-owner', 1, {
-      accountId: 'local-account',
-      workspaceId: 'workspace-a',
-      projectId: PROJECT_A,
-      chatId: 'chat-a',
-    });
-    expect(screen.getByLabelText('Message Agent Relay')).toHaveProperty('disabled', true);
-    expect(screen.queryByRole('button', { name: 'Stop agents' })).toBeNull();
-
-    act(() => useAuthStore.setState({ localUserId: 'other-account' }));
-    await waitFor(() => expect(relayContextMocks.update).toHaveBeenCalledTimes(2));
-    expect(updateRelayActiveContext).toHaveBeenLastCalledWith('native-owner', 2, {
-      accountId: 'other-account',
-      workspaceId: 'workspace-a',
-      projectId: PROJECT_A,
-      chatId: 'chat-a',
-    });
-
-    act(() => useUIStore.setState({ activeChatId: 'chat-b' }));
-    await waitFor(() => expect(relayContextMocks.update).toHaveBeenCalledTimes(3));
-    expect(updateRelayActiveContext).toHaveBeenLastCalledWith('native-owner', 3, {
-      accountId: 'other-account',
-      workspaceId: 'workspace-a',
-      projectId: PROJECT_A,
-      chatId: 'chat-b',
-    });
-
-    act(() => useAuthStore.setState({ projectId: PROJECT_B }));
-    await waitFor(() => expect(relayContextMocks.update).toHaveBeenCalledTimes(4));
-    expect(updateRelayActiveContext).toHaveBeenLastCalledWith('native-owner', 4, {
-      accountId: 'other-account',
-      workspaceId: 'workspace-a',
-      projectId: PROJECT_B,
-      chatId: 'chat-b',
-    });
-    expect(screen.getByLabelText('Message Agent Relay')).toHaveProperty('disabled', true);
-    expect(screen.queryByRole('button', { name: 'Stop agents' })).toBeNull();
-
-    act(() => useAuthStore.setState({ projectId: null }));
-    await waitFor(() => expect(relayContextMocks.update).toHaveBeenCalledTimes(5));
-    expect(updateRelayActiveContext).toHaveBeenLastCalledWith('native-owner', 5, null);
-    unmount();
-    await waitFor(() => expect(relayContextMocks.close).toHaveBeenCalledWith('native-owner', 6));
-    expect(closeRelayActiveContext).toHaveBeenCalledOnce();
   });
 
   it('persists an edited Workbench name through the store', () => {

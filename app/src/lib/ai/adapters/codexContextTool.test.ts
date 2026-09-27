@@ -10,12 +10,13 @@ const state = vi.hoisted(() => ({
   })),
   execute: vi.fn(async () => ({ ok: true, data: { evidence: 'verified' } })),
   release: vi.fn(), observed: vi.fn(() => true),
+  bind: vi.fn(() => state.authorized),
   grantMutation: vi.fn(() => vi.fn()),
 }));
 vi.mock('@/features/context/rlmPreferenceStore', () => ({ resolveRlmEnabled: () => ({ enabled: state.enabled }) }));
 vi.mock('@/lib/harness/toolGatewayAuthority', () => ({
   captureToolGatewayAuthorityClaim: state.capture,
-  bindToolGatewaySessionAuthority: () => state.authorized,
+  bindToolGatewaySessionAuthority: state.bind,
   bindToolGatewayObservedExecutionAuthority: state.observed,
   authorizeToolGatewayRequest: () => state.authorized,
   grantToolGatewayMutationForRequest: state.grantMutation,
@@ -92,6 +93,9 @@ it('advertises only the requested semantic MCP tools and routes them through the
   }))!;
   expect(bridge.dynamicTools?.map((tool) => tool.name)).toEqual(['mcp_list', 'mcp_run']);
   bridge.bind('mcp-thread', identity, 'mcp-generation');
+  expect(state.bind).toHaveBeenCalledWith(
+    'mcp-thread', expect.anything(), undefined, { requestId: 'request', chatId: 'chat' },
+  );
   await expect(bridge.executeTool?.('mcp_list', {}, 'mcp-list-call')).resolves.toMatchObject({ success: true });
   expect(state.execute).toHaveBeenCalledWith(expect.objectContaining({
     sessionId: 'mcp-thread', tool: 'mcp.list', args: {},

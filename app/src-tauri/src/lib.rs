@@ -43,6 +43,8 @@ use std::{sync::Mutex, time::Duration};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
+mod activity_diagnostics;
+mod activity_diagnostics_store;
 mod agent_coordination;
 mod branding;
 mod browser_chat_surface;
@@ -67,13 +69,14 @@ mod model_foundry;
 mod model_foundry_download;
 mod model_foundry_training;
 mod monochrome_evidence;
+mod native_app_surface;
 mod ollama_http;
 mod pets;
 mod playwright_feature_pack;
 mod playwright_feature_pack_commands;
 mod preview;
-mod relay_engine;
 mod relay_active_context;
+mod relay_engine;
 mod renderer_watchdog;
 pub mod runtime_profile;
 #[cfg(debug_assertions)]
@@ -81,16 +84,13 @@ mod sik_smoke;
 mod siyuan;
 mod static_server;
 mod terminal;
-mod terminal_clipboard;
 pub mod terminal_cli;
+mod terminal_clipboard;
 pub mod terminal_continuity;
 mod terminal_peer_fabric;
 mod terminal_snapshot;
 mod wallpaper_master;
 mod workbench_browser_surface;
-mod native_app_surface;
-mod activity_diagnostics;
-mod activity_diagnostics_store;
 
 /// Sanity-check command. The JS bridge can call this during startup to verify
 /// invoke() round-trips. Wire it in as needed; it returns a friendly string.
@@ -168,19 +168,39 @@ fn global_dictation_shortcut() -> Shortcut {
 }
 
 #[tauri::command]
-fn set_global_dictation_enabled(app: tauri::AppHandle, enabled: bool, shortcut: Option<String>) -> Result<(), String> {
+fn set_global_dictation_enabled(
+    app: tauri::AppHandle,
+    enabled: bool,
+    shortcut: Option<String>,
+) -> Result<(), String> {
     let state = app.state::<GlobalDictationShortcutState>();
-    let mut current = state.enabled.lock().map_err(|_| "Dictation state is unavailable.")?;
-    let mut binding = state.binding.lock().map_err(|_| "Dictation binding is unavailable.")?;
-    let desired = if enabled { Some(dictation_shortcut::parse(shortcut.as_deref())?) } else { None };
-    if *binding == desired { return Ok(()); }
+    let mut current = state
+        .enabled
+        .lock()
+        .map_err(|_| "Dictation state is unavailable.")?;
+    let mut binding = state
+        .binding
+        .lock()
+        .map_err(|_| "Dictation binding is unavailable.")?;
+    let desired = if enabled {
+        Some(dictation_shortcut::parse(shortcut.as_deref())?)
+    } else {
+        None
+    };
+    if *binding == desired {
+        return Ok(());
+    }
     // Register the replacement first: a conflict must leave the old shortcut working.
     if let Some(next) = desired {
-        app.global_shortcut().register(next).map_err(|_| "Could not register dictation shortcut. It may be in use by another app.".to_string())?;
+        app.global_shortcut().register(next).map_err(|_| {
+            "Could not register dictation shortcut. It may be in use by another app.".to_string()
+        })?;
     }
     if let Some(previous) = *binding {
         if let Err(error) = app.global_shortcut().unregister(previous) {
-            if let Some(next) = desired { let _ = app.global_shortcut().unregister(next); }
+            if let Some(next) = desired {
+                let _ = app.global_shortcut().unregister(next);
+            }
             return Err(format!("Could not replace dictation shortcut: {error}"));
         }
     }
@@ -329,7 +349,11 @@ enum DictationRoute {
 
 /// Never returns a Win+H / OS-dictation path.
 fn dictation_route(editable_or_visible: bool) -> DictationRoute {
-    if editable_or_visible { DictationRoute::Overlay } else { DictationRoute::Ignore }
+    if editable_or_visible {
+        DictationRoute::Overlay
+    } else {
+        DictationRoute::Ignore
+    }
 }
 
 fn handle_global_dictation_shortcut(app: &tauri::AppHandle) {
@@ -345,10 +369,15 @@ fn handle_global_dictation_shortcut(app: &tauri::AppHandle) {
     // UI Automation can cross process boundaries: never block the shortcut/UI
     // thread or queue multiple probes while a provider is responding.
     static PROBING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if PROBING.swap(true, std::sync::atomic::Ordering::SeqCst) { return; }
+    if PROBING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Some(window) = app.get_webview_window("dictation").filter(|window| window.is_visible().unwrap_or(false)) {
+        if let Some(window) = app
+            .get_webview_window("dictation")
+            .filter(|window| window.is_visible().unwrap_or(false))
+        {
             // The take owns its ORIGINAL field. Finishing never recaptures or
             // clears it when the user has moved to another page/application.
             let _ = window.emit("jarvis:global-dictation-toggle", ());
@@ -357,7 +386,7 @@ fn handle_global_dictation_shortcut(app: &tauri::AppHandle) {
         }
         match dictation_route(dictation::capture_target()) {
             DictationRoute::Overlay => show_dictation_window(&app),
-            DictationRoute::Ignore => {},
+            DictationRoute::Ignore => {}
         }
         PROBING.store(false, std::sync::atomic::Ordering::SeqCst);
     });
@@ -444,9 +473,14 @@ fn run_ordinary(
     #[cfg(target_os = "windows")]
     {
         let windows = &mut tauri_context.config_mut().app.windows;
-        let main_args = windows.iter().find(|window| window.label == "main")
+        let main_args = windows
+            .iter()
+            .find(|window| window.label == "main")
             .and_then(|window| window.additional_browser_args.clone());
-        if let Some(window) = windows.iter_mut().find(|window| window.label == "dictation") {
+        if let Some(window) = windows
+            .iter_mut()
+            .find(|window| window.label == "dictation")
+        {
             window.additional_browser_args = main_args;
             // Keep old local dev window overrides at the current compact size.
             window.width = 120.0;
@@ -504,6 +538,7 @@ fn run_ordinary(
         .manage(desktop_connector::DesktopConnectorState::default())
         .manage(relay_engine::RelayEngineState::default())
         .manage(relay_active_context::RelayActiveContextState::default())
+        .manage(relay_active_context::RelayPolicyState::default())
         .manage(pets::PetWindowState::default())
         .manage(jarvis_ambient_overlay::JarvisAmbientOverlayState::default())
         .manage(terminal_snapshot::PersistenceFlushState::default())
@@ -700,6 +735,14 @@ fn run_ordinary(
             relay_engine::relay_engine_start,
             relay_engine::relay_engine_stop,
             relay_engine::relay_engine_status,
+            relay_engine::relay_policy_set,
+            relay_engine::relay_policy_snapshot,
+            relay_engine::relay_participant_bind,
+            relay_engine::relay_tools_list,
+            relay_engine::relay_participant_call,
+            relay_engine::relay_human_room_snapshot,
+            relay_engine::relay_human_message,
+            relay_engine::relay_participant_unbind,
             relay_active_context::relay_active_context_open,
             relay_active_context::relay_active_context_update,
             relay_active_context::relay_active_context_close,
@@ -1478,9 +1521,8 @@ wallpaper_master::wallpaper_full_cache_path";
         assert!(ordinary.contains(
             ".manage(harness::managed_codex_install::ManagedCodexInstallState::default())"
         ));
-        assert!(ordinary.contains(
-            ".manage(harness::managed_codex_route::ManagedCodexRouteState::default())"
-        ));
+        assert!(ordinary
+            .contains(".manage(harness::managed_codex_route::ManagedCodexRouteState::default())"));
         assert!(ordinary.contains("harness::codex_server::codex_app_server_start,"));
         assert!(ordinary.contains("harness::codex_server::codex_app_server_stream,"));
         assert!(ordinary.contains("harness::codex_server::codex_app_server_write,"));
@@ -1621,7 +1663,10 @@ wallpaper_master::wallpaper_full_cache_path";
     fn global_dictation_shortcut_is_ctrl_shift_space_opening_the_vibespace_overlay() {
         let config = global_dictation_shortcut_config();
 
-        assert_eq!(config.modifiers, Some(Modifiers::CONTROL | Modifiers::SHIFT));
+        assert_eq!(
+            config.modifiers,
+            Some(Modifiers::CONTROL | Modifiers::SHIFT)
+        );
         assert_eq!(config.code, Code::Space);
         // The VibeSpace overlay is the ONLY global dictation path - the
         // shortcut must never route through OS dictation (Windows Win+H).

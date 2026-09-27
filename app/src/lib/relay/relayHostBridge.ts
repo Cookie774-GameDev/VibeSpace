@@ -81,6 +81,14 @@ export type RelayGroupToolName = (typeof RELAY_GROUP_TOOL_NAMES)[number];
 export interface RelayParticipantHandle {
   readonly role: 'agent' | 'human';
   readonly sessionId: string;
+  /** Optional catalog actually discovered from the bound upstream MCP server. */
+  readonly availableToolNames?: readonly string[];
+  /** Exact pinned upstream catalog, narrowed again before model exposure. */
+  readonly availableTools?: readonly Readonly<{
+    name: string;
+    description?: string;
+    inputSchema: unknown;
+  }>[];
   call(tool: string, args: unknown): Promise<unknown>;
 }
 

@@ -1,4 +1,5 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { ArrowDown, ArrowUp, Eye, EyeOff, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -7,10 +8,107 @@ import { chatActivityPreferences } from '@/features/chat/activity/chatActivityPr
 import { TokenOptimizationGlobalSettings } from '@/features/token-optimizer';
 import { BrowserAgentSettings } from './BrowserAgentSettings';
 import { RecycleBinSettings } from '@/features/recycle-bin/RecycleBinSettings';
-import { readRelaySettings, writeRelaySettings } from '../relaySettings';
+import { readRelaySettings, subscribeRelaySettings, writeRelaySettings } from '../relaySettings';
+
+type RelayEngineHealth =
+  'checking' | 'healthy' | 'unhealthy' | 'unavailable' | 'unknown' | 'desktop-only';
+
+async function testNativeRelayExchange(): Promise<number> {
+  const startedAt = performance.now();
+  const native = await invoke<{ generation: number; context: {
+    accountId: string; workspaceId: string | null; projectId: string; chatId: string;
+  } | null }>('relay_active_context_snapshot');
+  const context = native?.context;
+  if (!context?.accountId || !context.workspaceId || !context.projectId || !context.chatId ||
+      !Number.isSafeInteger(native.generation)) throw new Error('Select a native chat to test Relay.');
+  const sessionId = `vibespace-human-test:${context.chatId}`;
+  const settings = readRelaySettings();
+  if (settings.scope === 'off' || settings.excludedParticipants.includes(context.projectId) ||
+      settings.excludedParticipants.includes(sessionId)) throw new Error('Relay is off or this chat is excluded.');
+  await invoke('relay_engine_start');
+  let binding: { bindingId: string; relayAgentId: string } | null = null;
+  try {
+    binding = await invoke<{ bindingId: string; relayAgentId: string }>('relay_participant_bind', {
+      scope: context, sessionId, generation: native.generation, agentName: 'You', role: 'human',
+    });
+    const text = `VibeSpace Relay connection test ${crypto.randomUUID()}`;
+    const receipt = await invoke<{ messageId: string }>('relay_human_message', {
+      bindingId: binding.bindingId, generation: native.generation, text,
+    });
+    const room = await invoke<{ channel: string; messages: Array<{
+      id: string; authorId: string; text: string;
+    }> }>('relay_human_room_snapshot', {
+      bindingId: binding.bindingId, generation: native.generation, limit: 50,
+    });
+    if (room.channel !== 'vibespace' || !room.messages?.some((message) =>
+      message.id === receipt.messageId && message.authorId === binding?.relayAgentId && message.text === text)) {
+      throw new Error('Relay did not return the authenticated test message.');
+    }
+    return Math.round(performance.now() - startedAt);
+  } finally {
+    if (binding) await invoke('relay_participant_unbind', {
+      bindingId: binding.bindingId, generation: native.generation,
+    }).catch(() => undefined);
+  }
+}
+
+function relayEngineHealthMessage(status: RelayEngineHealth): string {
+  switch (status) {
+    case 'checking':
+      return 'Checking local Relay backend health.';
+    case 'healthy':
+      return 'Local Relay backend health check passed. This does not verify a participant exchange.';
+    case 'unhealthy':
+      return 'Local Relay backend is running but failed its health check.';
+    case 'unavailable':
+      return 'Local Relay backend is stopped or its status could not be read.';
+    case 'desktop-only':
+      return 'Local Relay backend health is available in the native VibeSpace app.';
+    case 'unknown':
+      return 'This app build did not return a verifiable Relay backend health status.';
+  }
+}
 
 export function General() {
   const [relaySettings, setRelaySettings] = useState(readRelaySettings);
+  const [relayEngineHealth, setRelayEngineHealth] = useState<RelayEngineHealth>('checking');
+  const [relayTestState, setRelayTestState] = useState<'idle' | 'running' | 'passed' | 'failed'>('idle');
+  const [relayTestDetail, setRelayTestDetail] = useState('');
+  useEffect(() => subscribeRelaySettings(setRelaySettings), []);
+  useEffect(() => {
+    let active = true;
+    const refreshRelayEngineHealth = async () => {
+      if (!('__TAURI_INTERNALS__' in window)) {
+        setRelayEngineHealth('desktop-only');
+        return;
+      }
+      setRelayEngineHealth('checking');
+      try {
+        const result = await invoke<unknown>('relay_engine_status');
+        if (!active) return;
+        if (!result || typeof result !== 'object') {
+          setRelayEngineHealth('unknown');
+          return;
+        }
+        const status = result as Record<string, unknown>;
+        if (status.running === false) setRelayEngineHealth('unavailable');
+        else if (status.running === true && status.healthy === true)
+          setRelayEngineHealth('healthy');
+        else if (status.running === true && status.healthy === false)
+          setRelayEngineHealth('unhealthy');
+        else setRelayEngineHealth('unknown');
+      } catch {
+        if (active) setRelayEngineHealth('unavailable');
+      }
+    };
+
+    void refreshRelayEngineHealth();
+    window.addEventListener('focus', refreshRelayEngineHealth);
+    return () => {
+      active = false;
+      window.removeEventListener('focus', refreshRelayEngineHealth);
+    };
+  }, []);
   const state = useSyncExternalStore(
     taskbarUsageStore.subscribe,
     taskbarUsageStore.getSnapshot,
@@ -62,7 +160,9 @@ export function General() {
           <span>
             <span className="block text-secondary text-foreground">Collaboration</span>
             <span className="block text-metadata text-muted-foreground">
-              Off disables Relay participation. Project keeps conversations within one project.
+              Off disables Relay participation. Project is recommended for first use. Entire app
+              connects enabled projects in this account, workspace, and profile without granting
+              extra file access.
             </span>
           </span>
           <select
@@ -78,7 +178,7 @@ export function General() {
             }}
           >
             <option value="off">Off</option>
-            <option value="project">Project</option>
+            <option value="project">Project (recommended)</option>
             <option value="entire-app">Entire app</option>
           </select>
         </label>
@@ -127,21 +227,42 @@ export function General() {
             <div>
               <p className="text-secondary font-medium text-foreground">Connection status</p>
               <p className="text-metadata text-muted-foreground">
-                Live Relay health is not available in this settings session yet.
+                {relayTestState === 'passed'
+                  ? relayTestDetail
+                  : relayTestState === 'running'
+                    ? 'Sending and reading an authenticated test message…'
+                    : relayTestState === 'failed'
+                      ? relayTestDetail
+                      : 'No authenticated Relay exchange has been verified in this settings session.'}
+              </p>
+              <p className="mt-1 text-metadata text-muted-foreground">
+                {relayEngineHealthMessage(relayEngineHealth)}
               </p>
             </div>
             <Button
               type="button"
               variant="secondary"
-              disabled
-              title="Requires a live authenticated Relay exchange"
+              disabled={relaySettings.scope === 'off' || relayTestState === 'running' || !('__TAURI_INTERNALS__' in window)}
+              onClick={() => {
+                setRelayTestState('running');
+                void testNativeRelayExchange()
+                  .then((durationMs) => {
+                    setRelayTestState('passed');
+                    setRelayTestDetail(`Authenticated send/read round trip passed in ${durationMs} ms. Agent reply was not tested.`);
+                  })
+                  .catch((error) => {
+                    setRelayTestState('failed');
+                    setRelayTestDetail(error instanceof Error ? error.message : 'Relay test failed.');
+                  });
+              }}
+              title="Send and read a test message in the active Relay project"
             >
               Test connection
             </Button>
           </div>
           <p className="mt-2 text-metadata text-muted-foreground">
-            Testing will be enabled when VibeSpace can verify an authenticated message and reply; a
-            running process alone is not a connection test.
+            The test sends one message as you and reads it back through the local Relay backend.
+            It does not verify that another agent responded.
           </p>
         </div>
       </section>

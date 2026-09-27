@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { Link2, MessageCircleMore } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { invoke } from '@tauri-apps/api/core';
 import type { createRelayRoomController } from '@/lib/relay/relayRoomController';
+import { createRelayNativeRoomClient } from '@/lib/relay/relayNativeRoomClient';
+import { readLocalRelayProfiles } from '@/lib/relay/relayLocalProfiles';
+import { readRelaySettings } from '@/features/settings/relaySettings';
 import { useAuthStore } from '@/stores/auth';
 import { fromLeaves } from '@/features/terminals/paneTree';
 import { readLiveTargetSnapshot } from '@/features/instant-command/targetSnapshot';
@@ -48,19 +52,37 @@ export function readWorkbenchFabricTargets() {
 export function WorkbenchFabric({ relayController }: { relayController?: RelayRoomController }) {
   const projectId = useAuthStore((state) => state.projectId);
   const [relayOpen, setRelayOpen] = useState(false);
+  const nativeRelayClient = useMemo(() =>
+    !relayController && typeof window !== 'undefined'
+      ? createRelayNativeRoomClient({
+          invoke: (command, args) => invoke(command, args),
+          readSettings: readRelaySettings,
+          readLocalProfiles: () => readLocalRelayProfiles(projectId).catch(() => []),
+        })
+      : null,
+  [relayController, projectId]);
+  const activeRelay = relayController ?? nativeRelayClient;
   const subscribeRelay = useCallback(
-    (listener: () => void) => relayController?.subscribe(listener) ?? (() => {}),
-    [relayController],
+    (listener: () => void) => activeRelay?.subscribe(listener) ?? (() => {}),
+    [activeRelay],
   );
   const readRelay = useCallback(
-    () => relayController?.getSnapshot() ?? UNBOUND_RELAY_STATE,
-    [relayController],
+    () => activeRelay?.getSnapshot() ?? UNBOUND_RELAY_STATE,
+    [activeRelay],
   );
   const relayState = useSyncExternalStore(subscribeRelay, readRelay, readRelay);
 
   useEffect(() => {
-    if (relayOpen && relayController) void relayController.refresh();
-  }, [relayOpen, relayController]);
+    if (!relayOpen || !activeRelay) return;
+    void activeRelay.refresh();
+    // A visible room may refresh its read-only upstream snapshot without waking any model.
+    const timer = window.setInterval(() => void activeRelay.refresh(), 5000);
+    const onFocus = () => void activeRelay.refresh();
+    window.addEventListener('focus', onFocus);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', onFocus); };
+  }, [relayOpen, activeRelay]);
+
+  useEffect(() => () => nativeRelayClient?.dispose(), [nativeRelayClient]);
 
   return (
     <>
@@ -78,7 +100,7 @@ export function WorkbenchFabric({ relayController }: { relayController?: RelayRo
         size="icon-sm"
         aria-label="Open Agent Relay group chat"
         title="Agent Relay group chat"
-        onClick={() => setRelayOpen(true)}
+        onClick={() => { setRelayOpen(true); void activeRelay?.refresh(); }}
       >
         <MessageCircleMore />
       </Button>
@@ -98,14 +120,18 @@ export function WorkbenchFabric({ relayController }: { relayController?: RelayRo
             room={relayState.room}
             humanAuthorized={relayState.humanAuthorized}
             onClose={() => setRelayOpen(false)}
-            onSend={async (text) => {
-              if (!relayController) throw new Error('Relay room unavailable');
-              await relayController.send(text);
+            onSend={async (text, parentMessageId) => {
+              if (relayController) {
+                if (parentMessageId) throw new Error('Thread replies are unavailable in this room.');
+                await relayController.send(text);
+              } else if (nativeRelayClient) {
+                await nativeRelayClient.send(text, parentMessageId);
+              } else {
+                throw new Error('Relay room unavailable');
+              }
             }}
-            onStopAll={async () => {
-              if (!relayController) throw new Error('Relay room unavailable');
-              await relayController.stopAll();
-            }}
+            onRefresh={() => activeRelay?.refresh()}
+            onStopAll={relayController ? () => relayController.stopAll() : undefined}
           />,
           document.body,
         )}
