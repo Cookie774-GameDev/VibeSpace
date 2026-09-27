@@ -27,6 +27,7 @@ import {
   type FasterWhisperRecorder,
 } from '@/features/composer-stt/composerSttService';
 import { FasterWhisperManager } from '@/features/composer-stt/fasterWhisperManager';
+import { FASTER_WHISPER_MODELS } from '@/features/composer-stt/catalog';
 import { getAudioContextCtor } from '@/features/composer-stt/audio';
 import { createDeepgramDictationSession, type DictationEvents } from './deepgramDictation';
 import {
@@ -200,11 +201,21 @@ async function createWebSpeechSession(
     }
     checkingLocalFallback = true;
     fallbackCheck = (async () => {
-      const model = getFasterWhisperModel();
-      const ready = await fasterWhisperReady(model);
+      const selectedModel = getFasterWhisperModel();
+      let model: ReturnType<typeof getFasterWhisperModel> | null = null;
+      for (const candidate of [
+        selectedModel,
+        ...FASTER_WHISPER_MODELS.map(({ id }) => id).filter((id) => id !== selectedModel),
+      ]) {
+        if (await fasterWhisperReady(candidate)) {
+          model = candidate;
+          break;
+        }
+        if (done) return;
+      }
       if (done) return;
       checkingLocalFallback = false;
-      if (!ready) {
+      if (!model) {
         events.onError?.(formatGlobalDictationSessionFailure(message));
         teardown();
         return;

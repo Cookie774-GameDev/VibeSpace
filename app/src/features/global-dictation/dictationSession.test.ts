@@ -104,6 +104,7 @@ describe('createGlobalDictationSession engine resolution', () => {
     vi.clearAllMocks();
     mocks.isTauri.value = true;
     mocks.composer.provider = 'system';
+    mocks.composer.model = 'small';
     mocks.voiceService.isSupported.mockReturnValue(false);
     mocks.voiceService.startListening.mockReturnValue(true);
     mocks.voiceHandlers.clear();
@@ -238,6 +239,37 @@ describe('createGlobalDictationSession engine resolution', () => {
       expect(stopMeter).toHaveBeenCalledOnce();
       expect(onClose).toHaveBeenCalledOnce();
       expect(readSpeechHistory()[0]).toMatchObject({ text: 'local text', status: 'completed' });
+    } finally {
+      session.cancel();
+    }
+  });
+
+  it('uses an installed Whisper model when the saved model is unavailable during a system network failure', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    mocks.composer.model = 'whisper-small-en-q8';
+    mocks.fasterWhisper.checkInstalled.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const onStatus = vi.fn();
+    const onFinal = vi.fn();
+    const onError = vi.fn();
+    const session = await createSelectedSttSession({ onStatus, onFinal, onError });
+    try {
+      mocks.voiceHandlers.get('voice:error')?.({
+        kind: 'network',
+        message: formatVoiceFailure('network'),
+      } as never);
+      await vi.waitFor(() =>
+        expect(onStatus).toHaveBeenCalledWith(expect.stringContaining('whisper-base-en-q5')),
+      );
+      await session.stop();
+      expect(mocks.fasterWhisper.checkInstalled).toHaveBeenNthCalledWith(1, 'whisper-small-en-q8');
+      expect(mocks.fasterWhisper.checkInstalled).toHaveBeenNthCalledWith(2, 'whisper-base-en-q5');
+      expect(mocks.composer.transcribeFasterWhisper).toHaveBeenCalledWith(
+        expect.any(Blob),
+        'whisper-base-en-q5',
+      );
+      expect(onFinal).toHaveBeenCalledWith('local text');
+      expect(onError).not.toHaveBeenCalled();
+      expect(mocks.composer.model).toBe('whisper-small-en-q8');
     } finally {
       session.cancel();
     }
