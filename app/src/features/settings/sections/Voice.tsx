@@ -126,6 +126,10 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
   const setVoiceMainAgentProvider = useAuthStore((s) => s.setVoiceMainAgentProvider);
   const voiceWorkerProvider = useAuthStore((s) => s.voiceWorkerProvider);
   const setVoiceWorkerProvider = useAuthStore((s) => s.setVoiceWorkerProvider);
+  const voiceMiniBarEnabled = useAuthStore((s) => s.voiceMiniBarEnabled);
+  const setVoiceMiniBarEnabled = useAuthStore((s) => s.setVoiceMiniBarEnabled);
+  const voiceStartFreshChat = useAuthStore((s) => s.voiceStartFreshChat);
+  const setVoiceStartFreshChat = useAuthStore((s) => s.setVoiceStartFreshChat);
   const voicePreset = useAuthStore((s) => s.voicePreset);
   const setVoicePreset = useAuthStore((s) => s.setVoicePreset);
   const voiceEngine = useAuthStore((s) => s.voiceEngine);
@@ -453,6 +457,33 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
               <option value="opencode">OpenCode</option>
             </select>
           </label>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="text-secondary text-foreground">
+            When Jarvis voice opens
+            <select
+              aria-label="Jarvis voice chat on open"
+              className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+              value={voiceStartFreshChat ? 'new' : 'resume'}
+              onChange={(event) => setVoiceStartFreshChat(event.target.value === 'new')}
+            >
+              <option value="resume">Resume the same provider chat</option>
+              <option value="new">Start a new chat</option>
+            </select>
+          </label>
+          <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-panel px-3 py-2">
+            <label htmlFor="voice-mini-bar-toggle" className="text-sm text-foreground">
+              Typed mini bar
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                Type a voice task and hear Jarvis reply. Off by default.
+              </span>
+            </label>
+            <Switch
+              id="voice-mini-bar-toggle"
+              checked={voiceMiniBarEnabled}
+              onCheckedChange={setVoiceMiniBarEnabled}
+            />
+          </div>
         </div>
       </section>
       <section className="flex flex-col gap-4">

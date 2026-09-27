@@ -34,7 +34,9 @@ type VoiceTurnCancellationHandle = Readonly<{
 let activeVoiceTurnCancellation: VoiceTurnCancellationHandle | null = null;
 const JARVIS_STREAM_SYNTH_AHEAD = 2;
 const JARVIS_PREVIEW_ASSET = '/voice/jarvis-high-preview.mp3';
+const JARVIS_ACK_ASSET = '/voice/jarvis-on-it.wav';
 let bundledPreviewAudio: HTMLAudioElement | null = null;
+let bundledAcknowledgmentAudio: HTMLAudioElement | null = null;
 
 /** Monotonic session id — bumped when the voice module opens; zeroed on close. */
 let activeVoiceSessionId = 0;
@@ -243,6 +245,8 @@ function stopPlaybackOnly(): void {
   jarvisHighLocalProvider.stop();
   bundledPreviewAudio?.pause();
   bundledPreviewAudio = null;
+  bundledAcknowledgmentAudio?.pause();
+  bundledAcknowledgmentAudio = null;
 }
 
 /** Bumped on every new preview or explicit cancel — in-flight previews check this. */
@@ -446,6 +450,22 @@ export async function speakWithSettings(
   const engine = options.voiceEngine ?? state.voiceEngine ?? 'jarvis';
   const voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
+
+  if (trimmed === 'On it.' && engine === 'jarvis' && voicePreset === 'jarvis-prime') {
+    bundledAcknowledgmentAudio?.pause();
+    const audio = new Audio(JARVIS_ACK_ASSET);
+    bundledAcknowledgmentAudio = audio;
+    const stop = () => audio.pause();
+    options.signal?.addEventListener('abort', stop, { once: true });
+    try {
+      await audio.play();
+      return;
+    } catch {
+      // Preserve the selected engine's generated speech fallback.
+    } finally {
+      options.signal?.removeEventListener('abort', stop);
+    }
+  }
 
   if (engine === 'deepgram') {
     TtsService.setProvider('deepgram_tts');

@@ -243,6 +243,35 @@ describe('voice module gate', () => {
     expect(h.speakText).toHaveBeenCalledTimes(1);
   });
 
+  it('plays the short bundled Jarvis acknowledgment without waiting for cold synthesis', async () => {
+    useAuthStore.setState({ voiceEngine: 'jarvis', voicePreset: 'jarvis-prime' });
+    await speakWithSettings('On it.');
+    expect(Audio).toHaveBeenCalledWith('/voice/jarvis-on-it.wav');
+    const audio = vi.mocked(Audio).mock.results.at(-1)?.value as HTMLAudioElement;
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    expect(h.ensureJarvisReady).not.toHaveBeenCalled();
+    expect(h.speakText).not.toHaveBeenCalled();
+    stopAllVoiceOutput();
+    expect(audio.pause).toHaveBeenCalled();
+  });
+
+  it('falls back to the selected Jarvis voice when bundled acknowledgment playback fails', async () => {
+    useAuthStore.setState({ voiceEngine: 'jarvis', voicePreset: 'jarvis-prime' });
+    h.speakText.mockResolvedValue(undefined);
+    vi.mocked(Audio).mockImplementationOnce(function MockFailedAudio(this: HTMLAudioElement) {
+      this.play = vi.fn(async () => {
+        throw new Error('audio playback blocked');
+      });
+      this.pause = vi.fn();
+    } as never);
+    await speakWithSettings('On it.');
+    expect(h.ensureJarvisReady).toHaveBeenCalled();
+    expect(h.speakText).toHaveBeenCalledWith('On it.', {
+      voicePreset: 'jarvis-prime',
+      engine: 'local',
+    });
+  });
+
   it('speakWithSettings runs for chat replies when speakReplies is on and the panel is closed', async () => {
     voiceModalOpen = false;
     syncVoiceModuleOpenState(false);

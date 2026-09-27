@@ -15,7 +15,7 @@ export interface DictationEvents {
   onPartial?: (text: string) => void;
   onFinal?: (text: string) => void;
   /** Confirmed provider turn completion, delivered after the final transcript. */
-  onTurnEnd?: () => void;
+  onTurnEnd?: (signal?: { forceCommit?: true }) => void;
   onLevel?: (level: number) => void;
   onError?: (message: string) => void;
   onClose?: () => void;

@@ -24,7 +24,7 @@ describe('JarvisVoiceInputService', () => {
       onOpen?: () => void;
       onPartial?: (text: string) => void;
       onFinal?: (text: string) => void;
-      onTurnEnd?: () => void;
+      onTurnEnd?: (signal?: { forceCommit?: true }) => void;
       onClose?: () => void;
     } = {};
     const session = {
@@ -60,8 +60,9 @@ describe('JarvisVoiceInputService', () => {
 
     events.onPartial?.('hello');
     events.onFinal?.('hello Jarvis');
-    events.onTurnEnd?.();
+    events.onTurnEnd?.({ forceCommit: true });
     expect(turnEnds).toHaveBeenCalledOnce();
+    expect(turnEnds).toHaveBeenCalledWith({ forceCommit: true });
     expect(starts).toHaveBeenCalledOnce();
     expect(partials).toHaveBeenCalledWith({ text: 'hello' });
     expect(finals).toHaveBeenCalledWith({ text: 'hello Jarvis' });

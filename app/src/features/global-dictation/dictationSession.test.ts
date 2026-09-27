@@ -244,6 +244,43 @@ describe('createGlobalDictationSession engine resolution', () => {
     }
   });
 
+  it('finishes a voice-only local fallback after speech becomes quiet', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);
+    let sample!: (level: number) => void;
+    mocks.composer.startBatchAudioRecorder.mockImplementationOnce(async (onLevel) => {
+      sample = onLevel;
+      return {
+        captureWav: () => new Blob(['spoken voice'], { type: 'audio/wav' }),
+        stop: vi.fn(),
+      };
+    });
+    const onFinal = vi.fn();
+    const onClose = vi.fn();
+    const onTurnEnd = vi.fn();
+    const session = await createSelectedSttSession(
+      { onFinal, onClose, onTurnEnd },
+      { requester: 'jarvis-voice' },
+    );
+    try {
+      mocks.voiceHandlers.get('voice:error')?.({
+        kind: 'network',
+        message: formatVoiceFailure('network'),
+      } as never);
+      await vi.waitFor(() => expect(mocks.voiceService.stopListening).toHaveBeenCalled());
+      sample(0.3);
+      await vi.waitFor(() => expect(onFinal).toHaveBeenCalledWith('local text'), {
+        timeout: 2_500,
+      });
+      expect(onTurnEnd).toHaveBeenCalledOnce();
+      expect(onTurnEnd).toHaveBeenCalledWith({ forceCommit: true });
+      expect(onClose).toHaveBeenCalledOnce();
+      expect(readSpeechHistory()[0]).toMatchObject({ text: 'local text', status: 'completed' });
+    } finally {
+      session.cancel();
+    }
+  });
+
   it('uses an installed Whisper model when the saved model is unavailable during a system network failure', async () => {
     mocks.voiceService.isSupported.mockReturnValue(true);
     mocks.composer.model = 'whisper-small-en-q8';

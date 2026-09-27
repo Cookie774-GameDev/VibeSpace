@@ -166,6 +166,7 @@ import {
 } from '@/lib/persistence/workspaceFlush';
 import { GlobalDictationOverlay } from '@/features/global-dictation/GlobalDictationOverlay';
 import { JarvisAmbientHost, JarvisAmbientOverlayView } from '@/features/jarvis-ambient';
+import { VoiceModal } from '@/features/voice/VoiceModal';
 import { PluginManagementCapabilityProvider } from '@/features/plugins/managementContext';
 import type { PluginManagementCapability } from '@/features/plugins/runtime';
 import type { Agent } from '@/types';
@@ -575,9 +576,6 @@ const PetOverlayWindow = React.lazy(() =>
 );
 const PetMiniPanelWindow = React.lazy(() =>
   import('@/features/pets/PetMiniPanelWindow').then((m) => ({ default: m.PetMiniPanelWindow })),
-);
-const VoiceModal = React.lazy(() =>
-  import('@/features/voice/VoiceModal').then((m) => ({ default: m.VoiceModal })),
 );
 const CommandPalette = React.lazy(() =>
   import('@/features/command-palette').then((m) => ({ default: m.CommandPalette })),

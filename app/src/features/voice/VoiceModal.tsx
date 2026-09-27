@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useMotionValue } from 'motion/react';
 import { ChevronDown, ChevronUp, Shield } from 'lucide-react';
 import { toast } from '@/components/ui/toast';
@@ -281,6 +282,9 @@ function VoiceModalPanel() {
   const fasterWhisperModel = useAuthStore((state) => state.fasterWhisperModel);
   const chatModelSelection = useAuthStore((state) => state.chatModelSelection);
   const voiceMainAgentProvider = useAuthStore((state) => state.voiceMainAgentProvider);
+  const voiceStartFreshChat = useAuthStore((state) => state.voiceStartFreshChat);
+  const voiceMiniBarEnabled = useAuthStore((state) => state.voiceMiniBarEnabled);
+  const [miniBarText, setMiniBarText] = React.useState('');
   const { flatOptions: accessibleModels } = useAccessibleChatModels();
   const accessibleModelsRef = React.useRef(accessibleModels);
   accessibleModelsRef.current = accessibleModels;
@@ -691,7 +695,7 @@ function VoiceModalPanel() {
         provider,
         undefined,
         {
-          freshVoiceConversation: true,
+          freshVoiceConversation: voiceStartFreshChat,
           openingId,
         },
       ));
@@ -742,6 +746,7 @@ function VoiceModalPanel() {
     workspaceId,
     projectId,
     voiceMainAgentProvider,
+    voiceStartFreshChat,
   ]);
 
   React.useEffect(() => {
@@ -873,7 +878,7 @@ function VoiceModalPanel() {
         const openingId = (openingIdRef.current ??= newVoiceSessionId());
         const chatId = await (providerChatsRef.current[mainProvider] ??=
           ensureJarvisChatForProvider(mainProvider, messageText, {
-            freshVoiceConversation: true,
+            freshVoiceConversation: auth.voiceStartFreshChat,
             openingId: `${openingId}:${mainProvider}`,
           }));
         if (!chatId) delete providerChatsRef.current[mainProvider];
@@ -1245,11 +1250,13 @@ function VoiceModalPanel() {
           auth.voiceSilenceDelayMs,
         );
       }),
-      VoiceService.on('voice:turn-end', () => {
+      VoiceService.on('voice:turn-end', (signal) => {
         if (!listeningArmedRef.current || turnBusyRef.current) return;
         // Click-to-talk can trust a confirmed provider endpoint. Hands-free
         // retains the user's explicit phrase gate or configured pause duration.
-        if (!useAuthStore.getState().voiceAutoListenOnOpen) flushUtterance();
+        // A local batch fallback has already ended recording after silence, so
+        // its completed transcript cannot wait for a later spoken commit phrase.
+        if (signal?.forceCommit || !useAuthStore.getState().voiceAutoListenOnOpen) flushUtterance();
       }),
       VoiceService.on('voice:error', ({ kind, message }) => {
         setCapturePending(false);
@@ -1608,6 +1615,37 @@ function VoiceModalPanel() {
             </motion.div>
           )}
         </AnimatePresence>
+        {voiceMiniBarEnabled &&
+          createPortal(
+            <form
+              aria-label="Jarvis voice mini bar"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const text = miniBarText.trim();
+                if (!text || turnBusyRef.current || voiceFlowActiveRef.current) return;
+                flushUtteranceRef.current(text);
+                setMiniBarText('');
+              }}
+              className="fixed bottom-5 left-1/2 z-[120] flex w-[min(34rem,calc(100vw-2rem))] -translate-x-1/2 items-center gap-2 rounded-2xl border border-white/20 bg-background/75 p-2 text-foreground shadow-2xl shadow-black/20 backdrop-blur-xl"
+            >
+              <input
+                aria-label="Type to Jarvis voice"
+                value={miniBarText}
+                onChange={(event) => setMiniBarText(event.target.value)}
+                placeholder="Ask Jarvis…"
+                autoComplete="off"
+                className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <button
+                type="submit"
+                disabled={!miniBarText.trim() || state === 'thinking' || state === 'speaking'}
+                className="rounded-xl bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-80 disabled:opacity-40"
+              >
+                Send
+              </button>
+            </form>,
+            document.body,
+          )}
       </motion.aside>
     </AnimatePresence>
   );

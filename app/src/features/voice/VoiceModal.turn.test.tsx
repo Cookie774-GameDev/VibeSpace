@@ -35,7 +35,9 @@ const toastMocks = vi.hoisted(() => ({
 
 const chatRoutingMocks = vi.hoisted(() => ({
   ensureJarvisChatForVoice: vi.fn(async (): Promise<string | null> => 'chat_voice'),
-  ensureJarvisChatForProvider: vi.fn(async (): Promise<string | null> => 'chat_voice'),
+  ensureJarvisChatForProvider: vi.fn(
+    async (..._args: unknown[]): Promise<string | null> => 'chat_voice',
+  ),
   focusVoiceChat: vi.fn(),
   resolveVoiceChatTarget: vi.fn(async (text: string): Promise<MockVoiceChatTarget | null> => ({
     chatId: 'chat_voice',
@@ -287,6 +289,8 @@ describe('VoiceModal hands-free turn-taking', () => {
       cloudSession: null,
       projectId: 'project-a' as ProjectId,
       voiceAutoListenOnOpen: true,
+      voiceMiniBarEnabled: false,
+      voiceStartFreshChat: false,
       voiceEndTrigger: 'phrase',
       voiceCommitPhrase: 'send it',
       voiceCancelPhrase: 'cancel',
@@ -305,6 +309,40 @@ describe('VoiceModal hands-free turn-taking', () => {
     clearContextGalaxySnapshotsForTests();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('resumes the provider chat by default and requests a fresh chat only when selected', async () => {
+    const first = render(<VoiceModal />);
+    await waitFor(() => expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalled());
+    expect(chatRoutingMocks.ensureJarvisChatForProvider.mock.calls[0]?.[2]).toMatchObject({
+      freshVoiceConversation: false,
+    });
+    first.unmount();
+    chatRoutingMocks.ensureJarvisChatForProvider.mockClear();
+    useAuthStore.getState().setVoiceStartFreshChat(true);
+    render(<VoiceModal />);
+    await waitFor(() => expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalled());
+    expect(chatRoutingMocks.ensureJarvisChatForProvider.mock.calls[0]?.[2]).toMatchObject({
+      freshVoiceConversation: true,
+    });
+  });
+
+  it('keeps the optional mini bar off by default and sends typed text through the voice flow', async () => {
+    const send = vi.fn();
+    window.addEventListener('jarvis:send', send as EventListener);
+    const rendered = render(<VoiceModal />);
+    expect(screen.queryByRole('form', { name: 'Jarvis voice mini bar' })).toBeNull();
+    act(() => useAuthStore.getState().setVoiceMiniBarEnabled(true));
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    const input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+    fireEvent.change(input, { target: { value: 'Check the status' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(routerMocks.speakWithSettings).toHaveBeenCalledWith('On it.');
+    expect((send.mock.calls[0]?.[0] as CustomEvent).detail.chatId).toBe('chat_voice');
+    expect((input as HTMLInputElement).value).toBe('');
+    rendered.unmount();
+    window.removeEventListener('jarvis:send', send as EventListener);
   });
 
   it('embeds the account-and-project-scoped Context galaxy directly below the transcript', async () => {
@@ -1053,6 +1091,23 @@ describe('VoiceModal hands-free turn-taking', () => {
       emitVoice('voice:turn-end');
     });
     expect(messageRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('submits a completed local fallback transcript in hands-free phrase mode', async () => {
+    const send = vi.fn();
+    window.addEventListener('jarvis:send', send as EventListener);
+    try {
+      render(<VoiceModal />);
+      act(() => {
+        emitVoice('voice:final', { text: 'Summarize my notes' });
+        emitVoice('voice:turn-end', { forceCommit: true });
+        emitVoice('voice:turn-end', { forceCommit: true });
+      });
+      await waitFor(() => expect(send).toHaveBeenCalledOnce());
+      expect(messageRepo.create).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener('jarvis:send', send as EventListener);
+    }
   });
 
   it('preserves the configured hands-free pause on provider turn end', async () => {

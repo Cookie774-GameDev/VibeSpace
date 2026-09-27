@@ -153,9 +153,9 @@ class JarvisVoiceInputServiceImpl {
           this.armInactivityTimer();
           this.emit('voice:final', { text });
         },
-        onTurnEnd: () => {
+        onTurnEnd: (signal) => {
           if (generation !== this.generation || !this.wantsActive) return;
-          this.emit('voice:turn-end', undefined);
+          this.emit('voice:turn-end', signal);
         },
         onError: (message) => {
           if (generation !== this.generation || (!this.wantsActive && !this.finishing)) return;

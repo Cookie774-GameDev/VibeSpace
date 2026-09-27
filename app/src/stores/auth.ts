@@ -121,6 +121,10 @@ interface AuthState {
   voiceMainAgentProvider: VoiceAgentProvider;
   /** Provider for the worker session started by a voice request. */
   voiceWorkerProvider: VoiceAgentProvider;
+  /** Show a small text entry surface while Jarvis voice is open. */
+  voiceMiniBarEnabled: boolean;
+  /** Create a provider-scoped Jarvis chat on each opening instead of resuming it. */
+  voiceStartFreshChat: boolean;
   /** Speak completed Jarvis replies, including normal typed conversations. */
   speakReplies: boolean;
   /**
@@ -207,6 +211,8 @@ interface AuthState {
   setVoiceEngine: (engine: VoiceEngine) => void;
   setVoiceMainAgentProvider: (provider: VoiceAgentProvider) => void;
   setVoiceWorkerProvider: (provider: VoiceAgentProvider) => void;
+  setVoiceMiniBarEnabled: (enabled: boolean) => void;
+  setVoiceStartFreshChat: (enabled: boolean) => void;
   setSpeakReplies: (enabled: boolean) => void;
   setVoiceAutoListenOnOpen: (enabled: boolean) => void;
   setVoiceSilenceDelayMs: (ms: number) => void;
@@ -308,6 +314,8 @@ export const useAuthStore = create<AuthState>()(
       voiceEngine: 'jarvis',
       voiceMainAgentProvider: 'codex',
       voiceWorkerProvider: 'codex',
+      voiceMiniBarEnabled: false,
+      voiceStartFreshChat: false,
       speakReplies: false,
       voiceAutoListenOnOpen: true,
       voiceSilenceDelayMs: VOICE_SILENCE_DELAY_MS_DEFAULT,
@@ -405,6 +413,8 @@ export const useAuthStore = create<AuthState>()(
         set({ voiceMainAgentProvider: normalizeVoiceAgentProvider(provider) }),
       setVoiceWorkerProvider: (provider) =>
         set({ voiceWorkerProvider: normalizeVoiceAgentProvider(provider) }),
+      setVoiceMiniBarEnabled: (enabled) => set({ voiceMiniBarEnabled: enabled }),
+      setVoiceStartFreshChat: (enabled) => set({ voiceStartFreshChat: enabled }),
       setSpeakReplies: (enabled) => set({ speakReplies: enabled }),
       setVoiceAutoListenOnOpen: (enabled) => set({ voiceAutoListenOnOpen: enabled }),
       setVoiceSilenceDelayMs: (ms) => set({ voiceSilenceDelayMs: clampVoiceSilenceDelayMs(ms) }),
@@ -542,6 +552,8 @@ export const useAuthStore = create<AuthState>()(
         voiceEngine: s.voiceEngine,
         voiceMainAgentProvider: s.voiceMainAgentProvider,
         voiceWorkerProvider: s.voiceWorkerProvider,
+        voiceMiniBarEnabled: s.voiceMiniBarEnabled,
+        voiceStartFreshChat: s.voiceStartFreshChat,
         speakReplies: s.speakReplies,
         voiceAutoListenOnOpen: s.voiceAutoListenOnOpen,
         voiceSilenceDelayMs: s.voiceSilenceDelayMs,
@@ -565,7 +577,7 @@ export const useAuthStore = create<AuthState>()(
         telemetryOptIn: s.telemetryOptIn,
         preferredConnectionIdByProviderFamily: s.preferredConnectionIdByProviderFamily,
       }),
-      version: 19,
+      version: 20,
       migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
@@ -716,6 +728,10 @@ export const useAuthStore = create<AuthState>()(
         if (fromVersion < 19) {
           state.voiceMainAgentProvider = normalizeVoiceAgentProvider(state.voiceMainAgentProvider);
           state.voiceWorkerProvider = normalizeVoiceAgentProvider(state.voiceWorkerProvider);
+        }
+        if (fromVersion < 20) {
+          state.voiceMiniBarEnabled = false;
+          state.voiceStartFreshChat = false;
         }
         return state;
       },

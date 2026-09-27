@@ -150,6 +150,7 @@ function createBatchSession(
 async function createWebSpeechSession(
   events: DictationEvents,
   assertCurrent: () => void,
+  autoFinishLocalFallback = false,
 ): Promise<GlobalDictationSession> {
   let finalText = '';
   let done = false;
@@ -163,6 +164,9 @@ async function createWebSpeechSession(
   let fallbackCheck: Promise<void> | null = null;
   let fallbackTranscription: Promise<void> | null = null;
   let fallbackModel: ReturnType<typeof getFasterWhisperModel> | null = null;
+  let fallbackSilenceTimer: ReturnType<typeof setInterval> | null = null;
+  let lastVoiceAt = 0;
+  let autoStopFallback: (() => void) | null = null;
 
   const transcribeLocalFallback = (): Promise<void> => {
     if (fallbackTranscription) return fallbackTranscription;
@@ -183,6 +187,7 @@ async function createWebSpeechSession(
         if (text) {
           finalText = text;
           events.onFinal?.(text);
+          if (autoFinishLocalFallback) events.onTurnEnd?.({ forceCommit: true });
         } else {
           events.onError?.(formatGlobalDictationSessionFailure('No speech detected'));
         }
@@ -228,11 +233,16 @@ async function createWebSpeechSession(
         events.onOpen?.();
       }
       events.onStatus?.(
-        `Web Speech could not reach its service. Recording locally with Whisper (${model}); press Space to finish.`,
+        `Web Speech could not reach its service. Recording locally with Whisper (${model}); ${autoFinishLocalFallback ? 'finishing after you pause.' : 'press Space to finish.'}`,
       );
       if (stopTimer !== null) clearTimeout(stopTimer);
       stopTimer = null;
       VoiceService.stopListening();
+      if (autoFinishLocalFallback) {
+        fallbackSilenceTimer = setInterval(() => {
+          if (lastVoiceAt && Date.now() - lastVoiceAt >= 1_200) autoStopFallback?.();
+        }, 150);
+      }
       if (stopping) void transcribeLocalFallback();
     })().catch(() => {
       checkingLocalFallback = false;
@@ -281,6 +291,8 @@ async function createWebSpeechSession(
     done = true;
     if (stopTimer !== null) clearTimeout(stopTimer);
     stopTimer = null;
+    if (fallbackSilenceTimer !== null) clearInterval(fallbackSilenceTimer);
+    fallbackSilenceTimer = null;
     offs.forEach((off) => off());
     meter?.stop();
     meter = null;
@@ -296,7 +308,10 @@ async function createWebSpeechSession(
     // discarded at stop/cancel and never written to dictation history.
     meter = await startBatchAudioRecorder(
       (level) => {
-        if (!done) events.onLevel?.(level);
+        if (!done) {
+          if (level >= 0.12) lastVoiceAt = Date.now();
+          events.onLevel?.(level);
+        }
       },
       () => {
         if (!done && usingLocalFallback) {
@@ -316,7 +331,7 @@ async function createWebSpeechSession(
     throw error;
   }
 
-  return {
+  const session: GlobalDictationSession = {
     engine: 'web-speech',
     engineLabel: 'Built-in speech recognition',
     streaming: true,
@@ -343,6 +358,12 @@ async function createWebSpeechSession(
     },
     getFinalText: () => finalText,
   };
+  autoStopFallback = () => {
+    if (fallbackSilenceTimer !== null) clearInterval(fallbackSilenceTimer);
+    fallbackSilenceTimer = null;
+    void session.stop();
+  };
+  return session;
 }
 
 /**
@@ -391,6 +412,7 @@ export async function createSelectedSttSession(
   };
   const history = createSpeechHistorySession(getComposerSttProvider());
   let finishing = false;
+  let hasFinal = false;
   const scopedEvents: DictationEvents = {
     onOpen: () => {
       if (isCurrent()) events.onOpen?.();
@@ -406,12 +428,13 @@ export async function createSelectedSttSession(
     },
     onFinal: (text) => {
       if (isCurrent()) {
+        hasFinal = hasFinal || Boolean(text.trim());
         history.final(text);
         events.onFinal?.(text);
       }
     },
-    onTurnEnd: () => {
-      if (isCurrent()) events.onTurnEnd?.();
+    onTurnEnd: (signal) => {
+      if (isCurrent()) events.onTurnEnd?.(signal);
     },
     onLevel: (level) => {
       if (isCurrent()) events.onLevel?.(level);
@@ -425,7 +448,7 @@ export async function createSelectedSttSession(
     onClose: () => {
       if (closed) return;
       closed = true;
-      if (!finishing) history.finish('interrupted');
+      if (!finishing) history.finish(hasFinal ? 'completed' : 'interrupted');
       release();
       if (!claim.superseded) {
         events.onLevel?.(0);
@@ -520,7 +543,13 @@ export async function createSelectedSttSession(
         `The selected built-in system speech engine is unavailable in this window. ${NO_ENGINE_MESSAGE}`,
       );
     }
-    return adoptSession(await createWebSpeechSession(scopedEvents, assertCurrent));
+    return adoptSession(
+      await createWebSpeechSession(
+        scopedEvents,
+        assertCurrent,
+        options.requester === 'jarvis-voice',
+      ),
+    );
   } catch (error) {
     history.finish('interrupted');
     release();
