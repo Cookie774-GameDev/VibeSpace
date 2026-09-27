@@ -55,13 +55,36 @@ const rows = [
 ];
 
 describe('BenchmarkIntelligencePage', () => {
-  it('keeps Overall available after visiting an unsupported category', async () => {
+  it('shows only Overall, Speed, and Cost and allows returning to Overall', async () => {
     render(<BenchmarkIntelligencePage />);
     await screen.findAllByText('Claude Opus 5 (Max Effort)');
-    fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
-    expect(screen.getByText('Reasoning scores unavailable')).toBeTruthy();
+    const categories = screen.getByRole('navigation', { name: 'Benchmark categories' });
+    expect([...categories.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
+      'Overall',
+      'Speed',
+      'Cost',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Speed' }));
+    expect(screen.getByRole('heading', { name: 'Speed ranking' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cost' }));
+    expect(screen.getByRole('heading', { name: 'Cost ranking' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Overall' }));
     expect(screen.getByRole('heading', { name: 'Overall ranking' })).toBeTruthy();
+  });
+
+  it('shows the SpaceXAI logo and marks a failed image as unavailable', async () => {
+    const saved = await api.fetchBenchmarkLeaderboard();
+    api.fetchBenchmarkLeaderboard.mockResolvedValueOnce({
+      ...saved,
+      rows: [{ ...rows[0], id: 'grok', provider: 'SpaceXAI', model: 'Grok 4.7' }],
+    });
+    render(<BenchmarkIntelligencePage />);
+    const mark = await screen.findByLabelText('SpaceXAI logo');
+    const image = mark.querySelector('img');
+    expect(image?.getAttribute('src')).toBe('/benchmark-provider-logos/spacexai.svg');
+    expect(mark.textContent).toBe('');
+    fireEvent.error(image!);
+    expect(screen.getByLabelText('SpaceXAI logo unavailable').querySelector('img')).toBeNull();
   });
 
   it('uses feed context first and exact provider docs only when the feed omits it', () => {
@@ -323,18 +346,18 @@ describe('BenchmarkIntelligencePage', () => {
     }
   });
 
-  it('filters providers and treats unsupported categories as unavailable', async () => {
+  it('filters providers across the available categories', async () => {
     render(<BenchmarkIntelligencePage />);
     await screen.findByText('Claude Opus 5 (Max Effort)');
     fireEvent.change(screen.getByLabelText('Models'), { target: { value: 'OpenAI' } });
     expect(screen.queryByText('Claude Opus 5 (Max Effort)')).toBeNull();
     expect(screen.getByText('GPT-5.6 Sol (max)')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
-    expect(screen.getByText('Reasoning scores unavailable')).toBeTruthy();
-    expect(screen.queryByText('GPT-5.6 Sol (max)')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Speed' }));
     expect(screen.getByText('GPT-5.6 Sol (max)')).toBeTruthy();
     expect(screen.getAllByText(/output tokens\/s/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Cost' }));
+    expect(screen.getByText('GPT-5.6 Sol (max)')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Cost ranking' })).toBeTruthy();
   });
 
   it('copies a source-dated leaderboard summary and confirms success', async () => {

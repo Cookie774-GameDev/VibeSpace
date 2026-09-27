@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Check, ExternalLink, RefreshCw, Share2 } from 'lucide-react';
+import { Check, ExternalLink, ImageOff, RefreshCw, Share2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
@@ -12,6 +12,7 @@ import {
   type BenchmarkFetchResult,
   type BenchmarkModelRow,
 } from './benchmarkApi';
+import { PROVIDER_LOGOS } from './providerLogos';
 import './sakura-benchmarks.css';
 
 type SortKey =
@@ -26,48 +27,29 @@ type SortKey =
   | 'context';
 
 type OwnershipFilter = 'all' | 'open' | 'proprietary';
-type Category =
-  | 'Overall'
-  | 'Reasoning'
-  | 'Front End'
-  | 'Back End'
-  | 'One Shot'
-  | 'Security'
-  | 'Trust'
-  | 'Efficiency'
-  | 'Speed'
-  | 'Cost';
-const CATEGORIES: readonly Category[] = [
-  'Overall',
-  'Reasoning',
-  'Front End',
-  'Back End',
-  'One Shot',
-  'Security',
-  'Trust',
-  'Efficiency',
-  'Speed',
-  'Cost',
-];
-const PROVIDER_LOGOS: Record<string, string> = {
-  Anthropic: '/plugin-logos/anthropic.svg',
-  OpenAI: '/plugin-logos/openai.svg',
-  Google: '/plugin-logos/google-gemini.svg',
-  Mistral: '/plugin-logos/mistral-ai.ico',
-  Cohere: '/plugin-logos/cohere.ico',
-};
+type Category = 'Overall' | 'Speed' | 'Cost';
+const CATEGORIES: readonly Category[] = ['Overall', 'Speed', 'Cost'];
 
 function ProviderMark({ provider }: { provider: string }) {
   const logo = PROVIDER_LOGOS[provider];
+  const [imageFailed, setImageFailed] = React.useState(false);
+  React.useEffect(() => setImageFailed(false), [provider]);
+  const available = Boolean(logo && !imageFailed);
   return (
     <span
       className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-lg border border-border bg-background text-xs font-bold text-accent-copper"
-      aria-label={provider}
+      aria-label={available ? `${provider} logo` : `${provider} logo unavailable`}
+      title={available ? `${provider} logo` : `${provider} logo unavailable`}
     >
-      {logo ? (
-        <img src={logo} alt="" className="h-5 w-5 object-contain" />
+      {logo && !imageFailed ? (
+        <img
+          src={logo.src}
+          alt=""
+          className="h-6 w-6 object-contain"
+          onError={() => setImageFailed(true)}
+        />
       ) : (
-        provider.slice(0, 2).toUpperCase()
+        <ImageOff className="h-4 w-4" aria-hidden="true" />
       )}
     </span>
   );
@@ -403,7 +385,6 @@ export function BenchmarkIntelligencePage() {
     setVisibleCount(50);
   }, [effort, ownership, provider, sortDirection, sortKey]);
 
-  const categorySupported = category === 'Overall' || category === 'Speed' || category === 'Cost';
   const categoryMetric: SortKey =
     category === 'Speed' ? 'speed' : category === 'Cost' ? 'costPerTask' : 'intelligence';
   const categoryUnit =
@@ -415,14 +396,12 @@ export function BenchmarkIntelligencePage() {
   const lowerIsBetter = category === 'Cost';
   const rankedRows = React.useMemo(
     () =>
-      categorySupported
-        ? sortBenchmarkRows(
-            filteredRows.filter((row) => numberForSort(row, categoryMetric) != null),
-            categoryMetric,
-            lowerIsBetter ? 'asc' : 'desc',
-          )
-        : [],
-    [categorySupported, filteredRows, categoryMetric, lowerIsBetter],
+      sortBenchmarkRows(
+        filteredRows.filter((row) => numberForSort(row, categoryMetric) != null),
+        categoryMetric,
+        lowerIsBetter ? 'asc' : 'desc',
+      ),
+    [filteredRows, categoryMetric, lowerIsBetter],
   );
   const chartRows = React.useMemo(() => rankedRows.slice(0, 25), [rankedRows]);
   const chartMax = Math.max(1, ...chartRows.map((row) => numberForSort(row, categoryMetric) ?? 0));
@@ -567,12 +546,10 @@ export function BenchmarkIntelligencePage() {
                 type="button"
                 onClick={() => {
                   setCategory(item);
-                  if (item === 'Overall' || item === 'Speed' || item === 'Cost') {
-                    setSortKey(
-                      item === 'Speed' ? 'speed' : item === 'Cost' ? 'costPerTask' : 'intelligence',
-                    );
-                    setSortDirection(item === 'Cost' ? 'asc' : 'desc');
-                  }
+                  setSortKey(
+                    item === 'Speed' ? 'speed' : item === 'Cost' ? 'costPerTask' : 'intelligence',
+                  );
+                  setSortDirection(item === 'Cost' ? 'asc' : 'desc');
                 }}
                 aria-current={category === item ? 'page' : undefined}
                 className={cn(
@@ -610,16 +587,12 @@ export function BenchmarkIntelligencePage() {
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          {categorySupported
-            ? `Artificial Analysis · ${category === 'Overall' ? 'Intelligence Index' : category} · ${categoryUnit} · ${lowerIsBetter ? 'lower' : 'higher'} is better · observed ${result?.dataset?.sourceObservedAt ? fullTime(result.dataset.sourceObservedAt) : 'date unavailable'}`
-            : `${category}: no comparable source metric in the current feed. Scores unavailable.`}
+          {`Artificial Analysis · ${category === 'Overall' ? 'Intelligence Index' : category} · ${categoryUnit} · ${lowerIsBetter ? 'lower' : 'higher'} is better · observed ${result?.dataset?.sourceObservedAt ? fullTime(result.dataset.sourceObservedAt) : 'date unavailable'}`}
         </p>
-        {categorySupported ? (
-          <p className="text-[11px] text-muted-foreground">
-            Context in tokens: Cloudflare feed when supplied; linked provider documentation fills
-            exact model matches (checked {CONTEXT_DOCS_CHECKED_AT}).
-          </p>
-        ) : null}
+        <p className="text-[11px] text-muted-foreground">
+          Context in tokens: Cloudflare feed when supplied; linked provider documentation fills
+          exact model matches (checked {CONTEXT_DOCS_CHECKED_AT}).
+        </p>
 
         {error && !result?.rows.length ? (
           <div
@@ -631,11 +604,10 @@ export function BenchmarkIntelligencePage() {
           </div>
         ) : null}
 
-        {categorySupported && view === 'chart' ? (
+        {view === 'chart' ? (
           <section
             className="cozy-card rounded-2xl border border-border bg-paper p-4 shadow-soft"
             data-warm-surface="benchmarks-chart"
-            style={{ width: '100%' }}
           >
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -730,23 +702,9 @@ export function BenchmarkIntelligencePage() {
           </section>
         ) : null}
 
-        {!categorySupported ? (
-          <section
-            className="rounded-xl border border-dashed border-border bg-paper p-8 text-center"
-            role="status"
-          >
-            <h2 className="font-display text-lg font-semibold">{category} scores unavailable</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              The current Artificial Analysis feed has no comparable {category.toLowerCase()} metric
-              for these exact model variants. No ranking is shown.
-            </p>
-          </section>
-        ) : null}
-
         <section
           className="cozy-card rounded-2xl border border-border bg-paper p-5 shadow-soft"
           data-warm-surface="benchmarks-filters"
-          style={{ width: '100%' }}
         >
           <div className="grid min-w-0 gap-3 md:grid-cols-3">
             <label className="min-w-0 space-y-1 text-metadata text-muted-foreground">
@@ -799,11 +757,10 @@ export function BenchmarkIntelligencePage() {
           </p>
         </section>
 
-        {categorySupported && view === 'table' ? (
+        {view === 'table' ? (
           <section
             className="cozy-card rounded-2xl border border-border bg-paper p-4 shadow-soft"
             data-monochrome-surface="benchmarks-table"
-            style={{ width: '100%' }}
             data-sakura-surface="benchmarks-table"
             data-warm-table-mode="compact-scroll"
           >
