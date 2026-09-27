@@ -4,6 +4,8 @@ import { createDefaultMusicMix, useMusicProjectStore } from './musicProject';
 
 const audio = vi.hoisted(() => ({
   playProject: vi.fn(),
+  playProjectAt: vi.fn(),
+  pause: vi.fn(),
   progressListener: null as
     ((progress: { clipId: string | null; currentTime: number; duration: number }) => void) | null,
   statusListener: null as
@@ -48,6 +50,8 @@ import { MusicStudio } from './MusicStudio';
 describe('MusicStudio', () => {
   beforeEach(() => {
     audio.playProject.mockReset();
+    audio.playProjectAt.mockReset();
+    audio.pause.mockReset();
     audio.stop.mockReset();
     audio.seek.mockReset();
     useMusicProjectStore.setState({
@@ -87,6 +91,21 @@ describe('MusicStudio', () => {
     });
     expect(screen.getByRole('alert').textContent).toContain('File missing');
     expect(screen.getByRole('button', { name: 'Play mix' })).toBeTruthy();
+  });
+
+  it('skips through the saved mix and pauses or resumes its current clip', () => {
+    const pair = createDefaultMusicMix().slice(0, 2);
+    useMusicProjectStore.setState({ clips: pair, loop: true });
+    render(<MusicStudio open onOpenChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Play mix' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next mix track' }));
+    expect(audio.playProjectAt).toHaveBeenLastCalledWith(pair, true, expect.any(Number), 1);
+    fireEvent.click(screen.getByRole('button', { name: 'Pause mix' }));
+    expect(audio.pause).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Resume mix' }));
+    expect(audio.playProject).toHaveBeenLastCalledWith(pair, true, expect.any(Number));
+    fireEvent.click(screen.getByRole('button', { name: 'Previous mix track' }));
+    expect(audio.playProjectAt).toHaveBeenLastCalledWith(pair, true, expect.any(Number), 0);
   });
 
   it('searches, previews, adds, edits, reorders, and saves a cloud track', () => {

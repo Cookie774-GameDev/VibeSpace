@@ -11,7 +11,7 @@
     warm: 'warm',
     origami: 'origami',
   };
-  const fallback = 'default';
+  const fallback = 'warm';
   const root = document.documentElement;
   let preference = fallback;
 

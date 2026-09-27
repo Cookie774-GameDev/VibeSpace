@@ -3,7 +3,7 @@
 
 export const THEME_STORAGE_KEY = 'jarvis-ui';
 export const UI_STORE_VERSION = 5;
-export const THEME_FALLBACK_ID = 'default';
+export const THEME_FALLBACK_ID = 'warm';
 
 export const SELECTABLE_THEME_IDS = [
   'jarvis',

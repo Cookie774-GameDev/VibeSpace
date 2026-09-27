@@ -80,13 +80,7 @@ export function normalizeSakuraPetalSpeed(value: unknown): SakuraPetalSpeed {
 }
 
 export type DoneNotificationKey =
-  | 'jarvis'
-  | 'terminal'
-  | 'tasks'
-  | 'contextMaps'
-  | 'skills'
-  | 'connectors'
-  | 'reminders';
+  'jarvis' | 'terminal' | 'tasks' | 'contextMaps' | 'skills' | 'connectors' | 'reminders';
 export type DoneNotificationSettings = Record<DoneNotificationKey, boolean>;
 
 const DONE_NOTIFICATION_KEY_LIST: readonly DoneNotificationKey[] = [
@@ -408,7 +402,7 @@ const defaults: Pick<
   settingsOpen: false,
   onboardingComplete: false,
   productTutorialStatus: null,
-  theme: 'default',
+  theme: 'warm',
   density: 'cozy',
   appBrightness: 100,
   sakuraPetalsEnabled: true,

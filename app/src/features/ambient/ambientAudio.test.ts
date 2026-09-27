@@ -99,6 +99,36 @@ describe('AmbientAudioEngine music projects', () => {
     expect(audio.paused).toBe(true);
   });
 
+  it('jumps between mix clips and resumes the paused clip without resetting its position', async () => {
+    const instances: FakeAudio[] = [];
+    vi.stubGlobal(
+      'Audio',
+      class extends FakeAudio {
+        constructor() {
+          super();
+          instances.push(this);
+        }
+      },
+    );
+    const engine = AmbientAudioEngine.getInstance();
+    engine.playProjectAt(clips, true, 45, 1);
+    await Promise.resolve();
+    const audio = instances[0]!;
+    expect(audio.src).toContain(clips[1]!.trackId);
+    expect(audio.currentTime).toBe(clips[1]!.trimStart);
+    audio.currentTime = 18;
+    engine.pause();
+    expect(audio.paused).toBe(true);
+    engine.playProject(clips, true, 45);
+    await Promise.resolve();
+    expect(audio.src).toContain(clips[1]!.trackId);
+    expect(audio.currentTime).toBe(18);
+    engine.playProjectAt(clips, true, 45, 0);
+    await Promise.resolve();
+    expect(audio.src).toContain(clips[0]!.trackId);
+    expect(audio.currentTime).toBe(clips[0]!.trimStart);
+  });
+
   it('keeps a track failure visible instead of reporting playback success', async () => {
     const instances: FakeAudio[] = [];
     vi.stubGlobal(

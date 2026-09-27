@@ -11,6 +11,12 @@ import {
 import type { SelectableTheme } from '@/features/appearance/themeContract';
 
 describe('UI theme resolution', () => {
+  it('uses Warm for a fresh store and leaves saved theme choices intact', () => {
+    expect(mergePersistedUiState(null, { ...useUIStore.getState(), theme: 'warm' }).theme).toBe(
+      'warm',
+    );
+    expect(mergePersistedUiState({ theme: 'jarvis' }, useUIStore.getState()).theme).toBe('jarvis');
+  });
   afterEach(() => {
     document.documentElement.setAttribute('data-theme', 'dark');
     document.documentElement.removeAttribute('data-theme-preference');

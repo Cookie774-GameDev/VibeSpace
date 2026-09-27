@@ -333,6 +333,38 @@ export class AmbientAudioEngine {
     }
   }
 
+  /** Start a mix at a chosen clip without changing its saved order. */
+  public playProjectAt(
+    clips: readonly MusicClip[],
+    loop: boolean,
+    volume: number,
+    index: number,
+  ): void {
+    const available = clips.filter((clip) => Boolean(musicClipUrl(clip)));
+    if (available.length === 0) {
+      this.playProject(clips, loop, volume);
+      return;
+    }
+    this.projectClips = available.map((clip) => ({ ...clip }));
+    this.projectLoop = loop;
+    this.projectSignature = musicProjectSignature(available, loop);
+    this.projectIndex =
+      ((Math.trunc(index) % available.length) + available.length) % available.length;
+    this.currentVolumePercent = volume;
+    this.isEngineRunning = true;
+    this.getAudio().volume = Math.max(0, Math.min(1, volume / 100));
+    this.getAudio().pause();
+    this.startProjectClip();
+  }
+
+  public pause(): void {
+    this.playbackAttempt += 1;
+    this.isEngineRunning = false;
+    this.audio?.pause();
+    this.setLoadStatus({ state: 'idle' });
+    this.notifyProgress();
+  }
+
   public stop(): void {
     this.playbackAttempt += 1;
     this.isEngineRunning = false;

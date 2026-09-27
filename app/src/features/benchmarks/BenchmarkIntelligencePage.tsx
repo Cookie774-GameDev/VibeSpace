@@ -91,6 +91,124 @@ const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string; direction: 'a
 
 const WARM_BENCHMARK_SCENE_ASSET =
   '/assets/themes/warm/benchmarks/continuation-v2/benchmark-scroll-composite-v2.webp';
+const CONTEXT_DOCS_CHECKED_AT = '2026-09-27';
+
+// The live Cloudflare AA feed currently omits context. Supplement only exact
+// model families documented by their providers, and link every supplemented value.
+const VERIFIED_CONTEXT: ReadonlyArray<{
+  provider: string;
+  model: RegExp;
+  tokens: number;
+  sourceUrl: string;
+}> = [
+  {
+    provider: 'Anthropic',
+    model: /^Claude Opus 5\.5(?:\s*\(|$)/u,
+    tokens: 1_000_000,
+    sourceUrl: 'https://platform.claude.com/docs/en/models/opus-5-5/overview',
+  },
+  {
+    provider: 'Anthropic',
+    model: /^Claude Fable 5\.1(?:\s*\(|$)/u,
+    tokens: 1_000_000,
+    sourceUrl: 'https://platform.claude.com/docs/en/models/fable-5-1/overview',
+  },
+  {
+    provider: 'Anthropic',
+    model: /^Claude (?:Opus 5|Fable 5)(?:\s*\(|$)/u,
+    tokens: 1_000_000,
+    sourceUrl: 'https://platform.claude.com/docs/en/build-with-claude/context-windows',
+  },
+  {
+    provider: 'OpenAI',
+    model: /^GPT-6 Astra(?:\s*\(|$)/u,
+    tokens: 1_050_000,
+    sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-6-astra',
+  },
+  {
+    provider: 'OpenAI',
+    model: /^GPT-6 Sol(?:\s*\(|$)/u,
+    tokens: 1_050_000,
+    sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-6-sol',
+  },
+  {
+    provider: 'OpenAI',
+    model: /^GPT-5\.6 Sol(?:\s*\(|$)/u,
+    tokens: 1_050_000,
+    sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-5.6-sol',
+  },
+  {
+    provider: 'Meta',
+    model: /^Muse Spark 1\.3(?:\s*\(|$)/u,
+    tokens: 1_048_576,
+    sourceUrl: 'https://dev.meta.ai/docs/models',
+  },
+  {
+    provider: 'SpaceXAI',
+    model: /^Grok 4\.7(?:\s*\(|$)/u,
+    tokens: 500_000,
+    sourceUrl: 'https://docs.x.ai/developers/models/grok-4.7',
+  },
+  {
+    provider: 'Xiaomi',
+    model: /^MiMo-V2\.6-Pro(?:\s*\(|$)/u,
+    tokens: 1_000_000,
+    sourceUrl: 'https://mimo.mi.com/models/en-US/mimo-v2.6-pro',
+  },
+  {
+    provider: 'Alibaba',
+    model: /^Qwen3\.8 Max \(0902\)$/u,
+    tokens: 1_000_000,
+    sourceUrl: 'https://www.alibabacloud.com/help/en/model-studio/text-generation-model',
+  },
+];
+
+export function contextForBenchmarkRow(row: BenchmarkModelRow): {
+  tokens: number;
+  sourceUrl: string;
+  sourceName: string;
+} | null {
+  if (row.contextWindowTokens && row.contextWindowTokens > 0) {
+    return {
+      tokens: row.contextWindowTokens,
+      sourceUrl: row.sourceUrl,
+      sourceName: 'Artificial Analysis feed',
+    };
+  }
+  const verified = VERIFIED_CONTEXT.find(
+    (entry) => entry.provider === row.provider && entry.model.test(row.model),
+  );
+  return verified
+    ? {
+        tokens: verified.tokens,
+        sourceUrl: verified.sourceUrl,
+        sourceName: `${row.provider} model documentation`,
+      }
+    : null;
+}
+
+function contextLabel(tokens: number): string {
+  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 }).format(
+    tokens,
+  );
+}
+
+function ContextValue({ row }: { row: BenchmarkModelRow }) {
+  const context = contextForBenchmarkRow(row);
+  if (!context)
+    return <span title="Context unavailable from the feed or a verified model source">—</span>;
+  return (
+    <a
+      href={context.sourceUrl}
+      target="_blank"
+      rel="noreferrer"
+      title={`${context.tokens.toLocaleString()} tokens · ${context.sourceName}${context.sourceName.includes('documentation') ? ` · checked ${CONTEXT_DOCS_CHECKED_AT}` : ''}`}
+      className="underline decoration-border underline-offset-2 hover:text-accent-copper"
+    >
+      {contextLabel(context.tokens)}
+    </a>
+  );
+}
 
 function numberForSort(row: BenchmarkModelRow, key: SortKey): number | null {
   switch (key) {
@@ -111,7 +229,7 @@ function numberForSort(row: BenchmarkModelRow, key: SortKey): number | null {
     case 'ttft':
       return row.timeToFirstTokenSeconds ?? null;
     case 'context':
-      return row.contextWindowTokens ?? null;
+      return contextForBenchmarkRow(row)?.tokens ?? null;
   }
 }
 
@@ -496,6 +614,12 @@ export function BenchmarkIntelligencePage() {
             ? `Artificial Analysis · ${category === 'Overall' ? 'Intelligence Index' : category} · ${categoryUnit} · ${lowerIsBetter ? 'lower' : 'higher'} is better · observed ${result?.dataset?.sourceObservedAt ? fullTime(result.dataset.sourceObservedAt) : 'date unavailable'}`
             : `${category}: no comparable source metric in the current feed. Scores unavailable.`}
         </p>
+        {categorySupported ? (
+          <p className="text-[11px] text-muted-foreground">
+            Context in tokens: Cloudflare feed when supplied; linked provider documentation fills
+            exact model matches (checked {CONTEXT_DOCS_CHECKED_AT}).
+          </p>
+        ) : null}
 
         {error && !result?.rows.length ? (
           <div
@@ -536,7 +660,12 @@ export function BenchmarkIntelligencePage() {
                   </span>
                   <span></span>
                   <span className="text-right">API in / out · $/1M</span>
-                  <span className="text-right">Context</span>
+                  <span
+                    className="text-right"
+                    title="Cloudflare feed where supplied; otherwise linked provider model documentation"
+                  >
+                    Context
+                  </span>
                 </div>
                 {chartRows.map((row, index) => (
                   <div
@@ -560,8 +689,8 @@ export function BenchmarkIntelligencePage() {
                         </div>
                         <div className="truncate text-[10px] text-muted-foreground xl:hidden">
                           {money(row.inputPricePer1MTokensUsd)} /{' '}
-                          {money(row.outputPricePer1MTokensUsd)} per 1M ·{' '}
-                          {compactNumber(row.contextWindowTokens)} context
+                          {money(row.outputPricePer1MTokensUsd)} per 1M · <ContextValue row={row} />{' '}
+                          context
                         </div>
                       </div>
                     </div>
@@ -584,7 +713,7 @@ export function BenchmarkIntelligencePage() {
                       {money(row.inputPricePer1MTokensUsd)} / {money(row.outputPricePer1MTokensUsd)}
                     </div>
                     <div className="hidden text-right font-mono text-xs text-muted-foreground xl:block">
-                      {compactNumber(row.contextWindowTokens)}
+                      <ContextValue row={row} />
                     </div>
                   </div>
                 ))}
@@ -697,7 +826,12 @@ export function BenchmarkIntelligencePage() {
                     <th className="px-2 py-3 text-right">Intel / $*</th>
                     <th className="px-2 py-3 text-right">Output speed</th>
                     <th className="px-2 py-3 text-right">TTFT</th>
-                    <th className="px-2 py-3 text-right">Context</th>
+                    <th
+                      className="px-2 py-3 text-right"
+                      title="Cloudflare feed where supplied; otherwise linked provider model documentation"
+                    >
+                      Context
+                    </th>
                     <th className="px-2 py-3">Weights</th>
                   </tr>
                 </thead>
@@ -744,7 +878,7 @@ export function BenchmarkIntelligencePage() {
                         {decimal(row.timeToFirstTokenSeconds, ' s')}
                       </td>
                       <td className="px-2 py-3 text-right font-mono">
-                        {compactNumber(row.contextWindowTokens)}
+                        <ContextValue row={row} />
                       </td>
                       <td className="px-2 py-3">
                         {row.openWeights == null ? '—' : row.openWeights ? 'Open' : 'Proprietary'}

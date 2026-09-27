@@ -49,7 +49,7 @@ function runPrepaint(
 
 describe('theme prepaint startup contract', () => {
   it('starts with canonical fallback attributes and loads the self-hosted prepaint before React', () => {
-    expect(indexHtml).toMatch(/<html lang="en" data-theme="dark" data-theme-preference="default">/);
+    expect(indexHtml).toMatch(/<html lang="en" data-theme="warm" data-theme-preference="warm">/);
 
     const prepaintIndex = indexHtml.indexOf('<script src="/theme-prepaint.js"></script>');
     const moduleIndex = indexHtml.indexOf('<script type="module" src="/src/main.tsx"></script>');
@@ -59,18 +59,18 @@ describe('theme prepaint startup contract', () => {
   });
 
   it.each([
-    ['origami', 'default', 'dark'],
-    ['vibespace', 'default', 'dark'],
+    ['origami', 'warm', 'warm'],
+    ['vibespace', 'warm', 'warm'],
     ['warm', 'warm', 'warm'],
-    ['sakura', 'default', 'dark'],
+    ['sakura', 'warm', 'warm'],
     ['monochrome', 'monochrome', 'monochrome'],
     ['light', 'monochrome', 'monochrome'],
     ['dark', 'default', 'dark'],
     ['system', 'default', 'dark'],
-    ['unknown', 'default', 'dark'],
-    ['constructor', 'default', 'dark'],
-    ['toString', 'default', 'dark'],
-    ['__proto__', 'default', 'dark'],
+    ['unknown', 'warm', 'warm'],
+    ['constructor', 'warm', 'warm'],
+    ['toString', 'warm', 'warm'],
+    ['__proto__', 'warm', 'warm'],
   ])('normalizes stored %s before React mounts', (stored, preference, documentTheme) => {
     const result = runPrepaint(JSON.stringify({ state: { theme: stored }, version: 5 }));
 
@@ -86,8 +86,8 @@ describe('theme prepaint startup contract', () => {
   ])('falls back safely for %s', (_label, stored, options) => {
     const result = runPrepaint(stored, options);
 
-    expect(result.attributes.get('data-theme-preference')).toBe('default');
-    expect(result.attributes.get('data-theme')).toBe('dark');
+    expect(result.attributes.get('data-theme-preference')).toBe('warm');
+    expect(result.attributes.get('data-theme')).toBe('warm');
   });
 
   it('marks the pet overlay transparent before React without unsafe executable constructs', () => {

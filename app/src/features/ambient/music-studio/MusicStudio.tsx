@@ -14,6 +14,8 @@ import {
   Save,
   Scissors,
   Search,
+  SkipBack,
+  SkipForward,
   Trash2,
   ZoomIn,
   ZoomOut,
@@ -110,6 +112,7 @@ export function MusicStudio({
   const savedAt = useMusicProjectStore((state) => state.savedAt);
   const [query, setQuery] = React.useState('');
   const [previewingId, setPreviewingId] = React.useState<string | null>(null);
+  const [mixPaused, setMixPaused] = React.useState(false);
   const [playbackProgress, setPlaybackProgress] = React.useState<AmbientPlaybackProgress>({
     clipId: null,
     currentTime: 0,
@@ -149,11 +152,15 @@ export function MusicStudio({
     Math.min(playbackProgress.currentTime, previewEnd),
   );
   const timelineClipWidth = Math.round(144 * timelineZoom);
+  const currentMixIndex = clips.findIndex((clip) => clip.id === playbackProgress.clipId);
+  const transportIndex = currentMixIndex >= 0 ? currentMixIndex : Math.max(0, selectedIndex);
+  const transportClip = clips[transportIndex] ?? null;
 
   const stopPreview = React.useCallback(() => {
     if (previewTimer.current !== null) window.clearTimeout(previewTimer.current);
     previewTimer.current = null;
     setPreviewingId(null);
+    setMixPaused(false);
     restoreAmbientProject();
   }, []);
 
@@ -237,6 +244,8 @@ export function MusicStudio({
     for (const clip of clips) revokeLocalMusicClip(clip);
     useMusicProjectStore.getState().clear();
     AmbientAudioEngine.getInstance().stop();
+    setPreviewingId(null);
+    setMixPaused(false);
   };
 
   const playMix = () => {
@@ -246,7 +255,34 @@ export function MusicStudio({
     AmbientAudioEngine.getInstance().playProject(clips, loop, useUIStore.getState().ambientVolume);
     if (AmbientAudioEngine.getInstance().getLoadStatus?.().state !== 'error') {
       setPreviewingId('mix');
+      setMixPaused(false);
     }
+  };
+
+  const pauseMix = () => {
+    if (previewTimer.current !== null) window.clearTimeout(previewTimer.current);
+    previewTimer.current = null;
+    AmbientAudioEngine.getInstance().pause();
+    setPreviewingId(null);
+    setMixPaused(true);
+  };
+
+  const skipMix = (direction: -1 | 1) => {
+    if (clips.length === 0) return;
+    if (previewTimer.current !== null) window.clearTimeout(previewTimer.current);
+    previewTimer.current = null;
+    const target = loop
+      ? (transportIndex + direction + clips.length) % clips.length
+      : Math.max(0, Math.min(clips.length - 1, transportIndex + direction));
+    AmbientAudioEngine.getInstance().playProjectAt(
+      clips,
+      loop,
+      useUIStore.getState().ambientVolume,
+      target,
+    );
+    setSelectedClipId(clips[target]!.id);
+    setPreviewingId('mix');
+    setMixPaused(false);
   };
 
   const save = () => {
@@ -266,20 +302,20 @@ export function MusicStudio({
       }}
     >
       <DialogContent
-        className="z-[100] h-[min(82vh,43rem)] w-[min(96vw,78rem)] max-w-none grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 max-sm:h-[96vh] max-sm:w-[98vw]"
+        className="z-[100] h-[min(88vh,42rem)] w-[min(98vw,90rem)] max-w-none grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:p-0 max-sm:h-[96vh] max-sm:w-[98vw]"
         overlayProps={{ className: 'z-[95] bg-black/75 backdrop-blur-sm' }}
       >
-        <DialogHeader className="border-b border-border px-5 py-3">
+        <DialogHeader className="border-b border-border bg-[#17191e] px-5 py-3 text-white">
           <DialogTitle className="flex items-center gap-2 text-lg tracking-tight">
             <Music2 className="h-5 w-5 text-accent-copper" /> VibeSpace Music Studio
           </DialogTitle>
-          <DialogDescription className="text-xs">
+          <DialogDescription className="text-xs text-white/60">
             Arrange a continuous ambience mix from {MUSIC_STUDIO_LIBRARY.length} songs or your own
             audio. Local files stay on your device.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid min-h-0 grid-cols-1 overflow-y-auto lg:grid-cols-[19rem_minmax(0,1fr)] lg:overflow-hidden">
+        <div className="grid min-h-0 grid-cols-1 overflow-y-auto lg:grid-cols-[16rem_minmax(0,1fr)] lg:overflow-hidden">
           <section
             aria-label="Music library"
             className="flex min-h-[15rem] max-h-[32vh] flex-col border-b border-border bg-paper-soft lg:min-h-0 lg:max-h-none lg:border-b-0 lg:border-r"
@@ -381,8 +417,19 @@ export function MusicStudio({
             <div className="flex flex-wrap items-center gap-2 border-b border-border bg-paper px-4 py-2.5">
               <Button
                 type="button"
+                size="icon"
+                variant="secondary"
+                aria-label="Previous mix track"
+                title="Previous mix track"
+                disabled={clips.length < 2 || (!loop && transportIndex === 0)}
+                onClick={() => skipMix(-1)}
+              >
+                <SkipBack className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
                 size="sm"
-                onClick={previewingId === 'mix' ? stopPreview : playMix}
+                onClick={previewingId === 'mix' ? pauseMix : playMix}
                 disabled={clips.length === 0}
               >
                 {previewingId === 'mix' ? (
@@ -390,7 +437,18 @@ export function MusicStudio({
                 ) : (
                   <Play className="h-4 w-4" />
                 )}{' '}
-                {previewingId === 'mix' ? 'Pause mix' : 'Play mix'}
+                {previewingId === 'mix' ? 'Pause mix' : mixPaused ? 'Resume mix' : 'Play mix'}
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="secondary"
+                aria-label="Next mix track"
+                title="Next mix track"
+                disabled={clips.length < 2 || (!loop && transportIndex === clips.length - 1)}
+                onClick={() => skipMix(1)}
+              >
+                <SkipForward className="h-4 w-4" />
               </Button>
               <Button type="button" size="sm" variant="secondary" onClick={save}>
                 <Save className="h-4 w-4" /> Save
@@ -445,7 +503,7 @@ export function MusicStudio({
                 </span>
               ) : null}
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
+            <div className="min-h-0 flex-1 overflow-y-auto bg-[#ece6de] p-3 sm:p-4">
               {clips.length === 0 ? (
                 <div className="grid h-full min-h-52 place-items-center rounded-xl border border-dashed border-border text-center text-sm text-muted-foreground">
                   <div>
@@ -454,8 +512,54 @@ export function MusicStudio({
                   </div>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  <div className="overflow-hidden rounded-xl border border-border bg-[#111318] shadow-inner">
+                <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_17rem] xl:grid-rows-[minmax(10rem,auto)_minmax(8rem,1fr)]">
+                  <div className="flex min-h-40 items-center gap-4 overflow-hidden rounded-xl border border-white/10 bg-[#17191e] p-4 text-white shadow-inner">
+                    {transportClip ? (
+                      <TrackArtwork
+                        seed={transportClip.trackId ?? transportClip.id}
+                        name={transportClip.name}
+                        className="h-24 w-24 shrink-0 rounded-xl shadow-lg sm:h-32 sm:w-32"
+                      />
+                    ) : null}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-accent-copper">
+                        Program monitor · {String(transportIndex + 1).padStart(2, '0')} /{' '}
+                        {clips.length}
+                      </p>
+                      <p className="mt-2 truncate text-lg font-semibold sm:text-xl">
+                        {transportClip?.name}
+                      </p>
+                      <p className="mt-1 text-xs text-white/55">
+                        {previewingId === 'mix'
+                          ? 'Playing mix'
+                          : mixPaused
+                            ? 'Paused'
+                            : 'Ready to play'}
+                      </p>
+                      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/15">
+                        <div
+                          className="h-full rounded-full bg-accent-copper transition-[width]"
+                          style={{
+                            width: `${playbackProgress.clipId === transportClip?.id && playbackProgress.duration > 0 ? Math.min(100, (playbackProgress.currentTime / playbackProgress.duration) * 100) : 0}%`,
+                          }}
+                        />
+                      </div>
+                      <p className="mt-1 font-mono text-[10px] text-white/45">
+                        {formatTime(
+                          playbackProgress.clipId === transportClip?.id
+                            ? playbackProgress.currentTime
+                            : 0,
+                        )}{' '}
+                        /{' '}
+                        {formatTime(
+                          playbackProgress.clipId === transportClip?.id
+                            ? playbackProgress.duration
+                            : 0,
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="overflow-hidden rounded-xl border border-border bg-[#111318] shadow-inner xl:col-start-1 xl:row-start-2">
                     <div className="flex h-10 items-center gap-2 border-b border-white/10 px-3 text-[10px] text-white/65">
                       <Scissors className="h-3.5 w-3.5 text-accent-copper" />
                       <span className="font-semibold uppercase tracking-[0.16em] text-white/85">
@@ -627,7 +731,7 @@ export function MusicStudio({
                   {selectedClip ? (
                     <section
                       aria-label="Selected clip editor"
-                      className="grid gap-3 rounded-xl border border-accent-copper/40 bg-paper p-3 shadow-sm sm:grid-cols-[4.5rem_minmax(0,1fr)]"
+                      className="grid content-start gap-3 rounded-xl border border-accent-copper/40 bg-paper p-3 shadow-sm sm:grid-cols-[4.5rem_minmax(0,1fr)] xl:col-start-2 xl:row-span-2 xl:row-start-1 xl:grid-cols-1 xl:overflow-y-auto"
                     >
                       <TrackArtwork
                         seed={selectedClip.trackId ?? selectedClip.id}

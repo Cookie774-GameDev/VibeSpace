@@ -11,7 +11,7 @@ vi.mock('./benchmarkApi', async (importOriginal) => ({
   getCachedBenchmarkLeaderboard: api.getCachedBenchmarkLeaderboard,
 }));
 
-import { BenchmarkIntelligencePage } from './BenchmarkIntelligencePage';
+import { BenchmarkIntelligencePage, contextForBenchmarkRow } from './BenchmarkIntelligencePage';
 
 const rows = [
   {
@@ -55,6 +55,47 @@ const rows = [
 ];
 
 describe('BenchmarkIntelligencePage', () => {
+  it('keeps Overall available after visiting an unsupported category', async () => {
+    render(<BenchmarkIntelligencePage />);
+    await screen.findAllByText('Claude Opus 5 (Max Effort)');
+    fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
+    expect(screen.getByText('Reasoning scores unavailable')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Overall' }));
+    expect(screen.getByRole('heading', { name: 'Overall ranking' })).toBeTruthy();
+  });
+
+  it('uses feed context first and exact provider docs only when the feed omits it', () => {
+    expect(contextForBenchmarkRow(rows[1]!)).toMatchObject({
+      tokens: 400000,
+      sourceName: 'Artificial Analysis feed',
+    });
+    expect(contextForBenchmarkRow({ ...rows[1]!, contextWindowTokens: undefined })).toMatchObject({
+      tokens: 1050000,
+      sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-5.6-sol',
+    });
+    expect(
+      contextForBenchmarkRow({
+        ...rows[0]!,
+        model: 'Claude Unknown 5',
+        contextWindowTokens: undefined,
+      }),
+    ).toBeNull();
+    expect(
+      contextForBenchmarkRow({
+        ...rows[0]!,
+        model: 'Claude Opus 5.5 (max)',
+        contextWindowTokens: undefined,
+      })?.tokens,
+    ).toBe(1_000_000);
+    expect(
+      contextForBenchmarkRow({
+        ...rows[0]!,
+        provider: 'Meta',
+        model: 'Muse Spark 1.3 (max)',
+        contextWindowTokens: undefined,
+      })?.tokens,
+    ).toBe(1_048_576);
+  });
   it('refreshes an open page hourly and removes its timer on unmount', async () => {
     vi.useFakeTimers();
     try {

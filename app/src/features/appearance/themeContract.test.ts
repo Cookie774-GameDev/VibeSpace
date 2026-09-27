@@ -33,7 +33,7 @@ describe('canonical theme contract', () => {
       description: 'Pastel origami workspace.',
     });
     expect(parseSelectableTheme('vibespace')).toBeNull();
-    expect(normalizePersistedTheme('vibespace')).toBe('default');
+    expect(normalizePersistedTheme('vibespace')).toBe('warm');
   });
 
   it('preserves Sakura metadata while deferring it from this release', () => {
@@ -43,8 +43,8 @@ describe('canonical theme contract', () => {
       description: 'Cel-painted dusk workspace.',
     });
     expect(parseSelectableTheme('sakura')).toBeNull();
-    expect(normalizePersistedTheme('sakura')).toBe('default');
-    expect(normalizePersistedTheme('dusk')).toBe('default');
+    expect(normalizePersistedTheme('sakura')).toBe('warm');
+    expect(normalizePersistedTheme('dusk')).toBe('warm');
   });
 
   it('publishes Warm as the owner-approved paper workspace theme', () => {
@@ -63,7 +63,7 @@ describe('canonical theme contract', () => {
       description: 'Sculpted paper workspace in motion.',
     });
     expect(parseSelectableTheme('origami')).toBeNull();
-    expect(normalizePersistedTheme('origami')).toBe('default');
+    expect(normalizePersistedTheme('origami')).toBe('warm');
   });
 
   it('parses only themes enabled for the current release', () => {
@@ -96,7 +96,7 @@ describe('canonical theme contract', () => {
     expect(normalizePersistedTheme('jarvis')).toBe('jarvis');
 
     for (const value of ['mono', 'unknown', '', null, undefined, {}, 42]) {
-      expect(normalizePersistedTheme(value)).toBe('default');
+      expect(normalizePersistedTheme(value)).toBe('warm');
     }
   });
 

@@ -1,7 +1,7 @@
 {
   "storageKey": "jarvis-ui",
   "storeVersion": 5,
-  "fallbackTheme": "default",
+  "fallbackTheme": "warm",
   "deferredThemes": ["vibespace", "sakura", "origami"],
   "selectableThemes": [
     {
