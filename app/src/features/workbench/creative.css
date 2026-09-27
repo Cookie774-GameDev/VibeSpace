@@ -204,6 +204,7 @@
 }
 .wb-creative-resize {
   position: absolute;
+  z-index: 2;
   right: -5px;
   bottom: -5px;
   width: 11px;
