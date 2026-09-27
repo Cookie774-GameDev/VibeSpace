@@ -324,3 +324,31 @@ Keep generated harness rules and frontend permission projections aligned. Test a
 - **Evidence**: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH33/native-review-once2-1790493753307.json
 
 ---
+
+## [LRN-20260927-CH33C] correction
+
+**Logged**: 2026-09-27T07:33:00Z
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Select the native main WebView by Tauri window label, not the shared localhost URL prefix.
+
+### Details
+The official C1 process exposes both dictation and main pages on localhost:5173. A read-only restart probe used Array.find on that URL prefix and twice selected dictation, then reported main missing before requesting exit. Checking each candidate's Tauri currentWindow label found main reliably; the corrected graceful process exit and postrestart dedup check passed.
+
+### Suggested Action
+In native Playwright helpers, enumerate CDP pages, inspect Tauri metadata for label main, then verify URL and app readiness. Preserve the failed pre-exit receipts separately from product failures.
+
+### Metadata
+- Source: error
+- Related Files: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH33/native-c1-graceful-exit2.cjs
+- Tags: native-playwright, multi-webview, selectors
+- Pattern-Key: native.qa.main_window_selector
+
+### Resolution
+- **Resolved**: 2026-09-27T07:32:25Z
+- **Evidence**: work/mini-prompts/01-native-chat-harnesses/20260925T2232Z-CH31/evidence/CH33/native-process-restart-dedup-1790494344573.json
+
+---
