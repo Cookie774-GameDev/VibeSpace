@@ -28,15 +28,17 @@ This crops `app-icon-source.png` to a square, runs `tauri icon`, and syncs
 
 | Surface | Asset |
 |---------|-------|
-| Windows taskbar / window / tray (runtime) | `32x32.png` in `branding.rs` |
+| Windows taskbar / window | multi-size `icon.ico` embedded in the `.exe` |
+| Windows tray | `32x32.png` in `branding.rs` |
 | Windows Start menu / pinned shortcut | `icon.ico` embedded in the `.exe` at build |
 | Web favicon | synced to `public/favicon.ico` |
 
-Runtime branding re-applies on focus, resize, tray restore, and a Windows watchdog
-so WebView2 cannot leave the generic placeholder on the taskbar.
+The Windows process uses its own `ai.vibespace.desktop` shell identity so an
+older Jarvis shortcut cannot supply its orange J icon. The Tauri identifier
+remains `ai.jarvis.desktop` to preserve existing app data.
 
 On Windows, `branding_windows.rs` also:
 
-- calls `SetCurrentProcessExplicitAppUserModelID` (`ai.jarvis.desktop`)
-- sets both `ICON_SMALL` and `ICON_BIG` via `WM_SETICON` from the embedded
-  `icon.ico` resource in the `.exe` (Tauri `set_icon` only sets the small icon)
+- calls `SetCurrentProcessExplicitAppUserModelID` (`ai.vibespace.desktop`)
+- provides a bounded `WM_SETICON` helper for both `ICON_SMALL` and `ICON_BIG`
+  from the embedded `icon.ico` resource when a window needs an explicit refresh

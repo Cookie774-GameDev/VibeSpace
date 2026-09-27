@@ -150,7 +150,7 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
 
 /**
  * Send a user-facing notification. Routing:
- *   1. Native OS notification via `tauri-plugin-notification` (desktop).
+ *   1. Branded native OS notification after the plugin permission check (desktop).
  *   2. Browser `Notification` API (web).
  *   3. Last-resort in-app toast (when fallbackToast is not false).
  */
@@ -165,9 +165,7 @@ export async function notify(
     try {
       permission = await requestNotificationPermission();
       if (permission === 'granted') {
-        await tauriInvoke('plugin:notification|notify', {
-          options: { title, body, silent: options.silent ?? false },
-        });
+        await tauriInvoke('vibespace_notify', { title, body, silent: options.silent ?? false });
         return {
           channel: 'native',
           permission,

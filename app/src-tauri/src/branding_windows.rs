@@ -4,7 +4,7 @@
 //! The taskbar on Windows 10/11 uses ICON_BIG — without it, WebView2 HWND swaps
 //! and "Not Responding" states show the generic document icon.
 
-use super::TAURI_APP_IDENTIFIER;
+use super::WINDOWS_APP_USER_MODEL_ID;
 use tauri::Window;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::HANDLE;
@@ -29,7 +29,7 @@ fn encode_wide(value: &str) -> Vec<u16> {
 
 /// Call once at process start, before any window is created.
 pub fn init_process_branding() {
-    let wide = encode_wide(TAURI_APP_IDENTIFIER);
+    let wide = encode_wide(WINDOWS_APP_USER_MODEL_ID);
     if let Err(err) =
         unsafe { SetCurrentProcessExplicitAppUserModelID(PCWSTR::from_raw(wide.as_ptr())) }
     {

@@ -70,6 +70,7 @@ mod model_foundry_download;
 mod model_foundry_training;
 mod monochrome_evidence;
 mod native_app_surface;
+mod notification_branding;
 mod ollama_http;
 mod pets;
 mod playwright_feature_pack;
@@ -730,6 +731,7 @@ fn run_ordinary(
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            notification_branding::vibespace_notify,
             desktop_connector::desktop_connector_status,
             desktop_connector::desktop_connector_setup,
             relay_engine::relay_engine_start,

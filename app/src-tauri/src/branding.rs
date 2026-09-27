@@ -18,8 +18,9 @@ static DEFERRED_REFRESH_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Tray id used in `lib.rs` — must stay in sync.
 pub const TRAY_ICON_ID: &str = "vibespace-tray";
 
-/// Must match `identifier` in `tauri.conf.json` (Windows AppUserModelID).
-pub const TAURI_APP_IDENTIFIER: &str = "ai.jarvis.desktop";
+/// Windows shell identity. Keep it separate from the historical Tauri identifier
+/// because an older Jarvis installation also owns `ai.jarvis.desktop` shortcuts.
+pub const WINDOWS_APP_USER_MODEL_ID: &str = "ai.vibespace.desktop";
 
 fn load_window_icon() -> tauri::image::Image<'static> {
     // PNG decodes reliably at runtime. `icon.ico` via `from_bytes` only keeps the
@@ -135,11 +136,11 @@ pub fn start_windows_icon_watchdog(_app: &AppHandle) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{should_apply_tauri_window_icon, TAURI_APP_IDENTIFIER};
+    use super::{should_apply_tauri_window_icon, WINDOWS_APP_USER_MODEL_ID};
 
     #[test]
-    fn tauri_identifier_is_stable() {
-        assert_eq!(TAURI_APP_IDENTIFIER, "ai.jarvis.desktop");
+    fn windows_shell_identity_does_not_collide_with_legacy_jarvis() {
+        assert_eq!(WINDOWS_APP_USER_MODEL_ID, "ai.vibespace.desktop");
     }
 
     #[test]

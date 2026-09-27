@@ -77,3 +77,32 @@ Reuse the existing native room binding and upstream parent-message reply API. Re
 
 ### 2026-09-27 correction to FEAT-20260927-RI02
 The user rejected reused flower assets. The Inspector background now uses the chat botanical canvas's deterministic sections and seeded randomness to draw individually varied silver flowers, curved stems, and a different number of thorns per bloom. The Workbench drawer remains available.
+
+## [FEAT-20260927-TC27] branded_windows_toasts
+
+**Logged**: 2026-09-27T14:00:00Z
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### Requested Capability
+Windows task notifications should show VibeSpace as the sender with its logo, including in the Live C2 native development app. The running app's taskbar icon should use the official full quality VibeSpace logo.
+
+### User Context
+A Jarvis task failure toast displayed Windows PowerShell and its icon above the task title and VibeSpace body copy. The taskbar also displayed an orange J icon from an older Jarvis identity.
+
+### Suggested Implementation
+Use a distinct VibeSpace notification AppUserModelID with a matching Start Menu shortcut for unpackaged Windows toasts. Give the running Windows app its own shell identity so it uses the bundled VibeSpace icon instead of the older Jarvis shortcut. Verify both in native C2 while preserving the historical app data identifier.
+
+### Metadata
+- Source: user_feedback
+- Related Files: app/src-tauri/src/notification_branding.rs, app/src-tauri/src/branding.rs, app/src/lib/tauri.ts
+- Tags: windows, notifications, branding, taskbar
+
+### Verified Result
+
+Live C2 (PID 1060, CDP 9252) showed a Windows banner from VibeSpace, a
+Notification Center entry with the official V icon, and an active V taskbar
+button. The legacy J remains a separate app button.
+
+---
