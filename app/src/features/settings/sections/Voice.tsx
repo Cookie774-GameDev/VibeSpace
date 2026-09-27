@@ -536,7 +536,11 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
             <VoiceConversationModeCard
               selected={voiceAutoListenOnOpen}
               title="Hands-free"
-              description={`Speak your message, then say "${voiceCommitPhrase}" to send.`}
+              description={
+                voiceEndTrigger === 'silence'
+                  ? 'Speak your message; Jarvis sends after the selected pause.'
+                  : `Speak your message, then say "${voiceCommitPhrase}" to send.`
+              }
               onSelect={() => setVoiceAutoListenOnOpen(true)}
             />
             <VoiceConversationModeCard
@@ -551,7 +555,9 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
               <div>
                 <Label htmlFor="voice-commit-phrase">Send phrase</Label>
                 <p className="mt-1 text-metadata text-muted-foreground">
-                  Say this when your message is ready. Jarvis will not send until he hears it.
+                  {voiceEndTrigger === 'phrase'
+                    ? 'Say this when your message is ready. Jarvis will not send until he hears it.'
+                    : 'Used when you select “Say a phrase” below. Pause mode sends after silence.'}
                 </p>
                 <Input
                   id="voice-commit-phrase"

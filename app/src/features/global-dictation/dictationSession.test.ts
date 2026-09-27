@@ -137,9 +137,43 @@ describe('createGlobalDictationSession engine resolution', () => {
   it('saves completed local transcription through the shared pipeline', async () => {
     mocks.composer.provider = 'faster-whisper';
     mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);
-    const session = await createSelectedSttSession();
+    const onTurnEnd = vi.fn();
+    const session = await createSelectedSttSession({ onTurnEnd });
     await session.stop();
+    expect(onTurnEnd).not.toHaveBeenCalled();
     expect(readSpeechHistory()[0]).toMatchObject({ text: 'local text', status: 'completed' });
+  });
+
+  it('finishes selected local Whisper in Jarvis voice after speech pauses and submits once', async () => {
+    mocks.composer.provider = 'faster-whisper';
+    mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);
+    let sample!: (level: number) => void;
+    mocks.composer.startBatchAudioRecorder.mockImplementationOnce(async (onLevel) => {
+      sample = onLevel;
+      return {
+        captureWav: () => new Blob(['spoken voice'], { type: 'audio/wav' }),
+        stop: vi.fn(),
+      };
+    });
+    const onFinal = vi.fn();
+    const onTurnEnd = vi.fn();
+    const session = await createSelectedSttSession(
+      { onFinal, onTurnEnd },
+      { requester: 'jarvis-voice' },
+    );
+    try {
+      sample(0.35);
+      await vi.waitFor(() => expect(onFinal).toHaveBeenCalledWith('local text'), {
+        timeout: 2_500,
+      });
+      expect(onTurnEnd).toHaveBeenCalledOnce();
+      expect(onTurnEnd).toHaveBeenCalledWith({ forceCommit: true });
+      expect(readSpeechHistory()[0]).toMatchObject({ text: 'local text', status: 'completed' });
+      await session.stop();
+      expect(onTurnEnd).toHaveBeenCalledOnce();
+    } finally {
+      session.cancel();
+    }
   });
 
   it('uses the configured local faster-whisper model first (same as composer STT)', async () => {

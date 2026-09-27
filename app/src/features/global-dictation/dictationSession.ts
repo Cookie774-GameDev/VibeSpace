@@ -88,32 +88,42 @@ function createBatchSession(
   engineLabel: string,
   transcribe: (blob: Blob) => Promise<string>,
   events: DictationEvents,
+  autoFinishVoiceTurn = false,
 ): Promise<GlobalDictationSession> {
   let finalText = '';
   let recorder: FasterWhisperRecorder | null = null;
   let done = false;
   let cancelled = false;
   let closed = false;
+  let lastVoiceAt = 0;
+  let silenceTimer: ReturnType<typeof setInterval> | null = null;
   const close = () => {
     if (closed) return;
     closed = true;
+    if (silenceTimer !== null) clearInterval(silenceTimer);
+    silenceTimer = null;
     events.onLevel?.(0);
     events.onClose?.();
   };
 
   return startBatchAudioRecorder(
-    (level) => events.onLevel?.(level),
+    (level) => {
+      if (autoFinishVoiceTurn && level >= 0.12) lastVoiceAt = Date.now();
+      events.onLevel?.(level);
+    },
     () => events.onError?.('No speech detected for a while — press Retry to keep listening.'),
   ).then((started) => {
     recorder = started;
     events.onOpen?.();
-    return {
+    const session: GlobalDictationSession = {
       engine,
       engineLabel,
       streaming: false,
       stop: async () => {
         if (done) return;
         done = true;
+        if (silenceTimer !== null) clearInterval(silenceTimer);
+        silenceTimer = null;
         const wav = recorder?.captureWav() ?? null;
         recorder?.stop();
         recorder = null;
@@ -125,7 +135,10 @@ function createBatchSession(
           const text = (await transcribe(wav)).trim();
           if (!cancelled) {
             finalText = text;
-            if (finalText) events.onFinal?.(finalText);
+            if (finalText) {
+              events.onFinal?.(finalText);
+              if (autoFinishVoiceTurn) events.onTurnEnd?.({ forceCommit: true });
+            }
           }
         } catch {
           if (!cancelled) events.onError?.(formatGlobalDictationTranscriptionFailure(engine));
@@ -144,6 +157,12 @@ function createBatchSession(
       },
       getFinalText: () => finalText,
     };
+    if (autoFinishVoiceTurn) {
+      silenceTimer = setInterval(() => {
+        if (lastVoiceAt && Date.now() - lastVoiceAt >= 1_200) void session.stop();
+      }, 150);
+    }
+    return session;
   });
 }
 
@@ -513,6 +532,7 @@ export async function createSelectedSttSession(
           `Local faster-whisper (${model})`,
           (blob) => transcribeFasterWhisper(blob, model),
           scopedEvents,
+          options.requester === 'jarvis-voice',
         ),
       );
     }

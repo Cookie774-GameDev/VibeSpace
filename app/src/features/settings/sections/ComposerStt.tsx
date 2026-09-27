@@ -200,7 +200,8 @@ export function ComposerStt() {
           Speech to Text
         </h2>
         <p className="text-secondary text-muted-foreground">
-          Composer microphone dictation only — not Jarvis voice, wake word, or phone calls.
+          This choice is shared by composer dictation and Jarvis voice. Wake word and phone calls
+          use separate input.
         </p>
       </header>
 
@@ -211,7 +212,7 @@ export function ComposerStt() {
           <ProviderRow
             selected={provider === 'system'}
             title="Free System"
-            description="Built-in speech recognition when available. Groq Whisper is used only when a Groq key is configured. No comparable accuracy estimate is shown because quality varies by OS engine, browser, language, and microphone."
+            description="Built-in speech recognition. After a network error, Jarvis voice can use an already-installed local Whisper model. Composer's optional Groq fallback requires a configured key."
             meta={
               isSystemSttAvailable()
                 ? 'Web Speech available'
