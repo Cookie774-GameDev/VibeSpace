@@ -38,6 +38,61 @@ const agents = {
 };
 
 describe('provider-bound Jarvis voice chats', () => {
+  it('creates a new provider chat for each voice opening even when older voice chats exist', async () => {
+    const previousAuth = useAuthStore.getState();
+    const previousAgents = useAgentStore.getState().agents;
+    useAuthStore.setState({
+      cloudSession: null,
+      localUserId: 'voice-opening-account',
+      workspaceId: 'voice-opening-workspace' as never,
+      projectId: null,
+    });
+    useAgentStore.setState({ agents: { [jarvisAgent.id]: jarvisAgent } });
+    vi.spyOn(db.chats, 'where').mockReturnValue({
+      equals: () => ({
+        toArray: async () => [
+          {
+            id: 'old-voice-chat',
+            title: 'Jarvis Voice yesterday',
+            active_agent_ids: [jarvisAgent.id],
+            backend_affinity: { version: 1, backend: 'codex', locked: false, selectedAt: 1 },
+          },
+        ],
+      }),
+    } as never);
+    let created = 0;
+    const create = vi.spyOn(chatRepo, 'createAuthorized').mockImplementation(
+      async (input) =>
+        ({
+          ...input,
+          id: `new-voice-chat-${++created}`,
+        }) as never,
+    );
+
+    try {
+      await expect(
+        ensureJarvisChatForProvider('codex', undefined, {
+          freshVoiceConversation: true,
+          openingId: 'first-opening',
+        }),
+      ).resolves.toBe('new-voice-chat-1');
+      await expect(
+        ensureJarvisChatForProvider('codex', undefined, {
+          freshVoiceConversation: true,
+          openingId: 'second-opening',
+        }),
+      ).resolves.toBe('new-voice-chat-2');
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(create.mock.calls[0]?.[0]).toMatchObject({
+        title: expect.stringMatching(/^Jarvis Voice /),
+        backend_affinity: expect.objectContaining({ backend: 'codex' }),
+      });
+    } finally {
+      useAuthStore.setState(previousAuth);
+      useAgentStore.setState({ agents: previousAgents });
+    }
+  });
+
   it('creates a Codex chat with explicit backend affinity before its first message', async () => {
     const previousAuth = useAuthStore.getState();
     const previousAgents = useAgentStore.getState().agents;

@@ -20,6 +20,7 @@ export interface VoiceAgentRequest {
 export interface VoiceAgentFlowStatus {
   phase:
     | 'acknowledged'
+    | 'submitted'
     | 'capture_failed'
     | 'launched'
     | 'worker_terminal'

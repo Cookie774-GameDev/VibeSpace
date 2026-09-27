@@ -38,6 +38,7 @@ describe('voice worker runtime receipt', () => {
     cards.publish({ status: 'thinking', harnessSessionId: 'native-session-1' });
     await expect(receipt).resolves.toEqual({
       provider: 'opencode',
+      proof: 'session',
       sessionId: 'native-session-1',
     });
     expect(cards.listenerCount()).toBe(0);
@@ -53,6 +54,48 @@ describe('voice worker runtime receipt', () => {
     cards.publish({ status: 'failed' });
     await rejected;
     expect(cards.listenerCount()).toBe(0);
+  });
+
+  it('accepts a completed child only after matching persisted provider evidence', async () => {
+    const cards = receiptSource();
+    const verifyCompletedProvider = vi.fn(async () => true);
+    const receipt = waitForVoiceWorkerReceipt(
+      {
+        parentChatId: 'parent',
+        agentId: 'agent',
+        provider: 'codex',
+        childChatId: 'child',
+        expectedProviderId: 'openai',
+        expectedModelId: 'codex-auto-review',
+      },
+      { ...cards.source, verifyCompletedProvider },
+    );
+    cards.publish({ status: 'done' });
+    await expect(receipt).resolves.toEqual({ provider: 'codex', proof: 'completed_response' });
+    expect(verifyCompletedProvider).toHaveBeenCalledWith({
+      childChatId: 'child',
+      provider: 'codex',
+      expectedProviderId: 'openai',
+      expectedModelId: 'codex-auto-review',
+    });
+  });
+
+  it('rejects a done child whose persisted response does not match the requested provider', async () => {
+    const cards = receiptSource();
+    const receipt = waitForVoiceWorkerReceipt(
+      {
+        parentChatId: 'parent',
+        agentId: 'agent',
+        provider: 'codex',
+        childChatId: 'child',
+        expectedProviderId: 'openai',
+        expectedModelId: 'codex-auto-review',
+      },
+      { ...cards.source, verifyCompletedProvider: async () => false },
+    );
+    const rejected = expect(receipt).rejects.toThrow('without matching provider proof');
+    cards.publish({ status: 'done' });
+    await rejected;
   });
 
   it('does not claim provider receipt after a bounded timeout', async () => {

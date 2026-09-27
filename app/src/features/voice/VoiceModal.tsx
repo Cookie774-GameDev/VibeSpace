@@ -45,6 +45,14 @@ import {
 import { captureVoiceScreenAttachment } from './voiceScreenCapture';
 import { waitForVoiceWorkerReceipt } from './voiceWorkerReceipt';
 import {
+  formatPreviousVoiceTaskContext,
+  isVoiceConversationInScope,
+  listPreviousVoiceTasks,
+  recordVoiceConversation,
+  voiceTaskCoordinator,
+} from './voiceTaskCoordinator';
+import { syncVoiceConversationFolder } from './voiceConversationFolder';
+import {
   buildVoiceMainResultSendDetail,
   createVoiceAgentFlow,
   type VoiceWorkerOutcome,
@@ -284,6 +292,22 @@ function VoiceModalPanel() {
     () => new Set(),
   );
   const session = useVoiceStore((voice) => voice.session);
+  const agentsByChat = useJarvisInteractionStore((state) => state.agentsByChat);
+  const priorVoiceTasks = React.useMemo(
+    () =>
+      session && workspaceId
+        ? listPreviousVoiceTasks(
+            {
+              accountId: session.accountId,
+              workspaceId: String(workspaceId),
+              projectId: projectId ? String(projectId) : null,
+            },
+            String(session.chatId),
+            agentsByChat,
+          )
+        : [],
+    [agentsByChat, projectId, session, workspaceId],
+  );
   const liveGalaxySnapshot = React.useSyncExternalStore(
     subscribeContextGalaxySnapshots,
     () => getContextGalaxySnapshot(session?.accountId ?? null, projectId),
@@ -317,8 +341,10 @@ function VoiceModalPanel() {
   const streamingReplyRef = React.useRef(false);
   const manuallyStoppedReplyRef = React.useRef(false);
   const flushUtteranceRef = React.useRef<(text: string) => void>(() => undefined);
-  const voiceAgentFlowRef = React.useRef<ReturnType<typeof createVoiceAgentFlow> | null>(null);
   const voiceFlowActiveRef = React.useRef(false);
+  const openingIdRef = React.useRef<string | null>(null);
+  const openingScopeRef = React.useRef('');
+  const providerChatsRef = React.useRef<Record<string, Promise<ChatId | null>>>({});
   const voiceLaunchFailureRef = React.useRef<string | null>(null);
   const [voiceFlowStatus, setVoiceFlowStatus] = React.useState('');
   const listeningArmedRef = React.useRef(false);
@@ -653,9 +679,23 @@ function VoiceModalPanel() {
       if (currentIdentity?.accountId !== requestedIdentity.accountId) return;
       if (voiceFlowActiveRef.current) return;
 
-      const chatId = await ensureJarvisChatForProvider(
-        useAuthStore.getState().voiceMainAgentProvider,
-      );
+      const provider = useAuthStore.getState().voiceMainAgentProvider;
+      const openingScope = JSON.stringify([requestedIdentity.accountId, workspaceId, projectId]);
+      if (openingScopeRef.current !== openingScope) {
+        openingScopeRef.current = openingScope;
+        openingIdRef.current = newVoiceSessionId();
+        providerChatsRef.current = {};
+      }
+      const openingId = openingIdRef.current!;
+      const chatId = await (providerChatsRef.current[provider] ??= ensureJarvisChatForProvider(
+        provider,
+        undefined,
+        {
+          freshVoiceConversation: true,
+          openingId,
+        },
+      ));
+      if (!chatId) delete providerChatsRef.current[provider];
       if (disposed || !chatId) return;
 
       const confirmedIdentity = resolveAccountIdentity(useAuthStore.getState());
@@ -674,7 +714,20 @@ function VoiceModalPanel() {
         chatId,
         startedAt: Date.now(),
       });
-      if (useVoiceStore.getState().beginSession(binding)) focusVoiceChat(binding.chatId);
+      if (useVoiceStore.getState().beginSession(binding)) {
+        recordVoiceConversation(
+          {
+            accountId: binding.accountId,
+            workspaceId: String(workspaceId),
+            projectId: projectId ? String(projectId) : null,
+          },
+          String(binding.chatId),
+        );
+        focusVoiceChat(binding.chatId);
+        void syncVoiceConversationFolder(String(binding.chatId)).then((result) => {
+          if (!disposed && !result.ok) setVoiceFlowStatus(result.error);
+        });
+      }
     })().catch(() => {
       if (disposed) return;
       useVoiceStore.getState().setState('error', VOICE_SESSION_START_FAILURE);
@@ -817,7 +870,13 @@ function VoiceModalPanel() {
           if (parsed.providers.worker) auth.setVoiceWorkerProvider(parsed.providers.worker);
         }
 
-        const chatId = await ensureJarvisChatForProvider(mainProvider, messageText);
+        const openingId = (openingIdRef.current ??= newVoiceSessionId());
+        const chatId = await (providerChatsRef.current[mainProvider] ??=
+          ensureJarvisChatForProvider(mainProvider, messageText, {
+            freshVoiceConversation: true,
+            openingId: `${openingId}:${mainProvider}`,
+          }));
+        if (!chatId) delete providerChatsRef.current[mainProvider];
         if (!chatId) throw new Error(VOICE_CHAT_TARGET_FAILURE);
         const identity = resolveAccountIdentity(useAuthStore.getState());
         if (!identity) throw new Error(VOICE_BOUND_CHAT_FAILURE);
@@ -833,6 +892,14 @@ function VoiceModalPanel() {
           if (!useVoiceStore.getState().beginSession(binding))
             throw new Error(VOICE_BOUND_CHAT_FAILURE);
         }
+        recordVoiceConversation(
+          {
+            accountId: identity.accountId,
+            workspaceId: String(auth.workspaceId),
+            projectId: auth.projectId ? String(auth.projectId) : null,
+          },
+          String(chatId),
+        );
         focusVoiceChat(chatId);
 
         const modelCheck = validateSendModelAccess(
@@ -844,8 +911,21 @@ function VoiceModalPanel() {
         );
         if (!modelCheck.ok) throw new Error(modelCheck.message);
 
-        if (!voiceAgentFlowRef.current) {
-          voiceAgentFlowRef.current = createVoiceAgentFlow({
+        const request = {
+          chatId,
+          text: messageText,
+          mainProvider,
+          workerProvider,
+          dedupeScope: JSON.stringify([
+            identity.accountId,
+            String(auth.workspaceId),
+            auth.projectId ? String(auth.projectId) : null,
+          ]),
+        };
+        const requestStartedAt = Date.now();
+        const receipt = await voiceTaskCoordinator.start(request, (report) => {
+          let workerSubmitted = false;
+          const flow = createVoiceAgentFlow({
             now: Date.now,
             acknowledge: () => undefined,
             persistUser: async (input) => {
@@ -854,6 +934,7 @@ function VoiceModalPanel() {
                 role: 'user',
                 parts: [{ kind: 'text', text: input.text }],
               });
+              void syncVoiceConversationFolder(input.chatId);
             },
             captureScreen: async (requestText, provider) => {
               const route = resolveVoiceProviderSelection({
@@ -895,22 +976,57 @@ function VoiceModalPanel() {
                 .filter(Boolean)
                 .join('\n')
                 .slice(-4_000);
+              const previousTasks = formatPreviousVoiceTaskContext(
+                listPreviousVoiceTasks(
+                  {
+                    accountId: identity.accountId,
+                    workspaceId: String(liveAuth.workspaceId),
+                    projectId: liveAuth.projectId ? String(liveAuth.projectId) : null,
+                  },
+                  input.parentChatId,
+                  useJarvisInteractionStore.getState().agentsByChat,
+                ),
+              );
               const launched = await launchJarvisChatAgent({
                 parentChatId: input.parentChatId,
-                task: recentContext
-                  ? `${input.task}\n\nRecent parent conversation (context only; follow the current request):\n${recentContext}`
-                  : input.task,
+                task: [
+                  input.task,
+                  recentContext
+                    ? `Recent parent conversation (context only; follow the current request):\n${recentContext}`
+                    : '',
+                  previousTasks,
+                ]
+                  .filter(Boolean)
+                  .join('\n\n'),
                 modelLabel: route.modelLabel,
                 modelSelection: route.selection,
                 workerProvider: route.provider,
                 imageAttachments: input.imageAttachments,
                 recordParentCommand: false,
               });
+              if (route.selection.mode !== 'single')
+                throw new Error('The selected worker route has no single model.');
+              workerSubmitted = true;
+              report({
+                phase: 'submitted',
+                chatId: input.parentChatId,
+                provider: route.provider,
+                elapsedMs: Date.now() - requestStartedAt,
+              });
+              if (useVoiceStore.getState().session?.chatId === input.parentChatId) {
+                setVoiceFlowStatus(
+                  `Submitted to ${route.provider === 'codex' ? 'Codex' : 'OpenCode'}; waiting for provider`,
+                );
+              }
               const receipt = await waitForVoiceWorkerReceipt({
                 parentChatId: input.parentChatId,
                 agentId: launched.agentId,
                 provider: route.provider,
+                childChatId: launched.childChatId,
+                expectedProviderId: route.selection.providerId,
+                expectedModelId: route.selection.modelId,
               });
+              void syncVoiceConversationFolder(input.parentChatId);
               return { ...launched, actualProvider: receipt.provider };
             },
             waitForWorker: (input) =>
@@ -921,15 +1037,71 @@ function VoiceModalPanel() {
                 input.signal,
               ),
             deliverMainResult: async (input) => {
+              const binding = useVoiceStore.getState().session;
+              if (binding?.chatId !== input.chatId || binding.accountId !== identity.accountId) {
+                const captureNotice = input.captureNotice ? `${input.captureNotice} ` : '';
+                await messageRepo.create({
+                  chat_id: input.chatId as ChatId,
+                  role: 'assistant',
+                  parts: [
+                    {
+                      kind: 'text',
+                      text: `${captureNotice}${input.workerProvider === 'codex' ? 'Codex' : 'OpenCode'} worker ${input.workerStatus} (child chat ${input.childChatId}): ${input.workerText.slice(0, 2_000)}`,
+                    },
+                  ],
+                });
+                void syncVoiceConversationFolder(input.chatId);
+                const currentAuth = useAuthStore.getState();
+                if (
+                  binding?.accountId === identity.accountId &&
+                  isVoiceConversationInScope(
+                    {
+                      accountId: identity.accountId,
+                      workspaceId: String(currentAuth.workspaceId),
+                      projectId: currentAuth.projectId ? String(currentAuth.projectId) : null,
+                    },
+                    String(binding.chatId),
+                  )
+                ) {
+                  await messageRepo.create({
+                    chat_id: binding.chatId,
+                    role: 'assistant',
+                    parts: [
+                      {
+                        kind: 'text',
+                        text: `${captureNotice}Earlier voice task finished in chat ${input.chatId}. ${input.workerProvider === 'codex' ? 'Codex' : 'OpenCode'} worker ${input.workerStatus}; child chat ${input.childChatId}. ${input.workerText.slice(0, 500)}`,
+                      },
+                    ],
+                  });
+                  void syncVoiceConversationFolder(String(binding.chatId));
+                  if (input.workerStatus === 'done') {
+                    VoiceService.cancelListening();
+                    useUIStore.getState().setVoiceListening(false);
+                    useVoiceStore.getState().setState('speaking');
+                    void speakWithSettings(
+                      `${captureNotice}Earlier task finished. ${input.workerText.slice(0, 500)}`,
+                    )
+                      .catch(() => undefined)
+                      .finally(() => {
+                        if (useVoiceStore.getState().session?.sessionId !== binding.sessionId)
+                          return;
+                        if (useAuthStore.getState().voiceAutoListenOnOpen) {
+                          if (!VoiceService.startListening())
+                            useVoiceStore.getState().setState('idle');
+                        } else {
+                          useVoiceStore.getState().setState('idle');
+                        }
+                      });
+                  }
+                }
+                return;
+              }
               const liveAuth = useAuthStore.getState();
               const route = resolveVoiceProviderSelection({
                 provider: input.mainProvider,
                 options: accessibleModelsRef.current,
                 preferredSelection: liveAuth.chatModelSelection,
               });
-              const binding = useVoiceStore.getState().session;
-              if (binding?.chatId !== input.chatId)
-                throw new Error('Voice session changed before the result.');
               const detail = buildVoiceMainResultSendDetail({
                 delivery: input,
                 selection: route.selection,
@@ -938,15 +1110,28 @@ function VoiceModalPanel() {
               window.dispatchEvent(new CustomEvent('jarvis:send', { detail }));
             },
             reportStatus: (status) => {
+              report(status);
+              if (useVoiceStore.getState().session?.chatId !== status.chatId) return;
               if (status.phase === 'launched') {
                 setVoiceFlowStatus(
                   `Sent to ${status.provider === 'codex' ? 'Codex' : 'OpenCode'} worker`,
                 );
               } else if (status.phase === 'capture_failed') {
                 setVoiceFlowStatus(status.message ?? 'Screen unavailable; sending text');
+                void speakWithSettings('Screen unavailable. Sending the text.').catch(
+                  () => undefined,
+                );
               } else if (status.phase === 'launch_failed') {
                 voiceLaunchFailureRef.current = status.message ?? null;
                 setVoiceFlowStatus(status.message ?? 'Worker could not start');
+                if (workerSubmitted) {
+                  useVoiceStore
+                    .getState()
+                    .setState('error', 'I could not verify the worker provider.');
+                  void speakWithSettings('I could not verify the worker provider.').catch(
+                    () => undefined,
+                  );
+                }
               } else if (status.phase === 'delivery_failed') {
                 setVoiceFlowStatus(status.message ?? 'Worker finished; result delivery failed');
               } else if (status.phase === 'worker_terminal') {
@@ -956,14 +1141,10 @@ function VoiceModalPanel() {
               }
             },
           });
-        }
-        const result = await voiceAgentFlowRef.current.run({
-          chatId,
-          text: messageText,
-          mainProvider,
-          workerProvider,
+          return flow.run(request);
         });
-        if (result.status === 'launch_failed') {
+        voiceFlowActiveRef.current = false;
+        if (receipt.status === 'launch_failed') {
           const saveFailed =
             voiceLaunchFailureRef.current === 'The voice request could not be saved.';
           const failure = saveFailed
@@ -973,10 +1154,7 @@ function VoiceModalPanel() {
           useVoiceStore.getState().setState('error', failure);
           void speakWithSettings(failure).catch(() => undefined);
           releaseTurnAndRestart();
-        } else if (result.status === 'delivery_failed') {
-          const failure = 'The worker finished, but I could not deliver the spoken result.';
-          useVoiceStore.getState().setState('error', failure);
-          void speakWithSettings(failure).catch(() => undefined);
+        } else {
           releaseTurnAndRestart();
         }
       })()
@@ -1372,6 +1550,28 @@ function VoiceModalPanel() {
                   })
                 }
               />
+              {priorVoiceTasks.length > 0 ? (
+                <section
+                  aria-label="Earlier voice workers"
+                  className="border-t border-border/50 px-3 py-2"
+                >
+                  <h3 className="mb-1 text-xs font-semibold">Earlier voice workers</h3>
+                  <ul className="space-y-1">
+                    {priorVoiceTasks.map((task) => (
+                      <li key={task.agentId} className="text-xs text-muted-foreground">
+                        <button
+                          type="button"
+                          className="text-left underline underline-offset-2 hover:text-foreground"
+                          onClick={() => focusVoiceChat(task.childChatId as ChatId)}
+                        >
+                          {task.provider} · {task.status} · {task.agentId.slice(0, 12)} ·{' '}
+                          {task.task}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
               {galaxySnapshot ? (
                 <section aria-label="Voice Context Map">
                   <h3 className="sr-only">Context Map</h3>

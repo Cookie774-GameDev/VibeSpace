@@ -17,6 +17,7 @@ const h = vi.hoisted(() => {
     testVoice: vi.fn(async () => {}),
     ttsStop: vi.fn(),
     endSession: vi.fn(),
+    sessionId: 'voice-session-old' as string | null,
     requestCancellation: vi.fn(async () => ({ kind: 'authority_revoked_before_intent' as const })),
     ensureJarvisReady: vi.fn(async () => false),
     resolveSpeak() {
@@ -90,6 +91,7 @@ vi.mock('./store', () => ({
       setState: vi.fn(),
       setPartialTranscript: vi.fn(),
       endSession: h.endSession,
+      session: h.sessionId ? { sessionId: h.sessionId } : null,
     }),
   },
 }));
@@ -123,6 +125,7 @@ describe('voiceRouter preview cancellation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     voiceModalOpen = true;
+    h.sessionId = 'voice-session-old';
     useAuthStore.setState({ voiceEngine: 'system', voicePreset: 'jarvis-prime' });
     registerActiveStreamingVoiceSession(null);
     registerActiveVoiceTurnCancellation(null);
@@ -262,7 +265,8 @@ describe('voice module gate', () => {
     await speakWithSettings('Hello from Jarvis.');
     expect(h.ensureJarvisReady).not.toHaveBeenCalled();
     expect(h.speakText).toHaveBeenCalledWith('Hello from Jarvis.', {
-      voicePreset: 'jarvis-prime', engine: 'system',
+      voicePreset: 'jarvis-prime',
+      engine: 'system',
     });
   });
 
@@ -314,6 +318,23 @@ describe('voice module lifecycle', () => {
     );
     expect(cancel).not.toHaveBeenCalled();
     window.removeEventListener('jarvis:cancel', cancel);
+  });
+
+  it('cannot end a newer voice binding when old cancellation finishes late', async () => {
+    let release!: () => void;
+    h.requestCancellation.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ kind: 'authority_revoked_before_intent' });
+        }),
+    );
+    registerActiveVoiceTurnCancellation({ requestCancellation: h.requestCancellation });
+
+    handleVoiceModuleClosed();
+    h.sessionId = 'voice-session-new';
+    release();
+    await vi.waitFor(() => expect(h.endSession).toHaveBeenCalledWith('voice-session-old'));
+    expect(h.endSession).not.toHaveBeenCalledWith('voice-session-new');
   });
 
   it('stopCurrentVoiceResponse uses only the registered process-local handle', async () => {

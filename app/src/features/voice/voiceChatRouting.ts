@@ -222,6 +222,7 @@ export async function ensureJarvisChatForVoice(titleHint?: string): Promise<Chat
 export async function ensureJarvisChatForProvider(
   provider: VoiceAgentProvider,
   titleHint?: string,
+  options: { freshVoiceConversation?: boolean; openingId?: string } = {},
 ): Promise<ChatId | null> {
   const auth = useAuthStore.getState();
   const identity = resolveAccountIdentity(auth);
@@ -231,7 +232,12 @@ export async function ensureJarvisChatForProvider(
     workspaceId: auth.workspaceId as WorkspaceId,
     projectId: auth.projectId as ProjectId | null,
   };
-  const key = JSON.stringify([captured, 'jarvis-provider', provider]);
+  const key = JSON.stringify([
+    captured,
+    'jarvis-provider',
+    provider,
+    options.freshVoiceConversation ? options.openingId : 'reuse',
+  ]);
   return runVoiceChatSingleFlight(key, async () => {
     const protectedJarvis = findProtectedJarvisAgent(
       Object.values(useAgentStore.getState().agents),
@@ -245,6 +251,7 @@ export async function ensureJarvisChatForProvider(
     if (!protectedJarvis || !targetIsCurrent()) return null;
     const find = async () => {
       const scoped = await listScopedChats(captured.workspaceId, captured.projectId);
+      if (options.freshVoiceConversation) return { scoped, existing: undefined };
       const existing = scoped
         .filter((chat) => isJarvisChat(chat, useAgentStore.getState().agents))
         .filter((chat) => {
@@ -272,7 +279,11 @@ export async function ensureJarvisChatForProvider(
       {
         workspace_id: captured.workspaceId,
         project_id: captured.projectId ?? undefined,
-        title: titleHint?.trim() ? 'New chat' : `New chat ${resolved.scoped.length + 1}`,
+        title: options.freshVoiceConversation
+          ? `Jarvis Voice ${new Date().toLocaleString()}`
+          : titleHint?.trim()
+            ? 'New chat'
+            : `New chat ${resolved.scoped.length + 1}`,
         mode: 'chat',
         active_agent_ids: [protectedJarvis.id],
         backend_affinity: {

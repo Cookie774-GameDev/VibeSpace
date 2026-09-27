@@ -262,14 +262,15 @@ export function isVoiceModuleOpen(): boolean {
 export function handleVoiceModuleClosed(): void {
   voiceModuleMarkedOpen = false;
   activeVoiceSessionId = 0;
+  const closingSessionId = useVoiceStore.getState().session?.sessionId;
   const cancellation = stopCurrentVoiceResponse();
   VoiceService.stopListening();
   useUIStore.getState().setVoiceListening(false);
   useVoiceStore.getState().setPartialTranscript('');
   useVoiceStore.getState().setState('idle');
   void cancellation.then(
-    () => useVoiceStore.getState().endSession(),
-    () => useVoiceStore.getState().endSession(),
+    () => closingSessionId && useVoiceStore.getState().endSession(closingSessionId),
+    () => closingSessionId && useVoiceStore.getState().endSession(closingSessionId),
   );
 }
 

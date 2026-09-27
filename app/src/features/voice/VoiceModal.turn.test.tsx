@@ -101,6 +101,10 @@ vi.mock('@/lib/db', () => ({
 
 vi.mock('./voiceChatRouting', () => chatRoutingMocks);
 
+vi.mock('./voiceConversationFolder', () => ({
+  syncVoiceConversationFolder: vi.fn(async () => ({ ok: true, folder: 'test', messageCount: 1 })),
+}));
+
 vi.mock('./voiceRouter', () => routerMocks);
 
 vi.mock('./voiceProviderSelection', async (importOriginal) => {
@@ -132,6 +136,12 @@ vi.mock('./voiceAgentFlow', async (importOriginal) => {
           });
           return { status: 'launch_failed' as const, duplicate: false, elapsedMs: 0 };
         }
+        deps.reportStatus({
+          phase: 'launched',
+          chatId: input.chatId,
+          provider: input.workerProvider,
+          elapsedMs: 1,
+        });
         await deps.deliverMainResult({
           chatId: input.chatId,
           userText: input.text,
@@ -799,7 +809,9 @@ describe('VoiceModal hands-free turn-taking', () => {
       .mockResolvedValueOnce('chat_voice');
 
     render(<VoiceModal />);
-    await waitFor(() => expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledOnce(),
+    );
     expect(useVoiceStore.getState().session).toBeNull();
 
     act(() => useAgentStore.setState({ agents: {} }));
@@ -943,12 +955,14 @@ describe('VoiceModal hands-free turn-taking', () => {
   });
 
   it('reports a precise routing failure without persisting or sending when no target exists', async () => {
+    chatRoutingMocks.ensureJarvisChatForProvider.mockResolvedValue(null);
     render(<VoiceModal />);
-    await waitFor(() => expect(useVoiceStore.getState().session).not.toBeNull());
+    await waitFor(() =>
+      expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledOnce(),
+    );
     vi.useFakeTimers();
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
-    chatRoutingMocks.ensureJarvisChatForProvider.mockResolvedValueOnce(null);
 
     try {
       act(() => emitVoice('voice:final', { text: 'unroutable request send it' }));
@@ -972,7 +986,9 @@ describe('VoiceModal hands-free turn-taking', () => {
   it('binds a provider chat when the initial voice session had no chat', async () => {
     chatRoutingMocks.ensureJarvisChatForProvider.mockResolvedValueOnce(null);
     render(<VoiceModal />);
-    await waitFor(() => expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledOnce(),
+    );
     vi.useFakeTimers();
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
@@ -1061,15 +1077,23 @@ describe('VoiceModal hands-free turn-taking', () => {
       vi.advanceTimersByTime(1500);
       emitVoice('voice:partial', { text: 'milk to my list' });
     });
-    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
     expect(messageRepo.create).not.toHaveBeenCalled();
     act(() => emitVoice('voice:final', { text: 'milk to my list' }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1999);
+    });
     expect(messageRepo.create).not.toHaveBeenCalled();
-    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-    expect(messageRepo.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      parts: [{ kind: 'text', text: 'Please add milk to my list' }],
-    }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(messageRepo.create).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        parts: [{ kind: 'text', text: 'Please add milk to my list' }],
+      }),
+    );
   });
 
   it('disables the listening timeout while send-it mode is active', async () => {
@@ -1151,7 +1175,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     window.removeEventListener('jarvis:send', send as EventListener);
   });
 
-  it('blocks a second send until Jarvis finishes the current turn', async () => {
+  it('accepts another task once worker launch is confirmed', async () => {
     vi.useFakeTimers();
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
@@ -1167,7 +1191,8 @@ describe('VoiceModal hands-free turn-taking', () => {
     act(() => {
       emitVoice('voice:final', { text: 'interrupt send it' });
     });
-    expect(send).toHaveBeenCalledTimes(1);
+    await act(async () => Promise.resolve());
+    expect(send).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT));
@@ -1179,7 +1204,7 @@ describe('VoiceModal hands-free turn-taking', () => {
       emitVoice('voice:final', { text: 'second message send it' });
       await Promise.resolve();
     });
-    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(3);
 
     window.removeEventListener('jarvis:send', send as EventListener);
   });
