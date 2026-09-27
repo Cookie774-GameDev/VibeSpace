@@ -30,7 +30,11 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
-import { AmbientAudioEngine, type AmbientPlaybackProgress } from '../ambientAudio';
+import {
+  AmbientAudioEngine,
+  type AmbientLoadStatus,
+  type AmbientPlaybackProgress,
+} from '../ambientAudio';
 import { shouldAmbientMusicPlay } from '../ambientPlayback';
 import {
   findMusicTrack,
@@ -90,7 +94,6 @@ function restoreAmbientProject(): void {
 function previewClip(clip: MusicClip): boolean {
   if (!musicClipUrl(clip)) return false;
   AmbientAudioEngine.getInstance().playProject([clip], false, useUIStore.getState().ambientVolume);
-  void AmbientAudioEngine.getInstance().resume();
   return true;
 }
 
@@ -112,6 +115,7 @@ export function MusicStudio({
     currentTime: 0,
     duration: 0,
   });
+  const [loadStatus, setLoadStatus] = React.useState<AmbientLoadStatus>({ state: 'idle' });
   const [selectedClipId, setSelectedClipId] = React.useState<string | null>(
     () => clips[0]?.id ?? null,
   );
@@ -163,6 +167,14 @@ export function MusicStudio({
 
   React.useEffect(() => {
     const unsubscribe = AmbientAudioEngine.getInstance().subscribeProgress?.(setPlaybackProgress);
+    return () => unsubscribe?.();
+  }, []);
+
+  React.useEffect(() => {
+    const unsubscribe = AmbientAudioEngine.getInstance().subscribeStatus?.((status) => {
+      setLoadStatus(status);
+      if (status.state === 'error') setPreviewingId(null);
+    });
     return () => unsubscribe?.();
   }, []);
 
@@ -229,9 +241,12 @@ export function MusicStudio({
 
   const playMix = () => {
     if (clips.length === 0) return;
+    if (previewTimer.current !== null) window.clearTimeout(previewTimer.current);
+    previewTimer.current = null;
     AmbientAudioEngine.getInstance().playProject(clips, loop, useUIStore.getState().ambientVolume);
-    void AmbientAudioEngine.getInstance().resume();
-    setPreviewingId('mix');
+    if (AmbientAudioEngine.getInstance().getLoadStatus?.().state !== 'error') {
+      setPreviewingId('mix');
+    }
   };
 
   const save = () => {
@@ -251,25 +266,31 @@ export function MusicStudio({
       }}
     >
       <DialogContent
-        className="h-[min(90vh,56rem)] w-[min(96vw,86rem)] max-w-none grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0"
-        overlayProps={{ className: 'bg-black/75 backdrop-blur-sm' }}
+        className="z-[100] h-[min(82vh,43rem)] w-[min(96vw,78rem)] max-w-none grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 max-sm:h-[96vh] max-sm:w-[98vw]"
+        overlayProps={{ className: 'z-[95] bg-black/75 backdrop-blur-sm' }}
       >
-        <DialogHeader className="border-b border-border px-5 py-4">
-          <DialogTitle className="flex items-center gap-2">
+        <DialogHeader className="border-b border-border px-5 py-3">
+          <DialogTitle className="flex items-center gap-2 text-lg tracking-tight">
             <Music2 className="h-5 w-5 text-accent-copper" /> VibeSpace Music Studio
           </DialogTitle>
-          <DialogDescription>
-            Build one continuous ambience mix from {MUSIC_STUDIO_LIBRARY.length} unique cloud songs
-            or your own device audio. Local files never upload automatically.
+          <DialogDescription className="text-xs">
+            Arrange a continuous ambience mix from {MUSIC_STUDIO_LIBRARY.length} songs or your own
+            audio. Local files stay on your device.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[22rem_minmax(0,1fr)]">
+        <div className="grid min-h-0 grid-cols-1 overflow-y-auto lg:grid-cols-[19rem_minmax(0,1fr)] lg:overflow-hidden">
           <section
             aria-label="Music library"
-            className="flex min-h-0 flex-col border-r border-border bg-paper-soft"
+            className="flex min-h-[15rem] max-h-[32vh] flex-col border-b border-border bg-paper-soft lg:min-h-0 lg:max-h-none lg:border-b-0 lg:border-r"
           >
-            <div className="space-y-2 border-b border-border p-3">
+            <div className="space-y-2.5 border-b border-border p-3">
+              <div className="flex items-baseline justify-between">
+                <h2 className="text-[11px] font-bold uppercase tracking-[0.16em] text-foreground">
+                  Library
+                </h2>
+                <span className="text-[10px] text-muted-foreground">Browse &amp; preview</span>
+              </div>
               <div className="relative">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <input
@@ -315,7 +336,7 @@ export function MusicStudio({
                 return (
                   <div
                     key={track.id}
-                    className="mb-1 flex items-center gap-1 rounded-lg border border-transparent p-1 hover:border-border hover:bg-background"
+                    className="mb-1 flex items-center gap-1 rounded-lg border border-transparent bg-background/40 p-1 transition-colors hover:border-border hover:bg-background"
                   >
                     <TrackArtwork seed={track.id} name={track.name} className="h-10 w-10" />
                     <button
@@ -324,11 +345,18 @@ export function MusicStudio({
                       onClick={() => preview(track)}
                       aria-label={`${previewingId === track.id ? 'Pause' : 'Preview'} ${track.name}`}
                     >
-                      <span className="block truncate text-xs font-medium text-foreground">
-                        {track.name}
+                      <span className="flex items-center gap-1">
+                        <span className="block min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                          {track.name}
+                        </span>
+                        {previewingId === track.id ? (
+                          <Pause className="h-3.5 w-3.5 shrink-0 text-accent-copper" />
+                        ) : (
+                          <Play className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        )}
                       </span>
                       <span className="text-[10px] text-muted-foreground">
-                        {formatBytes(track.bytes)} · click to preview
+                        {formatBytes(track.bytes)} · preview 15s
                       </span>
                     </button>
                     <Button
@@ -349,8 +377,8 @@ export function MusicStudio({
             </div>
           </section>
 
-          <section aria-label="Mix timeline" className="flex min-h-0 flex-col">
-            <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+          <section aria-label="Mix timeline" className="flex min-h-[32rem] flex-col lg:min-h-0">
+            <div className="flex flex-wrap items-center gap-2 border-b border-border bg-paper px-4 py-2.5">
               <Button
                 type="button"
                 size="sm"
@@ -396,8 +424,18 @@ export function MusicStudio({
                 />
               </div>
             </div>
+            {loadStatus.state === 'error' ? (
+              <div
+                role="alert"
+                className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive"
+              >
+                Could not play track: {loadStatus.message}
+              </div>
+            ) : null}
             <div className="flex items-center gap-2 border-b border-border bg-paper-soft px-4 py-2 text-xs text-muted-foreground">
               <Clock3 className="h-4 w-4" />
+              <span className="font-bold uppercase tracking-[0.12em] text-foreground">Mix</span>
+              <span className="text-border">/</span>
               <span>
                 {clips.length} clip{clips.length === 1 ? '' : 's'} in one continuous track
               </span>
@@ -407,7 +445,7 @@ export function MusicStudio({
                 </span>
               ) : null}
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
               {clips.length === 0 ? (
                 <div className="grid h-full min-h-52 place-items-center rounded-xl border border-dashed border-border text-center text-sm text-muted-foreground">
                   <div>
@@ -416,7 +454,7 @@ export function MusicStudio({
                   </div>
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   <div className="overflow-hidden rounded-xl border border-border bg-[#111318] shadow-inner">
                     <div className="flex h-10 items-center gap-2 border-b border-white/10 px-3 text-[10px] text-white/65">
                       <Scissors className="h-3.5 w-3.5 text-accent-copper" />
@@ -589,14 +627,14 @@ export function MusicStudio({
                   {selectedClip ? (
                     <section
                       aria-label="Selected clip editor"
-                      className="grid gap-4 rounded-xl border border-accent-copper/50 bg-paper p-4 lg:grid-cols-[7rem_minmax(0,1fr)]"
+                      className="grid gap-3 rounded-xl border border-accent-copper/40 bg-paper p-3 shadow-sm sm:grid-cols-[4.5rem_minmax(0,1fr)]"
                     >
                       <TrackArtwork
                         seed={selectedClip.trackId ?? selectedClip.id}
                         name={selectedClip.name}
-                        className="aspect-square w-full"
+                        className="aspect-square w-[4.5rem] rounded-lg"
                       />
-                      <div className="min-w-0 space-y-3">
+                      <div className="min-w-0 space-y-2.5">
                         <div className="flex flex-wrap items-start gap-2">
                           <div className="min-w-0 flex-1">
                             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-accent-copper">

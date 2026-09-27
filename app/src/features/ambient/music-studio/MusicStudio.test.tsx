@@ -5,8 +5,9 @@ import { createDefaultMusicMix, useMusicProjectStore } from './musicProject';
 const audio = vi.hoisted(() => ({
   playProject: vi.fn(),
   progressListener: null as
-    | ((progress: { clipId: string | null; currentTime: number; duration: number }) => void)
-    | null,
+    ((progress: { clipId: string | null; currentTime: number; duration: number }) => void) | null,
+  statusListener: null as
+    ((status: { state: 'idle' } | { state: 'error'; url: string; message: string }) => void) | null,
   resume: vi.fn(),
   seek: vi.fn(),
   stop: vi.fn(),
@@ -25,6 +26,19 @@ const audio = vi.hoisted(() => ({
       };
     },
   ),
+  subscribeStatus: vi.fn(
+    (
+      listener: (
+        status: { state: 'idle' } | { state: 'error'; url: string; message: string },
+      ) => void,
+    ) => {
+      audio.statusListener = listener;
+      listener({ state: 'idle' });
+      return () => {
+        audio.statusListener = null;
+      };
+    },
+  ),
 }));
 vi.mock('../ambientAudio', () => ({
   AmbientAudioEngine: { getInstance: () => audio },
@@ -34,6 +48,7 @@ import { MusicStudio } from './MusicStudio';
 describe('MusicStudio', () => {
   beforeEach(() => {
     audio.playProject.mockReset();
+    audio.stop.mockReset();
     audio.seek.mockReset();
     useMusicProjectStore.setState({
       clips: [],
@@ -43,6 +58,36 @@ describe('MusicStudio', () => {
     });
   });
   afterEach(cleanup);
+
+  it('does not let a 15-second clip preview timer stop the full mix', () => {
+    vi.useFakeTimers();
+    try {
+      useMusicProjectStore.setState({ clips: createDefaultMusicMix().slice(0, 2) });
+      render(<MusicStudio open onOpenChange={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: /Edit Ain't No Time Like Now/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Play mix' }));
+      expect(audio.playProject).toHaveBeenLastCalledWith(
+        useMusicProjectStore.getState().clips,
+        true,
+        expect.any(Number),
+      );
+      act(() => vi.advanceTimersByTime(15_000));
+      expect(audio.stop).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows a playback failure and returns the transport to Play mix', () => {
+    useMusicProjectStore.setState({ clips: createDefaultMusicMix().slice(0, 1) });
+    render(<MusicStudio open onOpenChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Play mix' }));
+    act(() => {
+      audio.statusListener?.({ state: 'error', url: 'track.mp3', message: 'File missing' });
+    });
+    expect(screen.getByRole('alert').textContent).toContain('File missing');
+    expect(screen.getByRole('button', { name: 'Play mix' })).toBeTruthy();
+  });
 
   it('searches, previews, adds, edits, reorders, and saves a cloud track', () => {
     render(<MusicStudio open onOpenChange={vi.fn()} />);

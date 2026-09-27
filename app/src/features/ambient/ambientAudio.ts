@@ -36,13 +36,13 @@ function mediaErrorMessage(audio: HTMLAudioElement): string {
   const err = audio.error;
   if (!err) return 'Failed to load track';
   switch (err.code) {
-    case MediaError.MEDIA_ERR_ABORTED:
+    case 1:
       return 'Playback aborted';
-    case MediaError.MEDIA_ERR_NETWORK:
+    case 2:
       return 'Network error — check R2 public access';
-    case MediaError.MEDIA_ERR_DECODE:
+    case 3:
       return 'Decode error — file may be corrupt or not MP3';
-    case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+    case 4:
       return 'Could not play this track — file missing or unsupported format';
     default:
       return err.message || `Media error ${err.code}`;
@@ -64,6 +64,7 @@ export class AmbientAudioEngine {
   private projectIndex = 0;
   private projectLoop = true;
   private projectSignature = '';
+  private playbackAttempt = 0;
 
   private constructor() {}
 
@@ -184,13 +185,18 @@ export class AmbientAudioEngine {
   private startPlayback(): void {
     if (!this.isEngineRunning) return;
     this.loadCurrentTrack();
+    this.setLoadStatus({ state: 'idle' });
+    const attempt = ++this.playbackAttempt;
     void this.getAudio()
       .play()
       .then(() => {
-        this.markPlaying(this.currentTrackDef().url);
+        if (attempt === this.playbackAttempt && this.isEngineRunning)
+          this.markPlaying(this.currentTrackDef().url);
       })
       .catch((err: unknown) => {
+        if (attempt !== this.playbackAttempt) return;
         const message = err instanceof Error ? err.message : 'Playback blocked until user gesture';
+        this.stop();
         this.setLoadError(this.currentTrackDef().url, message);
         console.warn('Ambient music playback is waiting for a user gesture:', err);
       });
@@ -212,10 +218,11 @@ export class AmbientAudioEngine {
       attempts += 1;
     }
     if (!clip || !url) {
-      this.setLoadError('', 'Saved mix needs at least one available track');
       this.stop();
+      this.setLoadError('', 'Saved mix needs at least one available track');
       return;
     }
+    this.setLoadStatus({ state: 'idle' });
     const audio = this.getAudio();
     audio.loop = false;
     audio.playbackRate = clip.speed;
@@ -231,11 +238,16 @@ export class AmbientAudioEngine {
     };
     if (audio.readyState >= 1) seek();
     else audio.addEventListener('loadedmetadata', seek, { once: true });
+    const attempt = ++this.playbackAttempt;
     void audio
       .play()
-      .then(() => this.markPlaying(url!))
+      .then(() => {
+        if (attempt === this.playbackAttempt && this.isEngineRunning) this.markPlaying(url!);
+      })
       .catch((err: unknown) => {
+        if (attempt !== this.playbackAttempt) return;
         const message = err instanceof Error ? err.message : 'Playback blocked until user gesture';
+        this.stop();
         this.setLoadError(url!, message);
       });
   }
@@ -274,9 +286,9 @@ export class AmbientAudioEngine {
       : this.currentTrackDef().url;
     const audio = this.getAudio();
     const message = mediaErrorMessage(audio);
+    this.stop();
     this.setLoadError(failedUrl, message);
     console.warn(`Ambient music failed to load: ${failedUrl} — ${message}`);
-    this.stop();
   };
 
   public play(track: AmbientTrack, volume: number): void {
@@ -301,6 +313,7 @@ export class AmbientAudioEngine {
     const available = clips.filter((clip) => Boolean(musicClipUrl(clip)));
     if (available.length === 0) {
       this.stop();
+      this.setLoadError('', 'Saved mix needs at least one available track');
       return;
     }
     const signature = musicProjectSignature(available, loop);
@@ -321,6 +334,7 @@ export class AmbientAudioEngine {
   }
 
   public stop(): void {
+    this.playbackAttempt += 1;
     this.isEngineRunning = false;
     this.setLoadStatus({ state: 'idle' });
     if (!this.audio) return;
@@ -359,17 +373,20 @@ export class AmbientAudioEngine {
 
   public async resume(): Promise<void> {
     if (!this.isEngineRunning) return;
+    this.setLoadStatus({ state: 'idle' });
     this.getAudio().volume = Math.max(0, Math.min(1, this.currentVolumePercent / 100));
+    const attempt = ++this.playbackAttempt;
+    const url = this.projectClips
+      ? (musicClipUrl(this.currentProjectClip()!) ?? '')
+      : this.currentTrackDef().url;
     try {
       await this.getAudio().play();
-      this.markPlaying(
-        this.projectClips
-          ? (musicClipUrl(this.currentProjectClip()!) ?? '')
-          : this.currentTrackDef().url,
-      );
+      if (attempt === this.playbackAttempt && this.isEngineRunning) this.markPlaying(url);
     } catch (err: unknown) {
+      if (attempt !== this.playbackAttempt) return;
       const message = err instanceof Error ? err.message : 'Playback blocked until user gesture';
-      this.setLoadError(this.currentTrackDef().url, message);
+      this.stop();
+      this.setLoadError(url, message);
       console.warn('Ambient music playback is waiting for a user gesture:', err);
     }
   }
@@ -380,6 +397,9 @@ export class AmbientAudioEngine {
 
   public dispose(): void {
     this.stop();
+    this.projectClips = null;
+    this.projectSignature = '';
+    this.projectIndex = 0;
     if (!this.audio) return;
     this.audio.removeEventListener('error', this.handleTrackError);
     this.audio.removeEventListener('ended', this.handleEnded);

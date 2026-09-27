@@ -13,7 +13,7 @@ class FakeAudio extends EventTarget {
   loop = false;
   paused = true;
   readyState = 1;
-  error = null;
+  error: MediaError | null = null;
   load = vi.fn();
   pause = vi.fn(() => {
     this.paused = true;
@@ -69,6 +69,54 @@ describe('AmbientAudioEngine music projects', () => {
     await Promise.resolve();
     expect(instances[0]!.src).not.toBe(firstSrc);
     expect(instances[0]!.currentTime).toBe(3);
+  });
+
+  it('loops from the last clip to the first and stays paused when stopped', async () => {
+    const instances: FakeAudio[] = [];
+    vi.stubGlobal(
+      'Audio',
+      class extends FakeAudio {
+        constructor() {
+          super();
+          instances.push(this);
+        }
+      },
+    );
+    const engine = AmbientAudioEngine.getInstance();
+    engine.playProject(clips, true, 40);
+    await Promise.resolve();
+    const audio = instances[0]!;
+    const firstSrc = audio.src;
+    audio.currentTime = clips[0]!.trimEnd!;
+    audio.dispatchEvent(new Event('timeupdate'));
+    await Promise.resolve();
+    expect(audio.src).not.toBe(firstSrc);
+    audio.dispatchEvent(new Event('ended'));
+    await Promise.resolve();
+    expect(audio.src).toBe(firstSrc);
+    expect(audio.currentTime).toBe(clips[0]!.trimStart);
+    engine.stop();
+    expect(audio.paused).toBe(true);
+  });
+
+  it('keeps a track failure visible instead of reporting playback success', async () => {
+    const instances: FakeAudio[] = [];
+    vi.stubGlobal(
+      'Audio',
+      class extends FakeAudio {
+        constructor() {
+          super();
+          instances.push(this);
+        }
+      },
+    );
+    const engine = AmbientAudioEngine.getInstance();
+    engine.playProject(clips, true, 40);
+    await Promise.resolve();
+    instances[0]!.error = { code: 4, message: 'Unsupported media' } as MediaError;
+    instances[0]!.dispatchEvent(new Event('error'));
+    expect(engine.getLoadStatus()).toMatchObject({ state: 'error' });
+    expect(engine.isPlaying()).toBe(false);
   });
 
   it('publishes current song progress and seeks within its playable timeline', async () => {
