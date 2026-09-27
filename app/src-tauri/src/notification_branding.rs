@@ -92,6 +92,14 @@ fn prepare_notification_artwork(
             "notification-task-attention.png",
             include_bytes!("../icons/notification-task-attention.png").as_slice(),
         ),
+        Some("task_failed") => (
+            "notification-task-failed.png",
+            include_bytes!("../icons/notification-task-failed.png").as_slice(),
+        ),
+        Some("task_stopped") => (
+            "notification-task-stopped.png",
+            include_bytes!("../icons/notification-task-stopped.png").as_slice(),
+        ),
         _ => (
             "notification-hero.png",
             include_bytes!("../icons/notification-hero.png").as_slice(),

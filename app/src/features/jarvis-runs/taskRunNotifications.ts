@@ -4,6 +4,7 @@ import { notify as nativeNotify } from '@/lib/tauri';
 import { chatRepo, workspaceRepo } from '@/lib/db/repositories';
 import { jarvisRunRepo } from '@/lib/db/jarvisRepositories';
 import { hasDetectedSecret } from '@/lib/security/secretDetector';
+import { useUIStore } from '@/stores/ui';
 import type { ChatId } from '@/types/common';
 import { useJarvisTaskRunStore } from './taskRunStore';
 
@@ -25,7 +26,7 @@ const COPY: Partial<Record<JarvisRunStatus, readonly [string, string]>> = {
   completed: ['Jarvis task completed', 'Open VibeSpace to view the verified result.'],
   failed: ['Jarvis task failed', 'Open VibeSpace to review the failure and next step.'],
   timed_out: ['Jarvis task timed out', 'Open VibeSpace to review the timeout and next step.'],
-  cancelled: ['Jarvis task cancelled', 'Open VibeSpace to view the verified cancellation.'],
+  cancelled: ['Jarvis task stopped', 'Open VibeSpace to resume when ready.'],
 };
 
 const TASK_TITLE_PREFIX: Partial<Record<JarvisRunStatus, string>> = {
@@ -34,25 +35,32 @@ const TASK_TITLE_PREFIX: Partial<Record<JarvisRunStatus, string>> = {
   completed: 'Completed',
   failed: 'Failed',
   timed_out: 'Timed out',
-  cancelled: 'Cancelled',
+  cancelled: 'Stopped',
 };
 
 function displayText(value: string | undefined, limit: number): string | undefined {
   if (!value || hasDetectedSecret(value)) return undefined;
-  const text = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return text ? `${text.slice(0, limit)}${text.length > limit ? '…' : ''}` : undefined;
+  const text = value
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return undefined;
+  const characters = Array.from(text);
+  return characters.length > limit
+    ? `${characters
+        .slice(0, limit - 1)
+        .join('')
+        .trimEnd()}…`
+    : text;
 }
 
-function notificationVariant(status: JarvisRunStatus) {
+export function notificationVariant(status: JarvisRunStatus) {
   if (status === 'completed') return 'task_completed' as const;
-  if (
-    status === 'failed' ||
-    status === 'timed_out' ||
-    status === 'partial' ||
-    status === 'awaiting_approval'
-  ) {
+  if (status === 'partial' || status === 'awaiting_approval') {
     return 'task_attention' as const;
   }
+  if (status === 'failed' || status === 'timed_out') return 'task_failed' as const;
+  if (status === 'cancelled') return 'task_stopped' as const;
   return undefined;
 }
 
@@ -62,6 +70,8 @@ async function defaultNotify(
   status: JarvisRunStatus,
   completionIdentity?: string,
 ): Promise<void> {
+  const settings = useUIStore.getState();
+  if (!settings.notificationMaster || !settings.doneNotifications.tasks) return;
   if (status === 'completed') {
     await notifyDone('tasks', title, body, {
       allowFallbackToast: true,
@@ -75,7 +85,11 @@ async function defaultNotify(
       new CustomEvent('jarvis:task-notification', { detail: { title, status } }),
     );
   }
-  await nativeNotify(title, body, { fallbackToast: true, variant: notificationVariant(status) });
+  await nativeNotify(title, body, {
+    fallbackToast: true,
+    silent: settings.notificationSound === false,
+    variant: notificationVariant(status),
+  });
 }
 
 export function startJarvisTaskRunNotifications(bindings: TaskRunNotificationBindings): () => void {
@@ -117,7 +131,7 @@ export function startJarvisTaskRunNotifications(bindings: TaskRunNotificationBin
               (!run.workspaceId || run.workspaceId === chat?.workspace_id)
             ) {
               const chatName = displayText(chat?.title, 56);
-              if (chatName) body = `Chat: ${chatName}. ${body}`;
+              if (chatName) body = displayText(`Chat: ${chatName}. ${body}`, 112) ?? body;
             }
           }
         }

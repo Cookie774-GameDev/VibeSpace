@@ -29,7 +29,9 @@ describe('native notification branding', () => {
       silent: true,
       variant: null,
     });
-    expect(mocks.invoke.mock.calls.some(([command]) => command === 'plugin:notification|notify')).toBe(false);
+    expect(
+      mocks.invoke.mock.calls.some(([command]) => command === 'plugin:notification|notify'),
+    ).toBe(false);
     expect(mocks.info).not.toHaveBeenCalled();
   });
 
@@ -43,6 +45,20 @@ describe('native notification branding', () => {
     });
   });
 
+  it.each(['task_failed', 'task_stopped', 'task_attention'] as const)(
+    'passes the %s artwork choice to the native command',
+    async (variant) => {
+      const result = await notify('Jarvis task update', 'Chat: Design review', { variant });
+      expect(result.channel).toBe('native');
+      expect(mocks.invoke).toHaveBeenCalledWith('vibespace_notify', {
+        title: 'Jarvis task update',
+        body: 'Chat: Design review',
+        silent: false,
+        variant,
+      });
+    },
+  );
+
   it('keeps the in-app fallback when branded OS delivery fails', async () => {
     mocks.invoke.mockImplementation(async (command: string) => {
       if (command === 'plugin:notification|is_permission_granted') return true;
@@ -52,5 +68,19 @@ describe('native notification branding', () => {
     const result = await notify('Jarvis task failed', 'Review the failure.');
     expect(result.channel).toBe('toast');
     expect(mocks.info).toHaveBeenCalledWith('Jarvis task failed', 'Review the failure.');
+  });
+
+  it('shows an in-app notification when desktop permission is denied', async () => {
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'plugin:notification|is_permission_granted') return false;
+      if (command === 'plugin:notification|request_permission') return 'denied';
+    });
+    const result = await notify('Stopped: Workbench polish', 'Chat: Design review', {
+      variant: 'task_stopped',
+      fallbackToast: true,
+    });
+    expect(result.channel).toBe('toast');
+    expect(mocks.info).toHaveBeenCalledWith('Stopped: Workbench polish', 'Chat: Design review');
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'vibespace_notify')).toBe(false);
   });
 });

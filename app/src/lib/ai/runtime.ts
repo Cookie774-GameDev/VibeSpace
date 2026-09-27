@@ -124,6 +124,8 @@ import { devConsole } from '@/features/dev-console';
 import { toast } from '@/components/ui/toast';
 import { agentRepo, chatRepo, eventRepo } from '@/lib/db';
 import { getAiCompletionInstruction, notifyDone } from '@/lib/notifications';
+import { notify as notifyNative } from '@/lib/tauri';
+import { chatNotificationCopy, type ChatNotificationStatus } from './chatNotificationPresentation';
 import {
   createCanonicalVoicePlaybackAdapter,
   createStreamingVoiceSession,
@@ -6047,6 +6049,37 @@ export function startRuntimeListener(
     );
     const activity = useChatActivityStore.getState();
     const agentActivityId = createChatActivityId('agent');
+    const refreshChatTitleForNotification = async (): Promise<void> => {
+      try {
+        const current = await chatRepo.getById(chatId as ChatId);
+        if (current && current.workspace_id === chatRecord?.workspace_id) chatRecord = current;
+      } catch {
+        // Notification naming is best-effort after the reply is already saved.
+      }
+    };
+    const notifyChatOutcome = (status: ChatNotificationStatus): void => {
+      const settings = useUIStore.getState();
+      if (!settings.notificationMaster || !settings.doneNotifications.jarvis) return;
+      const { title, body } = chatNotificationCopy({
+        status,
+        agentName: agent.name,
+        chatTitle: chatRecord?.title,
+        taskText: text,
+      });
+      if (status === 'completed') {
+        void notifyDone('jarvis', title, body, {
+          allowFallbackToast: true,
+          completionIdentity: `chat-run:${chatId}:${agentActivityId}`,
+          variant: 'task_completed',
+        });
+      } else {
+        void notifyNative(title, body, {
+          fallbackToast: true,
+          silent: settings.notificationSound === false,
+          variant: status === 'failed' ? 'task_failed' : 'task_stopped',
+        });
+      }
+    };
     preparationActivity = { id: agentActivityId, agentSlug: agent.slug };
     const hasAttachedFiles =
       (detail.filePaths?.length ?? 0) > 0 || (detail.imageAttachments?.length ?? 0) > 0;
@@ -7809,6 +7842,7 @@ export function startRuntimeListener(
             });
             dispatchCurrentRunState('cancelled');
             updateStructuredAgentStatus(detail.structuredContext, 'cancelled', 'Cancelled');
+            notifyChatOutcome('stopped');
             return;
           }
           assertRuntimeCaoExecutionIdentity(detail.caoAuthority, {
@@ -7851,10 +7885,12 @@ export function startRuntimeListener(
                   ? 'Grounded root audit incomplete'
                   : 'Response contract failed',
             );
+            notifyChatOutcome('failed');
             return;
           }
           try {
             await maybeRenameChat(chatId as ChatId, canonicalDisplayText);
+            await refreshChatTitleForNotification();
           } catch {
             // Canonical persistence is complete; tab naming remains best-effort.
           }
@@ -7974,11 +8010,7 @@ export function startRuntimeListener(
           dispatchCurrentRunState('done');
           providerTurnCompleted = true;
           updateStructuredAgentStatus(detail.structuredContext, 'done', 'Finished');
-          void notifyDone(
-            'jarvis',
-            `${agent.name} done`,
-            deriveChatTitle(canonicalDisplayText) || 'The AI response is complete.',
-          );
+          notifyChatOutcome('completed');
           return;
         }
       }
@@ -8880,6 +8912,7 @@ export function startRuntimeListener(
               ? 'Grounded root audit incomplete'
               : 'Response contract failed',
         );
+        notifyChatOutcome('failed');
         return;
       }
 
@@ -8915,6 +8948,7 @@ export function startRuntimeListener(
       // the user can rename manually any time.
       try {
         await maybeRenameChat(chatId as ChatId, finalText);
+        await refreshChatTitleForNotification();
       } catch {
         // Auto-naming is best-effort; never let it break the run.
       }
@@ -9009,11 +9043,7 @@ export function startRuntimeListener(
           partCount: finalParts.length,
         },
       });
-      void notifyDone(
-        'jarvis',
-        `${agent.name} done`,
-        deriveChatTitle(finalText) || 'The AI response is complete.',
-      );
+      notifyChatOutcome('completed');
     } catch (err) {
       if (detail.nativeQueuedSubmission) markNativeQueueForReview(detail);
       stopStreamingVoiceTurn();
@@ -9131,6 +9161,7 @@ export function startRuntimeListener(
         aborted ? 'cancelled' : 'failed',
         aborted ? 'Cancelled' : 'Failed',
       );
+      notifyChatOutcome(aborted ? 'stopped' : 'failed');
 
       devConsole.log({
         channel: 'ai',

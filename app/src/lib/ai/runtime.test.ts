@@ -12,6 +12,7 @@ import { useAllAboutMeStore } from '@/features/all-about-me/store';
 import { getChatActivityEvents, useChatActivityStore } from '@/features/chat/activity';
 import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
 import { useVoiceStore } from '@/features/voice/store';
+import * as tauriBridge from '@/lib/tauri';
 import { useAgentStore } from '@/stores/agents';
 import { createVoiceSessionBinding } from '@/features/voice/voiceSessionBinding';
 import { STREAMING_VOICE_END_EVENT } from '@/features/voice/speechSynthesis';
@@ -2313,7 +2314,11 @@ describe('startRuntimeListener agent routing', () => {
         GROQ_API_CONNECTION,
       ),
     });
-    useUIStore.setState({ voiceModalOpen: true });
+    useUIStore.setState((state) => ({
+      voiceModalOpen: true,
+      notificationMaster: false,
+      doneNotifications: { ...state.doneNotifications, jarvis: false },
+    }));
     useVoiceStore.getState().reset();
     mocks.runAgent.mockResolvedValue({
       text: 'APPLE',
@@ -2355,6 +2360,13 @@ describe('startRuntimeListener agent routing', () => {
       selectedAt: 1,
       lockedAt: 2,
     });
+  }
+
+  function enableChatOutcomeNotifications(): void {
+    useUIStore.setState((state) => ({
+      notificationMaster: true,
+      doneNotifications: { ...state.doneNotifications, jarvis: true },
+    }));
   }
 
   it('does not cancel and restart a turn when steering arrives before backend affinity resolves', async () => {
@@ -6797,6 +6809,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       'READ_SUM: 42',
       'SOURCE: input.txt',
     ].join('\n');
+    enableChatOutcomeNotifications();
     const { setStoredProjectRoot } = await import('@/features/files/projectFiles');
     setStoredProjectRoot(projectId, workingDirectory);
     useAuthStore.setState({
@@ -8939,6 +8952,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
   }, 15_000);
 
   it('persists a length-limited provider response as partial through the installed host', async () => {
+    enableChatOutcomeNotifications();
     const selectedNativeSkillRefs = [{ origin: 'opencode' as const, name: 'kernel-fixture', path: 'C:/workspace/.opencode/skills/kernel-fixture/SKILL.md', executionHost: 'local', sourceRevision: 'catalog:kernel-fixture' }];
     mocks.buildRoutedMcpTaskContext.mockReturnValueOnce(
       Object.freeze({
@@ -9566,6 +9580,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
   });
 
   it('executes a response safe action through the installed security binder without losing scope', async () => {
+    enableChatOutcomeNotifications();
     useAuthStore.setState({
       apiKeys: { openai: 'sk_test' },
       chatModelSelection: {
@@ -13284,6 +13299,168 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     await vi.waitFor(() => expect(mocks.devLog).toHaveBeenCalled());
     expect(mocks.runAgent).not.toHaveBeenCalled();
     expect(shadow.createPersistedRun).not.toHaveBeenCalled();
+  });
+
+  it('sends a bounded completion notification for an ordinary chat reply', async () => {
+    enableChatOutcomeNotifications();
+    const jarvis = agent('agent_chat_notify_success', 'jarvis', 'You are Jarvis.');
+    const harness = kernelRuntimeBindings(jarvis);
+    const chatTitle = 'Release readiness';
+    const chatRecord = {
+      id: harness.chatId,
+      workspace_id: 'workspace_chat_notify_success' as never,
+      mode: 'chat',
+      active_agent_ids: [jarvis.id],
+      created_at: 1,
+      updated_at: 1,
+    };
+    mocks.chatGetById
+      .mockResolvedValueOnce({ ...chatRecord, title: 'New chat' })
+      .mockResolvedValueOnce({ ...chatRecord, title: 'New chat' })
+      .mockResolvedValueOnce({ ...chatRecord, title: chatTitle })
+      .mockResolvedValue({ ...chatRecord, title: chatTitle });
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+
+    try {
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId: harness.chatId,
+            cancellationKey: 'msg_kernel_user',
+            text: 'Summarize the open release risks.',
+          },
+        }),
+      );
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      await stop.whenIdle();
+
+      const [kind, title, body, options] = mocks.notifyDone.mock.calls[0]!;
+      expect(kind).toBe('jarvis');
+      expect(title).toBe('Finished: Summarize the open release risks.');
+      expect(body).toContain('Chat: Release readiness.');
+      expect(mocks.chatGetById.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(Array.from(String(title)).length).toBeLessThanOrEqual(64);
+      expect(Array.from(String(body)).length).toBeLessThanOrEqual(112);
+      expect(options).toEqual(
+        expect.objectContaining({
+          allowFallbackToast: true,
+          completionIdentity: expect.stringMatching(/^chat-run:chat_kernel_gate:/),
+          variant: 'task_completed',
+        }),
+      );
+    } finally {
+      stop();
+    }
+  });
+
+  it('sends a native failure notification for a failed ordinary chat reply', async () => {
+    enableChatOutcomeNotifications();
+    const notifySpy = vi
+      .spyOn(tauriBridge, 'notify')
+      .mockResolvedValue({ channel: 'none', permission: 'unavailable', message: 'test' });
+    const jarvis = agent('agent_chat_notify_failure', 'jarvis', 'You are Jarvis.');
+    const harness = kernelRuntimeBindings(jarvis);
+    mocks.runAgent.mockRejectedValueOnce(new Error('provider unavailable'));
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+
+    try {
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId: harness.chatId,
+            cancellationKey: 'msg_kernel_user',
+            text: 'Check the deployment status.',
+          },
+        }),
+      );
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      await stop.whenIdle();
+
+      expect(notifySpy).toHaveBeenCalledWith(
+        'Failed: Check the deployment status.',
+        'Open VibeSpace to review the failure.',
+        expect.objectContaining({ fallbackToast: true, variant: 'task_failed' }),
+      );
+      expect(mocks.notifyDone).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      notifySpy.mockRestore();
+    }
+  });
+
+  it('sends a native stopped notification when an ordinary chat reply is cancelled', async () => {
+    enableChatOutcomeNotifications();
+    const notifySpy = vi
+      .spyOn(tauriBridge, 'notify')
+      .mockResolvedValue({ channel: 'none', permission: 'unavailable', message: 'test' });
+    const jarvis = agent('agent_chat_notify_stopped', 'jarvis', 'You are Jarvis.');
+    const harness = kernelRuntimeBindings(jarvis);
+    let signal: AbortSignal | undefined;
+    mocks.runAgent.mockImplementationOnce(
+      (input: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal = input.signal;
+          const rejectCancelled = () => reject(new DOMException('Cancelled', 'AbortError'));
+          if (input.signal.aborted) rejectCancelled();
+          else input.signal.addEventListener('abort', rejectCancelled, { once: true });
+        }),
+    );
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+
+    try {
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId: harness.chatId,
+            cancellationKey: 'msg_kernel_user',
+            text: 'Review the release checklist.',
+          },
+        }),
+      );
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(
+        new CustomEvent('jarvis:cancel', { detail: { messageId: 'msg_kernel_user' } }),
+      );
+      await stop.whenIdle();
+
+      expect(signal?.aborted).toBe(true);
+      expect(notifySpy).toHaveBeenCalledWith(
+        'Stopped: Review the release checklist.',
+        'Open VibeSpace to resume when ready.',
+        expect.objectContaining({ fallbackToast: true, variant: 'task_stopped' }),
+      );
+      expect(mocks.notifyDone).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      notifySpy.mockRestore();
+    }
+  });
+
+  it('keeps ordinary chat outcome notifications disabled by either notification setting', async () => {
+    const jarvis = agent('agent_chat_notify_disabled', 'jarvis', 'You are Jarvis.');
+    const harness = kernelRuntimeBindings(jarvis);
+    const notifySpy = vi.spyOn(tauriBridge, 'notify');
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+
+    try {
+      window.dispatchEvent(
+        new CustomEvent('jarvis:send', {
+          detail: {
+            chatId: harness.chatId,
+            cancellationKey: 'msg_kernel_user',
+            text: 'Summarize the deployment window.',
+          },
+        }),
+      );
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      await stop.whenIdle();
+
+      expect(mocks.notifyDone).not.toHaveBeenCalled();
+      expect(notifySpy).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      notifySpy.mockRestore();
+    }
   });
 });
 

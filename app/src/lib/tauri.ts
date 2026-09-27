@@ -84,7 +84,7 @@ export interface NotifyOptions {
   /** Suppress sound on supported platforms. */
   silent?: boolean;
   /** Select the Windows VibeSpace notification artwork. */
-  variant?: 'task_completed' | 'task_attention';
+  variant?: 'task_completed' | 'task_attention' | 'task_failed' | 'task_stopped';
   /** Show an in-app toast when native/browser delivery is unavailable. */
   fallbackToast?: boolean;
   /** Optional click handler (browser Notification API only). */
