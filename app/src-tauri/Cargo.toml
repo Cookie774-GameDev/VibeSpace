@@ -61,7 +61,7 @@ users = { version = "=0.11.0", default-features = false }
 [target.'cfg(windows)'.dependencies]
 webview2-com = "=0.38.2"
 winreg = "0.52"
-notify-rust = "4.18"
+tauri-winrt-notification = "0.7.3"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",

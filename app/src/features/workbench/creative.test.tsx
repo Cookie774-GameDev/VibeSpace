@@ -124,6 +124,7 @@ describe('Workbench Creative', () => {
         zoom={1}
         onUpdate={onUpdate}
         onSelect={vi.fn()}
+        onBringToFront={vi.fn()}
         onDuplicate={vi.fn()}
         onClose={vi.fn()}
       />,

@@ -11,6 +11,7 @@ interface Props {
   selected: boolean;
   zoom: number;
   onSelect: (additive: boolean) => void;
+  onBringToFront: () => void;
   onUpdate: (patch: Partial<WorkbenchPanel>) => void;
   onDuplicate: () => void;
   onClose: () => void;
@@ -20,6 +21,7 @@ export function CreativeItem({
   selected,
   zoom,
   onSelect,
+  onBringToFront,
   onUpdate,
   onDuplicate,
   onClose,
@@ -48,12 +50,16 @@ export function CreativeItem({
   const change = (patch: Partial<CreativeStyle>) =>
     onUpdate({ settings: { creative: creativeStyle({ ...style, ...patch }) } });
   const [rot, setRot] = React.useState<number | null>(null);
+  const activate = (additive: boolean) => {
+    onSelect(additive);
+    onBringToFront();
+  };
   const rotState = React.useRef<{ cx: number; cy: number; start: number; startAngle: number } | null>(null);
   const beginRotate = (e: React.PointerEvent<HTMLElement>) => {
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
-    onSelect(e.shiftKey);
+    activate(e.shiftKey);
     const el = (e.currentTarget as HTMLElement).closest('.wb-creative-item');
     const r = el ? el.getBoundingClientRect() : null;
     const cx = r ? r.left + r.width / 2 : e.clientX;
@@ -89,7 +95,7 @@ export function CreativeItem({
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
-    onSelect(e.shiftKey);
+    activate(e.shiftKey);
     gesture.current = { x: e.clientX, y: e.clientY, mode, start: draft };
     e.currentTarget.setPointerCapture(e.pointerId);
   };
@@ -162,13 +168,13 @@ export function CreativeItem({
         onPointerDown={(e) => {
           if (style.kind === 'draw') {
             e.stopPropagation();
-            onSelect(e.shiftKey);
+            activate(e.shiftKey);
             return;
           }
           if (!isText) begin(e, 'move');
           else {
             e.stopPropagation();
-            onSelect(e.shiftKey);
+            activate(e.shiftKey);
           }
         }}
         {...(!isText && style.kind !== 'draw' ? gestureProps : {})}
@@ -279,7 +285,7 @@ export function CreativeItem({
         style={{ '--grip-width': `${12 / zoom}px` } as React.CSSProperties}
         onPointerDown={(e) => begin(e, 'move')}
         {...gestureProps}
-        onClick={(e) => { if (e.detail === 0) onSelect(e.shiftKey); }}
+        onClick={(e) => { if (e.detail === 0) activate(e.shiftKey); }}
       >
       </button>
       {selected && (

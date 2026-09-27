@@ -14,18 +14,38 @@ pub async fn vibespace_notify(
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let _ = (app, silent); // The existing desktop plugin also ignores `silent` on Windows.
+        let _ = app;
         tauri::async_runtime::spawn_blocking(move || {
             register_windows_shortcut()?;
-            let mut notification = notify_rust::Notification::new();
-            notification
-                .app_id(NOTIFICATION_APP_ID)
-                .summary(&title)
-                .body(body.as_deref().unwrap_or_default());
-            notification
-                .show()
-                .map(|_| ())
-                .map_err(|error| error.to_string())
+            let plain_notification = || {
+                let mut notification = tauri_winrt_notification::Toast::new(NOTIFICATION_APP_ID)
+                    .title(&title)
+                    .text1(body.as_deref().unwrap_or_default());
+                if silent {
+                    notification = notification.sound(None);
+                }
+                notification
+            };
+            let mut notification = plain_notification();
+            // Artwork must never prevent a task result from reaching Notification Center.
+            let mut has_artwork = false;
+            if let Ok((hero, icon)) = prepare_notification_artwork() {
+                notification = notification
+                    .hero(&hero, "VibeSpace warm sunset artwork")
+                    .icon(
+                        &icon,
+                        tauri_winrt_notification::IconCrop::Square,
+                        "VibeSpace logo",
+                    );
+                has_artwork = true;
+            }
+            match notification.show() {
+                Ok(()) => Ok(()),
+                Err(artwork_error) if has_artwork => plain_notification().show().map_err(|error| {
+                    format!("branded toast failed: {artwork_error}; plain toast failed: {error}")
+                }),
+                Err(error) => Err(error.to_string()),
+            }
         })
         .await
         .map_err(|error| error.to_string())?
@@ -41,6 +61,29 @@ pub async fn vibespace_notify(
         }
         notification.show().map_err(|error| error.to_string())
     }
+}
+
+#[cfg(windows)]
+fn prepare_notification_artwork() -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    use std::{env, fs, path::Path};
+
+    fn ensure_asset(path: &Path, bytes: &[u8]) -> Result<(), String> {
+        if fs::read(path).ok().as_deref() != Some(bytes) {
+            fs::write(path, bytes).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    let artwork_dir = env::var_os("APPDATA")
+        .ok_or("APPDATA is unavailable")
+        .map(std::path::PathBuf::from)?
+        .join("VibeSpace/Notifications");
+    fs::create_dir_all(&artwork_dir).map_err(|error| error.to_string())?;
+    let hero = artwork_dir.join("notification-hero.png");
+    let icon = artwork_dir.join("notification-icon.png");
+    ensure_asset(&hero, include_bytes!("../icons/notification-hero.png"))?;
+    ensure_asset(&icon, include_bytes!("../icons/icon.png"))?;
+    Ok((hero, icon))
 }
 
 #[cfg(windows)]
