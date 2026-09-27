@@ -14,6 +14,16 @@ function bufToBase64(buf: ArrayBuffer): string {
   return btoa(binary);
 }
 
+function reportDeepgramAuthorizationFailure(providerMessage: string): void {
+  void import('@/lib/notifications').then(({ notifyApiKeyExpired, notifyApiKeyRejected }) => {
+    // A bare 401 is ambiguous; use "expired" only when Deepgram says so explicitly.
+    const notifyCredential = /\bexpired\b/iu.test(providerMessage)
+      ? notifyApiKeyExpired
+      : notifyApiKeyRejected;
+    void notifyCredential('Deepgram');
+  });
+}
+
 export async function speakDeepgramWithKey(
   apiKey: string,
   text: string,
@@ -44,6 +54,7 @@ export async function speakDeepgramWithKey(
     );
     if (!res.ok) {
       const detail = (await res.text().catch(() => '')).slice(0, 120);
+      if (res.status === 401) reportDeepgramAuthorizationFailure(detail);
       throw new Error(detail ? `deepgram_${res.status}: ${detail}` : `deepgram_${res.status}`);
     }
     audio = await res.arrayBuffer();
@@ -66,6 +77,9 @@ export async function testDeepgramVoiceKey(apiKey: string): Promise<boolean> {
       headers: { Authorization: `Token ${apiKey.trim()}` },
       signal: controller.signal,
     });
+    if (response.status === 401) {
+      reportDeepgramAuthorizationFailure((await response.text().catch(() => '')).slice(0, 120));
+    }
     return response.ok;
   } catch {
     return false;

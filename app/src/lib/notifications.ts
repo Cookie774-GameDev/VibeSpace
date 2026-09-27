@@ -68,7 +68,7 @@ const MAX_COMPLETION_IDENTITY_LENGTH = 512;
 const recentDoneNotifications = new Map<string, { observedAt: number; ttlMs: number }>();
 
 export interface NotifyDoneOptions {
-  /** Allow in-app toast when OS notifications are unavailable (explicit test only). */
+  /** Allow in-app toast when OS notifications are unavailable. */
   allowFallbackToast?: boolean;
   /** Bypass master + category gates (test notification only). */
   force?: boolean;
@@ -195,8 +195,18 @@ export async function notifyDone(
 
   const result = await notify(resolvedTitle, body, {
     silent: notificationSilent(),
-    variant: options.variant,
-    fallbackToast: options.allowFallbackToast === true,
+    variant:
+      options.variant ??
+      (kind === 'contextMaps'
+        ? 'context_map_completed'
+        : kind === 'tasks' || kind === 'terminal'
+          ? 'task_completed'
+          : undefined),
+    fallbackToast:
+      options.allowFallbackToast === true ||
+      kind === 'contextMaps' ||
+      kind === 'terminal' ||
+      kind === 'tasks',
     onClick: () => {
       if (useUIStore.getState().notificationBadge) {
         void setTrayBadge(0);
@@ -254,16 +264,77 @@ export async function ensureOsNotificationPermission(): Promise<NotificationPerm
   return requestNotificationPermission();
 }
 
+function notificationProviderLabel(value: string): string {
+  const displayValue = value === 'openai-codex' ? 'Codex' : value;
+  return (
+    displayValue
+      .replace(/[\u0000-\u001f\u007f]/gu, ' ')
+      .trim()
+      .slice(0, 36) || 'Provider'
+  );
+}
+
+function notificationDetectedTime(date: Date): string {
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(date);
+}
+
+/** Use only after a provider confirms that its API credential has expired. */
+export function notifyApiKeyExpired(
+  providerLabel: string,
+  detectedAt = new Date(),
+): Promise<NotifyResult | null> {
+  const provider = notificationProviderLabel(providerLabel);
+  const settings =
+    provider === 'Deepgram' ? 'Settings → Speech to Text' : 'Settings → AI Connectors';
+  return notifyDone(
+    'connectors',
+    `${provider} API key expired`,
+    `Detected ${notificationDetectedTime(detectedAt)}. Open ${settings} to replace the key.`,
+    {
+      variant: 'credential_expired',
+      allowFallbackToast: true,
+      completionIdentity: `credential:${provider}:expired`,
+    },
+  );
+}
+
+/** A 401 only proves authorization failed; the provider may not reveal whether a key expired. */
+export function notifyApiKeyRejected(
+  providerLabel: string,
+  detectedAt = new Date(),
+): Promise<NotifyResult | null> {
+  const provider = notificationProviderLabel(providerLabel);
+  const settings =
+    provider === 'Deepgram' ? 'Settings → Speech to Text' : 'Settings → AI Connectors';
+  return notifyDone(
+    'connectors',
+    `${provider} authorization failed`,
+    `Detected ${notificationDetectedTime(detectedAt)}. Check or replace the API key in ${settings}.`,
+    {
+      variant: 'credential_expired',
+      allowFallbackToast: true,
+      completionIdentity: `credential:${provider}:rejected`,
+    },
+  );
+}
+
 /**
  * Fire when a connector/auth session transitions authenticated → unauthenticated.
  * Call only with real inspection results (not first paint).
  */
 export function notifyConnectorAuthExpired(connectionLabel: string, detail?: string): void {
+  const label = notificationProviderLabel(connectionLabel);
+  const detectedAt = notificationDetectedTime(new Date());
+  const explanation =
+    detail
+      ?.replace(/[\u0000-\u001f\u007f]/gu, ' ')
+      .trim()
+      .slice(0, 78) || 'Open Settings → AI Connectors to reconnect.';
   void notifyDone(
     'connectors',
-    'Connector sign-in expired',
-    detail ??
-      `${connectionLabel} needs you to sign in again. Open Settings → AI Connectors to reconnect.`,
+    `${label} authorization expired`,
+    `Detected ${detectedAt}. ${explanation}`,
+    { variant: 'credential_expired', allowFallbackToast: true },
   );
 }
 

@@ -36,6 +36,9 @@ import {
   detectAndNotifyConnectorAuthLoss,
   getAiCompletionInstruction,
   getDoneNotificationLabels,
+  notifyApiKeyExpired,
+  notifyApiKeyRejected,
+  notifyConnectorAuthExpired,
   notifyDone,
   resetDoneNotificationDedupeForTests,
   sendTestNotification,
@@ -272,5 +275,85 @@ describe('notifications', () => {
     expect(fired).toEqual(['openai-codex']);
     expect(mocks.notify).toHaveBeenCalledTimes(1);
     expect(mocks.notify.mock.calls[0][0]).toMatch(/expired|sign-in/i);
+    expect(mocks.notify.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ variant: 'credential_expired', fallbackToast: true }),
+    );
+  });
+
+  it('bounds a connector label and detail in the native notification', async () => {
+    notifyConnectorAuthExpired(`Codex ${'very-long-name-'.repeat(8)}`, 'Reconnect. '.repeat(30));
+    await vi.waitFor(() => expect(mocks.notify).toHaveBeenCalledTimes(1));
+    const [title, body] = mocks.notify.mock.calls[0];
+    expect(title.length).toBeLessThanOrEqual(58);
+    expect(body.length).toBeLessThan(110);
+    expect(body).toContain('Detected ');
+  });
+
+  it('shows the Codex name for an expired OpenAI Codex connector', async () => {
+    notifyConnectorAuthExpired('openai-codex');
+    await vi.waitFor(() => expect(mocks.notify).toHaveBeenCalledTimes(1));
+    expect(mocks.notify.mock.calls[0][0]).toBe('Codex authorization expired');
+  });
+
+  it('uses distinct context-map artwork and completed-task artwork for terminal success', async () => {
+    mocks.getState.mockReturnValue(
+      enabledNotificationState({
+        doneNotifications: {
+          ...enabledNotificationState().doneNotifications,
+          contextMaps: true,
+          terminal: true,
+        },
+      }),
+    );
+    await notifyDone('contextMaps', 'Context map ready', '2,500 files indexed with SiYuan.');
+    await notifyDone('terminal', 'Terminal done', 'Command finished successfully.');
+    expect(mocks.notify.mock.calls[0]).toEqual([
+      'Context map ready',
+      '2,500 files indexed with SiYuan.',
+      expect.objectContaining({ variant: 'context_map_completed', fallbackToast: true }),
+    ]);
+    expect(mocks.notify.mock.calls[1][2]).toEqual(
+      expect.objectContaining({ variant: 'task_completed', fallbackToast: true }),
+    );
+  });
+
+  it('fills a bounded Deepgram expiry notice with observed time and repair path', async () => {
+    await notifyApiKeyExpired('Deepgram', new Date('2026-09-27T14:35:00'));
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
+    const [title, body, options] = mocks.notify.mock.calls[0];
+    expect(title).toBe('Deepgram API key expired');
+    expect(body).toMatch(/Detected .*2:35|Detected .*14:35/);
+    expect(body).toContain('Settings → Speech to Text');
+    expect(title.length).toBeLessThan(60);
+    expect(body.length).toBeLessThan(120);
+    expect(options).toEqual(
+      expect.objectContaining({
+        variant: 'credential_expired',
+        fallbackToast: true,
+      }),
+    );
+    expect(`${title} ${body}`).not.toContain('sk-');
+  });
+
+  it('honors connector notification settings for expired API keys', async () => {
+    mocks.getState.mockReturnValue(
+      enabledNotificationState({
+        doneNotifications: { ...enabledNotificationState().doneNotifications, connectors: false },
+      }),
+    );
+    expect(await notifyApiKeyExpired('Deepgram')).toBeNull();
+    expect(mocks.notify).not.toHaveBeenCalled();
+  });
+
+  it('reports a rejected Deepgram key without asserting expiration', async () => {
+    await notifyApiKeyRejected('Deepgram', new Date('2026-09-27T14:35:00'));
+    const [title, body, options] = mocks.notify.mock.calls[0];
+    expect(title).toBe('Deepgram authorization failed');
+    expect(body).toContain('Settings → Speech to Text');
+    expect(body).toContain('35');
+    expect(`${title} ${body}`).not.toMatch(/expired|private-key/i);
+    expect(options.variant).toBe('credential_expired');
+    await notifyApiKeyRejected('Deepgram', new Date('2026-09-27T14:36:00'));
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
   });
 });

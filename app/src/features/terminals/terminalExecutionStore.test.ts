@@ -1310,8 +1310,9 @@ describe('terminal execution lifecycle', () => {
     await vi.waitFor(() => expect(notificationMocks.notifyDone).toHaveBeenCalledOnce());
     expect(notificationMocks.notifyDone).toHaveBeenCalledWith(
       'terminal',
-      'Terminal done',
+      'Terminal failed',
       'Command failed.',
+      { variant: 'task_failed' },
     );
   });
 

@@ -638,7 +638,9 @@ function markCanonical(
         });
         return;
       }
-      void notifyDone('terminal', 'Terminal done', body);
+      void notifyDone('terminal', status === 'failed' ? 'Terminal failed' : 'Terminal done', body, {
+        variant: status === 'failed' ? 'task_failed' : 'task_completed',
+      });
     });
   }
 }
@@ -1245,9 +1247,7 @@ function resultReference(
 }
 
 export type TerminalPreNativeFailure =
-  | 'native_spawn_failed'
-  | 'native_attach_failed'
-  | 'pre_session_initialization_failed';
+  'native_spawn_failed' | 'native_attach_failed' | 'pre_session_initialization_failed';
 
 export async function failTerminalExecutionBeforeNativeExit(
   id: string,

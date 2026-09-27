@@ -100,6 +100,14 @@ fn prepare_notification_artwork(
             "notification-task-stopped.png",
             include_bytes!("../icons/notification-task-stopped.png").as_slice(),
         ),
+        Some("context_map_completed") => (
+            "notification-context-map.png",
+            include_bytes!("../icons/notification-context-map.png").as_slice(),
+        ),
+        Some("credential_expired") => (
+            "notification-credential-expired.png",
+            include_bytes!("../icons/notification-credential-expired.png").as_slice(),
+        ),
         _ => (
             "notification-hero.png",
             include_bytes!("../icons/notification-hero.png").as_slice(),
