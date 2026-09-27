@@ -1,0 +1,51 @@
+{
+  "at": "2026-09-27T18:17:00.647Z",
+  "cdp": 9252,
+  "scenarios": [
+    {
+      "name": "Codex/Codex",
+      "main": "codex",
+      "worker": "codex",
+      "pass": true
+    },
+    {
+      "name": "main changed alone",
+      "main": "opencode",
+      "worker": "codex",
+      "pass": true
+    },
+    {
+      "name": "OpenCode/OpenCode",
+      "main": "opencode",
+      "worker": "opencode",
+      "pass": true
+    },
+    {
+      "name": "worker changed alone",
+      "main": "codex",
+      "worker": "opencode",
+      "pass": true
+    },
+    {
+      "name": "settings persist on reopen",
+      "main": "codex",
+      "worker": "opencode",
+      "pass": true
+    }
+  ],
+  "identity": {
+    "title": "VibeSpace",
+    "tauri": true,
+    "route": "chat",
+    "sourceHasReceiptGate": true,
+    "sourceHasShortAck": true
+  },
+  "initial": {
+    "main": "codex",
+    "worker": "codex"
+  },
+  "restored": {
+    "main": "codex",
+    "worker": "codex"
+  }
+}

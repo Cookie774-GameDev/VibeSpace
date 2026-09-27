@@ -1,0 +1,14 @@
+{
+  "at": "2026-09-27T18:42:37.584Z",
+  "cdp": 9252,
+  "provider": "codex",
+  "marker": "VF03-CODEX-1790534557615",
+  "events": [],
+  "submitAt": "2026-09-27T18:42:46.661Z",
+  "notices": [],
+  "card": null,
+  "defaults": {
+    "main": "codex",
+    "worker": "codex"
+  }
+}

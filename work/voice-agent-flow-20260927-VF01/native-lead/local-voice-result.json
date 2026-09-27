@@ -1,0 +1,22 @@
+{
+  "at": "2026-09-27T18:27:49.164Z",
+  "cdp": 9252,
+  "phraseMarker": "violet",
+  "initialStt": "Free SystemWeb",
+  "localSelected": "true",
+  "listeningAt": "2026-09-27T18:29:11.589Z",
+  "injectedSpeech": {
+    "exitCode": 0,
+    "error": null
+  },
+  "stopViaLifecycleControl": true,
+  "after": {
+    "state": "paused",
+    "transcriptContainsMarker": false,
+    "statusMentionsCodex": false,
+    "statusMentionsOpenCode": false,
+    "failure": false,
+    "hint": "JarvisPaused — click the orb to resumeCommand Center"
+  },
+  "sttRestored": "true"
+}
