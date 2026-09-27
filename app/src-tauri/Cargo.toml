@@ -62,6 +62,8 @@ users = { version = "=0.11.0", default-features = false }
 webview2-com = "=0.38.2"
 winreg = "0.52"
 tauri-winrt-notification = "0.7.3"
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+fontdue = "=0.9.4"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -95,6 +97,13 @@ incremental = true
 # Keep repeated native runtime integrity checks fast in tauri:dev.
 # Hash the same bytes with the same algorithm; only optimize this dependency.
 [profile.dev.package.sha2]
+opt-level = 3
+
+# Keep dynamic notification artwork responsive in development builds.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.fontdue]
 opt-level = 3
 
 # Production profile – Tauri's recommended settings for smaller, faster bundles.

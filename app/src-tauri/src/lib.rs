@@ -71,6 +71,8 @@ mod model_foundry_training;
 mod monochrome_evidence;
 mod native_app_surface;
 mod notification_branding;
+#[cfg(windows)]
+mod notification_hero;
 mod ollama_http;
 mod pets;
 mod playwright_feature_pack;

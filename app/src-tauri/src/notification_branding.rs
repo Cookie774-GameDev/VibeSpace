@@ -30,7 +30,11 @@ pub async fn vibespace_notify(
             let mut notification = plain_notification();
             // Artwork must never prevent a task result from reaching Notification Center.
             let mut has_artwork = false;
-            if let Ok((hero, icon)) = prepare_notification_artwork(variant.as_deref()) {
+            if let Ok((hero, icon)) = prepare_notification_artwork(
+                variant.as_deref(),
+                &title,
+                body.as_deref().unwrap_or_default(),
+            ) {
                 notification = notification
                     .hero(&hero, "VibeSpace notification artwork")
                     .icon(
@@ -68,8 +72,14 @@ pub async fn vibespace_notify(
 #[cfg(windows)]
 fn prepare_notification_artwork(
     variant: Option<&str>,
+    title: &str,
+    body: &str,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
-    use std::{env, fs, path::Path};
+    use sha2::{Digest, Sha256};
+    use std::{env, fs, path::Path, sync::Mutex, time::SystemTime};
+
+    static ARTWORK_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = ARTWORK_LOCK.lock().map_err(|error| error.to_string())?;
 
     fn ensure_asset(path: &Path, bytes: &[u8]) -> Result<(), String> {
         if fs::read(path).ok().as_deref() != Some(bytes) {
@@ -113,10 +123,64 @@ fn prepare_notification_artwork(
             include_bytes!("../icons/notification-hero.png").as_slice(),
         ),
     };
-    let hero = artwork_dir.join(hero_name);
+    let static_hero = artwork_dir.join(hero_name);
     let icon = artwork_dir.join("notification-icon.png");
-    ensure_asset(&hero, hero_bytes)?;
     ensure_asset(&icon, include_bytes!("../icons/icon.png"))?;
+    let hero = (|| -> Result<std::path::PathBuf, String> {
+        let mut digest = Sha256::new();
+        digest.update(hero_bytes);
+        digest.update(title.as_bytes());
+        digest.update(body.as_bytes());
+        let hash = digest.finalize();
+        let name = hash[..12]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let live_dir = artwork_dir.join("live");
+        fs::create_dir_all(&live_dir).map_err(|error| error.to_string())?;
+        let path = live_dir.join(format!("notification-live-{name}.png"));
+        if !path.is_file() {
+            let windows = env::var_os("WINDIR").ok_or("WINDIR is unavailable")?;
+            let fonts = std::path::PathBuf::from(windows).join("Fonts");
+            let regular = fs::read(fonts.join("segoeui.ttf")).map_err(|error| error.to_string())?;
+            let bold = fs::read(fonts.join("segoeuib.ttf")).map_err(|error| error.to_string())?;
+            let rendered =
+                crate::notification_hero::render(hero_bytes, title, body, &regular, &bold)?;
+            fs::write(&path, rendered).map_err(|error| error.to_string())?;
+            // Keep a bounded local cache while preserving recent Notification Center images.
+            let mut old = fs::read_dir(&live_dir)
+                .map_err(|error| error.to_string())?
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("notification-live-")
+                })
+                .filter_map(|entry| {
+                    let modified = entry
+                        .metadata()
+                        .ok()?
+                        .modified()
+                        .unwrap_or(SystemTime::UNIX_EPOCH);
+                    Some((modified, entry.path()))
+                })
+                .collect::<Vec<_>>();
+            old.sort_by_key(|(modified, _)| *modified);
+            let excess = old.len().saturating_sub(128);
+            for (_, expired) in old.into_iter().take(excess) {
+                let _ = fs::remove_file(expired);
+            }
+        }
+        Ok(path)
+    })();
+    let hero = match hero {
+        Ok(path) => path,
+        Err(_) => {
+            ensure_asset(&static_hero, hero_bytes)?;
+            static_hero
+        }
+    };
     Ok((hero, icon))
 }
 
