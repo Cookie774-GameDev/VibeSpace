@@ -10,7 +10,11 @@ import {
   getStoredProjectRoot,
   isPopularTextFile,
 } from '@/features/files/projectFiles';
-import { WORKBENCH_DEVICE_PRESETS, getDevicePreset } from '@/features/preview/previewDevices';
+import {
+  WORKBENCH_DEVICE_PRESETS,
+  defaultOrientationForPreset,
+  getDevicePreset,
+} from '@/features/preview/previewDevices';
 import type { WorkbenchPanel } from './types';
 import { EDITOR_LANGUAGES } from './editorLanguages';
 import { buildDevicePreviewDocument } from './editorPreview';
@@ -233,7 +237,7 @@ export function EditorPanel({ panel, onUpdate }: EditorPanelProps) {
       language: lang,
       content,
       label: filePath ? basename(filePath) : 'draft',
-      orientation: 'portrait',
+      orientation: defaultOrientationForPreset(preset),
       zoom: preset.category === 'phone' ? 0.55 : preset.category === 'tablet' ? 0.4 : 0.35,
     });
     if (!id) {

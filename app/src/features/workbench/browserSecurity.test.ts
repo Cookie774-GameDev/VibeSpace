@@ -13,8 +13,11 @@ describe('Workbench browser isolation', () => {
     expect(browserFramePolicy('YouTube.com', 'http://localhost:5173', false).delivery).toBe(
       'external',
     );
+    expect(
+      browserFramePolicy('https://www.amazon.com', 'http://localhost:5173', false).delivery,
+    ).toBe('external');
     expect(browserFramePolicy('https://example.com', 'http://localhost:5173', false).delivery).toBe(
-      'external',
+      'embedded',
     );
   });
 
@@ -71,7 +74,6 @@ describe('Workbench browser isolation', () => {
     expect(browserFramePolicy(url)).toMatchObject({
       referrerPolicy: 'no-referrer',
       sandbox: EMBEDDED_BROWSER_SANDBOX,
-      frameBlocked: false,
       delivery: 'native-child',
     });
   });
@@ -91,7 +93,7 @@ describe('Workbench browser isolation', () => {
 
     const policy = browserFramePolicy('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
     expect(policy.usedEmbed).toBe(false);
-    expect(policy.frameBlocked).toBe(false);
+    expect(policy.frameBlocked).toBe(true);
     expect(policy.delivery).toBe('native-child');
   });
 
@@ -104,7 +106,7 @@ describe('Workbench browser isolation', () => {
 
   it('keeps YouTube home pages in the native child without pretending iframe support', () => {
     const policy = browserFramePolicy('https://www.youtube.com/');
-    expect(policy.frameBlocked).toBe(false);
+    expect(policy.frameBlocked).toBe(true);
     expect(policy.delivery).toBe('native-child');
     expect(policy.externalUrl).toContain('youtube.com');
   });

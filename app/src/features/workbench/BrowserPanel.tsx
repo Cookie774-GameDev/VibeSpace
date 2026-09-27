@@ -488,7 +488,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
       });
   };
 
-  const showFrame = policy?.delivery === 'embedded' && loadState !== 'idle';
+  const showFrame = policy?.delivery === 'embedded' && loadState !== 'idle' && !error;
   return (
     <div
       className="workbench-browser"
@@ -579,11 +579,14 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
         <div className="workbench-panel-empty">
           <strong>Open this website in a browser tab</strong>
           <span>
-            Full websites need a browser tab in web mode. Use the VibeSpace desktop app to browse
-            inside Workbench.
+            {policy.frameBlocked
+              ? 'This website cannot reliably run inside a Workbench iframe.'
+              : 'This website needs a browser tab in web mode.'}{' '}
+            Your address stays here. Return to this Workbench tab when done.
           </span>
+          <span>{policy.externalUrl}</span>
           <Button type="button" onClick={openDraftExternally}>
-            Open website
+            Open in browser tab
           </Button>
         </div>
       ) : null}
@@ -596,7 +599,16 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
           referrerPolicy={policy.referrerPolicy}
           allow={policy.allow}
           onLoad={() => setLoadState('loaded')}
+          onError={() => {
+            setError('This page could not load inside Workbench. Open it in a browser tab.');
+            setLoadState('error');
+          }}
         />
+      ) : null}
+      {policy?.delivery === 'embedded' && error ? (
+        <Button type="button" onClick={openDraftExternally}>
+          Open in browser tab
+        </Button>
       ) : null}
       <p className="workbench-browser-engine">
         {isTauri

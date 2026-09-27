@@ -37,8 +37,8 @@ beforeEach(() => {
 });
 
 it('opens a submitted full website without attempting native IPC or a blocked iframe', () => {
-  render(<BrowserPanel panel={panel('https://example.com/')} onUpdate={vi.fn()} />);
-  expect(screen.getByRole('button', { name: 'Open website' })).toBeTruthy();
+  render(<BrowserPanel panel={panel('https://amazon.com/')} onUpdate={vi.fn()} />);
+  expect(screen.getByRole('button', { name: 'Open in browser tab' })).toBeTruthy();
   expect(native.openExternal).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText('Browser address'), { target: { value: 'YouTube.com' } });
   fireEvent.click(screen.getByRole('button', { name: 'Go' }));
@@ -46,6 +46,12 @@ it('opens a submitted full website without attempting native IPC or a blocked if
   expect(native.invoke).not.toHaveBeenCalled();
   expect(screen.queryByTitle('Browser web page')).toBeNull();
   expect(screen.queryByText('Loading…')).toBeNull();
+});
+
+it('keeps a verified embeddable page inside the Workbench iframe', () => {
+  render(<BrowserPanel panel={panel('https://example.com/')} onUpdate={vi.fn()} />);
+  expect(screen.getByTitle('Browser web page').getAttribute('src')).toBe('https://example.com/');
+  expect(native.openExternal).not.toHaveBeenCalled();
 });
 
 it('renders official YouTube video embeds with a referrer and no native IPC', () => {
@@ -57,7 +63,7 @@ it('renders official YouTube video embeds with a referrer and no native IPC', ()
 });
 
 it('rejects unsafe addresses before opening a tab', () => {
-  render(<BrowserPanel panel={panel('https://example.com/')} onUpdate={vi.fn()} />);
+  render(<BrowserPanel panel={panel('https://amazon.com/')} onUpdate={vi.fn()} />);
   fireEvent.change(screen.getByLabelText('Browser address'), {
     target: { value: 'javascript:alert(1)' },
   });

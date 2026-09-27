@@ -13,8 +13,9 @@ export const LOOPBACK_BROWSER_SANDBOX = 'allow-forms allow-modals allow-popups a
 
 const FORBIDDEN_SCHEME = /^(?:javascript|data|file|tauri|asset|chrome|about|vbscript):/i;
 
-/** Hosts that reliably refuse iframe embedding (XFO / CSP frame-ancestors). */
+/** Hosts whose full sites are not usable in a Workbench iframe (XFO, CSP, or site challenge). */
 const KNOWN_FRAME_BLOCKED_HOSTS = [
+  'amazon.com',
   'youtube.com',
   'www.youtube.com',
   'm.youtube.com',
@@ -38,6 +39,11 @@ const KNOWN_FRAME_BLOCKED_HOSTS = [
   'netflix.com',
   'www.netflix.com',
 ];
+
+// Keep web-mode embedding conservative: cross-origin frame denial cannot be
+// observed reliably from an iframe load event. These static pages are verified
+// to render without X-Frame-Options or frame-ancestors restrictions.
+const KNOWN_FRAME_ALLOWED_HOSTS = ['example.com'];
 
 export function normalizeBrowserUrl(input: string): string {
   const raw = input.trim();
@@ -132,6 +138,10 @@ export function browserFramePolicy(
   const { src, usedEmbed } = toEmbeddableUrl(input);
   const frameHost = new URL(src).hostname;
   const loopback = isLoopbackHost(frameHost);
+  const frameBlocked = isKnownFrameBlockedHost(new URL(externalUrl).hostname);
+  const frameAllowed = KNOWN_FRAME_ALLOWED_HOSTS.some(
+    (host) => frameHost === host || frameHost === `www.${host}`,
+  );
   // Arbitrary remote pages cannot be made reliable in an iframe because sites
   // legitimately enforce X-Frame-Options/CSP. They stay inside VibeSpace in a
   // capability-free native child WebView instead.
@@ -139,10 +149,9 @@ export function browserFramePolicy(
     ? 'embedded'
     : nativeAvailable
       ? 'native-child'
-      : usedEmbed
+      : usedEmbed || (frameAllowed && !frameBlocked)
         ? 'embedded'
         : 'external';
-  const frameBlocked = false;
 
   return {
     src,

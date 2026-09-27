@@ -171,4 +171,18 @@ describe('device presets', () => {
     expect(defaultOrientationForPreset(getDevicePreset('ipad-mini'))).toBe('portrait');
     expect(defaultOrientationForPreset(getDevicePreset('iphone-15'))).toBe('portrait');
   });
+
+  it('names audited iPads precisely and treats laptop sizes as layouts, not exact models', () => {
+    expect(getDevicePreset('ipad-mini').name).toBe('iPad mini (A17 Pro)');
+    expect(getDevicePreset('ipad-air-11').name).toBe('iPad Air 11-inch (M3)');
+    expect(getDevicePreset('ipad-air-13').name).toBe('iPad Air 13-inch (M3)');
+    expect(getDevicePreset('ipad-pro-11').name).toBe('iPad Pro 11-inch (M4)');
+    expect(getDevicePreset('ipad-pro-13').name).toBe('iPad Pro 13-inch (M4)');
+    for (const preset of DEVICE_PRESETS.filter((device) => device.category === 'laptop')) {
+      expect(preset.name).toMatch(/laptop/i);
+    }
+    for (const preset of DEVICE_PRESETS) {
+      expect('safeArea' in preset).toBe(false);
+    }
+  });
 });

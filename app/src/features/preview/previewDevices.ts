@@ -1,7 +1,7 @@
 /**
- * CSS viewport presets (logical CSS pixels — not physical screen pixels).
- * Sources: platform CSS resolution tables, Chrome DevTools, Playwright device descriptors,
- * and Android's official window-size classes.
+ * Full-screen CSS viewport presets (logical pixels, never physical display pixels).
+ * Browser chrome and platform safe-area insets vary by browser and are not emulated.
+ * Sources are recorded in docs/WORKBENCH_DEVICE_PRESETS.md.
  */
 export type DeviceCategory =
   'responsive' | 'phone' | 'tablet' | 'adaptive' | 'laptop' | 'desktop' | 'custom';
@@ -38,7 +38,6 @@ export interface DevicePreset {
   userAgentProfile: 'mobile' | 'desktop';
   platform?: DevicePlatform;
   verifiedBy?: DeviceVerificationAuthority;
-  safeArea?: { top: number; bottom: number };
 }
 
 export interface DevicePresetGroup {
@@ -87,7 +86,6 @@ export const DEVICE_PRESETS: DevicePreset[] = [
     dpr: 2,
     touch: true,
     userAgentProfile: 'mobile',
-    safeArea: { top: 20, bottom: 0 },
   },
   {
     id: 'iphone-13-mini',
@@ -98,7 +96,6 @@ export const DEVICE_PRESETS: DevicePreset[] = [
     dpr: 3,
     touch: true,
     userAgentProfile: 'mobile',
-    safeArea: { top: 50, bottom: 34 },
   },
   {
     id: 'iphone-13',
@@ -109,7 +106,6 @@ export const DEVICE_PRESETS: DevicePreset[] = [
     dpr: 3,
     touch: true,
     userAgentProfile: 'mobile',
-    safeArea: { top: 47, bottom: 34 },
   },
   {
     id: 'iphone-13-pro-max',
@@ -120,7 +116,6 @@ export const DEVICE_PRESETS: DevicePreset[] = [
     dpr: 3,
     touch: true,
     userAgentProfile: 'mobile',
-    safeArea: { top: 47, bottom: 34 },
   },
   // iPhone 14 / 15 / 16 standard — 393×852 @3x
   {
@@ -132,7 +127,6 @@ export const DEVICE_PRESETS: DevicePreset[] = [
     dpr: 3,
     touch: true,
     userAgentProfile: 'mobile',
-    safeArea: { top: 59, bottom: 34 },
   },
   // iPhone 15 / 16 Pro Max — 430×932 @3x
   {
@@ -144,7 +138,6 @@ export const DEVICE_PRESETS: DevicePreset[] = [
     dpr: 3,
     touch: true,
     userAgentProfile: 'mobile',
-    safeArea: { top: 59, bottom: 34 },
   },
   {
     id: 'iphone-16-pro',
@@ -155,7 +148,6 @@ export const DEVICE_PRESETS: DevicePreset[] = [
     dpr: 3,
     touch: true,
     userAgentProfile: 'mobile',
-    safeArea: { top: 62, bottom: 34 },
   },
   {
     id: 'iphone-16-pro-max',
@@ -166,7 +158,6 @@ export const DEVICE_PRESETS: DevicePreset[] = [
     dpr: 3,
     touch: true,
     userAgentProfile: 'mobile',
-    safeArea: { top: 62, bottom: 34 },
   },
   // Playwright's maintained Chromium device descriptor — CSS screen 393×851 @2.75.
   {
@@ -245,7 +236,7 @@ export const DEVICE_PRESETS: DevicePreset[] = [
   // iPad mini (6th / A17 Pro) — 744×1133 @2x
   {
     id: 'ipad-mini',
-    name: 'iPad mini (6th generation / A17 Pro)',
+    name: 'iPad mini (A17 Pro)',
     category: 'tablet',
     width: 744,
     height: 1133,
@@ -255,7 +246,7 @@ export const DEVICE_PRESETS: DevicePreset[] = [
   },
   {
     id: 'ipad-air-11',
-    name: 'iPad Air 11-inch',
+    name: 'iPad Air 11-inch (M3)',
     category: 'tablet',
     width: 820,
     height: 1180,
@@ -265,7 +256,7 @@ export const DEVICE_PRESETS: DevicePreset[] = [
   },
   {
     id: 'ipad-air-13',
-    name: 'iPad Air 13-inch',
+    name: 'iPad Air 13-inch (M3)',
     category: 'tablet',
     width: 1024,
     height: 1366,
@@ -276,7 +267,7 @@ export const DEVICE_PRESETS: DevicePreset[] = [
   // iPad Pro 11" (M4) — 834×1210 @2x (was 834×1194 on older gens)
   {
     id: 'ipad-pro-11',
-    name: 'iPad Pro 11-inch',
+    name: 'iPad Pro 11-inch (M4)',
     category: 'tablet',
     width: 834,
     height: 1210,
@@ -287,7 +278,7 @@ export const DEVICE_PRESETS: DevicePreset[] = [
   // iPad Pro 13" (M4) — 1032×1376 @2x (not the older 1024×1366 12.9")
   {
     id: 'ipad-pro-13',
-    name: 'iPad Pro 13-inch',
+    name: 'iPad Pro 13-inch (M4)',
     category: 'tablet',
     width: 1032,
     height: 1376,
@@ -346,7 +337,7 @@ export const DEVICE_PRESETS: DevicePreset[] = [
   },
   {
     id: 'macbook-air-13',
-    name: 'MacBook Air 13-inch screen layout',
+    name: '13-inch Retina laptop layout',
     category: 'laptop',
     width: 1280,
     height: 832,
@@ -356,7 +347,7 @@ export const DEVICE_PRESETS: DevicePreset[] = [
   },
   {
     id: 'macbook-pro-14',
-    name: 'MacBook Pro 14-inch screen layout',
+    name: '14-inch Retina laptop layout',
     category: 'laptop',
     width: 1512,
     height: 982,
@@ -366,7 +357,7 @@ export const DEVICE_PRESETS: DevicePreset[] = [
   },
   {
     id: 'macbook-pro-16',
-    name: 'MacBook Pro 16-inch screen layout',
+    name: '16-inch Retina laptop layout',
     category: 'laptop',
     width: 1728,
     height: 1117,
@@ -377,7 +368,7 @@ export const DEVICE_PRESETS: DevicePreset[] = [
   // MacBook-style default CSS viewport (Retina often reports 1440×900)
   {
     id: 'macbook',
-    name: 'MacBook-style laptop',
+    name: 'Retina laptop layout',
     category: 'laptop',
     width: 1440,
     height: 900,

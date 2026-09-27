@@ -18,6 +18,38 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#39;');
 }
 
+const PREVIEW_DIAGNOSTICS = `<script>
+(() => {
+  const report = (message) => {
+    let box = document.getElementById('vibespace-preview-error');
+    if (!box) {
+      box = document.createElement('pre');
+      box.id = 'vibespace-preview-error';
+      box.setAttribute('role', 'alert');
+      box.style.cssText = 'position:fixed;z-index:2147483647;left:12px;right:12px;bottom:12px;max-height:40vh;overflow:auto;margin:0;padding:12px;border:1px solid #c55445;border-radius:8px;background:#361b1b;color:#fff;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap';
+      document.documentElement.appendChild(box);
+    }
+    box.textContent = 'Preview error: ' + message;
+  };
+  window.addEventListener('error', (event) => {
+    if (event.message) report(event.message);
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    report(String(event.reason?.message ?? event.reason ?? 'Unhandled promise rejection'));
+  });
+})();
+</script>`;
+
+function withPreviewDiagnostics(html: string): string {
+  if (/<head(?:\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${PREVIEW_DIAGNOSTICS}`);
+  }
+  return html.replace(
+    /<html(?:\s[^>]*)?>/i,
+    (start) => `${start}<head>${PREVIEW_DIAGNOSTICS}</head>`,
+  );
+}
+
 /**
  * Build a self-contained HTML document for the device iframe preview.
  * Never uses eval; HTML for html/svg is injected as-is into srcDoc sandbox.
@@ -28,17 +60,19 @@ export function buildDevicePreviewDocument(languageOrExt: string, source: string
 
   if (lang === 'html' || lang === 'htm') {
     // Ensure a full document so mobile viewport meta works when present.
-    if (/<html[\s>]/i.test(body)) return body;
-    return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/></head><body>${body}</body></html>`;
+    if (/<html[\s>]/i.test(body)) return withPreviewDiagnostics(body);
+    return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>${PREVIEW_DIAGNOSTICS}</head><body>${body}</body></html>`;
   }
 
   if (lang === 'svg') {
-    const svg = body.trim().startsWith('<') ? body : `<svg xmlns="http://www.w3.org/2000/svg">${escapeHtml(body)}</svg>`;
+    const svg = body.trim().startsWith('<')
+      ? body
+      : `<svg xmlns="http://www.w3.org/2000/svg">${escapeHtml(body)}</svg>`;
     return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><style>html,body{margin:0;height:100%;display:grid;place-items:center;background:#0b0d12}svg{max-width:100%;max-height:100%}</style></head><body>${svg}</body></html>`;
   }
 
   if (lang === 'css') {
-    return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><style>${body}</style></head><body>
+    return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><style>${body.replace(/<\/style/gi, '<\\/style')}</style></head><body>
       <main class="preview-root">
         <h1>CSS preview</h1>
         <p>Sample content styled by your stylesheet.</p>
@@ -47,6 +81,10 @@ export function buildDevicePreviewDocument(languageOrExt: string, source: string
         <div class="card">Card</div>
       </main>
     </body></html>`;
+  }
+
+  if (lang === 'js' || lang === 'javascript') {
+    return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>${PREVIEW_DIAGNOSTICS}</head><body><main id="preview-root"></main><script>${body.replace(/<\/script/gi, '<\\/script')}</script></body></html>`;
   }
 
   if (lang === 'md' || lang === 'mdx' || lang === 'markdown') {

@@ -186,9 +186,9 @@ export function DevicePreviewPanel({ panel, onUpdate }: DevicePreviewPanelProps)
           </div>
         </div>
         <p className="workbench-device-preview-hint">
-          Exact CSS viewport {logical.width}×{logical.height}. Zoom only scales the display — not
-          the layout size reported to the page. Web/PWA preview; native APK testing uses Android
-          platform tooling.
+          Full-screen CSS viewport {logical.width}×{logical.height}. Zoom only scales the display,
+          not media queries. Browser chrome and safe-area insets are not emulated. Native app
+          testing uses platform tooling.
         </p>
       </div>
     </div>

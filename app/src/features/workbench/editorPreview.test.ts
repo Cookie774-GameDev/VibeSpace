@@ -37,4 +37,23 @@ describe('Workbench editor preview', () => {
     expect(cssDoc).toContain('body { color: red; }');
     expect(cssDoc).toContain('CSS preview');
   });
+
+  it('runs JavaScript in the sandbox document and reports HTML/JS errors inside it', () => {
+    const htmlDoc = buildDevicePreviewDocument(
+      'html',
+      '<!doctype html><html><head><script>throw Error("broken")</script></head><body>Hi</body></html>',
+    );
+    expect(htmlDoc.indexOf('vibespace-preview-error')).toBeLessThan(
+      htmlDoc.indexOf('throw Error("broken")'),
+    );
+    expect(htmlDoc).toContain('unhandledrejection');
+
+    const jsDoc = buildDevicePreviewDocument(
+      'js',
+      'document.querySelector("#preview-root").textContent = "Updated";',
+    );
+    expect(jsDoc).toContain('<main id="preview-root"></main>');
+    expect(jsDoc).toContain('textContent = "Updated"');
+    expect(jsDoc).toContain('vibespace-preview-error');
+  });
 });
