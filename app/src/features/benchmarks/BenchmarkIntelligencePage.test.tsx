@@ -186,6 +186,40 @@ describe('BenchmarkIntelligencePage', () => {
     expect(screen.getAllByRole('row')).toHaveLength(101);
     fireEvent.click(screen.getByRole('button', { name: 'Show more models (100 of 120)' }));
     expect(screen.getAllByRole('row')).toHaveLength(121);
+  }, 15000);
+
+  it('searches the full feed in Chart and Table, combines with provider, and clears', async () => {
+    const saved = await api.fetchBenchmarkLeaderboard();
+    api.fetchBenchmarkLeaderboard.mockResolvedValueOnce({
+      ...saved,
+      rows: [
+        ...Array.from({ length: 60 }, (_, index) => ({
+          ...rows[0],
+          id: `model-${index}`,
+          model: `Claude Variant ${index}`,
+          rank: index + 1,
+        })),
+        { ...rows[1], id: 'grok-special', provider: 'SpaceXAI', model: 'Grok Search Target' },
+      ],
+    });
+    render(<BenchmarkIntelligencePage />);
+    await screen.findByText('25 of 61 models shown');
+    const search = screen.getByRole('searchbox', { name: 'Search models' });
+    fireEvent.change(search, { target: { value: 'gRoK sEaRcH' } });
+    expect(screen.getByText('Grok Search Target')).toBeTruthy();
+    expect(screen.getByText('1 of 1 models shown')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^table$/i }));
+    expect(screen.getByRole('row', { name: /Grok Search Target/ })).toBeTruthy();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Models' }), {
+      target: { value: 'Anthropic' },
+    });
+    expect(screen.getByText('No models match these filters.')).toBeTruthy();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Models' }), {
+      target: { value: 'all' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Clear model search' }));
+    expect((search as HTMLInputElement).value).toBe('');
+    expect(screen.getByText('Show more models (50 of 61)')).toBeTruthy();
   });
 
   it('renders Artificial Analysis and excludes the removed comparison/valuation UI', async () => {

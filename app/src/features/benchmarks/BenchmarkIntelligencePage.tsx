@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Check, ExternalLink, ImageOff, RefreshCw, Share2 } from 'lucide-react';
+import { Check, ExternalLink, ImageOff, RefreshCw, Search, Share2, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
@@ -300,6 +300,7 @@ export function BenchmarkIntelligencePage() {
   const [loading, setLoading] = React.useState(!result);
   const [refreshing, setRefreshing] = React.useState(false);
   const [provider, setProvider] = React.useState('all');
+  const [modelSearch, setModelSearch] = React.useState('');
   const [ownership, setOwnership] = React.useState<OwnershipFilter>('all');
   const [effort, setEffort] = React.useState('all');
   const [sortKey, setSortKey] = React.useState<SortKey>('intelligence');
@@ -371,19 +372,22 @@ export function BenchmarkIntelligencePage() {
   );
 
   const filteredRows = React.useMemo(() => {
+    const query = modelSearch.trim().toLocaleLowerCase();
     const rows = (result?.rows ?? []).filter((row) => {
       if (provider !== 'all' && row.provider !== provider) return false;
+      if (query && !`${row.model} ${row.provider}`.toLocaleLowerCase().includes(query))
+        return false;
       if (ownership === 'open' && row.openWeights !== true) return false;
       if (ownership === 'proprietary' && row.openWeights !== false) return false;
       if (effort !== 'all' && row.effort !== effort) return false;
       return true;
     });
     return sortBenchmarkRows(rows, sortKey, sortDirection);
-  }, [effort, ownership, provider, result, sortDirection, sortKey]);
+  }, [effort, modelSearch, ownership, provider, result, sortDirection, sortKey]);
 
   React.useEffect(() => {
     setVisibleCount(50);
-  }, [effort, ownership, provider, sortDirection, sortKey]);
+  }, [effort, modelSearch, ownership, provider, sortDirection, sortKey]);
 
   const categoryMetric: SortKey =
     category === 'Speed' ? 'speed' : category === 'Cost' ? 'costPerTask' : 'intelligence';
@@ -496,7 +500,36 @@ export function BenchmarkIntelligencePage() {
               </div>
             ) : null}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+            <div className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+              />
+              <input
+                type="text"
+                role="searchbox"
+                inputMode="search"
+                aria-label="Search models"
+                placeholder="Search models"
+                value={modelSearch}
+                onChange={(event) => setModelSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setModelSearch('');
+                }}
+                className="h-10 w-full rounded-lg border border-border bg-paper py-2 pl-9 pr-9 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-accent-copper/60"
+              />
+              {modelSearch ? (
+                <button
+                  type="button"
+                  aria-label="Clear model search"
+                  onClick={() => setModelSearch('')}
+                  className="absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:bg-accent-copper/10 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-copper"
+                >
+                  <X aria-hidden="true" className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
             <label className="flex items-center gap-2 rounded-lg border border-border bg-paper px-2 text-sm">
               <span>Models</span>
               <select
@@ -845,6 +878,15 @@ export function BenchmarkIntelligencePage() {
                 </tbody>
               </table>
             </div>
+            {!filteredRows.length ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                {loading
+                  ? 'Loading benchmarks…'
+                  : result?.rows.length
+                    ? 'No models match these filters.'
+                    : 'Results will appear here when available.'}
+              </p>
+            ) : null}
             {visibleCount < filteredRows.length ? (
               <Button
                 variant="outline"

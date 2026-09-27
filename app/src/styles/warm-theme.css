@@ -1224,25 +1224,23 @@ html[data-theme='warm'] [data-warm-decoration='benchmarks-scene'] {
   pointer-events: none;
 }
 
+html[data-theme='warm'] [data-warm-decoration='benchmarks-scene']::before {
+  position: absolute;
+  inset: 0 50% 0 0;
+  content: '';
+  background-image: url('/assets/themes/warm/benchmarks/continuation-v2/benchmark-scroll-composite-v2.webp');
+  background-position: right top;
+  background-repeat: no-repeat;
+  background-size: 200% auto;
+  opacity: 0.88;
+  transform: scaleX(-1);
+}
+
 html[data-theme='warm'] [data-warm-decoration='benchmarks-scene']::after {
   position: absolute;
   inset: 0;
   content: '';
-  background:
-    radial-gradient(
-      ellipse 72% 19% at 42% 15%,
-      rgb(250 238 222 / 0.93) 0%,
-      rgb(250 238 222 / 0.72) 49%,
-      transparent 80%
-    ),
-    linear-gradient(
-      90deg,
-      rgb(249 236 220 / 0.94) 0%,
-      rgb(249 236 220 / 0.88) 49%,
-      rgb(249 236 220 / 0.38) 67%,
-      transparent 84%
-    ),
-    linear-gradient(180deg, transparent 88%, rgb(246 229 209 / 0.62) 100%);
+  background: linear-gradient(180deg, rgb(250 238 222 / 0.4), transparent 25%);
 }
 
 html[data-theme='warm'] [data-warm-decoration='benchmarks-scene'] > img {
@@ -1250,6 +1248,7 @@ html[data-theme='warm'] [data-warm-decoration='benchmarks-scene'] > img {
   width: 100%;
   height: auto;
   opacity: 0.88;
+  clip-path: inset(0 0 0 50%);
   user-select: none;
 }
 

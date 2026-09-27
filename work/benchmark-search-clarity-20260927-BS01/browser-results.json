@@ -1,0 +1,28 @@
+{
+  "checks": {
+    "scene": {
+      "beforeImage": "url(\"http://127.0.0.1:5180/assets/themes/warm/benchmarks/continuation-v2/benchmark-scroll-composite-v2.webp\")",
+      "imageClip": "inset(0px 0px 0px 50%)",
+      "overlay": "linear-gradient(rgba(250, 238, 222, 0.4), rgba(0, 0, 0, 0) 25%)"
+    },
+    "grokChartRows": 50,
+    "grokVisible": true,
+    "grokTableRows": 28,
+    "grokTableText": "#1\t\nGrok 4.7 (xhigh)\nSpaceXAI\nEffort: xhigh\n\t46.4\t$3.7383\t$2\t$6\t$3\t12.41\t82.12 t/s\t54.44 s\t500K\t—\n#2\t\nGrok 4.7 (high)\nSpaceXAI\nEffort: high\n\t46.3\t$2.7261\t$2\t$6\t$3\t16.98\t82.65 t/s\t44.07 s\t500K\t—\n#3\t\nGrok 4.6 (high)\nSpaceXAI\nEffort: high\n\t44.3\t$1.8589\t",
+    "noMatch": true,
+    "cleared": true,
+    "restoredRows": 50,
+    "mobileOverflow": false,
+    "mobileSearchVisible": true,
+    "mobileGrokVisible": true
+  },
+  "consoleErrors": [
+    "[boot] account scope startup: jarvis_kernel_host_not_installed",
+    "Access to fetch at 'https://tipeobvisjqvpbzcpckh.supabase.co/functions/v1/third-party-call' from origin 'http://127.0.0.1:5180' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: It does not have HTTP ok status.",
+    "Failed to load resource: net::ERR_FAILED"
+  ],
+  "pageErrors": [],
+  "requestFailures": [
+    "https://tipeobvisjqvpbzcpckh.supabase.co/functions/v1/third-party-call: net::ERR_FAILED"
+  ]
+}
