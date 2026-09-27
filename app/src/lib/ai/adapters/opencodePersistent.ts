@@ -1,5 +1,5 @@
 import { openCodeToolDetails } from '../publicToolDetails';
-import { restoredConversationPrompt } from './restoredConversationPrompt';
+import { selectOpenCodeDispatchPrompt } from './restoredConversationPrompt';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { resolveOpenCodeChildControl } from './openCodeChildControls';
 import { newOpenCodeMessageId, sendOpenCodePromptOnce } from './openCodePromptAcceptance';
@@ -2373,7 +2373,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       chatId,
       // A preflight failure can leave a bound session with no accepted prompt.
       // Restore the bounded local history once; established sessions already own it.
-      text: baselineMessages.length === 0 ? restoredConversationPrompt(request) : request.prompt,
+      text: baselineMessages.length === 0 ? selectOpenCodeDispatchPrompt(request) : request.prompt,
       settings,
       selection: {
         connectionId: request.connection.id,

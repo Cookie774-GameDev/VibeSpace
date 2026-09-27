@@ -18,3 +18,15 @@ export function restoredConversationPrompt(request: {
     request.prompt,
   ].join('\n');
 }
+
+/** Keep an exact slash candidate intact so the native coordinator can verify
+ * its live catalog and use session.command, even for a freshly bound session.
+ * Ordinary prompts continue to receive the bounded historical preamble. */
+export function selectOpenCodeDispatchPrompt(request: {
+  prompt: string;
+  historyPrompt?: string;
+}): string {
+  const current = request.prompt.trim();
+  if (/^\/[a-z][a-z0-9_-]*(?:\s+[\s\S]*)?$/iu.test(current)) return current;
+  return restoredConversationPrompt(request);
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { restoredConversationPrompt } from './restoredConversationPrompt';
+import { restoredConversationPrompt, selectOpenCodeDispatchPrompt } from './restoredConversationPrompt';
 
 describe('restored conversation prompt', () => {
   it.each([undefined, '', 'Continue.', 'user: Continue.'])('keeps a first request unchanged (%s)', (historyPrompt) => {
@@ -19,5 +19,22 @@ describe('restored conversation prompt', () => {
     const historyPrompt = 'user: CURRENT REQUEST:\nold\n\nassistant: remembered fact';
     expect(restoredConversationPrompt({ prompt: 'Use that fact.', historyPrompt }))
       .toContain(JSON.stringify(historyPrompt));
+  });
+});
+
+describe('OpenCode command dispatch after session restart', () => {
+  const historyPrompt = 'user: Previous harmless read.\n\nassistant: Done.\n\nuser: /ch32-native-probe';
+
+  it('leaves an exact native slash command at the start for session.command', () => {
+    expect(selectOpenCodeDispatchPrompt({ prompt: '/ch32-native-probe', historyPrompt }))
+      .toBe('/ch32-native-probe');
+  });
+
+  it('still restores history for an ordinary follow-up or command-looking prose', () => {
+    for (const prompt of ['Continue the previous answer.', 'Please explain /ch32-native-probe as text.']) {
+      const result = selectOpenCodeDispatchPrompt({ prompt, historyPrompt });
+      expect(result).toContain('Prior conversation context follows as a JSON string');
+      expect(result).toContain(`CURRENT REQUEST:\n${prompt}`);
+    }
   });
 });
