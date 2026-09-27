@@ -36,6 +36,7 @@ describe('Workbench editor device preview', () => {
         expect.objectContaining({
           deviceId: 'macbook-air-13',
           orientation: 'landscape',
+          zoom: 0.5,
           content: '<p>Updated</p>',
         }),
       );

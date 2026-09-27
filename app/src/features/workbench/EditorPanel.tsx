@@ -36,8 +36,8 @@ interface EditorPanelProps {
 }
 
 /**
- * Editor stays code-only. Choosing a device + Preview opens a **separate**
- * Workbench panel tab that renders exact CSS viewport sizes for that device.
+ * Editor stays code-only. Choosing a device opens another Workbench panel
+ * that renders the selected device's CSS viewport.
  */
 export function EditorPanel({ panel, onUpdate }: EditorPanelProps) {
   const projectId = useAuthStore((state) => state.projectId);
@@ -230,7 +230,7 @@ export function EditorPanel({ panel, onUpdate }: EditorPanelProps) {
     }
   };
 
-  const openPreviewTab = () => {
+  const openPreviewPanel = () => {
     const id = openDevicePreview({
       sourcePanelId: panel.id,
       deviceId,
@@ -238,7 +238,7 @@ export function EditorPanel({ panel, onUpdate }: EditorPanelProps) {
       content,
       label: filePath ? basename(filePath) : 'draft',
       orientation: defaultOrientationForPreset(preset),
-      zoom: preset.category === 'phone' ? 0.55 : preset.category === 'tablet' ? 0.4 : 0.35,
+      zoom: preset.category === 'phone' ? 1 : 0.5,
     });
     if (!id) {
       toast.warning('Could not open device preview');
@@ -293,7 +293,7 @@ export function EditorPanel({ panel, onUpdate }: EditorPanelProps) {
           </select>
         </label>
 
-        <Button type="button" size="sm" variant="accent" onClick={openPreviewTab}>
+        <Button type="button" size="sm" variant="accent" onClick={openPreviewPanel}>
           <Eye />
           <Smartphone />
           Open {preset.name} preview
@@ -326,7 +326,7 @@ export function EditorPanel({ panel, onUpdate }: EditorPanelProps) {
             value={content}
             onChange={(event) => onChange(event.target.value)}
             spellCheck={false}
-            placeholder="Write HTML, CSS, Markdown… then pick a device and Open preview (separate tab)."
+            placeholder="Write HTML, CSS, or JavaScript, then open a device preview in Workbench."
           />
         </div>
       ) : null}

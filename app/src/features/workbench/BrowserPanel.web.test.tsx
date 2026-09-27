@@ -36,16 +36,21 @@ beforeEach(() => {
   native.openExternal.mockReset().mockResolvedValue(undefined);
 });
 
-it('opens a submitted full website without attempting native IPC or a blocked iframe', () => {
+it('keeps an unembeddable website in Workbench without opening a tab automatically', () => {
   render(<BrowserPanel panel={panel('https://amazon.com/')} onUpdate={vi.fn()} />);
   expect(screen.getByRole('button', { name: 'Open in browser tab' })).toBeTruthy();
   expect(native.openExternal).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText('Browser address'), { target: { value: 'YouTube.com' } });
   fireEvent.click(screen.getByRole('button', { name: 'Go' }));
-  expect(native.openExternal).toHaveBeenCalledWith('https://youtube.com/');
+  expect(native.openExternal).not.toHaveBeenCalled();
   expect(native.invoke).not.toHaveBeenCalled();
   expect(screen.queryByTitle('Browser web page')).toBeNull();
   expect(screen.queryByText('Loading…')).toBeNull();
+  expect(screen.getByText(/desktop VibeSpace browser/i)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Reload browser' }));
+  expect(native.openExternal).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Open in browser tab' }));
+  expect(native.openExternal).toHaveBeenCalledWith('https://youtube.com/');
 });
 
 it('keeps a verified embeddable page inside the Workbench iframe', () => {

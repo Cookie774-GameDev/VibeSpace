@@ -402,11 +402,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
     }
     setLoadState(nextPolicy.delivery === 'external' ? 'idle' : 'loading');
     if (nextPolicy.delivery === 'embedded') setFrameKey((value) => value + 1);
-    else if (nextPolicy.delivery === 'external') {
-      void openExternal(nextPolicy.externalUrl).catch((cause) => {
-        setError(nativeFailureMessage(cause, 'The page could not open externally.'));
-      });
-    } else
+    else if (nextPolicy.delivery === 'native-child')
       void syncNativeSurface(nextPolicy.externalUrl, false).catch((cause) => {
         const message = nativeFailureMessage(cause, 'The page could not open.');
         setError(message);
@@ -465,10 +461,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
   };
 
   const nativeControl = (command: 'reload' | 'stop') => {
-    if (policy?.delivery === 'external') {
-      if (command === 'reload') openDraftExternally();
-      return;
-    }
+    if (policy?.delivery === 'external') return;
     if (policy?.delivery !== 'native-child') {
       if (command === 'reload') {
         setLoadState('loading');
@@ -577,12 +570,13 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
       ) : null}
       {policy?.delivery === 'external' ? (
         <div className="workbench-panel-empty">
-          <strong>Open this website in a browser tab</strong>
+          <strong>This website cannot display in the web preview</strong>
           <span>
             {policy.frameBlocked
-              ? 'This website cannot reliably run inside a Workbench iframe.'
-              : 'This website needs a browser tab in web mode.'}{' '}
-            Your address stays here. Return to this Workbench tab when done.
+              ? 'This site prevents a reliable iframe view.'
+              : 'This site has not been verified for iframe viewing.'}{' '}
+            The desktop VibeSpace browser uses an in-panel WebView for full websites. Your address
+            stays here.
           </span>
           <span>{policy.externalUrl}</span>
           <Button type="button" onClick={openDraftExternally}>
@@ -615,7 +609,7 @@ export function BrowserPanel({ panel, onUpdate }: BrowserPanelProps) {
           ? 'Remote pages stay inside a capability-free VibeSpace child WebView.'
           : policy?.usedEmbed
             ? 'YouTube video player. Open in external browser for the full website.'
-            : 'Web mode: local previews stay in Workbench; full websites open in a browser tab.'}
+            : 'Web mode: embeddable pages stay here; full sites need desktop VibeSpace.'}
       </p>
     </div>
   );

@@ -27,13 +27,42 @@ import {
   resolveWorkbenchName,
   sanitizeWorkbenchName,
 } from './workbenchName';
-import { getDevicePreset, orientSize } from '@/features/preview/previewDevices';
+import {
+  defaultOrientationForPreset,
+  getDevicePreset,
+  orientSize,
+} from '@/features/preview/previewDevices';
 import { buildDevicePreviewDocument } from './editorPreview';
 
 interface WorkbenchSnapshot {
   panels: WorkbenchPanel[];
   view: WorkbenchView;
   name: string;
+}
+
+export function previewPanelSize(logical: { width: number; height: number }, zoom: number) {
+  return {
+    width: Math.min(920, Math.max(360, Math.round(logical.width * zoom) + 64)),
+    height: Math.min(980, Math.max(420, Math.round(logical.height * zoom) + 144)),
+  };
+}
+
+export function fitPreviewPanelInCanvas(
+  position: { x: number; y: number },
+  size: { width: number; height: number },
+  view: WorkbenchView,
+  canvasSize: { width: number; height: number },
+) {
+  const margin = 16;
+  const zoom = Math.max(0.25, view.zoom);
+  const minX = (margin - view.x) / zoom;
+  const minY = (margin - view.y) / zoom;
+  const maxX = Math.max(minX, (canvasSize.width - margin - view.x) / zoom - size.width);
+  const maxY = Math.max(minY, (canvasSize.height - margin - view.y) / zoom - size.height);
+  return {
+    x: Math.min(maxX, Math.max(minX, position.x)),
+    y: Math.min(maxY, Math.max(minY, position.y)),
+  };
 }
 
 interface WorkbenchState extends WorkbenchDocument {
@@ -484,7 +513,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   openDevicePreview: (input) => {
     const deviceId = input.deviceId || 'iphone-15';
     const preset = getDevicePreset(deviceId);
-    const orientation = input.orientation ?? 'portrait';
+    const orientation = input.orientation ?? defaultOrientationForPreset(preset);
     const zoom = Math.min(1, Math.max(0.25, input.zoom ?? 0.5));
     const logical = orientSize(preset, orientation, 390, 844, 800, 600);
     const doc = buildDevicePreviewDocument(input.language, input.content);
@@ -526,21 +555,27 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
     }
 
     const id = createWorkbenchId('device-preview');
-    // Panel chrome needs room for exact device + chrome; size to scaled viewport + padding.
-    const padX = 48;
-    const padY = 120;
-    const width = Math.min(920, Math.max(360, Math.round(logical.width * zoom) + padX));
-    const height = Math.min(980, Math.max(420, Math.round(logical.height * zoom) + padY));
+    // Give the rendered page room for controls, frame chrome, and scrollbars.
+    const { width, height } = previewPanelSize(logical, zoom);
 
     set((state) => {
       const maxZ = Math.max(0, ...state.panels.map((p) => p.z));
       const source = state.panels.find((p) => p.id === input.sourcePanelId);
+      const position = fitPreviewPanelInCanvas(
+        {
+          x: (source?.x ?? 120) + (source?.width ?? 400) + 28,
+          y: source?.y ?? 80,
+        },
+        { width, height },
+        state.view,
+        state.canvasSize,
+      );
       const panel: WorkbenchPanel = {
         id,
         kind: 'device-preview',
         title,
-        x: (source?.x ?? 120) + (source?.width ?? 400) + 28,
-        y: source?.y ?? 80,
+        x: position.x,
+        y: position.y,
         width,
         height,
         z: maxZ + 1,

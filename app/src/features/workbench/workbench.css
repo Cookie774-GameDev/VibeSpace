@@ -1755,7 +1755,7 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  place-items: center;
+  place-items: safe center;
   gap: 10px;
   overflow: auto;
   padding: 16px;

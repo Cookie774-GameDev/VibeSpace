@@ -11,6 +11,7 @@ import {
   orientSize,
 } from '@/features/preview/previewDevices';
 import type { WorkbenchPanel } from './types';
+import { fitPreviewPanelInCanvas, previewPanelSize, useWorkbenchStore } from './store';
 
 interface DevicePreviewPanelProps {
   panel: WorkbenchPanel;
@@ -22,6 +23,8 @@ interface DevicePreviewPanelProps {
  * Visual zoom uses transform:scale so media queries still see real width/height.
  */
 export function DevicePreviewPanel({ panel, onUpdate }: DevicePreviewPanelProps) {
+  const view = useWorkbenchStore((state) => state.view);
+  const canvasSize = useWorkbenchStore((state) => state.canvasSize);
   const deviceId = panel.settings.previewDeviceId || 'iphone-15';
   const preset = getDevicePreset(deviceId);
   const orientation = panel.settings.previewOrientation || defaultOrientationForPreset(preset);
@@ -42,6 +45,10 @@ export function DevicePreviewPanel({ panel, onUpdate }: DevicePreviewPanelProps)
   const patch = (next: Record<string, unknown>) => {
     onUpdate({ settings: { ...panel.settings, ...next } });
   };
+  const fittedPanel = (nextSize: { width: number; height: number }) => ({
+    ...nextSize,
+    ...fitPreviewPanelInCanvas(panel, nextSize, view, canvasSize),
+  });
 
   // When device changes, retitle panel.
   React.useEffect(() => {
@@ -76,9 +83,18 @@ export function DevicePreviewPanel({ panel, onUpdate }: DevicePreviewPanelProps)
             value={deviceId}
             onChange={(e) => {
               const next = getDevicePreset(e.target.value);
-              patch({
-                previewDeviceId: e.target.value,
-                previewOrientation: defaultOrientationForPreset(next),
+              const nextOrientation = defaultOrientationForPreset(next);
+              const nextZoom = next.category === 'phone' ? 1 : 0.5;
+              onUpdate({
+                ...fittedPanel(
+                  previewPanelSize(orientSize(next, nextOrientation, 390, 844, 800, 600), nextZoom),
+                ),
+                settings: {
+                  ...panel.settings,
+                  previewDeviceId: e.target.value,
+                  previewOrientation: nextOrientation,
+                  previewZoom: nextZoom,
+                },
               });
             }}
           >
@@ -99,9 +115,15 @@ export function DevicePreviewPanel({ panel, onUpdate }: DevicePreviewPanelProps)
           variant="ghost"
           aria-label="Rotate"
           title="Portrait / landscape"
-          onClick={() =>
-            patch({ previewOrientation: orientation === 'portrait' ? 'landscape' : 'portrait' })
-          }
+          onClick={() => {
+            const nextOrientation = orientation === 'portrait' ? 'landscape' : 'portrait';
+            onUpdate({
+              ...fittedPanel(
+                previewPanelSize(orientSize(preset, nextOrientation, 390, 844, 800, 600), zoom),
+              ),
+              settings: { ...panel.settings, previewOrientation: nextOrientation },
+            });
+          }}
         >
           <RotateCw />
         </Button>
@@ -110,7 +132,13 @@ export function DevicePreviewPanel({ panel, onUpdate }: DevicePreviewPanelProps)
           <select
             aria-label="Zoom"
             value={String(zoom)}
-            onChange={(e) => patch({ previewZoom: Number(e.target.value) })}
+            onChange={(e) => {
+              const nextZoom = Number(e.target.value);
+              onUpdate({
+                ...fittedPanel(previewPanelSize(logical, nextZoom)),
+                settings: { ...panel.settings, previewZoom: nextZoom },
+              });
+            }}
           >
             {[0.25, 0.35, 0.5, 0.65, 0.75, 1].map((z) => (
               <option key={z} value={z}>
