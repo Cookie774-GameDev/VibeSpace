@@ -30,7 +30,14 @@ vi.mock('@/features/jarvis-interaction/agentRunner', () => ({
 vi.mock('@/features/jarvis-interaction/sessionStore', () => ({
   useJarvisInteractionStore: {
     getState: () => ({
-      agentsForChat: () => [{ agentId: 'agent', status: 'done', summary: 'Finished the task.' }],
+      agentsForChat: () => [
+        {
+          agentId: 'agent',
+          status: 'done',
+          harnessSessionId: 'native-worker-session',
+          summary: 'Finished the task.',
+        },
+      ],
     }),
     subscribe: () => () => undefined,
   },

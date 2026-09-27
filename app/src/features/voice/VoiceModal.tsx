@@ -43,6 +43,7 @@ import {
   resolveVoiceProviderSelection,
 } from './voiceProviderSelection';
 import { captureVoiceScreenAttachment } from './voiceScreenCapture';
+import { waitForVoiceWorkerReceipt } from './voiceWorkerReceipt';
 import {
   buildVoiceMainResultSendDetail,
   createVoiceAgentFlow,
@@ -905,7 +906,12 @@ function VoiceModalPanel() {
                 imageAttachments: input.imageAttachments,
                 recordParentCommand: false,
               });
-              return { ...launched, actualProvider: route.provider };
+              const receipt = await waitForVoiceWorkerReceipt({
+                parentChatId: input.parentChatId,
+                agentId: launched.agentId,
+                provider: route.provider,
+              });
+              return { ...launched, actualProvider: receipt.provider };
             },
             waitForWorker: (input) =>
               awaitVoiceWorkerResult(
@@ -962,7 +968,7 @@ function VoiceModalPanel() {
             voiceLaunchFailureRef.current === 'The voice request could not be saved.';
           const failure = saveFailed
             ? VOICE_MESSAGE_SAVE_FAILURE
-            : 'I could not start the worker. The task was not sent.';
+            : 'I could not confirm the worker started.';
           if (saveFailed) toast.error('Voice message failed', failure);
           useVoiceStore.getState().setState('error', failure);
           void speakWithSettings(failure).catch(() => undefined);

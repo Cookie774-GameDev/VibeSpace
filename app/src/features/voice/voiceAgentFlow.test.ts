@@ -164,6 +164,40 @@ describe('voice agent flow', () => {
     expect(deps.deliverMainResult).not.toHaveBeenCalled();
   });
 
+  it('keeps a failed launch deduplicated for a repeated transcript', async () => {
+    const { deps, flow } = setup();
+    deps.launchWorker.mockRejectedValueOnce(new Error('provider receipt unavailable'));
+    const first = await flow.run({ ...request, text: 'Check the failing tests' });
+    const repeated = await flow.run({ ...request, text: ' Check the failing tests. ' });
+
+    expect(first.status).toBe('launch_failed');
+    expect(repeated).toMatchObject({ status: 'launch_failed', duplicate: true });
+    expect(deps.launchWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates an in-flight worker even after the original 45-second window', async () => {
+    const { deps, flow } = setup();
+    let clock = 1_000;
+    deps.now.mockImplementation(() => clock);
+    let finishWorker!: (outcome: { status: 'done'; text: string }) => void;
+    deps.waitForWorker.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishWorker = resolve;
+        }),
+    );
+
+    const first = flow.run({ ...request, text: 'Check the failing tests' });
+    await vi.waitFor(() => expect(deps.waitForWorker).toHaveBeenCalledTimes(1));
+    clock += 60_000;
+    const repeated = flow.run({ ...request, text: 'Check the failing tests.' });
+    finishWorker({ status: 'done', text: 'Finished once.' });
+
+    expect((await first).duplicate).toBe(false);
+    expect((await repeated).duplicate).toBe(true);
+    expect(deps.launchWorker).toHaveBeenCalledTimes(1);
+  });
+
   it('reports delivery failure truthfully after a worker was launched', async () => {
     const { deps, flow } = setup();
     deps.deliverMainResult.mockRejectedValueOnce(new Error('main runtime unavailable'));

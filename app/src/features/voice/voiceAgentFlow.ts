@@ -143,14 +143,19 @@ function workerTask(text: string, hasScreen: boolean): string {
 }
 
 export function createVoiceAgentFlow(deps: VoiceAgentFlowDependencies) {
-  const recent = new Map<string, { at: number; result: Promise<VoiceAgentFlowResult> }>();
+  const recent = new Map<string, { finishedAt?: number; result: Promise<VoiceAgentFlowResult> }>();
 
   const run = (input: VoiceAgentRequest): Promise<VoiceAgentFlowResult> => {
     const text = input.text.trim();
     const startedAt = deps.now();
     const key = `${input.chatId}\u0000${input.mainProvider}\u0000${input.workerProvider}\u0000${normalizedVoiceTask(text)}`;
+    for (const [candidate, entry] of recent) {
+      if (entry.finishedAt !== undefined && startedAt - entry.finishedAt >= DUPLICATE_WINDOW_MS) {
+        recent.delete(candidate);
+      }
+    }
     const prior = recent.get(key);
-    if (prior && startedAt - prior.at < DUPLICATE_WINDOW_MS) {
+    if (prior) {
       return prior.result.then((result) => ({ ...result, duplicate: true }));
     }
 
@@ -276,10 +281,18 @@ export function createVoiceAgentFlow(deps: VoiceAgentFlowDependencies) {
         elapsedMs: Math.max(0, deps.now() - startedAt),
       };
     })();
-    recent.set(key, { at: startedAt, result: operation });
-    void operation.then((result) => {
-      if (result.status === 'launch_failed' && !result.childChatId) recent.delete(key);
-    });
+    const entry: { finishedAt?: number; result: Promise<VoiceAgentFlowResult> } = {
+      result: operation,
+    };
+    recent.set(key, entry);
+    void operation.then(
+      () => {
+        entry.finishedAt = deps.now();
+      },
+      () => {
+        entry.finishedAt = deps.now();
+      },
+    );
     return operation;
   };
 

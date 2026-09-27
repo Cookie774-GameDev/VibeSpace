@@ -14,6 +14,7 @@ import {
 } from './voiceAgentFlow';
 import { captureVoiceScreenAttachment } from './voiceScreenCapture';
 import { ensureJarvisChatForProvider } from './voiceChatRouting';
+import { waitForVoiceWorkerReceipt } from './voiceWorkerReceipt';
 import {
   resolveVoiceProviderSelection,
   type ParsedVoiceProviderOverrides,
@@ -166,7 +167,12 @@ export async function startTypedAgentOverride(input: {
         imageAttachments: request.imageAttachments,
         recordParentCommand: false,
       });
-      return { ...launched, actualProvider: route.provider };
+      const receipt = await waitForVoiceWorkerReceipt({
+        parentChatId: request.parentChatId,
+        agentId: launched.agentId,
+        provider: route.provider,
+      });
+      return { ...launched, actualProvider: receipt.provider };
     },
     waitForWorker: (request) =>
       waitForTypedWorker(request.parentChatId, request.agentId, request.childChatId),
