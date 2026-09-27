@@ -59,3 +59,27 @@ html[data-theme='sakura'] [data-vibespace-owned-chrome='whats-new'] :focus-visib
     box-shadow: none;
   }
 }
+/* A quiet botanical mark stays inside the header's free corner. */
+.whats-new-polished .whats-new-flower {
+  position: absolute;
+  top: 1.7rem;
+  right: 4.25rem;
+  width: 4.5rem;
+  height: 5rem;
+  color: hsl(var(--accent-copper) / 0.72);
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.whats-new-polished header > :not(svg) {
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 38rem) {
+  .whats-new-polished .whats-new-flower {
+    width: 3rem;
+    right: 2.4rem;
+    opacity: 0.28;
+  }
+}

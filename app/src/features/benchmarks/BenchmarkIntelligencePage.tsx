@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ExternalLink, RefreshCw } from 'lucide-react';
+import { Check, ExternalLink, RefreshCw, Share2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import {
   blendedTokenPrice,
@@ -25,6 +26,52 @@ type SortKey =
   | 'context';
 
 type OwnershipFilter = 'all' | 'open' | 'proprietary';
+type Category =
+  | 'Overall'
+  | 'Reasoning'
+  | 'Front End'
+  | 'Back End'
+  | 'One Shot'
+  | 'Security'
+  | 'Trust'
+  | 'Efficiency'
+  | 'Speed'
+  | 'Cost';
+const CATEGORIES: readonly Category[] = [
+  'Overall',
+  'Reasoning',
+  'Front End',
+  'Back End',
+  'One Shot',
+  'Security',
+  'Trust',
+  'Efficiency',
+  'Speed',
+  'Cost',
+];
+const PROVIDER_LOGOS: Record<string, string> = {
+  Anthropic: '/plugin-logos/anthropic.svg',
+  OpenAI: '/plugin-logos/openai.svg',
+  Google: '/plugin-logos/google-gemini.svg',
+  Mistral: '/plugin-logos/mistral-ai.ico',
+  Cohere: '/plugin-logos/cohere.ico',
+};
+
+function ProviderMark({ provider }: { provider: string }) {
+  const logo = PROVIDER_LOGOS[provider];
+  return (
+    <span
+      className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-lg border border-border bg-background text-xs font-bold text-accent-copper"
+      aria-label={provider}
+    >
+      {logo ? (
+        <img src={logo} alt="" className="h-5 w-5 object-contain" />
+      ) : (
+        provider.slice(0, 2).toUpperCase()
+      )}
+    </span>
+  );
+}
 
 const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string; direction: 'asc' | 'desc' }> = [
   { value: 'intelligence', label: 'Intelligence', direction: 'desc' },
@@ -157,6 +204,9 @@ export function BenchmarkIntelligencePage() {
   const [effort, setEffort] = React.useState('all');
   const [sortKey, setSortKey] = React.useState<SortKey>('intelligence');
   const [sortDirection, setSortDirection] = React.useState<'asc' | 'desc'>('desc');
+  const [category, setCategory] = React.useState<Category>('Overall');
+  const [view, setView] = React.useState<'chart' | 'table'>('chart');
+  const [shared, setShared] = React.useState(false);
   const lastFetchRef = React.useRef(0);
   const mountedRef = React.useRef(false);
   const pendingRef = React.useRef(false);
@@ -235,15 +285,47 @@ export function BenchmarkIntelligencePage() {
     setVisibleCount(50);
   }, [effort, ownership, provider, sortDirection, sortKey]);
 
-  const chartRows = React.useMemo(
+  const categorySupported = category === 'Overall' || category === 'Speed' || category === 'Cost';
+  const categoryMetric: SortKey =
+    category === 'Speed' ? 'speed' : category === 'Cost' ? 'costPerTask' : 'intelligence';
+  const categoryUnit =
+    category === 'Speed'
+      ? 'output tokens/s'
+      : category === 'Cost'
+        ? 'USD per task'
+        : 'index points';
+  const lowerIsBetter = category === 'Cost';
+  const rankedRows = React.useMemo(
     () =>
-      filteredRows
-        .slice()
-        .sort((left, right) => left.rank - right.rank)
-        .slice(0, 12),
-    [filteredRows],
+      categorySupported
+        ? sortBenchmarkRows(
+            filteredRows.filter((row) => numberForSort(row, categoryMetric) != null),
+            categoryMetric,
+            lowerIsBetter ? 'asc' : 'desc',
+          )
+        : [],
+    [categorySupported, filteredRows, categoryMetric, lowerIsBetter],
   );
-  const chartMax = Math.max(1, ...chartRows.map((row) => row.intelligenceIndex));
+  const chartRows = React.useMemo(() => rankedRows.slice(0, 25), [rankedRows]);
+  const chartMax = Math.max(1, ...chartRows.map((row) => numberForSort(row, categoryMetric) ?? 0));
+  const chartMin = Math.min(
+    ...chartRows.map((row) => numberForSort(row, categoryMetric) ?? Infinity),
+  );
+
+  const share = async () => {
+    const sourceDate = result?.dataset?.sourceObservedAt
+      ? new Date(result.dataset.sourceObservedAt).toISOString().slice(0, 10)
+      : 'date unavailable';
+    const summary = `VibeSpace benchmarks · ${category} · Artificial Analysis · ${sourceDate}\n${window.location.href}`;
+    try {
+      await navigator.clipboard.writeText(summary);
+      setShared(true);
+      window.setTimeout(() => setShared(false), 3000);
+    } catch {
+      setShared(false);
+      toast.error('Could not copy leaderboard', 'Clipboard access is unavailable.');
+    }
+  };
 
   const changeSort = (value: string) => {
     const option = SORT_OPTIONS.find((entry) => entry.value === value);
@@ -275,7 +357,7 @@ export function BenchmarkIntelligencePage() {
       </div>
 
       <main
-        className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-8"
+        className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6"
         data-warm-surface="benchmarks-content"
       >
         <header
@@ -293,12 +375,11 @@ export function BenchmarkIntelligencePage() {
               <span>{statusLabel(result)}</span>
               <Badge variant="outline">Artificial Analysis</Badge>
             </div>
-            <h1 className="font-display text-4xl font-semibold leading-tight text-foreground">
-              Benchmarks
+            <h1 className="font-display text-3xl font-semibold leading-tight text-foreground">
+              Leaderboard
             </h1>
             <p className="max-w-3xl text-secondary text-muted-foreground">
-              Artificial Analysis Intelligence Index rankings with exact evaluated variants, price,
-              speed, latency, context, and clearly labeled VibeSpace-derived comparisons.
+              Independently evaluated models, ranked with source-linked scores and API prices.
             </p>
             {result?.dataset ? (
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-metadata text-muted-foreground">
@@ -318,15 +399,103 @@ export function BenchmarkIntelligencePage() {
               </div>
             ) : null}
           </div>
-          <Button
-            variant="outline"
-            onClick={() => void load(true)}
-            disabled={refreshing || loading}
-          >
-            <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
-            Refresh
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 rounded-lg border border-border bg-paper px-2 text-sm">
+              <span>Models</span>
+              <select
+                aria-label="Models"
+                value={provider}
+                onChange={(event) => setProvider(event.target.value)}
+                className="h-9 min-w-24 bg-transparent text-foreground"
+              >
+                <option value="all">All</option>
+                {providers.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button variant="outline" onClick={() => void share()}>
+              <Share2 className="mr-2 h-4 w-4" />
+              {shared ? (
+                <>
+                  <Check className="mr-1 h-4 w-4" />
+                  Copied
+                </>
+              ) : (
+                'Share'
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void load(true)}
+              disabled={refreshing || loading}
+              aria-label="Refresh benchmarks"
+            >
+              <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
+            </Button>
+          </div>
         </header>
+
+        <div
+          className="flex flex-wrap items-center justify-between gap-3 border-b border-border"
+          data-testid="benchmark-navigation"
+        >
+          <nav className="flex flex-wrap gap-x-4 gap-y-1" aria-label="Benchmark categories">
+            {CATEGORIES.map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => {
+                  setCategory(item);
+                  if (item === 'Overall' || item === 'Speed' || item === 'Cost') {
+                    setSortKey(
+                      item === 'Speed' ? 'speed' : item === 'Cost' ? 'costPerTask' : 'intelligence',
+                    );
+                    setSortDirection(item === 'Cost' ? 'asc' : 'desc');
+                  }
+                }}
+                aria-current={category === item ? 'page' : undefined}
+                className={cn(
+                  'border-b-2 px-0.5 py-2 text-sm font-medium transition-colors',
+                  category === item
+                    ? 'border-accent-copper text-foreground'
+                    : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {item}
+              </button>
+            ))}
+          </nav>
+          <div
+            className="mb-1 flex rounded-lg border border-border bg-paper p-0.5"
+            role="group"
+            aria-label="Leaderboard view"
+          >
+            {(['chart', 'table'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={view === mode}
+                onClick={() => setView(mode)}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-sm capitalize',
+                  view === mode
+                    ? 'bg-accent-copper/15 font-semibold text-foreground'
+                    : 'text-muted-foreground',
+                )}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {categorySupported
+            ? `Artificial Analysis · ${category === 'Overall' ? 'Intelligence Index' : category} · ${categoryUnit} · ${lowerIsBetter ? 'lower' : 'higher'} is better · observed ${result?.dataset?.sourceObservedAt ? fullTime(result.dataset.sourceObservedAt) : 'date unavailable'}`
+            : `${category}: no comparable source metric in the current feed. Scores unavailable.`}
+        </p>
 
         {error && !result?.rows.length ? (
           <div
@@ -338,82 +507,119 @@ export function BenchmarkIntelligencePage() {
           </div>
         ) : null}
 
-        <section
-          className="cozy-card rounded-2xl border border-border bg-paper p-5 shadow-soft"
-          data-warm-surface="benchmarks-chart"
-        >
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="font-display text-xl font-semibold text-foreground">
-                Top intelligence
-              </h2>
-              <p className="text-metadata text-muted-foreground">
-                Independent evaluations · higher scores indicate stronger performance.
-              </p>
+        {categorySupported && view === 'chart' ? (
+          <section
+            className="cozy-card rounded-2xl border border-border bg-paper p-4 shadow-soft"
+            data-warm-surface="benchmarks-chart"
+            style={{ width: '100%' }}
+          >
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display text-xl font-semibold text-foreground">
+                  {category} ranking
+                </h2>
+                <p className="text-metadata text-muted-foreground">
+                  Artificial Analysis · {categoryUnit} · {lowerIsBetter ? 'lower' : 'higher'} is
+                  better. Bars are relative to the best displayed value.
+                </p>
+              </div>
+              <span className="text-metadata text-muted-foreground">
+                {chartRows.length} of {rankedRows.length} models shown
+              </span>
             </div>
-            <span className="text-metadata text-muted-foreground">
-              {filteredRows.length} of {result?.rows.length ?? 0} rows
-            </span>
-          </div>
-          {chartRows.length ? (
-            <div className="space-y-2" aria-label="Artificial Analysis Intelligence Index chart">
-              {chartRows.map((row) => (
-                <div
-                  key={row.id}
-                  className="grid grid-cols-[minmax(130px,240px)_1fr_3rem] items-center gap-3"
-                >
-                  <div className="min-w-0">
-                    <div
-                      title={displayNames.get(row.id) ?? row.model}
-                      className="text-sm font-medium leading-snug text-foreground"
-                    >
-                      {displayNames.get(row.id) ?? row.model}
-                    </div>
-                    <div className="truncate text-[11px] text-muted-foreground">{row.provider}</div>
-                  </div>
-                  <div className="h-2.5 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-accent-copper transition-[width]"
-                      style={{ width: `${Math.max(2, (row.intelligenceIndex / chartMax) * 100)}%` }}
-                    />
-                  </div>
-                  <div className="text-right font-mono text-sm font-semibold text-foreground">
-                    {row.intelligenceIndex}
-                  </div>
+            {chartRows.length ? (
+              <div className="space-y-1" aria-label={`Artificial Analysis ${category} chart`}>
+                <div className="hidden grid-cols-[minmax(240px,2fr)_minmax(140px,2fr)_auto_135px_70px] gap-3 border-b border-border pb-2 text-[11px] uppercase tracking-wide text-muted-foreground xl:grid">
+                  <span>Model / provider</span>
+                  <span>
+                    {category} · {categoryUnit}
+                  </span>
+                  <span></span>
+                  <span className="text-right">API in / out · $/1M</span>
+                  <span className="text-right">Context</span>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <p className="py-10 text-center text-sm text-muted-foreground">
-              {loading
-                ? 'Loading benchmarks…'
-                : result?.rows.length
-                  ? 'No models match these filters.'
-                  : 'Results will appear here when available.'}
+                {chartRows.map((row, index) => (
+                  <div
+                    key={row.id}
+                    className="grid grid-cols-[minmax(145px,260px)_1fr_auto] items-center gap-3 border-b border-border/50 py-1.5 xl:grid-cols-[minmax(240px,2fr)_minmax(140px,2fr)_auto_135px_70px]"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="w-5 shrink-0 font-mono text-xs text-muted-foreground">
+                        {index + 1}
+                      </span>
+                      <ProviderMark provider={row.provider} />
+                      <div className="min-w-0">
+                        <div
+                          title={displayNames.get(row.id) ?? row.model}
+                          className="text-sm font-medium leading-snug text-foreground"
+                        >
+                          {displayNames.get(row.id) ?? row.model}
+                        </div>
+                        <div className="truncate text-[11px] text-muted-foreground">
+                          {row.provider}
+                        </div>
+                        <div className="truncate text-[10px] text-muted-foreground xl:hidden">
+                          {money(row.inputPricePer1MTokensUsd)} /{' '}
+                          {money(row.outputPricePer1MTokensUsd)} per 1M ·{' '}
+                          {compactNumber(row.contextWindowTokens)} context
+                        </div>
+                      </div>
+                    </div>
+                    <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-accent-copper transition-[width]"
+                        style={{
+                          width: `${Math.max(2, (lowerIsBetter ? chartMin / Math.max(numberForSort(row, categoryMetric) ?? 1, 0.0001) : (numberForSort(row, categoryMetric) ?? 0) / chartMax) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="text-right font-mono text-sm font-semibold text-foreground">
+                      {category === 'Cost'
+                        ? money(row.costPerTaskUsd, 4)
+                        : category === 'Speed'
+                          ? decimal(row.outputTokensPerSecond)
+                          : row.intelligenceIndex}
+                    </div>
+                    <div className="hidden text-right font-mono text-xs text-muted-foreground xl:block">
+                      {money(row.inputPricePer1MTokensUsd)} / {money(row.outputPricePer1MTokensUsd)}
+                    </div>
+                    <div className="hidden text-right font-mono text-xs text-muted-foreground xl:block">
+                      {compactNumber(row.contextWindowTokens)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="py-10 text-center text-sm text-muted-foreground">
+                {loading
+                  ? 'Loading benchmarks…'
+                  : result?.rows.length
+                    ? 'No models match these filters.'
+                    : 'Results will appear here when available.'}
+              </p>
+            )}
+          </section>
+        ) : null}
+
+        {!categorySupported ? (
+          <section
+            className="rounded-xl border border-dashed border-border bg-paper p-8 text-center"
+            role="status"
+          >
+            <h2 className="font-display text-lg font-semibold">{category} scores unavailable</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              The current Artificial Analysis feed has no comparable {category.toLowerCase()} metric
+              for these exact model variants. No ranking is shown.
             </p>
-          )}
-        </section>
+          </section>
+        ) : null}
 
         <section
           className="cozy-card rounded-2xl border border-border bg-paper p-5 shadow-soft"
           data-warm-surface="benchmarks-filters"
+          style={{ width: '100%' }}
         >
-          <div className="grid min-w-0 gap-3 md:grid-cols-4">
-            <label className="min-w-0 space-y-1 text-metadata text-muted-foreground">
-              <span>Provider</span>
-              <select
-                value={provider}
-                onChange={(event) => setProvider(event.target.value)}
-                className="box-border h-9 w-full !min-w-0 max-w-full rounded-md border border-border bg-background px-3 text-sm text-foreground"
-              >
-                <option value="all">All providers</option>
-                {providers.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <div className="grid min-w-0 gap-3 md:grid-cols-3">
             <label className="min-w-0 space-y-1 text-metadata text-muted-foreground">
               <span>Weights</span>
               <select
@@ -464,98 +670,102 @@ export function BenchmarkIntelligencePage() {
           </p>
         </section>
 
-        <section
-          className="cozy-card rounded-2xl border border-border bg-paper p-5 shadow-soft"
-          data-monochrome-surface="benchmarks-table"
-          data-sakura-surface="benchmarks-table"
-          data-warm-table-mode="compact-scroll"
-        >
-          <div
-            className="overflow-x-auto"
-            data-warm-region="benchmarks-table-scroll"
-            tabIndex={0}
-            aria-label="Scrollable Artificial Analysis benchmark table"
+        {categorySupported && view === 'table' ? (
+          <section
+            className="cozy-card rounded-2xl border border-border bg-paper p-4 shadow-soft"
+            data-monochrome-surface="benchmarks-table"
+            style={{ width: '100%' }}
+            data-sakura-surface="benchmarks-table"
+            data-warm-table-mode="compact-scroll"
           >
-            <table className="w-full min-w-[1280px] border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-2 py-3">Rank</th>
-                  <th className="px-2 py-3">Model / exact variant</th>
-                  <th className="px-2 py-3 text-right">Intelligence</th>
-                  <th className="px-2 py-3 text-right">Cost / task</th>
-                  <th className="px-2 py-3 text-right">Input / 1M</th>
-                  <th className="px-2 py-3 text-right">Output / 1M</th>
-                  <th className="px-2 py-3 text-right">Blended*</th>
-                  <th className="px-2 py-3 text-right">Intel / $*</th>
-                  <th className="px-2 py-3 text-right">Output speed</th>
-                  <th className="px-2 py-3 text-right">TTFT</th>
-                  <th className="px-2 py-3 text-right">Context</th>
-                  <th className="px-2 py-3">Weights</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRows.slice(0, visibleCount).map((row) => (
-                  <tr
-                    key={row.id}
-                    className="border-b border-border/60 align-top hover:bg-muted/30"
-                  >
-                    <td className="px-2 py-3 font-mono text-muted-foreground">#{row.rank}</td>
-                    <td className="px-2 py-3">
-                      <div className="font-medium text-foreground">
-                        {displayNames.get(row.id) ?? row.model}
-                      </div>
-                      <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
-                        <span>{row.provider}</span>
-                        {row.variantLabel ? <span>{row.variantLabel}</span> : null}
-                        {row.effort ? <span>Effort: {row.effort}</span> : null}
-                      </div>
-                    </td>
-                    <td className="px-2 py-3 text-right font-mono text-base font-semibold text-foreground">
-                      {row.intelligenceIndex}
-                    </td>
-                    <td className="px-2 py-3 text-right font-mono">
-                      {money(row.costPerTaskUsd, 4)}
-                    </td>
-                    <td className="px-2 py-3 text-right font-mono">
-                      {money(row.inputPricePer1MTokensUsd)}
-                    </td>
-                    <td className="px-2 py-3 text-right font-mono">
-                      {money(row.outputPricePer1MTokensUsd)}
-                    </td>
-                    <td className="px-2 py-3 text-right font-mono">
-                      {money(blendedTokenPrice(row))}
-                    </td>
-                    <td className="px-2 py-3 text-right font-mono">
-                      {decimal(intelligencePerDollar(row))}
-                    </td>
-                    <td className="px-2 py-3 text-right font-mono">
-                      {decimal(row.outputTokensPerSecond, ' t/s')}
-                    </td>
-                    <td className="px-2 py-3 text-right font-mono">
-                      {decimal(row.timeToFirstTokenSeconds, ' s')}
-                    </td>
-                    <td className="px-2 py-3 text-right font-mono">
-                      {compactNumber(row.contextWindowTokens)}
-                    </td>
-                    <td className="px-2 py-3">
-                      {row.openWeights == null ? '—' : row.openWeights ? 'Open' : 'Proprietary'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {visibleCount < filteredRows.length ? (
-            <Button
-              variant="outline"
-              className="mt-4"
-              onClick={() => setVisibleCount((count) => count + 50)}
+            <div
+              className="overflow-x-auto"
+              data-warm-region="benchmarks-table-scroll"
+              tabIndex={0}
+              aria-label="Scrollable Artificial Analysis benchmark table"
             >
-              Show more models ({Math.min(visibleCount, filteredRows.length)} of{' '}
-              {filteredRows.length})
-            </Button>
-          ) : null}
-        </section>
+              <table className="w-full min-w-[1280px] border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <th className="px-2 py-3">Rank</th>
+                    <th className="px-2 py-3">Model / exact variant</th>
+                    <th className="px-2 py-3 text-right">Intelligence</th>
+                    <th className="px-2 py-3 text-right">Cost / task</th>
+                    <th className="px-2 py-3 text-right">Input / 1M</th>
+                    <th className="px-2 py-3 text-right">Output / 1M</th>
+                    <th className="px-2 py-3 text-right">Blended*</th>
+                    <th className="px-2 py-3 text-right">Intel / $*</th>
+                    <th className="px-2 py-3 text-right">Output speed</th>
+                    <th className="px-2 py-3 text-right">TTFT</th>
+                    <th className="px-2 py-3 text-right">Context</th>
+                    <th className="px-2 py-3">Weights</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRows.slice(0, visibleCount).map((row, index) => (
+                    <tr
+                      key={row.id}
+                      className="border-b border-border/60 align-top hover:bg-muted/30"
+                    >
+                      <td className="px-2 py-3 font-mono text-muted-foreground">#{index + 1}</td>
+                      <td className="px-2 py-3">
+                        <div className="flex items-center gap-2 font-medium text-foreground">
+                          <ProviderMark provider={row.provider} />
+                          {displayNames.get(row.id) ?? row.model}
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
+                          <span>{row.provider}</span>
+                          {row.variantLabel ? <span>{row.variantLabel}</span> : null}
+                          {row.effort ? <span>Effort: {row.effort}</span> : null}
+                        </div>
+                      </td>
+                      <td className="px-2 py-3 text-right font-mono text-base font-semibold text-foreground">
+                        {row.intelligenceIndex}
+                      </td>
+                      <td className="px-2 py-3 text-right font-mono">
+                        {money(row.costPerTaskUsd, 4)}
+                      </td>
+                      <td className="px-2 py-3 text-right font-mono">
+                        {money(row.inputPricePer1MTokensUsd)}
+                      </td>
+                      <td className="px-2 py-3 text-right font-mono">
+                        {money(row.outputPricePer1MTokensUsd)}
+                      </td>
+                      <td className="px-2 py-3 text-right font-mono">
+                        {money(blendedTokenPrice(row))}
+                      </td>
+                      <td className="px-2 py-3 text-right font-mono">
+                        {decimal(intelligencePerDollar(row))}
+                      </td>
+                      <td className="px-2 py-3 text-right font-mono">
+                        {decimal(row.outputTokensPerSecond, ' t/s')}
+                      </td>
+                      <td className="px-2 py-3 text-right font-mono">
+                        {decimal(row.timeToFirstTokenSeconds, ' s')}
+                      </td>
+                      <td className="px-2 py-3 text-right font-mono">
+                        {compactNumber(row.contextWindowTokens)}
+                      </td>
+                      <td className="px-2 py-3">
+                        {row.openWeights == null ? '—' : row.openWeights ? 'Open' : 'Proprietary'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {visibleCount < filteredRows.length ? (
+              <Button
+                variant="outline"
+                className="mt-4"
+                onClick={() => setVisibleCount((count) => count + 50)}
+              >
+                Show more models ({Math.min(visibleCount, filteredRows.length)} of{' '}
+                {filteredRows.length})
+              </Button>
+            ) : null}
+          </section>
+        ) : null}
       </main>
     </div>
   );

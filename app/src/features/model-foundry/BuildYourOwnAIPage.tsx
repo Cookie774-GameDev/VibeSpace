@@ -88,10 +88,10 @@ function Blueprint() {
   return (
     <section
       aria-label="Local model blueprint"
-      className="relative overflow-hidden rounded-2xl border border-border bg-card p-5 shadow-soft [html[data-theme=monochrome]_&]:shadow-none"
+      className="relative overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-soft [html[data-theme=monochrome]_&]:shadow-none"
     >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,hsl(var(--accent-cyan)/0.12),transparent_55%)]" />
-      <div className="relative mb-5 flex flex-wrap items-end justify-between gap-3">
+      <div className="relative mb-3 flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-metadata font-semibold uppercase tracking-[0.18em] text-accent-copper">
             Local model blueprint
@@ -105,13 +105,13 @@ function Blueprint() {
           No cloud upload
         </span>
       </div>
-      <div className="relative grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,180px),1fr))]">
+      <div className="relative grid grid-cols-2 gap-2.5 xl:grid-cols-4">
         {stages.map((stage, index) => {
           const Icon = stage.icon;
           return (
             <React.Fragment key={stage.label}>
-              <div className="relative z-[1] rounded-xl border border-border/80 bg-background/85 p-4 backdrop-blur-sm">
-                <div className="mb-5 flex items-center justify-between">
+              <div className="relative z-[1] rounded-xl border border-border/80 bg-background/85 p-3 backdrop-blur-sm">
+                <div className="mb-2 flex items-center justify-between">
                   <span className="grid h-9 w-9 place-items-center rounded-lg bg-accent-copper/10 text-accent-copper">
                     <Icon className="h-[18px] w-[18px]" />
                   </span>
@@ -122,7 +122,6 @@ function Blueprint() {
                 <h3 className="font-medium text-foreground">{stage.label}</h3>
                 <p className="mt-1 text-secondary text-muted-foreground">{stage.detail}</p>
               </div>
-
             </React.Fragment>
           );
         })}
@@ -146,8 +145,8 @@ function Overview({
 }) {
   const completed = verifiedJobs(jobs);
   return (
-    <div className="space-y-5" data-warm-surface="model-foundry-overview">
-      <div className="relative overflow-hidden rounded-2xl border border-accent-copper/25 bg-card/90 p-6 shadow-soft sm:p-8">
+    <div className="space-y-4" data-warm-surface="model-foundry-overview">
+      <div className="relative overflow-hidden rounded-2xl border border-accent-copper/25 bg-card/90 p-5 shadow-soft sm:p-6">
         <p className="text-metadata font-semibold uppercase tracking-[0.18em] text-accent-copper">
           Your private model workshop
         </p>
@@ -156,13 +155,11 @@ function Overview({
           Add knowledge, prepare examples, train compatible models, and verify the result without
           sending your source files away.
         </p>
-        <Button className="mt-5" variant="accent" size="lg" onClick={onCreate}>
+        <Button className="mt-4" variant="accent" size="sm" onClick={onCreate}>
           <Sparkles className="h-4 w-4" />
           Create a local model
         </Button>
       </div>
-
-
 
       <section aria-labelledby="foundry-paths-heading">
         <div className="mb-3 flex items-center justify-between">
@@ -177,7 +174,7 @@ function Overview({
             Compare methods
           </button>
         </div>
-        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,210px),1fr))]">
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
           {[
             {
               title: 'Add knowledge',
@@ -211,18 +208,21 @@ function Overview({
             <button
               key={method.technical}
               type="button"
-              className="rounded-xl border border-border bg-card p-4 text-left transition-[border-color,transform] hover:-translate-y-0.5 hover:border-accent-copper/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-copper"
+              className="flex h-full min-w-0 flex-col rounded-xl border border-border bg-card p-3 text-left transition-[border-color,transform,box-shadow] hover:-translate-y-0.5 hover:border-accent-copper/40 hover:shadow-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-copper"
               aria-label={`${method.technical}: ${method.title}`}
               onClick={() => onChooseMethod(method.method)}
             >
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex min-h-9 flex-wrap items-start justify-between gap-1">
                 <span className="rounded-full bg-muted px-2 py-1 font-mono text-metadata text-muted-foreground">
                   {method.technical}
                 </span>
                 <span
                   className={cn(
                     'inline-flex items-center gap-1 text-metadata',
-                    method.method === 'knowledge' || trainingWorker?.attested && trainingWorker.methods.includes(method.method) ? 'text-accent-copper' : 'text-muted-foreground',
+                    method.method === 'knowledge' ||
+                      (trainingWorker?.attested && trainingWorker.methods.includes(method.method))
+                      ? 'text-accent-copper'
+                      : 'text-muted-foreground',
                   )}
                 >
                   {method.method === 'knowledge' ? (
@@ -230,12 +230,23 @@ function Overview({
                   ) : (
                     <Gauge className="h-3.5 w-3.5" />
                   )}
-                  {method.method === 'knowledge' ? 'No weight training' : trainingWorker?.attested && trainingWorker.methods.includes(method.method) ? 'Worker ready' : 'Setup required'}
+                  {method.method === 'knowledge'
+                    ? 'No weight training'
+                    : trainingWorker?.attested && trainingWorker.methods.includes(method.method)
+                      ? 'Worker ready'
+                      : 'Setup required'}
                 </span>
               </div>
-              <h3 className="mt-5 font-medium text-foreground">{method.title}</h3>
-              <p className="mt-1 text-secondary text-muted-foreground">{method.description}</p>
-              <span className="mt-5 inline-flex items-center gap-1 text-secondary font-medium text-accent-copper">Configure {method.technical}<ChevronRight className="h-3.5 w-3.5" /></span>
+              <h3 className="mt-2 font-display text-sm font-semibold leading-tight text-foreground">
+                {method.title}
+              </h3>
+              <p className="mt-1 flex-1 text-xs leading-snug text-muted-foreground">
+                {method.description}
+              </p>
+              <span className="mt-3 inline-flex items-center gap-1 border-t border-border/70 pt-2 text-xs font-medium text-accent-copper">
+                Configure {method.technical}
+                <ChevronRight className="h-3.5 w-3.5" />
+              </span>
             </button>
           ))}
         </div>
@@ -357,7 +368,9 @@ function SectionContent({
         </p>
         <div className="mt-6 rounded-xl border border-border bg-card p-5">
           <p className="text-secondary text-muted-foreground">
-            {jobs.length ? `${jobs.length} local jobs · ${verifiedJobs(jobs).length} verified artifacts` : 'No job results yet. Create a model to begin.'}
+            {jobs.length
+              ? `${jobs.length} local jobs Â· ${verifiedJobs(jobs).length} verified artifacts`
+              : 'No job results yet. Create a model to begin.'}
           </p>
         </div>
         <div className="mt-4 space-y-3">
@@ -368,13 +381,17 @@ function SectionContent({
                 <span className="text-metadata text-muted-foreground">{statusLabel(job)}</span>
               </div>
               <p className="mt-2 text-secondary text-muted-foreground">
-                {job.artifactVerified && job.artifactPath && job.status === 'completed' ? 'Artifact integrity verified' : 'Artifact not yet verified'}
+                {job.artifactVerified && job.artifactPath && job.status === 'completed'
+                  ? 'Artifact integrity verified'
+                  : 'Artifact not yet verified'}
               </p>
               {job.error && <p className="mt-2 text-secondary text-destructive">{job.error}</p>}
             </article>
           ))}
         </div>
-        <Button className="mt-5" variant="accent" onClick={onCreate}>Open jobs and artifacts</Button>
+        <Button className="mt-5" variant="accent" onClick={onCreate}>
+          Open jobs and artifacts
+        </Button>
       </div>
     );
   }
@@ -453,10 +470,14 @@ export function BuildYourOwnAIPage() {
         if (!cancelled && Array.isArray(nativeJobs)) setJobs(nativeJobs);
       } catch {
         // Keep the last known snapshot; never fabricate a completed job.
-      } finally { refreshing = false; }
+      } finally {
+        refreshing = false;
+      }
     };
     void refreshJobs();
-    const timer = window.setInterval(() => { void refreshJobs(); }, 5000);
+    const timer = window.setInterval(() => {
+      void refreshJobs();
+    }, 5000);
     window.addEventListener('focus', refreshJobs);
 
     return () => {
@@ -511,7 +532,7 @@ export function BuildYourOwnAIPage() {
       data-warm-surface="model-foundry-canvas"
     >
       <div
-        className="mx-auto grid min-h-full max-w-[1680px] gap-4 p-3 lg:grid-cols-[180px_minmax(0,1fr)] xl:grid-cols-[180px_minmax(0,1fr)_220px] xl:gap-6 xl:p-[22px]"
+        className="mx-auto grid min-h-full min-w-0 max-w-[1680px] grid-cols-[minmax(0,1fr)] gap-4 p-3 lg:grid-cols-[180px_minmax(0,1fr)] xl:grid-cols-[180px_minmax(0,1fr)_220px] xl:gap-6 xl:p-[22px]"
         data-warm-surface="model-foundry-content"
       >
         <div
@@ -528,7 +549,7 @@ export function BuildYourOwnAIPage() {
         </div>
         <nav
           aria-label="Model Foundry workflow"
-          className="rounded-xl border border-border bg-panel p-2 lg:sticky lg:top-3 lg:h-fit"
+          className="min-w-0 rounded-xl border border-border bg-panel p-2 lg:sticky lg:top-3 lg:h-fit"
         >
           <div className="mb-3 hidden items-center gap-2 px-2 py-2 lg:flex">
             <span className="grid h-8 w-8 place-items-center rounded-lg bg-accent-copper/10 text-accent-copper">
@@ -576,14 +597,17 @@ export function BuildYourOwnAIPage() {
               onCreate={() => setBuilderOpen(true)}
               onOpenSection={setSection}
               trainingWorker={trainingWorker}
-              onChooseMethod={(method) => { setInitialMethod(method); setBuilderOpen(true); }}
+              onChooseMethod={(method) => {
+                setInitialMethod(method);
+                setBuilderOpen(true);
+              }}
             />
           ) : (
             <SectionContent section={section} jobs={jobs} onCreate={() => setBuilderOpen(true)} />
           )}
         </section>
 
-        <aside className="space-y-3 lg:col-start-2 xl:col-start-auto xl:sticky xl:top-5 xl:h-fit">
+        <aside className="min-w-0 space-y-3 lg:col-start-2 xl:col-start-auto xl:sticky xl:top-5 xl:h-fit">
           <section className="rounded-xl border border-border bg-card p-4">
             <div className="flex items-center gap-2">
               <Cpu className="h-4 w-4 text-accent-copper" />
@@ -689,7 +713,10 @@ export function BuildYourOwnAIPage() {
                   <button
                     key={job.id}
                     type="button"
-                    onClick={() => { setInitialMethod(undefined); setBuilderOpen(true); }}
+                    onClick={() => {
+                      setInitialMethod(undefined);
+                      setBuilderOpen(true);
+                    }}
                     className="w-full rounded-lg bg-muted/60 p-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-copper"
                   >
                     <span className="block truncate text-secondary font-medium">{job.name}</span>

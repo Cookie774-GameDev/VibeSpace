@@ -99,7 +99,7 @@ describe('BenchmarkIntelligencePage', () => {
     api.getCachedBenchmarkLeaderboard.mockReturnValueOnce(saved);
     api.fetchBenchmarkLeaderboard.mockReturnValueOnce(new Promise(() => {}));
     render(<BenchmarkIntelligencePage />);
-    expect(screen.getAllByText('Claude Opus 5 (Max Effort)')).toHaveLength(2);
+    expect(screen.getAllByText('Claude Opus 5 (Max Effort)')).toHaveLength(1);
     expect(screen.queryByText('Loading benchmarks…')).toBeNull();
   });
 
@@ -115,6 +115,7 @@ describe('BenchmarkIntelligencePage', () => {
       })),
     });
     render(<BenchmarkIntelligencePage />);
+    fireEvent.click(screen.getByRole('button', { name: /^table$/i }));
     await screen.findByText('Show more models (50 of 120)');
     expect(screen.getAllByRole('row')).toHaveLength(51);
     fireEvent.click(screen.getByRole('button', { name: 'Show more models (50 of 120)' }));
@@ -125,12 +126,13 @@ describe('BenchmarkIntelligencePage', () => {
 
   it('renders Artificial Analysis and excludes the removed comparison/valuation UI', async () => {
     const { container } = render(<BenchmarkIntelligencePage />);
-    expect((await screen.findAllByText('Claude Opus 5 (Max Effort)')).length).toBe(2);
+    expect((await screen.findAllByText('Claude Opus 5 (Max Effort)')).length).toBe(1);
     expect(screen.getAllByText('Artificial Analysis').length).toBeGreaterThan(0);
     expect(screen.queryByText(/New model comparison/i)).toBeNull();
     expect(screen.queryByText(/Official provider valuations/i)).toBeNull();
     expect(container.querySelector('[data-warm-surface="benchmarks-chart"]')).toBeTruthy();
     expect(container.querySelector('[data-warm-surface="benchmarks-filters"]')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^table$/i }));
     expect(container.querySelector('[data-monochrome-surface="benchmarks-table"]')).toBeTruthy();
     expect(container.querySelector('[data-warm-region="benchmarks-table-scroll"]')).toBeTruthy();
   });
@@ -176,6 +178,7 @@ describe('BenchmarkIntelligencePage', () => {
 
   it('sorts by exact-row input price and output speed', async () => {
     render(<BenchmarkIntelligencePage />);
+    fireEvent.click(screen.getByRole('button', { name: /^table$/i }));
     await screen.findAllByText('Claude Opus 5 (Max Effort)');
     const sort = screen.getByLabelText('Sort');
     fireEvent.change(sort, { target: { value: 'inputPrice' } });
@@ -203,7 +206,7 @@ describe('BenchmarkIntelligencePage', () => {
     render(<BenchmarkIntelligencePage />);
     await screen.findAllByText('Claude Opus 5 (Max Effort)');
     expect(screen.queryByText(/AA_DUPLICATE_VARIANT|D1|backend|Ingested:/i)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Refresh' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Refresh benchmarks' })).toBeTruthy();
     expect(screen.getByText('Saved results')).toBeTruthy();
   });
 
@@ -254,9 +257,9 @@ describe('BenchmarkIntelligencePage', () => {
 
     expect(
       await screen.findAllByText('Claude Opus 5 — Adaptive Reasoning · effort: max'),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(screen.getAllByText('Claude Opus 5 — Adaptive Reasoning · effort: xhigh')).toHaveLength(
-      2,
+      1,
     );
     expect(screen.queryByText(/^Claude Opus 5$/u)).toBeNull();
   });
@@ -269,12 +272,39 @@ describe('BenchmarkIntelligencePage', () => {
     const grid = filters?.firstElementChild;
     expect(grid?.classList.contains('min-w-0')).toBe(true);
 
-    for (const label of ['Provider', 'Weights', 'Reasoning effort', 'Sort']) {
+    expect(screen.getByLabelText('Models')).toBeTruthy();
+    for (const label of ['Weights', 'Reasoning effort', 'Sort']) {
       const control = screen.getByLabelText<HTMLSelectElement>(label);
       expect(control.parentElement?.classList.contains('min-w-0')).toBe(true);
       expect(control.classList.contains('box-border')).toBe(true);
       expect(control.classList.contains('!min-w-0')).toBe(true);
       expect(control.classList.contains('max-w-full')).toBe(true);
     }
+  });
+
+  it('filters providers and treats unsupported categories as unavailable', async () => {
+    render(<BenchmarkIntelligencePage />);
+    await screen.findByText('Claude Opus 5 (Max Effort)');
+    fireEvent.change(screen.getByLabelText('Models'), { target: { value: 'OpenAI' } });
+    expect(screen.queryByText('Claude Opus 5 (Max Effort)')).toBeNull();
+    expect(screen.getByText('GPT-5.6 Sol (max)')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
+    expect(screen.getByText('Reasoning scores unavailable')).toBeTruthy();
+    expect(screen.queryByText('GPT-5.6 Sol (max)')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Speed' }));
+    expect(screen.getByText('GPT-5.6 Sol (max)')).toBeTruthy();
+    expect(screen.getAllByText(/output tokens\/s/).length).toBeGreaterThan(0);
+  });
+
+  it('copies a source-dated leaderboard summary and confirms success', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    render(<BenchmarkIntelligencePage />);
+    await screen.findByText('Claude Opus 5 (Max Effort)');
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('2026-08-14')),
+    );
+    expect(screen.getByRole('button', { name: /Copied/ })).toBeTruthy();
   });
 });

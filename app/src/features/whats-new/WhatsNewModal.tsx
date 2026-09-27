@@ -83,10 +83,36 @@ export function WhatsNewModal({ open, onOpenChange, onDismiss }: WhatsNewModalPr
           'data-sakura-overlay': 'whats-new',
           'data-vibespace-owned-chrome': 'whats-new',
         }}
-        className="flex h-[min(680px,85vh)] w-[min(760px,92vw)] max-w-none flex-col overflow-hidden p-0"
+        className="whats-new-polished flex h-[min(720px,88vh)] w-[min(840px,94vw)] max-w-none flex-col overflow-hidden p-0"
       >
         {/* ---------- Header strip ---------- */}
-        <header className="shrink-0 border-b border-border bg-paper-soft px-6 py-5">
+        <header className="relative shrink-0 overflow-hidden border-b border-border bg-paper-soft px-6 py-6 sm:px-8">
+          <svg className="whats-new-flower" viewBox="0 0 96 104" fill="none" aria-hidden="true">
+            <path
+              d="M48 71V30M48 55C34 54 27 47 25 39c12-1 19 5 23 16Zm0 7c13-13 21-14 27-10-4 10-13 13-27 10Z"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M48 30c-7-10-18-7-19 1-1 6 4 9 11 9-2 8 3 13 9 13 7 0 10-6 7-13 8 1 13-3 12-10-1-8-11-11-20 0Z"
+              fill="currentColor"
+              fillOpacity=".18"
+              stroke="currentColor"
+              strokeWidth="2.5"
+            />
+            <circle cx="48" cy="37" r="6" fill="currentColor" />
+            <path
+              d="M28 73h40l-5 23H33l-5-23Z"
+              fill="currentColor"
+              fillOpacity=".22"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinejoin="round"
+            />
+            <path d="M25 73h46" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
           <span className="eyebrow block">Update notes</span>
           <DialogTitle className="font-display mt-1 text-page-title leading-tight text-foreground">
             What&apos;s new in Jarvis
@@ -97,7 +123,7 @@ export function WhatsNewModal({ open, onOpenChange, onDismiss }: WhatsNewModalPr
         </header>
 
         {/* ---------- Scrollable release log ---------- */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 sm:px-8">
           <ul className="flex flex-col gap-5">
             {RELEASES.map((release, idx) => (
               <li key={release.version}>
