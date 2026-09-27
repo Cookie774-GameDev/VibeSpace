@@ -663,7 +663,14 @@ fn scoped_provider_config(
     };
     let review_bash = || {
         json!({
-            "*": "allow",
+            // Interpreters and redirection can write without a destructive-looking
+            // first word. Review asks unless the exact command is a safe read.
+            "*": "ask",
+            "pwd": "allow",
+            "ls": "allow",
+            "git status": "allow",
+            "git diff": "allow",
+            "git log": "allow",
             "rm *": "ask",
             "rmdir *": "ask",
             "del *": "ask",
@@ -3268,6 +3275,10 @@ mod tests {
         );
         assert_eq!(
             config["agent"]["vibespace-full"]["permission"]["bash"]["*"],
+            "ask"
+        );
+        assert_eq!(
+            config["agent"]["vibespace-full"]["permission"]["bash"]["git status"],
             "allow"
         );
         let review_bash = &config["agent"]["vibespace-full"]["permission"]["bash"];

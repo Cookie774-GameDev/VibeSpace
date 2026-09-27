@@ -168,10 +168,18 @@ const REVIEW_BASH_ASK_PATTERNS: Readonly<Record<string, PermissionDecision>> = O
 function bashDecisionFor(authority: TerminalAuthority, approveAllForRun: boolean): BashPermission {
   if (authority === 'autonomous' && approveAllForRun) return 'allow';
   if (authority === 'autonomous') {
-    // The OpenCode agent is already bound to this project's working directory.
-    // Keep ordinary native CLI work prompt-free and ask on destructive,
-    // privilege-changing, or externally publishing command patterns.
-    return Object.freeze({ '*': 'allow', ...REVIEW_BASH_ASK_PATTERNS });
+    // A shell command can mutate files through an interpreter or redirection,
+    // regardless of its first word. Review asks unless the entire command is
+    // one of these exact inspection commands.
+    return Object.freeze({
+      '*': 'ask',
+      pwd: 'allow',
+      ls: 'allow',
+      'git status': 'allow',
+      'git diff': 'allow',
+      'git log': 'allow',
+      ...REVIEW_BASH_ASK_PATTERNS,
+    });
   }
   const defaultDecision = 'deny';
   // Use exact, argument-free commands for the native shell's low-risk

@@ -123,6 +123,8 @@ describe('OpenCode prompt tool flags preserve native semantic approval policy', 
     expect(effectivePermission('edit', 'D:/outside/secret.txt', agentRules, sessionRules)).toBe('deny');
     expect(effectivePermission('edit', 'C:/workspace/src/app.ts', agentRules, sessionRules)).toBe('allow');
     expect(effectivePermission('bash', 'rm -rf data', agentRules, sessionRules)).toBe('ask');
+    expect(effectivePermission('bash', 'powershell.exe -NoProfile -Command Set-Content', agentRules, sessionRules)).toBe('ask');
+    expect(effectivePermission('bash', 'git status', agentRules, sessionRules)).toBe('allow');
     expect(effectivePermission('task', '*', agentRules, sessionRules)).toBe('ask');
     expect(sessionRules.some((rule) =>
       ['edit', 'write', 'patch', 'bash', 'shell', 'task'].includes(rule.permission) &&

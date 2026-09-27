@@ -158,7 +158,9 @@ describe('buildEffectivePermissionProfile', () => {
     expect(review.openCode.edit['*']).toBe('deny');
     expect(review.openCode.edit['/project/**']).toBe('allow');
     expect(review.openCode.bash).toMatchObject({
-      '*': 'allow',
+      '*': 'ask',
+      pwd: 'allow',
+      'git status': 'allow',
       'rm *': 'ask',
       'Remove-Item *': 'ask',
       'git clean *': 'ask',
