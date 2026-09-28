@@ -1,0 +1,53 @@
+.benchmark-chart {
+  container: benchmark-chart / inline-size;
+}
+
+.benchmark-chart-heading,
+.benchmark-chart-detail {
+  display: none;
+}
+
+.benchmark-chart-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(32px, 1fr) auto;
+}
+
+@container benchmark-chart (max-width: 360px) {
+  .benchmark-chart-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .benchmark-chart-row > :nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .benchmark-chart-row > :nth-child(3) {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .benchmark-chart-compactmeta {
+    overflow: visible;
+    white-space: normal;
+  }
+}
+
+@container benchmark-chart (min-width: 800px) {
+  .benchmark-chart-heading,
+  .benchmark-chart-row {
+    grid-template-columns: minmax(200px, 2fr) minmax(120px, 2fr) auto 135px 70px;
+  }
+
+  .benchmark-chart-heading {
+    display: grid;
+  }
+
+  .benchmark-chart-detail {
+    display: block;
+  }
+
+  .benchmark-chart-compactmeta {
+    display: none;
+  }
+}

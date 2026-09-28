@@ -13,6 +13,7 @@ import {
   type BenchmarkModelRow,
 } from './benchmarkApi';
 import { PROVIDER_LOGOS } from './providerLogos';
+import './benchmark-intelligence.css';
 import './sakura-benchmarks.css';
 
 type SortKey =
@@ -639,7 +640,7 @@ export function BenchmarkIntelligencePage() {
 
         {view === 'chart' ? (
           <section
-            className="cozy-card rounded-2xl border border-border bg-paper p-4 shadow-soft"
+            className="benchmark-chart cozy-card rounded-2xl border border-border bg-paper p-4 shadow-soft"
             data-warm-surface="benchmarks-chart"
           >
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -658,7 +659,7 @@ export function BenchmarkIntelligencePage() {
             </div>
             {chartRows.length ? (
               <div className="space-y-1" aria-label={`Artificial Analysis ${category} chart`}>
-                <div className="hidden grid-cols-[minmax(240px,2fr)_minmax(140px,2fr)_auto_135px_70px] gap-3 border-b border-border pb-2 text-[11px] uppercase tracking-wide text-muted-foreground xl:grid">
+                <div className="benchmark-chart-heading gap-3 border-b border-border pb-2 text-[11px] uppercase tracking-wide text-muted-foreground">
                   <span>Model / provider</span>
                   <span>
                     {category} · {categoryUnit}
@@ -675,7 +676,7 @@ export function BenchmarkIntelligencePage() {
                 {chartRows.map((row, index) => (
                   <div
                     key={row.id}
-                    className="grid grid-cols-[minmax(145px,260px)_1fr_auto] items-center gap-3 border-b border-border/50 py-1.5 xl:grid-cols-[minmax(240px,2fr)_minmax(140px,2fr)_auto_135px_70px]"
+                    className="benchmark-chart-row items-center gap-3 border-b border-border/50 py-1.5"
                   >
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="w-5 shrink-0 font-mono text-xs text-muted-foreground">
@@ -692,7 +693,7 @@ export function BenchmarkIntelligencePage() {
                         <div className="truncate text-[11px] text-muted-foreground">
                           {row.provider}
                         </div>
-                        <div className="truncate text-[10px] text-muted-foreground xl:hidden">
+                        <div className="benchmark-chart-compactmeta truncate text-[10px] text-muted-foreground">
                           {money(row.inputPricePer1MTokensUsd)} /{' '}
                           {money(row.outputPricePer1MTokensUsd)} per 1M · <ContextValue row={row} />{' '}
                           context
@@ -714,10 +715,10 @@ export function BenchmarkIntelligencePage() {
                           ? decimal(row.outputTokensPerSecond)
                           : row.intelligenceIndex}
                     </div>
-                    <div className="hidden text-right font-mono text-xs text-muted-foreground xl:block">
+                    <div className="benchmark-chart-detail text-right font-mono text-xs text-muted-foreground">
                       {money(row.inputPricePer1MTokensUsd)} / {money(row.outputPricePer1MTokensUsd)}
                     </div>
-                    <div className="hidden text-right font-mono text-xs text-muted-foreground xl:block">
+                    <div className="benchmark-chart-detail text-right font-mono text-xs text-muted-foreground">
                       <ContextValue row={row} />
                     </div>
                   </div>

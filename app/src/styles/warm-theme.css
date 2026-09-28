@@ -1236,7 +1236,7 @@ html[data-theme='warm'] [data-warm-decoration='benchmarks-scene'] > img {
   width: 100%;
   height: auto;
   opacity: 0.88;
-  clip-path: inset(0 0 0 50%);
+  mask-image: linear-gradient(to right, transparent 43%, #000 58%);
   user-select: none;
 }
 
@@ -1612,6 +1612,12 @@ html[data-theme='warm']
     [data-warm-page='benchmarks']
     [data-monochrome-surface='benchmarks-table'] {
     width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  html[data-theme='warm'] [data-warm-surface='benchmarks-content'] {
+    padding-inline: 16px;
   }
 }
 
