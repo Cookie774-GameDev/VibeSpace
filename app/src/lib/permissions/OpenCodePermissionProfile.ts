@@ -5,6 +5,7 @@ export type BashPermission = PermissionDecision | Readonly<Record<string, Permis
 /** Persistent Agent profile captured for one provider run. */
 export type AgentApprovalMode = 'full' | 'review';
 export type OpenCodeExecutionAgentId =
+  | 'plan'
   | 'vibespace-readonly'
   | 'vibespace-write'
   | 'vibespace-write-auto'
@@ -29,6 +30,7 @@ export interface OpenCodePermissionProfile {
   edit: Readonly<Record<string, PermissionDecision>>;
   bash: BashPermission;
   task: PermissionDecision;
+  question: PermissionDecision;
   skill: PermissionDecision;
   webfetch: PermissionDecision;
   websearch: PermissionDecision;
@@ -126,6 +128,7 @@ function openCodeExecutionAgentFor(
   access: AccessLevel,
   approveAllForRun: boolean,
 ): OpenCodeExecutionAgentId {
+  if (mode === 'plan') return 'plan';
   if (mode !== 'agent' || access === 'read-only') return 'vibespace-readonly';
   if (access === 'write') {
     return approveAllForRun ? 'vibespace-write-auto' : 'vibespace-write';
@@ -242,6 +245,9 @@ export function buildEffectivePermissionProfile(
       }),
       bash: bashDecision,
       task: agent ? agentDecision(nativeApproveAll) : 'deny',
+      // Native OpenCode questions are safe in every interaction mode and are
+      // required for the built-in Plan agent's question tool.
+      question: 'allow',
       // Skills and web access are non-mutating by themselves. Their resulting
       // tool calls remain subject to the gateway and access profile.
       skill: 'allow',

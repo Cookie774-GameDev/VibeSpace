@@ -479,7 +479,6 @@ import {
   type EscapeCancelState,
 } from './composerEscapeCancel';
 import { getChatRunState } from './runtime/chatRunState';
-import { buildComposerResumeRequest } from './composerResumeRequest';
 import { hydrateLatestTurn } from './runtime/turn/turnStore';
 import { CaoCommandPanel, type CaoCommandInput } from '@/features/cao/CaoCommandPanel';
 import { agentSelectorOptions } from './listLiveChatAgents';
@@ -7442,9 +7441,6 @@ export function Composer({
                         size="icon-sm"
                         variant="accent"
                         onClick={() => {
-                          const stoppedCancellationKey = getChatRunState(String(chatId))?.cancellationKey;
-                          const resumeScope = useAuthStore.getState();
-                          const resumeAccountId = resolveAccountIdentity(resumeScope)?.accountId;
                           const cancellationKey = crypto.randomUUID();
                           activeCancellationKeyRef.current = cancellationKey;
                           window.dispatchEvent(
@@ -7452,31 +7448,11 @@ export function Composer({
                               detail: {
                                 chatId: String(chatId),
                                 cancellationKey,
-                                onUnavailable: async () => {
-                                  try {
-                                    const history = await messageRepo.listByChat(chatId as ChatId);
-                                    const currentScope = useAuthStore.getState();
-                                    const currentTurn = getChatRunState(String(chatId));
-                                    if (
-                                      !resumeAccountId ||
-                                      resolveAccountIdentity(currentScope)?.accountId !== resumeAccountId ||
-                                      currentScope.workspaceId !== resumeScope.workspaceId ||
-                                      currentScope.projectId !== resumeScope.projectId ||
-                                      activeCancellationKeyRef.current !== cancellationKey ||
-                                      currentTurn?.status !== 'cancelled' ||
-                                      currentTurn.cancellationKey !== stoppedCancellationKey
-                                    ) return;
-                                    const request = buildComposerResumeRequest(
-                                      String(chatId), history, stoppedCancellationKey,
-                                    );
-                                    if (!request) {
-                                      toast.error('Cannot resume', 'The original request is unavailable. Send a new message to continue.');
-                                      return;
-                                    }
-                                    await handleSend(request);
-                                  } catch {
-                                    toast.error('Cannot resume', 'The retained request could not be read safely. Try again after the chat finishes loading.');
-                                  }
+                                onUnavailable: () => {
+                                  toast.error(
+                                    'Cannot resume this exact turn',
+                                    'The active runtime could not confirm a safe native continuation. The original request remains in this chat; review the native session before starting another turn.',
+                                  );
                                 },
                               },
                             }),

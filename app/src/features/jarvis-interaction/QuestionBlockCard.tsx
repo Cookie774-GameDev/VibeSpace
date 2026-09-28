@@ -41,6 +41,14 @@ interface QuestionDraft {
   activeIndex: number;
 }
 
+interface ConfirmedOpenCodeQuestionResponse {
+  blockId: string;
+  requestId: string;
+  sessionId: string;
+  action: 'reply' | 'reject';
+  answers: JarvisQuestionAnswer[];
+}
+
 const EMPTY_DRAFT: QuestionDraft = { selected: {}, text: {}, activeIndex: 0 };
 
 function draftKeyFor(chatId: string | undefined, blockId: string): string {
@@ -89,6 +97,42 @@ function clearDraft(key: string) {
     window.sessionStorage.removeItem(key);
   } catch {
     // Ignore - nothing to recover.
+  }
+}
+
+function confirmedResponseKey(key: string): string {
+  return `${key}:confirmed-response`;
+}
+
+function readConfirmedResponse(key: string): ConfirmedOpenCodeQuestionResponse | null {
+  try {
+    const raw = window.sessionStorage.getItem(confirmedResponseKey(key));
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<ConfirmedOpenCodeQuestionResponse> | null;
+    return value && typeof value === 'object' &&
+      typeof value.blockId === 'string' && typeof value.requestId === 'string' &&
+      typeof value.sessionId === 'string' &&
+      (value.action === 'reply' || value.action === 'reject') && Array.isArray(value.answers)
+      ? value as ConfirmedOpenCodeQuestionResponse
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeConfirmedResponse(key: string, response: ConfirmedOpenCodeQuestionResponse) {
+  try {
+    window.sessionStorage.setItem(confirmedResponseKey(key), JSON.stringify(response));
+  } catch {
+    // The mounted card still retains the receipt in memory if storage is unavailable.
+  }
+}
+
+function clearConfirmedResponse(key: string) {
+  try {
+    window.sessionStorage.removeItem(confirmedResponseKey(key));
+  } catch {
+    // Ignore unavailable storage; no retry remains after a confirmed local save.
   }
 }
 
@@ -211,6 +255,10 @@ export function QuestionBlockCard({
     Math.min(Math.max(initialDraft.activeIndex, 0), Math.max(total - 1, 0)),
   );
   const [error, setError] = useState<string | null>(null);
+  const [submissionFailed, setSubmissionFailed] = useState(false);
+  const [acceptedHarnessResponse, setAcceptedHarnessResponse] = useState(() =>
+    readConfirmedResponse(draftKey),
+  );
   const [busy, setBusy] = useState(false);
   const [inlineDismissed, setInlineDismissed] = useState(false);
   const [focusInlineRequested, setFocusInlineRequested] = useState(false);
@@ -222,6 +270,7 @@ export function QuestionBlockCard({
   const previousActiveQuestionIdRef = useRef<string | undefined>();
 
   const isPending = block.status === 'pending';
+  const harnessResponseLocked = Boolean(part.harness && acceptedHarnessResponse);
   const isWizard = total > 1;
   const activeQuestion = block.questions[activeIndex];
   const isLast = activeIndex >= total - 1;
@@ -353,6 +402,48 @@ export function QuestionBlockCard({
     });
   };
 
+  const persistUserAnswer = async (
+    answers: JarvisQuestionAnswer[],
+    status: 'answered' | 'skipped',
+  ) => {
+    const id = `msg_question_answer_${encodeURIComponent(String(messageId))}_${encodeURIComponent(block.id)}` as never;
+    const summary =
+      status === 'skipped'
+        ? `Skipped: ${block.title ?? 'Jarvis questions'}`
+        : buildAnswerSummary(block.questions, answers);
+    const answerPart: Part = { kind: 'question_answer', blockId: block.id, answers };
+    try {
+      await messageRepo.create({
+        id,
+        chat_id: chatId as never,
+        role: 'user',
+        parts: [{ kind: 'text', text: summary }, answerPart],
+      });
+    } catch (createError) {
+      // A retry after the message was committed but a later sync/status step
+      // failed must reuse the same answer, never create or dispatch it twice.
+      let existing;
+      try {
+        existing = await messageRepo.getById(id);
+      } catch {
+        throw createError;
+      }
+      const existingAnswer = existing?.parts.find(
+        (messagePart): messagePart is Extract<Part, { kind: 'question_answer' }> =>
+          messagePart.kind === 'question_answer' && messagePart.blockId === block.id,
+      );
+      if (
+        !existing ||
+        String(existing.chat_id) !== chatId ||
+        existing.role !== 'user' ||
+        !existingAnswer ||
+        JSON.stringify(existingAnswer.answers) !== JSON.stringify(answers)
+      ) {
+        throw createError;
+      }
+    }
+  };
+
   const respondToHarnessQuestion = async (
     answers: JarvisQuestionAnswer[],
     action: 'reply' | 'reject',
@@ -384,6 +475,38 @@ export function QuestionBlockCard({
     });
   };
 
+  const respondToHarnessQuestionOnce = async (
+    answers: JarvisQuestionAnswer[],
+    action: 'reply' | 'reject',
+  ): Promise<boolean> => {
+    const { persistedPart } = await readPersistedQuestionPart();
+    const route = persistedPart.harness;
+    if (!route) throw new Error('OpenCode question authority is unavailable.');
+    const saved = acceptedHarnessResponse ?? readConfirmedResponse(draftKey);
+    if (saved) {
+      if (
+        saved.blockId !== block.id || saved.requestId !== route.requestId ||
+        saved.sessionId !== route.sessionId || saved.action !== action ||
+        JSON.stringify(saved.answers) !== JSON.stringify(answers)
+      ) {
+        throw new Error('OpenCode already confirmed a different response. Reload this question before retrying.');
+      }
+      setAcceptedHarnessResponse(saved);
+      return true;
+    }
+    await respondToHarnessQuestion(answers, action);
+    const receipt = {
+      blockId: block.id,
+      requestId: route.requestId,
+      sessionId: route.sessionId,
+      action,
+      answers,
+    } satisfies ConfirmedOpenCodeQuestionResponse;
+    writeConfirmedResponse(draftKey, receipt);
+    setAcceptedHarnessResponse(receipt);
+    return true;
+  };
+
   const emitHarnessResolution = (
     answers: JarvisQuestionAnswer[],
     status: 'answered' | 'skipped' | 'cancelled',
@@ -409,32 +532,26 @@ export function QuestionBlockCard({
     status: 'answered' | 'skipped',
   ) => {
     if (!messageId || !chatId || busyRef.current) return;
+    let harnessResponseConfirmed = false;
     busyRef.current = true;
     setBusy(true);
     setError(null);
+    setSubmissionFailed(false);
     try {
       if (part.harness) {
-        await respondToHarnessQuestion(answers, 'reply');
+        harnessResponseConfirmed = await respondToHarnessQuestionOnce(answers, 'reply');
         await persistBlockStatus(answers, status);
         emitHarnessResolution(answers, status);
         clearDraft(draftKey);
+        clearConfirmedResponse(draftKey);
+        setAcceptedHarnessResponse(null);
         return;
       }
+      // Validate the source chat and pending question before creating the
+      // deterministic answer message, so stale/cross-chat cards write nothing.
+      await readPersistedQuestionPart();
+      await persistUserAnswer(answers, status);
       await persistBlockStatus(answers, status);
-      await messageRepo.create({
-        chat_id: chatId as never,
-        role: 'user',
-        parts: [
-          {
-            kind: 'text',
-            text:
-              status === 'skipped'
-                ? `Skipped: ${block.title ?? 'Jarvis questions'}`
-                : buildAnswerSummary(block.questions, answers),
-          },
-          { kind: 'question_answer', blockId: block.id, answers },
-        ],
-      });
       window.dispatchEvent(
         new CustomEvent('jarvis:send', {
           detail: {
@@ -458,9 +575,12 @@ export function QuestionBlockCard({
       );
       clearDraft(draftKey);
     } catch (err) {
+      setSubmissionFailed(true);
       setError(
         part.harness
-          ? 'Could not send this answer to its original agent session. Check that the request is still active before retrying.'
+          ? harnessResponseConfirmed
+            ? 'OpenCode accepted this answer, but its saved status could not be confirmed. Retry to finish saving; the answer will not be sent twice.'
+            : 'Could not send this answer to its original agent session. Check that the request is still active before retrying.'
           : err instanceof Error
             ? err.message
             : 'Could not save these answers. Please retry.',
@@ -472,7 +592,7 @@ export function QuestionBlockCard({
   };
 
   const toggleChoice = (question: JarvisQuestion, optionId: string) => {
-    if (busy || !isPending) return;
+    if (busy || !isPending || harnessResponseLocked) return;
     playUiSound('ui_click_soft');
     setError(null);
     setSelectedByQuestion((current) => {
@@ -486,7 +606,7 @@ export function QuestionBlockCard({
   };
 
   const handleNext = () => {
-    if (busy || !isPending || !activeQuestion) return;
+    if (busy || !isPending || harnessResponseLocked || !activeQuestion) return;
     const answers = collectAnswers(false);
     if (activeQuestion.required && !questionAnswered(activeQuestion, answers)) {
       setError('Please answer this question before continuing.');
@@ -497,13 +617,17 @@ export function QuestionBlockCard({
   };
 
   const handleBack = () => {
-    if (busy || !isPending) return;
+    if (busy || !isPending || harnessResponseLocked) return;
     setError(null);
     setActiveIndex((index) => Math.max(index - 1, 0));
   };
 
   const handleContinue = async () => {
-    if (busy || !isPending) return;
+    if (
+      busy ||
+      !isPending ||
+      (harnessResponseLocked && acceptedHarnessResponse?.action !== 'reply')
+    ) return;
     const answers = collectAnswers(false);
     const missingIndex = firstMissingRequired(answers);
     if (missingIndex !== -1) {
@@ -515,26 +639,30 @@ export function QuestionBlockCard({
   };
 
   const handleSkip = async () => {
-    if (busy || !isPending) return;
-    clearDraft(draftKey);
+    if (busy || !isPending || harnessResponseLocked) return;
     await persistAndSend(collectAnswers(true), 'skipped');
   };
 
   const handleCancel = async () => {
-    if (busyRef.current || !isPending) return;
+    if (busyRef.current || !isPending || harnessResponseLocked) return;
+    let harnessResponseConfirmed = false;
     busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
       const answers = collectAnswers(true);
-      if (part.harness) await respondToHarnessQuestion(answers, 'reject');
+      if (part.harness) harnessResponseConfirmed = await respondToHarnessQuestionOnce(answers, 'reject');
       await persistBlockStatus(answers, 'cancelled');
       emitHarnessResolution(answers, 'cancelled');
       clearDraft(draftKey);
+      clearConfirmedResponse(draftKey);
+      setAcceptedHarnessResponse(null);
     } catch (err) {
       setError(
         part.harness
-          ? 'Could not cancel this OpenCode question. Please retry.'
+          ? harnessResponseConfirmed
+            ? 'OpenCode rejected this question, but its saved status could not be confirmed. Retry Cancel to finish saving; the rejection will not be sent twice.'
+            : 'Could not cancel this OpenCode question. Please retry.'
           : err instanceof Error
             ? err.message
             : 'Could not cancel these questions. Please retry.',
@@ -575,7 +703,7 @@ export function QuestionBlockCard({
                       : 'border-border bg-elevated text-muted-foreground hover:text-foreground',
                   )}
                   aria-pressed={active}
-                  disabled={busy || !isPending}
+                  disabled={busy || !isPending || harnessResponseLocked}
                   onClick={() => toggleChoice(question, option.id)}
                 >
                   <span className="question-card__marker" aria-hidden="true">
@@ -601,7 +729,7 @@ export function QuestionBlockCard({
                 : 'border-border bg-elevated text-muted-foreground hover:text-foreground',
             )}
             aria-pressed={Boolean(customOpenByQuestion[question.id])}
-            disabled={busy || !isPending}
+            disabled={busy || !isPending || harnessResponseLocked}
             aria-controls={`question-custom-${question.id}`}
             onClick={() =>
               setCustomOpenByQuestion((current) => ({
@@ -622,7 +750,7 @@ export function QuestionBlockCard({
             className="min-h-16 w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-secondary text-foreground outline-none focus:border-accent-cyan focus-visible:ring-2 focus-visible:ring-accent-cyan/40"
             placeholder={question.placeholder ?? 'Write your own answer'}
             value={textByQuestion[question.id] ?? ''}
-            disabled={busy || !isPending}
+            disabled={busy || !isPending || harnessResponseLocked}
             onKeyDown={handleTextKeyDown}
             onChange={(event) => {
               setError(null);
@@ -829,7 +957,7 @@ export function QuestionBlockCard({
               type="button"
               size="sm"
               variant="ghost"
-              disabled={busy || !isPending}
+              disabled={busy || !isPending || harnessResponseLocked}
               onClick={handleBack}
             >
               <ArrowLeft className="mr-1 h-3.5 w-3.5" />
@@ -841,7 +969,7 @@ export function QuestionBlockCard({
               type="button"
               size="sm"
               variant="accent"
-              disabled={busy || !isPending}
+              disabled={busy || !isPending || harnessResponseLocked}
               onClick={handleNext}
             >
               Next
@@ -852,10 +980,13 @@ export function QuestionBlockCard({
               type="button"
               size="sm"
               variant="accent"
-              disabled={busy || !isPending}
+              disabled={
+                busy || !isPending ||
+                (harnessResponseLocked && acceptedHarnessResponse?.action !== 'reply')
+              }
               onClick={handleContinue}
             >
-              Submit
+              {acceptedHarnessResponse ? 'Retry save' : submissionFailed && error ? 'Retry answer' : 'Submit'}
             </Button>
           )}
           {canSkip && (
@@ -863,7 +994,7 @@ export function QuestionBlockCard({
               type="button"
               size="sm"
               variant="ghost"
-              disabled={busy || !isPending}
+              disabled={busy || !isPending || harnessResponseLocked}
               onClick={handleSkip}
             >
               Skip
@@ -875,7 +1006,7 @@ export function QuestionBlockCard({
               size="sm"
               variant="ghost"
               className="text-muted-foreground"
-              disabled={busy}
+              disabled={busy || harnessResponseLocked}
               onClick={handleCancel}
             >
               Cancel

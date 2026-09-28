@@ -575,10 +575,10 @@ describe('QuestionBlockCard', () => {
     expect(repo.update).not.toHaveBeenCalled();
     expect(repo.create).not.toHaveBeenCalled();
     expect(window.dispatchEvent).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /Submit/i })).toHaveProperty('disabled', false);
+    expect(screen.getByRole('button', { name: 'Retry answer' })).toHaveProperty('disabled', false);
   });
 
-  it('emits no harness resolution when persistence fails after an accepted reply', async () => {
+  it('retries local confirmation without submitting an accepted OpenCode answer twice', async () => {
     repo.getById.mockResolvedValue({
       id: 'msg_1',
       chat_id: 'chat_1',
@@ -594,11 +594,30 @@ describe('QuestionBlockCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Submit/i }));
 
     expect((await screen.findByRole('alert')).textContent).toMatch(
-      /could not send.*original agent session.*still active.*retry/i,
+      /OpenCode accepted this answer.*saved status could not be confirmed.*will not be sent twice/i,
     );
     expect(openCodeQuestion.respond).toHaveBeenCalledOnce();
     expect(window.dispatchEvent).not.toHaveBeenCalled();
     expect(repo.create).not.toHaveBeenCalled();
+
+    const draftKey = 'jarvis-question-draft:chat_1:qb_opencode_exact';
+    expect(window.sessionStorage.getItem(`${draftKey}:confirmed-response`)).toContain('que_opencode_exact');
+    expect(screen.getByRole('button', { name: 'Yes' })).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry save' }));
+
+    await waitFor(() => expect(repo.update).toHaveBeenCalledTimes(2));
+    expect(openCodeQuestion.respond).toHaveBeenCalledOnce();
+    expect(window.dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'vibespace:opencode-question-resolved',
+        detail: expect.objectContaining({
+          part: expect.objectContaining({
+            block: expect.objectContaining({ status: 'answered' }),
+          }),
+        }),
+      }),
+    );
+    expect(window.sessionStorage.getItem(`${draftKey}:confirmed-response`)).toBeNull();
   });
 
   it('fails closed before OpenCode I/O when the persisted harness authority changed', async () => {
@@ -773,9 +792,40 @@ describe('QuestionBlockCard', () => {
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByText(/Question 2 of 2/i)).toBeTruthy();
-    expect(repo.create).not.toHaveBeenCalled();
+    expect(repo.create).toHaveBeenCalledOnce();
     expect(window.dispatchEvent).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /Submit/i })).toHaveProperty('disabled', false);
+    expect(screen.getByRole('button', { name: 'Retry answer' })).toHaveProperty('disabled', false);
+  });
+
+  it('keeps a failed answer pending with its draft and lets the user dismiss or retry it', async () => {
+    repo.create.mockRejectedValueOnce(new Error('Storage unavailable'));
+    const draftKey = 'jarvis-question-draft:chat_1:qb_1';
+    render(
+      <InlineQuestionBlockCard
+        part={blockPart}
+        messageId={'msg_1' as never}
+        chatId="chat_1"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat UI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Storage unavailable');
+    expect(repo.update).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem(draftKey)).toContain('chat');
+    expect(screen.getByRole('button', { name: 'Retry answer' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss question' }));
+    expect(screen.getByRole('button', { name: 'Reopen question' })).toBeTruthy();
+    expect(window.sessionStorage.getItem(draftKey)).toContain('chat');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen question' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry answer' }));
+    await waitFor(() => expect(repo.update).toHaveBeenCalledOnce());
+    expect(repo.create).toHaveBeenCalledTimes(2);
+    expect(window.sessionStorage.getItem(draftKey)).toBeNull();
   });
 
   it('dismisses and reopens the inline card without resolving its pending question', () => {

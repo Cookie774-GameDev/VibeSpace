@@ -2134,6 +2134,8 @@ export function toolsForPolicy(input: {
     glob: true,
     grep: true,
     list: true,
+    // OpenCode's native Plan agent must retain its user-question tool.
+    question: true,
     webfetch: !input.explicitReadRoot,
     websearch: !input.explicitReadRoot,
     edit: canWrite,

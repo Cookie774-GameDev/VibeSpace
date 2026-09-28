@@ -202,24 +202,36 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
               ) : null}
             </DialogContent>
           </Dialog>
-          <p className="whitespace-pre-wrap text-secondary text-muted-foreground">{plan.summary}</p>
         </div>
       </div>
-      <ol className="ml-5 list-decimal space-y-1 text-secondary text-foreground">
-        {plan.steps.map((step, index) => (
-          <li key={`${plan.id}:step:${index}`}>{step}</li>
-        ))}
-      </ol>
-      {plan.risks?.length ? (
-        <div className="mt-2 rounded-md border border-border bg-background/60 px-2 py-1.5">
-          <div className="text-metadata uppercase tracking-wide text-muted-foreground">Risks</div>
-          <ul className="ml-4 list-disc text-secondary text-muted-foreground">
-            {plan.risks.map((risk, index) => (
-              <li key={`${plan.id}:risk:${index}`}>{risk}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      <div
+        role="region"
+        aria-label="Plan details"
+        className="max-h-64 space-y-2 overflow-y-auto overscroll-contain pr-2"
+      >
+        <p className="whitespace-pre-wrap break-words text-secondary text-muted-foreground">
+          {plan.summary}
+        </p>
+        <ol className="ml-5 list-decimal space-y-1 text-secondary text-foreground">
+          {plan.steps.map((step, index) => (
+            <li key={`${plan.id}:step:${index}`} className="break-words">
+              {step}
+            </li>
+          ))}
+        </ol>
+        {plan.risks?.length ? (
+          <div className="rounded-md border border-border bg-background/60 px-2 py-1.5">
+            <div className="text-metadata uppercase tracking-wide text-muted-foreground">Risks</div>
+            <ul className="ml-4 list-disc text-secondary text-muted-foreground">
+              {plan.risks.map((risk, index) => (
+                <li key={`${plan.id}:risk:${index}`} className="break-words">
+                  {risk}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
       {plan.status !== 'pending' && (
         <p className="mt-2 text-secondary text-muted-foreground">Plan status: {plan.status}</p>
       )}

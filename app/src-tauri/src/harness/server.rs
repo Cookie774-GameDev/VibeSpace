@@ -811,6 +811,9 @@ fn scoped_provider_config(
         "deny",
         "deny",
     );
+    // Extend the built-in OpenCode Plan agent with VibeSpace's read-only
+    // permissions while leaving its native Plan prompt intact.
+    let plan_agent = readonly_agent.clone();
     let mut reviewer_agent = execution_agent(
         "Independent VibeSpace reviewer: inspect the supplied deliverable and request approval to run verification commands.",
         "deny", readonly_bash("ask"), "deny", "deny",
@@ -821,6 +824,7 @@ fn scoped_provider_config(
         "agent".to_string(),
         json!({
             "title": { "disable": true },
+            "plan": plan_agent,
             "vibespace-reviewer": reviewer_agent,
             "vibespace": readonly_agent.clone(),
             "vibespace-readonly": readonly_agent,
@@ -2076,7 +2080,8 @@ fn validate_transport_body(
                     .is_some_and(|agent| {
                         matches!(
                             agent,
-                            "vibespace-readonly"
+                            "plan"
+                                | "vibespace-readonly"
                                 | "vibespace-write"
                                 | "vibespace-write-auto"
                                 | "vibespace-full"
@@ -2099,7 +2104,8 @@ fn validate_transport_body(
                     .is_some_and(|agent| {
                         matches!(
                             agent,
-                            "vibespace-readonly"
+                            "plan"
+                                | "vibespace-readonly"
                                 | "vibespace-write"
                                 | "vibespace-write-auto"
                                 | "vibespace-full"
@@ -3131,6 +3137,13 @@ mod tests {
         assert_eq!(config["permission"]["edit"], "deny");
         assert_eq!(config["permission"]["bash"], "deny");
         assert_eq!(config["permission"]["task"], "deny");
+        assert_eq!(config["agent"]["plan"]["mode"], "primary");
+        assert_eq!(config["agent"]["plan"]["permission"]["edit"], "deny");
+        assert_eq!(config["agent"]["plan"]["permission"]["bash"]["*"], "deny");
+        assert_eq!(config["agent"]["plan"]["permission"]["task"], "deny");
+        assert_eq!(config["agent"]["plan"]["permission"]["question"], "allow");
+        assert_eq!(config["agent"]["plan"]["permission"]["read"]["**/.env"], "deny");
+        assert!(config["agent"]["plan"].get("prompt").is_none());
         let reviewer = &config["agent"]["vibespace-reviewer"];
         assert_eq!(reviewer["mode"], "subagent");
         assert_eq!(reviewer["permission"]["bash"]["*"], "ask");
@@ -3146,6 +3159,7 @@ mod tests {
             );
         }
         for name in [
+            "plan",
             "vibespace",
             "vibespace-readonly",
             "vibespace-write",
@@ -3157,6 +3171,7 @@ mod tests {
             );
         }
         for name in [
+            "plan",
             "vibespace",
             "vibespace-readonly",
             "vibespace-write",
@@ -3180,6 +3195,7 @@ mod tests {
         assert_eq!(config["permission"]["todowrite"], "allow");
         assert_eq!(config["permission"]["external_directory"], "deny");
         for name in [
+            "plan",
             "vibespace",
             "vibespace-readonly",
             "vibespace-write",
@@ -3995,6 +4011,10 @@ mod tests {
         };
         let valid_command = r#"{"agent":"vibespace-full","model":"opencode-go/deepseek-v4-flash-vision-exp","command":"goal","arguments":"Finish the workflow"}"#;
         assert!(validate_transport_body(&command, Some(valid_command)).is_ok());
+        assert!(validate_transport_body(
+            &command,
+            Some(r#"{"agent":"plan","model":"opencode-go/model","command":"plan","arguments":"Inspect this task"}"#)
+        ).is_ok());
         for invalid in [
             r#"{"agent":"build","model":"opencode-go/model","command":"goal","arguments":"work"}"#,
             r#"{"agent":"vibespace-full","model":"opencode-go/model","command":"goal","arguments":""}"#,
@@ -4009,6 +4029,11 @@ mod tests {
         assert!(validate_transport_body(
             &prompt,
             Some(r#"{"agent":"vibespace-readonly","parts":[{"type":"text","text":"hi"}]}"#)
+        )
+        .is_ok());
+        assert!(validate_transport_body(
+            &prompt,
+            Some(r#"{"agent":"plan","tools":{"question":true,"edit":false,"bash":false},"parts":[{"type":"text","text":"Plan this task"}]}"#)
         )
         .is_ok());
         assert!(validate_transport_body(

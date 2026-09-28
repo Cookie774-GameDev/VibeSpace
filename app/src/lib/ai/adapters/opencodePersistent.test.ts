@@ -420,6 +420,30 @@ describe('persistent OpenCode question transport authority', () => {
     }
   });
 
+  it('dispatches Plan Mode with OpenCode native Plan and its question tool enabled', async () => {
+    configureManagedQuestionTransport([]);
+    const iterator = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('request-native-plan-mode'),
+      interactionMode: 'plan',
+      accessLevel: 'read-only',
+    })[Symbol.asyncIterator]();
+    try {
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'session', sessionId: 'ses_question_exact' },
+      });
+      const sent = nativeOpenCodeMocks.request.mock.calls.find(([, path]) =>
+        path.includes('/prompt_async'),
+      );
+      expect(JSON.parse(String(sent?.[2]?.body))).toMatchObject({
+        agent: 'plan',
+        tools: { question: true, edit: false, write: false, bash: false, task: false },
+      });
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
   it('allows a sixteen-second cold health handshake before dispatching exactly once', async () => {
     vi.useFakeTimers();
     const original = nativeOpenCodeMocks.request.getMockImplementation()!;
@@ -4600,10 +4624,28 @@ describe('persistent OpenCode live authority', () => {
     });
 
     expect(tools.vibespace_context).toBe(true);
+    expect(tools.question).toBe(true);
     expect(tools).toMatchObject({ todo: true, todoread: true, todowrite: true });
     expect(Object.keys(tools)).toEqual(expect.arrayContaining(['vibespace_context']));
     expect(Object.keys(tools).every((name) => /^[a-zA-Z0-9_-]+$/u.test(name))).toBe(true);
     expect(tools).not.toHaveProperty('vibespace_context.query');
+  });
+
+  it('keeps the native question tool while restricting Plan Mode to non-mutating tools', () => {
+    const tools = toolsForPolicy({ mode: 'plan', access: 'read-only', rlmEnabled: false });
+    expect(tools).toMatchObject({
+      question: true,
+      read: true,
+      glob: true,
+      grep: true,
+      list: true,
+      edit: false,
+      write: false,
+      patch: false,
+      bash: false,
+      shell: false,
+      task: false,
+    });
   });
 
   it('keeps independent Agent work moving after an optional Context lookup returns no evidence', () => {

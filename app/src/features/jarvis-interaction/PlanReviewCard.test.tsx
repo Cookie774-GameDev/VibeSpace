@@ -56,6 +56,21 @@ describe('PlanReviewCard', () => {
     repo.create.mockResolvedValue({});
   });
 
+  it('keeps the plan body scrollable while decision actions stay outside the scroll region', () => {
+    render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
+
+    const planDetails = screen.getByRole('region', { name: 'Plan details' });
+    expect(planDetails.className).toContain('overflow-y-auto');
+    expect(planDetails.className).toMatch(/max-h-/);
+    expect(within(planDetails).getByText('Add store')).toBeTruthy();
+    expect(within(planDetails).getByText('Shared chat surface')).toBeTruthy();
+    expect(within(planDetails).queryByRole('button')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Yes — Implement Plan' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Redo Plan' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Add to Plan' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'No — Cancel' })).toBeTruthy();
+  });
+
   it('adds a requirement while preserving the original plan in a read-only revision', async () => {
     render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
     fireEvent.click(screen.getByRole('button', { name: 'Add to Plan' }));

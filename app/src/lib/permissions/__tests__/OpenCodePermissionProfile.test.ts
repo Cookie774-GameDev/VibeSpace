@@ -77,7 +77,7 @@ describe('buildEffectivePermissionProfile', () => {
     expect(profile.gateway.allowDelete).toBe(false);
   });
 
-  it('keeps Plan non-mutating and binds the read-only OpenCode agent', () => {
+  it('keeps Plan non-mutating and selects OpenCode native Plan with questions enabled', () => {
     const profile = buildEffectivePermissionProfile({
       mode: 'plan',
       access: 'full',
@@ -88,7 +88,8 @@ describe('buildEffectivePermissionProfile', () => {
     expect(profile.gateway.terminalAuthority).toBe('none');
     expect(profile.openCode.edit['/project/**']).toBe('deny');
     expect(profile.openCode.bash).toMatchObject({ '*': 'deny', pwd: 'allow' });
-    expect(profile.openCodeAgent).toBe('vibespace-readonly');
+    expect(profile.openCodeAgent).toBe('plan');
+    expect(profile.openCode.question).toBe('allow');
     expect(profile.gateway.planArtifactGlobs).toContain('/project/docs/plans/**');
     expect(profile.gateway.allowDelete).toBe(false);
   });
