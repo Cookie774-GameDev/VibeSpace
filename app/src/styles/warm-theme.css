@@ -1224,18 +1224,6 @@ html[data-theme='warm'] [data-warm-decoration='benchmarks-scene'] {
   pointer-events: none;
 }
 
-html[data-theme='warm'] [data-warm-decoration='benchmarks-scene']::before {
-  position: absolute;
-  inset: 0 50% 0 0;
-  content: '';
-  background-image: url('/assets/themes/warm/benchmarks/continuation-v2/benchmark-scroll-composite-v2.webp');
-  background-position: right top;
-  background-repeat: no-repeat;
-  background-size: 200% auto;
-  opacity: 0.88;
-  transform: scaleX(-1);
-}
-
 html[data-theme='warm'] [data-warm-decoration='benchmarks-scene']::after {
   position: absolute;
   inset: 0;
