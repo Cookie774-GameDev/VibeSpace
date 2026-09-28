@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
@@ -254,6 +254,30 @@ function setReducedMotion(matches: boolean) {
   );
 }
 
+function voicePanel() {
+  const panel = document.getElementById('jarvis-panel');
+  if (!panel) throw new Error('voice panel lifecycle mount missing');
+  return panel;
+}
+
+function voicePanelRole(...[role, options]: Parameters<typeof screen.getByRole>) {
+  return within(voicePanel()).getByRole(role, { ...options, hidden: true });
+}
+
+function queryVoicePanelRole(...[role, options]: Parameters<typeof screen.queryByRole>) {
+  return within(voicePanel()).queryByRole(role, { ...options, hidden: true });
+}
+
+function findVoicePanelRole(...[role, options]: Parameters<typeof screen.findByRole>) {
+  return within(voicePanel()).findByRole(role, { ...options, hidden: true });
+}
+
+function voiceMiniBar() {
+  const form = document.querySelector<HTMLFormElement>('form[aria-label="Jarvis voice mini bar"]');
+  if (!form) throw new Error('voice mini bar mount missing');
+  return form;
+}
+
 describe('VoiceModal hands-free turn-taking', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -359,16 +383,41 @@ describe('VoiceModal hands-free turn-taking', () => {
     expect(VoiceService.cancelListening).toHaveBeenCalled();
   });
 
-  it('keeps the optional mini bar off by default and sends typed text through the voice flow', async () => {
+  it('keeps voice lifecycle active while hiding the panel and enabled mini bar', async () => {
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+
+    const panel = voicePanel();
+    expect(panel.hasAttribute('hidden')).toBe(true);
+    expect(getComputedStyle(panel).display).toBe('none');
+    expect(panel.getAttribute('aria-hidden')).toBe('true');
+    expect(panel.hasAttribute('inert')).toBe(true);
+    expect(screen.queryByRole('complementary', { name: 'Jarvis voice session' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Expand Command Center' })).toBeNull();
+    expect(useUIStore.getState().voiceModalOpen).toBe(true);
+
+    act(() => useAuthStore.getState().setVoiceMiniBarEnabled(true));
+    await waitFor(() => expect(voiceMiniBar().hasAttribute('hidden')).toBe(true));
+    expect(getComputedStyle(voiceMiniBar()).display).toBe('none');
+    expect(voiceMiniBar().getAttribute('aria-hidden')).toBe('true');
+    expect(voiceMiniBar().hasAttribute('inert')).toBe(true);
+    expect(screen.queryByRole('form', { name: 'Jarvis voice mini bar' })).toBeNull();
+    expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice');
+  });
+
+  it('keeps the optional mini bar hidden but preserves its voice-submit flow', async () => {
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
     const rendered = render(<VoiceModal />);
     expect(screen.queryByRole('form', { name: 'Jarvis voice mini bar' })).toBeNull();
     act(() => useAuthStore.getState().setVoiceMiniBarEnabled(true));
     await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
-    const input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+    const form = await waitFor(() => voiceMiniBar());
+    expect(form.hasAttribute('hidden')).toBe(true);
+    const input = form.querySelector<HTMLInputElement>('input[aria-label="Type to Jarvis voice"]');
+    if (!input) throw new Error('voice mini bar input missing');
     fireEvent.change(input, { target: { value: 'Check the status' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    fireEvent.submit(form);
     await waitFor(() => expect(send).toHaveBeenCalledOnce());
     expect(routerMocks.speakWithSettings).toHaveBeenCalledWith('On it.', {
       allowBackground: true,
@@ -379,22 +428,29 @@ describe('VoiceModal hands-free turn-taking', () => {
     window.removeEventListener('jarvis:send', send as EventListener);
   });
 
-  it('restores mini-bar submission after a streamed reply ends', async () => {
+  it('restores hidden mini-bar submission after a streamed reply ends', async () => {
     useAuthStore.getState().setVoiceMiniBarEnabled(true);
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
     try {
       render(<VoiceModal />);
       await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      const form = await waitFor(() => voiceMiniBar());
+      const input = form.querySelector<HTMLInputElement>(
+        'input[aria-label="Type to Jarvis voice"]',
+      );
+      if (!input) throw new Error('voice mini bar input missing');
+      const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (!submit) throw new Error('voice mini bar submit button missing');
+      expect(form.hasAttribute('hidden')).toBe(true);
       act(() => window.dispatchEvent(new CustomEvent(STREAMING_VOICE_START_EVENT)));
       act(() => window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT)));
       await waitFor(() => expect(useVoiceStore.getState().state).not.toBe('speaking'), {
         timeout: VOICE_REPLY_COOLDOWN_MS + 1_000,
       });
-      fireEvent.change(screen.getByRole('textbox', { name: 'Type to Jarvis voice' }), {
-        target: { value: 'Next question' },
-      });
-      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      fireEvent.change(input, { target: { value: 'Next question' } });
+      expect(submit.disabled).toBe(false);
+      fireEvent.submit(form);
       await waitFor(() => expect(send).toHaveBeenCalledOnce());
     } finally {
       window.removeEventListener('jarvis:send', send as EventListener);
@@ -409,8 +465,8 @@ describe('VoiceModal hands-free turn-taking', () => {
       await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
       act(() => emitVoice('voice:final', { text: 'Use OpenCode as main for this answer send it' }));
       await waitFor(() => expect(send).toHaveBeenCalledOnce());
-      expect(screen.getByLabelText('Jarvis voice session').dataset.voiceProvider).toBe('opencode');
-      expect(screen.getByRole('img', { name: 'Jarvis voice activity' }).dataset.voiceProvider).toBe(
+      expect(voicePanel().dataset.voiceProvider).toBe('opencode');
+      expect(voicePanelRole('img', { name: 'Jarvis voice activity' }).dataset.voiceProvider).toBe(
         'opencode',
       );
       expect(useAuthStore.getState().voiceMainAgentProvider).toBe('codex');
@@ -532,15 +588,15 @@ describe('VoiceModal hands-free turn-taking', () => {
 
     render(<VoiceModal />);
     await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
-    fireEvent.click(screen.getByRole('button', { name: /Command Center/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Command Center/i }));
 
     const transcript = screen.getByLabelText('Voice session transcript');
-    const galaxy = screen.getByRole('region', { name: 'Compact Context galaxy' });
+    const galaxy = voicePanelRole('region', { name: 'Compact Context galaxy' });
     expect(
       transcript.compareDocumentPosition(galaxy) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Use 2D fallback/i })).not.toBeNull();
-    expect(screen.getByRole('button', { name: /Source A/i }).dataset.contextActivity).toBe('true');
+    expect(voicePanelRole('button', { name: /Use 2D fallback/i })).not.toBeNull();
+    expect(voicePanelRole('button', { name: /Source A/i }).dataset.contextActivity).toBe('true');
   });
 
   it('captures one immutable account/chat binding and keeps transcript and default sends pinned to it', async () => {
@@ -569,12 +625,13 @@ describe('VoiceModal hands-free turn-taking', () => {
     expect(Object.isFrozen(binding)).toBe(true);
 
     act(() => useUIStore.setState({ activeChatId: 'chat_changed_after_open' }));
-    fireEvent.click(screen.getByRole('button', { name: /Command Center/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Command Center/i }));
     await waitFor(() => expect(chatHookMocks.useChatMessages).toHaveBeenCalledWith('chat_voice'));
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Outputs',
-      'Live Systems',
-    ]);
+    expect(
+      within(voicePanel())
+        .getAllByRole('tab', { hidden: true })
+        .map((tab) => tab.textContent),
+    ).toEqual(['Outputs', 'Live Systems']);
     expect(screen.getByTitle(/GPT.OSS.20B/i)).not.toBeNull();
     await waitFor(() =>
       expect(bindingPort.dataPort.getRunsForChat).toHaveBeenCalledWith(
@@ -610,9 +667,9 @@ describe('VoiceModal hands-free turn-taking', () => {
     );
 
     await waitFor(() => expect(useVoiceStore.getState().session?.accountId).toBe('account-a'));
-    fireEvent.click(screen.getByRole('button', { name: /Command Center/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Command Center/i }));
 
-    expect(screen.queryByRole('tab')).toBeNull();
+    expect(queryVoicePanelRole('tab')).toBeNull();
     expect(bindingPort.dataPort.getRunsForChat).not.toHaveBeenCalled();
     expect(
       screen.getByText('Command Center is unavailable for this voice session.'),
@@ -644,8 +701,8 @@ describe('VoiceModal hands-free turn-taking', () => {
       }),
     ).toBe(true);
 
-    fireEvent.click(screen.getByRole('button', { name: /Command Center/i }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Open approval in chat' }));
+    fireEvent.click(voicePanelRole('button', { name: /Command Center/i }));
+    fireEvent.click(await findVoicePanelRole('button', { name: 'Open approval in chat' }));
     await waitFor(() => expect(useUIStore.getState().voiceModalOpen).toBe(false));
   });
 
@@ -767,7 +824,7 @@ describe('VoiceModal hands-free turn-taking', () => {
 
     render(<VoiceModal />);
     await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
-    fireEvent.click(screen.getByRole('button', { name: /Command Center/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Command Center/i }));
 
     expect(screen.queryByText('turn 1')).toBeNull();
     expect(screen.queryByText('turn 2')).toBeNull();
@@ -775,15 +832,16 @@ describe('VoiceModal hands-free turn-taking', () => {
     expect(screen.getByText(/first line\s+second line\s+third line/u)).not.toBeNull();
     expect(screen.getByText(longTail)).not.toBeNull();
 
-    const showMore = screen.getAllByRole('button', { name: 'Show more' });
+    const showMore = within(voicePanel()).getAllByRole('button', {
+      name: 'Show more',
+      hidden: true,
+    });
     expect(showMore).toHaveLength(2);
     expect(showMore[0]?.getAttribute('aria-expanded')).toBe('false');
     expect(showMore[0]?.classList.contains('min-h-7')).toBe(true);
-    expect(
-      screen.getByLabelText('Jarvis voice session').querySelector('[class*="text-[8px]"]'),
-    ).toBe(null);
+    expect(voicePanel().querySelector('[class*="text-[8px]"]')).toBe(null);
     fireEvent.click(showMore[0]!);
-    expect(screen.getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe(
+    expect(voicePanelRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe(
       'true',
     );
 
@@ -803,33 +861,35 @@ describe('VoiceModal hands-free turn-taking', () => {
     act(() => emitVoice('voice:start')); // The icon must reflect actual capture, not request acceptance.
     await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
 
-    const close = screen.getByRole('button', { name: 'Close Jarvis voice session' });
+    const close = voicePanelRole('button', { name: 'Close Jarvis voice session' });
     expect(close.getAttribute('title')).toBe('Close');
     expect(close.classList.contains('h-7')).toBe(true);
     expect(close.classList.contains('w-7')).toBe(true);
 
-    const voiceControl = screen.getByRole('button', {
+    const voiceControl = voicePanelRole('button', {
       name: /Listening active|Stop listening/i,
     });
     expect(voiceControl.getAttribute('title')).toBeTruthy();
     expect(voiceControl.classList.contains('min-h-8')).toBe(true);
     expect(voiceControl.classList.contains('min-w-8')).toBe(true);
 
-    fireEvent.click(screen.getByRole('button', { name: /Command Center/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Command Center/i }));
     const region = document.getElementById(
-      screen.getByRole('button', { name: /Command Center/i }).getAttribute('aria-controls')!,
+      voicePanelRole('button', { name: /Command Center/i }).getAttribute('aria-controls')!,
     );
     expect(region?.getAttribute('data-motion-kind')).toBe('spring');
   });
 
-  it('uses theme-owned colors and preserves disclosure text at browser text zoom', async () => {
+  it('keeps the voice shell transparent and preserves disclosure text at browser text zoom', async () => {
     render(<VoiceModal />);
     await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
 
-    const panel = screen.getByLabelText('Jarvis voice session');
-    const disclosure = screen.getByRole('button', { name: /Command Center/i });
-    expect(panel.classList.contains('bg-elevated/95')).toBe(true);
-    expect(panel.className).not.toContain('bg-[#0c0907]');
+    const panel = voicePanel();
+    const disclosure = voicePanelRole('button', { name: /Command Center/i });
+    expect(panel.className).toContain('text-foreground');
+    expect(panel.className).not.toMatch(
+      /\b(?:jarvis-glass-panel|border|bg-elevated|backdrop-blur)\b/,
+    );
     expect(disclosure.classList.contains('text-xs')).toBe(true);
 
     fireEvent.click(disclosure);
@@ -848,9 +908,9 @@ describe('VoiceModal hands-free turn-taking', () => {
     );
     await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
 
-    const disclosure = screen.getByRole('button', { name: /Command Center/i });
+    const disclosure = voicePanelRole('button', { name: /Command Center/i });
     fireEvent.click(disclosure);
-    const outputTab = await screen.findByRole('tab', { name: 'Outputs' });
+    const outputTab = await findVoicePanelRole('tab', { name: 'Outputs' });
     outputTab.focus();
     fireEvent.keyDown(outputTab, { key: 'Escape' });
 
@@ -929,12 +989,12 @@ describe('VoiceModal hands-free turn-taking', () => {
     await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
 
     const artifactsProfile = await measure(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Command Center/i }));
+      fireEvent.click(voicePanelRole('button', { name: /Command Center/i }));
       await screen.findByText('Profile artifact 6');
     });
 
     const toolTaskProfile = await measure(async () => {
-      const liveSystemsTab = screen.getByRole('tab', { name: 'Live Systems' });
+      const liveSystemsTab = voicePanelRole('tab', { name: 'Live Systems' });
       liveSystemsTab.focus();
       fireEvent.keyDown(liveSystemsTab, { key: 'Enter' });
       await screen.findByText('Tool step 6');
@@ -943,12 +1003,12 @@ describe('VoiceModal hands-free turn-taking', () => {
     act(() => useVoiceStore.setState({ state: 'paused' }));
     const listeningProfile = await measure(() => {
       act(() => useVoiceStore.setState({ state: 'listening' }));
-      expect(screen.getByRole('button', { name: 'Stop listening' })).not.toBeNull();
+      expect(voicePanelRole('button', { name: 'Stop listening' })).not.toBeNull();
     });
 
     const speakingProfile = await measure(() => {
       act(() => useVoiceStore.setState({ state: 'speaking' }));
-      expect(screen.getByRole('button', { name: 'Stop response' })).not.toBeNull();
+      expect(voicePanelRole('button', { name: 'Stop response' })).not.toBeNull();
     });
 
     const dragProfile = await measure(() => {
@@ -985,7 +1045,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     render(<VoiceModal />);
     await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
 
-    const panel = screen.getByLabelText('Jarvis voice session');
+    const panel = voicePanel();
     expect(panel.getAttribute('data-reduced-motion')).toBe('true');
     expect(panel.classList.contains('transition-[width]')).toBe(false);
     expect(panel.querySelector('[data-orb-motion="reduced"]')).not.toBeNull();
@@ -993,9 +1053,9 @@ describe('VoiceModal hands-free turn-taking', () => {
     expect(panel.getAttribute('animate')).toBeNull();
     expect(panel.getAttribute('exit')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /Command Center/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Command Center/i }));
     const region = document.getElementById(
-      screen.getByRole('button', { name: /Command Center/i }).getAttribute('aria-controls')!,
+      voicePanelRole('button', { name: /Command Center/i }).getAttribute('aria-controls')!,
     );
     expect(region).not.toBeNull();
     expect(region?.getAttribute('initial')).toBeNull();
@@ -1233,7 +1293,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     window.addEventListener('jarvis:send', send as EventListener);
     try {
       render(<VoiceModal />);
-      fireEvent.click(screen.getByRole('button', { name: /click to talk/i }));
+      fireEvent.click(voicePanelRole('button', { name: /click to talk/i }));
       act(() => {
         emitVoice('voice:final', { text: 'What is two plus two?' });
         emitVoice('voice:turn-end');
@@ -1458,7 +1518,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     render(<VoiceModal />);
 
     act(() => window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_START_EVENT)));
-    fireEvent.click(screen.getByRole('button', { name: /Stop response/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Stop response/i }));
     act(() => emitVoice('voice:final', { text: 'new request send it' }));
 
     await waitFor(() => expect(send).toHaveBeenCalledOnce());

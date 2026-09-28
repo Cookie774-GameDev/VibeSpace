@@ -1248,11 +1248,14 @@ function VoiceModalPanel() {
           } as MotionStyle & { '--jarvis-accent-intensity': string }
         }
         className={cn(
-          'jarvis-voice-panel jarvis-glass-panel fixed right-3 top-3 z-[90] max-h-[calc(100vh-1.5rem)] max-w-[calc(100vw-1.5rem)] overflow-hidden border border-border bg-elevated/95 text-foreground backdrop-blur-sm',
+          'jarvis-voice-panel fixed right-3 top-3 z-[90] max-h-[calc(100vh-1.5rem)] max-w-[calc(100vw-1.5rem)] overflow-hidden text-foreground',
           showCommandCenter && 'is-expanded',
         )}
         id="jarvis-panel"
         aria-label="Jarvis voice session"
+        hidden
+        aria-hidden="true"
+        inert=""
         data-monochrome-surface="voice"
         data-vibespace-owned-chrome="voice"
         data-voice-appearance-state={state}
@@ -1446,6 +1449,9 @@ function VoiceModalPanel() {
           createPortal(
             <form
               aria-label="Jarvis voice mini bar"
+              hidden
+              aria-hidden="true"
+              inert=""
               onSubmit={(event) => {
                 event.preventDefault();
                 const text = miniBarText.trim();

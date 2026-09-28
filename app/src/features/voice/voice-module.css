@@ -32,6 +32,11 @@
   font-size: 14px;
 }
 
+#jarvis-panel[hidden],
+form[aria-label='Jarvis voice mini bar'][hidden] {
+  display: none !important;
+}
+
 .jarvis-voice-panel:has(
   .jarvis-hud-orb[data-provider-accents='true'][data-voice-provider='codex']
 ) {

@@ -52,6 +52,10 @@ Use this order:
 
 Where a color or detail is visible in the image, sample/match it rather than inventing a new value.
 
+## Current voice surface contract
+
+Keep the voice listening panel and optional typed mini bar visually absent while a voice session runs. The mounted voice module continues to own speech and agent behavior, but both surfaces must stay hidden from layout, keyboard focus, and the accessibility tree across all themes. The TopBar is the visible start/stop control. Keep the separate colored screen-edge Aura and its existing provider accents; do not add another voice panel or floating mini bar.
+
 ---
 
 # 3. Visual Character

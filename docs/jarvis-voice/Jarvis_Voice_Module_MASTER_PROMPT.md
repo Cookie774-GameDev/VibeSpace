@@ -1,5 +1,9 @@
 # VibeSpace — Jarvis Voice Module Reference-Clone Master Prompt
 
+## Current runtime contract
+
+Current VibeSpace behavior is edge-Aura-only during voice sessions: keep the voice module mounted for speech and agent lifecycle, but keep the panel and optional mini bar hidden from layout, keyboard focus, and assistive technology across themes. The TopBar remains the visible start/stop control, and the existing screen-edge Aura remains visible. The older panel and reference-matching instructions below are archival design guidance; they do not authorize showing a panel or mini bar in the current runtime unless a later explicit product requirement supersedes this contract.
+
 ## Mission
 
 You are the implementation agent responsible for rebuilding and polishing **only the VibeSpace Jarvis Voice Module** so that its visible UI matches the supplied reference image as closely as technically possible while preserving VibeSpace's existing architecture and all unrelated product behavior.
