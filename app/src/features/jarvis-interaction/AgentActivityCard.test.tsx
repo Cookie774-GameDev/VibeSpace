@@ -147,9 +147,10 @@ describe('AgentActivityCard', () => {
 
     expect(screen.getByText(/Jarvis Runtime/i)).toBeTruthy();
 
+    useUIStore.setState({ activeChatId: 'chat_parent', route: 'chat' });
     fireEvent.click(screen.getByRole('button', { name: /Open chat for Jarvis Runtime/i }));
 
-    expect(useUIStore.getState().activeChatId).toBe('chat_child');
+    expect(useUIStore.getState().activeChatId).toBe('chat_parent');
     expect(useUIStore.getState().route).toBe('chat');
 
     fireEvent.click(screen.getByRole('button', { name: /Dismiss multitask activity/i }));
@@ -194,6 +195,25 @@ describe('AgentActivityCard', () => {
     expect(screen.getByText('2 Working')).toBeTruthy();
   });
 
+  it('counts resume as working only after active work is observed', () => {
+    useJarvisInteractionStore.setState({
+      agentsByChat: {
+        chat_parent: [
+          { ...agentPart.agent, agentId: 'ja_resuming', name: 'Pending resume', status: 'resuming' },
+          { ...agentPart.agent, agentId: 'ja_resumed', name: 'Accepted resume', status: 'resumed' },
+          { ...agentPart.agent, agentId: 'ja_working', name: 'Observed work', status: 'working' },
+        ],
+      },
+    });
+
+    render(<ChatAgentActivityPanel chatId="chat_parent" />);
+
+    expect(screen.getByText('1 Working')).toBeTruthy();
+    expect(screen.getByText('Observed work')).toBeTruthy();
+    expect(screen.queryByText('Pending resume')).toBeNull();
+    expect(screen.queryByText('Accepted resume')).toBeNull();
+  });
+
   it('renders standalone message-level agent cards as compact chat rows', () => {
     render(<AgentActivityCard part={agentPart} />);
 
@@ -202,11 +222,12 @@ describe('AgentActivityCard', () => {
     expect(screen.getByText(/Review runtime modes/i)).toBeTruthy();
     expect(screen.getByText(/Reading context/i)).toBeTruthy();
     expect(screen.getByText(/Google \/ gemini/i)).toBeTruthy();
-    expect(useUIStore.getState().activeChatId).not.toBe('chat_child');
+    useUIStore.setState({ activeChatId: 'chat_parent', route: 'chat' });
+    expect(useUIStore.getState().activeChatId).toBe('chat_parent');
 
     fireEvent.click(screen.getByRole('button', { name: /Open chat for Jarvis Runtime/i }));
 
-    expect(useUIStore.getState().activeChatId).toBe('chat_child');
+    expect(useUIStore.getState().activeChatId).toBe('chat_parent');
     expect(useUIStore.getState().route).toBe('chat');
   });
 

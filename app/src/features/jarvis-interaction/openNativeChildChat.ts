@@ -1,11 +1,24 @@
-import { browserChatStore } from '@/features/browser-chat/browserChatStore';
-import { useUIStore } from '@/stores/ui';
 import type { ChatId } from '@/types/common';
 
-/** Focus a multitask/subagent child thread without destroying the parent tab. */
-export function openNativeChildChat(childChatId: string | ChatId): void {
+export const OPEN_CHILD_CHAT_PANEL_EVENT = 'vibespace:open-child-chat-panel';
+
+export interface OpenChildChatPanelDetail {
+  childChatId: string;
+  parentChatId?: string;
+}
+
+/** Request the child transcript in its parent chat's side panel. */
+export function openNativeChildChat(
+  childChatId: string | ChatId,
+  parentChatId?: string | ChatId,
+): void {
   const id = String(childChatId).trim();
   if (!id) return;
-  browserChatStore.getState().setEngine('native', id);
-  useUIStore.setState({ activeChatId: id, route: 'chat', chatMode: 'chat' });
+  if (typeof window === 'undefined') return;
+  const parentId = parentChatId === undefined ? undefined : String(parentChatId).trim();
+  window.dispatchEvent(
+    new CustomEvent<OpenChildChatPanelDetail>(OPEN_CHILD_CHAT_PANEL_EVENT, {
+      detail: { childChatId: id, ...(parentId ? { parentChatId: parentId } : {}) },
+    }),
+  );
 }

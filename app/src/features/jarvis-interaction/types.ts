@@ -114,6 +114,10 @@ export interface JarvisPermissionRequest {
 
 export type JarvisAgentStatus =
   | 'queued'
+  | 'paused'
+  | 'resuming'
+  | 'resumed'
+  | 'working'
   | 'thinking'
   | 'planning'
   | 'asking_question'

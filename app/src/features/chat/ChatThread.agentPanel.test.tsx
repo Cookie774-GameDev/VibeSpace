@@ -1,18 +1,22 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '@/types/chat';
 import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
+import { useUIStore } from '@/stores/ui';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 const mockState = vi.hoisted(() => ({
   messages: [] as Message[],
+  messagesByChat: {} as Record<string, Message[]>,
   hasOlder: false,
   loadOlder: vi.fn(),
 }));
 
 vi.mock('./hooks', () => ({
-  usePagedChatMessages: () => ({
-    messages: mockState.messages,
+  usePagedChatMessages: (chatId: string | null) => ({
+    messages: chatId
+      ? (mockState.messagesByChat[chatId] ?? mockState.messages)
+      : mockState.messages,
     hasOlder: mockState.hasOlder,
     loadOlder: mockState.loadOlder,
   }),
@@ -41,6 +45,7 @@ const baseAgent = {
 describe('ChatThread agent panel attachment', () => {
   beforeEach(() => {
     mockState.messages = [];
+    mockState.messagesByChat = {};
     mockState.hasOlder = false;
     mockState.loadOlder.mockReset();
     useJarvisInteractionStore.setState({
@@ -48,6 +53,7 @@ describe('ChatThread agent panel attachment', () => {
       planSafeApprovalsByChat: {},
       agentsByChat: {},
     });
+    useUIStore.setState({ activeChatId: 'chat_parent', route: 'chat', chatMode: 'chat' });
   });
 
   it('requests the next bounded database page when the user scrolls to older history', () => {
@@ -145,5 +151,42 @@ describe('ChatThread agent panel attachment', () => {
     expect(screen.getAllByRole('button', { name: /Open chat for/i }).length).toBeGreaterThanOrEqual(
       2,
     );
+  });
+
+  it('records a live Created sub-agent event and opens that child in the parent side panel', () => {
+    mockState.messagesByChat.chat_child_multitask = [
+      {
+        id: 'child_reply' as Message['id'],
+        chat_id: 'chat_child_multitask' as Message['chat_id'],
+        role: 'assistant',
+        parts: [{ kind: 'text', text: 'Child task progress is visible here.' }],
+        created_at: 3,
+        updated_at: 3,
+      },
+    ];
+
+    const view = render(
+      <TooltipProvider>
+        <ChatThread chatId="chat_parent" />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByTestId('subagent-created-event')).toBeNull();
+    act(() => useJarvisInteractionStore.getState().upsertAgent('chat_parent', baseAgent));
+    expect(screen.getByText('Created sub-agent')).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open child side panel for Fix Jarvis runtime plans' }),
+    );
+    expect(
+      screen.getByRole('dialog', { name: 'Child chat for Fix Jarvis runtime plans' }),
+    ).toBeTruthy();
+    expect(screen.getByText('Child task progress is visible here.')).toBeTruthy();
+    expect(useUIStore.getState().activeChatId).toBe('chat_parent');
+    expect(useUIStore.getState().route).toBe('chat');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close child chat' }));
+    expect(screen.queryByTestId('subagent-child-side-panel')).toBeNull();
+    view.unmount();
   });
 });

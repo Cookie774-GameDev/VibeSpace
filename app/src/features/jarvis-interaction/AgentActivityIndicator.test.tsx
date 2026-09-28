@@ -52,6 +52,19 @@ it('uses existing coordination motion while delegated work is running', () => {
   expect(container.querySelector('[data-agent-motion="nine-dot-fold"]')).toBeTruthy();
 });
 
+it('distinguishes pending resume and observed work from paused or accepted-resume states', () => {
+  const { container, rerender } = render(<AgentActivityIndicator agent={{ ...agent, status: 'paused' }} />);
+  for (const status of ['paused', 'resumed'] as const) {
+    rerender(<AgentActivityIndicator agent={{ ...agent, status }} />);
+    expect(container.querySelector('[data-agent-motion]')).toBeNull();
+  }
+
+  for (const status of ['resuming', 'working'] as const) {
+    rerender(<AgentActivityIndicator agent={{ ...agent, status }} />);
+    expect(container.querySelector('[data-agent-motion="nine-dot-fold"]')).toBeTruthy();
+  }
+});
+
 it('follows canonical child messaging and stops when the task completes', () => {
   const { container, rerender } = render(<AgentActivityIndicator agent={agent} />);
   act(() =>

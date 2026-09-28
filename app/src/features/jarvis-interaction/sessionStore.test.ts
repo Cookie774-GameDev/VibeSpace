@@ -28,6 +28,9 @@ describe('Jarvis interaction restart persistence', () => {
   it('fails closed for interrupted agents and clears session-only plan approval', () => {
     const activeStatuses = [
       'queued',
+      'resuming',
+      'resumed',
+      'working',
       'thinking',
       'planning',
       'asking_question',
@@ -41,6 +44,7 @@ describe('Jarvis interaction restart persistence', () => {
       agentsByChat: {
         chat_parent: [
           ...activeStatuses.map((status) => agent(status, status)),
+          { ...agent('paused', 'paused'), currentStep: 'Paused with resumable checkpoint' },
           agent('done', 'done'),
           agent('failed', 'failed'),
           agent('blocked', 'blocked'),
@@ -61,6 +65,7 @@ describe('Jarvis interaction restart persistence', () => {
         })),
       ).toEqual([
         ...activeStatuses.map((agentId) => ({ agentId, status: 'failed' })),
+        { agentId: 'paused', status: 'paused' },
         { agentId: 'done', status: 'done' },
         { agentId: 'failed', status: 'failed' },
         { agentId: 'blocked', status: 'blocked' },
@@ -72,12 +77,16 @@ describe('Jarvis interaction restart persistence', () => {
         error: 'Interrupted by app restart.',
       });
       expect(persisted.agentsByChat.chat_parent?.[activeStatuses.length]).toMatchObject({
+        status: 'paused',
+        currentStep: 'Paused with resumable checkpoint',
+      });
+      expect(persisted.agentsByChat.chat_parent?.[activeStatuses.length + 1]).toMatchObject({
         currentStep: 'Finished',
       });
-      expect(persisted.agentsByChat.chat_parent?.[activeStatuses.length]).not.toHaveProperty(
+      expect(persisted.agentsByChat.chat_parent?.[activeStatuses.length + 1]).not.toHaveProperty(
         'summary',
       );
-      expect(persisted.agentsByChat.chat_parent?.[activeStatuses.length]).not.toHaveProperty(
+      expect(persisted.agentsByChat.chat_parent?.[activeStatuses.length + 1]).not.toHaveProperty(
         'error',
       );
     }

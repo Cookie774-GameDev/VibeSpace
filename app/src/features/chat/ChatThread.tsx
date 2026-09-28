@@ -6,6 +6,8 @@ import { usePagedChatMessages } from './hooks';
 import { MessageBubble } from './MessageBubble';
 import { ChatActivityTimeline, useUnifiedChatActivity } from './activity';
 import { ChatAgentActivityPanel } from '@/features/jarvis-interaction/AgentActivityCard';
+import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
+import type { JarvisChatAgent } from '@/features/jarvis-interaction/types';
 import { JarvisTaskProgressCard } from '@/features/jarvis-runs/JarvisTaskProgressCard';
 import { JarvisMemoryStatus } from '@/features/jarvis-memory/JarvisMemoryStatus';
 import { useJarvisCommandCenterBinding } from '@/features/jarvis-command-center/JarvisCommandCenter';
@@ -28,7 +30,13 @@ import type { JarvisCreatorKind } from '@/features/jarvis-creator/contracts';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import { SIK_EVIDENCE } from '@/lib/jarvis/smoke/evidenceIds';
 import { AgenticConsole, AgenticConsoleErrorBoundary } from './agentic-console';
+import { SubagentChatSidePanel, subagentStatusLabel } from './agentic-console/SubagentsMiniPanel';
 import { CONSOLE_PREFERENCE_EVENT, loadConsolePreferences } from './agentic-console/preferences';
+import {
+  OPEN_CHILD_CHAT_PANEL_EVENT,
+  openNativeChildChat,
+  type OpenChildChatPanelDetail,
+} from '@/features/jarvis-interaction/openNativeChildChat';
 import { useAuthStore } from '@/stores/auth';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import type { ChatModelSelection } from '@/lib/ai/modelSelection';
@@ -52,6 +60,7 @@ const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
 });
 
 const MAX_STREAM_SIZE_PART = 8000;
+const EMPTY_CHAT_AGENTS: JarvisChatAgent[] = [];
 
 export function selectedModelPreview(
   selection: ChatModelSelection,
@@ -279,6 +288,10 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
   const persistedPage = usePagedChatMessages(fixtureMessages ? null : chatId);
   const messages = fixtureMessages ?? persistedPage.messages;
   const chatKey = String(chatId);
+  const [selectedChildChatId, setSelectedChildChatId] = useState<string | null>(null);
+  const storedAgents = useJarvisInteractionStore(
+    (state) => state.agentsByChat[chatKey] ?? EMPTY_CHAT_AGENTS,
+  );
   const commandCenterBinding = useJarvisCommandCenterBinding();
   const authenticatedAccountId = useAuthStore(
     (state) => resolveAccountIdentity(state)?.accountId,
@@ -325,9 +338,9 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
   );
   const hasEarlierRecovery = useJarvisTaskRunStore((state) =>
     Object.values(state.manualRecoveryByRun).some((entry) =>
-      entry.accountId === commandCenterBinding?.hostPort.accountId &&
-      state.runs[entry.runId]?.chatId === chatKey &&
-      !/completed|failed|cancelled/.test(state.runs[entry.runId]?.status ?? ''),
+        entry.accountId === commandCenterBinding?.hostPort.accountId &&
+        state.runs[entry.runId]?.chatId === chatKey &&
+        !/completed|failed|cancelled/.test(state.runs[entry.runId]?.status ?? ''),
     ),
   );
 
@@ -343,6 +356,9 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
     chatId: chatKey,
     mountedCount: INITIAL_CHAT_MESSAGE_WINDOW,
   });
+  useEffect(() => {
+    setSelectedChildChatId(null);
+  }, [chatKey]);
   const classicMountedCount =
     classicWindow.chatId === chatKey ? classicWindow.mountedCount : INITIAL_CHAT_MESSAGE_WINDOW;
   const classicMessages = useMemo(
@@ -351,6 +367,26 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
     [classicMountedCount, consoleView, messages],
   );
   const fallbackAgents = useMemo(() => extractAgentCards(messages), [messages]);
+  const chatAgents = useMemo(() => {
+    const byId = new Map<string, JarvisChatAgent>();
+    for (const agent of fallbackAgents) byId.set(String(agent.agentId), agent);
+    for (const agent of storedAgents) byId.set(String(agent.agentId), agent);
+    return [...byId.values()];
+  }, [fallbackAgents, storedAgents]);
+  useEffect(() => {
+    const openChildPanel = (event: Event) => {
+      const detail = (event as CustomEvent<OpenChildChatPanelDetail>).detail;
+      const childChatId = String(detail?.childChatId ?? '').trim();
+      if (!childChatId || (detail?.parentChatId && detail.parentChatId !== chatKey)) return;
+      if (!chatAgents.some((agent) => String(agent.childChatId) === childChatId)) return;
+      setSelectedChildChatId(childChatId);
+    };
+    window.addEventListener(OPEN_CHILD_CHAT_PANEL_EVENT, openChildPanel);
+    return () => window.removeEventListener(OPEN_CHILD_CHAT_PANEL_EVENT, openChildPanel);
+  }, [chatAgents, chatKey]);
+  const selectedChildAgent = chatAgents.find(
+    (agent) => String(agent.childChatId) === selectedChildChatId,
+  );
   const creatorDraftKind = useMemo(() => detectCreatorDraftKind(messages), [messages]);
   const durableProviderFailure = useMemo(() => {
     const latestUserAt =
@@ -657,149 +693,187 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
   };
 
   return (
-    <div
-      ref={scrollRef}
-      onScroll={onScroll}
-      className="min-h-0 flex-1 overflow-y-auto"
-      role="log"
-      aria-live="polite"
-      aria-relevant="additions text"
-      data-tour="chat-thread"
-      data-pet-chat-message-list={compact ? 'true' : undefined}
-      data-sakura-surface="message-scroll"
-      data-sik-evidence={
-        KERNEL_SMOKE_ENABLED && hasCanonicalRun ? SIK_EVIDENCE.chatRunShell : undefined
-      }
-      data-sik-assistant-count={
-        KERNEL_SMOKE_ENABLED && hasCanonicalRun
-          ? messages.filter((message) => message.role === 'assistant').length
-          : undefined
-      }
-    >
-      {consoleView === 'classic' ? (
-        <AgentChecklistBar
-          run={currentCanonicalRun}
-          events={currentCanonicalState.events}
-          messages={messages}
-          coverageComplete={currentCanonicalState.eventCoverageComplete}
-          coverageTruncated={currentCanonicalState.eventCoverageTruncated}
-          compact={compact}
-        />
-      ) : null}
+    <div className="relative flex min-h-0 flex-1">
       <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="min-h-0 flex-1 overflow-y-auto"
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        data-tour="chat-thread"
+        data-pet-chat-message-list={compact ? 'true' : undefined}
+        data-sakura-surface="message-scroll"
         data-sik-evidence={
-          KERNEL_SMOKE_ENABLED && commandCenterBinding ? SIK_EVIDENCE.chatRuntimeReady : undefined
+          KERNEL_SMOKE_ENABLED && hasCanonicalRun ? SIK_EVIDENCE.chatRunShell : undefined
         }
-        data-sakura-surface="message-stack"
-        className={
-          compact
-            ? 'flex w-full flex-col gap-3 px-2 py-3'
-            : consoleView === 'agentic'
-              ? 'mx-auto flex w-full max-w-[1600px] flex-col gap-4 px-3 py-3'
-              : 'mx-auto flex w-full max-w-[860px] flex-col gap-4 px-4 py-6'
+        data-sik-assistant-count={
+          KERNEL_SMOKE_ENABLED && hasCanonicalRun
+            ? messages.filter((message) => message.role === 'assistant').length
+            : undefined
         }
       >
-        {requiresManualRecovery || hasEarlierRecovery ? (
-          <div role="status" className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
-            Interrupted request · outcome unknown. Review the existing result before retrying.
-          </div>
+        {consoleView === 'classic' ? (
+          <AgentChecklistBar
+            run={currentCanonicalRun}
+            events={currentCanonicalState.events}
+            messages={messages}
+            coverageComplete={currentCanonicalState.eventCoverageComplete}
+            coverageTruncated={currentCanonicalState.eventCoverageTruncated}
+            compact={compact}
+          />
         ) : null}
-        {consoleView === 'agentic' ? (
-          <AgenticConsoleErrorBoundary
-            fallback={
-              <>
-                {/* Fallback only: single classic mini command center if agentic projection fails. */}
-                <AgentChecklistBar
-                  run={currentCanonicalRun}
-                  events={currentCanonicalState.events}
-                  messages={messages}
-                  coverageComplete={currentCanonicalState.eventCoverageComplete}
-                  coverageTruncated={currentCanonicalState.eventCoverageTruncated}
-                  compact={compact}
-                />
-                <ChatActivityTimeline chatId={chatId} compact={compact} />
-                {messages.length === 0 ? (
-                  <ThreadHint />
-                ) : (
-                  <AnimatePresence initial={false}>
-                    {messages.map((message) => (
-                      <MessageBubble
-                        key={message.id}
-                        message={message}
-                        compact={compact}
-                        creatorDraftKind={creatorDraftKind}
-                      />
-                    ))}
-                  </AnimatePresence>
-                )}
-              </>
-            }
-          >
-            {/* Single top mini command center lives inside AgenticConsole SessionHeader. */}
-            <AgenticConsole
-              chatId={String(chatId)}
-              messages={messages}
-              activity={activityEvents}
-              compact={compact}
-              creatorDraftKind={creatorDraftKind}
-              sessionEvidence={agenticSessionEvidence}
-              headerProgress={
-                <AgentChecklistBar
-                  run={currentCanonicalRun}
-                  events={currentCanonicalState.events}
-                  messages={messages}
-                  coverageComplete={currentCanonicalState.eventCoverageComplete}
-                  coverageTruncated={currentCanonicalState.eventCoverageTruncated}
-                  compact={compact}
-                  embedded
-                />
-              }
-              actions={agenticActions}
-            />
-          </AgenticConsoleErrorBoundary>
-        ) : (
-          <>
-            {/* Classic path: one Jarvis session mini command center. */}
-            <ChatActivityTimeline chatId={chatId} compact={compact} />
-            {messages.length === 0 ? (
-              <ThreadHint />
-            ) : (
-              <AnimatePresence initial={false}>
-                {classicMessages.map((message) => (
-                  <MessageBubble
-                    key={message.id}
-                    message={message}
+        <div
+          data-sik-evidence={
+            KERNEL_SMOKE_ENABLED && commandCenterBinding ? SIK_EVIDENCE.chatRuntimeReady : undefined
+          }
+          data-sakura-surface="message-stack"
+          className={
+            compact
+              ? 'flex w-full flex-col gap-3 px-2 py-3'
+              : consoleView === 'agentic'
+                ? 'mx-auto flex w-full max-w-[1600px] flex-col gap-4 px-3 py-3'
+                : 'mx-auto flex w-full max-w-[860px] flex-col gap-4 px-4 py-6'
+          }
+        >
+          {chatAgents.map((agent) => (
+            <div
+              key={`subagent-created-${String(agent.agentId)}`}
+              className="agentic-subagent-created-event"
+              role="status"
+              data-testid="subagent-created-event"
+              data-agent-id={String(agent.agentId)}
+            >
+              <span className="agentic-subagent-created-event__title">Created sub-agent</span>
+              <span className="min-w-0 flex-1 truncate" title={agent.name}>
+                {agent.name}
+              </span>
+              <span className="shrink-0 text-[10px] uppercase text-muted-foreground">
+                {subagentStatusLabel(String(agent.status))}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                data-chat-pane-action="true"
+                aria-label={`Open child side panel for ${agent.name}`}
+                onClick={() => openNativeChildChat(String(agent.childChatId), chatKey)}
+              >
+                View
+              </Button>
+            </div>
+          ))}
+          {requiresManualRecovery || hasEarlierRecovery ? (
+            <div
+              role="status"
+              className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
+            >
+              Interrupted request · outcome unknown. Review the existing result before retrying.
+            </div>
+          ) : null}
+          {consoleView === 'agentic' ? (
+            <AgenticConsoleErrorBoundary
+              fallback={
+                <>
+                  {/* Fallback only: single classic mini command center if agentic projection fails. */}
+                  <AgentChecklistBar
+                    run={currentCanonicalRun}
+                    events={currentCanonicalState.events}
+                    messages={messages}
+                    coverageComplete={currentCanonicalState.eventCoverageComplete}
+                    coverageTruncated={currentCanonicalState.eventCoverageTruncated}
                     compact={compact}
-                    creatorDraftKind={creatorDraftKind}
                   />
-                ))}
-              </AnimatePresence>
-            )}
-          </>
-        )}
-        <ChatAgentActivityPanel
-          chatId={chatId}
-          fallbackAgents={fallbackAgents}
-          compact={compact}
-          className={compact ? 'mx-1 mb-6' : 'sticky bottom-0 z-10 mb-8'}
-        />
-        {!hasCanonicalRun ? (
-          <JarvisTaskProgressCard chatId={String(chatId)} compact={compact} />
-        ) : null}
-        <JarvisMemoryStatus chatId={String(chatId)} />
-        {consoleView === 'agentic' && hasNewActivityBelow ? (
-          <Button
-            type="button"
-            size="sm"
-            className="sticky bottom-4 z-20 mx-auto shadow-soft"
-            aria-label="Jump to latest activity"
-            onClick={jumpToLatest}
-          >
-            <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
-            New activity below
-          </Button>
-        ) : null}
+                  <ChatActivityTimeline chatId={chatId} compact={compact} />
+                  {messages.length === 0 ? (
+                    <ThreadHint />
+                  ) : (
+                    <AnimatePresence initial={false}>
+                      {messages.map((message) => (
+                        <MessageBubble
+                          key={message.id}
+                          message={message}
+                          compact={compact}
+                          creatorDraftKind={creatorDraftKind}
+                        />
+                      ))}
+                    </AnimatePresence>
+                  )}
+                </>
+              }
+            >
+              {/* Single top mini command center lives inside AgenticConsole SessionHeader. */}
+              <AgenticConsole
+                chatId={String(chatId)}
+                messages={messages}
+                activity={activityEvents}
+                compact={compact}
+                creatorDraftKind={creatorDraftKind}
+                sessionEvidence={agenticSessionEvidence}
+                headerProgress={
+                  <AgentChecklistBar
+                    run={currentCanonicalRun}
+                    events={currentCanonicalState.events}
+                    messages={messages}
+                    coverageComplete={currentCanonicalState.eventCoverageComplete}
+                    coverageTruncated={currentCanonicalState.eventCoverageTruncated}
+                    compact={compact}
+                    embedded
+                  />
+                }
+                actions={agenticActions}
+              />
+            </AgenticConsoleErrorBoundary>
+          ) : (
+            <>
+              {/* Classic path: one Jarvis session mini command center. */}
+              <ChatActivityTimeline chatId={chatId} compact={compact} />
+              {messages.length === 0 ? (
+                <ThreadHint />
+              ) : (
+                <AnimatePresence initial={false}>
+                  {classicMessages.map((message) => (
+                    <MessageBubble
+                      key={message.id}
+                      message={message}
+                      compact={compact}
+                      creatorDraftKind={creatorDraftKind}
+                    />
+                  ))}
+                </AnimatePresence>
+              )}
+            </>
+          )}
+          <ChatAgentActivityPanel
+            chatId={chatId}
+            fallbackAgents={fallbackAgents}
+            compact={compact}
+            className={compact ? 'mx-1 mb-6' : 'sticky bottom-0 z-10 mb-8'}
+          />
+          {!hasCanonicalRun ? (
+            <JarvisTaskProgressCard chatId={String(chatId)} compact={compact} />
+          ) : null}
+          <JarvisMemoryStatus chatId={String(chatId)} />
+          {consoleView === 'agentic' && hasNewActivityBelow ? (
+            <Button
+              type="button"
+              size="sm"
+              className="sticky bottom-4 z-20 mx-auto shadow-soft"
+              aria-label="Jump to latest activity"
+              onClick={jumpToLatest}
+            >
+              <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+              New activity below
+            </Button>
+          ) : null}
+        </div>
       </div>
+      {selectedChildAgent ? (
+        <SubagentChatSidePanel
+          agent={selectedChildAgent}
+          onClose={() => setSelectedChildChatId(null)}
+        />
+      ) : null}
     </div>
   );
 }

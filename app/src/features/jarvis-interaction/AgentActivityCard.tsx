@@ -28,19 +28,31 @@ export interface ChatAgentActivityPanelProps {
 
 const STATUS_LABELS: Record<JarvisAgentStatus, string> = {
   queued: 'queued',
-  thinking: 'thinking',
-  planning: 'planning',
+  paused: 'paused',
+  resuming: 'resuming',
+  resumed: 'resumed',
+  working: 'working',
+  thinking: 'working',
+  planning: 'working',
   asking_question: 'asking',
   waiting_permission: 'waiting permission',
-  editing: 'editing',
-  testing: 'testing',
+  editing: 'working',
+  testing: 'working',
   blocked: 'blocked',
-  done: 'done',
+  done: 'completed',
   failed: 'failed',
   cancelled: 'cancelled',
 };
 
-const INACTIVE_STATUSES: JarvisAgentStatus[] = ['blocked', 'done', 'failed', 'cancelled'];
+const INACTIVE_STATUSES: JarvisAgentStatus[] = [
+  'paused',
+  'resuming',
+  'resumed',
+  'blocked',
+  'done',
+  'failed',
+  'cancelled',
+];
 const HEADER_STATUS = 'Live agent work for this chat';
 
 export function AgentActivityCard({ part }: AgentActivityCardProps) {
@@ -52,7 +64,7 @@ export function AgentActivityCard({ part }: AgentActivityCardProps) {
   );
   const agent = liveAgent ?? persistedAgent;
   const openChildChat = () => {
-    openNativeChildChat(agent.childChatId);
+    openNativeChildChat(agent.childChatId, agent.parentChatId);
   };
   return (
     <article
@@ -287,7 +299,7 @@ function AgentActivityRow({
   const filesRead = agent.filesRead ?? [];
   const filesEditing = agent.filesEditing ?? agent.lockedFiles;
   const openChildChat = () => {
-    openNativeChildChat(agent.childChatId);
+    openNativeChildChat(agent.childChatId, agent.parentChatId);
   };
   const diff = agent.diffSummary;
 

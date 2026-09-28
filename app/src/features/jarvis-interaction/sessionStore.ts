@@ -26,6 +26,9 @@ type JarvisInteractionPersistedState = Pick<
 
 const ACTIVE_AGENT_STATUSES = new Set<JarvisChatAgent['status']>([
   'queued',
+  'resuming',
+  'resumed',
+  'working',
   'thinking',
   'planning',
   'asking_question',
@@ -35,6 +38,7 @@ const ACTIVE_AGENT_STATUSES = new Set<JarvisChatAgent['status']>([
 ]);
 const ALL_AGENT_STATUSES = new Set<JarvisChatAgent['status']>([
   ...ACTIVE_AGENT_STATUSES,
+  'paused',
   'blocked',
   'done',
   'failed',

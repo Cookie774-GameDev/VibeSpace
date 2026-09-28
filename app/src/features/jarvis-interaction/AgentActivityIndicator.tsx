@@ -6,7 +6,15 @@ import {
 } from '@/features/chat/agentic-console/AgentMotionIndicator';
 import type { JarvisChatAgent } from './types';
 
-const MOVING_STATUSES = new Set(['queued', 'thinking', 'planning', 'editing', 'testing']);
+const MOVING_STATUSES = new Set([
+  'queued',
+  'resuming',
+  'working',
+  'thinking',
+  'planning',
+  'editing',
+  'testing',
+]);
 
 /** Reuse live runtime evidence; never infer communication from task prose. */
 export function AgentActivityIndicator({ agent }: { agent: JarvisChatAgent }) {
