@@ -19,6 +19,9 @@ describe('Workbench browser isolation', () => {
     expect(browserFramePolicy('https://example.com', 'http://localhost:5173', false).delivery).toBe(
       'embedded',
     );
+    expect(
+      browserFramePolicy('https://vibespaceos.com', 'http://localhost:5173', false).delivery,
+    ).toBe('embedded');
   });
 
   it('uses the official player in web mode without losing its referrer', () => {

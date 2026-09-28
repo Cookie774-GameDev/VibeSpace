@@ -43,7 +43,7 @@ const KNOWN_FRAME_BLOCKED_HOSTS = [
 // Keep web-mode embedding conservative: cross-origin frame denial cannot be
 // observed reliably from an iframe load event. These static pages are verified
 // to render without X-Frame-Options or frame-ancestors restrictions.
-const KNOWN_FRAME_ALLOWED_HOSTS = ['example.com'];
+const KNOWN_FRAME_ALLOWED_HOSTS = ['example.com', 'vibespaceos.com'];
 
 export function normalizeBrowserUrl(input: string): string {
   const raw = input.trim();
