@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { BrowserGoalStatus } from '@/features/browser/BrowserGoalStatus';
 import { BrowserChatHub, resolveChatEngine, useBrowserChatStore } from '@/features/browser-chat';
 import { ChatThread } from './ChatThread';
+import { ChatSelectionToolbar } from './ChatSelectionToolbar';
 import { Composer } from './Composer';
 import { WarmChatWelcome } from './WarmChatWelcome';
 import { ChatBotanicalBackground } from './ChatBotanicalBackground';
@@ -70,6 +71,7 @@ function NativeChatSurface({
   onDragState: (dragging: boolean) => void;
 }) {
   const [outputOpen, setOutputOpen] = useState(false);
+  const conversationRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onOutput = (event: Event) => {
@@ -84,6 +86,7 @@ function NativeChatSurface({
   return (
     <ChatSurfaceLayout>
       <div
+        ref={conversationRef}
         data-testid={`chat-conversation-region-${chatId}`}
         className="chat-pane-conversation relative flex min-h-0 flex-1 flex-col"
         onDragOver={(event) => {
@@ -106,6 +109,7 @@ function NativeChatSurface({
         <ChatBotanicalBackground chatId={chatId} />
         <WarmChatWelcome chatId={chatId} />
         <ChatThread chatId={chatId} fixtureMessages={fixtureMessages} />
+        <ChatSelectionToolbar chatId={chatId} rootRef={conversationRef} />
         <BrowserGoalStatus chatId={chatId} />
       </div>
       <Composer key={chatId} chatId={chatId} />

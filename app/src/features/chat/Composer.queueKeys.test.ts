@@ -10,7 +10,9 @@ const source = readFileSync(resolve(__dirname, 'Composer.tsx'), 'utf8');
 describe('Composer queue keyboard contract', () => {
   it('wires bare Enter to after-tool enqueue while running and idle send otherwise', () => {
     expect(source).toContain("e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey");
-    expect(source).toContain("enqueueCurrentMessage(text, 'after-tool')");
+    expect(source).toContain(
+      "enqueueCurrentMessage(appendChatAnnotations(text, chatAnnotations), 'after-tool')",
+    );
     expect(source).toContain("void handleSend(undefined, { flushMode: 'after-run' })");
   });
 
@@ -27,7 +29,9 @@ describe('Composer queue keyboard contract', () => {
 
   it('wires bare Tab to after-run enqueue while Jarvis is running', () => {
     expect(source).toContain("e.key === 'Tab' &&");
-    expect(source).toContain("enqueueCurrentMessage(text, 'after-run')");
+    expect(source).toContain(
+      "enqueueCurrentMessage(appendChatAnnotations(text, chatAnnotations), 'after-run')",
+    );
   });
 
   it('keeps Esc interrupt-send and adds Esc×3 cancel via jarvis:cancel', () => {

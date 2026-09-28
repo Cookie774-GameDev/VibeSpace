@@ -110,6 +110,12 @@ import {
   updateConsolePreferences,
 } from './agentic-console/preferences';
 import { MicWaveform } from './MicWaveform';
+import {
+  appendChatAnnotations,
+  CHAT_ANNOTATION_ATTACH_EVENT,
+  type ChatAnnotation,
+  type ChatAnnotationAttachDetail,
+} from './chatAnnotations';
 import { formatComposerSendFailure } from './composerSendFailures';
 import { HarnessReadinessGate, useHarnessRuntimeState } from './HarnessReadinessGate';
 import { CodexReadinessGate, useCodexRuntimeState } from './CodexReadinessGate';
@@ -1412,6 +1418,7 @@ export function Composer({
     if (caoRequested) { setCaoPanelOpen(true); useUIStore.getState().setChatMode('chat'); }
   }, [caoRequested]);
   const [text, setText] = useState(() => readNotesComposerDraft(noteScope, String(chatId)).text);
+  const [chatAnnotations, setChatAnnotations] = useState<ChatAnnotation[]>([]);
   const recentChatMessages = usePagedChatMessages(chatId).messages;
   const pendingQuestion = useMemo(() => {
     for (let index = recentChatMessages.length - 1; index >= 0; index -= 1) {
@@ -1626,6 +1633,7 @@ export function Composer({
     input: HTMLTextAreaElement;
     commit: (value: string, caret: number) => void;
   } | null>(null);
+  const annotationCommentRefs = useRef(new Map<string, HTMLTextAreaElement>());
   const slashTypeaheadRef = useRef<SlashCommandTypeaheadRef>(null);
   const [slashComboboxMetadata, setSlashComboboxMetadata] = useState<SlashComboboxMetadata | null>(
     null,
@@ -4396,6 +4404,7 @@ export function Composer({
       );
       return false;
     }
+    const submittedAnnotations = !overrideText && !options.attachments ? chatAnnotations : [];
     const draftText = overrideText ?? text;
     const directlySubmittedDraftEditRevision = handoffDraftEditRevisionRef.current;
     const directlySubmittedVisibleHandoffKey =
@@ -4410,6 +4419,15 @@ export function Composer({
           )
         : null;
     const trimmed = draftText.trim();
+    if (
+      submittedAnnotations.length &&
+      (trimmed.startsWith('/') ||
+        pendingHandoff ||
+        options.handoffPayload)
+    ) {
+      toast.warning('Annotations are ready', 'Send the selected text in an ordinary chat message.');
+      return false;
+    }
     const providerOverride = parseVoiceProviderOverrides(trimmed);
     if (providerOverride) {
       if (
@@ -4451,6 +4469,7 @@ export function Composer({
         attachedPlugins.length === 0 &&
         attachedContexts.length === 0 &&
         attachedNotes.length === 0 &&
+        submittedAnnotations.length === 0 &&
         !pendingHandoff &&
         !options.handoffPayload &&
         !hasConfirmedCommands &&
@@ -4540,7 +4559,17 @@ export function Composer({
       (!overrideText || options.promptForgeApproved)
     ) {
       // Send button defaults to after-run; Enter passes after-tool explicitly.
-      if (!enqueueCurrentMessage(trimmed, options.flushMode ?? 'after-run')) return false;
+      if (
+        !enqueueCurrentMessage(
+          appendChatAnnotations(trimmed, submittedAnnotations),
+          options.flushMode ?? 'after-run',
+        )
+      ) return false;
+      setChatAnnotations((current) =>
+        current.filter((item) => !submittedAnnotations.some((sent) =>
+          sent.id === item.id && sent.text === item.text && sent.comment === item.comment,
+        )),
+      );
       playUiSound('chat_message_send');
       return true;
     }
@@ -4752,6 +4781,14 @@ export function Composer({
             fullyLocal: offlineMode,
           })
         : '';
+    if (
+      submittedAnnotations.length &&
+      (imageCommand || markdownCommand || options.handoffPayload || pendingHandoff)
+    ) {
+      toast.warning('Annotations are ready', 'Send the selected text in an ordinary chat message.');
+      return false;
+    }
+    rawSendText = appendChatAnnotations(rawSendText, submittedAnnotations);
     const handoffPayload =
       options.handoffPayload !== undefined
         ? options.handoffPayload
@@ -4779,7 +4816,7 @@ export function Composer({
       referenceText,
       allAboutMeText,
       imageCommand || handoffPayload || localCommandResult?.localActionContext
-        ? originalRawSendText
+        ? appendChatAnnotations(originalRawSendText, submittedAnnotations)
         : markdownInstruction || rawSendText,
     ]
       .filter(Boolean)
@@ -5055,18 +5092,21 @@ export function Composer({
         oversizedSummary: oversizedAttachment ? oversizedMessageSummary(oversizedAttachment) : null,
       });
       const mentionedAgentIds = resolveMentionedAgentIdsForSend(
-        persistedSendText,
+        submittedAnnotations.length ? originalRawSendText : persistedSendText,
         agents,
         confirmedMentionsForSend,
       );
-      const mentionedPluginIds = extractPluginMentions(persistedSendText, PLUGIN_CATALOG);
+      const mentionedPluginIds = extractPluginMentions(
+        submittedAnnotations.length ? originalRawSendText : persistedSendText,
+        PLUGIN_CATALOG,
+      );
       const pluginIds = Array.from(new Set([...nextAttachedPlugins, ...mentionedPluginIds])).slice(
         0,
         8,
       );
       const messageFilePaths = resolveSendFilePaths({
         attachedFiles: nextAttachedFiles,
-        sendText: persistedSendText,
+        sendText: submittedAnnotations.length ? originalRawSendText : persistedSendText,
         ...(oversizedAttachment ? { oversizedPath: oversizedAttachment.path } : {}),
         supportsFiles: connectionSupportsFileAttachments(selectedForSend),
       });
@@ -5234,6 +5274,11 @@ export function Composer({
         setAttachedPlugins([]);
         setAttachedContexts([]);
         setAttachedNotes([]);
+        setChatAnnotations((current) =>
+          current.filter((item) => !submittedAnnotations.some((sent) =>
+            sent.id === item.id && sent.text === item.text && sent.comment === item.comment,
+          )),
+        );
       }
       const currentVisibleHandoffKey = pendingHandoffRef.current
         ? composerChatHandoffDeliveryKey(
@@ -5779,7 +5824,9 @@ export function Composer({
       !mentionCtx
     ) {
       e.preventDefault();
-      enqueueCurrentMessage(text, 'after-run');
+      if (enqueueCurrentMessage(appendChatAnnotations(text, chatAnnotations), 'after-run')) {
+        setChatAnnotations([]);
+      }
       return;
     }
 
@@ -5791,7 +5838,9 @@ export function Composer({
         confirmedReferenceKeys: confirmedCatalogReferences.map((reference) => reference.key),
       })?.control;
       if (jarvisRunning && text.trim() && !caoControl) {
-        enqueueCurrentMessage(text, 'after-tool');
+        if (enqueueCurrentMessage(appendChatAnnotations(text, chatAnnotations), 'after-tool')) {
+          setChatAnnotations([]);
+        }
       } else {
         void handleSend(undefined, { flushMode: 'after-run' });
       }
@@ -6256,6 +6305,7 @@ export function Composer({
       localOnlyWithoutBackend);
   const hasDraft =
     text.trim().length > 0 ||
+    chatAnnotations.length > 0 ||
     attachedFiles.length > 0 ||
     attachedImages.length > 0 ||
     attachedTerminals.length > 0 ||
@@ -6652,6 +6702,23 @@ export function Composer({
   }, [addDroppedContext, chatId]);
 
   useEffect(() => {
+    const onAttachAnnotation = (event: Event) => {
+      const detail = (event as CustomEvent<ChatAnnotationAttachDetail>).detail;
+      if (detail?.chatId !== String(chatId) || !detail.text?.trim()) return;
+      setChatAnnotations((current) => [
+        ...current,
+        { id: crypto.randomUUID(), text: detail.text.trim(), comment: '' },
+      ]);
+      if (detail.ask) {
+        setText((current) => current.trim() ? current : 'Tell me about this selection.');
+      }
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    window.addEventListener(CHAT_ANNOTATION_ATTACH_EVENT, onAttachAnnotation);
+    return () => window.removeEventListener(CHAT_ANNOTATION_ATTACH_EVENT, onAttachAnnotation);
+  }, [chatId]);
+
+  useEffect(() => {
     const onInsertText = (e: Event) => {
       const detail = (e as CustomEvent<{ text: string; chatId?: string; skillId?: string }>).detail;
       if (detail?.chatId && String(detail.chatId) !== String(chatId)) return;
@@ -6846,6 +6913,88 @@ export function Composer({
         />
       )}
       <div className={cn('composer-frame-body px-3 py-2.5', compact && 'px-3.5 py-3')}>
+        {chatAnnotations.length > 0 && (
+          <div
+            className="mb-2 flex max-h-48 flex-col gap-2 overflow-y-auto"
+            aria-label="Attached chat annotations"
+          >
+            {chatAnnotations.map((annotation, index) => (
+              <div
+                key={annotation.id}
+                data-chat-annotation-card={annotation.id}
+                className="rounded-lg border border-border bg-background/80 px-3 py-2"
+              >
+                <div className="flex items-center justify-between gap-2 text-xs font-medium text-foreground">
+                  <span>Annotation {index + 1}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove annotation ${index + 1}`}
+                    onClick={(event) => {
+                      const input = event.currentTarget
+                        .closest('[data-chat-annotation-card]')
+                        ?.querySelector('textarea');
+                      if (input && questionDictationTargetRef.current?.input === input) {
+                        cleanupQuestionDictation();
+                      }
+                      setChatAnnotations((current) =>
+                        current.filter((item) => item.id !== annotation.id),
+                      );
+                    }}
+                    className="rounded p-1 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <blockquote className="mt-1 max-h-16 overflow-y-auto whitespace-pre-wrap break-words border-l-2 border-accent-copper/50 pl-2 text-xs text-muted-foreground">
+                  {annotation.text}
+                </blockquote>
+                <div className="mt-2 flex items-end gap-1">
+                  <textarea
+                    aria-label={`Comment on annotation ${index + 1}`}
+                    rows={1}
+                    ref={(input) => {
+                      if (input) annotationCommentRefs.current.set(annotation.id, input);
+                      else annotationCommentRefs.current.delete(annotation.id);
+                    }}
+                    placeholder="Add a comment…"
+                    value={annotation.comment}
+                    onChange={(event) => setChatAnnotations((current) =>
+                      current.map((item) => item.id === annotation.id
+                        ? { ...item, comment: event.target.value }
+                        : item),
+                    )}
+                    className="min-h-8 flex-1 resize-y rounded-md border border-border bg-panel px-2 py-1 text-xs text-foreground outline-none focus:border-accent-copper/50"
+                  />
+                  {composerSttEnabled && (
+                    <button
+                      type="button"
+                      aria-label={questionDictationTargetRef.current?.input === annotationCommentRefs.current.get(annotation.id) && sttView.phase !== 'idle'
+                        ? `Stop dictation for annotation ${index + 1}`
+                        : `Dictate comment on annotation ${index + 1}`}
+                      aria-pressed={questionDictationTargetRef.current?.input === annotationCommentRefs.current.get(annotation.id) && sttView.phase !== 'idle'}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        const input = annotationCommentRefs.current.get(annotation.id);
+                        if (!input) return;
+                        toggleStt({
+                          input,
+                          commit: (value) => setChatAnnotations((current) =>
+                            current.map((item) => item.id === annotation.id
+                              ? { ...item, comment: value }
+                              : item),
+                          ),
+                        });
+                      }}
+                      className="rounded-md p-2 text-muted-foreground hover:bg-accent-copper/15 hover:text-foreground"
+                    >
+                      <Mic className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         {chatBackendAffinity?.backend === 'codex' ? (
           <CodexReadinessGate
             requiresTranslation={

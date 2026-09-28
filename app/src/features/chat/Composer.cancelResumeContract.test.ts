@@ -31,8 +31,12 @@ describe('Composer active-request cancel and resume contract', () => {
   });
 
   it('keeps queued messages editable, removable, and dispatchable after the active turn', () => {
-    expect(composerSource).toContain("enqueueCurrentMessage(text, 'after-tool')");
-    expect(composerSource).toContain("enqueueCurrentMessage(text, 'after-run')");
+    expect(composerSource).toContain(
+      "enqueueCurrentMessage(appendChatAnnotations(text, chatAnnotations), 'after-tool')",
+    );
+    expect(composerSource).toContain(
+      "enqueueCurrentMessage(appendChatAnnotations(text, chatAnnotations), 'after-run')",
+    );
     expect(composerSource).toContain('messages={queuedMessages}');
     expect(queueSource).toContain('aria-label="Edit queued message"');
     expect(queueSource).toContain("'Steer queued message'");
