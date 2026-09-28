@@ -10,7 +10,7 @@ use crate::harness::managed_cli_runtime::{
 };
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const OPENCODEX_ENTRYPOINT: &str = "node_modules/@bitkyc08/opencodex/bin/ocx.mjs";
 const OPENCODEX_BUN_EXECUTABLE: &str = "node_modules/@oven/bun-windows-x64/bin/bun.exe";
+const INSTALL_ERROR_TAIL_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedOpenCodexFailureKind {
@@ -56,6 +57,7 @@ impl Drop for CleanupPath {
 struct QuarantinedVersion {
     original: PathBuf,
     quarantine: PathBuf,
+    promoted: bool,
     armed: bool,
 }
 
@@ -77,8 +79,13 @@ impl QuarantinedVersion {
         Ok(Self {
             original: original.to_path_buf(),
             quarantine,
+            promoted: false,
             armed: true,
         })
+    }
+
+    fn mark_promoted(&mut self) {
+        self.promoted = true;
     }
 
     fn move_validated_legacy(
@@ -114,7 +121,8 @@ impl QuarantinedVersion {
     }
 
     fn commit(mut self) {
-        self.commit_with(|path| fs::remove_dir_all(path))
+        self.armed = false;
+        remove_owned_path(&self.quarantine);
     }
 
     fn commit_with<F>(&mut self, remove: F)
@@ -143,7 +151,7 @@ impl QuarantinedVersion {
             .original
             .parent()
             .map(|parent| parent.join(format!(".failed-rollback-{}", nanoid::nanoid!(20))));
-        let moved_failed = if self.original.exists() {
+        let moved_failed = if self.promoted && self.original.exists() {
             failed
                 .as_ref()
                 .is_some_and(|failed| rename(&self.original, failed).is_ok())
@@ -161,6 +169,21 @@ impl QuarantinedVersion {
         } else if let Some(failed) = failed {
             let _ = rename(&failed, &self.original);
         }
+    }
+}
+
+fn remove_owned_path(path: &Path) {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() {
+        if fs::remove_dir(path).is_err() {
+            let _ = fs::remove_file(path);
+        }
+    } else if metadata.is_dir() {
+        let _ = fs::remove_dir_all(path);
+    } else {
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -197,6 +220,62 @@ fn ensure_regular_directory(path: &Path) -> Result<(), ManagedOpenCodexFailure> 
         ));
     }
     Ok(())
+}
+
+fn bounded_stderr_tail<R: Read>(mut stderr: R) -> Vec<u8> {
+    let mut tail = Vec::with_capacity(INSTALL_ERROR_TAIL_BYTES);
+    let mut buffer = [0_u8; 1024];
+    loop {
+        match stderr.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                if read >= INSTALL_ERROR_TAIL_BYTES {
+                    tail.clear();
+                    tail.extend_from_slice(&buffer[read - INSTALL_ERROR_TAIL_BYTES..read]);
+                } else {
+                    let excess = tail
+                        .len()
+                        .saturating_add(read)
+                        .saturating_sub(INSTALL_ERROR_TAIL_BYTES);
+                    if excess > 0 {
+                        tail.drain(..excess);
+                    }
+                    tail.extend_from_slice(&buffer[..read]);
+                }
+            }
+        }
+    }
+    tail
+}
+
+fn frozen_install_failure_message(stderr: &[u8]) -> &'static str {
+    let diagnostic = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if diagnostic.contains("enospc")
+        || diagnostic.contains("no space left")
+        || diagnostic.contains("not enough space")
+    {
+        "OpenCodex install ran out of disk space; free space and retry."
+    } else if diagnostic.contains("401") || diagnostic.contains("403") {
+        "The package registry denied OpenCodex access; check proxy/auth settings and retry."
+    } else if diagnostic.contains("429") {
+        "The package registry is rate-limiting OpenCodex; wait briefly, then retry."
+    } else if diagnostic.contains("404") {
+        "The pinned OpenCodex package was not found; retry later or contact support."
+    } else if ["500", "502", "503", "504"]
+        .iter()
+        .any(|status| diagnostic.contains(status))
+    {
+        "The package registry is temporarily unavailable; check registry.npmjs.org and retry."
+    } else if diagnostic.contains("econnreset")
+        || diagnostic.contains("etimedout")
+        || diagnostic.contains("enotfound")
+        || diagnostic.contains("fetch failed")
+        || diagnostic.contains("network")
+    {
+        "OpenCodex package download failed; check registry.npmjs.org and proxy access, then retry."
+    } else {
+        "OpenCodex frozen install failed; check registry.npmjs.org access and free disk space, then retry."
+    }
 }
 
 fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), ManagedOpenCodexFailure> {
@@ -313,7 +392,7 @@ fn run_frozen_install(
         .env_remove("npm_config_userconfig")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| {
             failure(
@@ -321,11 +400,21 @@ fn run_frozen_install(
                 "Managed OpenCodex frozen install could not start.",
             )
         })?;
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(failure(
+            ManagedOpenCodexFailureKind::Process,
+            "Managed OpenCodex install diagnostics could not be read.",
+        ));
+    };
+    let stderr_reader = thread::spawn(move || bounded_stderr_tail(stderr));
     let started = Instant::now();
     let status = loop {
         if cancellation.load(Ordering::Acquire) {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = stderr_reader.join();
             return Err(failure(
                 ManagedOpenCodexFailureKind::Cancelled,
                 "Managed OpenCodex installation was cancelled.",
@@ -334,6 +423,7 @@ fn run_frozen_install(
         if started.elapsed() >= INSTALL_TIMEOUT {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = stderr_reader.join();
             return Err(failure(
                 ManagedOpenCodexFailureKind::Process,
                 "Managed OpenCodex frozen install timed out.",
@@ -345,6 +435,7 @@ fn run_frozen_install(
             Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = stderr_reader.join();
                 return Err(failure(
                     ManagedOpenCodexFailureKind::Process,
                     "Managed OpenCodex frozen install could not be observed.",
@@ -352,10 +443,11 @@ fn run_frozen_install(
             }
         }
     };
+    let diagnostics = stderr_reader.join().unwrap_or_default();
     if !status.success() {
         return Err(failure(
             ManagedOpenCodexFailureKind::Process,
-            "Managed OpenCodex frozen install failed.",
+            frozen_install_failure_message(&diagnostics),
         ));
     }
     remove_staging_cache(staging)?;
@@ -400,34 +492,22 @@ where
     }
 
     let opencodex_root = managed_base.join("opencodex");
-    let legacy_upgrade = match inspect_managed_runtime(&opencodex_root, &release) {
+    let mut legacy_upgrade = false;
+    let repair_incomplete = match inspect_managed_runtime(&opencodex_root, &release) {
         ready @ ManagedCliReadiness::Ready { .. }
         | ready @ ManagedCliReadiness::ProbeRequired { .. } => return Ok(ready),
-        ManagedCliReadiness::Incomplete { .. }
-            if is_rematerializable_legacy_opencodex(&opencodex_root, &release) =>
-        {
-            true
-        }
         ManagedCliReadiness::Incomplete { .. } => {
-            return Err(failure(
-                ManagedOpenCodexFailureKind::Existing,
-                "Existing managed OpenCodex installation is incomplete.",
-            ));
+            legacy_upgrade = is_rematerializable_legacy_opencodex(&opencodex_root, &release);
+            true
         }
         ManagedCliReadiness::Missing => false,
     };
 
-    on_progress(0.0);
     let bun =
         download_and_install_embedded_bun(&managed_base.join("bun"), cancellation, |progress| {
             on_progress(progress * 0.45)
         })
-        .map_err(|_| {
-            failure(
-                ManagedOpenCodexFailureKind::Bootstrap,
-                "Managed OpenCodex Bun bootstrap failed.",
-            )
-        })?;
+        .map_err(|error| failure(ManagedOpenCodexFailureKind::Bootstrap, error.message))?;
     if bun.version != files.dependency_lock.bun_version {
         return Err(failure(
             ManagedOpenCodexFailureKind::Integrity,
@@ -439,19 +519,6 @@ where
     let versions_root = opencodex_root.join("versions");
     ensure_regular_directory(&versions_root)?;
     let destination = versions_root.join(&release.version);
-    let quarantine = if legacy_upgrade {
-        Some(QuarantinedVersion::move_validated_legacy(
-            &destination,
-            &release,
-        )?)
-    } else if destination.exists() {
-        return Err(failure(
-            ManagedOpenCodexFailureKind::Existing,
-            "Existing managed OpenCodex installation is incomplete.",
-        ));
-    } else {
-        None
-    };
     let staging = versions_root.join(format!(".staging-{}", nanoid::nanoid!(20)));
     fs::create_dir(&staging).map_err(|_| {
         failure(
@@ -528,19 +595,66 @@ where
             "Managed OpenCodex installation was cancelled.",
         ));
     }
+    let mut quarantine = if repair_incomplete {
+        match inspect_managed_runtime(&opencodex_root, &release) {
+            ManagedCliReadiness::Incomplete { .. } => {
+                if legacy_upgrade {
+                    Some(QuarantinedVersion::move_validated_legacy(
+                        &destination,
+                        &release,
+                    )?)
+                } else {
+                    match fs::symlink_metadata(&destination) {
+                        Ok(_) => Some(QuarantinedVersion::move_aside(&destination)?),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(_) => {
+                            return Err(failure(
+                                ManagedOpenCodexFailureKind::Disk,
+                                "Incomplete managed OpenCodex version could not be inspected for repair.",
+                            ));
+                        }
+                    }
+                }
+            }
+            ManagedCliReadiness::Missing => None,
+            ManagedCliReadiness::Ready { .. } | ManagedCliReadiness::ProbeRequired { .. } => {
+                return Err(failure(
+                    ManagedOpenCodexFailureKind::Existing,
+                    "Managed OpenCodex changed while retrying; refresh readiness and retry.",
+                ));
+            }
+        }
+    } else {
+        None
+    };
+    if fs::symlink_metadata(&destination).is_ok() {
+        return Err(failure(
+            ManagedOpenCodexFailureKind::Existing,
+            "Managed OpenCodex version appeared during installation; refresh readiness and retry.",
+        ));
+    }
     fs::rename(&staging, &destination).map_err(|_| {
         failure(
             ManagedOpenCodexFailureKind::Disk,
             "Managed OpenCodex version could not be promoted.",
         )
     })?;
+    if let Some(quarantine) = quarantine.as_mut() {
+        quarantine.mark_promoted();
+    }
     cleanup.disarm();
-    on_progress(1.0);
+    let mut promoted_cleanup = quarantine
+        .is_none()
+        .then(|| CleanupPath(destination.clone()));
     match inspect_managed_runtime(&opencodex_root, &release) {
         readiness @ ManagedCliReadiness::ProbeRequired { .. } => {
             if let Some(quarantine) = quarantine {
                 quarantine.commit();
             }
+            if let Some(cleanup) = promoted_cleanup.take() {
+                cleanup.disarm();
+            }
+            on_progress(1.0);
             Ok(readiness)
         }
         _ => Err(failure(
@@ -553,8 +667,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_lf_bytes, download_and_install_embedded_opencodex, remove_staging_cache,
-        QuarantinedVersion,
+        canonical_lf_bytes, download_and_install_embedded_opencodex,
+        frozen_install_failure_message, remove_staging_cache, QuarantinedVersion,
     };
     use crate::harness::managed_cli_runtime::ManagedCliReadiness;
     use std::fs;
@@ -581,15 +695,29 @@ mod tests {
     }
 
     #[test]
+    fn package_failure_messages_are_actionable_without_exposing_raw_diagnostics() {
+        assert!(
+            frozen_install_failure_message(b"error: fetch failed ECONNRESET")
+                .contains("registry.npmjs.org")
+        );
+        assert!(frozen_install_failure_message(b"HTTP 503").contains("registry.npmjs.org"));
+        assert!(
+            frozen_install_failure_message(b"ENOSPC: no space left on device")
+                .contains("disk space")
+        );
+    }
+
+    #[test]
     fn legacy_quarantine_rolls_back_failed_replacement_atomically() {
         let fixture = temp_dir("legacy-rollback");
         let destination = fixture.join("opencodex/versions/2.36.0");
         fs::create_dir_all(&destination).unwrap();
         fs::write(destination.join("legacy.marker"), b"v1").unwrap();
 
-        let quarantine = QuarantinedVersion::move_aside(&destination).unwrap();
+        let mut quarantine = QuarantinedVersion::move_aside(&destination).unwrap();
         fs::create_dir_all(&destination).unwrap();
         fs::write(destination.join("partial.marker"), b"v2-partial").unwrap();
+        quarantine.mark_promoted();
         drop(quarantine);
 
         assert_eq!(fs::read(destination.join("legacy.marker")).unwrap(), b"v1");
@@ -652,6 +780,7 @@ mod tests {
         let mut quarantine = QuarantinedVersion::move_aside(&destination).unwrap();
         fs::create_dir_all(&destination).unwrap();
         fs::write(destination.join("replacement.marker"), b"v2-partial").unwrap();
+        quarantine.mark_promoted();
         let original = destination.clone();
 
         quarantine.rollback_with(

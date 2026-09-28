@@ -69,6 +69,15 @@ describe('CodexReadinessGate', () => {
     expect(runtime.cancel).toHaveBeenCalledOnce();
   });
 
+  it('shows connection setup without presenting a false zero-percent download', () => {
+    const runtime = manager({ kind: 'connecting', component: 'codex' });
+    render(<CodexReadinessGate manager={runtime} />);
+    expect(screen.getByText('Connecting to Codex downloads…')).toBeTruthy();
+    expect(screen.queryByText(/0%/u)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel installation' }));
+    expect(runtime.cancel).toHaveBeenCalledOnce();
+  });
+
   it('supports contained failure retry and disappears only when both tools are verified', () => {
     const runtime = manager({
       kind: 'failed',

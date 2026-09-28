@@ -109,6 +109,9 @@ enum InstallComponent {
     rename_all_fields = "camelCase"
 )]
 enum InstallEvent {
+    Connecting {
+        component: InstallComponent,
+    },
     Installing {
         component: InstallComponent,
         progress: f64,
@@ -286,9 +289,8 @@ pub async fn managed_codex_runtime_install(
     let result = tauri::async_runtime::spawn_blocking(move || {
         emit(
             &worker_app,
-            InstallEvent::Installing {
+            InstallEvent::Connecting {
                 component: InstallComponent::Codex,
-                progress: 0.0,
             },
         );
         crate::harness::managed_codex_materializer::download_and_install_embedded_codex(
@@ -307,9 +309,8 @@ pub async fn managed_codex_runtime_install(
         .map_err(|failure| failure.message)?;
         emit(
             &worker_app,
-            InstallEvent::Installing {
+            InstallEvent::Connecting {
                 component: InstallComponent::OpenCodex,
-                progress: 0.0,
             },
         );
         crate::harness::managed_opencodex_materializer::download_and_install_embedded_opencodex(
@@ -483,6 +484,13 @@ mod tests {
         assert_eq!(ready["openCodexVersion"], "5.0.0");
         assert_eq!(ready["executableId"], "cli-executable-test");
         assert!(ready.get("executablePath").is_none());
+
+        let connecting = serde_json::to_value(InstallEvent::Connecting {
+            component: InstallComponent::Codex,
+        })
+        .expect("serialize connection state");
+        assert_eq!(connecting["kind"], "connecting");
+        assert_eq!(connecting["component"], "codex");
 
         let progress = serde_json::to_value(InstallEvent::Installing {
             component: InstallComponent::OpenCodex,

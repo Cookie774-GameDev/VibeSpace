@@ -17,6 +17,7 @@ export type CodexRuntimeDetection =
     };
 
 export type ManagedCodexRuntimeEvent =
+  | { kind: 'connecting'; component: 'codex' | 'opencodex' }
   | { kind: 'installing'; component: 'codex' | 'opencodex'; progress: number }
   | { kind: 'ready'; codexVersion: string; openCodexVersion: string; executableId: string; translationRuntime?: CodexTranslationReadiness }
   | { kind: 'failed'; recoverable: boolean; message: string };
@@ -25,6 +26,7 @@ export type CodexRuntimeState =
   | { kind: 'checking' }
   | { kind: 'missing' }
   | { kind: 'incomplete'; reason: string }
+  | { kind: 'connecting'; component: 'codex' | 'opencodex' }
   | { kind: 'installing'; component: 'codex' | 'opencodex'; progress: number }
   | {
       kind: 'ready';
@@ -164,7 +166,13 @@ export function createCodexRuntimeManager(
         void native
           .listen((event) => {
             if (generation !== lifecycle || subscribers.size === 0) return;
-            if (event.kind === 'installing') {
+            if (event.kind === 'connecting') {
+              if (optionalTranslationBase) {
+                publish({ ...optionalTranslationBase, translationRuntime: 'installing' });
+                return;
+              }
+              publish({ kind: 'connecting', component: event.component });
+            } else if (event.kind === 'installing') {
               if (optionalTranslationBase) {
                 publish({ ...optionalTranslationBase, translationRuntime: 'installing' });
                 return;
@@ -218,7 +226,7 @@ export function createCodexRuntimeManager(
         }
         publish(optionalTranslationBase
           ? { ...optionalTranslationBase, translationRuntime: 'installing' }
-          : { kind: 'installing', component: 'codex', progress: 0 });
+          : { kind: 'connecting', component: 'codex' });
         try {
           const detection = await (options?.includeTranslation === true
             ? native.install({ includeTranslation: true }) : native.install());

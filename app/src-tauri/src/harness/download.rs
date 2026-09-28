@@ -23,6 +23,35 @@ pub enum DownloadFailureKind {
     Archive,
 }
 
+/// Convert reqwest's safe error categories into guidance suitable for the UI. Keep URLs,
+/// response bodies, headers, and credentials out of user-visible messages.
+pub(crate) fn request_failure_detail(
+    status: Option<u16>,
+    timed_out: bool,
+    connecting: bool,
+    receiving: bool,
+) -> &'static str {
+    match status {
+        Some(401 | 403) => {
+            "The release server denied access; check your network or proxy policy, then retry."
+        }
+        Some(404) => "The pinned release was not found; retry later or contact support.",
+        Some(429) => "The release server is rate-limiting downloads; wait briefly, then retry.",
+        Some(500..=599) => {
+            "The release server is temporarily unavailable; check network/proxy access and retry."
+        }
+        Some(_) => {
+            "The release server rejected the download; check network/proxy access and retry."
+        }
+        None if timed_out => "The download timed out; check internet/proxy access and retry.",
+        None if connecting => {
+            "Could not connect to the release server; check firewall/proxy access and retry."
+        }
+        None if receiving => "The download stream was interrupted; check network access and retry.",
+        None => "The download request failed; check network/proxy access and retry.",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadFailure {
     pub kind: DownloadFailureKind,
@@ -935,8 +964,8 @@ pub fn opencode_runtime_install_cancel(
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_verified_archive, install_verified_archive, stream_verified_download,
-        DownloadFailureKind,
+        extract_verified_archive, install_verified_archive, request_failure_detail,
+        stream_verified_download, DownloadFailureKind,
     };
     use crate::harness::manifest::OpenCodeRelease;
     use sha2::{Digest, Sha256};
@@ -949,6 +978,17 @@ mod tests {
     use zip::ZipWriter;
 
     static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn request_failure_detail_identifies_http_status_and_retry_action() {
+        assert_eq!(
+            request_failure_detail(Some(503), false, false, false),
+            "The release server is temporarily unavailable; check network/proxy access and retry."
+        );
+        assert!(request_failure_detail(None, true, false, false).contains("timed out"));
+        assert!(request_failure_detail(None, false, true, false).contains("Could not connect"));
+        assert!(request_failure_detail(None, false, false, true).contains("stream was interrupted"));
+    }
 
     struct FixtureRoot(PathBuf);
 

@@ -1,5 +1,6 @@
 use crate::harness::download::{
-    extract_verified_archive, stream_verified_download, DownloadFailure, DownloadFailureKind,
+    extract_verified_archive, request_failure_detail, stream_verified_download, DownloadFailure,
+    DownloadFailureKind,
 };
 use crate::harness::managed_cli_manifest::{embedded_managed_release, ManagedCliKind};
 use crate::harness::managed_cli_runtime::{
@@ -58,6 +59,111 @@ impl Drop for CleanupPath {
         } else {
             fs::remove_file(&self.0)
         };
+    }
+}
+
+struct QuarantinedVersion {
+    original: PathBuf,
+    quarantine: PathBuf,
+    promoted: bool,
+    armed: bool,
+}
+
+impl QuarantinedVersion {
+    fn move_incomplete(
+        original: &Path,
+        managed_root: &Path,
+        release: &crate::harness::managed_cli_manifest::ManagedCliRelease,
+    ) -> Result<Option<Self>, ManagedCodexFailure> {
+        match inspect_managed_runtime(managed_root, release) {
+            ManagedCliReadiness::Incomplete { .. } => {}
+            ManagedCliReadiness::Missing => return Ok(None),
+            ManagedCliReadiness::Ready { .. } | ManagedCliReadiness::ProbeRequired { .. } => {
+                return Err(failure(
+                    ManagedCodexFailureKind::Existing,
+                    "Managed Codex changed while retrying; check readiness and retry.",
+                ));
+            }
+        }
+        match fs::symlink_metadata(original) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => {
+                return Err(failure(
+                    ManagedCodexFailureKind::Disk,
+                    "Incomplete managed Codex version could not be inspected for repair.",
+                ));
+            }
+        }
+        let parent = original.parent().ok_or_else(|| {
+            failure(
+                ManagedCodexFailureKind::Disk,
+                "Managed Codex version path is invalid.",
+            )
+        })?;
+        let quarantine = parent.join(format!(".quarantine-{}", nanoid::nanoid!(20)));
+        fs::rename(original, &quarantine).map_err(|_| {
+            failure(
+                ManagedCodexFailureKind::Disk,
+                "Incomplete managed Codex version could not be preserved for retry.",
+            )
+        })?;
+        Ok(Some(Self {
+            original: original.to_path_buf(),
+            quarantine,
+            promoted: false,
+            armed: true,
+        }))
+    }
+
+    fn mark_promoted(&mut self) {
+        self.promoted = true;
+    }
+
+    fn commit(mut self) {
+        self.armed = false;
+        remove_owned_path(&self.quarantine);
+    }
+}
+
+fn remove_owned_path(path: &Path) {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() {
+        if fs::remove_dir(path).is_err() {
+            let _ = fs::remove_file(path);
+        }
+    } else if metadata.is_dir() {
+        let _ = fs::remove_dir_all(path);
+    } else {
+        let _ = fs::remove_file(path);
+    }
+}
+
+impl Drop for QuarantinedVersion {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if self.promoted && fs::symlink_metadata(&self.original).is_ok() {
+            let failed = self
+                .original
+                .parent()
+                .map(|parent| parent.join(format!(".failed-rollback-{}", nanoid::nanoid!(20))));
+            if let Some(failed) = failed {
+                if fs::rename(&self.original, &failed).is_ok() {
+                    remove_owned_path(&failed);
+                } else {
+                    return;
+                }
+            }
+        }
+        if fs::symlink_metadata(&self.original).is_err()
+            && fs::rename(&self.quarantine, &self.original).is_ok()
+        {
+            self.armed = false;
+        }
     }
 }
 
@@ -199,10 +305,14 @@ fn write_receipt(
 }
 
 /// Materialize only the missing, pinned companion. Existing bytes are never replaced.
-fn install_code_mode_host(
+fn install_code_mode_host<F>(
     root: &Path,
     cancellation: &AtomicBool,
-) -> Result<(), ManagedCodexFailure> {
+    mut on_progress: F,
+) -> Result<(), ManagedCodexFailure>
+where
+    F: FnMut(f64),
+{
     match inspect_codex_code_mode_host(root) {
         Ok(()) => return Ok(()),
         Err(CODEX_CODE_MODE_HOST_MISSING) => {}
@@ -231,14 +341,14 @@ fn install_code_mode_host(
         .timeout(Duration::from_secs(15 * 60)).build()
         .and_then(|client| client.get("https://github.com/openai/codex/releases/download/rust-v0.151.0/codex-code-mode-host-x86_64-pc-windows-msvc.exe").send())
         .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|_| failure(ManagedCodexFailureKind::Network, "Managed Codex helper download failed."))?;
+        .map_err(|error| failure(ManagedCodexFailureKind::Network, request_failure_detail(error.status().map(|status| status.as_u16()), error.is_timeout(), error.is_connect(), error.is_body())))?;
     stream_verified_download(
         response,
         &mut output,
         72_271_664,
         CODEX_CODE_MODE_HOST_SHA256,
         cancellation,
-        |_| {},
+        |progress| on_progress(progress),
     )
     .map_err(map_download_failure)?;
     output.sync_all().map_err(|_| {
@@ -287,6 +397,7 @@ where
             )
         })?;
     let managed_root = managed_base.join("codex");
+    let mut repair_incomplete = false;
     match inspect_managed_runtime(&managed_root, &release) {
         ready @ ManagedCliReadiness::Ready { .. } => return Ok(ready),
         ManagedCliReadiness::Incomplete {
@@ -297,15 +408,11 @@ where
             install_code_mode_host(
                 &managed_root.join("versions").join(&release.version),
                 cancellation,
+                |progress| on_progress(progress * 0.98),
             )?;
             return Ok(inspect_managed_runtime(&managed_root, &release));
         }
-        ManagedCliReadiness::Incomplete { .. } => {
-            return Err(failure(
-                ManagedCodexFailureKind::Existing,
-                "Existing managed Codex installation is incomplete.",
-            ));
-        }
+        ManagedCliReadiness::Incomplete { .. } => repair_incomplete = true,
         ManagedCliReadiness::Missing | ManagedCliReadiness::ProbeRequired { .. } => {}
     }
 
@@ -336,10 +443,15 @@ where
         .get(&release.url)
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|_| {
+        .map_err(|error| {
             failure(
                 ManagedCodexFailureKind::Network,
-                "Managed Codex download request failed.",
+                request_failure_detail(
+                    error.status().map(|status| status.as_u16()),
+                    error.is_timeout(),
+                    error.is_connect(),
+                    error.is_body(),
+                ),
             )
         })?;
     if response.content_length() != Some(release.compressed_bytes) {
@@ -361,7 +473,7 @@ where
     let versions_root = managed_root.join("versions");
     ensure_regular_directory(&versions_root)?;
     let destination = versions_root.join(&release.version);
-    if destination.exists() {
+    if fs::symlink_metadata(&destination).is_ok() && !repair_incomplete {
         return Err(failure(
             ManagedCodexFailureKind::Existing,
             "Existing managed Codex installation is incomplete.",
@@ -390,12 +502,26 @@ where
     extract_verified_archive(&archive_path, &staging, &archive_release, cancellation)
         .map_err(map_download_failure)?;
     on_progress(0.9);
-    install_code_mode_host(&staging, cancellation)?;
+    install_code_mode_host(&staging, cancellation, |progress| {
+        on_progress(0.9 + progress * 0.09)
+    })?;
     write_receipt(&staging, &release)?;
+    on_progress(0.99);
     if cancellation.load(Ordering::Acquire) {
         return Err(failure(
             ManagedCodexFailureKind::Cancelled,
             "Managed Codex installation was cancelled.",
+        ));
+    }
+    let mut quarantine = if repair_incomplete {
+        QuarantinedVersion::move_incomplete(&destination, &managed_root, &release)?
+    } else {
+        None
+    };
+    if fs::symlink_metadata(&destination).is_ok() {
+        return Err(failure(
+            ManagedCodexFailureKind::Existing,
+            "Managed Codex version appeared during installation; retry after readiness refresh.",
         ));
     }
     fs::rename(&staging, &destination).map_err(|_| {
@@ -404,11 +530,25 @@ where
             "Managed Codex version could not be promoted.",
         )
     })?;
+    if let Some(quarantine) = quarantine.as_mut() {
+        quarantine.mark_promoted();
+    }
     staging_cleanup.disarm();
     drop(archive_cleanup);
-    on_progress(1.0);
+    let mut promoted_cleanup = quarantine
+        .is_none()
+        .then(|| CleanupPath(destination.clone()));
     match inspect_managed_runtime(&managed_root, &release) {
-        readiness @ ManagedCliReadiness::Ready { .. } => Ok(readiness),
+        readiness @ ManagedCliReadiness::Ready { .. } => {
+            if let Some(quarantine) = quarantine.take() {
+                quarantine.commit();
+            }
+            if let Some(cleanup) = promoted_cleanup.take() {
+                cleanup.disarm();
+            }
+            on_progress(1.0);
+            Ok(readiness)
+        }
         _ => Err(failure(
             ManagedCodexFailureKind::Integrity,
             "Managed Codex verification failed after installation.",
@@ -418,7 +558,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::download_and_install_embedded_codex;
+    use super::{download_and_install_embedded_codex, QuarantinedVersion};
+    use crate::harness::managed_cli_manifest::{embedded_managed_release, ManagedCliKind};
     use crate::harness::managed_cli_runtime::ManagedCliReadiness;
     use std::fs;
     use std::path::PathBuf;
@@ -441,6 +582,34 @@ mod tests {
             download_and_install_embedded_codex(&fixture, &AtomicBool::new(true), |_| {},).is_err()
         );
         assert!(!fixture.join("codex/versions/0.151.0").exists());
+    }
+
+    #[test]
+    fn incomplete_pinned_version_is_preserved_until_verified_replacement() {
+        let fixture = temp_dir("repair-rollback");
+        let release = embedded_managed_release(ManagedCliKind::Codex, "windows", "x86_64")
+            .expect("embedded release");
+        let managed_root = fixture.join("codex");
+        let destination = managed_root.join("versions").join(&release.version);
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("partial.marker"), b"old-partial").unwrap();
+
+        let mut quarantine =
+            QuarantinedVersion::move_incomplete(&destination, &managed_root, &release)
+                .expect("quarantine incomplete pinned version")
+                .expect("incomplete version exists");
+        assert!(!destination.exists());
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("verified.marker"), b"new-pinned").unwrap();
+        quarantine.mark_promoted();
+        drop(quarantine);
+
+        assert_eq!(
+            fs::read(destination.join("partial.marker")).unwrap(),
+            b"old-partial"
+        );
+        assert!(!destination.join("verified.marker").exists());
+        fs::remove_dir_all(fixture).unwrap();
     }
 
     #[test]

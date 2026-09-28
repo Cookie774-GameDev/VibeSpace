@@ -1,4 +1,6 @@
-use crate::harness::download::{stream_verified_download, DownloadFailure, DownloadFailureKind};
+use crate::harness::download::{
+    request_failure_detail, stream_verified_download, DownloadFailure, DownloadFailureKind,
+};
 use crate::harness::managed_bun_manifest::{embedded_managed_bun_release, ManagedBunRelease};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -81,6 +83,97 @@ impl Drop for CleanupPath {
             } else {
                 fs::remove_file(&self.path)
             };
+        }
+    }
+}
+
+struct QuarantinedVersion {
+    original: PathBuf,
+    quarantine: PathBuf,
+    promoted: bool,
+    armed: bool,
+}
+
+impl QuarantinedVersion {
+    fn move_aside(original: &Path) -> Result<Option<Self>, ManagedBunFailure> {
+        match fs::symlink_metadata(original) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => {
+                return Err(failure(
+                    ManagedBunFailureKind::Disk,
+                    "Incomplete managed Bun version could not be inspected for repair.",
+                ));
+            }
+        }
+        let parent = original.parent().ok_or_else(|| {
+            failure(
+                ManagedBunFailureKind::Disk,
+                "Managed Bun version path is invalid.",
+            )
+        })?;
+        let quarantine = parent.join(format!(".quarantine-{}", nanoid::nanoid!(20)));
+        fs::rename(original, &quarantine).map_err(|_| {
+            failure(
+                ManagedBunFailureKind::Disk,
+                "Incomplete managed Bun version could not be preserved for retry.",
+            )
+        })?;
+        Ok(Some(Self {
+            original: original.to_path_buf(),
+            quarantine,
+            promoted: false,
+            armed: true,
+        }))
+    }
+
+    fn mark_promoted(&mut self) {
+        self.promoted = true;
+    }
+
+    fn commit(mut self) {
+        self.armed = false;
+        remove_owned_path(&self.quarantine);
+    }
+}
+
+fn remove_owned_path(path: &Path) {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() {
+        if fs::remove_dir(path).is_err() {
+            let _ = fs::remove_file(path);
+        }
+    } else if metadata.is_dir() {
+        let _ = fs::remove_dir_all(path);
+    } else {
+        let _ = fs::remove_file(path);
+    }
+}
+
+impl Drop for QuarantinedVersion {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if self.promoted && fs::symlink_metadata(&self.original).is_ok() {
+            let failed = self
+                .original
+                .parent()
+                .map(|parent| parent.join(format!(".failed-rollback-{}", nanoid::nanoid!(20))));
+            if let Some(failed) = failed {
+                if fs::rename(&self.original, &failed).is_ok() {
+                    remove_owned_path(&failed);
+                } else {
+                    return;
+                }
+            }
+        }
+        if fs::symlink_metadata(&self.original).is_err()
+            && fs::rename(&self.quarantine, &self.original).is_ok()
+        {
+            self.armed = false;
         }
     }
 }
@@ -451,14 +544,10 @@ pub fn install_verified_bun_archive(
     cancellation: &AtomicBool,
 ) -> Result<ManagedBunInstall, ManagedBunFailure> {
     verify_archive(archive_path, release, cancellation)?;
+    let mut repair_incomplete = false;
     match inspect_managed_bun(managed_root, release) {
         ManagedBunReadiness::Ready(installed) => return Ok(installed),
-        ManagedBunReadiness::Incomplete(_) => {
-            return Err(failure(
-                ManagedBunFailureKind::Existing,
-                "Existing managed Bun installation is incomplete.",
-            ));
-        }
+        ManagedBunReadiness::Incomplete(_) => repair_incomplete = true,
         ManagedBunReadiness::Missing => {}
     }
 
@@ -539,15 +628,49 @@ pub fn install_verified_bun_archive(
     })?;
     drop(receipt_file);
 
+    let quarantine = match inspect_managed_bun(managed_root, release) {
+        ManagedBunReadiness::Ready(installed) => return Ok(installed),
+        ManagedBunReadiness::Incomplete(_) if repair_incomplete => {
+            QuarantinedVersion::move_aside(&destination)?
+        }
+        ManagedBunReadiness::Missing => None,
+        ManagedBunReadiness::Incomplete(_) => {
+            return Err(failure(
+                ManagedBunFailureKind::Existing,
+                "Managed Bun changed during installation; refresh readiness and retry.",
+            ));
+        }
+    };
+    if fs::symlink_metadata(&destination).is_ok() {
+        return Err(failure(
+            ManagedBunFailureKind::Existing,
+            "Managed Bun version appeared during installation; refresh readiness and retry.",
+        ));
+    }
     fs::rename(&staging, &destination).map_err(|_| {
         failure(
             ManagedBunFailureKind::Disk,
             "Managed Bun version could not be promoted.",
         )
     })?;
+    let mut quarantine = quarantine;
+    if let Some(quarantine) = quarantine.as_mut() {
+        quarantine.mark_promoted();
+    }
     cleanup.disarm();
+    let mut promoted_cleanup = quarantine
+        .is_none()
+        .then(|| CleanupPath::armed(destination.clone()));
     match inspect_managed_bun(managed_root, release) {
-        ManagedBunReadiness::Ready(installed) => Ok(installed),
+        ManagedBunReadiness::Ready(installed) => {
+            if let Some(quarantine) = quarantine.take() {
+                quarantine.commit();
+            }
+            if let Some(mut cleanup) = promoted_cleanup.take() {
+                cleanup.disarm();
+            }
+            Ok(installed)
+        }
         _ => Err(failure(
             ManagedBunFailureKind::Archive,
             "Managed Bun verification failed after installation.",
@@ -653,10 +776,15 @@ where
         .get(&release.url)
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|_| {
+        .map_err(|error| {
             failure(
                 ManagedBunFailureKind::Network,
-                "Managed Bun download request failed.",
+                request_failure_detail(
+                    error.status().map(|status| status.as_u16()),
+                    error.is_timeout(),
+                    error.is_connect(),
+                    error.is_body(),
+                ),
             )
         })?;
     if response.content_length() != Some(release.compressed_bytes) {
@@ -750,6 +878,15 @@ mod tests {
         assert!(matches!(
             inspect_managed_bun(&managed_root, &release),
             ManagedBunReadiness::Incomplete(_)
+        ));
+
+        let repaired =
+            install_verified_bun_archive(&managed_root, &archive, &release, &cancellation)
+                .expect("retry replaces the owned incomplete pinned version");
+        assert_eq!(fs::read(&repaired.executable).unwrap(), executable_bytes);
+        assert!(matches!(
+            inspect_managed_bun(&managed_root, &release),
+            ManagedBunReadiness::Ready(_)
         ));
 
         fs::remove_dir_all(fixture).unwrap();

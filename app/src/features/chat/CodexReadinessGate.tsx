@@ -28,6 +28,14 @@ export function CodexReadinessGate({
       className="mb-2 rounded-lg border border-accent-copper/30 bg-accent-copper/5 px-3 py-2 text-sm"
     >
       {state.kind === 'checking' ? <p>Checking Codex tools…</p> : null}
+      {state.kind === 'connecting' ? (
+        <div className="flex items-center justify-between gap-3">
+          <p>Connecting to {state.component === 'codex' ? 'Codex' : 'OpenCodex'} downloads…</p>
+          <Button type="button" size="sm" variant="ghost" onClick={() => void manager.cancel()}>
+            Cancel installation
+          </Button>
+        </div>
+      ) : null}
       {optionalTranslationOnly ? (
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">

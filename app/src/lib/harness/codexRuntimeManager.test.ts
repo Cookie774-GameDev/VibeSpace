@@ -179,6 +179,8 @@ describe('Codex runtime manager', () => {
     const manager = createCodexRuntimeManager(native);
     const stop = manager.subscribe(() => {});
     await Promise.resolve();
+    listener?.({ kind: 'connecting', component: 'codex' });
+    expect(manager.getSnapshot()).toEqual({ kind: 'connecting', component: 'codex' });
     listener?.({ kind: 'installing', component: 'codex', progress: 7 });
     expect(manager.getSnapshot()).toEqual({
       kind: 'installing',
