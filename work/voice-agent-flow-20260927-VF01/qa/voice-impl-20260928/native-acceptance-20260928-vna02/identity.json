@@ -1,0 +1,80 @@
+{
+  "capturedUtc": "2026-09-28T06:57:30.7148853Z",
+  "branch": "integration/UnifiedChungus-final",
+  "head": "cdb310dd5a17530dcbe8c85a4bf73e265e0de092",
+  "upstream": "origin/UnifiedChungus",
+  "jarvis": {
+    "pid": 17280,
+    "path": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\dual-live-20260912\\target-c2\\debug\\jarvis.exe",
+    "sha256": "F249F39AEE9F550D5D10AC1564526DBF250DAB5988F22A5E2B8D9113B563EF13"
+  },
+  "webView": {
+    "pid": 12248,
+    "parentPid": 17280,
+    "path": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\153.0.4234.48\\msedgewebview2.exe",
+    "profile": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\dual-live-20260912\\profile-c2\\EBWebView",
+    "cdpPort": 9252
+  },
+  "listeners": [
+    {
+      "LocalAddress": "::1",
+      "LocalPort": 5173,
+      "OwningProcess": 32892
+    },
+    {
+      "LocalAddress": "127.0.0.1",
+      "LocalPort": 11434,
+      "OwningProcess": 15196
+    },
+    {
+      "LocalAddress": "127.0.0.1",
+      "LocalPort": 9252,
+      "OwningProcess": 12248
+    }
+  ],
+  "vite": {
+    "pid": 32892,
+    "path": "C:\\Program Files\\nodejs\\node.exe",
+    "commandIsRepoVite": true
+  },
+  "voiceSource": [
+    {
+      "path": "app/src/features/voice/VoiceModal.tsx",
+      "sha256": "9B8BFCA5FC4A1E630A4A4E8C79CE89DB741E851CEF93BA8AFC29D66B07B996E2",
+      "clean": true
+    },
+    {
+      "path": "app/src/features/voice/voiceRouter.ts",
+      "sha256": "9192331A720CA383AAC827530BECBCADDAC83BEDE68E37BDAF3DF4CBC7B3AB2F",
+      "clean": true
+    },
+    {
+      "path": "app/src/features/voice/JarvisVoiceInputService.ts",
+      "sha256": "914C20645DE9FE4A5C0D0BDC8FE947B6CD0BB287F0ACC0CF6417C602AB65687A",
+      "clean": true
+    }
+  ],
+  "cdpTargetInventory": [
+    {
+      "type": "page",
+      "host": "localhost",
+      "path": "/index.html",
+      "route": "dictation",
+      "officialTitle": true,
+      "webSocketDebuggerUrlPresent": true
+    },
+    {
+      "type": "page",
+      "host": "localhost",
+      "path": "/",
+      "route": "chat",
+      "officialTitle": true,
+      "webSocketDebuggerUrlPresent": true
+    }
+  ],
+  "ollama": {
+    "pid": 15196,
+    "present": true,
+    "ownsPort11434": true
+  }
+}

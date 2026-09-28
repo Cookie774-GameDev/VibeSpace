@@ -1,0 +1,49 @@
+{
+  "receiptId": "VNA02-C2-POSTFIX-20260928",
+  "status": "BLOCKED_BEFORE_UI",
+  "branch": "integration/UnifiedChungus-final",
+  "head": "cdb310dd5a17530dcbe8c85a4bf73e265e0de092",
+  "target": "official Instance 2 Tauri WebView, C2 only",
+  "identityEvidence": "identity.json",
+  "reservationRelease": {
+    "released": true,
+    "releasedAtUtc": "2026-09-28T07:00:23.137Z",
+    "scheduler": "VS-CODEX-SCHEDULER-20260928-GC23",
+    "queueRevision": 19,
+    "resultsRevision": 8,
+    "c1Touched": false
+  },
+  "attempts": [
+    {
+      "kind": "shared-harness-preflight",
+      "exitCode": 1,
+      "wallSeconds": 5.587,
+      "result": "refused-before-CDP-attach",
+      "error": "forbidden_ollama_or_11434",
+      "readOnlyFinding": "ollama.exe PID 15196 at D:/VibeSpace-Ollama-X22/bin/ollama.exe owned 127.0.0.1:11434; process and listener were not touched",
+      "coordinatorDisposition": "Root classified the zero-Ollama check as PR31-specific and authorized a narrow direct C2 CDP attempt; shared harness was not changed."
+    },
+    {
+      "kind": "direct-playwright-cdp-attach",
+      "playwrightCore": "1.61.1",
+      "exitCode": 1,
+      "wallSeconds": 3.407,
+      "result": "failed-before-page-selection",
+      "error": "Playwright internal assertion while attaching target type=shared_worker, url origin http://localhost:5173, pid=0 (coreBundle.js _onAttachedToTarget); targetInfo lacked browserContextId",
+      "cdpTargetInventory": [
+        { "type": "page", "route": "dictation", "host": "localhost", "path": "/index.html", "officialTitle": true },
+        { "type": "page", "route": "chat", "host": "localhost", "path": "/", "officialTitle": true }
+      ]
+    }
+  ],
+  "uiActions": [],
+  "micStartAttemptedByTest": false,
+  "settingsChanged": false,
+  "transcriptOrDraftRead": false,
+  "screenshotCaptured": false,
+  "port11434InteractionByTest": false,
+  "appOrPeerProcessStopped": false,
+  "nativeVoiceLifecycle": "unverified: no Playwright page was selected or evaluated; no state snapshot, click, wake, mic, stop or close action",
+  "providerSttTtsAndWorkerResults": "unverified",
+  "limitation": "The official C2 process/profile/CDP/Vite identity remained stable, but Playwright could not attach cleanly because WebView exposed a shared_worker target that causes its CDP attach assertion. The inventory exposed page WebSocket endpoints but no supported clean page-scoped Playwright attachment was established. No retry, shared-worker mutation, app restart, or alternate non-Playwright UI control was attempted."
+}
