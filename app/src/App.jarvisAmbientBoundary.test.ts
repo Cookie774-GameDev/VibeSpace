@@ -13,13 +13,14 @@ describe('App Jarvis ambient boundary', () => {
     );
   });
 
-  it('keeps voice lifecycle headless and uses only the native screen-edge Aura', () => {
+  it('exposes the voice controls alongside the native screen-edge Aura', () => {
     const start = source.indexOf('function VoiceModalHost()');
     const end = source.indexOf('function ActionsPaletteHost()', start);
     const host = source.slice(start, end);
     expect(host).toContain('<JarvisAmbientHost />');
     expect(host).toContain('<VoiceModal />');
-    expect(host).toContain('hidden data-jarvis-voice-lifecycle-only="true" aria-hidden="true"');
+    expect(host).not.toContain('data-jarvis-voice-lifecycle-only');
+    expect(host).not.toContain('aria-hidden="true"');
   });
 });
 

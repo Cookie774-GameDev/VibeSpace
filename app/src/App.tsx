@@ -2080,12 +2080,9 @@ function VoiceModalHost() {
     <>
       <JarvisAmbientHost />
       {open ? (
-        // Voice owns capture/conversation only. The physical-screen Aura is the UI.
-        <div hidden data-jarvis-voice-lifecycle-only="true" aria-hidden="true">
-          <React.Suspense fallback={null}>
-            <VoiceModal />
-          </React.Suspense>
-        </div>
+        <React.Suspense fallback={null}>
+          <VoiceModal />
+        </React.Suspense>
       ) : null}
     </>
   );

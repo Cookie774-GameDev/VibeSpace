@@ -12,7 +12,9 @@ import {
 import { VOICE_REPLY_COOLDOWN_MS } from './voiceTurnCommit';
 import { VOICE_BRIEF_SYSTEM_INSTRUCTION } from './voiceAgentFlow';
 import { dispatchVoiceMainRequest } from './voiceNativeDelegation';
+import { resolveVoiceProviderSelection } from './voiceProviderSelection';
 import { createVoiceSessionBinding } from './voiceSessionBinding';
+import type { ChatId } from '@/types';
 
 type VoiceHandler = (payload?: unknown) => void;
 type MockVoiceChatTarget = {
@@ -44,7 +46,11 @@ const toastMocks = vi.hoisted(() => ({
 const chatRoutingMocks = vi.hoisted(() => ({
   ensureJarvisChatForVoice: vi.fn(async (): Promise<string | null> => 'chat_voice'),
   ensureJarvisChatForProvider: vi.fn(
-    async (..._args: unknown[]): Promise<string | null> => 'chat_voice',
+    async (
+      _provider: string,
+      _title?: string,
+      _options?: { freshVoiceConversation?: boolean; openingId?: string },
+    ): Promise<string | null> => 'chat_voice',
   ),
   focusVoiceChat: vi.fn(),
   resolveVoiceChatTarget: vi.fn(async (text: string): Promise<MockVoiceChatTarget | null> => ({
@@ -339,7 +345,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     const binding = createVoiceSessionBinding({
       sessionId: 'orphaned-voice-session',
       accountId: 'account-a',
-      chatId: 'chat_voice',
+      chatId: 'chat_voice' as ChatId,
       startedAt: Date.now(),
     });
     useVoiceStore.getState().beginSession(binding);
@@ -364,7 +370,9 @@ describe('VoiceModal hands-free turn-taking', () => {
     fireEvent.change(input, { target: { value: 'Check the status' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(send).toHaveBeenCalledOnce());
-    expect(routerMocks.speakWithSettings).toHaveBeenCalledWith('On it.');
+    expect(routerMocks.speakWithSettings).toHaveBeenCalledWith('On it.', {
+      allowBackground: true,
+    });
     expect((send.mock.calls[0]?.[0] as CustomEvent).detail.chatId).toBe('chat_voice');
     expect((input as HTMLInputElement).value).toBe('');
     rendered.unmount();
@@ -407,6 +415,31 @@ describe('VoiceModal hands-free turn-taking', () => {
       );
       expect(useAuthStore.getState().voiceMainAgentProvider).toBe('codex');
     } finally {
+      window.removeEventListener('jarvis:send', send as EventListener);
+    }
+  });
+
+  it('sends a simple Main answer without resolving an unavailable Worker provider', async () => {
+    useAuthStore.getState().setVoiceWorkerProvider('opencode');
+    const resolveRoute = vi.mocked(resolveVoiceProviderSelection);
+    const originalResolve = resolveRoute.getMockImplementation();
+    if (!originalResolve) throw new Error('voice provider test resolver unavailable');
+    resolveRoute.mockImplementation((input) => {
+      if (input.provider === 'opencode') throw new Error('Worker provider unavailable');
+      return originalResolve(input);
+    });
+    const send = vi.fn();
+    window.addEventListener('jarvis:send', send as EventListener);
+    try {
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      act(() => emitVoice('voice:final', { text: 'What day is it send it' }));
+      await waitFor(() => expect(send).toHaveBeenCalledOnce());
+      expect(resolveRoute.mock.calls.map(([input]) => input.provider)).toEqual(['codex']);
+      expect(useAuthStore.getState().voiceWorkerProvider).toBe('opencode');
+      expect(toastMocks.error).not.toHaveBeenCalled();
+    } finally {
+      resolveRoute.mockImplementation(originalResolve);
       window.removeEventListener('jarvis:send', send as EventListener);
     }
   });

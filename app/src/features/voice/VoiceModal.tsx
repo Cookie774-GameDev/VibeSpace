@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { createPortal } from 'react-dom';
-import { AnimatePresence, motion, useMotionValue } from 'motion/react';
+import { AnimatePresence, motion, useMotionValue, type MotionStyle } from 'motion/react';
 import { ChevronDown, ChevronUp, Shield } from 'lucide-react';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
@@ -820,7 +820,9 @@ function VoiceModalPanel() {
       useVoiceStore.getState().setState('thinking');
       // Speak before DB/chat preparation so the acknowledgment is not held
       // behind provider routing or a display-permission prompt.
-      void speakWithSettings('On it.').catch(() => undefined);
+      // Acknowledgment belongs to this submitted turn even if the panel's
+      // lifecycle synchronization has not finished on a fresh open.
+      void speakWithSettings('On it.', { allowBackground: true }).catch(() => undefined);
       voiceFlowActiveRef.current = true;
       const flowGeneration = ++voiceFlowGenerationRef.current;
       void (async () => {
@@ -830,15 +832,10 @@ function VoiceModalPanel() {
         if (!messageText) throw new Error('Say a task after the provider instruction.');
         const mainProvider = parsed?.providers.main ?? auth.voiceMainAgentProvider;
         const workerProvider = parsed?.providers.worker ?? auth.voiceWorkerProvider;
-        // Resolve both live routes before accepting the task. A missing provider
-        // is an error, never a silent fallback to the other saved provider.
+        // Only Main must be available before this turn is sent. Main may answer
+        // directly without a worker; native delegation checks its own route.
         const mainRoute = resolveVoiceProviderSelection({
           provider: mainProvider,
-          options: accessibleModelsRef.current,
-          preferredSelection: auth.chatModelSelection,
-        });
-        resolveVoiceProviderSelection({
-          provider: workerProvider,
           options: accessibleModelsRef.current,
           preferredSelection: auth.chatModelSelection,
         });
@@ -1248,7 +1245,7 @@ function VoiceModalPanel() {
             x: dragX,
             y: dragY,
             '--jarvis-accent-intensity': `${voiceAccentIntensity}%`,
-          } as React.CSSProperties
+          } as MotionStyle & { '--jarvis-accent-intensity': string }
         }
         className={cn(
           'jarvis-voice-panel jarvis-glass-panel fixed right-3 top-3 z-[90] max-h-[calc(100vh-1.5rem)] max-w-[calc(100vw-1.5rem)] overflow-hidden border border-border bg-elevated/95 text-foreground backdrop-blur-sm',
