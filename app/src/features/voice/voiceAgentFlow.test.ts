@@ -1,18 +1,37 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { ChatModelSelection } from '@/lib/ai/modelSelection';
+import type { SendDetail } from '@/lib/ai/runtime';
+import { createVoiceSessionBinding } from './voiceSessionBinding';
 import {
-  buildVoiceMainResultSendDetail,
+  buildVoiceMainRequestSendDetail,
   createVoiceAgentFlow,
   VOICE_BRIEF_SYSTEM_INSTRUCTION,
-  type VoiceMainDelivery,
+  type VoiceAgentRequest,
 } from './voiceAgentFlow';
-import { createVoiceSessionBinding } from './voiceSessionBinding';
-import type { ChatModelSelection } from '@/lib/ai/modelSelection';
+import type { VoiceMainDispatchReceipt } from './voiceNativeDelegation';
 
-const request = {
+const selection = {
+  mode: 'single',
+  providerId: 'openai',
+  modelId: 'gpt-6',
+  connectionId: 'openai-codex',
+} as ChatModelSelection;
+
+const binding = createVoiceSessionBinding({
+  sessionId: 'voice-session-1',
+  accountId: 'account-1',
+  chatId: 'chat-voice' as never,
+  startedAt: 1,
+});
+
+const request: VoiceAgentRequest = {
   chatId: 'chat-voice',
   text: 'Check the failing tests on my screen',
-  mainProvider: 'codex' as const,
-  workerProvider: 'opencode' as const,
+  mainProvider: 'codex',
+  workerProvider: 'opencode',
+  selection,
+  voiceSession: binding,
+  requestId: 'voice-request-1',
 };
 
 function setup() {
@@ -24,189 +43,210 @@ function setup() {
     }),
     persistUser: vi.fn(async () => {
       calls.push('persist');
+      return 'message-1';
     }),
-    captureScreen: vi.fn(async () => ({
-      ok: true as const,
-      attachment: {
-        id: 'screen-1',
-        name: 'screen.jpg',
-        mimeType: 'image/jpeg',
-        data: 'base64-image',
-        size: 12,
-      },
-    })),
-    launchWorker: vi.fn(async () => {
-      calls.push('launch');
-      return { agentId: 'agent-1', childChatId: 'child-1', actualProvider: 'opencode' as const };
+    captureScreen: vi.fn(async () => {
+      calls.push('capture');
+      return {
+        ok: true as const,
+        attachment: {
+          id: 'screen-1',
+          name: 'screen.jpg',
+          mimeType: 'image/jpeg',
+          data: 'base64-image',
+          size: 12,
+        },
+      };
     }),
-    waitForWorker: vi.fn(async () => ({ status: 'done' as const, text: 'Two tests pass.' })),
-    deliverMainResult: vi.fn(async () => {
-      calls.push('main');
+    dispatchMain: vi.fn(async (detail: SendDetail): Promise<VoiceMainDispatchReceipt> => {
+      calls.push('dispatch');
+      return {
+        status: 'accepted',
+        chatId: detail.chatId,
+        cancellationKey: String(detail.cancellationKey),
+      };
     }),
+    createRequestId: vi.fn(() => 'voice-request-generated'),
     reportStatus: vi.fn(),
   };
   return { deps, calls, flow: createVoiceAgentFlow(deps) };
 }
 
-describe('voice agent flow', () => {
-  it('puts the brief instruction and selected provider route on the voice-only runtime send', () => {
-    const selection = {
-      mode: 'single',
-      providerId: 'openai',
-      modelId: 'gpt-5',
-      connectionId: 'openai-codex',
-    } as ChatModelSelection;
-    const delivery: VoiceMainDelivery = {
-      chatId: 'chat-voice',
-      userText: 'Check the tests',
-      mainProvider: 'codex' as const,
-      workerProvider: 'opencode' as const,
-      childChatId: 'chat-child',
-      workerStatus: 'done' as const,
-      workerText: 'Two tests passed.',
-      instruction: VOICE_BRIEF_SYSTEM_INSTRUCTION,
-    };
-    const binding = createVoiceSessionBinding({
-      sessionId: 'voice-session-1',
-      accountId: 'account-1',
-      chatId: 'chat-voice' as never,
-      startedAt: 1,
-    });
-    const voice = buildVoiceMainResultSendDetail({ delivery, selection, voiceSession: binding });
-    const typed = buildVoiceMainResultSendDetail({ delivery, selection });
-
-    expect(voice.speakReply).toBe(true);
-    expect(voice.modelSelectionOverride).toBe(selection);
-    expect(voice.localCommandContext).toContain(VOICE_BRIEF_SYSTEM_INSTRUCTION);
-    expect(voice.structuredContext?.payload).toMatchObject({
+describe('voice Main Agent request', () => {
+  it('builds one Main send with voice-only brevity, selected Main model, worker constraints, and bounded context', () => {
+    const detail = buildVoiceMainRequestSendDetail({
+      chatId: request.chatId,
+      userText: 'Check the failing tests',
+      mainProvider: 'codex',
       workerProvider: 'opencode',
-      workerText: 'Two tests passed.',
+      selection,
+      cancellationKey: 'message-1',
+      requestId: 'voice-request-1',
+      voiceSession: binding,
+      sourceContext: 'Recent source chat context.',
+      priorTaskContext: 'An earlier native task is still running.',
     });
-    expect(typed.speakReply).toBe(false);
-    expect(typed.localCommandContext).not.toContain(VOICE_BRIEF_SYSTEM_INSTRUCTION);
+
+    expect(detail).toMatchObject({
+      chatId: 'chat-voice',
+      text: 'Check the failing tests',
+      cancellationKey: 'message-1',
+      speakReply: true,
+      interactionMode: 'agent',
+      modelSelectionOverride: selection,
+      autoApproveActions: false,
+      accountId: 'account-1',
+      voiceSessionId: 'voice-session-1',
+    });
+    expect(detail.localCommandContext).toContain(VOICE_BRIEF_SYSTEM_INSTRUCTION);
+    expect(detail.localCommandContext).toContain('Answer simple requests directly');
+    expect(detail.localCommandContext).toContain('Cross-provider');
+    expect(detail.structuredContext?.payload).toMatchObject({
+      requestId: 'voice-request-1',
+      mainProvider: 'codex',
+      requestedWorkerProvider: 'opencode',
+      crossProviderNativeSessionUnavailable: true,
+      sourceContext: 'Recent source chat context.',
+      priorTaskContext: 'An earlier native task is still running.',
+    });
   });
 
-  it('acknowledges first, launches one worker with a permitted screen, and forwards its result', async () => {
+  it('does not pre-block a direct Main answer when the worker provider differs', () => {
+    const detail = buildVoiceMainRequestSendDetail({
+      chatId: request.chatId,
+      userText: 'What time is it?',
+      mainProvider: 'codex',
+      workerProvider: 'opencode',
+      selection,
+      cancellationKey: 'message-2',
+      requestId: 'voice-request-2',
+    });
+
+    expect(detail.text).toBe('What time is it?');
+    expect(detail.interactionMode).toBe('agent');
+    expect(detail.localCommandContext).toContain('Answer simple requests directly');
+  });
+
+  it('keeps typed sends free of voice-only brevity and speech controls', () => {
+    const detail = buildVoiceMainRequestSendDetail({
+      chatId: request.chatId,
+      userText: 'Summarize this file',
+      mainProvider: 'codex',
+      workerProvider: 'codex',
+      selection,
+      cancellationKey: 'message-3',
+      requestId: 'voice-request-3',
+      sourceContext: 'The user asked about src/app.ts.',
+    });
+
+    expect(detail.speakReply).toBe(false);
+    expect(detail.localCommandContext).not.toContain(VOICE_BRIEF_SYSTEM_INSTRUCTION);
+    expect(detail.modelSelectionOverride).toBe(selection);
+  });
+
+  it('acknowledges, persists once, captures once, and dispatches the original request once to Main', async () => {
     const { deps, calls, flow } = setup();
-    const outcome = await flow.run(request);
+    const result = await flow.run(request);
 
-    expect(calls[0]).toBe('ack');
-    expect(calls).toEqual(['ack', 'persist', 'launch', 'main']);
+    expect(calls).toEqual(['ack', 'persist', 'capture', 'dispatch']);
+    expect(deps.persistUser).toHaveBeenCalledOnce();
     expect(deps.captureScreen).toHaveBeenCalledWith(request.text, 'opencode');
-    expect(deps.launchWorker).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parentChatId: 'chat-voice',
-        requestedProvider: 'opencode',
-        imageAttachments: [
-          {
-            id: 'screen-1',
-            name: 'screen.jpg',
-            mimeType: 'image/jpeg',
-            data: 'base64-image',
-            size: 12,
-          },
-        ],
-      }),
+    const sent = deps.dispatchMain.mock.calls[0]?.[0];
+    expect(sent).toMatchObject({
+      chatId: 'chat-voice',
+      text: request.text,
+      cancellationKey: 'message-1',
+      imageAttachments: [expect.objectContaining({ id: 'screen-1' })],
+    });
+    expect(sent?.structuredContext?.payload).toMatchObject({ requestId: 'voice-request-1' });
+    expect(result).toMatchObject({
+      status: 'main_accepted',
+      duplicate: false,
+      requestId: 'voice-request-1',
+      cancellationKey: 'message-1',
+    });
+    expect(deps.reportStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'main_accepted' }),
     );
-    expect(deps.deliverMainResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mainProvider: 'codex',
-        workerProvider: 'opencode',
-        workerStatus: 'done',
-        workerText: 'Two tests pass.',
-        instruction: VOICE_BRIEF_SYSTEM_INSTRUCTION,
-      }),
-    );
-    expect(outcome).toMatchObject({ status: 'main_dispatched', actualWorkerProvider: 'opencode' });
+    expect(result).not.toHaveProperty('actualWorkerProvider');
+    expect(result).not.toHaveProperty('childChatId');
   });
 
-  it('does not launch or speak again for repeated final transcripts', async () => {
+  it('deduplicates repeated final transcripts without acknowledging, persisting, capturing, or dispatching twice', async () => {
     const { deps, flow } = setup();
     await flow.run(request);
     const duplicate = await flow.run({
       ...request,
       text: '  Check   the failing tests on my screen. ',
+      requestId: 'different-transcript-id',
     });
 
-    expect(duplicate.duplicate).toBe(true);
-    expect(deps.acknowledge).toHaveBeenCalledTimes(1);
-    expect(deps.launchWorker).toHaveBeenCalledTimes(1);
-    expect(deps.deliverMainResult).toHaveBeenCalledTimes(1);
+    expect(duplicate).toMatchObject({ status: 'main_accepted', duplicate: true });
+    expect(deps.acknowledge).toHaveBeenCalledOnce();
+    expect(deps.persistUser).toHaveBeenCalledOnce();
+    expect(deps.captureScreen).toHaveBeenCalledOnce();
+    expect(deps.dispatchMain).toHaveBeenCalledOnce();
   });
 
-  it('sends text after capture failure and never claims an image was attached', async () => {
+  it('continues with text after screenshot capture failure and tells Main the limitation', async () => {
     const { deps, flow } = setup();
     deps.captureScreen.mockResolvedValueOnce({
       ok: false,
       code: 'permission-denied',
       message: 'Screen capture was not permitted.',
-    } as never);
-    await flow.run(request);
+    });
 
-    expect(deps.launchWorker).toHaveBeenCalledWith(
-      expect.objectContaining({ imageAttachments: [] }),
-    );
-    expect(deps.deliverMainResult).toHaveBeenCalledWith(
-      expect.objectContaining({ captureNotice: 'Screen capture was not permitted.' }),
-    );
-  });
+    const result = await flow.run(request);
+    const sent = deps.dispatchMain.mock.calls[0]?.[0];
 
-  it('reports a launch failure without claiming a worker started', async () => {
-    const { deps, flow } = setup();
-    deps.launchWorker.mockRejectedValueOnce(new Error('provider unavailable'));
-    const outcome = await flow.run({ ...request, text: 'Check the failing tests' });
-
-    expect(outcome.status).toBe('launch_failed');
-    expect(deps.reportStatus).not.toHaveBeenCalledWith(
-      expect.objectContaining({ phase: 'launched' }),
-    );
-    expect(deps.waitForWorker).not.toHaveBeenCalled();
-    expect(deps.deliverMainResult).not.toHaveBeenCalled();
-  });
-
-  it('keeps a failed launch deduplicated for a repeated transcript', async () => {
-    const { deps, flow } = setup();
-    deps.launchWorker.mockRejectedValueOnce(new Error('provider receipt unavailable'));
-    const first = await flow.run({ ...request, text: 'Check the failing tests' });
-    const repeated = await flow.run({ ...request, text: ' Check the failing tests. ' });
-
-    expect(first.status).toBe('launch_failed');
-    expect(repeated).toMatchObject({ status: 'launch_failed', duplicate: true });
-    expect(deps.launchWorker).toHaveBeenCalledTimes(1);
-  });
-
-  it('deduplicates an in-flight worker even after the original 45-second window', async () => {
-    const { deps, flow } = setup();
-    let clock = 1_000;
-    deps.now.mockImplementation(() => clock);
-    let finishWorker!: (outcome: { status: 'done'; text: string }) => void;
-    deps.waitForWorker.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finishWorker = resolve;
-        }),
-    );
-
-    const first = flow.run({ ...request, text: 'Check the failing tests' });
-    await vi.waitFor(() => expect(deps.waitForWorker).toHaveBeenCalledTimes(1));
-    clock += 60_000;
-    const repeated = flow.run({ ...request, text: 'Check the failing tests.' });
-    finishWorker({ status: 'done', text: 'Finished once.' });
-
-    expect((await first).duplicate).toBe(false);
-    expect((await repeated).duplicate).toBe(true);
-    expect(deps.launchWorker).toHaveBeenCalledTimes(1);
-  });
-
-  it('reports delivery failure truthfully after a worker was launched', async () => {
-    const { deps, flow } = setup();
-    deps.deliverMainResult.mockRejectedValueOnce(new Error('main runtime unavailable'));
-    const outcome = await flow.run({ ...request, text: 'Check the failing tests' });
-
-    expect(outcome.status).toBe('delivery_failed');
-    expect(outcome.actualWorkerProvider).toBe('opencode');
+    expect(result.status).toBe('main_accepted');
+    expect(sent?.text).toBe(request.text);
+    expect(sent?.imageAttachments).toBeUndefined();
+    expect(sent?.localCommandContext).toContain('Screen capture was not permitted.');
     expect(deps.reportStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: 'delivery_failed', message: 'main runtime unavailable' }),
+      expect.objectContaining({ phase: 'capture_failed' }),
     );
+  });
+
+  it('does not dispatch if persistence fails', async () => {
+    const { deps, flow } = setup();
+    deps.persistUser.mockRejectedValueOnce(new Error('save failed'));
+
+    const result = await flow.run(request);
+
+    expect(result.status).toBe('persist_failed');
+    expect(deps.dispatchMain).not.toHaveBeenCalled();
+    expect(deps.captureScreen).not.toHaveBeenCalled();
+  });
+
+  it('reports runtime rejection without calling the Main turn accepted', async () => {
+    const { deps, flow } = setup();
+    deps.dispatchMain.mockResolvedValueOnce({
+      status: 'failed',
+      code: 'runtime_timeout',
+      message: 'No runtime acceptance was observed.',
+    });
+
+    const result = await flow.run({ ...request, text: 'Check the tests' });
+
+    expect(result.status).toBe('dispatch_failed');
+    expect(deps.reportStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'dispatch_failed' }),
+    );
+    expect(deps.reportStatus).not.toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'main_accepted' }),
+    );
+  });
+
+  it('does not persist or dispatch an aborted turn', async () => {
+    const { deps, flow } = setup();
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await flow.run({ ...request, signal: controller.signal });
+
+    expect(result.status).toBe('cancelled');
+    expect(deps.persistUser).not.toHaveBeenCalled();
+    expect(deps.dispatchMain).not.toHaveBeenCalled();
   });
 });

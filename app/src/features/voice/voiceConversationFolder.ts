@@ -1,17 +1,138 @@
 import { appDataDir } from '@tauri-apps/api/path';
 import { messageRepo } from '@/lib/db';
-import { createDirectory, writeTextFile } from '@/lib/fs';
+import { createDirectory, readTextFile, writeTextFile } from '@/lib/fs';
 import { isTauri } from '@/lib/utils';
 import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
 import type { ChatId } from '@/types';
+import {
+  listVoiceNativeTasks,
+  type VoiceNativeTaskRecord,
+  type VoiceNativeTaskScope,
+  type VoiceNativeTaskStatus,
+  type VoiceNativeProvider,
+} from './voiceNativeTaskIndex';
 
 export type VoiceConversationFolderResult =
   { ok: true; folder: string; messageCount: number } | { ok: false; error: string };
 
 const pendingWrites = new Map<string, Promise<VoiceConversationFolderResult>>();
 const MAX_CHUNK_CHARS = 300_000;
+const MAX_NATIVE_TASK_REFERENCES = 12;
+const NATIVE_TASK_STATUSES = new Set<VoiceNativeTaskStatus>([
+  'submitted',
+  'launched',
+  'running',
+  'done',
+  'blocked',
+  'failed',
+  'cancelled',
+]);
 
-async function writeConversationSnapshot(chatId: string): Promise<VoiceConversationFolderResult> {
+export interface VoiceConversationNativeTaskReference {
+  requestId: string;
+  parentChatId: string;
+  requestedMainProvider: VoiceNativeProvider;
+  requestedWorkerProvider: VoiceNativeProvider;
+  actualWorkerProvider?: VoiceNativeProvider;
+  actualModelId?: string;
+  nativeTaskId?: string;
+  status: VoiceNativeTaskStatus;
+  updatedAt: string;
+  summary: string;
+}
+
+function toNativeTaskReferences(
+  records: readonly VoiceNativeTaskRecord[],
+  chatId: string,
+): VoiceConversationNativeTaskReference[] {
+  return records
+    .filter((record) => record.parentChatId === chatId)
+    .slice(0, MAX_NATIVE_TASK_REFERENCES)
+    .map((record) => ({
+      requestId: record.requestId,
+      parentChatId: record.parentChatId,
+      requestedMainProvider: record.requestedMainProvider,
+      requestedWorkerProvider: record.requestedWorkerProvider,
+      ...(record.actualWorker
+        ? {
+            actualWorkerProvider: record.actualWorker.provider,
+            ...(record.actualWorker.modelId ? { actualModelId: record.actualWorker.modelId } : {}),
+            nativeTaskId: record.actualWorker.nativeTaskId,
+          }
+        : {}),
+      status: record.status,
+      updatedAt: record.updatedAt,
+      summary: record.summary.slice(0, 180),
+    }));
+}
+
+function isNativeTaskReference(value: unknown): value is VoiceConversationNativeTaskReference {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.requestId === 'string' &&
+    /^[a-zA-Z0-9_-]{1,128}$/u.test(record.requestId) &&
+    typeof record.parentChatId === 'string' &&
+    /^[a-zA-Z0-9_-]{1,128}$/u.test(record.parentChatId) &&
+    (record.requestedMainProvider === 'codex' || record.requestedMainProvider === 'opencode') &&
+    (record.requestedWorkerProvider === 'codex' || record.requestedWorkerProvider === 'opencode') &&
+    (record.actualWorkerProvider === undefined ||
+      record.actualWorkerProvider === 'codex' ||
+      record.actualWorkerProvider === 'opencode') &&
+    (record.actualModelId === undefined ||
+      (typeof record.actualModelId === 'string' && record.actualModelId.length <= 180)) &&
+    (record.nativeTaskId === undefined ||
+      (typeof record.nativeTaskId === 'string' && record.nativeTaskId.length <= 180)) &&
+    typeof record.status === 'string' &&
+    NATIVE_TASK_STATUSES.has(record.status as VoiceNativeTaskStatus) &&
+    typeof record.updatedAt === 'string' &&
+    Number.isFinite(Date.parse(record.updatedAt)) &&
+    typeof record.summary === 'string' &&
+    record.summary.length <= 180
+  );
+}
+
+function safeNativeReferenceSummary(summary: string): string {
+  return summary
+    .replace(/[\u0000-\u001f\u007f]/gu, ' ')
+    .replace(/\b(?:sk|rk|pk)-(?:proj-)?[a-z0-9_-]{16,}\b/giu, '[redacted]')
+    .replace(/\bgithub_pat_[a-z0-9_]{20,}\b/giu, '[redacted]')
+    .replace(/\bgh[pousr]_[a-z0-9_]{20,}\b/giu, '[redacted]')
+    .replace(/\b(bearer|token|api[_-]?key|password|secret)\s*[:=]\s*[^\s,;]+/giu, '$1=[redacted]')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 180);
+}
+
+async function previousNativeTaskReferences(
+  indexPath: string,
+  root: string,
+  chatId: string,
+): Promise<VoiceConversationNativeTaskReference[]> {
+  const read = await readTextFile(indexPath, { root });
+  if (!read.ok || read.content.length > 128_000) return [];
+  try {
+    const parsed: unknown = JSON.parse(read.content);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    const references = (parsed as { nativeTasks?: unknown }).nativeTasks;
+    if (!Array.isArray(references)) return [];
+    return references
+      .filter(isNativeTaskReference)
+      .filter((reference) => reference.parentChatId === chatId)
+      .map((reference) => ({
+        ...reference,
+        summary: safeNativeReferenceSummary(reference.summary),
+      }))
+      .slice(0, MAX_NATIVE_TASK_REFERENCES);
+  } catch {
+    return [];
+  }
+}
+
+async function writeConversationSnapshot(
+  chatId: string,
+  scope?: VoiceNativeTaskScope,
+): Promise<VoiceConversationFolderResult> {
   if (!isTauri)
     return { ok: false, error: 'Voice conversation folders require VibeSpace desktop.' };
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(chatId)) {
@@ -67,10 +188,23 @@ async function writeConversationSnapshot(chatId: string): Promise<VoiceConversat
         updatedAt: agent.updatedAt,
         summary: agent.summary ?? '',
       }));
+    const indexPath = `${folder}/index.json`;
+    let nativeTasks = await previousNativeTaskReferences(indexPath, root, chatId);
+    if (scope) {
+      const listed = await listVoiceNativeTasks(scope);
+      if (listed.ok) nativeTasks = toNativeTaskReferences(listed.records, chatId);
+    }
     const index = await writeTextFile(
-      `${folder}/index.json`,
+      indexPath,
       JSON.stringify(
-        { version: 1, chatId, messageCount: messages.length, chunks: chunks.length, workers },
+        {
+          version: 1,
+          chatId,
+          messageCount: messages.length,
+          chunks: chunks.length,
+          workers,
+          nativeTasks,
+        },
         null,
         2,
       ),
@@ -86,9 +220,10 @@ async function writeConversationSnapshot(chatId: string): Promise<VoiceConversat
 /** Serializes refreshes so an older snapshot cannot overwrite a newer one. */
 export function syncVoiceConversationFolder(
   chatId: string,
+  scope?: VoiceNativeTaskScope,
 ): Promise<VoiceConversationFolderResult> {
   const previous = pendingWrites.get(chatId) ?? Promise.resolve({ ok: false } as const);
-  const next = previous.then(() => writeConversationSnapshot(chatId));
+  const next = previous.then(() => writeConversationSnapshot(chatId, scope));
   pendingWrites.set(chatId, next);
   void next.then(
     () => {

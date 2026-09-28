@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "capturedAtUtc": "2026-09-28T06:10:46.507Z",
+  "agent": "VS-CODEX-VOICE-NATIVE-OPERATOR-20260928-VNA01",
+  "task": "JARVIS-VOICE-NATIVE-ACCEPTANCE-20260928-VNA01",
+  "worktree": "C:/Users/viper/VibeSpace-UnifiedChungus-Final",
+  "branch": "integration/UnifiedChungus-final",
+  "head": "eee963dabf84884516f3783c7b8a86339ecd5f68",
+  "nativeTarget": {
+    "instance": "official C1",
+    "jarvisPid": 19476,
+    "executablePath": "D:/VibeSpace-Testing/MI01-cargo-target/debug/jarvis.exe",
+    "executableSha256": "639EF6C283166EE12AAE2AF084BF6B132B034ED2E53F24426E91AA643E2C7879",
+    "webViewPid": 26784,
+    "webViewParentPid": 19476,
+    "profile": "C:/Users/viper/AppData/Local/ai.jarvis.desktop/EBWebView",
+    "cdpPort": 9223,
+    "cdpListenerPid": 26784,
+    "webViewRuntime": "Edge 153.0.4234.48",
+    "appVersion": "1.5.0",
+    "tauriBridgePresent": true,
+    "targetPage": "http://localhost:5173/?route=chat"
+  },
+  "attestations": [
+    { "atUtc": "2026-09-28T06:03:06.7155563Z", "result": "matched V4C1 reservation; jarvis executable, WebView parent/profile and CDP listener owner verified" },
+    { "atUtc": "2026-09-28T06:07:44.2804429Z", "result": "same identity verified before reattach for cleanup" },
+    { "atUtc": "2026-09-28T06:08:45.9385774Z", "result": "same identity verified before reattach for cleanup" },
+    { "atUtc": "2026-09-28T06:09:44.0531026Z", "result": "same identity verified before final cleanup" }
+  ],
+  "rendererSourceIdentity": {
+    "headAtReceipt": "eee963dabf84884516f3783c7b8a86339ecd5f68",
+    "immutableRendererBundleDigest": null,
+    "note": "The live page and Tauri bridge were attested, but the Vite-served renderer bundle was not independently hashed at attachment time."
+  },
+  "privacy": "No chat content, drafts, transcript text, message bodies, account IDs, or screenshots were recorded."
+}

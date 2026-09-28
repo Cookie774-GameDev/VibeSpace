@@ -1,0 +1,67 @@
+{
+  "requestId": "VOICE-TSC-POST-IMPLEMENTATION-20260928-TO01",
+  "submittedAtUtc": "2026-09-28T05:40:52.8518745Z",
+  "agent": "VS-CODEX-TSC-OPERATOR-20260928-TO01",
+  "task": "JARVIS-VOICE-TSC-ADMISSION-20260928-TO01",
+  "rootChatId": "01a0e363-1680-7333-af43-a3c894d9c49e",
+  "operatorChatId": "01a0e363-1680-7333-af43-a3c894d9c49e",
+  "operatorTaskPath": "/root/operator",
+  "coordinatorChatId": "01a0e3d2-8db8-75c2-9fce-69a2021a842b",
+  "branch": "integration/UnifiedChungus-final",
+  "head": "eee963dabf84884516f3783c7b8a86339ecd5f68",
+  "worktree": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final",
+  "exactCommand": "npx tsc --noEmit --incremental false -p app/tsconfig.json",
+  "workdir": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final",
+  "toolchain": {
+    "node": "v22.22.2",
+    "npm": "11.13.0",
+    "typescript": "5.9.3"
+  },
+  "input": {
+    "fileCount": 3619,
+    "manifestSha256": "DF2A4CCC6EF521A002FCAB620898BC1FE9E30B0F33FB0353C9BF83D597AD17CC",
+    "identityCaptures": [
+      {
+        "path": "work\\voice-agent-flow-20260927-VF01\\qa\\voice-typecheck-20260928\\source-identity-01.json",
+        "capturedAtUtc": "2026-09-28T05:38:32.5409988Z",
+        "headStable": true
+      },
+      {
+        "path": "work\\voice-agent-flow-20260927-VF01\\qa\\voice-typecheck-20260928\\source-identity-02.json",
+        "capturedAtUtc": "2026-09-28T05:38:45.4181593Z",
+        "headStable": true
+      }
+    ],
+    "rootStableSourceSignal": "Root reports revised source stable after close/reopen regression fixed; 4 focused files/63 tests pass at 2026-09-28, no further source edits planned absent typecheck failure."
+  },
+  "outputs": {
+    "emit": "none",
+    "noEmit": true,
+    "incremental": false,
+    "temp": "D:\\VibeSpace-Testing\\voice-tsc-20260928-TO01\\temp",
+    "tempAndTmpSetForThisProcessOnly": true,
+    "log": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\voice-agent-flow-20260927-VF01\\qa\\voice-typecheck-20260928\\typecheck.log",
+    "result": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\work\\voice-agent-flow-20260927-VF01\\qa\\voice-typecheck-20260928\\typecheck.result.json",
+    "sharedOutputsForbidden": [
+      "app/dist/**",
+      "TypeScript .tsbuildinfo artifacts"
+    ]
+  },
+  "instance": "none; code-only typecheck",
+  "resourceEstimate": {
+    "priorComparableRamPeakMiB": 900,
+    "priorComparableCommitPeakMiB": 1200,
+    "source": "CR01-TSC-POST-RUNTIME-20260928-R2 preflight inputs for same command",
+    "evidence": "Prior preflight passed and command exited 0 on a different manifest; these values were estimates, not measured runtime whole-tree peaks.",
+    "coordinatorAction": "GC23 must accept these as a credible bounded estimate or replace with a credible whole-tree estimate; if unknown, leave request blocked.",
+    "otherReservationsAtLastQueueRead": "0 active grants, 0/0 MiB at queue revision 13; refresh at admission."
+  },
+  "acceptance": [
+    "persisted coordinator grant exactly matches request, input digest, command and output/temp scope",
+    "immediate safe-fast-fix heavy_job_preflight.py passes using coordinator values",
+    "command exits 0 and produces no app output artifacts",
+    "post-run source identity matches pre-run manifest SHA"
+  ],
+  "launchRule": "Do not launch before explicit persisted GC23 grant and passing immediate preflight.",
+  "nextAction": "Await coordinator decision; if granted, refresh source identity and resource/output ownership before preflight/launch; otherwise report exact blocker."
+}

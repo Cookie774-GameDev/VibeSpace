@@ -18,6 +18,7 @@ import {
 } from '@/features/chat/jarvisChatIntent';
 import { resolveChatBackendAffinity } from '@/lib/ai/backend/chatBackend';
 import type { VoiceAgentProvider } from './voiceProviderSelection';
+import { isVoiceConversationInScope } from './voiceTaskCoordinator';
 
 export interface VoiceChatTarget {
   chatId: ChatId;
@@ -252,7 +253,7 @@ export async function ensureJarvisChatForProvider(
     const find = async () => {
       const scoped = await listScopedChats(captured.workspaceId, captured.projectId);
       if (options.freshVoiceConversation) return { scoped, existing: undefined };
-      const existing = scoped
+      const providerChats = scoped
         .filter((chat) => isJarvisChat(chat, useAgentStore.getState().agents))
         .filter((chat) => {
           try {
@@ -265,8 +266,22 @@ export async function ensureJarvisChatForProvider(
           } catch {
             return false;
           }
-        })
-        .sort((a, b) => b.updated_at - a.updated_at)[0];
+        });
+      const voiceScope = {
+        accountId: captured.accountId,
+        workspaceId: String(captured.workspaceId),
+        projectId: captured.projectId ? String(captured.projectId) : null,
+      };
+      // A newer ordinary Jarvis chat must not replace the user's voice
+      // conversation. The title fallback keeps pre-index voice chats resumable.
+      const indexedVoiceChats = providerChats.filter((chat) =>
+        isVoiceConversationInScope(voiceScope, String(chat.id)),
+      );
+      const existing = (
+        indexedVoiceChats.length
+          ? indexedVoiceChats
+          : providerChats.filter((chat) => /^Jarvis Voice(?:\s|$)/iu.test(chat.title))
+      ).sort((a, b) => b.updated_at - a.updated_at)[0];
       return { scoped, existing };
     };
     let resolved = await find();

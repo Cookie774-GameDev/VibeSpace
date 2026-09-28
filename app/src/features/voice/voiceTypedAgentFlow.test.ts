@@ -1,21 +1,26 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  createMessage: vi.fn(async () => undefined),
-  listByChat: vi.fn(async (chatId: string) =>
-    chatId === 'child'
-      ? [{ role: 'assistant', parts: [{ kind: 'text', text: 'Finished the task.' }] }]
-      : [{ role: 'user', parts: [{ kind: 'text', text: 'Earlier context' }] }],
-  ),
-  launch: vi.fn(async () => ({ agentId: 'agent', childChatId: 'child', agents: [] })),
+  createMessage: vi.fn(async () => ({ id: 'typed-message' })),
+  listByChat: vi.fn(async () => [
+    { role: 'user', parts: [{ kind: 'text', text: 'Earlier context' }] },
+  ]),
+  dispatch: vi.fn(async (detail: import('@/lib/ai/runtime').SendDetail) => {
+    window.dispatchEvent(new CustomEvent('jarvis:send', { detail }));
+    return {
+      status: 'accepted' as const,
+      chatId: detail.chatId,
+      cancellationKey: String(detail.cancellationKey),
+    };
+  }),
   mainSetter: vi.fn(),
   workerSetter: vi.fn(),
   info: vi.fn(),
   warning: vi.fn(),
   error: vi.fn(),
   capture: vi.fn(async () => ({
-    ok: false,
-    code: 'capture-unavailable',
+    ok: false as const,
+    code: 'capture-unavailable' as const,
     message: 'Text sent.',
   })),
   supportsVision: vi.fn(() => true),
@@ -24,33 +29,23 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/db', () => ({
   messageRepo: { create: mocks.createMessage, listByChat: mocks.listByChat },
 }));
-vi.mock('@/features/jarvis-interaction/agentRunner', () => ({
-  launchJarvisChatAgent: mocks.launch,
+vi.mock('./voiceNativeDelegation', () => ({
+  buildVoiceNativeDelegationGuidance: ({
+    requestedWorkerProvider,
+  }: {
+    requestedWorkerProvider: string;
+  }) => 'Answer directly or use one native ' + requestedWorkerProvider + ' worker.',
+  dispatchVoiceMainRequest: mocks.dispatch,
 }));
-vi.mock('@/features/jarvis-interaction/sessionStore', () => ({
-  useJarvisInteractionStore: {
-    getState: () => ({
-      agentsForChat: () => [
-        {
-          agentId: 'agent',
-          status: 'done',
-          harnessSessionId: 'native-worker-session',
-          summary: 'Finished the task.',
-        },
-      ],
-    }),
-    subscribe: () => () => undefined,
-  },
-}));
-vi.mock('@/features/voice/voiceChatRouting', () => ({
+vi.mock('./voiceChatRouting', () => ({
   ensureJarvisChatForProvider: vi.fn(async () => 'typed-main'),
   focusVoiceChat: vi.fn(),
 }));
-vi.mock('@/features/voice/voiceScreenCapture', () => ({
+vi.mock('./voiceScreenCapture', () => ({
   captureVoiceScreenAttachment: mocks.capture,
 }));
 vi.mock('@/lib/ai/vision', () => ({ modelSupportsVision: mocks.supportsVision }));
-vi.mock('@/features/voice/voiceProviderSelection', () => ({
+vi.mock('./voiceProviderSelection', () => ({
   resolveVoiceProviderSelection: vi.fn(({ provider }) => ({
     provider,
     modelLabel: provider,
@@ -90,7 +85,7 @@ afterEach(() => {
 });
 
 describe('typed one-request provider override', () => {
-  it('routes one worker and a text-only Main result without changing either saved default', async () => {
+  it('sends one Main Agent turn, preserves source context, and leaves saved defaults alone', async () => {
     const events: CustomEvent[] = [];
     const onSend = (event: Event) => events.push(event as CustomEvent);
     window.addEventListener('jarvis:send', onSend);
@@ -104,49 +99,48 @@ describe('typed one-request provider override', () => {
         options: [],
         sourceChatId: 'source',
       });
-      await vi.waitFor(() => expect(events).toHaveLength(1));
       expect(routedChatId).toBe('typed-main');
-      expect(mocks.launch).toHaveBeenCalledTimes(1);
-      expect(mocks.launch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workerProvider: 'opencode',
-          recordParentCommand: false,
-          task: expect.stringContaining('Earlier context'),
-        }),
-      );
+      expect(mocks.dispatch).toHaveBeenCalledOnce();
+      expect(mocks.createMessage).toHaveBeenCalledOnce();
+      expect(events).toHaveLength(1);
       expect(events[0]?.detail).toMatchObject({
         chatId: 'typed-main',
+        text: 'Check this task',
         speakReply: false,
+        interactionMode: 'agent',
+        cancellationKey: 'typed-message',
         modelSelectionOverride: { connectionId: 'openai-codex' },
       });
+      expect(JSON.stringify(events[0]?.detail.structuredContext)).toContain('opencode');
+      expect(JSON.stringify(events[0]?.detail.structuredContext)).toContain('Earlier context');
       expect(events[0]?.detail.localCommandContext).not.toContain(VOICE_BRIEF_SYSTEM_INSTRUCTION);
       expect(mocks.mainSetter).not.toHaveBeenCalled();
       expect(mocks.workerSetter).not.toHaveBeenCalled();
+      expect(mocks.info).toHaveBeenCalledWith('Main Agent routed', 'Sent to Codex.');
     } finally {
       window.removeEventListener('jarvis:send', onSend);
     }
   });
 
-  it('keeps the typed draft unaccepted when the worker fails to launch', async () => {
-    mocks.launch.mockRejectedValueOnce(new Error('worker unavailable'));
-
+  it('keeps the typed draft unaccepted when the Main runtime rejects dispatch', async () => {
+    mocks.dispatch.mockResolvedValueOnce({ status: 'failed', code: 'runtime_rejected' } as never);
     await expect(
       startTypedAgentOverride({
         parsed: {
           providers: { worker: 'opencode' },
-          taskText: 'Check this task',
+          taskText: 'Check failing task',
           saveAsDefault: false,
         },
         options: [],
         sourceChatId: 'source',
       }),
-    ).rejects.toThrow('worker unavailable');
+    ).rejects.toThrow('Main Agent did not accept');
     expect(mocks.info).not.toHaveBeenCalled();
     expect(mocks.mainSetter).not.toHaveBeenCalled();
     expect(mocks.workerSetter).not.toHaveBeenCalled();
   });
 
-  it('sends text and discloses the limitation when the worker model cannot receive screenshots', async () => {
+  it('sends text and discloses the limit when the Main model cannot receive a screenshot', async () => {
     mocks.supportsVision.mockReturnValueOnce(false);
     await startTypedAgentOverride({
       parsed: {
@@ -157,12 +151,12 @@ describe('typed one-request provider override', () => {
       options: [],
       sourceChatId: 'source',
     });
-
     expect(mocks.capture).not.toHaveBeenCalled();
-    expect(mocks.launch).toHaveBeenCalledWith(expect.objectContaining({ imageAttachments: [] }));
+    const detail = mocks.dispatch.mock.lastCall?.[0];
+    expect(detail?.imageAttachments ?? []).toEqual([]);
     expect(mocks.warning).toHaveBeenCalledWith(
       'Agent task',
-      'The selected worker model cannot receive a screenshot; continuing with text.',
+      'The selected Main Agent model cannot receive a screenshot; sending text.',
     );
   });
 });

@@ -1,106 +1,153 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JarvisChatAgent } from '@/features/jarvis-interaction/types';
+import type { ChatModelSelection } from '@/lib/ai/modelSelection';
 import {
   createVoiceTaskCoordinator,
   formatPreviousVoiceTaskContext,
   listPreviousVoiceTasks,
   recordVoiceConversation,
 } from './voiceTaskCoordinator';
+import type {
+  VoiceAgentFlowResult,
+  VoiceAgentRequest,
+  VoiceAgentFlowStatus,
+} from './voiceAgentFlow';
 
 const scope = { accountId: 'account-a', workspaceId: 'workspace-a', projectId: null };
+const selection = { mode: 'single', providerId: 'openai', modelId: 'gpt-6' } as ChatModelSelection;
 
 beforeEach(() => localStorage.clear());
 
-describe('voice task continuity', () => {
-  it('keeps an old worker running while a fresh voice chat starts and dedupes repeated transcripts', async () => {
+function acceptedResult(requestId: string): VoiceAgentFlowResult {
+  return {
+    status: 'main_accepted',
+    duplicate: false,
+    requestId,
+    cancellationKey: `message-${requestId}`,
+    elapsedMs: 4,
+  };
+}
+
+describe('voice Main request coordination', () => {
+  it('deduplicates final STT repeats across modal reopens without creating a worker launch receipt', async () => {
     const coordinator = createVoiceTaskCoordinator();
-    const oldRequest = {
+    const request: VoiceAgentRequest & { dedupeScope: string } = {
       chatId: 'voice-chat-1',
       text: 'Fix the app',
-      mainProvider: 'codex' as const,
-      workerProvider: 'opencode' as const,
+      mainProvider: 'codex',
+      workerProvider: 'opencode',
+      selection,
+      requestId: 'voice-req-1',
       dedupeScope: 'account-a/workspace-a',
     };
-    let finishOld!: (result: {
-      status: 'main_dispatched';
-      duplicate: false;
-      elapsedMs: number;
-    }) => void;
-    let reportOld!: (status: {
-      phase: 'launched';
-      chatId: string;
-      provider: 'opencode';
-      elapsedMs: number;
-    }) => void;
-    const runOld = vi.fn((report: typeof reportOld) => {
-      reportOld = report;
-      return new Promise<{
-        status: 'main_dispatched';
-        duplicate: false;
-        elapsedMs: number;
-      }>((resolve) => {
-        finishOld = resolve;
+    const run = vi.fn(async (report: (status: VoiceAgentFlowStatus) => void) => {
+      report({ phase: 'main_accepted', chatId: request.chatId, elapsedMs: 2 });
+      return acceptedResult(request.requestId);
+    });
+
+    const first = await coordinator.start(request, run);
+    const repeated = await coordinator.start(
+      { ...request, chatId: 'voice-chat-2', text: ' Fix   the app! ', requestId: 'new-id' },
+      run,
+    );
+
+    expect(first).toMatchObject({ status: 'accepted', duplicate: false });
+    expect(repeated).toMatchObject({ status: 'accepted', duplicate: true });
+    expect(repeated).not.toHaveProperty('actualWorkerProvider');
+    expect(repeated).not.toHaveProperty('childChatId');
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it('shares the in-flight promise and accepts only after Main runtime acceptance', async () => {
+    const coordinator = createVoiceTaskCoordinator();
+    const request: VoiceAgentRequest = {
+      chatId: 'voice-chat',
+      text: 'Review the patch',
+      mainProvider: 'codex',
+      workerProvider: 'codex',
+      selection,
+      requestId: 'voice-req-2',
+    };
+    let finish!: (result: VoiceAgentFlowResult) => void;
+    const run = vi.fn((report: (status: VoiceAgentFlowStatus) => void) => {
+      report({ phase: 'submitted', chatId: request.chatId, elapsedMs: 1 });
+      return new Promise<VoiceAgentFlowResult>((resolve) => {
+        finish = resolve;
       });
     });
-    const first = coordinator.start(oldRequest, runOld);
-    await Promise.resolve();
-    reportOld({ phase: 'launched', chatId: oldRequest.chatId, provider: 'opencode', elapsedMs: 2 });
-    await expect(first).resolves.toMatchObject({ status: 'launched', duplicate: false });
-    await expect(
-      coordinator.start({ ...oldRequest, text: 'Fix  the app!' }, runOld),
-    ).resolves.toMatchObject({
-      status: 'launched',
-      duplicate: true,
+    const first = coordinator.start(request, run);
+    const duplicate = coordinator.start({ ...request, requestId: 'duplicate-id' }, run);
+
+    let settled = false;
+    void first.then(() => {
+      settled = true;
     });
-    expect(runOld).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish(acceptedResult(request.requestId));
 
-    await expect(
-      coordinator.start({ ...oldRequest, chatId: 'voice-chat-2' }, runOld),
-    ).resolves.toMatchObject({ status: 'launched', duplicate: true });
-    expect(runOld).toHaveBeenCalledOnce();
-
-    const fresh = coordinator.start(
-      { ...oldRequest, chatId: 'voice-chat-2', text: 'Another task' },
-      (report) => {
-        report({ phase: 'launched', chatId: 'voice-chat-2', provider: 'opencode', elapsedMs: 1 });
-        return Promise.resolve({ status: 'main_dispatched', duplicate: false, elapsedMs: 1 });
-      },
-    );
-    await expect(fresh).resolves.toMatchObject({ status: 'launched', duplicate: false });
-    finishOld({ status: 'main_dispatched', duplicate: false, elapsedMs: 4 });
+    await expect(first).resolves.toMatchObject({ status: 'accepted', duplicate: false });
+    await expect(duplicate).resolves.toMatchObject({ status: 'accepted', duplicate: true });
+    expect(run).toHaveBeenCalledOnce();
   });
 
-  it('never reports a worker launched when its operation fails before receipt', async () => {
+  it.each([
+    ['persist_failed', 'persist_failed'],
+    ['dispatch_failed', 'dispatch_failed'],
+    ['cancelled', 'cancelled'],
+  ] as const)(
+    'returns %s truthfully and does not convert it to accepted',
+    async (status, expected) => {
+      const coordinator = createVoiceTaskCoordinator();
+      const request: VoiceAgentRequest = {
+        chatId: 'voice-chat',
+        text: `Fail ${status}`,
+        mainProvider: 'codex',
+        workerProvider: 'opencode',
+        selection,
+        requestId: `request-${status}`,
+      };
+      const result: VoiceAgentFlowResult = {
+        status,
+        duplicate: false,
+        requestId: request.requestId,
+        elapsedMs: 1,
+      };
+
+      await expect(coordinator.start(request, async () => result)).resolves.toMatchObject({
+        status: expected,
+        duplicate: false,
+      });
+    },
+  );
+
+  it('keeps a failed request deduplicated for a repeated transcript', async () => {
     const coordinator = createVoiceTaskCoordinator();
+    const request: VoiceAgentRequest = {
+      chatId: 'voice-chat',
+      text: 'Check the tests',
+      mainProvider: 'codex',
+      workerProvider: 'opencode',
+      selection,
+      requestId: 'request-failed',
+    };
+    const run = vi.fn(async () => ({
+      status: 'dispatch_failed' as const,
+      duplicate: false as const,
+      requestId: request.requestId,
+      elapsedMs: 1,
+    }));
+
+    await expect(coordinator.start(request, run)).resolves.toMatchObject({
+      status: 'dispatch_failed',
+    });
     await expect(
-      coordinator.start(
-        { chatId: 'voice-chat', text: 'Run task', mainProvider: 'codex', workerProvider: 'codex' },
-        async () => ({ status: 'launch_failed', duplicate: false, elapsedMs: 1 }),
-      ),
-    ).resolves.toMatchObject({ status: 'launch_failed' });
+      coordinator.start({ ...request, text: ' Check   the tests. ', requestId: 'retry-id' }, run),
+    ).resolves.toMatchObject({ status: 'dispatch_failed', duplicate: true });
+    expect(run).toHaveBeenCalledOnce();
   });
 
-  it('releases the voice turn as submitted while provider proof and worker completion remain pending', async () => {
-    const coordinator = createVoiceTaskCoordinator();
-    let finish!: (result: {
-      status: 'main_dispatched';
-      duplicate: false;
-      elapsedMs: number;
-    }) => void;
-    const receipt = await coordinator.start(
-      { chatId: 'voice-chat', text: 'Long task', mainProvider: 'codex', workerProvider: 'codex' },
-      (report) => {
-        report({ phase: 'submitted', chatId: 'voice-chat', provider: 'codex', elapsedMs: 3 });
-        return new Promise((resolve) => {
-          finish = resolve;
-        });
-      },
-    );
-    expect(receipt).toEqual({ status: 'submitted', duplicate: false });
-    finish({ status: 'main_dispatched', duplicate: false, elapsedMs: 100 });
-  });
-
-  it('loads only same-scope prior task references and a bounded context', () => {
+  it('keeps legacy history bounded without inventing a child for new native task records', () => {
     recordVoiceConversation(scope, 'voice-chat-1');
     recordVoiceConversation(scope, 'voice-chat-2');
     recordVoiceConversation({ ...scope, accountId: 'account-b' }, 'other-account-chat');
@@ -108,10 +155,10 @@ describe('voice task continuity', () => {
       ({
         parentChatId,
         agentId,
-        childChatId: `child-${agentId}`,
+        childChatId: `legacy-child-${agentId}`,
         modelLabel: 'OpenCode · GPT',
         status: 'thinking',
-        task: 'Build a large task',
+        task: 'An old task',
         summary: '',
         updatedAt: '2026-09-27T19:00:00Z',
       }) as JarvisChatAgent;
@@ -120,8 +167,9 @@ describe('voice task continuity', () => {
       'voice-chat-2': [card('voice-chat-2', 'worker-2')],
       'other-account-chat': [card('other-account-chat', 'worker-3')],
     });
+
     expect(tasks.map((task) => task.agentId)).toEqual(['worker-1']);
-    expect(formatPreviousVoiceTaskContext(tasks)).toContain('child-worker-1');
+    expect(formatPreviousVoiceTaskContext(tasks)).toContain('legacy-child-worker-1');
     expect(formatPreviousVoiceTaskContext(tasks)).not.toContain('worker-2');
     expect(formatPreviousVoiceTaskContext(tasks).length).toBeLessThanOrEqual(1_500);
   });

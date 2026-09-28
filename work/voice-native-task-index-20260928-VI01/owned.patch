@@ -1,0 +1,1290 @@
+diff --git a/app/src/features/voice/voiceConversationFolder.test.ts b/app/src/features/voice/voiceConversationFolder.test.ts
+index 483d6faf..37f57c71 100644
+--- a/app/src/features/voice/voiceConversationFolder.test.ts
++++ b/app/src/features/voice/voiceConversationFolder.test.ts
+@@ -4,7 +4,13 @@ const mocks = vi.hoisted(() => ({
+   isTauri: true,
+   appDataDir: vi.fn(async () => 'C:/VibeSpaceData/'),
+   createDirectory: vi.fn(async (path: string) => ({ ok: true, path })),
+-  writeTextFile: vi.fn(async (path: string) => ({ ok: true, path })),
++  writeTextFile: vi.fn(async (path: string, _content: string) => ({ ok: true, path })),
++  readTextFile: vi.fn(async (path: string) => ({
++    ok: false as const,
++    error: { code: 'not_found' as const },
++    path,
++  })),
++  listVoiceNativeTasks: vi.fn(async () => ({ ok: true as const, records: [] as unknown[] })),
+   listByChat: vi.fn(async () => [
+     { id: 'message-1', role: 'user', created_at: 1, parts: [{ kind: 'text', text: 'Help me' }] },
+     { id: 'message-2', role: 'assistant', created_at: 2, parts: [{ kind: 'text', text: 'Done' }] },
+@@ -24,6 +30,7 @@ vi.mock('@tauri-apps/api/path', () => ({ appDataDir: mocks.appDataDir }));
+ vi.mock('@/lib/db', () => ({ messageRepo: { listByChat: mocks.listByChat } }));
+ vi.mock('@/lib/fs', () => ({
+   createDirectory: mocks.createDirectory,
++  readTextFile: mocks.readTextFile,
+   writeTextFile: mocks.writeTextFile,
+ }));
+ vi.mock('@/lib/utils', () => ({
+@@ -34,6 +41,9 @@ vi.mock('@/lib/utils', () => ({
+ vi.mock('@/features/jarvis-interaction/sessionStore', () => ({
+   useJarvisInteractionStore: { getState: () => ({ agentsForChat: mocks.agentsForChat }) },
+ }));
++vi.mock('./voiceNativeTaskIndex', () => ({
++  listVoiceNativeTasks: mocks.listVoiceNativeTasks,
++}));
+ 
+ import { syncVoiceConversationFolder } from './voiceConversationFolder';
+ 
+@@ -65,6 +75,93 @@ describe('voice conversation folder', () => {
+     );
+   });
+ 
++  it('adds bounded native task references for the matching scoped voice chat', async () => {
++    mocks.listVoiceNativeTasks.mockResolvedValueOnce({
++      ok: true,
++      records: [
++        {
++          requestId: 'voice-request-1',
++          parentChatId: 'voice-chat-1',
++          requestedMainProvider: 'codex',
++          requestedWorkerProvider: 'opencode',
++          actualWorker: {
++            provider: 'opencode',
++            modelId: 'opencode/model-x',
++            nativeTaskId: 'native-child-1',
++          },
++          status: 'running',
++          updatedAt: '2026-09-28T05:10:00.000Z',
++          summary: 'Review the selected files',
++        },
++        {
++          requestId: 'voice-request-2',
++          parentChatId: 'another-voice-chat',
++          requestedWorkerProvider: 'codex',
++          status: 'submitted',
++          updatedAt: '2026-09-28T05:09:00.000Z',
++          summary: 'Must not leak into this folder',
++        },
++      ],
++    });
++
++    await syncVoiceConversationFolder('voice-chat-1', {
++      accountId: 'account-1',
++      workspaceId: 'workspace-1',
++      projectId: 'project-1',
++    });
++
++    const indexCall = mocks.writeTextFile.mock.calls.find(([path]) => path.endsWith('/index.json'));
++    expect(indexCall).toBeDefined();
++    const index = JSON.parse(indexCall?.[1] ?? '{}') as {
++      workers: Array<{ childChatId: string }>;
++      nativeTasks: Array<Record<string, unknown>>;
++    };
++    expect(index.workers).toMatchObject([{ childChatId: 'child-1' }]);
++    expect(index.nativeTasks).toEqual([
++      {
++        requestId: 'voice-request-1',
++        parentChatId: 'voice-chat-1',
++        requestedMainProvider: 'codex',
++        requestedWorkerProvider: 'opencode',
++        actualWorkerProvider: 'opencode',
++        actualModelId: 'opencode/model-x',
++        nativeTaskId: 'native-child-1',
++        status: 'running',
++        updatedAt: '2026-09-28T05:10:00.000Z',
++        summary: 'Review the selected files',
++      },
++    ]);
++  });
++
++  it('preserves prior native task references when a folder refresh has no scope', async () => {
++    mocks.readTextFile.mockResolvedValueOnce({
++      ok: true,
++      path: 'C:/VibeSpaceData/jarvis-voice-conversations/voice-chat-1/index.json',
++      content: JSON.stringify({
++        nativeTasks: [
++          {
++            requestId: 'voice-request-1',
++            parentChatId: 'voice-chat-1',
++            requestedMainProvider: 'codex',
++            requestedWorkerProvider: 'codex',
++            status: 'running',
++            updatedAt: '2026-09-28T05:10:00.000Z',
++            summary: 'Still running',
++          },
++        ],
++      }),
++    });
++
++    await syncVoiceConversationFolder('voice-chat-1');
++
++    const indexCall = mocks.writeTextFile.mock.calls.find(([path]) => path.endsWith('/index.json'));
++    const index = JSON.parse(indexCall?.[1] ?? '{}') as {
++      nativeTasks: Array<Record<string, unknown>>;
++    };
++    expect(index.nativeTasks).toMatchObject([{ requestId: 'voice-request-1', status: 'running' }]);
++    expect(mocks.listVoiceNativeTasks).not.toHaveBeenCalled();
++  });
++
+   it('rejects unsafe chat IDs before touching the filesystem', async () => {
+     await expect(syncVoiceConversationFolder('../another-account')).resolves.toMatchObject({
+       ok: false,
+diff --git a/app/src/features/voice/voiceConversationFolder.ts b/app/src/features/voice/voiceConversationFolder.ts
+index aa9891ca..63595266 100644
+--- a/app/src/features/voice/voiceConversationFolder.ts
++++ b/app/src/features/voice/voiceConversationFolder.ts
+@@ -1,17 +1,138 @@
+ import { appDataDir } from '@tauri-apps/api/path';
+ import { messageRepo } from '@/lib/db';
+-import { createDirectory, writeTextFile } from '@/lib/fs';
++import { createDirectory, readTextFile, writeTextFile } from '@/lib/fs';
+ import { isTauri } from '@/lib/utils';
+ import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
+ import type { ChatId } from '@/types';
++import {
++  listVoiceNativeTasks,
++  type VoiceNativeTaskRecord,
++  type VoiceNativeTaskScope,
++  type VoiceNativeTaskStatus,
++  type VoiceNativeProvider,
++} from './voiceNativeTaskIndex';
+ 
+ export type VoiceConversationFolderResult =
+   { ok: true; folder: string; messageCount: number } | { ok: false; error: string };
+ 
+ const pendingWrites = new Map<string, Promise<VoiceConversationFolderResult>>();
+ const MAX_CHUNK_CHARS = 300_000;
++const MAX_NATIVE_TASK_REFERENCES = 12;
++const NATIVE_TASK_STATUSES = new Set<VoiceNativeTaskStatus>([
++  'submitted',
++  'launched',
++  'running',
++  'done',
++  'blocked',
++  'failed',
++  'cancelled',
++]);
+ 
+-async function writeConversationSnapshot(chatId: string): Promise<VoiceConversationFolderResult> {
++export interface VoiceConversationNativeTaskReference {
++  requestId: string;
++  parentChatId: string;
++  requestedMainProvider: VoiceNativeProvider;
++  requestedWorkerProvider: VoiceNativeProvider;
++  actualWorkerProvider?: VoiceNativeProvider;
++  actualModelId?: string;
++  nativeTaskId?: string;
++  status: VoiceNativeTaskStatus;
++  updatedAt: string;
++  summary: string;
++}
++
++function toNativeTaskReferences(
++  records: readonly VoiceNativeTaskRecord[],
++  chatId: string,
++): VoiceConversationNativeTaskReference[] {
++  return records
++    .filter((record) => record.parentChatId === chatId)
++    .slice(0, MAX_NATIVE_TASK_REFERENCES)
++    .map((record) => ({
++      requestId: record.requestId,
++      parentChatId: record.parentChatId,
++      requestedMainProvider: record.requestedMainProvider,
++      requestedWorkerProvider: record.requestedWorkerProvider,
++      ...(record.actualWorker
++        ? {
++            actualWorkerProvider: record.actualWorker.provider,
++            ...(record.actualWorker.modelId ? { actualModelId: record.actualWorker.modelId } : {}),
++            nativeTaskId: record.actualWorker.nativeTaskId,
++          }
++        : {}),
++      status: record.status,
++      updatedAt: record.updatedAt,
++      summary: record.summary.slice(0, 180),
++    }));
++}
++
++function isNativeTaskReference(value: unknown): value is VoiceConversationNativeTaskReference {
++  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
++  const record = value as Record<string, unknown>;
++  return (
++    typeof record.requestId === 'string' &&
++    /^[a-zA-Z0-9_-]{1,128}$/u.test(record.requestId) &&
++    typeof record.parentChatId === 'string' &&
++    /^[a-zA-Z0-9_-]{1,128}$/u.test(record.parentChatId) &&
++    (record.requestedMainProvider === 'codex' || record.requestedMainProvider === 'opencode') &&
++    (record.requestedWorkerProvider === 'codex' || record.requestedWorkerProvider === 'opencode') &&
++    (record.actualWorkerProvider === undefined ||
++      record.actualWorkerProvider === 'codex' ||
++      record.actualWorkerProvider === 'opencode') &&
++    (record.actualModelId === undefined ||
++      (typeof record.actualModelId === 'string' && record.actualModelId.length <= 180)) &&
++    (record.nativeTaskId === undefined ||
++      (typeof record.nativeTaskId === 'string' && record.nativeTaskId.length <= 180)) &&
++    typeof record.status === 'string' &&
++    NATIVE_TASK_STATUSES.has(record.status as VoiceNativeTaskStatus) &&
++    typeof record.updatedAt === 'string' &&
++    Number.isFinite(Date.parse(record.updatedAt)) &&
++    typeof record.summary === 'string' &&
++    record.summary.length <= 180
++  );
++}
++
++function safeNativeReferenceSummary(summary: string): string {
++  return summary
++    .replace(/[\u0000-\u001f\u007f]/gu, ' ')
++    .replace(/\b(?:sk|rk|pk)-(?:proj-)?[a-z0-9_-]{16,}\b/giu, '[redacted]')
++    .replace(/\bgithub_pat_[a-z0-9_]{20,}\b/giu, '[redacted]')
++    .replace(/\bgh[pousr]_[a-z0-9_]{20,}\b/giu, '[redacted]')
++    .replace(/\b(bearer|token|api[_-]?key|password|secret)\s*[:=]\s*[^\s,;]+/giu, '$1=[redacted]')
++    .replace(/\s+/gu, ' ')
++    .trim()
++    .slice(0, 180);
++}
++
++async function previousNativeTaskReferences(
++  indexPath: string,
++  root: string,
++  chatId: string,
++): Promise<VoiceConversationNativeTaskReference[]> {
++  const read = await readTextFile(indexPath, { root });
++  if (!read.ok || read.content.length > 128_000) return [];
++  try {
++    const parsed: unknown = JSON.parse(read.content);
++    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
++    const references = (parsed as { nativeTasks?: unknown }).nativeTasks;
++    if (!Array.isArray(references)) return [];
++    return references
++      .filter(isNativeTaskReference)
++      .filter((reference) => reference.parentChatId === chatId)
++      .map((reference) => ({
++        ...reference,
++        summary: safeNativeReferenceSummary(reference.summary),
++      }))
++      .slice(0, MAX_NATIVE_TASK_REFERENCES);
++  } catch {
++    return [];
++  }
++}
++
++async function writeConversationSnapshot(
++  chatId: string,
++  scope?: VoiceNativeTaskScope,
++): Promise<VoiceConversationFolderResult> {
+   if (!isTauri)
+     return { ok: false, error: 'Voice conversation folders require VibeSpace desktop.' };
+   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(chatId)) {
+@@ -67,10 +188,23 @@ async function writeConversationSnapshot(chatId: string): Promise<VoiceConversat
+         updatedAt: agent.updatedAt,
+         summary: agent.summary ?? '',
+       }));
++    const indexPath = `${folder}/index.json`;
++    let nativeTasks = await previousNativeTaskReferences(indexPath, root, chatId);
++    if (scope) {
++      const listed = await listVoiceNativeTasks(scope);
++      if (listed.ok) nativeTasks = toNativeTaskReferences(listed.records, chatId);
++    }
+     const index = await writeTextFile(
+-      `${folder}/index.json`,
++      indexPath,
+       JSON.stringify(
+-        { version: 1, chatId, messageCount: messages.length, chunks: chunks.length, workers },
++        {
++          version: 1,
++          chatId,
++          messageCount: messages.length,
++          chunks: chunks.length,
++          workers,
++          nativeTasks,
++        },
+         null,
+         2,
+       ),
+@@ -86,9 +220,10 @@ async function writeConversationSnapshot(chatId: string): Promise<VoiceConversat
+ /** Serializes refreshes so an older snapshot cannot overwrite a newer one. */
+ export function syncVoiceConversationFolder(
+   chatId: string,
++  scope?: VoiceNativeTaskScope,
+ ): Promise<VoiceConversationFolderResult> {
+   const previous = pendingWrites.get(chatId) ?? Promise.resolve({ ok: false } as const);
+-  const next = previous.then(() => writeConversationSnapshot(chatId));
++  const next = previous.then(() => writeConversationSnapshot(chatId, scope));
+   pendingWrites.set(chatId, next);
+   void next.then(
+     () => {
+diff --git a/app/src/features/voice/voiceNativeTaskIndex.ts b/app/src/features/voice/voiceNativeTaskIndex.ts
+new file mode 100644
+index 00000000..eaa9ad27
+--- /dev/null
++++ b/app/src/features/voice/voiceNativeTaskIndex.ts
+@@ -0,0 +1,676 @@
++import { appDataDir } from '@tauri-apps/api/path';
++import { createDirectory, readTextFile, writeTextFile } from '@/lib/fs';
++import { isTauri } from '@/lib/utils';
++
++export type VoiceNativeProvider = 'codex' | 'opencode';
++export type VoiceNativeTaskStatus =
++  'submitted' | 'launched' | 'running' | 'done' | 'blocked' | 'failed' | 'cancelled';
++
++export interface VoiceNativeTaskScope {
++  accountId: string;
++  workspaceId: string;
++  projectId: string | null;
++}
++
++export type VoiceNativeTaskStatusEvidence =
++  | { source: 'voice_route_result'; observedAt?: string; code?: string }
++  | {
++      source: 'provider_native_task_tool' | 'provider_native_activity';
++      observedAt?: string;
++    };
++
++export interface VoiceNativeMainIdentity {
++  provider: VoiceNativeProvider;
++  modelId?: string;
++  evidence: 'main_runtime_usage';
++}
++
++export interface VoiceNativeWorkerIdentity {
++  provider: VoiceNativeProvider;
++  modelId?: string;
++  nativeParentSessionId?: string;
++  nativeTaskId: string;
++  evidence: 'provider_native_task_tool';
++}
++
++/** Parent affinity is stored only when a runtime API independently proves it. */
++export interface VoiceNativeWorkerParentSession {
++  provider: VoiceNativeProvider;
++  sessionId: string;
++  evidence: 'verified_runtime_affinity';
++}
++
++export interface VoiceNativeTaskRecord {
++  requestId: string;
++  /** Original voice conversation. Its chat URL can be derived by the caller. */
++  parentChatId: string;
++  requestedMainProvider: VoiceNativeProvider;
++  requestedWorkerProvider: VoiceNativeProvider;
++  status: VoiceNativeTaskStatus;
++  statusEvidence?: VoiceNativeTaskStatusEvidence;
++  actualMain?: VoiceNativeMainIdentity;
++  actualWorker?: VoiceNativeWorkerIdentity;
++  workerParentSession?: VoiceNativeWorkerParentSession;
++  summary: string;
++  createdAt: string;
++  updatedAt: string;
++}
++
++export type VoiceNativeTaskUpdate = Pick<
++  VoiceNativeTaskRecord,
++  | 'requestId'
++  | 'parentChatId'
++  | 'requestedMainProvider'
++  | 'requestedWorkerProvider'
++  | 'status'
++  | 'summary'
++> &
++  Partial<
++    Pick<
++      VoiceNativeTaskRecord,
++      | 'statusEvidence'
++      | 'actualMain'
++      | 'actualWorker'
++      | 'workerParentSession'
++      | 'createdAt'
++      | 'updatedAt'
++    >
++  >;
++
++export type VoiceNativeTaskIndexErrorCode =
++  | 'invalid_scope'
++  | 'invalid_request'
++  | 'invalid_evidence'
++  | 'invalid_transition'
++  | 'unavailable'
++  | 'read_failed'
++  | 'write_failed'
++  | 'corrupt_index'
++  | 'scope_mismatch'
++  | 'capacity_reached';
++
++export type VoiceNativeTaskIndexResult<T> =
++  | { ok: true; value: T }
++  | { ok: false; error: { code: VoiceNativeTaskIndexErrorCode; message: string } };
++
++export type VoiceNativeTaskListResult =
++  | { ok: true; records: VoiceNativeTaskRecord[] }
++  | { ok: false; error: { code: VoiceNativeTaskIndexErrorCode; message: string } };
++
++export type VoiceNativeTaskUpsertResult =
++  | { ok: true; record: VoiceNativeTaskRecord }
++  | { ok: false; error: { code: VoiceNativeTaskIndexErrorCode; message: string } };
++
++export type VoiceNativeWorkerSessionResult =
++  | { ok: true; session: (VoiceNativeWorkerParentSession & { requestId: string }) | null }
++  | { ok: false; error: { code: VoiceNativeTaskIndexErrorCode; message: string } };
++
++export const VOICE_NATIVE_TASK_INDEX_MAX_RECORDS = 100;
++export const VOICE_NATIVE_TASK_INDEX_MAX_CONTEXT_CHARS = 1_800;
++export const VOICE_NATIVE_TASK_INDEX_MAX_CONTEXT_RECORDS = 8;
++export const VOICE_NATIVE_TASK_INDEX_MAX_SUMMARY_CHARS = 240;
++
++const INDEX_DIRECTORY = 'jarvis-voice-native-task-index';
++const MAX_INDEX_CHARS = 256_000;
++const ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/u;
++const REQUEST_ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/u;
++const PROVIDERS = new Set<VoiceNativeProvider>(['codex', 'opencode']);
++const ACTIVE_STATUSES = new Set<VoiceNativeTaskStatus>(['submitted', 'launched', 'running']);
++const TERMINAL_STATUSES = new Set<VoiceNativeTaskStatus>([
++  'done',
++  'blocked',
++  'failed',
++  'cancelled',
++]);
++
++interface PersistedIndex {
++  version: 1;
++  scope: VoiceNativeTaskScope;
++  records: VoiceNativeTaskRecord[];
++}
++
++interface LoadedIndex {
++  path: string;
++  root: string;
++  index: PersistedIndex;
++}
++
++const pendingWrites = new Map<string, Promise<unknown>>();
++
++function failure<T>(
++  code: VoiceNativeTaskIndexErrorCode,
++  message: string,
++): VoiceNativeTaskIndexResult<T> {
++  return { ok: false, error: { code, message } };
++}
++
++function listFailure(
++  code: VoiceNativeTaskIndexErrorCode,
++  message: string,
++): VoiceNativeTaskListResult {
++  return { ok: false, error: { code, message } };
++}
++
++function validBoundedText(value: unknown, maxLength: number): value is string {
++  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
++}
++
++function validProvider(value: unknown): value is VoiceNativeProvider {
++  return typeof value === 'string' && PROVIDERS.has(value as VoiceNativeProvider);
++}
++
++function validScope(scope: VoiceNativeTaskScope): boolean {
++  if (!asRecord(scope)) return false;
++  return (
++    validBoundedText(scope.accountId, 128) &&
++    validBoundedText(scope.workspaceId, 128) &&
++    (scope.projectId === null || validBoundedText(scope.projectId, 128))
++  );
++}
++
++function sameScope(left: VoiceNativeTaskScope, right: VoiceNativeTaskScope): boolean {
++  return (
++    left.accountId === right.accountId &&
++    left.workspaceId === right.workspaceId &&
++    left.projectId === right.projectId
++  );
++}
++
++function validTimestamp(value: unknown): value is string {
++  return typeof value === 'string' && Number.isFinite(Date.parse(value));
++}
++
++function timestampOrNow(value: string | undefined): string {
++  return validTimestamp(value) ? value : new Date().toISOString();
++}
++
++function safeSummary(summary: string): string {
++  return summary
++    .replace(/[\u0000-\u001f\u007f]/gu, ' ')
++    .replace(/\b(?:sk|rk|pk)-(?:proj-)?[a-z0-9_-]{16,}\b/giu, '[redacted]')
++    .replace(/\bgithub_pat_[a-z0-9_]{20,}\b/giu, '[redacted]')
++    .replace(/\bgh[pousr]_[a-z0-9_]{20,}\b/giu, '[redacted]')
++    .replace(/\b(bearer|token|api[_-]?key|password|secret)\s*[:=]\s*[^\s,;]+/giu, '$1=[redacted]')
++    .replace(/\s+/gu, ' ')
++    .trim()
++    .slice(0, VOICE_NATIVE_TASK_INDEX_MAX_SUMMARY_CHARS);
++}
++
++function validStatus(value: unknown): value is VoiceNativeTaskStatus {
++  return (
++    value === 'submitted' ||
++    value === 'launched' ||
++    value === 'running' ||
++    value === 'done' ||
++    value === 'blocked' ||
++    value === 'failed' ||
++    value === 'cancelled'
++  );
++}
++
++function validIdentityPart(value: unknown): value is string {
++  return validBoundedText(value, 180) && !/[\u0000-\u001f\u007f]/u.test(value);
++}
++
++function validMainIdentity(value: VoiceNativeMainIdentity | undefined): boolean {
++  return (
++    value === undefined ||
++    (validProvider(value.provider) &&
++      value.evidence === 'main_runtime_usage' &&
++      (value.modelId === undefined || validIdentityPart(value.modelId)))
++  );
++}
++
++function validWorkerIdentity(value: VoiceNativeWorkerIdentity | undefined): boolean {
++  return (
++    value === undefined ||
++    (validProvider(value.provider) &&
++      value.evidence === 'provider_native_task_tool' &&
++      validIdentityPart(value.nativeTaskId) &&
++      (value.modelId === undefined || validIdentityPart(value.modelId)) &&
++      (value.nativeParentSessionId === undefined || validIdentityPart(value.nativeParentSessionId)))
++  );
++}
++
++function validParentSession(value: VoiceNativeWorkerParentSession | undefined): boolean {
++  return (
++    value === undefined ||
++    (validProvider(value.provider) &&
++      value.evidence === 'verified_runtime_affinity' &&
++      validIdentityPart(value.sessionId))
++  );
++}
++
++function validStatusEvidence(value: VoiceNativeTaskStatusEvidence | undefined): boolean {
++  if (value === undefined) return true;
++  if (value.source === 'voice_route_result') {
++    return (
++      (value.observedAt === undefined || validTimestamp(value.observedAt)) &&
++      (value.code === undefined || /^[a-zA-Z0-9_.:-]{1,120}$/u.test(value.code))
++    );
++  }
++  return (
++    (value.source === 'provider_native_task_tool' || value.source === 'provider_native_activity') &&
++    (value.observedAt === undefined || validTimestamp(value.observedAt))
++  );
++}
++
++function validateEvidence(update: VoiceNativeTaskUpdate): boolean {
++  if (
++    !validStatusEvidence(update.statusEvidence) ||
++    !validMainIdentity(update.actualMain) ||
++    !validWorkerIdentity(update.actualWorker) ||
++    !validParentSession(update.workerParentSession)
++  ) {
++    return false;
++  }
++
++  if (update.status === 'submitted') {
++    return (
++      update.actualWorker === undefined &&
++      update.workerParentSession === undefined &&
++      update.statusEvidence?.source !== 'provider_native_task_tool' &&
++      update.statusEvidence?.source !== 'provider_native_activity'
++    );
++  }
++  if (update.status === 'launched' || update.status === 'running') {
++    return (
++      update.actualWorker !== undefined &&
++      update.statusEvidence !== undefined &&
++      (update.statusEvidence.source === 'provider_native_task_tool' ||
++        update.statusEvidence.source === 'provider_native_activity')
++    );
++  }
++  if (update.status === 'done') {
++    return (
++      update.actualWorker !== undefined &&
++      update.statusEvidence?.source === 'provider_native_activity'
++    );
++  }
++  return (
++    update.statusEvidence !== undefined &&
++    (update.statusEvidence.source === 'voice_route_result' ||
++      update.statusEvidence.source === 'provider_native_activity')
++  );
++}
++
++function transitionAllowed(from: VoiceNativeTaskStatus, to: VoiceNativeTaskStatus): boolean {
++  if (from === to) return true;
++  if (from === 'submitted') return to !== 'submitted';
++  if (from === 'launched') return to === 'running' || TERMINAL_STATUSES.has(to);
++  if (from === 'running') return TERMINAL_STATUSES.has(to);
++  return false;
++}
++
++function asRecord(value: unknown): value is Record<string, unknown> {
++  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
++}
++
++function validStoredRecord(value: unknown): value is VoiceNativeTaskRecord {
++  if (!asRecord(value)) return false;
++  const validBase =
++    typeof value.requestId === 'string' &&
++    REQUEST_ID_PATTERN.test(value.requestId) &&
++    typeof value.parentChatId === 'string' &&
++    ID_PATTERN.test(value.parentChatId) &&
++    validProvider(value.requestedMainProvider) &&
++    validProvider(value.requestedWorkerProvider) &&
++    validStatus(value.status) &&
++    typeof value.summary === 'string' &&
++    value.summary.length <= VOICE_NATIVE_TASK_INDEX_MAX_SUMMARY_CHARS &&
++    validTimestamp(value.createdAt) &&
++    validTimestamp(value.updatedAt) &&
++    validStatusEvidence(value.statusEvidence as VoiceNativeTaskStatusEvidence | undefined) &&
++    validMainIdentity(value.actualMain as VoiceNativeMainIdentity | undefined) &&
++    validWorkerIdentity(value.actualWorker as VoiceNativeWorkerIdentity | undefined) &&
++    validParentSession(value.workerParentSession as VoiceNativeWorkerParentSession | undefined);
++  if (!validBase) return false;
++  const record = value as unknown as VoiceNativeTaskRecord;
++  return (
++    validateEvidence(record) &&
++    (!record.workerParentSession ||
++      record.workerParentSession.provider === record.actualWorker?.provider)
++  );
++}
++
++async function indexPath(scope: VoiceNativeTaskScope): Promise<LoadedIndex | null> {
++  if (!validScope(scope)) return null;
++  const scopeJson = JSON.stringify([scope.accountId, scope.workspaceId, scope.projectId]);
++  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(scopeJson));
++  const scopeKey = [...new Uint8Array(digest)]
++    .map((byte) => byte.toString(16).padStart(2, '0'))
++    .join('');
++  const root = (await appDataDir()).replace(/[\\/]+$/u, '');
++  const folder = `${root}/${INDEX_DIRECTORY}`;
++  return {
++    path: `${folder}/${scopeKey}.json`,
++    root,
++    index: { version: 1, scope: { ...scope }, records: [] },
++  };
++}
++
++async function loadIndex(
++  scope: VoiceNativeTaskScope,
++): Promise<
++  | { ok: true; loaded: LoadedIndex }
++  | { ok: false; error: { code: VoiceNativeTaskIndexErrorCode; message: string } }
++> {
++  if (!validScope(scope)) {
++    return {
++      ok: false,
++      error: { code: 'invalid_scope', message: 'The voice task scope is invalid.' },
++    };
++  }
++  if (!isTauri) {
++    return {
++      ok: false,
++      error: { code: 'unavailable', message: 'Native task storage is unavailable.' },
++    };
++  }
++  try {
++    const loaded = await indexPath(scope);
++    if (!loaded) {
++      return {
++        ok: false,
++        error: { code: 'invalid_scope', message: 'The voice task scope is invalid.' },
++      };
++    }
++    const read = await readTextFile(loaded.path, { root: loaded.root });
++    if (!read.ok) {
++      if (read.error.code === 'not_found') return { ok: true, loaded };
++      return {
++        ok: false,
++        error: { code: 'read_failed', message: 'Could not read native task references.' },
++      };
++    }
++    if (read.content.length > MAX_INDEX_CHARS) {
++      return {
++        ok: false,
++        error: { code: 'corrupt_index', message: 'The native task index is too large.' },
++      };
++    }
++    const parsed: unknown = JSON.parse(read.content);
++    if (!asRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.records)) {
++      return {
++        ok: false,
++        error: { code: 'corrupt_index', message: 'The native task index is invalid.' },
++      };
++    }
++    if (!asRecord(parsed.scope)) {
++      return {
++        ok: false,
++        error: { code: 'corrupt_index', message: 'The native task scope is invalid.' },
++      };
++    }
++    const storedScope = parsed.scope as unknown as VoiceNativeTaskScope;
++    if (!validScope(storedScope)) {
++      return {
++        ok: false,
++        error: { code: 'corrupt_index', message: 'The native task scope is invalid.' },
++      };
++    }
++    if (!sameScope(storedScope, scope)) {
++      return {
++        ok: false,
++        error: { code: 'scope_mismatch', message: 'The native task scope did not match.' },
++      };
++    }
++    if (
++      parsed.records.length > VOICE_NATIVE_TASK_INDEX_MAX_RECORDS ||
++      !parsed.records.every(validStoredRecord)
++    ) {
++      return {
++        ok: false,
++        error: { code: 'corrupt_index', message: 'The native task records are invalid.' },
++      };
++    }
++    loaded.index = { version: 1, scope: { ...scope }, records: parsed.records };
++    return { ok: true, loaded };
++  } catch {
++    return {
++      ok: false,
++      error: { code: 'read_failed', message: 'Could not read native task references.' },
++    };
++  }
++}
++
++async function saveIndex(loaded: LoadedIndex): Promise<boolean> {
++  const content = JSON.stringify(loaded.index);
++  if (content.length > MAX_INDEX_CHARS) return false;
++  try {
++    const directory = loaded.path.slice(0, loaded.path.lastIndexOf('/'));
++    const created = await createDirectory(directory, { root: loaded.root });
++    if (!created.ok) return false;
++    const written = await writeTextFile(loaded.path, content, { root: loaded.root });
++    return written.ok;
++  } catch {
++    return false;
++  }
++}
++
++function scopeQueueKey(scope: VoiceNativeTaskScope): string {
++  return JSON.stringify([scope.accountId, scope.workspaceId, scope.projectId]);
++}
++
++async function serializeScope<T>(
++  scope: VoiceNativeTaskScope,
++  action: () => Promise<T>,
++): Promise<T> {
++  const key = scopeQueueKey(scope);
++  const previous = pendingWrites.get(key) ?? Promise.resolve();
++  const next = previous.then(action, action);
++  pendingWrites.set(key, next);
++  try {
++    return await next;
++  } finally {
++    if (pendingWrites.get(key) === next) pendingWrites.delete(key);
++  }
++}
++
++function mergeUpdate(
++  previous: VoiceNativeTaskRecord | undefined,
++  update: VoiceNativeTaskUpdate,
++): VoiceNativeTaskRecord | null {
++  if (
++    !REQUEST_ID_PATTERN.test(update.requestId) ||
++    !ID_PATTERN.test(update.parentChatId) ||
++    !validProvider(update.requestedMainProvider) ||
++    !validProvider(update.requestedWorkerProvider) ||
++    !validStatus(update.status) ||
++    typeof update.summary !== 'string'
++  ) {
++    return null;
++  }
++  if (previous) {
++    if (
++      previous.parentChatId !== update.parentChatId ||
++      previous.requestedMainProvider !== update.requestedMainProvider ||
++      previous.requestedWorkerProvider !== update.requestedWorkerProvider ||
++      !transitionAllowed(previous.status, update.status)
++    ) {
++      return null;
++    }
++    if (
++      update.actualWorker &&
++      previous.actualWorker &&
++      (update.actualWorker.provider !== previous.actualWorker.provider ||
++        update.actualWorker.nativeTaskId !== previous.actualWorker.nativeTaskId)
++    ) {
++      return null;
++    }
++    if (
++      update.actualMain &&
++      previous.actualMain &&
++      (update.actualMain.provider !== previous.actualMain.provider ||
++        (update.actualMain.modelId &&
++          previous.actualMain.modelId &&
++          update.actualMain.modelId !== previous.actualMain.modelId))
++    ) {
++      return null;
++    }
++    if (
++      update.workerParentSession &&
++      previous.workerParentSession &&
++      (update.workerParentSession.provider !== previous.workerParentSession.provider ||
++        update.workerParentSession.sessionId !== previous.workerParentSession.sessionId)
++    ) {
++      return null;
++    }
++  }
++  const actualWorker = update.actualWorker ?? previous?.actualWorker;
++  const workerParentSession = update.workerParentSession ?? previous?.workerParentSession;
++  const evidenceCandidate = {
++    ...update,
++    actualMain: update.actualMain ?? previous?.actualMain,
++    actualWorker,
++    workerParentSession,
++  };
++  if (
++    !validateEvidence(evidenceCandidate) ||
++    (workerParentSession &&
++      (!actualWorker || workerParentSession.provider !== actualWorker.provider))
++  ) {
++    return null;
++  }
++  if (update.status === 'submitted' && (actualWorker || workerParentSession)) return null;
++
++  return {
++    requestId: update.requestId,
++    parentChatId: update.parentChatId,
++    requestedMainProvider: update.requestedMainProvider,
++    requestedWorkerProvider: update.requestedWorkerProvider,
++    status: update.status,
++    ...(update.statusEvidence
++      ? {
++          statusEvidence: {
++            ...update.statusEvidence,
++            observedAt: timestampOrNow(update.statusEvidence.observedAt),
++          },
++        }
++      : previous?.statusEvidence
++        ? { statusEvidence: previous.statusEvidence }
++        : {}),
++    ...((update.actualMain ?? previous?.actualMain)
++      ? { actualMain: update.actualMain ?? previous?.actualMain }
++      : {}),
++    ...(actualWorker ? { actualWorker } : {}),
++    ...(workerParentSession ? { workerParentSession } : {}),
++    summary: safeSummary(update.summary),
++    createdAt: previous?.createdAt ?? timestampOrNow(update.createdAt),
++    updatedAt: timestampOrNow(update.updatedAt),
++  };
++}
++
++function compactRecords(records: VoiceNativeTaskRecord[]): VoiceNativeTaskRecord[] {
++  return [...records].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
++}
++
++export function createVoiceNativeTaskRequestId(): string {
++  const uuid =
++    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
++      ? crypto.randomUUID()
++      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 18)}`;
++  return `voice-${uuid}`;
++}
++
++/** Persist one bounded task summary; full user/task prompts and transcripts are never indexed. */
++export async function upsertVoiceNativeTask(
++  scope: VoiceNativeTaskScope,
++  update: VoiceNativeTaskUpdate,
++): Promise<VoiceNativeTaskUpsertResult> {
++  if (!validScope(scope)) {
++    return {
++      ok: false,
++      error: { code: 'invalid_scope', message: 'The voice task scope is invalid.' },
++    };
++  }
++  return serializeScope(scope, async () => {
++    const result = await loadIndex(scope);
++    if (!result.ok) return result;
++    const { loaded } = result;
++    const position = loaded.index.records.findIndex(
++      (record) => record.requestId === update.requestId,
++    );
++    const previous = position >= 0 ? loaded.index.records[position] : undefined;
++    const record = mergeUpdate(previous, update);
++    if (!record) {
++      return failure(
++        previous ? 'invalid_transition' : 'invalid_evidence',
++        'The native task update did not include valid, matching request evidence.',
++      );
++    }
++    if (position >= 0) loaded.index.records[position] = record;
++    else loaded.index.records.push(record);
++
++    if (loaded.index.records.length > VOICE_NATIVE_TASK_INDEX_MAX_RECORDS) {
++      const removable = compactRecords(loaded.index.records)
++        .filter((entry) => TERMINAL_STATUSES.has(entry.status))
++        .slice(VOICE_NATIVE_TASK_INDEX_MAX_RECORDS - loaded.index.records.length);
++      for (const stale of removable) {
++        loaded.index.records = loaded.index.records.filter(
++          (entry) => entry.requestId !== stale.requestId,
++        );
++      }
++    }
++    if (loaded.index.records.length > VOICE_NATIVE_TASK_INDEX_MAX_RECORDS) {
++      return failure('capacity_reached', 'The native task index is full of active tasks.');
++    }
++    loaded.index.records = compactRecords(loaded.index.records);
++    if (!(await saveIndex(loaded))) {
++      return failure('write_failed', 'Could not save native task references.');
++    }
++    return { ok: true, record };
++  });
++}
++
++export async function listVoiceNativeTasks(
++  scope: VoiceNativeTaskScope,
++): Promise<VoiceNativeTaskListResult> {
++  if (!validScope(scope)) {
++    return listFailure('invalid_scope', 'The voice task scope is invalid.');
++  }
++  return serializeScope(scope, async () => {
++    const result = await loadIndex(scope);
++    if (!result.ok) return listFailure(result.error.code, result.error.message);
++    return { ok: true, records: compactRecords(result.loaded.index.records) };
++  });
++}
++
++export async function getLastVoiceWorkerParentSession(
++  scope: VoiceNativeTaskScope,
++  provider: VoiceNativeProvider,
++): Promise<VoiceNativeWorkerSessionResult> {
++  const listed = await listVoiceNativeTasks(scope);
++  if (!listed.ok) return { ok: false, error: listed.error };
++  const record = listed.records.find(
++    (candidate) =>
++      candidate.actualWorker?.provider === provider &&
++      candidate.workerParentSession?.provider === provider &&
++      candidate.workerParentSession.evidence === 'verified_runtime_affinity',
++  );
++  return {
++    ok: true,
++    session: record?.workerParentSession
++      ? { ...record.workerParentSession, requestId: record.requestId }
++      : null,
++  };
++}
++
++/** Bounded reference only; callers derive the actual chat link from parentChatId. */
++export function formatVoiceNativeTaskContext(records: readonly VoiceNativeTaskRecord[]): string {
++  if (records.length === 0) return '';
++  const selected = compactRecords([...records]).slice(
++    0,
++    VOICE_NATIVE_TASK_INDEX_MAX_CONTEXT_RECORDS,
++  );
++  const lines = [
++    'Prior native voice tasks (references only; do not relaunch these tasks):',
++    ...selected.map((record) => {
++      const actual = record.actualWorker
++        ? `; actual ${record.actualWorker.provider}${record.actualWorker.modelId ? `/${record.actualWorker.modelId}` : ''} task ${record.actualWorker.nativeTaskId}`
++        : '';
++      return `- ${record.requestId} [${record.status}] requested ${record.requestedWorkerProvider}${actual}; original chat ${record.parentChatId}: ${record.summary}`;
++    }),
++  ];
++  return lines.join('\n').slice(0, VOICE_NATIVE_TASK_INDEX_MAX_CONTEXT_CHARS);
++}
+diff --git a/app/src/features/voice/voiceNativeTaskIndex.test.ts b/app/src/features/voice/voiceNativeTaskIndex.test.ts
+new file mode 100644
+index 00000000..96ca1a95
+--- /dev/null
++++ b/app/src/features/voice/voiceNativeTaskIndex.test.ts
+@@ -0,0 +1,288 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++
++const mocks = vi.hoisted(() => {
++  const files = new Map<string, string>();
++  return {
++    appDataDir: vi.fn(async () => 'C:/VibeSpaceData/'),
++    createDirectory: vi.fn(async (path: string) => ({ ok: true as const, path, created: true })),
++    readTextFile: vi.fn(async (path: string) => {
++      const content = files.get(path);
++      return content === undefined
++        ? { ok: false as const, error: { code: 'not_found' as const }, path }
++        : { ok: true as const, content, path };
++    }),
++    writeTextFile: vi.fn(async (path: string, content: string) => {
++      files.set(path, content);
++      return { ok: true as const, path };
++    }),
++    files,
++    isTauri: true,
++  };
++});
++
++vi.mock('@tauri-apps/api/path', () => ({ appDataDir: mocks.appDataDir }));
++vi.mock('@/lib/fs', () => ({
++  createDirectory: mocks.createDirectory,
++  readTextFile: mocks.readTextFile,
++  writeTextFile: mocks.writeTextFile,
++}));
++vi.mock('@/lib/utils', () => ({
++  get isTauri() {
++    return mocks.isTauri;
++  },
++}));
++
++import {
++  createVoiceNativeTaskRequestId,
++  formatVoiceNativeTaskContext,
++  getLastVoiceWorkerParentSession,
++  listVoiceNativeTasks,
++  upsertVoiceNativeTask,
++  VOICE_NATIVE_TASK_INDEX_MAX_CONTEXT_CHARS,
++  VOICE_NATIVE_TASK_INDEX_MAX_RECORDS,
++  type VoiceNativeTaskScope,
++} from './voiceNativeTaskIndex';
++
++const scope: VoiceNativeTaskScope = {
++  accountId: 'account-a',
++  workspaceId: 'workspace-a',
++  projectId: 'project-a',
++};
++
++function taskUpdate(overrides: Record<string, unknown> = {}) {
++  return {
++    requestId: 'voice-request-1',
++    parentChatId: 'voice-chat-1',
++    requestedMainProvider: 'codex' as const,
++    requestedWorkerProvider: 'opencode' as const,
++    status: 'submitted' as const,
++    summary: 'Review the selected files',
++    ...overrides,
++  };
++}
++
++beforeEach(() => {
++  vi.clearAllMocks();
++  mocks.files.clear();
++  mocks.isTauri = true;
++});
++
++describe('voice native task index', () => {
++  it('creates stable request IDs suitable for a single task identity', () => {
++    const requestId = createVoiceNativeTaskRequestId();
++
++    expect(requestId).toMatch(/^voice-[a-zA-Z0-9-]{16,80}$/u);
++    expect(createVoiceNativeTaskRequestId()).not.toBe(requestId);
++  });
++
++  it('isolates the persisted records by account, workspace, and project', async () => {
++    await upsertVoiceNativeTask(scope, taskUpdate());
++    await upsertVoiceNativeTask(
++      { ...scope, projectId: 'project-b' },
++      taskUpdate({ summary: 'Different project request' }),
++    );
++
++    const result = await listVoiceNativeTasks(scope);
++    expect(result).toMatchObject({ ok: true, records: [{ summary: 'Review the selected files' }] });
++    if (result.ok) expect(result.records).toHaveLength(1);
++  });
++
++  it('upserts by request ID, preserving creation and proven native identity', async () => {
++    await upsertVoiceNativeTask(scope, taskUpdate({ createdAt: '2026-09-28T05:00:00.000Z' }));
++    const launched = await upsertVoiceNativeTask(
++      scope,
++      taskUpdate({
++        status: 'launched',
++        updatedAt: '2026-09-28T05:00:01.000Z',
++        statusEvidence: {
++          source: 'provider_native_task_tool',
++          observedAt: '2026-09-28T05:00:01.000Z',
++        },
++        actualWorker: {
++          provider: 'opencode',
++          modelId: 'opencode/model-x',
++          nativeTaskId: 'task-native-9',
++          evidence: 'provider_native_task_tool',
++        },
++      }),
++    );
++    const running = await upsertVoiceNativeTask(
++      scope,
++      taskUpdate({
++        status: 'running',
++        updatedAt: '2026-09-28T05:00:02.000Z',
++        statusEvidence: {
++          source: 'provider_native_activity',
++          observedAt: '2026-09-28T05:00:02.000Z',
++        },
++      }),
++    );
++
++    expect(launched.ok).toBe(true);
++    expect(running).toMatchObject({
++      ok: true,
++      record: {
++        createdAt: '2026-09-28T05:00:00.000Z',
++        status: 'running',
++        actualWorker: { provider: 'opencode', nativeTaskId: 'task-native-9' },
++      },
++    });
++    expect(mocks.files.size).toBe(1);
++  });
++
++  it('rejects launch and native terminal claims without correlated native evidence', async () => {
++    const launch = await upsertVoiceNativeTask(scope, taskUpdate({ status: 'launched' }));
++    const done = await upsertVoiceNativeTask(
++      scope,
++      taskUpdate({ status: 'done', statusEvidence: { source: 'voice_route_result' } }),
++    );
++
++    expect(launch).toMatchObject({ ok: false, error: { code: 'invalid_evidence' } });
++    expect(done).toMatchObject({ ok: false, error: { code: 'invalid_evidence' } });
++    expect(mocks.files.size).toBe(0);
++  });
++
++  it('keeps preflight failures truthful without native task identities', async () => {
++    const blocked = await upsertVoiceNativeTask(
++      scope,
++      taskUpdate({
++        status: 'blocked',
++        statusEvidence: {
++          source: 'voice_route_result',
++          code: 'cross_provider_native_session_unavailable',
++        },
++      }),
++    );
++
++    expect(blocked).toMatchObject({ ok: true, record: { status: 'blocked' } });
++    if (blocked.ok) expect(blocked.record).not.toHaveProperty('actualWorker');
++  });
++
++  it('redacts common credentials from the bounded summary before persistence', async () => {
++    const result = await upsertVoiceNativeTask(
++      scope,
++      taskUpdate({
++        summary: 'Update this API key=sk-proj-123456789012345678901234 after review',
++      }),
++    );
++
++    expect(result).toMatchObject({
++      ok: true,
++      record: { summary: 'Update this API key=[redacted] after review' },
++    });
++    const persisted = [...mocks.files.values()][0] ?? '';
++    expect(persisted).not.toContain('sk-proj-123456789012345678901234');
++  });
++
++  it('looks up only a separately verified parent session for the selected worker provider', async () => {
++    await upsertVoiceNativeTask(
++      scope,
++      taskUpdate({
++        status: 'launched',
++        statusEvidence: { source: 'provider_native_task_tool' },
++        actualWorker: {
++          provider: 'opencode',
++          nativeTaskId: 'child-session-1',
++          evidence: 'provider_native_task_tool',
++        },
++      }),
++    );
++
++    await expect(getLastVoiceWorkerParentSession(scope, 'opencode')).resolves.toMatchObject({
++      ok: true,
++      session: null,
++    });
++    await upsertVoiceNativeTask(
++      scope,
++      taskUpdate({
++        status: 'running',
++        statusEvidence: { source: 'provider_native_activity' },
++        workerParentSession: {
++          provider: 'opencode',
++          sessionId: 'verified-parent-1',
++          evidence: 'verified_runtime_affinity',
++        },
++      }),
++    );
++
++    await expect(getLastVoiceWorkerParentSession(scope, 'opencode')).resolves.toMatchObject({
++      ok: true,
++      session: { provider: 'opencode', sessionId: 'verified-parent-1' },
++    });
++    await expect(getLastVoiceWorkerParentSession(scope, 'codex')).resolves.toMatchObject({
++      ok: true,
++      session: null,
++    });
++  });
++
++  it('bounds summaries, record count, and formatted context without copying prompts', async () => {
++    const summary = 'x'.repeat(2000);
++    for (let index = 0; index < VOICE_NATIVE_TASK_INDEX_MAX_RECORDS; index += 1) {
++      const record = await upsertVoiceNativeTask(
++        scope,
++        taskUpdate({ requestId: `voice-request-${index}`, summary }),
++      );
++      expect(record.ok).toBe(true);
++    }
++    const overflow = await upsertVoiceNativeTask(
++      scope,
++      taskUpdate({ requestId: 'voice-request-overflow' }),
++    );
++    const listed = await listVoiceNativeTasks(scope);
++    expect(overflow).toMatchObject({ ok: false, error: { code: 'capacity_reached' } });
++    expect(listed).toMatchObject({ ok: true, records: expect.any(Array) });
++    if (!listed.ok) return;
++    expect(listed.records).toHaveLength(VOICE_NATIVE_TASK_INDEX_MAX_RECORDS);
++    expect(listed.records[0]?.summary.length).toBeLessThanOrEqual(240);
++    const context = formatVoiceNativeTaskContext(listed.records);
++    expect(context.length).toBeLessThanOrEqual(VOICE_NATIVE_TASK_INDEX_MAX_CONTEXT_CHARS);
++    expect(context).not.toContain('task:');
++  });
++
++  it('prunes old terminal references before active tasks when the index reaches its cap', async () => {
++    await upsertVoiceNativeTask(
++      scope,
++      taskUpdate({
++        requestId: 'voice-request-active',
++        updatedAt: '2026-01-01T00:00:00.000Z',
++      }),
++    );
++    for (let index = 0; index < VOICE_NATIVE_TASK_INDEX_MAX_RECORDS - 1; index += 1) {
++      await upsertVoiceNativeTask(
++        scope,
++        taskUpdate({
++          requestId: `voice-request-terminal-${index}`,
++          status: 'blocked',
++          updatedAt: new Date(Date.UTC(2026, 0, index + 2)).toISOString(),
++          statusEvidence: { source: 'voice_route_result', code: 'route_blocked' },
++        }),
++      );
++    }
++
++    const next = await upsertVoiceNativeTask(
++      scope,
++      taskUpdate({ requestId: 'voice-request-new-active', updatedAt: '2026-12-01T00:00:00.000Z' }),
++    );
++    const listed = await listVoiceNativeTasks(scope);
++
++    expect(next.ok).toBe(true);
++    expect(listed.ok).toBe(true);
++    if (!listed.ok) return;
++    expect(listed.records).toHaveLength(VOICE_NATIVE_TASK_INDEX_MAX_RECORDS);
++    expect(listed.records.map((record) => record.requestId)).toContain('voice-request-active');
++    expect(listed.records.map((record) => record.requestId)).toContain('voice-request-new-active');
++    expect(listed.records.map((record) => record.requestId)).not.toContain(
++      'voice-request-terminal-0',
++    );
++  });
++
++  it('does not pretend persistence is available outside the desktop runtime', async () => {
++    mocks.isTauri = false;
++
++    await expect(upsertVoiceNativeTask(scope, taskUpdate())).resolves.toMatchObject({
++      ok: false,
++      error: { code: 'unavailable' },
++    });
++    expect(mocks.writeTextFile).not.toHaveBeenCalled();
++  });
++});

@@ -4,7 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
-import { SPEECH_SYNTHESIS_START_EVENT, STREAMING_VOICE_END_EVENT } from './speechSynthesis';
+import {
+  SPEECH_SYNTHESIS_START_EVENT,
+  STREAMING_VOICE_END_EVENT,
+  STREAMING_VOICE_START_EVENT,
+} from './speechSynthesis';
+import { VOICE_REPLY_COOLDOWN_MS } from './voiceTurnCommit';
+import { VOICE_BRIEF_SYSTEM_INSTRUCTION } from './voiceAgentFlow';
+import { dispatchVoiceMainRequest } from './voiceNativeDelegation';
+import { createVoiceSessionBinding } from './voiceSessionBinding';
 
 type VoiceHandler = (payload?: unknown) => void;
 type MockVoiceChatTarget = {
@@ -95,11 +103,14 @@ vi.mock('@/components/ui/toast', () => ({
   },
 }));
 
-vi.mock('@/lib/db', () => ({
-  messageRepo: {
-    create: vi.fn(async () => ({})),
-  },
-}));
+vi.mock('@/lib/db', () => {
+  let nextMessage = 0;
+  return {
+    messageRepo: {
+      create: vi.fn(async () => ({ id: `voice-message-${++nextMessage}` })),
+    },
+  };
+});
 
 vi.mock('./voiceChatRouting', () => chatRoutingMocks);
 
@@ -121,41 +132,17 @@ vi.mock('./voiceProviderSelection', async (importOriginal) => {
   };
 });
 
-vi.mock('./voiceAgentFlow', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./voiceAgentFlow')>();
+vi.mock('./voiceNativeDelegation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./voiceNativeDelegation')>();
   return {
     ...actual,
-    createVoiceAgentFlow: (deps: import('./voiceAgentFlow').VoiceAgentFlowDependencies) => ({
-      run: async (input: import('./voiceAgentFlow').VoiceAgentRequest) => {
-        try {
-          await deps.persistUser(input);
-        } catch {
-          deps.reportStatus({
-            phase: 'launch_failed',
-            chatId: input.chatId,
-            message: 'The voice request could not be saved.',
-            elapsedMs: 0,
-          });
-          return { status: 'launch_failed' as const, duplicate: false, elapsedMs: 0 };
-        }
-        deps.reportStatus({
-          phase: 'launched',
-          chatId: input.chatId,
-          provider: input.workerProvider,
-          elapsedMs: 1,
-        });
-        await deps.deliverMainResult({
-          chatId: input.chatId,
-          userText: input.text,
-          mainProvider: input.mainProvider,
-          workerProvider: input.workerProvider,
-          childChatId: 'child-voice-test',
-          workerStatus: 'done',
-          workerText: 'Test worker result',
-          instruction: actual.VOICE_BRIEF_SYSTEM_INSTRUCTION,
-        });
-        return { status: 'main_dispatched' as const, duplicate: false, elapsedMs: 0 };
-      },
+    dispatchVoiceMainRequest: vi.fn(async (detail: import('@/lib/ai/runtime').SendDetail) => {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail }));
+      return {
+        status: 'accepted' as const,
+        chatId: detail.chatId,
+        cancellationKey: String(detail.cancellationKey),
+      };
     }),
   };
 });
@@ -327,6 +314,45 @@ describe('VoiceModal hands-free turn-taking', () => {
     });
   });
 
+  it('creates a different chat when New is selected and the mounted voice panel reopens', async () => {
+    useAuthStore.getState().setVoiceStartFreshChat(true);
+    chatRoutingMocks.ensureJarvisChatForProvider
+      .mockResolvedValueOnce('voice-opening-one')
+      .mockResolvedValueOnce('voice-opening-two');
+
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('voice-opening-one'));
+    act(() => useUIStore.getState().setVoiceModalOpen(false));
+    act(() => useUIStore.getState().setVoiceModalOpen(true));
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('voice-opening-two'));
+    expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledTimes(2);
+    expect(chatRoutingMocks.ensureJarvisChatForProvider.mock.calls[0]?.[2]).toMatchObject({
+      freshVoiceConversation: true,
+    });
+    expect(chatRoutingMocks.ensureJarvisChatForProvider.mock.calls[0]?.[2]?.openingId).not.toBe(
+      chatRoutingMocks.ensureJarvisChatForProvider.mock.calls[1]?.[2]?.openingId,
+    );
+  });
+
+  it('clears an orphaned voice session when the panel mounts closed', async () => {
+    useUIStore.setState({ voiceModalOpen: false, voiceListening: true });
+    const binding = createVoiceSessionBinding({
+      sessionId: 'orphaned-voice-session',
+      accountId: 'account-a',
+      chatId: 'chat_voice',
+      startedAt: Date.now(),
+    });
+    useVoiceStore.getState().beginSession(binding);
+    useVoiceStore.getState().setState('listening');
+
+    render(<VoiceModal />);
+
+    await waitFor(() => expect(useVoiceStore.getState().session).toBeNull());
+    expect(useVoiceStore.getState().state).toBe('idle');
+    expect(useUIStore.getState().voiceListening).toBe(false);
+    expect(VoiceService.cancelListening).toHaveBeenCalled();
+  });
+
   it('keeps the optional mini bar off by default and sends typed text through the voice flow', async () => {
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
@@ -343,6 +369,110 @@ describe('VoiceModal hands-free turn-taking', () => {
     expect((input as HTMLInputElement).value).toBe('');
     rendered.unmount();
     window.removeEventListener('jarvis:send', send as EventListener);
+  });
+
+  it('restores mini-bar submission after a streamed reply ends', async () => {
+    useAuthStore.getState().setVoiceMiniBarEnabled(true);
+    const send = vi.fn();
+    window.addEventListener('jarvis:send', send as EventListener);
+    try {
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      act(() => window.dispatchEvent(new CustomEvent(STREAMING_VOICE_START_EVENT)));
+      act(() => window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT)));
+      await waitFor(() => expect(useVoiceStore.getState().state).not.toBe('speaking'), {
+        timeout: VOICE_REPLY_COOLDOWN_MS + 1_000,
+      });
+      fireEvent.change(screen.getByRole('textbox', { name: 'Type to Jarvis voice' }), {
+        target: { value: 'Next question' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => expect(send).toHaveBeenCalledOnce());
+    } finally {
+      window.removeEventListener('jarvis:send', send as EventListener);
+    }
+  });
+
+  it('shows the actual one-request Main provider without saving that override', async () => {
+    const send = vi.fn();
+    window.addEventListener('jarvis:send', send as EventListener);
+    try {
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      act(() => emitVoice('voice:final', { text: 'Use OpenCode as main for this answer send it' }));
+      await waitFor(() => expect(send).toHaveBeenCalledOnce());
+      expect(screen.getByLabelText('Jarvis voice session').dataset.voiceProvider).toBe('opencode');
+      expect(screen.getByRole('img', { name: 'Jarvis voice activity' }).dataset.voiceProvider).toBe(
+        'opencode',
+      );
+      expect(useAuthStore.getState().voiceMainAgentProvider).toBe('codex');
+    } finally {
+      window.removeEventListener('jarvis:send', send as EventListener);
+    }
+  });
+
+  it('does not submit a repeated transcript after a New-chat reopen', async () => {
+    useAuthStore.getState().setVoiceStartFreshChat(true);
+    chatRoutingMocks.ensureJarvisChatForProvider
+      .mockResolvedValueOnce('voice-first')
+      .mockResolvedValueOnce('voice-second');
+    const send = vi.fn();
+    window.addEventListener('jarvis:send', send as EventListener);
+    try {
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('voice-first'));
+      act(() => emitVoice('voice:final', { text: 'Unique repeated task send it' }));
+      await waitFor(() => expect(send).toHaveBeenCalledOnce());
+      act(() => useUIStore.getState().setVoiceModalOpen(false));
+      act(() => useUIStore.getState().setVoiceModalOpen(true));
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('voice-second'));
+      act(() => emitVoice('voice:final', { text: 'Unique repeated task send it' }));
+      await waitFor(() =>
+        expect(screen.getByText('Already sent; continuing the existing request')).not.toBeNull(),
+      );
+      expect(send).toHaveBeenCalledOnce();
+      expect(messageRepo.create).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener('jarvis:send', send as EventListener);
+    }
+  });
+
+  it('binds a New chat while the previous Main request awaits runtime acceptance', async () => {
+    useAuthStore.getState().setVoiceStartFreshChat(true);
+    chatRoutingMocks.ensureJarvisChatForProvider
+      .mockResolvedValueOnce('voice-pending-first')
+      .mockResolvedValueOnce('voice-pending-second');
+    let accept!: (receipt: Awaited<ReturnType<typeof dispatchVoiceMainRequest>>) => void;
+    vi.mocked(dispatchVoiceMainRequest).mockImplementationOnce(
+      () => new Promise((resolve) => (accept = resolve)),
+    );
+    render(<VoiceModal />);
+    await waitFor(() =>
+      expect(useVoiceStore.getState().session?.chatId).toBe('voice-pending-first'),
+    );
+    act(() => emitVoice('voice:final', { text: 'Work while I reopen send it' }));
+    await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce());
+    act(() => useUIStore.getState().setVoiceModalOpen(false));
+    act(() => useUIStore.getState().setVoiceModalOpen(true));
+    await waitFor(() =>
+      expect(useVoiceStore.getState().session?.chatId).toBe('voice-pending-second'),
+    );
+    act(() => emitVoice('voice:final', { text: 'A separate request in the new chat send it' }));
+    await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(dispatchVoiceMainRequest).mock.calls[1]?.[0]?.chatId).toBe(
+      'voice-pending-second',
+    );
+    act(() =>
+      accept({
+        status: 'failed',
+        code: 'runtime_rejected',
+        message: 'The old request was rejected.',
+      }),
+    );
+    await act(async () => Promise.resolve());
+    expect(useVoiceStore.getState().session?.chatId).toBe('voice-pending-second');
+    expect(screen.getByText('Sent to Codex Main Agent')).toBeTruthy();
+    expect(useVoiceStore.getState().state).not.toBe('error');
   });
 
   it('embeds the account-and-project-scoped Context galaxy directly below the transcript', async () => {
@@ -1078,7 +1208,10 @@ describe('VoiceModal hands-free turn-taking', () => {
       });
       await waitFor(() => expect(send).toHaveBeenCalledOnce());
       expect(messageRepo.create).toHaveBeenCalledOnce();
-      expect((send.mock.calls[0][0] as CustomEvent).detail.text).toBe('What is two plus two?');
+      const detail = (send.mock.calls[0][0] as CustomEvent).detail;
+      expect(detail.text).toBe('What is two plus two?');
+      expect(detail.interactionMode).toBe('agent');
+      expect(detail.localCommandContext).toContain(VOICE_BRIEF_SYSTEM_INSTRUCTION);
     } finally {
       window.removeEventListener('jarvis:send', send as EventListener);
     }

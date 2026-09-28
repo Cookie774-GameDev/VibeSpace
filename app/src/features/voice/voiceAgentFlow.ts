@@ -3,126 +3,74 @@ import type { ChatModelSelection } from '@/lib/ai/modelSelection';
 import type { SendDetail } from '@/lib/ai/runtime';
 import type { VoiceSessionBinding } from './voiceSessionBinding';
 import type { VoiceAgentProvider } from './voiceProviderSelection';
+import {
+  buildVoiceNativeDelegationGuidance,
+  dispatchVoiceMainRequest,
+  type VoiceMainDispatchReceipt,
+} from './voiceNativeDelegation';
 
 export const VOICE_BRIEF_SYSTEM_INSTRUCTION =
   'Reply quickly and as briefly as possible. Use the fewest words that preserve the action, real status, result, and any important limitation. Acknowledge promptly; do not narrate routine steps.';
 
 const DUPLICATE_WINDOW_MS = 45_000;
+const MAX_SOURCE_CONTEXT_CHARS = 4_000;
+const MAX_PRIOR_TASK_CONTEXT_CHARS = 1_500;
+const MAX_LOCAL_COMMAND_CONTEXT_CHARS = 800;
 
 export interface VoiceAgentRequest {
   chatId: string;
   text: string;
   mainProvider: VoiceAgentProvider;
   workerProvider: VoiceAgentProvider;
+  selection: ChatModelSelection;
+  requestId?: string;
+  dedupeScope?: string;
+  voiceSession?: Readonly<VoiceSessionBinding>;
+  sourceContext?: string;
+  priorTaskContext?: string;
   signal?: AbortSignal;
 }
 
 export interface VoiceAgentFlowStatus {
   phase:
     | 'acknowledged'
-    | 'submitted'
+    | 'persist_failed'
     | 'capture_failed'
-    | 'launched'
-    | 'worker_terminal'
-    | 'main_dispatched'
-    | 'launch_failed'
-    | 'delivery_failed'
+    | 'submitted'
+    | 'main_accepted'
+    | 'dispatch_failed'
     | 'cancelled';
   chatId: string;
-  provider?: VoiceAgentProvider;
+  mainProvider: VoiceAgentProvider;
+  workerProvider: VoiceAgentProvider;
+  requestId: string;
+  cancellationKey?: string;
   message?: string;
   elapsedMs: number;
 }
 
-export interface VoiceWorkerOutcome {
-  status: 'done' | 'blocked' | 'failed' | 'cancelled';
-  text: string;
-}
-
 export interface VoiceAgentFlowResult {
-  status: 'main_dispatched' | 'launch_failed' | 'delivery_failed' | 'cancelled';
+  status: 'main_accepted' | 'persist_failed' | 'dispatch_failed' | 'cancelled';
   duplicate: boolean;
-  actualWorkerProvider?: VoiceAgentProvider;
-  childChatId?: string;
+  requestId: string;
+  cancellationKey?: string;
   elapsedMs: number;
 }
 
 export interface VoiceAgentFlowDependencies {
   now(): number;
   acknowledge(text: string): void | Promise<void>;
-  persistUser(input: VoiceAgentRequest): Promise<void>;
+  /** Persist the original user turn once; return its actual message ID. */
+  persistUser(input: VoiceAgentRequest & { text: string; requestId: string }): Promise<string>;
   captureScreen(
     text: string,
     provider: VoiceAgentProvider,
   ): Promise<
     { ok: true; attachment: ChatImageAttachment } | { ok: false; code: string; message: string }
   >;
-  launchWorker(input: {
-    parentChatId: string;
-    task: string;
-    requestedProvider: VoiceAgentProvider;
-    imageAttachments: ChatImageAttachment[];
-  }): Promise<{ agentId: string; childChatId: string; actualProvider: VoiceAgentProvider }>;
-  waitForWorker(input: {
-    parentChatId: string;
-    agentId: string;
-    childChatId: string;
-    signal?: AbortSignal;
-  }): Promise<VoiceWorkerOutcome>;
-  deliverMainResult(input: VoiceMainDelivery): Promise<void>;
+  dispatchMain(detail: SendDetail): Promise<VoiceMainDispatchReceipt>;
+  createRequestId?(): string;
   reportStatus(status: VoiceAgentFlowStatus): void;
-}
-
-export interface VoiceMainDelivery {
-  chatId: string;
-  userText: string;
-  mainProvider: VoiceAgentProvider;
-  workerProvider: VoiceAgentProvider;
-  childChatId: string;
-  workerStatus: VoiceWorkerOutcome['status'];
-  workerText: string;
-  captureNotice?: string;
-  instruction: typeof VOICE_BRIEF_SYSTEM_INSTRUCTION;
-}
-
-/** Build the exact runtime send; only voice sends receive the brief system instruction. */
-export function buildVoiceMainResultSendDetail(input: {
-  delivery: VoiceMainDelivery;
-  selection: ChatModelSelection;
-  voiceSession?: Readonly<VoiceSessionBinding>;
-}): SendDetail {
-  const { delivery, selection, voiceSession } = input;
-  return {
-    chatId: delivery.chatId,
-    ...(voiceSession
-      ? { accountId: voiceSession.accountId, voiceSessionId: voiceSession.sessionId }
-      : {}),
-    text: delivery.userText,
-    speakReply: Boolean(voiceSession),
-    interactionMode: 'ask',
-    modelSelectionOverride: selection,
-    autoApproveActions: false,
-    localCommandContext: [
-      ...(voiceSession ? [delivery.instruction] : []),
-      'The worker already ran. Report its result; do not launch another worker or repeat the task.',
-      `Actual worker provider: ${delivery.workerProvider}. Worker status: ${delivery.workerStatus}.`,
-      delivery.captureNotice ?? '',
-    ]
-      .filter(Boolean)
-      .join('\n')
-      .slice(0, 800),
-    structuredContext: {
-      kind: 'multitask',
-      payload: {
-        voiceWorkerResult: Boolean(voiceSession),
-        childChatId: delivery.childChatId,
-        workerProvider: delivery.workerProvider,
-        workerStatus: delivery.workerStatus,
-        workerText: delivery.workerText.slice(0, 20_000),
-        captureNotice: delivery.captureNotice,
-      },
-    },
-  };
 }
 
 function normalizedVoiceTask(text: string): string {
@@ -133,66 +81,190 @@ function normalizedVoiceTask(text: string): string {
     .toLocaleLowerCase();
 }
 
-function workerTask(text: string, hasScreen: boolean): string {
-  return [
-    `User's voice request: ${text.trim()}`,
-    'Use the current VibeSpace project and parent-chat context. Complete this one task. Report the real result and any blocker briefly with useful evidence.',
-    hasScreen
-      ? 'One user-permitted screenshot is attached to this worker message. Inspect it only for this request.'
-      : 'No screen image is attached; proceed from the text and available project context.',
-  ].join('\n\n');
+function boundedContext(value: string | undefined, limit: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  return normalized.slice(0, limit);
 }
 
+function newVoiceRequestId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID;
+  if (typeof randomUUID === 'function') return `vreq_${randomUUID.call(globalThis.crypto)}`;
+  return `vreq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** Build one original Main turn. The Main runtime decides whether to answer or use its native tool. */
+export function buildVoiceMainRequestSendDetail(input: {
+  chatId: string;
+  userText: string;
+  mainProvider: VoiceAgentProvider;
+  workerProvider: VoiceAgentProvider;
+  selection: ChatModelSelection;
+  cancellationKey: string;
+  requestId: string;
+  voiceSession?: Readonly<VoiceSessionBinding>;
+  captureNotice?: string;
+  imageAttachments?: ChatImageAttachment[];
+  sourceContext?: string;
+  priorTaskContext?: string;
+}): SendDetail {
+  const text = input.userText.trim();
+  const requestId = input.requestId.trim();
+  const cancellationKey = input.cancellationKey.trim();
+  if (!text) throw new Error('voice_main_request_text_required');
+  if (!requestId) throw new Error('voice_main_request_id_required');
+  if (
+    !cancellationKey ||
+    cancellationKey.length > 512 ||
+    /[\u0000-\u001f\u007f]/u.test(cancellationKey)
+  ) {
+    throw new Error('voice_main_cancellation_key_invalid');
+  }
+  if (
+    input.voiceSession &&
+    (String(input.voiceSession.chatId) !== input.chatId ||
+      !input.voiceSession.accountId ||
+      !input.voiceSession.sessionId)
+  ) {
+    throw new Error('voice_main_session_binding_mismatch');
+  }
+
+  const guidance = buildVoiceNativeDelegationGuidance({
+    selectedMainProvider: input.mainProvider,
+    requestedWorkerProvider: input.workerProvider,
+  });
+  const sourceContext = boundedContext(input.sourceContext, MAX_SOURCE_CONTEXT_CHARS);
+  const priorTaskContext = boundedContext(input.priorTaskContext, MAX_PRIOR_TASK_CONTEXT_CHARS);
+  const imageAttachments = input.imageAttachments?.length ? input.imageAttachments : undefined;
+  const captureNotice = boundedContext(input.captureNotice, 240);
+  const localCommandContext = [
+    ...(input.voiceSession ? [VOICE_BRIEF_SYSTEM_INSTRUCTION] : []),
+    guidance,
+    ...(imageAttachments
+      ? [
+          'The explicitly requested screenshot is attached to this Main turn only. Do not claim a native worker saw it without a tool receipt confirming image transfer.',
+        ]
+      : []),
+    ...(captureNotice
+      ? [
+          `Screen capture limitation: ${captureNotice} Continue from the original text and mention this briefly.`,
+        ]
+      : []),
+  ]
+    .join('\n')
+    .slice(0, MAX_LOCAL_COMMAND_CONTEXT_CHARS);
+
+  return {
+    chatId: input.chatId,
+    cancellationKey: cancellationKey as SendDetail['cancellationKey'],
+    ...(input.voiceSession
+      ? { accountId: input.voiceSession.accountId, voiceSessionId: input.voiceSession.sessionId }
+      : {}),
+    text,
+    ...(imageAttachments ? { imageAttachments } : {}),
+    speakReply: Boolean(input.voiceSession),
+    interactionMode: 'agent',
+    modelSelectionOverride: input.selection,
+    autoApproveActions: false,
+    localCommandContext,
+    structuredContext: {
+      kind: 'multitask',
+      sourceMessageId: cancellationKey,
+      payload: {
+        voiceMainRequest: true,
+        requestId,
+        mainProvider: input.mainProvider,
+        requestedWorkerProvider: input.workerProvider,
+        crossProviderNativeSessionUnavailable: input.mainProvider !== input.workerProvider,
+        workerRoutingInstruction: guidance,
+        ...(captureNotice ? { captureNotice } : {}),
+        ...(imageAttachments
+          ? { screenshotAttachedToMain: true, workerImageReceiptRequired: true }
+          : {}),
+        ...(sourceContext ? { sourceContext } : {}),
+        ...(priorTaskContext ? { priorTaskContext } : {}),
+      },
+    },
+  };
+}
+
+/** Acknowledge, persist, capture if asked, then dispatch one Main turn. */
 export function createVoiceAgentFlow(deps: VoiceAgentFlowDependencies) {
   const recent = new Map<string, { finishedAt?: number; result: Promise<VoiceAgentFlowResult> }>();
 
   const run = (input: VoiceAgentRequest): Promise<VoiceAgentFlowResult> => {
     const text = input.text.trim();
     const startedAt = deps.now();
-    const key = `${input.chatId}\u0000${input.mainProvider}\u0000${input.workerProvider}\u0000${normalizedVoiceTask(text)}`;
+    const requestId = input.requestId?.trim() || deps.createRequestId?.() || newVoiceRequestId();
+    const dedupeScope = input.dedupeScope?.trim() || input.chatId;
+    const key = JSON.stringify([
+      dedupeScope,
+      input.mainProvider,
+      input.workerProvider,
+      normalizedVoiceTask(text),
+    ]);
     for (const [candidate, entry] of recent) {
       if (entry.finishedAt !== undefined && startedAt - entry.finishedAt >= DUPLICATE_WINDOW_MS) {
         recent.delete(candidate);
       }
     }
     const prior = recent.get(key);
-    if (prior) {
-      return prior.result.then((result) => ({ ...result, duplicate: true }));
-    }
+    if (prior) return prior.result.then((result) => ({ ...result, duplicate: true }));
 
     const report = (
       phase: VoiceAgentFlowStatus['phase'],
-      extras: Pick<VoiceAgentFlowStatus, 'provider' | 'message'> = {},
-    ) =>
-      deps.reportStatus({
-        phase,
-        chatId: input.chatId,
-        elapsedMs: Math.max(0, deps.now() - startedAt),
-        ...extras,
-      });
+      extras: Pick<VoiceAgentFlowStatus, 'cancellationKey' | 'message'> = {},
+    ) => {
+      try {
+        deps.reportStatus({
+          phase,
+          chatId: input.chatId,
+          mainProvider: input.mainProvider,
+          workerProvider: input.workerProvider,
+          requestId,
+          elapsedMs: Math.max(0, deps.now() - startedAt),
+          ...extras,
+        });
+      } catch {
+        // Status subscribers cannot block persistence or the Main runtime send.
+      }
+    };
     const cancelled = (): VoiceAgentFlowResult => ({
       status: 'cancelled',
       duplicate: false,
+      requestId,
       elapsedMs: Math.max(0, deps.now() - startedAt),
     });
 
     const operation = (async (): Promise<VoiceAgentFlowResult> => {
       if (!text || input.signal?.aborted) return cancelled();
-      try {
-        void Promise.resolve(deps.acknowledge('On it.')).catch(() => undefined);
-      } catch {
-        // A failed local voice engine must not prevent the task from starting.
+      if (input.voiceSession) {
+        try {
+          void Promise.resolve(deps.acknowledge('On it.')).catch(() => undefined);
+        } catch {
+          // A local speech failure must not prevent the Main request.
+        }
+        report('acknowledged');
       }
-      report('acknowledged');
 
+      let cancellationKey: string;
       try {
-        await deps.persistUser({ ...input, text });
+        cancellationKey = (await deps.persistUser({ ...input, text, requestId })).trim();
+        if (!cancellationKey) throw new Error('persisted_voice_message_identity_unavailable');
       } catch (error) {
-        report('launch_failed', { message: 'The voice request could not be saved.' });
-        return { status: 'launch_failed', duplicate: false, elapsedMs: deps.now() - startedAt };
+        const message =
+          error instanceof Error ? error.message : 'The voice request could not be saved.';
+        report('persist_failed', { message });
+        return {
+          status: 'persist_failed',
+          duplicate: false,
+          requestId,
+          elapsedMs: Math.max(0, deps.now() - startedAt),
+        };
       }
       if (input.signal?.aborted) {
-        report('cancelled');
+        report('cancelled', { cancellationKey });
         return cancelled();
       }
 
@@ -206,79 +278,56 @@ export function createVoiceAgentFlow(deps: VoiceAgentFlowDependencies) {
         } catch {
           captureNotice = 'I could not capture the screen; continuing with text.';
         }
-        if (captureNotice) report('capture_failed', { message: captureNotice });
+        if (captureNotice) report('capture_failed', { cancellationKey, message: captureNotice });
       }
       if (input.signal?.aborted) {
-        report('cancelled');
+        report('cancelled', { cancellationKey });
         return cancelled();
       }
 
-      let launched: Awaited<ReturnType<VoiceAgentFlowDependencies['launchWorker']>>;
-      try {
-        launched = await deps.launchWorker({
-          parentChatId: input.chatId,
-          task: workerTask(text, imageAttachments.length > 0),
-          requestedProvider: input.workerProvider,
-          imageAttachments,
-        });
-      } catch (error) {
-        report('launch_failed', {
-          message: error instanceof Error ? error.message : 'The worker could not start.',
-        });
-        return { status: 'launch_failed', duplicate: false, elapsedMs: deps.now() - startedAt };
-      }
-      report('launched', { provider: launched.actualProvider });
+      const detail = buildVoiceMainRequestSendDetail({
+        chatId: input.chatId,
+        userText: text,
+        mainProvider: input.mainProvider,
+        workerProvider: input.workerProvider,
+        selection: input.selection,
+        cancellationKey,
+        requestId,
+        ...(input.voiceSession ? { voiceSession: input.voiceSession } : {}),
+        ...(captureNotice ? { captureNotice } : {}),
+        ...(imageAttachments.length ? { imageAttachments } : {}),
+        ...(input.sourceContext ? { sourceContext: input.sourceContext } : {}),
+        ...(input.priorTaskContext ? { priorTaskContext: input.priorTaskContext } : {}),
+      });
 
-      let worker: VoiceWorkerOutcome;
+      report('submitted', { cancellationKey });
+      let receipt: VoiceMainDispatchReceipt;
       try {
-        worker = await deps.waitForWorker({
-          parentChatId: input.chatId,
-          agentId: launched.agentId,
-          childChatId: launched.childChatId,
-          ...(input.signal ? { signal: input.signal } : {}),
-        });
-      } catch (error) {
-        worker = {
-          status: input.signal?.aborted ? 'cancelled' : 'failed',
-          text: error instanceof Error ? error.message : 'The worker result was unavailable.',
+        receipt = await deps.dispatchMain(detail);
+      } catch {
+        receipt = {
+          status: 'failed',
+          code: 'dispatch_failed',
+          message: 'The Main request could not be dispatched.',
         };
       }
-      if (input.signal?.aborted) {
-        report('cancelled');
-        return cancelled();
-      }
-      report('worker_terminal', { provider: launched.actualProvider, message: worker.status });
-
-      try {
-        await deps.deliverMainResult({
-          chatId: input.chatId,
-          userText: text,
-          mainProvider: input.mainProvider,
-          workerProvider: launched.actualProvider,
-          childChatId: launched.childChatId,
-          workerStatus: worker.status,
-          workerText: worker.text,
-          ...(captureNotice ? { captureNotice } : {}),
-          instruction: VOICE_BRIEF_SYSTEM_INSTRUCTION,
-        });
-      } catch (error) {
-        report('delivery_failed', {
-          message: error instanceof Error ? error.message : 'The result could not be delivered.',
-        });
+      if (receipt.status !== 'accepted') {
+        report('dispatch_failed', { cancellationKey, message: receipt.message });
         return {
-          status: 'delivery_failed',
+          status: 'dispatch_failed',
           duplicate: false,
-          actualWorkerProvider: launched.actualProvider,
-          childChatId: launched.childChatId,
-          elapsedMs: deps.now() - startedAt,
+          requestId,
+          cancellationKey,
+          elapsedMs: Math.max(0, deps.now() - startedAt),
         };
       }
-      report('main_dispatched', { provider: input.mainProvider });
+
+      report('main_accepted', { cancellationKey });
       return {
-        status: 'main_dispatched',
+        status: 'main_accepted',
         duplicate: false,
-        actualWorkerProvider: launched.actualProvider,
-        childChatId: launched.childChatId,
+        requestId,
+        cancellationKey,
         elapsedMs: Math.max(0, deps.now() - startedAt),
       };
     })();
@@ -299,3 +348,6 @@ export function createVoiceAgentFlow(deps: VoiceAgentFlowDependencies) {
 
   return { run };
 }
+
+/** Resolves after a matching runtime `running` event, never merely after dispatchEvent. */
+export const dispatchVoiceMainRequestByDefault = dispatchVoiceMainRequest;

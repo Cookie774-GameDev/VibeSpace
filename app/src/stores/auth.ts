@@ -72,9 +72,19 @@ import { DEFAULT_PROMPT_FORGE_MODEL_SELECTION } from '@/features/prompt-forge/mo
 import { CredentialHydrationSnapshot } from '@/lib/harness/CredentialHydrationSnapshot';
 
 export type VoiceAgentProvider = 'codex' | 'opencode';
+export type VoiceWorkerSessionMode = 'new' | 'resume';
 
 function normalizeVoiceAgentProvider(value: unknown): VoiceAgentProvider {
   return value === 'opencode' ? 'opencode' : 'codex';
+}
+
+function normalizeVoiceWorkerSessionMode(value: unknown): VoiceWorkerSessionMode {
+  return value === 'resume' ? 'resume' : 'new';
+}
+
+function normalizeVoiceAccentIntensity(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 60;
+  return Math.round(Math.min(100, Math.max(0, value)));
 }
 
 interface AuthState {
@@ -121,6 +131,12 @@ interface AuthState {
   voiceMainAgentProvider: VoiceAgentProvider;
   /** Provider for the worker session started by a voice request. */
   voiceWorkerProvider: VoiceAgentProvider;
+  /** Whether voice worker requests create a new worker session or resume the existing one. */
+  voiceWorkerSessionMode: VoiceWorkerSessionMode;
+  /** Tint Jarvis voice visuals with colors for the provider receiving the current request. */
+  voiceProviderAccentsEnabled: boolean;
+  /** Provider accent mix, from 0 (theme colors) to 100 (full provider colors). */
+  voiceAccentIntensity: number;
   /** Show a small text entry surface while Jarvis voice is open. */
   voiceMiniBarEnabled: boolean;
   /** Create a provider-scoped Jarvis chat on each opening instead of resuming it. */
@@ -211,6 +227,9 @@ interface AuthState {
   setVoiceEngine: (engine: VoiceEngine) => void;
   setVoiceMainAgentProvider: (provider: VoiceAgentProvider) => void;
   setVoiceWorkerProvider: (provider: VoiceAgentProvider) => void;
+  setVoiceWorkerSessionMode: (mode: VoiceWorkerSessionMode) => void;
+  setVoiceProviderAccentsEnabled: (enabled: boolean) => void;
+  setVoiceAccentIntensity: (intensity: number) => void;
   setVoiceMiniBarEnabled: (enabled: boolean) => void;
   setVoiceStartFreshChat: (enabled: boolean) => void;
   setSpeakReplies: (enabled: boolean) => void;
@@ -314,6 +333,9 @@ export const useAuthStore = create<AuthState>()(
       voiceEngine: 'jarvis',
       voiceMainAgentProvider: 'codex',
       voiceWorkerProvider: 'codex',
+      voiceWorkerSessionMode: 'new',
+      voiceProviderAccentsEnabled: false,
+      voiceAccentIntensity: 60,
       voiceMiniBarEnabled: false,
       voiceStartFreshChat: false,
       speakReplies: false,
@@ -413,6 +435,11 @@ export const useAuthStore = create<AuthState>()(
         set({ voiceMainAgentProvider: normalizeVoiceAgentProvider(provider) }),
       setVoiceWorkerProvider: (provider) =>
         set({ voiceWorkerProvider: normalizeVoiceAgentProvider(provider) }),
+      setVoiceWorkerSessionMode: (mode) =>
+        set({ voiceWorkerSessionMode: normalizeVoiceWorkerSessionMode(mode) }),
+      setVoiceProviderAccentsEnabled: (enabled) => set({ voiceProviderAccentsEnabled: enabled }),
+      setVoiceAccentIntensity: (intensity) =>
+        set({ voiceAccentIntensity: normalizeVoiceAccentIntensity(intensity) }),
       setVoiceMiniBarEnabled: (enabled) => set({ voiceMiniBarEnabled: enabled }),
       setVoiceStartFreshChat: (enabled) => set({ voiceStartFreshChat: enabled }),
       setSpeakReplies: (enabled) => set({ speakReplies: enabled }),
@@ -552,6 +579,9 @@ export const useAuthStore = create<AuthState>()(
         voiceEngine: s.voiceEngine,
         voiceMainAgentProvider: s.voiceMainAgentProvider,
         voiceWorkerProvider: s.voiceWorkerProvider,
+        voiceWorkerSessionMode: s.voiceWorkerSessionMode,
+        voiceProviderAccentsEnabled: s.voiceProviderAccentsEnabled,
+        voiceAccentIntensity: s.voiceAccentIntensity,
         voiceMiniBarEnabled: s.voiceMiniBarEnabled,
         voiceStartFreshChat: s.voiceStartFreshChat,
         speakReplies: s.speakReplies,
@@ -577,7 +607,7 @@ export const useAuthStore = create<AuthState>()(
         telemetryOptIn: s.telemetryOptIn,
         preferredConnectionIdByProviderFamily: s.preferredConnectionIdByProviderFamily,
       }),
-      version: 20,
+      version: 21,
       migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
@@ -733,6 +763,14 @@ export const useAuthStore = create<AuthState>()(
           state.voiceMiniBarEnabled = false;
           state.voiceStartFreshChat = false;
         }
+        state.voiceWorkerSessionMode = normalizeVoiceWorkerSessionMode(
+          state.voiceWorkerSessionMode,
+        );
+        state.voiceProviderAccentsEnabled =
+          typeof state.voiceProviderAccentsEnabled === 'boolean'
+            ? state.voiceProviderAccentsEnabled
+            : false;
+        state.voiceAccentIntensity = normalizeVoiceAccentIntensity(state.voiceAccentIntensity);
         return state;
       },
     },

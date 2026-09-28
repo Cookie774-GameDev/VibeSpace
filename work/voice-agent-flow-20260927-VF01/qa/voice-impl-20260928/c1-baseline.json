@@ -1,0 +1,75 @@
+{
+  "capturedAtUtc": "2026-09-28T05:18:00.424Z",
+  "task": "JARVIS-VOICE-IMPL-C1-BASELINE-20260928-VI01",
+  "branch": "integration/UnifiedChungus-final",
+  "head": "eee963dabf84884516f3783c7b8a86339ecd5f68",
+  "mode": "read-only baseline; no click, screenshot, transcript/draft read, mic request, or playback",
+  "identity": {
+    "jarvisPid": 19476,
+    "webViewPid": 26784,
+    "executablePath": "D:\\VibeSpace-Testing\\MI01-cargo-target\\debug\\jarvis.exe",
+    "profile": "C:\\Users\\viper\\AppData\\Local\\ai.jarvis.desktop\\EBWebView",
+    "cdpPort": 9223,
+    "listenerAddress": "127.0.0.1",
+    "identityReattestedBeforeAndAfterAttach": true,
+    "officialReservation": "VS-CODEX-NATIVE-RESERVE-20260928-V4C1"
+  },
+  "renderer": {
+    "url": "http://localhost:5173/?route=chat",
+    "title": "VibeSpace",
+    "officialPageCount": 1,
+    "documentReadyState": "complete",
+    "tauriBridgePresent": true,
+    "attachAndReadyMs": 5561,
+    "vitePid": 32892,
+    "viteCommandPath": "C:\\Users\\viper\\VibeSpace-UnifiedChungus-Final\\app\\node_modules\\.bin\\..\\vite\\bin\\vite.js",
+    "jarvisBinaryFileVersion": "1.5.0",
+    "jarvisBinaryProductVersion": "1.5.0",
+    "frontendSourceIdentity": "not frozen: live Vite HMR serves the in-progress dirty worktree; root is still editing"
+  },
+  "voiceUi": {
+    "modalOpen": false,
+    "panelMounted": false,
+    "panelVisible": false,
+    "state": "idle",
+    "errorPresent": false,
+    "sessionPresent": false,
+    "panelOpenLatencyMs": null,
+    "panelOpenLatencyReason": "not measured during passive baseline; hands-free-on-open is enabled"
+  },
+  "settings": {
+    "mainAgentProvider": "codex",
+    "workerProvider": "codex",
+    "workerSessionMode": "new",
+    "sttProvider": "system",
+    "deepgramModelOptionStored": null,
+    "fasterWhisperModel": "whisper-small-en-q8",
+    "ttsEngine": "jarvis",
+    "ttsVoicePreset": "jarvis-prime",
+    "speakReplies": false,
+    "handsFreeOnOpen": true
+  },
+  "audioApiFeasibility": {
+    "secureContext": true,
+    "mediaDevicesAvailable": true,
+    "getUserMediaAvailable": true,
+    "microphonePermissionQuery": "granted",
+    "speechRecognitionAvailable": true,
+    "speechSynthesisAvailable": true,
+    "installedSpeechVoiceCount": 3,
+    "wavAudioElementSupported": true,
+    "microphoneCaptureRequested": false,
+    "ttsPlaybackAttempted": false
+  },
+  "evidenceLimits": [
+    "API presence and permission query do not verify successful capture or transcription.",
+    "Speech API presence and selected engine do not verify selected Jarvis TTS playback.",
+    "No panel-open transition was triggered; 5561ms measures attach and stable-page readiness only."
+  ],
+  "driver": {
+    "path": "work/voice-agent-flow-20260927-VF01/qa/voice-impl-20260928/c1-baseline.mjs",
+    "nodeSyntaxCheck": "passed",
+    "persistentSessionId": 47531,
+    "stableCdpConnection": true
+  }
+}

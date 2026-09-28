@@ -12,6 +12,7 @@ import { chatRepo, db } from '@/lib/db';
 import { useAgentStore } from '@/stores/agents';
 import { useAuthStore } from '@/stores/auth';
 import { createJarvisChatIntentStore } from '@/features/chat/jarvisChatIntent';
+import { recordVoiceConversation } from './voiceTaskCoordinator';
 
 const jarvisAgent = {
   id: 'agent-jarvis',
@@ -38,6 +39,53 @@ const agents = {
 };
 
 describe('provider-bound Jarvis voice chats', () => {
+  it('resumes the recorded voice conversation instead of a newer ordinary Jarvis chat', async () => {
+    const previousAuth = useAuthStore.getState();
+    const previousAgents = useAgentStore.getState().agents;
+    const scope = {
+      accountId: 'voice-resume-account',
+      workspaceId: 'voice-resume-workspace',
+      projectId: null,
+    };
+    useAuthStore.setState({
+      cloudSession: null,
+      localUserId: scope.accountId,
+      workspaceId: scope.workspaceId as never,
+      projectId: null,
+    });
+    useAgentStore.setState({ agents: { [jarvisAgent.id]: jarvisAgent } });
+    recordVoiceConversation(scope, 'previous-voice');
+    vi.spyOn(db.chats, 'where').mockReturnValue({
+      equals: () => ({
+        toArray: async () => [
+          {
+            id: 'previous-voice',
+            title: 'Jarvis Voice earlier',
+            active_agent_ids: [jarvisAgent.id],
+            backend_affinity: { version: 1, backend: 'codex', locked: false, selectedAt: 1 },
+            updated_at: 100,
+          },
+          {
+            id: 'ordinary-chat',
+            title: 'New chat',
+            active_agent_ids: [jarvisAgent.id],
+            backend_affinity: { version: 1, backend: 'codex', locked: false, selectedAt: 2 },
+            updated_at: 200,
+          },
+        ],
+      }),
+    } as never);
+    const create = vi.spyOn(chatRepo, 'createAuthorized');
+
+    try {
+      await expect(ensureJarvisChatForProvider('codex')).resolves.toBe('previous-voice');
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      useAuthStore.setState(previousAuth);
+      useAgentStore.setState({ agents: previousAgents });
+    }
+  });
+
   it('creates a new provider chat for each voice opening even when older voice chats exist', async () => {
     const previousAuth = useAuthStore.getState();
     const previousAgents = useAgentStore.getState().agents;

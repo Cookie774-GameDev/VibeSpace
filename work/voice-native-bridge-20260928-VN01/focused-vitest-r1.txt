@@ -1,0 +1,51 @@
+
+ RUN  v4.1.11 C:/Users/viper/VibeSpace-UnifiedChungus-Final/app
+
+ ❯ src/features/voice/voiceAgentFlow.test.ts (9 tests | 2 failed) 38ms
+     × builds one Main send with voice-only brevity, selected Main model, worker constraints, and bounded context 16ms
+     × does not pre-block a direct Main answer when the worker provider differs 4ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/voice/voiceAgentFlow.test.ts > voice Main Agent request > builds one Main send with voice-only brevity, selected Main model, worker constraints, and bounded context
+AssertionError: expected 'Reply quickly and as briefly as possi…' to contain 'Answer simple requests directly'
+
+- Expected
++ Received
+
+- Answer simple requests directly
++ Reply quickly and as briefly as possible. Use the fewest words that preserve the action, real status, result, and any important limitation. Acknowledge promptly; do not narrate routine steps.
++ Answer simple turns directly. For real work, use exactly one provider-native subagent and preserve parent context. Never create VibeSpace child chats or claim launch without a native task/session receipt. Worker is opencode; Main is codex. Cross-provider native sessions are unavailable. Do not substitute Main or another provider; state this limitation for real work. A screenshot is attached to Main only; never claim the worker received it without native attachment evidence.
+
+ ❯ src/features/voice/voiceAgentFlow.test.ts:102:40
+    100|     });
+    101|     expect(detail.localCommandContext).toContain(VOICE_BRIEF_SYSTEM_IN…
+    102|     expect(detail.localCommandContext).toContain('Answer simple reques…
+       |                                        ^
+    103|     expect(detail.localCommandContext).toContain('cross-provider');
+    104|     expect(detail.structuredContext?.payload).toMatchObject({
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/features/voice/voiceAgentFlow.test.ts > voice Main Agent request > does not pre-block a direct Main answer when the worker provider differs
+AssertionError: expected 'Answer simple turns directly. For rea…' to contain 'Answer simple requests directly'
+
+Expected: "Answer simple requests directly"
+Received: "Answer simple turns directly. For real work, use exactly one provider-native subagent and preserve parent context. Never create VibeSpace child chats or claim launch without a native task/session receipt. Worker is opencode; Main is codex. Cross-provider native sessions are unavailable. Do not substitute Main or another provider; state this limitation for real work. A screenshot is attached to Main only; never claim the worker received it without native attachment evidence."
+
+ ❯ src/features/voice/voiceAgentFlow.test.ts:127:40
+    125|     expect(detail.text).toBe('What time is it?');
+    126|     expect(detail.interactionMode).toBe('agent');
+    127|     expect(detail.localCommandContext).toContain('Answer simple reques…
+       |                                        ^
+    128|   });
+    129|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 3 passed (4)
+      Tests  2 failed | 30 passed (32)
+   Start at  00:21:48
+   Duration  13.65s (transform 3.10s, setup 150ms, import 5.04s, tests 80ms, environment 6.83s)
+

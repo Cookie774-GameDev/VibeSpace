@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { motion } from 'motion/react';
 import { cn } from '@/lib/utils';
+import { useAuthStore, type VoiceAgentProvider } from '@/stores/auth';
 import type { VoiceState } from './store';
 import { useThemeMotionTransition } from '@/features/appearance/themeMotion';
 import { useAppForeground } from './useAppForeground';
@@ -40,6 +41,8 @@ export interface OrbProps {
   presentation?: 'default' | 'monochrome-flat' | 'signal-globe';
   /** Mutable 0..1 signal sampled without causing React renders. */
   levelRef?: React.RefObject<number>;
+  /** Provider resolved for this voice request; falls back to the saved Main Agent provider. */
+  activeProvider?: VoiceAgentProvider;
 }
 
 const LEGACY_ORB_STATE_TRANSITION = Object.freeze({
@@ -151,11 +154,17 @@ function JarvisHudOrb({
   className,
   ariaLabel,
   levelRef,
+  activeProvider,
+  providerAccentsEnabled,
+  accentIntensity,
 }: {
   state: VoiceState;
   className?: string;
   ariaLabel?: string;
   levelRef?: React.RefObject<number>;
+  activeProvider: VoiceAgentProvider;
+  providerAccentsEnabled: boolean;
+  accentIntensity: number;
 }) {
   const reducedMotion = usePrefersReducedMotion();
   const appForeground = useAppForeground();
@@ -194,7 +203,11 @@ function JarvisHudOrb({
       data-speaking={speaking ? 'true' : 'false'}
       data-orb-presentation="signal-globe"
       data-hud-motion={!reducedMotion && speaking && appForeground ? 'on' : 'off'}
+      data-voice-provider={activeProvider}
+      data-provider-accents={providerAccentsEnabled ? 'true' : 'false'}
+      data-voice-status={state}
       className={cn('jarvis-hud-orb relative shrink-0 select-none pointer-events-none', className)}
+      style={{ '--jarvis-accent-intensity': `${accentIntensity}%` } as React.CSSProperties}
     >
       <svg viewBox="0 0 100 100" className="jarvis-hud-svg h-full w-full" aria-hidden="true">
         <defs>
@@ -226,8 +239,13 @@ export function Orb({
   ariaLabel,
   presentation = 'default',
   levelRef,
+  activeProvider,
 }: OrbProps) {
   const style = STYLES[state];
+  const savedProvider = useAuthStore((auth) => auth.voiceMainAgentProvider);
+  const providerAccentsEnabled = useAuthStore((auth) => auth.voiceProviderAccentsEnabled);
+  const accentIntensity = useAuthStore((auth) => auth.voiceAccentIntensity);
+  const resolvedProvider = activeProvider ?? savedProvider;
   const reducedMotion = usePrefersReducedMotion();
   const stateTransition = useThemeMotionTransition(LEGACY_ORB_STATE_TRANSITION);
   const haloTransition = useThemeMotionTransition(LEGACY_ORB_HALO_TRANSITION);
@@ -237,7 +255,15 @@ export function Orb({
 
   if (signalGlobe) {
     return (
-      <JarvisHudOrb state={state} className={className} ariaLabel={ariaLabel} levelRef={levelRef} />
+      <JarvisHudOrb
+        state={state}
+        className={className}
+        ariaLabel={ariaLabel}
+        levelRef={levelRef}
+        activeProvider={resolvedProvider}
+        providerAccentsEnabled={providerAccentsEnabled}
+        accentIntensity={accentIntensity}
+      />
     );
   }
 
@@ -247,15 +273,24 @@ export function Orb({
       aria-label={ariaLabel ?? `Voice orb (${state})`}
       data-orb-motion={reducedMotion ? 'reduced' : active ? 'active' : 'idle'}
       data-orb-presentation={presentation}
-      className={cn('relative shrink-0 select-none pointer-events-none', className)}
-      style={{
-        width: size,
-        height: size,
-        filter:
-          reducedMotion && !flat
-            ? `brightness(${style.brightness}) saturate(${style.saturation}) hue-rotate(${style.hueShift}deg)`
-            : undefined,
-      }}
+      data-voice-provider={resolvedProvider}
+      data-provider-accents={providerAccentsEnabled ? 'true' : 'false'}
+      data-voice-status={state}
+      className={cn(
+        'jarvis-orb-surface relative shrink-0 select-none pointer-events-none',
+        className,
+      )}
+      style={
+        {
+          width: size,
+          height: size,
+          '--jarvis-accent-intensity': `${accentIntensity}%`,
+          filter:
+            reducedMotion && !flat
+              ? `brightness(${style.brightness}) saturate(${style.saturation}) hue-rotate(${style.hueShift}deg)`
+              : undefined,
+        } as React.CSSProperties
+      }
       animate={
         reducedMotion
           ? undefined
@@ -276,7 +311,7 @@ export function Orb({
           inset: flat ? '-18%' : '-40%',
           background: flat
             ? 'hsl(var(--foreground) / 0.08)'
-            : 'radial-gradient(circle, hsl(var(--accent-amber) / 0.5) 0%, hsl(var(--accent-copper) / 0.3) 35%, transparent 70%)',
+            : 'radial-gradient(circle, color-mix(in srgb, var(--jarvis-orb-accent-primary) 50%, transparent) 0%, color-mix(in srgb, var(--jarvis-orb-accent-secondary) 30%, transparent) 35%, transparent 70%)',
           filter: flat ? undefined : 'blur(34px)',
           willChange: 'transform, opacity',
         }}
@@ -306,7 +341,7 @@ export function Orb({
         style={{
           background: flat
             ? 'hsl(var(--foreground) / 0.16)'
-            : 'conic-gradient(from 0deg, hsl(var(--accent-amber)) 0deg, hsl(var(--accent-copper)) 120deg, hsl(var(--accent-amber)) 240deg, hsl(var(--accent-copper)) 360deg)',
+            : 'conic-gradient(from 0deg, var(--jarvis-orb-accent-primary) 0deg, var(--jarvis-orb-accent-secondary) 120deg, var(--jarvis-orb-accent-primary) 240deg, var(--jarvis-orb-accent-secondary) 360deg)',
           filter: flat ? undefined : 'blur(10px)',
           opacity: 0.78,
           willChange: 'transform',
@@ -327,11 +362,11 @@ export function Orb({
           inset: '12%',
           background: flat
             ? 'hsl(var(--accent-copper) / 0.72)'
-            : 'radial-gradient(circle at 32% 30%, hsl(0 0% 100% / 0.18) 0%, hsl(var(--accent-amber) / 0.58) 28%, hsl(var(--accent-copper) / 0.86) 70%, hsl(var(--accent-copper) / 0.96) 100%)',
+            : 'radial-gradient(circle at 32% 30%, hsl(0 0% 100% / 0.18) 0%, color-mix(in srgb, var(--jarvis-orb-accent-primary) 58%, transparent) 28%, color-mix(in srgb, var(--jarvis-orb-accent-secondary) 86%, transparent) 70%, color-mix(in srgb, var(--jarvis-orb-accent-secondary) 96%, transparent) 100%)',
           border: flat ? '2px solid hsl(var(--foreground) / 0.6)' : undefined,
           boxShadow: flat
             ? undefined
-            : 'inset 0 0 28px hsl(var(--accent-amber) / 0.48), inset 0 -10px 28px hsl(var(--accent-copper) / 0.56)',
+            : 'inset 0 0 28px color-mix(in srgb, var(--jarvis-orb-accent-primary) 48%, transparent), inset 0 -10px 28px color-mix(in srgb, var(--jarvis-orb-accent-secondary) 56%, transparent)',
         }}
       />
 
@@ -359,7 +394,9 @@ export function Orb({
           border: flat
             ? '2px solid hsl(var(--foreground) / 0.55)'
             : '1px solid hsl(0 0% 100% / 0.08)',
-          boxShadow: flat ? undefined : '0 0 0 1px hsl(var(--accent-copper) / 0.2)',
+          boxShadow: flat
+            ? undefined
+            : '0 0 0 1px color-mix(in srgb, var(--jarvis-orb-accent-secondary) 20%, transparent)',
         }}
       />
     </motion.div>

@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "agent": "VS-CODEX-VOICE-NATIVE-OPERATOR-20260928-VNA01",
+  "task": "JARVIS-VOICE-NATIVE-ACCEPTANCE-20260928-VNA01",
+  "branch": "integration/UnifiedChungus-final",
+  "head": "eee963dabf84884516f3783c7b8a86339ecd5f68",
+  "overall": "blocked",
+  "nativeVoiceAcceptance": "not passed",
+  "events": [
+    {
+      "atUtc": "2026-09-28T06:03:19.483Z",
+      "event": "official_c1_attach_and_baseline",
+      "result": "Tauri WebView bridge present; exact chat page attested; voice panel closed/idle, no error or session.",
+      "settings": { "mainAgentProvider": "codex", "workerProvider": "codex", "workerSessionMode": "new", "sttProvider": "system", "ttsEngine": "jarvis", "ttsVoicePreset": "jarvis-prime", "speakReplies": false, "handsFreeOnOpen": true }
+    },
+    {
+      "atUtc": "2026-09-28T05:59:17.223Z",
+      "event": "read_only_occlusion_diagnosis",
+      "result": "The button center (52,19.6) was covered by the full-screen ambient-home dialog, aria-label 'Ambient mode. Press any key to wake.', z-index 70, pointer-events auto, viewport 1280x820. This was expected ambient interception, not a TopBar defect."
+    },
+    {
+      "atUtc": "2026-09-28T06:03:32.497Z",
+      "event": "ambient_wake",
+      "action": "One Escape key press after reattestation; no mouse/click sent to the overlay.",
+      "durationMs": 3172,
+      "result": "Overlay became inactive. Voice button was actionable; center hit its own SVG child, modal count 0."
+    },
+    {
+      "atUtc": "2026-09-28T06:03:53.834Z",
+      "event": "voice_open_attempt",
+      "action": "One ordinary Playwright click, no force option.",
+      "result": "Timed out waiting 8000ms for #jarvis-panel to become visible. Snapshot showed voiceModalOpen=false, panel hidden, voiceState=listening, sessionPresent=true, status Listening, no error. No transcript text was read and no worker task was sent."
+    },
+    {
+      "atUtc": "2026-09-28T06:05:13.727Z",
+      "event": "bounded_state_recheck",
+      "result": "Same hidden-panel/listening-store mismatch remained."
+    },
+    {
+      "atUtc": "2026-09-28T06:05:45.113Z",
+      "event": "normal_ui_recovery_attempt",
+      "result": "Start Jarvis voice control count was 0; no further voice click or capture start was attempted."
+    },
+    {
+      "atUtc": "2026-09-28T06:10:57.202Z",
+      "event": "safety_cleanup_and_disconnect",
+      "action": "Called the app's UI store setVoiceModalOpen(false), JarvisVoiceInputService.cancelListening(), and voiceRouter.handleVoiceModuleClosed() in the attested page; then quit the driver.",
+      "inputServiceBefore": { "active": false, "wantsListening": false },
+      "inputServiceAfter": { "active": false, "wantsListening": false },
+      "finalUi": { "voiceModalOpen": false, "panelVisible": false, "voiceState": "idle", "sessionPresent": false, "statusLabel": "Ready", "voiceErrorPresent": false, "voiceListeningDirectRead": "not captured in the minimized snapshot; the called close handler sets it false" },
+      "result": "Capture was not active in the selected Jarvis input service at cleanup; stale UI voice state/session were reset and the panel is closed. CDP driver disconnected; native app left open."
+    }
+  ],
+  "scenarioResults": {
+    "ambientWake": "passed",
+    "voiceControlActionableAfterWake": "passed",
+    "voicePanelOpen": "failed",
+    "actualSttTranscription": "not tested",
+    "spokenAcknowledgment": "not tested",
+    "ttsOutput": "not tested",
+    "workerLaunchAndReceipt": "not tested",
+    "providerSettingsAndOverride": "not tested",
+    "screenshotSuccessOrFailure": "not tested",
+    "duplicateRequestBehavior": "not tested"
+  },
+  "statePreservation": {
+    "settingsChanged": false,
+    "existingDraftOrChatContentRead": false,
+    "transcriptTextRead": false,
+    "taskLaunched": false,
+    "screenshotCaptured": false,
+    "c2Touched": false,
+    "buildOrReload": false
+  },
+  "verification": {
+    "command": "node --check work/voice-agent-flow-20260927-VF01/qa/voice-impl-20260928/native-acceptance-20260928/native-voice-driver.mjs",
+    "exitCode": 0
+  },
+  "limitation": "The official native voice panel never became visible. The hidden panel contradicted stale UI-store Listening/session state, while JarvisVoiceInputService reported inactive before and after cleanup. No end-to-end voice, STT, acknowledgment, TTS, worker, screenshot, or provider claim is made."
+}

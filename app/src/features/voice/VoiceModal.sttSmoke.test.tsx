@@ -6,7 +6,7 @@ import { GROQ_DEFAULT_MODEL } from '@/lib/ai/providers/groq';
 import { DEFAULT_CUSTOM_STEPS } from '@/lib/ai/stacks/presets';
 
 const invoke = vi.hoisted(() => vi.fn());
-const messageCreate = vi.hoisted(() => vi.fn(async () => ({})));
+const messageCreate = vi.hoisted(() => vi.fn(async () => ({ id: 'smoke-message' })));
 const voiceHandlers = vi.hoisted(() => new Map<string, Set<(payload?: unknown) => void>>());
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
@@ -74,28 +74,18 @@ vi.mock('./voiceProviderSelection', async (importOriginal) => {
     })),
   };
 });
-vi.mock('./voiceAgentFlow', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./voiceAgentFlow')>();
-  return {
-    ...actual,
-    createVoiceAgentFlow: (deps: import('./voiceAgentFlow').VoiceAgentFlowDependencies) => ({
-      run: async (input: import('./voiceAgentFlow').VoiceAgentRequest) => {
-        await deps.persistUser(input);
-        await deps.deliverMainResult({
-          chatId: input.chatId,
-          userText: input.text,
-          mainProvider: input.mainProvider,
-          workerProvider: input.workerProvider,
-          childChatId: 'child-smoke',
-          workerStatus: 'done',
-          workerText: 'Smoke worker result',
-          instruction: actual.VOICE_BRIEF_SYSTEM_INSTRUCTION,
-        });
-        return { status: 'main_dispatched' as const, duplicate: false, elapsedMs: 0 };
-      },
-    }),
-  };
-});
+vi.mock('./voiceNativeDelegation', () => ({
+  buildVoiceNativeDelegationGuidance: () =>
+    'Answer simple requests directly. Use one native subagent for real work.',
+  dispatchVoiceMainRequest: vi.fn(async (detail: import('@/lib/ai/runtime').SendDetail) => {
+    window.dispatchEvent(new CustomEvent('jarvis:send', { detail }));
+    return {
+      status: 'accepted' as const,
+      chatId: detail.chatId,
+      cancellationKey: String(detail.cancellationKey),
+    };
+  }),
+}));
 
 async function renderVoice(flag: string) {
   vi.resetModules();

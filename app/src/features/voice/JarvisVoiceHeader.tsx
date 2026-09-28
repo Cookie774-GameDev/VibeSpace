@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { VoiceAgentProvider } from '@/stores/auth';
 import type { VoiceState } from './store';
 import { Orb } from './Orb';
 import { VoiceActivityWaveform } from './VoiceActivityWaveform';
@@ -13,6 +14,7 @@ export function JarvisVoiceHeader({
   errorMessage,
   voiceAutoListenOnOpen,
   voiceCommitPhrase,
+  activeProvider,
   levelRef,
   voiceControlEvidence,
   onClose,
@@ -29,6 +31,7 @@ export function JarvisVoiceHeader({
   errorMessage?: string | null;
   voiceAutoListenOnOpen: boolean;
   voiceCommitPhrase: string;
+  activeProvider?: VoiceAgentProvider;
   levelRef: React.RefObject<number>;
   voiceControlEvidence?: string;
   onClose: () => void;
@@ -91,6 +94,7 @@ export function JarvisVoiceHeader({
             state={state}
             ariaLabel="Jarvis voice activity"
             presentation="signal-globe"
+            activeProvider={activeProvider}
             levelRef={levelRef}
             className="jarvis-voice-orb"
           />

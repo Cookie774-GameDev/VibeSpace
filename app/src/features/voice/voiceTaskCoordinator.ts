@@ -106,23 +106,23 @@ export function formatPreviousVoiceTaskContext(tasks: readonly PreviousVoiceTask
     .slice(0, 1_500);
 }
 
-export interface VoiceTaskLaunchReceipt {
-  status: 'submitted' | 'launched' | 'launch_failed' | 'cancelled';
+export interface VoiceTaskCoordinatorReceipt {
+  status: 'accepted' | 'persist_failed' | 'dispatch_failed' | 'cancelled';
   duplicate: boolean;
-  actualWorkerProvider?: 'codex' | 'opencode';
-  childChatId?: string;
+  requestId: string;
+  cancellationKey?: string;
 }
 
-/** Long-running worker completion belongs here, outside the short-lived voice modal. */
+/** Owns Main-send deduplication across short-lived voice modal instances. */
 export function createVoiceTaskCoordinator(now: () => number = Date.now) {
   const operations = new Map<
     string,
-    { startedAt: number; completedAt?: number; launch: Promise<VoiceTaskLaunchReceipt> }
+    { completedAt?: number; result: Promise<VoiceTaskCoordinatorReceipt> }
   >();
   const start = (
     request: VoiceAgentRequest & { dedupeScope?: string },
     run: (report: (status: VoiceAgentFlowStatus) => void) => Promise<VoiceAgentFlowResult>,
-  ): Promise<VoiceTaskLaunchReceipt> => {
+  ): Promise<VoiceTaskCoordinatorReceipt> => {
     const startedAt = now();
     for (const [key, entry] of operations) {
       if (entry.completedAt !== undefined && startedAt - entry.completedAt >= RECENT_DUPLICATE_MS)
@@ -139,57 +139,37 @@ export function createVoiceTaskCoordinator(now: () => number = Date.now) {
         .toLowerCase(),
     ]);
     const prior = operations.get(key);
-    if (prior) return prior.launch.then((receipt) => ({ ...receipt, duplicate: true }));
+    if (prior) return prior.result.then((receipt) => ({ ...receipt, duplicate: true }));
 
-    let resolveLaunch!: (receipt: VoiceTaskLaunchReceipt) => void;
-    const launch = new Promise<VoiceTaskLaunchReceipt>((resolve) => {
-      resolveLaunch = resolve;
-    });
-    let launched = false;
-    const report = (status: VoiceAgentFlowStatus) => {
-      if (status.phase === 'submitted') {
-        resolveLaunch({ status: 'submitted', duplicate: false });
-      } else if (status.phase === 'launched') {
-        launched = true;
-        resolveLaunch({
-          status: 'launched',
-          duplicate: false,
-          actualWorkerProvider: status.provider,
-        });
-      } else if (status.phase === 'launch_failed' || status.phase === 'cancelled') {
-        resolveLaunch({ status: status.phase, duplicate: false });
-      }
-    };
-    const entry: {
-      startedAt: number;
-      completedAt?: number;
-      launch: Promise<VoiceTaskLaunchReceipt>;
-    } = {
-      startedAt,
-      launch,
+    const report = (_status: VoiceAgentFlowStatus) => undefined;
+    const entry: { completedAt?: number; result: Promise<VoiceTaskCoordinatorReceipt> } = {
+      result: Promise.resolve({
+        status: 'dispatch_failed',
+        duplicate: false,
+        requestId: request.requestId ?? '',
+      }),
     };
     operations.set(key, entry);
-    void Promise.resolve()
+    const result = Promise.resolve()
       .then(() => run(report))
       .then(
-        (result) => {
-          if (!launched) {
-            resolveLaunch({
-              status: result.status === 'cancelled' ? 'cancelled' : 'launch_failed',
-              duplicate: false,
-            });
-            operations.delete(key);
-            return;
-          }
-          entry.completedAt = now();
-        },
-        () => {
-          if (!launched) resolveLaunch({ status: 'launch_failed', duplicate: false });
-          if (!launched) operations.delete(key);
-          entry.completedAt = now();
-        },
+        (flowResult): VoiceTaskCoordinatorReceipt => ({
+          status: flowResult.status === 'main_accepted' ? 'accepted' : flowResult.status,
+          duplicate: false,
+          requestId: flowResult.requestId,
+          ...(flowResult.cancellationKey ? { cancellationKey: flowResult.cancellationKey } : {}),
+        }),
+        (): VoiceTaskCoordinatorReceipt => ({
+          status: 'dispatch_failed',
+          duplicate: false,
+          requestId: request.requestId ?? '',
+        }),
       );
-    return launch;
+    entry.result = result;
+    void result.then(() => {
+      entry.completedAt = now();
+    });
+    return result;
   };
   return { start };
 }

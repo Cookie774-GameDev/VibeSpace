@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AudioLines, Check, Cloud, Download, HardDrive, Play, RefreshCw } from 'lucide-react';
-import { useAuthStore, type VoiceAgentProvider } from '@/stores/auth';
+import { useAuthStore, type VoiceAgentProvider, type VoiceWorkerSessionMode } from '@/stores/auth';
 import type { PersonaPreset, VoiceEngine, VoicePresetId } from '@/types/common';
 import { PERSONAS } from '@/features/onboarding/steps/personas-data';
 import {
@@ -126,6 +126,12 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
   const setVoiceMainAgentProvider = useAuthStore((s) => s.setVoiceMainAgentProvider);
   const voiceWorkerProvider = useAuthStore((s) => s.voiceWorkerProvider);
   const setVoiceWorkerProvider = useAuthStore((s) => s.setVoiceWorkerProvider);
+  const voiceWorkerSessionMode = useAuthStore((s) => s.voiceWorkerSessionMode);
+  const setVoiceWorkerSessionMode = useAuthStore((s) => s.setVoiceWorkerSessionMode);
+  const voiceProviderAccentsEnabled = useAuthStore((s) => s.voiceProviderAccentsEnabled);
+  const setVoiceProviderAccentsEnabled = useAuthStore((s) => s.setVoiceProviderAccentsEnabled);
+  const voiceAccentIntensity = useAuthStore((s) => s.voiceAccentIntensity);
+  const setVoiceAccentIntensity = useAuthStore((s) => s.setVoiceAccentIntensity);
   const voiceMiniBarEnabled = useAuthStore((s) => s.voiceMiniBarEnabled);
   const setVoiceMiniBarEnabled = useAuthStore((s) => s.setVoiceMiniBarEnabled);
   const voiceStartFreshChat = useAuthStore((s) => s.voiceStartFreshChat);
@@ -471,6 +477,20 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
               <option value="new">Start a new chat</option>
             </select>
           </label>
+          <label className="text-secondary text-foreground">
+            Worker session
+            <select
+              aria-label="Jarvis worker session"
+              className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+              value={voiceWorkerSessionMode}
+              onChange={(event) =>
+                setVoiceWorkerSessionMode(event.target.value as VoiceWorkerSessionMode)
+              }
+            >
+              <option value="new">Start a new worker session</option>
+              <option value="resume">Resume the existing worker session</option>
+            </select>
+          </label>
           <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-panel px-3 py-2">
             <label htmlFor="voice-mini-bar-toggle" className="text-sm text-foreground">
               Typed mini bar
@@ -484,6 +504,43 @@ export function Voice({ active = true }: { active?: boolean } = {}) {
               onCheckedChange={setVoiceMiniBarEnabled}
             />
           </div>
+        </div>
+        <div className="grid gap-3 rounded-md border border-border bg-panel p-3 sm:grid-cols-2">
+          <div className="flex items-center justify-between gap-3">
+            <label htmlFor="voice-provider-accents" className="text-sm text-foreground">
+              Provider accents
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                Tint the voice Orb for the provider handling this request.
+              </span>
+            </label>
+            <Switch
+              id="voice-provider-accents"
+              aria-label="Provider accents"
+              checked={voiceProviderAccentsEnabled}
+              onCheckedChange={setVoiceProviderAccentsEnabled}
+            />
+          </div>
+          <label className="text-sm text-foreground">
+            <span className="flex items-center justify-between gap-2">
+              <span>Accent intensity</span>
+              <output htmlFor="voice-accent-intensity" aria-live="polite">
+                {voiceAccentIntensity}%
+              </output>
+            </span>
+            <input
+              id="voice-accent-intensity"
+              aria-label="Accent intensity"
+              aria-valuetext={`${voiceAccentIntensity}%`}
+              className="mt-2 w-full accent-[hsl(var(--accent-copper))] disabled:cursor-not-allowed disabled:opacity-50"
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={voiceAccentIntensity}
+              disabled={!voiceProviderAccentsEnabled}
+              onChange={(event) => setVoiceAccentIntensity(event.currentTarget.valueAsNumber)}
+            />
+          </label>
         </div>
       </section>
       <section className="flex flex-col gap-4">

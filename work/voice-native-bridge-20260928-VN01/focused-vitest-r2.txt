@@ -1,0 +1,34 @@
+
+ RUN  v4.1.11 C:/Users/viper/VibeSpace-UnifiedChungus-Final/app
+
+ ❯ src/features/voice/voiceAgentFlow.test.ts (9 tests | 1 failed) 42ms
+     × builds one Main send with voice-only brevity, selected Main model, worker constraints, and bounded context 17ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/features/voice/voiceAgentFlow.test.ts > voice Main Agent request > builds one Main send with voice-only brevity, selected Main model, worker constraints, and bounded context
+AssertionError: expected 'Reply quickly and as briefly as possi…' to contain 'cross-provider'
+
+- Expected
++ Received
+
+- cross-provider
++ Reply quickly and as briefly as possible. Use the fewest words that preserve the action, real status, result, and any important limitation. Acknowledge promptly; do not narrate routine steps.
++ Answer simple requests directly. For real work, use exactly one provider-native subagent and preserve parent context. Never create VibeSpace child chats or claim launch without a native task/session receipt. Worker is opencode; Main is codex. Cross-provider native sessions are unavailable. Do not substitute Main or another provider; state this limitation for real work. A screenshot is attached to Main only; never claim the worker received it without native attachment evidence.
+
+ ❯ src/features/voice/voiceAgentFlow.test.ts:103:40
+    101|     expect(detail.localCommandContext).toContain(VOICE_BRIEF_SYSTEM_IN…
+    102|     expect(detail.localCommandContext).toContain('Answer simple reques…
+    103|     expect(detail.localCommandContext).toContain('cross-provider');
+       |                                        ^
+    104|     expect(detail.structuredContext?.payload).toMatchObject({
+    105|       requestId: 'voice-request-1',
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 3 passed (4)
+      Tests  1 failed | 31 passed (32)
+   Start at  00:22:22
+   Duration  14.78s (transform 3.78s, setup 168ms, import 5.48s, tests 78ms, environment 7.36s)
+

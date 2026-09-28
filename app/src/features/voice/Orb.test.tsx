@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useAuthStore } from '@/stores/auth';
 import { Orb } from './Orb';
 
 function setReducedMotion(matches: boolean) {
@@ -19,8 +20,36 @@ function setReducedMotion(matches: boolean) {
 }
 
 describe('Orb motion policy', () => {
-  beforeEach(() => setReducedMotion(false));
+  beforeEach(() => {
+    setReducedMotion(false);
+    useAuthStore.setState({
+      voiceMainAgentProvider: 'codex',
+      voiceProviderAccentsEnabled: false,
+      voiceAccentIntensity: 60,
+    });
+  });
   afterEach(() => vi.restoreAllMocks());
+
+  it('exposes the resolved provider and voice state for provider-aware accents', () => {
+    useAuthStore.setState({
+      voiceProviderAccentsEnabled: true,
+      voiceAccentIntensity: 37,
+    });
+    render(
+      <Orb
+        state="speaking"
+        presentation="signal-globe"
+        activeProvider="opencode"
+        ariaLabel="Jarvis voice activity"
+      />,
+    );
+
+    const orb = screen.getByRole('img', { name: 'Jarvis voice activity' });
+    expect(orb.getAttribute('data-voice-provider')).toBe('opencode');
+    expect(orb.getAttribute('data-provider-accents')).toBe('true');
+    expect(orb.getAttribute('data-voice-status')).toBe('speaking');
+    expect(orb.style.getPropertyValue('--jarvis-accent-intensity')).toBe('37%');
+  });
 
   it('does not schedule presentation frames unless Jarvis is speaking', () => {
     const requestFrame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1);
