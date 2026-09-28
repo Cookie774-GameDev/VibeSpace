@@ -10552,6 +10552,183 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     },
   );
 
+  it('keeps Codex stop pending until the exact interrupted terminal and fails resume closed', async () => {
+    lockTestBackend('codex');
+    const selection = selectionFromOption('openai', 'gpt-5.6-terra', CODEX_CLI_CONNECTION);
+    setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
+      {
+        id: 'gpt-5.6-terra',
+        label: 'GPT-5.6 Terra',
+        source: 'provider_list',
+        lastVerifiedAt: 1,
+      },
+    ]);
+    writeConnectionPickerStates({
+      [CODEX_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' },
+    });
+    useAuthStore.setState({ chatModelSelection: selection });
+    const selectedAgent = agent('agent_codex_interrupt_ack', 'apple', 'You are Apple.');
+    const harness = kernelRuntimeBindings(selectedAgent);
+    const response = deferred<{
+      text: string;
+      usage: { input_tokens: number; output_tokens: number; cost_usd: number };
+      provider: string;
+      model: string;
+      finish_reason?: string;
+    }>();
+    const interrupt = vi.fn(async () => undefined);
+    const signalRef: { current?: AbortSignal } = {};
+    mocks.runAgent.mockImplementationOnce((input) => {
+      signalRef.current = input.signal;
+      input.onLiveTurnControl?.({
+        interrupt,
+        steer: vi.fn(async () => undefined),
+        enqueue: vi.fn(async () => ({
+          submissionId: 'queued_codex_interrupt_ack',
+          threadId: 'thread_codex_interrupt_ack',
+          turnId: 'turn_codex_interrupt_ack',
+        })),
+      });
+      return response.promise;
+    });
+    const runStates: Array<{ status?: string; errorCode?: string }> = [];
+    const onRunState = (event: Event) => {
+      runStates.push((event as CustomEvent<{ status?: string; errorCode?: string }>).detail);
+    };
+    let internallyDispatchedSends = 0;
+    const observeInternalSend = () => { internallyDispatchedSends += 1; };
+    const onUnavailable = vi.fn();
+    window.addEventListener('jarvis:run-state', onRunState);
+    window.addEventListener('jarvis:send', observeInternalSend);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', {
+        detail: {
+          chatId: harness.chatId,
+          cancellationKey: 'msg_kernel_user',
+          text: 'Continue the exact Codex task once.',
+          modelSelectionOverride: selection,
+        },
+      }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      vi.useFakeTimers();
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', {
+        detail: { messageId: 'msg_kernel_user' },
+      }));
+      expect(interrupt).toHaveBeenCalledOnce();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(signalRef.current?.aborted).toBe(false);
+      expect(runStates.at(-1)?.status).toBe('running');
+      expect(getChatActivityEvents(harness.chatId).at(-1)).toMatchObject({
+        status: 'running',
+        title: '@apple stop outcome is unconfirmed',
+      });
+      vi.useRealTimers();
+
+      // Duplicate clicks while native completion is pending must reuse the same stop request.
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', {
+        detail: { messageId: 'msg_kernel_user' },
+      }));
+      expect(interrupt).toHaveBeenCalledOnce();
+
+      response.resolve({
+        text: 'partial Codex output',
+        usage: { input_tokens: 2, output_tokens: 1, cost_usd: 0 },
+        provider: 'openai',
+        model: 'gpt-5.6-terra',
+        finish_reason: 'interrupted',
+      });
+      await vi.waitFor(() => expect(runStates.at(-1)?.status).toBe('cancelled'));
+      window.dispatchEvent(new CustomEvent('jarvis:resume', {
+        detail: {
+          chatId: harness.chatId,
+          cancellationKey: 'resume_codex_interrupt_ack',
+          onUnavailable,
+        },
+      }));
+
+      expect(onUnavailable).toHaveBeenCalledOnce();
+      expect(mocks.runAgent).toHaveBeenCalledOnce();
+      expect(internallyDispatchedSends).toBe(1);
+      expect(harness.bindings.appendMessage.mock.calls.every(([message]) => message.role !== 'user')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      window.removeEventListener('jarvis:run-state', onRunState);
+      window.removeEventListener('jarvis:send', observeInternalSend);
+      stop();
+      response.resolve({
+        text: '', usage: { input_tokens: 0, output_tokens: 0, cost_usd: 0 },
+        provider: 'openai', model: 'gpt-5.6-terra',
+      });
+      await stop.whenIdle();
+    }
+  });
+
+  it('keeps a Codex stop before exact turn binding in review-required error state', async () => {
+    lockTestBackend('codex');
+    const selection = selectionFromOption('openai', 'gpt-5.6-terra', CODEX_CLI_CONNECTION);
+    setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
+      {
+        id: 'gpt-5.6-terra',
+        label: 'GPT-5.6 Terra',
+        source: 'provider_list',
+        lastVerifiedAt: 1,
+      },
+    ]);
+    writeConnectionPickerStates({
+      [CODEX_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' },
+    });
+    useAuthStore.setState({ chatModelSelection: selection });
+    const selectedAgent = agent('agent_codex_interrupt_unknown', 'apple', 'You are Apple.');
+    const harness = kernelRuntimeBindings(selectedAgent);
+    const outcomeUnknown = Object.assign(
+      new Error('Codex started a turn before its exact native ID was observed.'),
+      { code: 'native_codex_interrupt_outcome_unknown' },
+    );
+    mocks.runAgent.mockImplementationOnce((input) => new Promise((_resolve, reject) => {
+      const rejectAfterAbort = () => reject(outcomeUnknown);
+      if (input.signal.aborted) rejectAfterAbort();
+      else input.signal.addEventListener('abort', rejectAfterAbort, { once: true });
+    }));
+    const runStates: Array<{ status?: string; errorCode?: string }> = [];
+    const onRunState = (event: Event) => {
+      runStates.push((event as CustomEvent<{ status?: string; errorCode?: string }>).detail);
+    };
+    window.addEventListener('jarvis:run-state', onRunState);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', {
+        detail: {
+          chatId: harness.chatId,
+          cancellationKey: 'msg_kernel_user',
+          text: 'Do not retry an ambiguously interrupted Codex turn.',
+          modelSelectionOverride: selection,
+        },
+      }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', {
+        detail: { messageId: 'msg_kernel_user' },
+      }));
+      await vi.waitFor(() => expect(runStates.at(-1)?.status).toBe('error'));
+
+      expect(runStates.at(-1)).toMatchObject({
+        status: 'error',
+        errorCode: 'native_codex_interrupt_outcome_unknown',
+      });
+      expect(runStates.some((state) => state.status === 'cancelled')).toBe(false);
+      expect(mocks.runAgent).toHaveBeenCalledOnce();
+      expect(JSON.stringify(harness.updateMessage.mock.calls)).toContain('stop outcome is unknown');
+    } finally {
+      window.removeEventListener('jarvis:run-state', onRunState);
+      stop();
+      await stop.whenIdle();
+    }
+  });
+
   it('retains the original task across repeated resumes cancelled before provider dispatch', async () => {
     const harness = kernelRuntimeBindings(
       agent('agent_apple', 'apple', 'Always answer with APPLE.'),
@@ -10590,6 +10767,93 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       pending.resolve({ relevantFiles: [], enabledCapabilities: [], sourceReasons: [] });
       await stop.whenIdle();
       window.removeEventListener('jarvis:send', observe);
+    }
+  });
+
+  it('rejects overlapping resumes and a stale continuation cancelling a newer canonical run', async () => {
+    const turns = await import('@/features/chat/runtime/turn/turnStore');
+    turns.resetTurnStoreForTests();
+    const harness = kernelRuntimeBindings(
+      agent('agent_resume_owner', 'apple', 'Always answer with APPLE.'),
+    );
+    const pending = deferred<Awaited<ReturnType<typeof mocks.resolveJarvisContext>>>();
+    mocks.resolveJarvisContext.mockReturnValue(pending.promise);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', {
+        detail: { chatId: harness.chatId, text: 'Keep this task.', cancellationKey: 'msg_kernel_user' },
+      }));
+      await vi.waitFor(() => expect(mocks.resolveJarvisContext).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', {
+        detail: { messageId: 'msg_kernel_user' },
+      }));
+      await stop.whenIdle();
+
+      window.dispatchEvent(new CustomEvent('jarvis:resume', {
+        detail: { chatId: harness.chatId, cancellationKey: 'resume_fresh_key' },
+      }));
+      await vi.waitFor(() => expect(mocks.resolveJarvisContext).toHaveBeenCalledTimes(2));
+      const onUnavailable = vi.fn();
+      window.dispatchEvent(new CustomEvent('jarvis:resume', {
+        detail: { chatId: harness.chatId, cancellationKey: 'duplicate_resume_key', onUnavailable },
+      }));
+      expect(onUnavailable).toHaveBeenCalledOnce();
+      expect(mocks.resolveJarvisContext).toHaveBeenCalledTimes(2);
+      const resumed = {
+        accountId: 'runtime-test-account', chatId: String(harness.chatId),
+        runId: 'newer-unowned-run', requestId: 'newer-unowned-request', attempt: 1,
+      };
+      // A newer canonical run may still carry the original user key. The
+      // older continuation has no claim on this run ID.
+      turns.acceptTurn(resumed, Date.now(), 'msg_kernel_user');
+      turns.publishTurnEvent(resumed, { type: 'turn.running', at: Date.now() });
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', {
+        detail: { messageId: 'resume_fresh_key' },
+      }));
+      await stop.whenIdle();
+      expect(turns.getLatestTurnByChatId(String(harness.chatId))?.identity.runId).toBe(resumed.runId);
+      expect(turns.getLatestTurnByChatId(String(harness.chatId))?.status).toBe('running');
+      expect(harness.bindings.appendMessage.mock.calls.every(([message]) => message.role !== 'user')).toBe(true);
+    } finally {
+      pending.resolve({ relevantFiles: [], enabledCapabilities: [], sourceReasons: [] });
+      stop();
+      await stop.whenIdle();
+      turns.resetTurnStoreForTests();
+    }
+  });
+
+  it('rejects a duplicate send without failing its still-running canonical turn', async () => {
+    const turns = await import('@/features/chat/runtime/turn/turnStore');
+    turns.resetTurnStoreForTests();
+    const harness = kernelRuntimeBindings(
+      agent('agent_duplicate_owner', 'apple', 'Always answer with APPLE.'),
+    );
+    const pending = deferred<Awaited<ReturnType<typeof mocks.resolveJarvisContext>>>();
+    mocks.resolveJarvisContext.mockReturnValue(pending.promise);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    const detail = { chatId: harness.chatId, text: 'Keep one request.', cancellationKey: 'msg_kernel_user' };
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail }));
+      await vi.waitFor(() => expect(mocks.resolveJarvisContext).toHaveBeenCalledOnce());
+      const original = {
+        accountId: 'runtime-test-account', chatId: String(harness.chatId),
+        runId: 'original-running-run', requestId: 'original-running-request', attempt: 1,
+      };
+      turns.acceptTurn(original, Date.now(), 'msg_kernel_user');
+      turns.publishTurnEvent(original, { type: 'turn.running', at: Date.now() });
+      expect(turns.getLatestTurnByChatId(String(harness.chatId))?.status).toBe('running');
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail }));
+      expect(mocks.resolveJarvisContext).toHaveBeenCalledOnce();
+      expect(turns.getLatestTurnByChatId(String(harness.chatId))?.identity.runId).toBe(original.runId);
+      expect(turns.getLatestTurnByChatId(String(harness.chatId))?.status).toBe('running');
+    } finally {
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', {
+        detail: { messageId: 'msg_kernel_user' },
+      }));
+      pending.resolve({ relevantFiles: [], enabledCapabilities: [], sourceReasons: [] });
+      stop();
+      await stop.whenIdle();
+      turns.resetTurnStoreForTests();
     }
   });
 

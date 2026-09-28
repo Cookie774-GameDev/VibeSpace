@@ -116,6 +116,15 @@ function selectDiscoveredCodexSkills(
 const CODEX_CONTROL_RESPONSE_TIMEOUT_MS = 15_000;
 const CODEX_MCP_STATUS_STAGE_TIMEOUT_MS = 15_000;
 
+export class CodexInterruptedTurnOutcomeUnknownError extends Error {
+  readonly code = 'native_codex_interrupt_outcome_unknown';
+
+  constructor() {
+    super('Codex started the turn before its exact native ID was observed. Review the saved thread before retrying.');
+    this.name = 'CodexInterruptedTurnOutcomeUnknownError';
+  }
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
@@ -1108,6 +1117,8 @@ async function* sendCodexRequest(
   let frameReader: ReturnType<typeof createCodexFrameReader> | undefined;
   let threadId: string | undefined;
   let turnId: string | undefined;
+  let turnStartSubmitted = false;
+  let interruptedBeforeBinding = false;
   let terminal = false;
   const acceptedNativeQueue = new Map<string, string>();
   let nativeQueueAddInFlight = false;
@@ -1150,12 +1161,13 @@ async function* sendCodexRequest(
       });
     });
   };
-  const rejectPendingControlResponses = (error: unknown) => {
-    for (const pending of pendingControlResponses.values()) {
+  const rejectPendingControlResponses = (error: unknown, exceptId?: string) => {
+    for (const [id, pending] of pendingControlResponses) {
+      if (id === exceptId) continue;
       clearTimeout(pending.timeout);
       pending.reject(error);
+      pendingControlResponses.delete(id);
     }
-    pendingControlResponses.clear();
   };
   let cancelPendingWaits!: () => void;
   const cancelled = new Promise<void>((resolve) => {
@@ -1163,6 +1175,19 @@ async function* sendCodexRequest(
   });
   const streamAbort = new AbortController();
   let cancellationCleanup: Promise<void> | undefined;
+  let nativeInterrupt: Promise<void> | undefined;
+  const interruptRequestId = requestId(request.requestId, 'interrupt');
+  const interruptNativeTurn = (): Promise<void> => {
+    if (!threadId || !turnId) return Promise.reject(new Error('Codex native turn is not bound.'));
+    if (!nativeInterrupt) {
+      nativeInterrupt = sendControlRequest(buildCodexTurnInterruptRequest({
+        requestId: interruptRequestId,
+        threadId,
+        turnId,
+      })).then(() => undefined);
+    }
+    return nativeInterrupt;
+  };
   let stopPromise: Promise<boolean> | undefined;
   const stopGeneration = () => {
     if (!stopPromise) {
@@ -1176,18 +1201,16 @@ async function* sendCodexRequest(
   };
   const abort = () => {
     // A stalled public projection must not retain this turn or its approval handles.
+    if (turnStartSubmitted && threadId && !turnId) interruptedBeforeBinding = true;
+    const interruptResponse = threadId && turnId ? interruptNativeTurn() : undefined;
     controls.dispose();
     request.onLiveTurnControl?.(null);
-    rejectPendingControlResponses(new DOMException('The request was aborted.', 'AbortError'));
+    rejectPendingControlResponses(
+      new DOMException('The request was aborted.', 'AbortError'),
+      interruptResponse ? interruptRequestId : undefined,
+    );
     cancelPendingWaits();
-    if (threadId && turnId) {
-      const interruptResponse = sendControlRequest(
-          buildCodexTurnInterruptRequest({
-            requestId: requestId(request.requestId, 'interrupt'),
-            threadId,
-            turnId,
-          }),
-        );
+    if (interruptResponse) {
       // Keep the native ingress alive until Codex confirms interruption or its
       // bounded control deadline/write failure ends the wait. The host is stopped
       // by finally only after this cleanup settles.
@@ -1499,6 +1522,7 @@ async function* sendCodexRequest(
         );
       }
     } else {
+      turnStartSubmitted = true;
       await dependencies.write(
         generation,
         buildCodexTurnStartRequest({
@@ -1700,6 +1724,13 @@ async function* sendCodexRequest(
             const boundThreadId = threadId;
             const boundTurnId = turnId;
             const liveControl: ProviderLiveTurnControl = {
+              interrupt: async () => {
+                if (terminal || request.signal?.aborted ||
+                    threadId !== boundThreadId || turnId !== boundTurnId) {
+                  throw new Error('Codex active turn is no longer available for interruption.');
+                }
+                await interruptNativeTurn();
+              },
               steer: async (input: {
                 clientUserMessageId: string;
                 text: string;
@@ -1707,6 +1738,7 @@ async function* sendCodexRequest(
               }) => {
                 if (
                   terminal ||
+                  nativeInterrupt ||
                   request.signal?.aborted ||
                   threadId !== boundThreadId ||
                   turnId !== boundTurnId
@@ -1745,6 +1777,7 @@ async function* sendCodexRequest(
               }) => {
                 if (
                   terminal ||
+                  nativeInterrupt ||
                   request.signal?.aborted ||
                   threadId !== boundThreadId ||
                   turnId !== boundTurnId
@@ -1797,6 +1830,21 @@ async function* sendCodexRequest(
       }
       for (const event of projection.events) {
         if (event.type === 'done') {
+          if (event.finishReason === 'interrupted') {
+            terminal = true;
+            // The matching native terminal is stronger confirmation than a
+            // turn/interrupt RPC reply, which can arrive after turn/completed.
+            const pendingInterrupt = pendingControlResponses.get(interruptRequestId);
+            if (nativeInterrupt && pendingInterrupt) {
+              clearTimeout(pendingInterrupt.timeout);
+              pendingControlResponses.delete(interruptRequestId);
+              pendingInterrupt.resolve({ id: interruptRequestId, result: {} });
+            }
+            if (drainingAcceptedNativeQueue) {
+              throw new Error('Codex queued turn was interrupted; review its native state before retry.');
+            }
+            throw new DOMException('The Codex turn was interrupted.', 'AbortError');
+          }
           if (drainingAcceptedNativeQueue) {
             drainedNativeTurnCount += 1;
             turnId = undefined;
@@ -1934,7 +1982,10 @@ async function* sendCodexRequest(
     }
     throw new Error('Codex turn exceeded its safe event bound.');
   } catch (error) {
-    if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+    if (request.signal?.aborted) {
+      if (interruptedBeforeBinding) throw new CodexInterruptedTurnOutcomeUnknownError();
+      throw new DOMException('The request was aborted.', 'AbortError');
+    }
     throw error;
   } finally {
     request.onLiveTurnControl?.(null);

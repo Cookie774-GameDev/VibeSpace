@@ -3,6 +3,7 @@ import type { ProviderConnection, ProviderEvent, ProviderRequest } from './types
 import type { ProviderLiveTurnControl } from './types';
 import { CODEX_CONTEXT_TOOL } from './codexContextTool';
 import {
+  CodexInterruptedTurnOutcomeUnknownError,
   codexApprovalPolicyForRequest,
   createCodexPersistentAdapter,
   resolveCodexExecutable,
@@ -143,6 +144,7 @@ function activeCancellationFixture(options?: {
   const queuedFrames: Record<string, unknown>[] = [];
   let wakeFrame: ((frame: Record<string, unknown> | null) => void) | undefined;
   let ingressSignal: AbortSignal | undefined;
+  let liveControl: ProviderLiveTurnControl | undefined;
   let resolveControlPublished!: () => void;
   let resolveWrongResponseDelivered!: () => void;
   const controlPublished = new Promise<void>((resolve) => { resolveControlPublished = resolve; });
@@ -199,7 +201,10 @@ function activeCancellationFixture(options?: {
       requestId: 'request_1', connection, codexRoute, chatId: 'chat_cancel_ack',
       prompt: 'Read the marker', modelId: codexRoute.modelId,
       workingDirectory: 'C:\\workspace', interactionMode: 'ask', signal: controller.signal,
-      onLiveTurnControl: (control) => { if (control) resolveControlPublished(); },
+      onLiveTurnControl: (control) => {
+        liveControl = control ?? undefined;
+        if (control) resolveControlPublished();
+      },
     })) {
       events.push(event);
     }
@@ -208,7 +213,8 @@ function activeCancellationFixture(options?: {
     () => ({ status: 'resolved' as const }),
     (error: unknown) => ({ status: 'rejected' as const, error }),
   );
-  return { controller, running, settled, writes, events, stop, pushFrame, controlPublished, wrongResponseDelivered, get ingressAborted() {
+  return { controller, running, settled, writes, events, stop, pushFrame, controlPublished, wrongResponseDelivered,
+    get liveControl() { return liveControl; }, get ingressAborted() {
     return ingressSignal?.aborted ?? false;
   } };
 }
@@ -1750,6 +1756,112 @@ describe('persistent Codex app-server adapter', () => {
     expect(fixture.stop).toHaveBeenCalledTimes(1);
     expect(fixture.stop).toHaveBeenCalledWith('cancel-ack-generation');
     expect(fixture.ingressAborted).toBe(true);
+  });
+
+  it('requires review when stopped after turn/start but before the native turn ID is bound', async () => {
+    const controller = new AbortController();
+    const writes: Record<string, unknown>[] = [];
+    const stop = vi.fn(async () => true);
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'trusted-codex' }),
+      start: async () => ({ generation: 'pre-binding-generation' }),
+      frames: () => ({ stream: frames(), ready: Promise.resolve() }),
+      write: async (_generation, frame) => {
+        writes.push(frame);
+        if (frame.method === 'turn/start') controller.abort();
+      },
+      stop,
+    });
+    const consume = async () => {
+      for await (const _event of adapter.send!({
+        requestId: 'request_1', connection, codexRoute, chatId: 'chat_pre_binding',
+        prompt: 'Read the marker', modelId: codexRoute.modelId,
+        workingDirectory: 'C:\\workspace', interactionMode: 'ask', signal: controller.signal,
+      })) { /* Consume the exact adapter lifecycle. */ }
+    };
+
+    await expect(consume()).rejects.toBeInstanceOf(CodexInterruptedTurnOutcomeUnknownError);
+    expect(writes.filter((frame) => frame.method === 'turn/start')).toHaveLength(1);
+    expect(writes.filter((frame) => frame.method === 'turn/interrupt')).toHaveLength(0);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('interrupts the exact bound Codex turn once without a replacement user message', async () => {
+    const fixture = activeCancellationFixture();
+    await fixture.controlPublished;
+    const control = fixture.liveControl;
+    expect(control).toBeDefined();
+
+    const first = control!.interrupt();
+    const second = control!.interrupt();
+    const interrupts = fixture.writes.filter((frame) => frame.method === 'turn/interrupt');
+    expect(interrupts).toHaveLength(1);
+    expect(interrupts[0]).toMatchObject({
+      params: { threadId: 'thread_native_1', turnId: 'turn_native_1' },
+    });
+    expect(fixture.writes.filter((frame) => frame.method === 'turn/start')).toHaveLength(1);
+    await expect(control!.steer({ clientUserMessageId: 'message_after_stop', text: 'again' }))
+      .rejects.toThrow('no longer available');
+    await expect(control!.enqueue({ clientUserMessageId: 'message_after_stop', text: 'again' }))
+      .rejects.toThrow('no longer available');
+    fixture.pushFrame({ id: interrupts[0]!.id, result: {} });
+    await Promise.all([first, second]);
+
+    fixture.controller.abort();
+    await expect(fixture.settled).resolves.toMatchObject({
+      status: 'rejected', error: { name: 'AbortError' },
+    });
+    expect(fixture.writes.filter((frame) => frame.method === 'turn/interrupt')).toHaveLength(1);
+    expect(fixture.writes.filter((frame) => frame.method === 'turn/start')).toHaveLength(1);
+  });
+
+  it('does not commit native interrupted completion as a successful turn', async () => {
+    const fixture = activeCancellationFixture();
+    await fixture.controlPublished;
+    fixture.pushFrame({
+      method: 'turn/completed',
+      params: { threadId: 'thread_native_1', turn: { id: 'turn_native_1', status: 'interrupted' } },
+    });
+    await expect(fixture.settled).resolves.toMatchObject({
+      status: 'rejected', error: { name: 'AbortError' },
+    });
+    expect(fixture.events.some((event) => event.type === 'done')).toBe(false);
+  });
+
+  it('accepts an exact interrupted terminal before the interrupt RPC reply', async () => {
+    const fixture = activeCancellationFixture();
+    await fixture.controlPublished;
+    const interrupted = fixture.liveControl!.interrupt();
+    expect(fixture.writes.filter((frame) => frame.method === 'turn/interrupt')).toHaveLength(1);
+    fixture.pushFrame({
+      method: 'turn/completed',
+      params: { threadId: 'thread_native_1', turn: { id: 'turn_native_1', status: 'interrupted' } },
+    });
+    await expect(interrupted).resolves.toBeUndefined();
+    await expect(fixture.settled).resolves.toMatchObject({
+      status: 'rejected', error: { name: 'AbortError' },
+    });
+    expect(fixture.events.some((event) => event.type === 'done')).toBe(false);
+  });
+
+  it('does not retry a rejected native interrupt or allow another action on its turn', async () => {
+    const fixture = activeCancellationFixture();
+    await fixture.controlPublished;
+    const control = fixture.liveControl!;
+    const interrupt = control.interrupt();
+    const frame = fixture.writes.find((message) => message.method === 'turn/interrupt');
+    expect(frame).toBeDefined();
+    fixture.pushFrame({ id: frame!.id, error: { code: 'rejected', message: 'Not active.' } });
+    await expect(interrupt).rejects.toThrow('Codex native control failed');
+    await expect(control.interrupt()).rejects.toThrow('Codex native control failed');
+    await expect(control.steer({ clientUserMessageId: 'message_after_rejection', text: 'again' }))
+      .rejects.toThrow('no longer available');
+
+    fixture.controller.abort();
+    await expect(fixture.settled).resolves.toMatchObject({
+      status: 'rejected', error: { name: 'AbortError' },
+    });
+    expect(fixture.writes.filter((message) => message.method === 'turn/interrupt')).toHaveLength(1);
   });
 
   it('cleans up after a negative interrupt response while preserving cancellation', async () => {

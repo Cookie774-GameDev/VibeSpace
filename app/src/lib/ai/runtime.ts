@@ -366,6 +366,8 @@ import { browserGoalLaunchRuntime } from '@/features/browser/browserGoalLaunchRu
 import { projectOpenCodeLiveToolActivity } from './openCodeLiveToolActivity';
 import { resolveNativeQuestionPart } from './openCodeQuestionProjection';
 
+const CODEX_INTERRUPT_CONFIRMATION_TIMEOUT_MS = 15_000;
+
 /** Resolve only the live-catalog lookup key; never rewrite the captured dispatch identity. */
 export function liveVariantLookupForChatSelection(selection: {
   providerId: string;
@@ -3062,6 +3064,8 @@ export interface SendDetail {
   localCommandContext?: string;
   /** Stable original task carried only by hidden stop/resume continuations. */
   resumeOriginalText?: string;
+  /** The stopped checkpoint this hidden continuation is resolving. */
+  resumeOfCancellationKey?: string;
   /** Exact settled approval that authorizes one hidden post-action continuation turn. */
   approvalContinuation?: {
     messageId: string;
@@ -3895,6 +3899,21 @@ function dispatchRunState(
     status,
     ...(status === 'error' && errorCode ? { errorCode } : {}),
   });
+}
+
+/** Exact ownership for a hidden continuation whose kernel run keeps the original user key. */
+function ownsResumedCanonicalTurn(input: {
+  resumeOfCancellationKey?: string;
+  currentCancellationKey?: string;
+  currentRunId?: string;
+  ownedRunId?: string;
+  controllerActive: boolean;
+}): boolean {
+  return Boolean(
+    input.controllerActive && input.resumeOfCancellationKey && input.ownedRunId &&
+    input.currentCancellationKey === input.resumeOfCancellationKey &&
+    input.currentRunId === input.ownedRunId,
+  );
 }
 
 function dispatchKernelSmokeRuntimeStage(stage: KernelSmokeRuntimeStage): void {
@@ -5441,12 +5460,27 @@ export function startRuntimeListener(
   const activeSendDetails = new Map<AbortController, SendDetail>();
   const activeBackendByController = new Map<AbortController, ChatBackend>();
   const liveTurnControls = new Map<AbortController, ProviderLiveTurnControl>();
+  const activeActivityByController = new Map<AbortController, {
+    agentId: AgentId;
+    agentSlug: string;
+    activityId: string;
+    chatId: string;
+  }>();
+  const nativeInterruptRequested = new WeakSet<AbortController>();
+  const nativeInterruptConfirmationTimers = new WeakMap<AbortController, ReturnType<typeof setTimeout>>();
   const nativeSteersInFlight = new Set<string>();
   const nativeSteersAcknowledged = new Set<string>();
   const nativeQueuesInFlight = new Set<string>();
   const nativeQueuesAcknowledged = new Set<string>();
   const completedNativeTurns = new WeakMap<AbortController, boolean>();
-  const suspendedSendDetails = new Map<string, SendDetail>();
+  const suspendedSendDetails = new Map<string, Array<{
+    send: SendDetail;
+    backend?: ChatBackend;
+  }>>();
+  const suspendedByController = new WeakMap<AbortController, {
+    send: SendDetail;
+    backend?: ChatBackend;
+  }>();
   const pendingSteersByChatId = new Map<string, SteerDetail & { send: SendDetail }>();
   const canonicalCancellations = new Map<MessageId, () => Promise<unknown>>();
   const canonicalCancellationOwners = new Map<AbortController, () => Promise<unknown>>();
@@ -5484,10 +5518,14 @@ export function startRuntimeListener(
   };
 
   const detachControllerFromChat = (controller: AbortController): void => {
+    const interruptTimer = nativeInterruptConfirmationTimers.get(controller);
+    if (interruptTimer) clearTimeout(interruptTimer);
+    nativeInterruptConfirmationTimers.delete(controller);
     const detail = activeSendDetails.get(controller);
     activeSendDetails.delete(controller);
     activeBackendByController.delete(controller);
     liveTurnControls.delete(controller);
+    activeActivityByController.delete(controller);
     if (!detail) return;
     const chatId = String(detail.chatId);
     const controllers = controllersByChatId.get(chatId);
@@ -5496,8 +5534,142 @@ export function startRuntimeListener(
   };
 
   const preserveStoppedTurn = (controller: AbortController): void => {
+    if (suspendedByController.has(controller)) return;
     const detail = activeSendDetails.get(controller);
-    if (detail) suspendedSendDetails.set(String(detail.chatId), { ...detail });
+    if (!detail) return;
+    const suspended = {
+      send: { ...detail },
+      ...(activeBackendByController.get(controller)
+        ? { backend: activeBackendByController.get(controller)! }
+        : {}),
+    };
+    suspendedByController.set(controller, suspended);
+    const chatId = String(detail.chatId);
+    const previous = suspendedSendDetails.get(chatId) ?? [];
+    const sourceKey = detail.resumeOfCancellationKey ?? String(detail.cancellationKey ?? '');
+    const sourceIndex = sourceKey
+      ? previous.findIndex((entry) =>
+          (entry.send.resumeOfCancellationKey ?? String(entry.send.cancellationKey ?? '')) === sourceKey,
+        )
+      : -1;
+    suspendedSendDetails.set(
+      chatId,
+      sourceIndex < 0
+        ? [...previous, suspended]
+        : previous.map((entry, index) => index === sourceIndex ? suspended : entry),
+    );
+  };
+
+  const removeSuspendedTurn = (chatId: string, cancellationKey: string | undefined): void => {
+    if (!cancellationKey) return;
+    const remaining = (suspendedSendDetails.get(chatId) ?? []).filter((entry) =>
+      String(entry.send.cancellationKey ?? '') !== cancellationKey &&
+      entry.send.resumeOfCancellationKey !== cancellationKey,
+    );
+    if (remaining.length) suspendedSendDetails.set(chatId, remaining);
+    else suspendedSendDetails.delete(chatId);
+  };
+
+  const requestNativeCodexInterrupt = (controller: AbortController): boolean => {
+    if (
+      activeBackendByController.get(controller) !== 'codex' ||
+      !liveTurnControls.has(controller)
+    ) return false;
+    if (nativeInterruptRequested.has(controller)) return true;
+
+    const control = liveTurnControls.get(controller);
+    if (!control) return false;
+    nativeInterruptRequested.add(controller);
+    const send = activeSendDetails.get(controller);
+    if (send) preserveStoppedTurn(controller);
+    const activity = activeActivityByController.get(controller);
+    if (activity) {
+      useAgentStore.getState().setVerb(activity.agentId, 'stopping');
+      useChatActivityStore.getState().update(activity.chatId, activity.activityId, {
+        category: 'response',
+        status: 'running',
+        title: `@${activity.agentSlug} is stopping`,
+        subtitle: 'Waiting for Codex to confirm this exact turn was interrupted.',
+        ts: Date.now(),
+      });
+    }
+    toast.info(
+      'Stopping Codex turn',
+      'Waiting for Codex to confirm that the current turn was interrupted.',
+    );
+    let interruptRequest: Promise<void>;
+    try {
+      // Dispatch synchronously so the native request is on the wire before a
+      // concurrent terminal event can be reconciled as an ordinary success.
+      interruptRequest = control.interrupt();
+    } catch (error) {
+      interruptRequest = Promise.reject(error);
+    }
+    const task = interruptRequest.then(
+      () => {
+        devConsole.log({
+          channel: 'ai',
+          level: 'info',
+          message: 'Exact Codex turn interrupt acknowledged; awaiting terminal status',
+          detail: { chatId: String(send?.chatId ?? '') },
+        });
+        const chatId = String(send?.chatId ?? '');
+        if (!chatId || controllersByChatId.get(chatId)?.has(controller) !== true) return;
+        const timer = setTimeout(() => {
+          nativeInterruptConfirmationTimers.delete(controller);
+          if (controllersByChatId.get(chatId)?.has(controller) !== true) return;
+          const currentActivity = activeActivityByController.get(controller) ?? activity;
+          if (currentActivity) {
+            useChatActivityStore.getState().update(
+              currentActivity.chatId,
+              currentActivity.activityId,
+              {
+                category: 'response',
+                status: 'running',
+                title: `@${currentActivity.agentSlug} stop outcome is unconfirmed`,
+                subtitle: 'Codex acknowledged the stop request but has not confirmed that this exact turn ended. Review the native thread; no resume was started.',
+                ts: Date.now(),
+              },
+            );
+          }
+          toast.error(
+            'Codex stop is unconfirmed',
+            'Codex acknowledged the stop request but has not confirmed that this exact turn ended. Review the native thread; this task remains active.',
+          );
+          devConsole.log({
+            channel: 'ai',
+            level: 'warn',
+            message: 'Codex interrupt acknowledgement was not followed by a terminal event',
+            detail: { chatId },
+          });
+        }, CODEX_INTERRUPT_CONFIRMATION_TIMEOUT_MS);
+        nativeInterruptConfirmationTimers.set(controller, timer);
+      },
+      (error: unknown) => {
+        if (activity) {
+          useAgentStore.getState().setVerb(activity.agentId, undefined);
+          useChatActivityStore.getState().update(activity.chatId, activity.activityId, {
+            category: 'response',
+            status: 'running',
+            title: `@${activity.agentSlug} stop outcome is unconfirmed`,
+            subtitle: 'The Codex turn may still be running. Review the native thread before retrying.',
+            ts: Date.now(),
+          });
+        }
+        toast.error(
+          'Codex stop is unconfirmed',
+          'The native turn may still be running. Review the Codex thread before retrying.',
+        );
+        devConsole.log({
+          channel: 'ai',
+          level: 'warn',
+          message: 'Exact Codex turn interrupt was not confirmed; request remains active',
+          detail: { chatId: String(send?.chatId ?? ''), error: safeErrorMessage(error) },
+        });
+      },
+    );
+    void trackListenerOwnedTask(task);
+    return true;
   };
 
   const safelyRejectSteer = (steer: Pick<SteerDetail, 'onRejected'>): void => {
@@ -5535,19 +5707,12 @@ export function startRuntimeListener(
   const abortAllTrackedRuns = (): number => {
     for (const chatId of queuedNativeDelegations.keys()) preserveNativeQueuedDelegations(chatId);
     const count = activeControllers.size;
-    for (const requestCancellation of new Set(canonicalCancellationOwners.values())) {
-      cancellationTaskTracker.request(requestCancellation);
+    for (const controller of activeControllers) {
+      preserveStoppedTurn(controller);
+      if (requestNativeCodexInterrupt(controller)) continue;
+      cancellationTaskTracker.request(canonicalCancellationOwners.get(controller));
+      controller.abort();
     }
-    for (const controller of activeControllers) controller.abort();
-    controllersByChatId.clear();
-    activeSendDetails.clear();
-    activeBackendByController.clear();
-    liveTurnControls.clear();
-    nativeSteersInFlight.clear();
-    nativeSteersAcknowledged.clear();
-    inFlight.clear();
-    canonicalCancellations.clear();
-    canonicalCancellationOwners.clear();
     return count;
   };
 
@@ -5628,6 +5793,7 @@ export function startRuntimeListener(
     const authState = useAuthStore.getState();
     const requestAcceptedAt = Date.now();
     const previousCanonicalRunId = getLatestTurnByChatId(String(chatId))?.identity.runId;
+    let ownedCanonicalRunId: string | undefined;
     const dispatchCurrentRunState = (
       status: 'running' | 'done' | 'error' | 'cancelled',
       errorCode?: string,
@@ -5639,12 +5805,25 @@ export function startRuntimeListener(
         if (!accountId || accountId !== currentAccountId) return;
         {
           const current = getLatestTurnByChatId(String(chatId));
+          // A hidden resume keeps the original user message in the kernel run,
+          // while Composer assigns a fresh key to cancel this continuation.
+          // The kernel can therefore rebind the canonical turn to the original
+          // message after our initial running event. Accept its terminal only
+          // while this exact resumed controller still owns the chat.
+          const resumedSourceOwnsCurrentTurn = ownsResumedCanonicalTurn({
+            resumeOfCancellationKey: detail.resumeOfCancellationKey,
+            currentCancellationKey: current?.cancellationKey,
+            currentRunId: current?.identity.runId,
+            ownedRunId: ownedCanonicalRunId,
+            controllerActive: controllersByChatId.get(String(chatId))?.has(controller) === true,
+          });
           // Ownership, not wall-clock order: consecutive requests can share a
           // millisecond, and the system clock can move backwards during preparation.
           if (current && (current.identity.accountId !== accountId ||
             (current.cancellationKey !== String(cancellationKey) &&
-              current.identity.runId !== previousCanonicalRunId))) return;
-          if (current?.cancellationKey !== String(cancellationKey)) {
+              current.identity.runId !== previousCanonicalRunId &&
+              !resumedSourceOwnsCurrentTurn))) return;
+          if (current?.cancellationKey !== String(cancellationKey) && !resumedSourceOwnsCurrentTurn) {
             // Preparation can stop before a kernel run exists. Retain that real
             // client request's terminal state in the same canonical checkpoint,
             // without inventing a provider run, usage, or assistant response.
@@ -5668,8 +5847,8 @@ export function startRuntimeListener(
         message: 'Duplicate AI cancellation key rejected',
         detail: { messageId: cancellationKey },
       });
-      releaseVoiceTurnWithoutReply(detail, chatId);
-      dispatchCurrentRunState('error', 'kernel_runtime_duplicate_request');
+      // The key belongs to the original in-flight controller. Publishing a
+      // terminal state here would falsely fail that still-running turn.
       return;
     }
     const controller = new AbortController();
@@ -6049,6 +6228,12 @@ export function startRuntimeListener(
     );
     const activity = useChatActivityStore.getState();
     const agentActivityId = createChatActivityId('agent');
+    activeActivityByController.set(controller, {
+      agentId: agent.id,
+      agentSlug: agent.slug,
+      activityId: agentActivityId,
+      chatId: String(chatId),
+    });
     const refreshChatTitleForNotification = async (): Promise<void> => {
       try {
         const current = await chatRepo.getById(chatId as ChatId);
@@ -7493,6 +7678,7 @@ export function startRuntimeListener(
               contextBlocks: runtimeContextBlocks,
               model,
             });
+            ownedCanonicalRunId = turn.run.id;
             dispatchKernelSmokeRuntimeStage('hive_plan');
             await bindCanonicalCancellation(host, turn);
             const plan = createHiveStackPlan({
@@ -7647,6 +7833,7 @@ export function startRuntimeListener(
                 },
               },
             });
+            ownedCanonicalRunId = turn.run.id;
             kernelRequestId = turn.attempt.requestId;
             kernelAttemptNumber = turn.attempt.attemptNumber;
             if (continuationOutcome) {
@@ -8010,6 +8197,7 @@ export function startRuntimeListener(
           dispatchCurrentRunState('done');
           providerTurnCompleted = true;
           updateStructuredAgentStatus(detail.structuredContext, 'done', 'Finished');
+          removeSuspendedTurn(String(chatId), detail.resumeOfCancellationKey);
           notifyChatOutcome('completed');
           return;
         }
@@ -8644,6 +8832,13 @@ export function startRuntimeListener(
         : shouldRunLocalFinalBossRevision(reasoningPolicy?.mode, runnable.model.provider)
           ? await runBoundedLocalFinalBossRevision(runAgent, providerRequest)
           : await runAgent(providerRequest);
+      if (
+        activeBackendByController.get(controller) === 'codex' &&
+        nativeInterruptRequested.has(controller) &&
+        response.finish_reason === 'interrupted'
+      ) {
+        throw new DOMException('The exact Codex turn was interrupted.', 'AbortError');
+      }
       controller.signal.throwIfAborted();
       const observedCaoIdentity = caoCompletionEvidence;
       if (detail.caoAuthority && observedCaoIdentity === null) {
@@ -9028,6 +9223,7 @@ export function startRuntimeListener(
       dispatchCurrentRunState('done');
       providerTurnCompleted = true;
       updateStructuredAgentStatus(detail.structuredContext, 'done', 'Finished');
+      removeSuspendedTurn(String(chatId), detail.resumeOfCancellationKey);
 
       devConsole.log({
         channel: 'ai',
@@ -9051,7 +9247,14 @@ export function startRuntimeListener(
       cancelPendingFlush();
       await settleStreamingWrites();
 
-      const aborted = controller.signal.aborted || isAbortError(err);
+      const errorCode = typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: unknown }).code ?? '')
+        : '';
+      const nativeCodexInterruptOutcomeUnknown =
+        errorCode === 'native_codex_interrupt_outcome_unknown' ||
+        (err instanceof Error && err.name === 'CodexInterruptedTurnOutcomeUnknownError');
+      const aborted = !nativeCodexInterruptOutcomeUnknown &&
+        (controller.signal.aborted || isAbortError(err));
       if (aborted) {
         liveOpenCodeQuestions.forEach((part, index) => {
           if (part.block.status !== 'pending') return;
@@ -9090,6 +9293,8 @@ export function startRuntimeListener(
         if (placeholderId) {
           const suffix = aborted
             ? '_[cancelled]_'
+            : nativeCodexInterruptOutcomeUnknown
+              ? '_Codex started this turn, but its stop outcome is unknown. Review the saved native thread before retrying._'
             : providerError
               ? ''
               : `_Error: ${safeErrorMessage(err)}_`;
@@ -9154,7 +9359,11 @@ export function startRuntimeListener(
       });
       dispatchCurrentRunState(
         aborted ? 'cancelled' : 'error',
-        aborted ? undefined : (providerError?.code ?? safeKernelRuntimeErrorCode(err)),
+        aborted
+          ? undefined
+          : nativeCodexInterruptOutcomeUnknown
+            ? 'native_codex_interrupt_outcome_unknown'
+            : (providerError?.code ?? safeKernelRuntimeErrorCode(err)),
       );
       updateStructuredAgentStatus(
         detail.structuredContext,
@@ -9202,14 +9411,16 @@ export function startRuntimeListener(
         const owner = activeSendDetails.get(c);
         if (owner) preserveNativeQueuedDelegations(String(owner.chatId));
         preserveStoppedTurn(c);
-        abortTrackedRun(targetMessageId, c);
-        for (const [messageId, owner] of inFlight) {
-          if (owner === c) {
-            inFlight.delete(messageId);
-            canonicalCancellations.delete(messageId);
+        if (!requestNativeCodexInterrupt(c)) {
+          abortTrackedRun(targetMessageId, c);
+          for (const [messageId, owner] of inFlight) {
+            if (owner === c) {
+              inFlight.delete(messageId);
+              canonicalCancellations.delete(messageId);
+            }
           }
+          canonicalCancellationOwners.delete(c);
         }
-        canonicalCancellationOwners.delete(c);
         devConsole.log({
           channel: 'ai',
           level: 'warn',
@@ -9225,6 +9436,7 @@ export function startRuntimeListener(
       const controllers = [...(controllersByChatId.get(chatId) ?? [])];
       for (const controller of controllers) {
         preserveStoppedTurn(controller);
+        if (requestNativeCodexInterrupt(controller)) continue;
         cancellationTaskTracker.request(canonicalCancellationOwners.get(controller));
         controller.abort();
       }
@@ -9256,8 +9468,18 @@ export function startRuntimeListener(
     const detail = (e as CustomEvent<ResumeDetail>).detail;
     const chatId = String(detail?.chatId ?? '').trim();
     if (!chatId || !detail?.cancellationKey) return;
+    if ((controllersByChatId.get(chatId)?.size ?? 0) > 0) {
+      devConsole.log({
+        channel: 'ai',
+        level: 'warn',
+        message: 'AI resume rejected: this chat already has an active turn',
+        detail: { chatId },
+      });
+      detail.onUnavailable?.();
+      return;
+    }
     const suspended = suspendedSendDetails.get(chatId);
-    if (!suspended) {
+    if (!suspended?.length) {
       // A durable cancelled checkpoint can outlive this listener's in-memory
       // envelope. Let Composer use its ordinary account/context/model checks.
       if (
@@ -9276,11 +9498,33 @@ export function startRuntimeListener(
       });
       return;
     }
+    if (suspended.length !== 1) {
+      devConsole.log({
+        channel: 'ai',
+        level: 'warn',
+        message: 'AI resume rejected: multiple stopped turns need explicit review',
+        detail: { chatId, stoppedTurnCount: suspended.length },
+      });
+      detail.onUnavailable?.();
+      return;
+    }
+    const stopped = suspended[0]!;
+    if (stopped.backend === 'codex') {
+      devConsole.log({
+        channel: 'ai',
+        level: 'warn',
+        message: 'Codex resume rejected: native exact interrupted-turn resume is unavailable',
+        detail: { chatId },
+      });
+      detail.onUnavailable?.();
+      return;
+    }
+    const suspendedSend = stopped.send;
     let currentCaoPolicy: ReturnType<typeof caoResumePolicy> | undefined;
     if (detail.caoExpectedAuthority) {
       try {
         currentCaoPolicy = caoResumePolicy(
-          suspended,
+          suspendedSend,
           detail.caoExpectedAuthority,
           useJarvisInteractionStore.getState().modeForChat(chatId),
           readPermissionAccess(chatId).access,
@@ -9295,17 +9539,18 @@ export function startRuntimeListener(
         return;
       }
     }
-    suspendedSendDetails.delete(chatId);
     const resumed: SendDetail = {
-      ...suspended,
+      ...suspendedSend,
       ...currentCaoPolicy,
       chatId,
       cancellationKey: detail.cancellationKey,
-      resumeOriginalText: suspended.resumeOriginalText ?? suspended.text,
+      resumeOriginalText: suspendedSend.resumeOriginalText ?? suspendedSend.text,
+      resumeOfCancellationKey:
+        suspendedSend.resumeOfCancellationKey ?? String(suspendedSend.cancellationKey ?? ''),
       text: [
         'Continue the interrupted task using any progress already retained in this persistent session. If the request was stopped before it reached you, begin the original task below. Do not repeat completed work, change model controls, or discard queued context.',
         'Original user request:',
-        suspended.resumeOriginalText ?? suspended.text,
+        suspendedSend.resumeOriginalText ?? suspendedSend.text,
       ].join('\n\n'),
     };
     window.dispatchEvent(new CustomEvent(sendEventName, { detail: resumed }));
@@ -9462,7 +9707,6 @@ export function startRuntimeListener(
       return;
     }
     pendingSteersByChatId.set(chatId, { ...detail, chatId, text, send: { ...active[0]! } });
-    suspendedSendDetails.delete(chatId);
     devConsole.log({
       channel: 'ai',
       level: 'info',

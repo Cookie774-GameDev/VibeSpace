@@ -299,6 +299,8 @@ export interface ProviderRequest {
 }
 
 export interface ProviderLiveTurnControl {
+  /** Interrupt only the native turn bound to this control; never starts a replacement turn. */
+  interrupt(): Promise<void>;
   steer(input: { clientUserMessageId: string; text: string; skills?: readonly import('./codexAppServerProtocol').CodexDiscoveredSkill[] }): Promise<void>;
   enqueue(input: { clientUserMessageId: string; text: string; skills?: readonly import('./codexAppServerProtocol').CodexDiscoveredSkill[] }): Promise<{
     submissionId: string;
