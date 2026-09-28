@@ -1,6 +1,7 @@
 import { openQueuedSideChat, registerQueueSideSender } from './queueSideChat';
 import { useComposerQueueSession } from './composerQueueSession';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { AxoMotion } from '@/components/ui/AxoMotion';
 import './composer-frame.css';
 import { useChatBackendAffinity } from './useChatBackendAffinity';
@@ -41,6 +42,9 @@ import {
   Mic,
   MicOff,
   FileText,
+  MessageSquareText,
+  Pencil,
+  Trash2,
   X,
   Network,
   Plug,
@@ -1419,6 +1423,18 @@ export function Composer({
   }, [caoRequested]);
   const [text, setText] = useState(() => readNotesComposerDraft(noteScope, String(chatId)).text);
   const [chatAnnotations, setChatAnnotations] = useState<ChatAnnotation[]>([]);
+  const [annotationEditor, setAnnotationEditor] = useState<{
+    id: string;
+    text: string;
+    comment: string;
+    mode: 'new' | 'edit';
+    top: number;
+    left: number;
+  } | null>(null);
+  const [annotationDetails, setAnnotationDetails] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const recentChatMessages = usePagedChatMessages(chatId).messages;
   const pendingQuestion = useMemo(() => {
     for (let index = recentChatMessages.length - 1; index >= 0; index -= 1) {
@@ -1633,7 +1649,7 @@ export function Composer({
     input: HTMLTextAreaElement;
     commit: (value: string, caret: number) => void;
   } | null>(null);
-  const annotationCommentRefs = useRef(new Map<string, HTMLTextAreaElement>());
+  const annotationEditorInputRef = useRef<HTMLTextAreaElement>(null);
   const slashTypeaheadRef = useRef<SlashCommandTypeaheadRef>(null);
   const [slashComboboxMetadata, setSlashComboboxMetadata] = useState<SlashComboboxMetadata | null>(
     null,
@@ -6705,18 +6721,23 @@ export function Composer({
     const onAttachAnnotation = (event: Event) => {
       const detail = (event as CustomEvent<ChatAnnotationAttachDetail>).detail;
       if (detail?.chatId !== String(chatId) || !detail.text?.trim()) return;
-      setChatAnnotations((current) => [
-        ...current,
-        { id: crypto.randomUUID(), text: detail.text.trim(), comment: '' },
-      ]);
-      if (detail.ask) {
-        setText((current) => current.trim() ? current : 'Tell me about this selection.');
+      if (annotationEditor) {
+        toast.info('Finish this annotation first', 'Save or cancel the open comment.');
+        return;
       }
-      requestAnimationFrame(() => textareaRef.current?.focus());
+      setAnnotationDetails(null);
+      setAnnotationEditor({
+        id: crypto.randomUUID(),
+        text: detail.text.trim(),
+        comment: '',
+        mode: 'new',
+        top: Math.max(8, Math.min(window.innerHeight - 160, detail.anchor?.top ?? 80)),
+        left: Math.max(8, Math.min(window.innerWidth - 380, detail.anchor?.left ?? 24)),
+      });
     };
     window.addEventListener(CHAT_ANNOTATION_ATTACH_EVENT, onAttachAnnotation);
     return () => window.removeEventListener(CHAT_ANNOTATION_ATTACH_EVENT, onAttachAnnotation);
-  }, [chatId]);
+  }, [annotationEditor, chatId]);
 
   useEffect(() => {
     const onInsertText = (e: Event) => {
@@ -6848,6 +6869,29 @@ export function Composer({
     return () => setComposerSttListening(false);
   }, [compact, setComposerSttListening, sttListening]);
 
+  const closeAnnotationEditor = () => {
+    if (questionDictationTargetRef.current?.input === annotationEditorInputRef.current) {
+      cleanupQuestionDictation();
+    }
+    setAnnotationEditor(null);
+    window.getSelection()?.removeAllRanges();
+  };
+  const saveAnnotationEditor = () => {
+    if (!annotationEditor) return;
+    const { id, text: selectedText, comment, mode } = annotationEditor;
+    setChatAnnotations((current) =>
+      mode === 'new'
+        ? [...current, { id, text: selectedText, comment }]
+        : current.map((item) => (item.id === id ? { ...item, comment } : item)),
+    );
+    closeAnnotationEditor();
+    textareaRef.current?.focus();
+  };
+  const annotationEditorIndex =
+    annotationEditor?.mode === 'edit'
+      ? chatAnnotations.findIndex((item) => item.id === annotationEditor.id) + 1
+      : chatAnnotations.length + 1;
+
   return (
     <div
       className={cn('border-t border-border bg-panel', compact && 'text-[12px]')}
@@ -6912,87 +6956,219 @@ export function Composer({
           }}
         />
       )}
-      <div className={cn('composer-frame-body px-3 py-2.5', compact && 'px-3.5 py-3')}>
-        {chatAnnotations.length > 0 && (
+      {annotationEditor &&
+        createPortal(
           <div
-            className="mb-2 flex max-h-48 flex-col gap-2 overflow-y-auto"
-            aria-label="Attached chat annotations"
+            role="dialog"
+            aria-label="Comment on selected text"
+            data-chat-annotation-editor
+            className="fixed z-[100] w-[min(370px,calc(100vw-16px))] rounded-[24px] border border-white/10 bg-[#2b2b2b] p-4 text-white shadow-2xl"
+            style={{ top: annotationEditor.top, left: annotationEditor.left }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') closeAnnotationEditor();
+            }}
+          >
+            <textarea
+              autoFocus
+              ref={annotationEditorInputRef}
+              aria-label={`Comment on annotation ${annotationEditorIndex}`}
+              placeholder="Add an optional comment…"
+              rows={2}
+              value={annotationEditor.comment}
+              onChange={(event) =>
+                setAnnotationEditor((current) =>
+                  current ? { ...current, comment: event.target.value } : current,
+                )
+              }
+              className="min-h-14 w-full resize-none bg-transparent text-sm text-white outline-none placeholder:text-white/40"
+            />
+            <div className="mt-1 flex items-center gap-2">
+              <button
+                type="button"
+                aria-label={
+                  annotationEditor.mode === 'edit'
+                    ? `Remove annotation ${annotationEditorIndex}`
+                    : 'Discard annotation'
+                }
+                onClick={() => {
+                  if (annotationEditor.mode === 'edit') {
+                    setChatAnnotations((current) =>
+                      current.filter((item) => item.id !== annotationEditor.id),
+                    );
+                  }
+                  closeAnnotationEditor();
+                }}
+                className="rounded-full p-1.5 text-white/80 hover:bg-white/10 hover:text-white"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+              <div className="flex-1" />
+              <button
+                type="button"
+                aria-label={
+                  questionDictationTargetRef.current?.input === annotationEditorInputRef.current &&
+                  sttView.phase !== 'idle'
+                    ? `Stop dictation for annotation ${annotationEditorIndex}`
+                    : `Dictate comment on annotation ${annotationEditorIndex}`
+                }
+                aria-pressed={
+                  questionDictationTargetRef.current?.input === annotationEditorInputRef.current &&
+                  sttView.phase !== 'idle'
+                }
+                disabled={!composerSttEnabled}
+                title={composerSttEnabled ? 'Dictate comment' : 'Enable dictation in settings'}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  const input = annotationEditorInputRef.current;
+                  if (!input) return;
+                  const editorId = annotationEditor.id;
+                  toggleStt({
+                    input,
+                    commit: (value) =>
+                      setAnnotationEditor((current) =>
+                        current?.id === editorId ? { ...current, comment: value } : current,
+                      ),
+                  });
+                }}
+                className="rounded-full p-1.5 text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-40"
+              >
+                <Mic className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={closeAnnotationEditor}
+                className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white hover:bg-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveAnnotationEditor}
+                disabled={
+                  sttView.phase === 'starting' ||
+                  sttView.phase === 'listening' ||
+                  sttView.phase === 'transcribing'
+                }
+                className="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-zinc-900 hover:bg-white/90 disabled:opacity-50"
+              >
+                Save
+              </button>
+            </div>
+          </div>,
+          document.body,
+        )}
+      {annotationDetails &&
+        chatAnnotations.length > 0 &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-label="Attached annotation details"
+            tabIndex={-1}
+            autoFocus
+            className="fixed z-[99] max-h-[min(320px,50vh)] w-[min(480px,calc(100vw-16px))] overflow-y-auto rounded-2xl border border-white/10 bg-[#292929] p-4 text-sm text-white shadow-2xl"
+            style={{ top: annotationDetails.top, left: annotationDetails.left }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setAnnotationDetails(null);
+            }}
           >
             {chatAnnotations.map((annotation, index) => (
               <div
                 key={annotation.id}
-                data-chat-annotation-card={annotation.id}
-                className="rounded-lg border border-border bg-background/80 px-3 py-2"
+                className={index > 0 ? 'mt-4 border-t border-white/10 pt-4' : undefined}
               >
-                <div className="flex items-center justify-between gap-2 text-xs font-medium text-foreground">
-                  <span>Annotation {index + 1}</span>
+                <div className="flex items-start gap-2">
+                  <span className="flex-1 text-xs font-semibold text-white/55">
+                    {index + 1}. Selected text:
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`Edit annotation ${index + 1}`}
+                    onClick={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      setAnnotationEditor({
+                        ...annotation,
+                        mode: 'edit',
+                        top: Math.max(8, Math.min(window.innerHeight - 160, rect.bottom + 8)),
+                        left: Math.max(8, Math.min(window.innerWidth - 380, rect.left - 280)),
+                      });
+                      setAnnotationDetails(null);
+                    }}
+                    className="rounded p-0.5 text-white/60 hover:text-white"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
                   <button
                     type="button"
                     aria-label={`Remove annotation ${index + 1}`}
-                    onClick={(event) => {
-                      const input = event.currentTarget
-                        .closest('[data-chat-annotation-card]')
-                        ?.querySelector('textarea');
-                      if (input && questionDictationTargetRef.current?.input === input) {
-                        cleanupQuestionDictation();
-                      }
+                    onClick={() => {
                       setChatAnnotations((current) =>
                         current.filter((item) => item.id !== annotation.id),
                       );
+                      if (chatAnnotations.length === 1) setAnnotationDetails(null);
                     }}
-                    className="rounded p-1 text-muted-foreground hover:text-foreground"
+                    className="rounded p-0.5 text-white/60 hover:text-white"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
-                <blockquote className="mt-1 max-h-16 overflow-y-auto whitespace-pre-wrap break-words border-l-2 border-accent-copper/50 pl-2 text-xs text-muted-foreground">
+                <blockquote className="mt-1 whitespace-pre-wrap break-words pl-5 leading-6 text-white/95">
                   {annotation.text}
                 </blockquote>
-                <div className="mt-2 flex items-end gap-1">
-                  <textarea
-                    aria-label={`Comment on annotation ${index + 1}`}
-                    rows={1}
-                    ref={(input) => {
-                      if (input) annotationCommentRefs.current.set(annotation.id, input);
-                      else annotationCommentRefs.current.delete(annotation.id);
-                    }}
-                    placeholder="Add a comment…"
-                    value={annotation.comment}
-                    onChange={(event) => setChatAnnotations((current) =>
-                      current.map((item) => item.id === annotation.id
-                        ? { ...item, comment: event.target.value }
-                        : item),
-                    )}
-                    className="min-h-8 flex-1 resize-y rounded-md border border-border bg-panel px-2 py-1 text-xs text-foreground outline-none focus:border-accent-copper/50"
-                  />
-                  {composerSttEnabled && (
-                    <button
-                      type="button"
-                      aria-label={questionDictationTargetRef.current?.input === annotationCommentRefs.current.get(annotation.id) && sttView.phase !== 'idle'
-                        ? `Stop dictation for annotation ${index + 1}`
-                        : `Dictate comment on annotation ${index + 1}`}
-                      aria-pressed={questionDictationTargetRef.current?.input === annotationCommentRefs.current.get(annotation.id) && sttView.phase !== 'idle'}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => {
-                        const input = annotationCommentRefs.current.get(annotation.id);
-                        if (!input) return;
-                        toggleStt({
-                          input,
-                          commit: (value) => setChatAnnotations((current) =>
-                            current.map((item) => item.id === annotation.id
-                              ? { ...item, comment: value }
-                              : item),
-                          ),
-                        });
-                      }}
-                      className="rounded-md p-2 text-muted-foreground hover:bg-accent-copper/15 hover:text-foreground"
-                    >
-                      <Mic className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
+                {annotation.comment.trim() && (
+                  <p className="mt-2 whitespace-pre-wrap break-words pl-5 text-xs text-white/60">
+                    Comment: {annotation.comment}
+                  </p>
+                )}
               </div>
             ))}
+          </div>,
+          document.body,
+        )}
+      <div className={cn('composer-frame-body px-3 py-2.5', compact && 'px-3.5 py-3')}>
+        {chatAnnotations.length > 0 && (
+          <div className="mb-2 flex items-center" aria-label="Attached chat annotations">
+            <div className="inline-flex items-center rounded-xl border border-white/10 bg-[#303030] p-1 text-white shadow-sm">
+              <button
+                type="button"
+                aria-label={`${chatAnnotations.length} attached ${chatAnnotations.length === 1 ? 'annotation' : 'annotations'}. Double-click to show details`}
+                aria-expanded={annotationDetails !== null}
+                aria-haspopup="dialog"
+                title="Double-click to view selected text"
+                onDoubleClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setAnnotationDetails({
+                    top: rect.top > 280 ? rect.top - 270 : rect.bottom + 8,
+                    left: Math.max(8, Math.min(window.innerWidth - 496, rect.left)),
+                  });
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setAnnotationDetails({
+                    top: rect.top > 280 ? rect.top - 270 : rect.bottom + 8,
+                    left: Math.max(8, Math.min(window.innerWidth - 496, rect.left)),
+                  });
+                }}
+                className="inline-flex max-w-44 items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-white/90 hover:bg-white/10"
+              >
+                <MessageSquareText className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">
+                  <strong>{chatAnnotations.length}</strong>{' '}
+                  {chatAnnotations.length === 1 ? 'annotation' : 'annotations'}
+                </span>
+              </button>
+              {annotationDetails && (
+                <button
+                  type="button"
+                  aria-label="Close annotation details"
+                  onClick={() => setAnnotationDetails(null)}
+                  className="rounded-full border border-white/15 p-0.5 text-white/70 hover:text-white"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
           </div>
         )}
         {chatBackendAffinity?.backend === 'codex' ? (

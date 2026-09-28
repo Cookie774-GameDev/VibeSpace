@@ -9,7 +9,7 @@ export const CHAT_ANNOTATION_ATTACH_EVENT = 'jarvis:chat:annotation-attach';
 export interface ChatAnnotationAttachDetail {
   readonly chatId: string;
   readonly text: string;
-  readonly ask?: boolean;
+  readonly anchor?: { readonly top: number; readonly left: number };
 }
 
 export function appendChatAnnotations(

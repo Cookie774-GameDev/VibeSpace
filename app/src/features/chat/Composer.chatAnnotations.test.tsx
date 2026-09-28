@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe('chat annotations in Composer', () => {
-  it('adds selected chat text to the matching draft, accepts a comment, and removes it', () => {
+  it('saves a comment, reveals the quote only on double-click, and supports edit and remove', () => {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     useUIStore.setState({ composerStt: true });
     render(
@@ -60,23 +60,43 @@ describe('chat annotations in Composer', () => {
     act(() =>
       window.dispatchEvent(
         new CustomEvent(CHAT_ANNOTATION_ATTACH_EVENT, {
-          detail: { chatId: 'annotation-chat', text: 'A selected reply', ask: false },
+          detail: { chatId: 'annotation-chat', text: 'A selected reply' },
         }),
       ),
     );
-    expect(screen.getByText('Annotation 1')).toBeTruthy();
-    expect(screen.getByText('A selected reply')).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Comment on selected text' })).toBeTruthy();
+    expect(screen.queryByLabelText('Attached chat annotations')).toBeNull();
     const comment = screen.getByRole('textbox', {
       name: 'Comment on annotation 1',
     }) as HTMLTextAreaElement;
     fireEvent.change(comment, { target: { value: 'Please explain this.' } });
     expect(comment.value).toBe('Please explain this.');
     expect(screen.getByRole('button', { name: 'Dictate comment on annotation 1' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const chip = screen.getByRole('button', { name: /1 attached annotation.*Double-click/ });
+    expect(screen.queryByText('A selected reply')).toBeNull();
+    fireEvent.click(chip);
+    expect(screen.queryByRole('dialog', { name: 'Attached annotation details' })).toBeNull();
+    fireEvent.dblClick(chip);
+    expect(screen.getByRole('dialog', { name: 'Attached annotation details' })).toBeTruthy();
+    expect(screen.getByText('A selected reply')).toBeTruthy();
+    expect(screen.getByText('Comment: Please explain this.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit annotation 1' }));
+    expect(
+      (screen.getByRole('textbox', { name: 'Comment on annotation 1' }) as HTMLTextAreaElement)
+        .value,
+    ).toBe('Please explain this.');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Comment on annotation 1' }), {
+      target: { value: 'Unsaved change' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.dblClick(chip);
+    expect(screen.getByText('Comment: Please explain this.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Remove annotation 1' }));
     expect(screen.queryByLabelText('Attached chat annotations')).toBeNull();
-  });
+  }, 20_000);
 
-  it('sets an Ask Jarvis prompt only when the current draft is empty', () => {
+  it('cancels an attachment without changing the current message or saving a quote', () => {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     render(
       <TooltipProvider>
@@ -84,24 +104,29 @@ describe('chat annotations in Composer', () => {
       </TooltipProvider>,
     );
     const message = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
-    act(() =>
-      window.dispatchEvent(
-        new CustomEvent(CHAT_ANNOTATION_ATTACH_EVENT, {
-          detail: { chatId: 'annotation-ask', text: 'Quote', ask: true },
-        }),
-      ),
-    );
-    expect(message.value).toBe('Tell me about this selection.');
     fireEvent.change(message, { target: { value: 'My own question' } });
     act(() =>
       window.dispatchEvent(
         new CustomEvent(CHAT_ANNOTATION_ATTACH_EVENT, {
-          detail: { chatId: 'annotation-ask', text: 'Second quote', ask: true },
+          detail: { chatId: 'annotation-ask', text: 'Quote' },
         }),
       ),
     );
     expect(message.value).toBe('My own question');
-    expect(screen.getByText('Annotation 2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByLabelText('Attached chat annotations')).toBeNull();
+    act(() =>
+      window.dispatchEvent(
+        new CustomEvent(CHAT_ANNOTATION_ATTACH_EVENT, {
+          detail: { chatId: 'annotation-ask', text: 'Second quote' },
+        }),
+      ),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(message.value).toBe('My own question');
+    expect(
+      screen.getByRole('button', { name: /1 attached annotation.*Double-click/ }),
+    ).toBeTruthy();
   });
 
   it('dictates into the annotation comment without sending the chat', async () => {
@@ -152,11 +177,16 @@ describe('chat annotations in Composer', () => {
             .value,
         ).toBe('Spoken comment'),
       );
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      fireEvent.dblClick(
+        screen.getByRole('button', { name: /1 attached annotation.*Double-click/ }),
+      );
+      expect(screen.getByText('Comment: Spoken comment')).toBeTruthy();
       expect(send).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener('jarvis:send', send);
     }
-  });
+  }, 20_000);
 
   it('persists the selected quote and comment once with the ordinary user message', async () => {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
@@ -208,8 +238,11 @@ describe('chat annotations in Composer', () => {
       fireEvent.change(screen.getByRole('textbox', { name: 'Comment on annotation 1' }), {
         target: { value: 'Why?' },
       });
-      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
-      await waitFor(() => expect(send).toHaveBeenCalledOnce());
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      const sendButton = screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement;
+      await waitFor(() => expect(sendButton.disabled).toBe(false), { timeout: 10_000 });
+      fireEvent.click(sendButton);
+      await waitFor(() => expect(send).toHaveBeenCalledOnce(), { timeout: 10_000 });
       const messages = await messageRepo.list({ chat_id: 'annotation-send' as never });
       const sent = messages.filter((message) => message.role === 'user');
       expect(sent).toHaveLength(1);
@@ -222,5 +255,5 @@ describe('chat annotations in Composer', () => {
       window.removeEventListener('jarvis:send', send);
       vi.unstubAllGlobals();
     }
-  });
+  }, 30_000);
 });

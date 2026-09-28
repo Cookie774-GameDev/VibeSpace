@@ -1,4 +1,4 @@
-import { Copy, MessageSquarePlus, Sparkles } from 'lucide-react';
+import { Copy, MessageSquarePlus } from 'lucide-react';
 import { useEffect, useState, type RefObject } from 'react';
 import { toast } from '@/components/ui/toast';
 import { CHAT_ANNOTATION_ATTACH_EVENT } from './chatAnnotations';
@@ -7,6 +7,7 @@ interface SelectionPopup {
   text: string;
   top: number;
   left: number;
+  editorTop: number;
 }
 
 export function ChatSelectionToolbar({
@@ -45,7 +46,8 @@ export function ChatSelectionToolbar({
       setSelection({
         text,
         top: Math.max(8, rect.top - 42),
-        left: Math.max(8, Math.min(window.innerWidth - 320, rect.left)),
+        left: Math.max(8, Math.min(window.innerWidth - 220, rect.left)),
+        editorTop: Math.max(8, Math.min(window.innerHeight - 160, rect.bottom + 8)),
       });
     };
     const hide = () => setSelection(null);
@@ -61,14 +63,17 @@ export function ChatSelectionToolbar({
     };
   }, [rootRef]);
 
-  const attach = (ask: boolean) => {
+  const attach = () => {
     if (!selection) return;
     window.dispatchEvent(
       new CustomEvent(CHAT_ANNOTATION_ATTACH_EVENT, {
-        detail: { chatId, text: selection.text, ask },
+        detail: {
+          chatId,
+          text: selection.text,
+          anchor: { top: selection.editorTop, left: selection.left },
+        },
       }),
     );
-    window.getSelection()?.removeAllRanges();
     setSelection(null);
   };
   const copy = async () => {
@@ -102,14 +107,7 @@ export function ChatSelectionToolbar({
       <button
         type="button"
         className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] text-accent-copper hover:bg-accent-copper/15"
-        onClick={() => attach(true)}
-      >
-        <Sparkles className="h-3 w-3" /> Ask Jarvis
-      </button>
-      <button
-        type="button"
-        className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] text-accent-copper hover:bg-accent-copper/15"
-        onClick={() => attach(false)}
+        onClick={attach}
       >
         <MessageSquarePlus className="h-3 w-3" /> Attach to Chat
       </button>
