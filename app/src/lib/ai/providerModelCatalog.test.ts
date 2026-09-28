@@ -179,6 +179,89 @@ describe('providerModelCatalog', () => {
     fetchMock.mockRestore();
   });
 
+  it('keeps OpenRouter text-and-image output capability and free-price metadata account scoped', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: 'google/gemini-image-chat',
+              architecture: { output_modalities: ['text', 'image'] },
+              pricing: { prompt: '0.000001', completion: '0.000002', image: '0', request: '0' },
+            },
+            {
+              id: 'provider/image-only',
+              architecture: { output_modalities: ['image'] },
+              pricing: { prompt: '0', completion: '0', image: '0', request: '0' },
+            },
+            {
+              id: 'provider/image-metadata-missing',
+              architecture: { input_modalities: ['image'], output_modalities: ['text'] },
+              pricing: { prompt: '0', completion: '0', image: '0', request: '0' },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+
+    const models = await loadProviderModels(
+      'openrouter',
+      { ...ctx, apiKeys: { openrouter: 'openrouter-key' } },
+      { force: true },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://openrouter.ai/api/v1/models/user',
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer openrouter-key' },
+      }),
+    );
+    expect(models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'google/gemini-image-chat',
+          supportsImageOutput: true,
+          isImageOutputFree: false,
+        }),
+      ]),
+    );
+    expect(models.map((model) => model.id)).not.toEqual(
+      expect.arrayContaining(['provider/image-only', 'provider/image-metadata-missing']),
+    );
+    fetchMock.mockRestore();
+  });
+
+  it('keeps a verified free image-output model in the bounded OpenRouter picker', async () => {
+    const rows = Array.from({ length: 40 }, (_, index) => ({ id: `provider/chat-model-${index}` }));
+    rows.push({
+      id: 'google/gemini-free-image-chat',
+      architecture: { output_modalities: ['text', 'image'] },
+      pricing: { prompt: '0', completion: '0', image: '0', request: '0' },
+    } as typeof rows[number]);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: rows }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    const models = await loadProviderModels(
+      'openrouter',
+      { ...ctx, apiKeys: { openrouter: 'openrouter-key' } },
+      { force: true },
+    );
+
+    expect(models).toHaveLength(40);
+    expect(models[0]).toMatchObject({
+      id: 'google/gemini-free-image-chat',
+      supportsImageOutput: true,
+      isImageOutputFree: true,
+    });
+    expect(models.some((model) => model.id === 'provider/chat-model-39')).toBe(false);
+    fetchMock.mockRestore();
+  });
+
   it('clears mismatched model when provider changes', () => {
     const next = resolveModelOnProviderChange('groq', 'gemini-3.5-flash', ctx);
     expect(modelBelongsToProvider('groq', next)).toBe(true);

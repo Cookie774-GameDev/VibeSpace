@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { createOpenCodeHttpClient } from './openCodeClient';
 import type { OpenCodeServerConnection } from './runtimeManager';
 
@@ -78,6 +79,27 @@ describe('OpenCodeHttpClient', () => {
     expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toMatchObject({
       tools: { 'terminal.list': true, 'terminal.write': false },
     });
+  });
+
+  it('sends image data to OpenCode without retaining base64 bytes in activity diagnostics', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(null, { status: 204 }));
+    const client = createOpenCodeHttpClient(connection, { fetch });
+    const dataUrl = 'data:image/png;base64,aGVsbG8=';
+    const beforeSequence = appActivityLog.snapshot().sequence;
+
+    await client.promptAsync('session-image', {
+      model: { providerID: 'openai', modelID: 'gpt-5.6-luna' },
+      parts: [
+        { type: 'text', text: 'Describe this.' },
+        { type: 'file', mime: 'image/png', url: dataUrl, filename: 'tiny.png' },
+      ],
+    });
+
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)) as { parts: unknown[] };
+    expect(body.parts[1]).toMatchObject({ type: 'file', url: dataUrl });
+    const diagnostics = JSON.stringify(appActivityLog.snapshot(beforeSequence).events);
+    expect(diagnostics).not.toContain('aGVsbG8=');
+    expect(diagnostics).toContain('[image payload omitted');
   });
 
   it('patches only a bounded verified Qwen endpoint into managed OpenCode config', async () => {

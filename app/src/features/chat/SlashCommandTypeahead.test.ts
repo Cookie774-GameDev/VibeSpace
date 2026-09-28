@@ -330,6 +330,15 @@ describe('orderSlashCommandsForDisplay', () => {
     });
   });
 
+  it('offers explicit image output as a prompt taking chat command', () => {
+    expect(findSlashCommandDef('image')).toMatchObject({
+      cmd: 'image',
+      category: 'chat',
+      takesArg: true,
+      argPlaceholder: '<image prompt>',
+    });
+  });
+
   it('registers /doctor as a local repair command', () => {
     expect(findSlashCommandDef('doctor')).toMatchObject({
       cmd: 'doctor',

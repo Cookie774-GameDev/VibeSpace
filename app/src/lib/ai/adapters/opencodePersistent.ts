@@ -2376,6 +2376,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       // A preflight failure can leave a bound session with no accepted prompt.
       // Restore the bounded local history once; established sessions already own it.
       text: baselineMessages.length === 0 ? selectOpenCodeDispatchPrompt(request) : request.prompt,
+      ...(request.parts?.length ? { parts: request.parts } : {}),
       settings,
       selection: {
         connectionId: request.connection.id,

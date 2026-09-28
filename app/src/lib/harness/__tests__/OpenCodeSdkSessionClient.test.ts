@@ -36,6 +36,60 @@ function fakeClient(events: readonly OpenCodeRawEvent[] = []) {
 }
 
 describe('OpenCodeSdkSessionClient', () => {
+  it('sends validated image parts in the same persistent OpenCode prompt', async () => {
+    const client = fakeClient();
+    const sdk = new OpenCodeSdkSessionClient(client);
+    const parts = [
+      { type: 'text' as const, text: 'Describe this.' },
+      {
+        type: 'file' as const,
+        mime: 'image/png' as const,
+        url: 'data:image/png;base64,aGVsbG8=',
+        filename: 'tiny.png',
+      },
+    ];
+    await sdk.sendAsync({
+      sessionId: 'session-1',
+      controls: {
+        connectionId: 'opencode-cli',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-luna',
+        performance: 'quality',
+        rlmEnabled: true,
+      },
+      text: 'Describe this.',
+      agent: 'vibespace-full',
+      parts,
+    });
+    expect(client.session.promptAsync).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({ parts }),
+    }));
+  });
+
+  it('rejects over-limit image data before sending it to OpenCode', async () => {
+    const client = fakeClient();
+    const sdk = new OpenCodeSdkSessionClient(client);
+    const maxEncodedLength = Math.ceil((8 * 1024 * 1024) / 3) * 4;
+    await expect(sdk.sendAsync({
+      sessionId: 'session-1',
+      controls: {
+        connectionId: 'opencode-cli',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-luna',
+        performance: 'quality',
+        rlmEnabled: true,
+      },
+      text: 'Describe this.',
+      agent: 'vibespace-full',
+      parts: [{
+        type: 'file',
+        mime: 'image/png',
+        url: `data:image/png;base64,${'A'.repeat(maxEncodedLength + 4)}`,
+      }],
+    })).rejects.toThrow(/bounded matching base64 data URL/iu);
+    expect(client.session.promptAsync).not.toHaveBeenCalled();
+  });
+
   it('binds the predeclared execution agent in the prompt without unsupported session mutation', async () => {
     const client = fakeClient();
     const sdk = new OpenCodeSdkSessionClient(client);

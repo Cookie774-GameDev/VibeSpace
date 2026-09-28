@@ -221,6 +221,7 @@ describe('provider capability catalog', () => {
     expect(getProviderConnectionDescriptor('qwen-code').capabilities).toEqual(external);
     expect(getProviderConnectionDescriptor('opencode-cli').capabilities).toEqual({
       ...external,
+      images: true,
       tools: true,
     });
     expect(getProviderConnectionDescriptor('opencode-cli').toolAllowlist).toEqual([

@@ -341,6 +341,36 @@ async function drain(iterator: AsyncIterator<ProviderEvent>): Promise<void> {
 }
 
 describe('persistent OpenCode question transport authority', () => {
+  it('forwards structured image parts through the persistent prompt body', async () => {
+    configureManagedQuestionTransport([]);
+    const parts = [
+      { type: 'text' as const, text: 'Describe this image.' },
+      {
+        type: 'file' as const,
+        mime: 'image/png' as const,
+        url: 'data:image/png;base64,aGVsbG8=',
+        filename: 'tiny.png',
+      },
+    ];
+    const iterator = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('request-image-input'),
+      parts,
+    })[Symbol.asyncIterator]();
+
+    try {
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'session', sessionId: 'ses_question_exact' },
+      });
+      const sent = nativeOpenCodeMocks.request.mock.calls.find(([, path]) =>
+        path.includes('/prompt_async'),
+      );
+      expect(JSON.parse(String(sent?.[2]?.body))).toMatchObject({ parts });
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
   it('revalidates selected native skill references through the scoped catalog before dispatch', async () => {
     configureManagedQuestionTransport([]);
     const transport = nativeOpenCodeMocks.request.getMockImplementation()!;

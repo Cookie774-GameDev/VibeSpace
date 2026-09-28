@@ -1,20 +1,42 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FileText, Loader2, Redo2, Save, Undo2, X, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import {
+  Download,
+  FileText,
+  Loader2,
+  Maximize2,
+  Pencil,
+  Redo2,
+  Save,
+  Undo2,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { readTextFile, writeTextFile } from '@/lib/fs';
 import { toast } from '@/components/ui/toast';
 import type { ChatImageAttachment } from '@/lib/ai/vision';
+import { IMAGE_ATTACHMENT_MAX_BYTES } from '@/lib/ai/vision';
 import {
   DEFAULT_PAN_ZOOM,
   attachmentToPreviewUrl,
+  boundedRasterSize,
+  createImageEditHistory,
   createTextHistory,
   isVideoMediaUrl,
   panBy,
+  pushImageStroke,
   pushTextChange,
+  redoImageEdit,
   redoText,
   resetPanZoom,
+  undoImageEdit,
   undoText,
+  validateImagePngDataUrl,
   zoomAtPoint,
+  type ImageEditHistory,
+  type ImagePoint,
+  type ImageStroke,
   type PanZoomState,
   type TextHistory,
 } from './mediaPreviewModel';
@@ -43,12 +65,21 @@ export function mediaTargetFromAttachment(image: ChatImageAttachment): MediaPrev
   };
 }
 
+function imageEditErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.name === 'SecurityError') {
+    return 'This image source blocks export. Reopen a saved chat image or choose another image.';
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
 export function MediaPreviewPanel({
   target,
   onClose,
+  onSaveEditedCopy,
 }: {
   target: MediaPreviewTarget;
   onClose: () => void;
+  onSaveEditedCopy?: (pngDataUrl: string) => Promise<void>;
 }) {
   return (
     <div
@@ -63,7 +94,12 @@ export function MediaPreviewPanel({
     >
       <div className="flex h-full max-h-[min(92vh,900px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-soft">
         {target.kind === 'media' ? (
-          <MediaViewer target={target} onClose={onClose} />
+          <MediaViewer
+            key={`${target.name}:${target.url}`}
+            target={target}
+            onClose={onClose}
+            onSaveEditedCopy={onSaveEditedCopy}
+          />
         ) : (
           <FileEditor target={target} onClose={onClose} />
         )}
@@ -75,17 +111,169 @@ export function MediaPreviewPanel({
 function MediaViewer({
   target,
   onClose,
+  onSaveEditedCopy,
 }: {
   target: Extract<MediaPreviewTarget, { kind: 'media' }>;
   onClose: () => void;
+  onSaveEditedCopy?: (pngDataUrl: string) => Promise<void>;
 }) {
   const [view, setView] = useState<PanZoomState>(DEFAULT_PAN_ZOOM);
+  const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(
+    null,
+  );
+  const [imageStatus, setImageStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [annotationHistory, setAnnotationHistory] = useState<ImageEditHistory>(
+    createImageEditHistory,
+  );
+  const [draftPoints, setDraftPoints] = useState<ImagePoint[] | null>(null);
+  const [annotating, setAnnotating] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editMessage, setEditMessage] = useState<string | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     setView(resetPanZoom());
   }, [target.url]);
+
+  const hasImageEdits = annotationHistory.present.length > 0;
+
+  const pointAt = useCallback(
+    (clientX: number, clientY: number): ImagePoint | null => {
+      const image = imageRef.current;
+      if (!image || !imageDimensions || imageStatus !== 'ready') return null;
+      const rect = image.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        return null;
+      }
+      return {
+        x: ((clientX - rect.left) / rect.width) * imageDimensions.width,
+        y: ((clientY - rect.top) / rect.height) * imageDimensions.height,
+      };
+    },
+    [imageDimensions, imageStatus],
+  );
+
+  const makePngDataUrl = useCallback(() => {
+    const image = imageRef.current;
+    if (!image || !imageDimensions || imageStatus !== 'ready') {
+      throw new Error('Wait for the image to finish loading before exporting.');
+    }
+    const size = boundedRasterSize(imageDimensions.width, imageDimensions.height);
+    if (!size) throw new Error('The image has invalid dimensions and cannot be edited.');
+    const canvas = document.createElement('canvas');
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('This browser could not prepare an image canvas.');
+
+    context.drawImage(image, 0, 0, size.width, size.height);
+    const scaleX = size.width / imageDimensions.width;
+    const scaleY = size.height / imageDimensions.height;
+    for (const stroke of annotationHistory.present) {
+      if (stroke.points.length === 0) continue;
+      context.beginPath();
+      context.strokeStyle = stroke.color;
+      context.fillStyle = stroke.color;
+      context.lineWidth = stroke.width * Math.min(scaleX, scaleY);
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      if (stroke.points.length === 1) {
+        const [point] = stroke.points;
+        context.arc(
+          point!.x * scaleX,
+          point!.y * scaleY,
+          Math.max(1, context.lineWidth / 2),
+          0,
+          Math.PI * 2,
+        );
+        context.fill();
+      } else {
+        const [first, ...rest] = stroke.points;
+        context.moveTo(first!.x * scaleX, first!.y * scaleY);
+        for (const point of rest) context.lineTo(point.x * scaleX, point.y * scaleY);
+        context.stroke();
+      }
+    }
+    const dataUrl = canvas.toDataURL('image/png');
+    const validation = validateImagePngDataUrl(dataUrl, IMAGE_ATTACHMENT_MAX_BYTES);
+    if (!validation.ok) {
+      throw new Error(
+        validation.reason === 'too-large'
+          ? 'The edited PNG exceeds the 8 MiB chat image limit. Try a smaller image.'
+          : 'The browser returned an unsupported image format.',
+      );
+    }
+    return dataUrl;
+  }, [annotationHistory.present, imageDimensions, imageStatus]);
+
+  const exportPng = useCallback(() => {
+    try {
+      const dataUrl = makePngDataUrl();
+      const basename = target.name.replace(/\.[^.\\/]+$/u, '').replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '-');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = `${basename || 'annotated-image'}.png`;
+      link.click();
+      setEditMessage('Exported an annotated PNG.');
+    } catch (error) {
+      setEditMessage(imageEditErrorMessage(error, 'The annotated PNG could not be exported.'));
+    }
+  }, [makePngDataUrl, target.name]);
+
+  const saveEditedCopy = useCallback(async () => {
+    if (!onSaveEditedCopy) return;
+    setSaving(true);
+    setEditMessage(null);
+    try {
+      const dataUrl = makePngDataUrl();
+      await onSaveEditedCopy(dataUrl);
+      setAnnotationHistory(createImageEditHistory());
+      setDraftPoints(null);
+      setAnnotating(false);
+      setEditMessage('Saved an edited copy to this chat. The original image is unchanged.');
+    } catch (error) {
+      setEditMessage(imageEditErrorMessage(error, 'The edited image could not be saved.'));
+    } finally {
+      setSaving(false);
+    }
+  }, [makePngDataUrl, onSaveEditedCopy]);
+
+  const renderStroke = (stroke: ImageStroke, key: string) => {
+    if (stroke.points.length === 1) {
+      const point = stroke.points[0]!;
+      return (
+        <circle
+          key={key}
+          cx={point.x}
+          cy={point.y}
+          r={stroke.width / 2}
+          fill={stroke.color}
+        />
+      );
+    }
+    const path = stroke.points
+      .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
+      .join(' ');
+    return (
+      <path
+        key={key}
+        d={path}
+        fill="none"
+        stroke={stroke.color}
+        strokeWidth={stroke.width}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    );
+  };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -115,11 +303,81 @@ function MediaViewer({
 
   return (
     <>
-      <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         <strong className="min-w-0 flex-1 truncate text-ui-strong text-foreground">
           {target.name}
         </strong>
         <span className="text-metadata text-muted-foreground">{Math.round(view.scale * 100)}%</span>
+        {target.mediaKind === 'image' && (
+          <>
+            <button
+              type="button"
+              className={cn(
+                'inline-flex items-center gap-1 rounded px-2 py-1 text-metadata hover:bg-muted hover:text-foreground disabled:opacity-40',
+                annotating ? 'bg-accent-copper/20 text-accent-copper' : 'text-muted-foreground',
+              )}
+              aria-label={annotating ? 'Finish drawing' : 'Draw on image'}
+              aria-pressed={annotating}
+              disabled={imageStatus !== 'ready'}
+              onClick={() => {
+                setAnnotating((value) => !value);
+                setDraftPoints(null);
+                setEditMessage(null);
+              }}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              Draw
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded px-2 py-1 text-metadata text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+              aria-label="Undo drawing"
+              disabled={annotationHistory.past.length === 0}
+              onClick={() => {
+                setAnnotationHistory((history) => undoImageEdit(history));
+                setEditMessage(null);
+              }}
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+              Undo
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded px-2 py-1 text-metadata text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+              aria-label="Redo drawing"
+              disabled={annotationHistory.future.length === 0}
+              onClick={() => {
+                setAnnotationHistory((history) => redoImageEdit(history));
+                setEditMessage(null);
+              }}
+            >
+              <Redo2 className="h-3.5 w-3.5" />
+              Redo
+            </button>
+            {onSaveEditedCopy && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded px-2 py-1 text-metadata text-accent-copper hover:bg-accent-copper/15 disabled:opacity-40"
+                aria-label="Save edited copy to chat"
+                disabled={!hasImageEdits || imageStatus !== 'ready' || saving}
+                onClick={() => void saveEditedCopy()}
+              >
+                <Save className="h-3.5 w-3.5" />
+                {saving ? 'Saving…' : 'Save copy'}
+              </button>
+            )}
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded px-2 py-1 text-metadata text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+              aria-label="Export annotated PNG"
+              disabled={!hasImageEdits || imageStatus !== 'ready'}
+              onClick={exportPng}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export PNG
+            </button>
+          </>
+        )}
         <button
           type="button"
           className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -173,17 +431,44 @@ function MediaViewer({
       </header>
       <div
         ref={stageRef}
-        className="relative min-h-0 flex-1 cursor-grab overflow-hidden bg-black/90 active:cursor-grabbing"
+        className={cn(
+          'relative min-h-0 flex-1 overflow-hidden bg-black/90',
+          annotating ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing',
+        )}
         data-media-preview-stage="true"
+        data-testid="media-preview-stage"
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           // Do not pan when using native video controls or buttons.
           const t = event.target as HTMLElement | null;
           if (t?.closest?.('video, button, input, a, [data-no-pan]')) return;
-          (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+          if (annotating && target.mediaKind === 'image') {
+            const point = pointAt(event.clientX, event.clientY);
+            if (!point) return;
+            event.preventDefault();
+            try {
+              (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+            } catch {
+              // Pointer capture is unavailable in some embedded WebViews.
+            }
+            dragRef.current = null;
+            setDraftPoints([point]);
+            setEditMessage(null);
+            return;
+          }
+          try {
+            (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+          } catch {
+            // Pointer capture is unavailable in some embedded WebViews.
+          }
           dragRef.current = { x: event.clientX, y: event.clientY };
         }}
         onPointerMove={(event) => {
+          if (draftPoints) {
+            const point = pointAt(event.clientX, event.clientY);
+            if (point) setDraftPoints((points) => (points ? [...points, point] : points));
+            return;
+          }
           if (!dragRef.current) return;
           const dx = event.clientX - dragRef.current.x;
           const dy = event.clientY - dragRef.current.y;
@@ -191,6 +476,17 @@ function MediaViewer({
           setView((cur) => panBy(cur, dx, dy));
         }}
         onPointerUp={(event) => {
+          if (draftPoints && imageDimensions) {
+            const width = Math.max(imageDimensions.width, imageDimensions.height) * 0.006;
+            setAnnotationHistory((history) =>
+              pushImageStroke(history, {
+                points: draftPoints,
+                color: '#ef4444',
+                width,
+              }),
+            );
+            setDraftPoints(null);
+          }
           dragRef.current = null;
           try {
             (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
@@ -200,6 +496,7 @@ function MediaViewer({
         }}
         onPointerCancel={() => {
           dragRef.current = null;
+          setDraftPoints(null);
         }}
       >
         <div
@@ -219,16 +516,72 @@ function MediaViewer({
               draggable={false}
             />
           ) : (
-            <img
-              src={target.url}
-              alt={target.name}
-              className="max-h-[70vh] max-w-[80vw] select-none"
-              draggable={false}
-            />
+            <div className="relative inline-block max-h-[70vh] max-w-[80vw]">
+              <img
+                ref={imageRef}
+                src={target.url}
+                alt={target.name}
+                className="block max-h-[70vh] max-w-[80vw] select-none"
+                draggable={false}
+                onLoad={(event) => {
+                  const { naturalWidth, naturalHeight } = event.currentTarget;
+                  if (naturalWidth <= 0 || naturalHeight <= 0) {
+                    setImageStatus('error');
+                    return;
+                  }
+                  setImageDimensions({ width: naturalWidth, height: naturalHeight });
+                  setImageStatus('ready');
+                }}
+                onError={() => setImageStatus('error')}
+              />
+              {imageDimensions && (
+                <svg
+                  className="pointer-events-none absolute inset-0 h-full w-full"
+                  viewBox={`0 0 ${imageDimensions.width} ${imageDimensions.height}`}
+                  aria-hidden="true"
+                  preserveAspectRatio="none"
+                >
+                  {annotationHistory.present.map((stroke, index) =>
+                    renderStroke(stroke, `saved-${index}`),
+                  )}
+                  {draftPoints &&
+                    renderStroke(
+                      {
+                        points: draftPoints,
+                        color: '#ef4444',
+                        width: Math.max(imageDimensions.width, imageDimensions.height) * 0.006,
+                      },
+                      'draft',
+                    )}
+                </svg>
+              )}
+            </div>
           )}
         </div>
+        {target.mediaKind === 'image' && imageStatus === 'loading' && (
+          <div
+            className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm text-white"
+            role="status"
+          >
+            <Loader2 className="h-5 w-5 animate-spin" />
+            Loading image…
+          </div>
+        )}
+        {target.mediaKind === 'image' && imageStatus === 'error' && (
+          <p className="absolute inset-x-3 top-3 rounded bg-destructive/90 px-3 py-2 text-sm text-white" role="alert">
+            The saved image could not be loaded. Verify its source or choose another image.
+          </p>
+        )}
+        {editMessage && (
+          <p
+            className="absolute bottom-10 left-1/2 max-w-[90%] -translate-x-1/2 rounded bg-black/75 px-3 py-2 text-center text-metadata text-white"
+            role="status"
+          >
+            {editMessage}
+          </p>
+        )}
         <p className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded bg-black/60 px-2 py-1 text-metadata text-white">
-          Scroll to zoom · drag to pan · Esc to close
+          {annotating ? 'Draw with pointer · Undo/redo from toolbar · Esc to close' : 'Scroll to zoom · drag to pan · Esc to close'}
         </p>
       </div>
     </>

@@ -235,6 +235,8 @@ export interface ProviderRequest {
    */
   toolGatewayAuthority?: ToolGatewayAuthorityClaim | null;
   prompt: string;
+  /** Current user message parts for OpenCode's native multimodal prompt API. */
+  parts?: readonly import('@/lib/harness/OpenCodeTurnCoordinator').OpenCodePromptPart[];
   /** Supplied conversation context for a newly created persistent thread only. */
   historyPrompt?: string;
   modelId?: string;

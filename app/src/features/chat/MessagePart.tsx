@@ -1,5 +1,6 @@
 import { Bot, FileText, Image as ImageIcon, Layers, Zap } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { ToolCallCard } from './ToolCallCard';
 import { ThinkingDisclosure } from './ThinkingDisclosure';
 import { ActionApprovalCard } from './ActionApprovalCard';
@@ -36,6 +37,8 @@ import { presentProviderError } from '@/lib/ai/providerError';
 import { AssistantRichText } from './AssistantRichText';
 import { ToolFileLink } from './activity-ledger/ToolDetailsInspector';
 import { resolveToolChatRoot } from './activity-ledger/toolFileActions';
+import { messageRepo } from '@/lib/db/repositories';
+import { MediaPreviewPanel, type MediaPreviewTarget } from './MediaPreviewPanel';
 
 function ChatFileReference({ path, chatId }: { path: string; chatId?: string }) {
   const [projectRoot, setProjectRoot] = useState<string>();
@@ -50,6 +53,110 @@ function ChatFileReference({ path, chatId }: { path: string; chatId?: string }) 
     return () => { current = false; };
   }, [chatId]);
   return <ToolFileLink path={path} projectRoot={projectRoot} />;
+}
+
+function MessageImagePart({
+  part,
+  allParts,
+  messageId,
+  compact,
+}: {
+  part: Extract<Part, { kind: 'image' }>;
+  allParts: Part[];
+  messageId?: MessageId;
+  compact?: boolean;
+}) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const target: MediaPreviewTarget = {
+    kind: 'media',
+    name: part.alt || 'Chat image',
+    url: part.url,
+    mediaKind: 'image',
+  };
+
+  const saveEditedCopy = useCallback(
+    async (pngDataUrl: string) => {
+      if (!messageId) throw new Error('This image is not attached to a saved chat message.');
+      const saved = await messageRepo.getById(messageId);
+      if (!saved) throw new Error('The chat message could not be found. Reopen the image and try again.');
+      const matchesSource = (candidate: Part | undefined) =>
+        candidate?.kind === 'image' && candidate.url === part.url && candidate.alt === part.alt;
+      const preferredIndex = allParts.indexOf(part);
+      let sourceIndex = matchesSource(saved.parts[preferredIndex]) ? preferredIndex : -1;
+      if (sourceIndex < 0) sourceIndex = saved.parts.findIndex(matchesSource);
+      if (sourceIndex < 0) {
+        throw new Error('The original image changed while you were editing. Reopen it from chat.');
+      }
+
+      const editedCopy: Part = {
+        kind: 'image',
+        url: pngDataUrl,
+        alt: `Edited copy${part.alt ? ` of ${part.alt}` : ''}`,
+      };
+      const parts = [...saved.parts];
+      parts.splice(sourceIndex + 1, 0, editedCopy);
+      await messageRepo.update(messageId, { parts });
+    },
+    [allParts, messageId, part],
+  );
+
+  const openButton = (image: ReactNode) => (
+    <button
+      type="button"
+      className="block w-full cursor-zoom-in text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-copper"
+      aria-label={`Open image editor for ${part.alt || 'image'}`}
+      onClick={() => setPreviewOpen(true)}
+    >
+      {image}
+    </button>
+  );
+
+  return (
+    <>
+      {compact ? (
+        <details className="max-w-sm rounded-md border border-border bg-elevated">
+          <summary className="cursor-pointer list-none px-2 py-1 text-secondary text-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
+              [Image{part.alt ? `: ${part.alt}` : ''}]
+            </span>
+          </summary>
+          {openButton(
+            <img
+              src={part.url}
+              alt={part.alt ?? ''}
+              className="block h-auto max-h-80 w-full object-contain"
+              loading="lazy"
+            />,
+          )}
+        </details>
+      ) : (
+        <div className="max-w-sm overflow-hidden rounded-md border border-border bg-elevated">
+          {openButton(
+            <img
+              src={part.url}
+              alt={part.alt ?? ''}
+              className="block h-auto w-full"
+              loading="lazy"
+            />,
+          )}
+          {part.alt && (
+            <div className="flex items-center gap-1 px-2 py-1 text-metadata text-muted-foreground">
+              <ImageIcon className="h-3 w-3" />
+              {part.alt}
+            </div>
+          )}
+        </div>
+      )}
+      {previewOpen && (
+        <MediaPreviewPanel
+          target={target}
+          onClose={() => setPreviewOpen(false)}
+          onSaveEditedCopy={messageId ? saveEditedCopy : undefined}
+        />
+      )}
+    </>
+  );
 }
 
 function textForDisplay(text: string): string {
@@ -510,39 +617,13 @@ export function MessagePart({
     }
 
     case 'image': {
-      if (compactAttachments) {
-        return (
-          <details className="max-w-sm rounded-md border border-border bg-elevated">
-            <summary className="cursor-pointer list-none px-2 py-1 text-secondary text-foreground">
-              <span className="inline-flex items-center gap-1.5">
-                <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
-                [Image{part.alt ? `: ${part.alt}` : ''}]
-              </span>
-            </summary>
-            <img
-              src={part.url}
-              alt={part.alt ?? ''}
-              className="block h-auto max-h-80 w-full object-contain"
-              loading="lazy"
-            />
-          </details>
-        );
-      }
       return (
-        <div className="rounded-md overflow-hidden border border-border bg-elevated max-w-sm">
-          <img
-            src={part.url}
-            alt={part.alt ?? ''}
-            className="block w-full h-auto"
-            loading="lazy"
-          />
-          {part.alt && (
-            <div className="px-2 py-1 text-metadata text-muted-foreground flex items-center gap-1">
-              <ImageIcon className="h-3 w-3" />
-              {part.alt}
-            </div>
-          )}
-        </div>
+        <MessageImagePart
+          part={part}
+          allParts={allParts}
+          messageId={messageId}
+          compact={compactAttachments}
+        />
       );
     }
 

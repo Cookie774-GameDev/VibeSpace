@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent } from '@/types';
 import type { CompiledJarvisPrompt } from '@/lib/jarvis/contracts';
 import type { ToolGatewayAuthorityClaim } from '@/lib/harness/toolGatewayAuthority';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { useAuthStore } from '@/stores/auth';
 import { providerActivityTracker } from '@/features/taskbar-usage/activityTracker';
 import { AGENT_DEFAULT_PROVIDER_MODEL } from './agentProviderOptions';
 import { aggregateConnectionUsage, readConnectionUsageLedger } from './connectionUsageLedger';
+import { openrouterProvider } from './providers/compatibleInstances';
 
 const { openCodeDetect, openCodeProbeAuth, openCodeSend, isActiveChildQuestion } = vi.hoisted(() => ({
   openCodeDetect: vi.fn(),
@@ -154,6 +156,133 @@ describe('canonical OpenCode AI routing', () => {
         onSessionBound: expect.any(Function),
       }),
     );
+  });
+
+  it('forwards the current user image as an OpenCode file part instead of flattening it to text', async () => {
+    const beforeSequence = appActivityLog.snapshot().sequence;
+    await runAgent({
+      agent: openaiAgent,
+      connectionId: 'opencode-cli',
+      connectionRequirements: { images: true },
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'What is in this picture?' },
+          { type: 'image', mimeType: 'image/png', data: 'aGVsbG8=', name: 'tiny.png' },
+        ],
+      }],
+    });
+
+    expect(openCodeSend).toHaveBeenCalledWith(expect.objectContaining({
+      parts: [
+        { type: 'text', text: 'What is in this picture?' },
+        {
+          type: 'file',
+          mime: 'image/png',
+          url: 'data:image/png;base64,aGVsbG8=',
+          filename: 'tiny.png',
+        },
+      ],
+    }));
+    const diagnostics = JSON.stringify(appActivityLog.snapshot(beforeSequence).events);
+    expect(diagnostics).not.toContain('aGVsbG8=');
+    expect(diagnostics).toContain('[image payload omitted');
+  });
+
+  it('routes explicit image output to the selected OpenRouter provider, never through OpenCode', async () => {
+    const imageResponse = {
+      text: 'Generated image.',
+      images: [{ mimeType: 'image/png', data: 'aGVsbG8=', alt: 'blue fox' }],
+      usage: { input_tokens: 12, output_tokens: 34, cost_usd: 0.02 },
+      provider: 'openrouter' as const,
+      model: 'openai/gpt-image-1',
+      finish_reason: 'stop',
+    };
+    const providerRun = vi.spyOn(openrouterProvider, 'run').mockResolvedValue(imageResponse);
+    try {
+      const result = await runAgent({
+        backend: 'opencode',
+        agent: { ...openaiAgent, model: { provider: 'openrouter', model: 'openai/gpt-image-1' } },
+        connectionId: 'openrouter-api',
+        imageOutputRequested: true,
+        messages: [{ role: 'user', content: 'Create an image of a blue fox.' }],
+      });
+      expect(result.images).toEqual(imageResponse.images);
+      expect(providerRun).toHaveBeenCalledWith(expect.objectContaining({
+        imageOutputRequested: true,
+        agent: expect.objectContaining({
+          model: { provider: 'openrouter', model: 'openai/gpt-image-1' },
+        }),
+      }));
+      expect(openCodeSend).not.toHaveBeenCalled();
+    } finally {
+      providerRun.mockRestore();
+    }
+  });
+
+  it('preserves the protected attempt boundary on the direct OpenRouter image route', async () => {
+    const imageResponse = {
+      text: 'Generated image.',
+      images: [{ mimeType: 'image/png', data: 'aGVsbG8=' }],
+      usage: { input_tokens: 2, output_tokens: 3, cost_usd: 0 },
+      provider: 'openrouter' as const,
+      model: 'openai/gpt-image-1',
+      finish_reason: 'stop',
+    };
+    const providerRun = vi.spyOn(openrouterProvider, 'run').mockImplementation(async (request) => {
+      request.onResponseObservation?.({ kind: 'sdk_chunk', observedAt: Date.now() });
+      request.onActionDispatch?.({ observedAt: Date.now() });
+      return imageResponse;
+    });
+    try {
+      await runAgent({
+        backend: 'opencode',
+        agent: { ...openaiAgent, model: { provider: 'openrouter', model: 'openai/gpt-image-1' } },
+        connectionId: 'openrouter-api',
+        imageOutputRequested: true,
+        messages: [{ role: 'user', content: 'Create a protected image.' }],
+        compiledPrompt,
+        protectedAttempt,
+        requestId: protectedAttempt.requestId,
+      });
+      expect(providerRun).toHaveBeenCalledWith(expect.objectContaining({
+        imageOutputRequested: true,
+        systemPrompt: compiledPrompt.systemText,
+        protectedAttempt,
+        onResponseObservation: expect.any(Function),
+        onActionDispatch: expect.any(Function),
+      }));
+      expect(openCodeSend).not.toHaveBeenCalled();
+    } finally {
+      providerRun.mockRestore();
+    }
+  });
+
+  it('fails closed when image output is requested through a non-OpenRouter route', async () => {
+    await expect(runAgent({
+      backend: 'opencode',
+      agent: openaiAgent,
+      connectionId: 'openai-api',
+      imageOutputRequested: true,
+      messages: [{ role: 'user', content: 'Create an image of a blue fox.' }],
+    })).rejects.toMatchObject({
+      name: 'ProviderRuntimeError',
+      details: { message: expect.stringMatching(/image output.*OpenRouter/iu) },
+    });
+    expect(openCodeSend).not.toHaveBeenCalled();
+  });
+
+  it('fails closed unless explicit image output uses the OpenCode backend', async () => {
+    await expect(runAgent({
+      agent: { ...openaiAgent, model: { provider: 'openrouter', model: 'openai/gpt-image-1' } },
+      connectionId: 'openrouter-api',
+      imageOutputRequested: true,
+      messages: [{ role: 'user', content: 'Create an image.' }],
+    })).rejects.toMatchObject({
+      name: 'ProviderRuntimeError',
+      details: { message: expect.stringMatching(/image output requires the OpenCode backend/iu) },
+    });
+    expect(openCodeSend).not.toHaveBeenCalled();
   });
 
   it('records provider totals and cache subsets once for the OpenCode route', async () => {

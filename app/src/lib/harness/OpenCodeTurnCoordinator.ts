@@ -53,6 +53,7 @@ export interface PersistentOpenCodeTurnClient extends OpenCodeSessionClient {
     sessionId: string;
     controls: OpenCodeRequestControls;
     text: string;
+    parts?: readonly OpenCodePromptPart[];
     system?: string;
     agent: OpenCodeExecutionAgentId;
     tools?: Readonly<Record<string, boolean>>;
@@ -69,6 +70,16 @@ export interface PersistentOpenCodeTurnClient extends OpenCodeSessionClient {
   listSkillsAsync?(): Promise<readonly OpenCodeNativeSkillDescriptor[]>;
 }
 
+/** Bounded structured parts supported by OpenCode's native prompt_async API. */
+export type OpenCodePromptPart =
+  | Readonly<{ type: 'text'; text: string }>
+  | Readonly<{
+      type: 'file';
+      mime: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+      url: string;
+      filename?: string;
+    }>;
+
 export interface TurnPolicyInput {
   mode: InteractionMode;
   access: AccessLevel;
@@ -83,6 +94,7 @@ export interface OpenCodeTurnInput {
   chatId: string;
   chatTitle?: string;
   text: string;
+  parts?: readonly OpenCodePromptPart[];
   settings?: Readonly<ChatRuntimeSettings>;
   selection: Readonly<ExactModelSelection>;
   policy: Readonly<TurnPolicyInput>;
@@ -396,6 +408,7 @@ export class OpenCodeTurnCoordinator {
         sessionId: session.sessionId,
         controls,
         text,
+        ...(input.parts?.length ? { parts: input.parts } : {}),
         ...(turnSystem?.trim() ? { system: turnSystem } : {}),
         agent: permissions.openCodeAgent,
         ...(turnTools ? { tools: turnTools } : {}),

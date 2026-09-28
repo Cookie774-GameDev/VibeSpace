@@ -71,6 +71,8 @@ export function llmContentToText(content: LLMMessage['content']): string {
 export interface LLMRequest {
   /** Defaults to chat at the public router boundary for existing callers. */
   purpose?: AiPurpose;
+  /** Explicit user request for image output; never inferred from ordinary chat text. */
+  imageOutputRequested?: boolean;
   /** The agent making this call. Drives model + system prompt + temperature. */
   agent: Agent;
   /** Messages so far. System prompt is on the agent, not in this list. */
@@ -181,6 +183,8 @@ export interface TokenUsage {
 export interface LLMResponse {
   /** Final public answer text. OpenCode checkpoints are carried separately below. */
   text: string;
+  /** Validated inline image bytes returned by the same provider turn. No remote URLs. */
+  images?: readonly Readonly<{ mimeType: string; data: string; alt?: string }>[];
   /** Token + dollar usage. */
   usage: TokenUsage;
   /** The provider that actually handled this. May differ from request agent's

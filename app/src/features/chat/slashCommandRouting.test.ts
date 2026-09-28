@@ -26,6 +26,7 @@ const expected = {
   file: ['vibespace-context', 'attachment'],
   md: ['opencode-agent', 'structured-agent-request'],
   model: ['vibespace-ui', 'local'],
+  image: ['vibespace-ui', 'agent-request'],
   cao: ['vibespace-ui', 'local'],
   effort: ['vibespace-ui', 'local'],
   fast: ['vibespace-ui', 'local'],
@@ -125,6 +126,11 @@ describe('Section 20 slash command routing', () => {
       owner: 'vibespace-ui',
     });
     expect(classifySlashCommand('/ACCESS')).toMatchObject({ command: 'access' });
+    expect(classifySlashCommand('/IMAGE draw a tree')).toMatchObject({
+      command: 'image',
+      owner: 'vibespace-ui',
+      execution: 'agent-request',
+    });
     expect(classifySlashCommand('/approve-all on')).toMatchObject({ command: 'approveall' });
     expect(classifySlashCommand('/connect openrouter')).toMatchObject({
       command: 'connect',

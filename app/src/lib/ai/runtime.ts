@@ -235,7 +235,11 @@ import {
   retrieveApprovedLocalKnowledge,
 } from '@/features/context/retrieval';
 import { prepareProductionRlmContext } from '@/features/context/rlm/contextRlmProduction';
-import { modelSupportsVision, type ChatImageAttachment } from './vision';
+import {
+  IMAGE_ATTACHMENT_MAX_BYTES,
+  modelSupportsVision,
+  type ChatImageAttachment,
+} from './vision';
 import {
   ALL_ABOUT_ME_FILE_LOCATION,
   buildAllAboutMeContextBlock,
@@ -3041,6 +3045,8 @@ export function hasPriorPersistedTurn(
 
 /** The shape of the `jarvis:send` event detail. */
 export interface SendDetail {
+  /** Set only by an explicit image-generation action in the composer. */
+  imageOutputRequested?: boolean;
   /** Process-local authority captured at submission, before message persistence. */
   toolGatewayAuthority?: ToolGatewayAuthorityClaim | null;
   /** Runtime-captured resolved agent; retained only for exact CAO resume checks. */
@@ -4306,6 +4312,34 @@ function imagePartToLlm(part: Extract<Part, { kind: 'image' }>): LLMContentPart 
     data: match[2],
     name: part.alt,
   };
+}
+
+function imageResponseToParts(response: LLMResponse, requested: boolean): Part[] {
+  if (!requested) return [];
+  if (!response.images?.length || response.images.length > 4) {
+    throw new Error('The image provider returned no supported image. Retry this image request.');
+  }
+  return response.images.map((image): Part => {
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(image.mimeType)) {
+      throw new Error('The image provider returned an unsupported image format.');
+    }
+    const data = image.data;
+    const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
+    const byteLength = (data.length / 4) * 3 - padding;
+    if (
+      data.length === 0 ||
+      data.length % 4 !== 0 ||
+      byteLength > IMAGE_ATTACHMENT_MAX_BYTES ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(data)
+    ) {
+      throw new Error('The image provider returned invalid or oversized image data.');
+    }
+    return {
+      kind: 'image',
+      url: `data:${image.mimeType};base64,${data}`,
+      alt: image.alt?.slice(0, 256) || 'Generated image',
+    };
+  });
 }
 
 function toLLMMessages(
@@ -8479,6 +8513,7 @@ export function startRuntimeListener(
       activeBackendByController.set(controller, chatBackendAffinity.backend);
       const providerRequest: RunAgentRequest = {
         backend: chatBackendAffinity.backend,
+        imageOutputRequested: detail.imageOutputRequested === true,
         ...(detail.nativeQueuedSubmission ? {
           nativeQueuedSubmission: detail.nativeQueuedSubmission,
           expectedSessionId: detail.nativeQueuedSubmission.threadId,
@@ -8840,6 +8875,10 @@ export function startRuntimeListener(
         throw new DOMException('The exact Codex turn was interrupted.', 'AbortError');
       }
       controller.signal.throwIfAborted();
+      const responseImageParts = imageResponseToParts(
+        response,
+        detail.imageOutputRequested === true,
+      );
       const observedCaoIdentity = caoCompletionEvidence;
       if (detail.caoAuthority && observedCaoIdentity === null) {
         throw new Error('cao_learner_completion_evidence_missing');
@@ -9029,6 +9068,7 @@ export function startRuntimeListener(
         ...(authoritativePublicTimeline.length > 0
           ? [...authoritativePublicTimeline, ...authoritativeDisplayResponseParts]
           : [...authoritativeDisplayResponseParts, ...currentOpenCodeToolParts()]),
+        ...responseImageParts,
         ...openCodeChecklistParts(response.checklist_evidence ?? []),
         ...currentOpenCodeQuestionParts(),
         ...currentOpenCodePermissionParts(),

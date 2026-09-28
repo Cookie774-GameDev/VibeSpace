@@ -187,6 +187,23 @@ describe('explicit Chat backend routing', () => {
     expect(onHarnessSessionBound).toHaveBeenCalledWith({ sessionId: 'thread_native_1' });
   });
 
+  it('fails closed before Codex dispatch when image attachments are required', async () => {
+    await expect(runAgent({
+      backend: 'codex',
+      agent,
+      connectionId: 'openai-codex',
+      connectionRequirements: { images: true },
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: 'Describe this.' },
+        { type: 'image', mimeType: 'image/png', data: 'aGVsbG8=', name: 'tiny.png' },
+      ] }],
+    })).rejects.toMatchObject({
+      name: 'ProviderRuntimeError',
+      details: { message: expect.stringMatching(/does not support image attachments/iu) },
+    });
+    expect(codexSend).not.toHaveBeenCalled();
+  });
+
   it('wraps an early Codex request rejection with exact route identity', async () => {
     const rejection = Object.assign(new Error('Native request rejected; apiKey=private-value'), {
       code: '-32600',

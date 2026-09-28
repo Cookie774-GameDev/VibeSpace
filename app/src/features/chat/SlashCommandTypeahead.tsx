@@ -26,6 +26,7 @@ import {
   FileText,
   HelpCircle,
   History,
+  Image as ImageIcon,
   ListTodo,
   MessageSquare,
   Network,
@@ -300,6 +301,14 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     takesArg: true,
     argPlaceholder: '<provider>',
     hasOptions: true,
+  },
+  {
+    cmd: 'image',
+    description: 'Generate an image with a verified free OpenRouter model',
+    icon: ImageIcon,
+    category: 'chat',
+    takesArg: true,
+    argPlaceholder: '<image prompt>',
   },
   {
     cmd: 'effort',

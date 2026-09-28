@@ -4781,6 +4781,106 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(mocks.runAgent).toHaveBeenCalledOnce();
   });
 
+  it('persists one generated image on the exact explicit image turn', async () => {
+    const jarvis = agent('agent_image_output', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_image_output' as ChatId;
+    const userMessage: Message = {
+      id: 'msg_image_output_user' as MessageId,
+      chat_id: chatId,
+      role: 'user',
+      parts: [{ kind: 'text', text: '/image Draw a blue square.' }],
+      created_at: 1,
+      updated_at: 1,
+    };
+    const appendMessage = vi.fn(async (message) => ({
+      ...message,
+      id: 'msg_image_output_assistant' as MessageId,
+      created_at: 2,
+      updated_at: 2,
+    }));
+    const updateMessage = vi.fn(async (_id: MessageId, _patch: Partial<Omit<Message, 'id'>>) => undefined);
+    mocks.runAgent.mockResolvedValueOnce({
+      text: 'Here is the image.',
+      images: [{ mimeType: 'image/png', data: 'AAAA', alt: 'Blue square' }],
+      usage: { input_tokens: 8, output_tokens: 8, cost_usd: 0 },
+      provider: 'openrouter',
+      model: 'test-image-model',
+    });
+    const stop = trackListener(startRuntimeListener({
+      getAgentById: () => jarvis,
+      getAgentBySlug: () => jarvis,
+      getAgentForChat: vi.fn(async () => jarvis),
+      getMessages: vi.fn(async () => [userMessage]),
+      appendMessage,
+      updateMessage,
+    }));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId,
+        cancellationKey: userMessage.id,
+        text: '/image Draw a blue square.',
+        modelText: 'Draw a blue square.',
+        imageOutputRequested: true,
+      } }));
+      await stop.whenIdle();
+      expect(mocks.runAgent).toHaveBeenCalledOnce();
+      expect(mocks.runAgent.mock.calls[0]![0]).toMatchObject({ imageOutputRequested: true });
+      expect(JSON.stringify(mocks.runAgent.mock.calls[0]![0].messages.at(-1)?.content))
+        .not.toContain('/image');
+      expect(appendMessage.mock.calls.filter(([message]) => message.role === 'assistant'))
+        .toHaveLength(1);
+      const finalParts = updateMessage.mock.calls.at(-1)?.[1]?.parts;
+      expect(finalParts).toContainEqual({
+        kind: 'image',
+        url: 'data:image/png;base64,AAAA',
+        alt: 'Blue square',
+      });
+    } finally {
+      stop();
+      await stop.whenIdle();
+    }
+  });
+
+  it('does not present a completed image when an explicit image turn returns text only', async () => {
+    const jarvis = agent('agent_image_output_missing', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_image_output_missing' as ChatId;
+    const updateMessage = vi.fn(async (_id: MessageId, _patch: Partial<Omit<Message, 'id'>>) => undefined);
+    mocks.runAgent.mockResolvedValueOnce({
+      text: 'No image was generated.',
+      usage: { input_tokens: 8, output_tokens: 8, cost_usd: 0 },
+      provider: 'openrouter',
+      model: 'test-image-model',
+    });
+    const stop = trackListener(startRuntimeListener({
+      getAgentById: () => jarvis,
+      getAgentBySlug: () => jarvis,
+      getAgentForChat: vi.fn(async () => jarvis),
+      getMessages: vi.fn(async () => []),
+      appendMessage: vi.fn(async (message) => ({
+        ...message,
+        id: 'msg_image_output_missing_assistant' as MessageId,
+        created_at: 2,
+        updated_at: 2,
+      })),
+      updateMessage,
+    }));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId,
+        text: '/image Draw a blue square.',
+        modelText: 'Draw a blue square.',
+        imageOutputRequested: true,
+      } }));
+      await stop.whenIdle();
+      expect(mocks.runAgent).toHaveBeenCalledOnce();
+      expect(updateMessage.mock.calls.some(([, patch]) =>
+        patch.parts?.some((part: Part) => part.kind === 'image'))).toBe(false);
+    } finally {
+      stop();
+      await stop.whenIdle();
+    }
+  });
+
   it('fails an image turn closed when automatic routing has no cost-safe vision candidate', async () => {
     const jarvis = agent('agent_jarvis_auto_route', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_auto_route' as ChatId;

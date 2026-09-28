@@ -11,6 +11,85 @@ import {
   openCodePromptModel,
   qualifiedOpenCodeModelRoute,
 } from './OpenCodeRequestControls';
+import type { OpenCodePromptPart } from './OpenCodeTurnCoordinator';
+
+const OPEN_CODE_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const OPEN_CODE_IMAGE_MAX_BASE64_CHARS = Math.ceil(OPEN_CODE_IMAGE_MAX_BYTES / 3) * 4;
+const OPEN_CODE_PROMPT_MAX_PARTS = 24;
+const OPEN_CODE_PROMPT_MAX_IMAGES = 16;
+const OPEN_CODE_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
+function imagePayloadByteLength(encoded: string): number | undefined {
+  if (!encoded || encoded.length > OPEN_CODE_IMAGE_MAX_BASE64_CHARS || encoded.length % 4 !== 0) {
+    return undefined;
+  }
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+  const dataLength = encoded.length - padding;
+  if ((padding === 1 && dataLength % 4 !== 3) || (padding === 2 && dataLength % 4 !== 2)) {
+    return undefined;
+  }
+  for (let index = 0; index < dataLength; index += 1) {
+    const code = encoded.charCodeAt(index);
+    if (!(
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      code === 43 ||
+      code === 47
+    )) return undefined;
+  }
+  for (let index = dataLength; index < encoded.length; index += 1) {
+    if (encoded.charCodeAt(index) !== 61) return undefined;
+  }
+  const byteLength = (encoded.length / 4) * 3 - padding;
+  return byteLength > 0 && byteLength <= OPEN_CODE_IMAGE_MAX_BYTES ? byteLength : undefined;
+}
+
+function validatedOpenCodePromptParts(
+  parts: readonly OpenCodePromptPart[] | undefined,
+  fallbackText: string,
+): readonly OpenCodePromptPart[] {
+  if (!parts?.length) return [{ type: 'text', text: fallbackText }];
+  if (parts.length > OPEN_CODE_PROMPT_MAX_PARTS) {
+    throw new Error('OpenCode prompt exceeds the supported part count.');
+  }
+  let imageCount = 0;
+  const validated: OpenCodePromptPart[] = [];
+  for (const part of parts) {
+    if (part.type === 'text') {
+      if (typeof part.text !== 'string') throw new Error('OpenCode text part is invalid.');
+      validated.push({ type: 'text', text: part.text });
+      continue;
+    }
+    if (part.type !== 'file') throw new Error('OpenCode prompt part type is unsupported.');
+    imageCount += 1;
+    if (imageCount > OPEN_CODE_PROMPT_MAX_IMAGES) {
+      throw new Error('OpenCode prompt exceeds the supported image count.');
+    }
+    if (!OPEN_CODE_IMAGE_MIMES.has(part.mime)) {
+      throw new Error('OpenCode image MIME type is unsupported.');
+    }
+    const prefix = `data:${part.mime};base64,`;
+    if (!part.url.startsWith(prefix) ||
+      part.url.length > prefix.length + OPEN_CODE_IMAGE_MAX_BASE64_CHARS) {
+      throw new Error('OpenCode image data must use a bounded matching base64 data URL.');
+    }
+    if (imagePayloadByteLength(part.url.slice(prefix.length)) === undefined) {
+      throw new Error('OpenCode image data must be valid base64 and no larger than 8 MiB.');
+    }
+    if (part.filename !== undefined &&
+      (part.filename.length > 128 || /[\\/\u0000-\u001f\u007f]/u.test(part.filename))) {
+      throw new Error('OpenCode image filename is invalid.');
+    }
+    validated.push({
+      type: 'file',
+      mime: part.mime,
+      url: part.url,
+      ...(part.filename ? { filename: part.filename } : {}),
+    });
+  }
+  return Object.freeze(validated);
+}
 
 export interface OpenCodeRawEvent {
   type: string;
@@ -383,6 +462,7 @@ export class OpenCodeSdkSessionClient implements OpenCodeSessionClient {
     sessionId: string;
     controls: OpenCodeRequestControls;
     text: string;
+    parts?: readonly OpenCodePromptPart[];
     system?: string;
     agent: OpenCodeExecutionAgentId;
     tools?: Readonly<Record<string, boolean>>;
@@ -397,6 +477,7 @@ export class OpenCodeSdkSessionClient implements OpenCodeSessionClient {
     const agent = input.agent;
     if (!sessionId || !text || !agent?.trim())
       throw new Error('A session id, execution agent, and non-empty prompt text are required.');
+    const parts = validatedOpenCodePromptParts(input.parts, text);
 
     const controlFields = this.modelControls.toPromptFields(input.controls);
     await this.client.session.promptAsync({
@@ -407,7 +488,7 @@ export class OpenCodeSdkSessionClient implements OpenCodeSessionClient {
         agent,
         ...(input.system?.trim() ? { system: input.system } : {}),
         ...(input.tools ? { tools: toProviderSafeOpenCodeTools(input.tools) } : {}),
-        parts: [{ type: 'text', text }],
+        parts,
       },
     });
   }

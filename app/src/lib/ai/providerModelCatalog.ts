@@ -17,6 +17,7 @@ import {
 } from './providerRegistry';
 import { setDiscoveredConnectionModels } from './connectionCatalog';
 import { verifiedQwenCompatibleBaseUrl } from './nativeConnectionProbe';
+import { getOpenRouterImageOutputCapabilities } from './openrouterImageOutput';
 
 const NATIVE_CONNECTION_ID_BY_PROVIDER: Partial<Record<ProviderId, string>> = {
   openai: 'openai-api',
@@ -48,6 +49,10 @@ export interface RegistryModelOption {
   isCustom?: boolean;
   /** Smaller subtitle shown under the label (usually the raw model id). */
   subtitle?: string;
+  /** OpenRouter account-catalog evidence that the model advertises text+image output. */
+  supportsImageOutput?: boolean;
+  /** True only when all live OpenRouter pricing fields are explicitly zero. */
+  isImageOutputFree?: boolean;
 }
 
 export interface ProviderModelValidation {
@@ -311,6 +316,8 @@ interface OpenAiCompatibleModelRow {
   id?: string;
   type?: string;
   capabilities?: { completion_chat?: boolean };
+  architecture?: { output_modalities?: unknown };
+  pricing?: Record<string, unknown>;
 }
 
 function isOpenAiCompatibleModelRow(value: unknown): value is OpenAiCompatibleModelRow {
@@ -336,17 +343,34 @@ function parseOpenAiCompatibleModels(
       (row) => !row.type || row.type === 'chat' || row.type === 'language' || row.type === 'code',
     )
     .filter((row) => row.capabilities?.completion_chat !== false)
-    .map((row) => row.id?.trim())
-    .filter((id): id is string => Boolean(id))
-    .filter(isChatTransportCompatibleModelId)
+    .filter((row) => {
+      const id = row.id?.trim();
+      if (!id) return false;
+      if (providerId !== 'openrouter') return isChatTransportCompatibleModelId(id);
+      const imageOutput = getOpenRouterImageOutputCapabilities(row).supportsImageOutput;
+      return isChatTransportCompatibleModelId(id) || imageOutput;
+    })
+    .sort((left, right) => {
+      if (providerId !== 'openrouter') return 0;
+      const leftFreeImage = getOpenRouterImageOutputCapabilities(left).isImageOutputFree ? 1 : 0;
+      const rightFreeImage = getOpenRouterImageOutputCapabilities(right).isImageOutputFree ? 1 : 0;
+      return rightFreeImage - leftFreeImage;
+    })
     .slice(0, 40)
-    .map((id) => ({
-      id,
-      label: id,
-      provider: providerId,
-      availability: 'stable' as const,
-      subtitle: id,
-    }));
+    .map((row) => {
+      const id = row.id!.trim();
+      const option: RegistryModelOption = {
+        id,
+        label: id,
+        provider: providerId,
+        availability: 'stable',
+        subtitle: id,
+      };
+      if (providerId === 'openrouter') {
+        Object.assign(option, getOpenRouterImageOutputCapabilities(row));
+      }
+      return option;
+    });
 }
 
 function parseGoogleModels(payload: {

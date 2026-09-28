@@ -232,7 +232,7 @@ export const OPENCODE_CLI_CONNECTION = externalConnection({
   displayName: 'OpenCode Bridge',
   authSource: 'opencode-provider-session',
   promptTransport: OPENCODE_CLI_DEFINITION.promptTransport,
-  capabilities: { tools: true },
+  capabilities: { images: true, tools: true },
   toolAllowlist: ['vibespace_context'],
 });
 

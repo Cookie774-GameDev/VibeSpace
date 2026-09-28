@@ -4477,13 +4477,22 @@ export function Composer({
       afterInline,
     );
 
+    // An explicit image request keeps its visible command while sending only
+    // the prompt to the provider. Ordinary chat never asks for image output.
+    const imageCommand = /^\/image(?:\s+([\s\S]*))?$/iu.exec(afterInline);
+    if (imageCommand && !imageCommand[1]?.trim()) {
+      toast.warning('Image prompt needed', 'Enter a prompt after /image.');
+      return false;
+    }
     // Leading full-message slash (multitask, ask, plan, etc.)
-    const slashResult = await handleSlashCommand(afterInline, draftText);
+    const slashResult = imageCommand
+      ? imageCommand[1]!.trim()
+      : await handleSlashCommand(afterInline, draftText);
     if (slashResult === true) return true;
     // When a route slash command has a remainder (e.g. "/terminals close 5 terminals"),
     // handleSlashCommand returns the remainder text so we send it as the message.
     let rawSendText = typeof slashResult === 'string' ? slashResult.trim() : afterInline;
-    const originalRawSendText = rawSendText;
+    const originalRawSendText = imageCommand ? afterInline : rawSendText;
 
     // Message was only utility slash tokens (e.g. just /clearfiles) — done.
     if (
@@ -4517,6 +4526,13 @@ export function Composer({
       text: rawSendText,
       confirmedReferenceKeys: confirmedCatalogReferences.map((reference) => reference.key),
     });
+    if (imageCommand && jarvisRunning && !options.bypassQueue) {
+      toast.warning(
+        'Image request is ready',
+        'Wait for this response to finish, then send your image prompt.',
+      );
+      return false;
+    }
     if (
       !caoDecision?.control &&
       jarvisRunning &&
@@ -4664,6 +4680,7 @@ export function Composer({
     // Skip when caller already provided overrideText (queued flush / smoke helpers).
     if (
       promptForgeAutoUpgradeRef.current &&
+      !imageCommand &&
       !overrideText &&
       !options.promptForgeApproved &&
       !promptForge.isDraftApproved(rawSendText) &&
@@ -4761,11 +4778,9 @@ export function Composer({
       catalogReferencePrefix,
       referenceText,
       allAboutMeText,
-      handoffPayload
+      imageCommand || handoffPayload || localCommandResult?.localActionContext
         ? originalRawSendText
-        : localCommandResult?.localActionContext
-          ? originalRawSendText
-          : markdownInstruction || rawSendText,
+        : markdownInstruction || rawSendText,
     ]
       .filter(Boolean)
       .join(' ')
@@ -4843,6 +4858,34 @@ export function Composer({
     if (!sendCheck.ok) {
       toast.error('Cannot send', sendCheck.message);
       return false;
+    }
+    if (imageCommand) {
+      if (
+        selectedForSend.mode !== 'single' ||
+        selectedForSend.providerId !== 'openrouter' ||
+        selectedForSend.connectionId !== 'openrouter-api'
+      ) {
+        toast.error('Cannot generate image', 'Select a supported OpenRouter image model first.');
+        return false;
+      }
+      if (chatBackendAffinity?.backend !== 'opencode') {
+        toast.error('Cannot generate image', 'Switch this chat to the OpenCode backend first.');
+        return false;
+      }
+      try {
+        const { assertOpenRouterFreeImageOutputAvailable } = await import(
+          '@/lib/ai/providers/openai-compatible'
+        );
+        await assertOpenRouterFreeImageOutputAvailable(selectedForSend.modelId, {
+          forceRefresh: true,
+        });
+      } catch (error) {
+        toast.error(
+          'Cannot generate image',
+          error instanceof Error ? error.message : 'The selected image model is unavailable.',
+        );
+        return false;
+      }
     }
 
     // Process confirmed commands before sending
@@ -5104,10 +5147,13 @@ export function Composer({
           chatId,
           cancellationKey: userMessage.id,
           text: persistedText,
-          ...(localCommandResult?.localActionContext
+          imageOutputRequested: Boolean(imageCommand),
+          ...(localCommandResult?.localActionContext || imageCommand
             ? {
                 modelText: sendText,
-                localCommandContext: localCommandResult.localActionContext,
+                ...(localCommandResult?.localActionContext
+                  ? { localCommandContext: localCommandResult.localActionContext }
+                  : {}),
               }
             : {}),
           mentionedAgentIds,

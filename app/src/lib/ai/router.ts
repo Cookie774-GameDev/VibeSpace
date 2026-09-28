@@ -17,6 +17,7 @@ import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import type { CompiledJarvisPrompt } from '@/lib/jarvis/contracts';
 import type { VibeSpaceApproval } from '@/lib/harness/types';
 import type { ToolGatewayAuthorityClaim } from '@/lib/harness/toolGatewayAuthority';
+import type { OpenCodePromptPart } from '@/lib/harness/OpenCodeTurnCoordinator';
 import {
   DEFAULT_CHAT_RUNTIME_SETTINGS,
   type ChatRuntimeSettings,
@@ -57,6 +58,7 @@ import { resolveNativeCodexRoute } from '@/lib/harness/codexNativeTransport';
 import type { ChatBackend } from './backend/chatBackend';
 import { kernelSmokeCliAdapter } from './adapters/cliBridge';
 import { foundryProvider } from './providers/foundry';
+import { openrouterProvider } from './providers/compatibleInstances';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 import {
   isKernelSmokeBindingActive,
@@ -211,6 +213,99 @@ function assertConnectionCapabilities(
       throw new Error(`${connection.displayName} does not support ${label}`);
     }
   }
+}
+
+const OPEN_CODE_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const OPEN_CODE_IMAGE_MAX_BASE64_CHARS = Math.ceil(OPEN_CODE_IMAGE_MAX_BYTES / 3) * 4;
+const OPEN_CODE_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
+function imagePayloadByteLength(encoded: string): number | undefined {
+  if (!encoded || encoded.length > OPEN_CODE_IMAGE_MAX_BASE64_CHARS || encoded.length % 4 !== 0) {
+    return undefined;
+  }
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+  const dataLength = encoded.length - padding;
+  if ((padding === 1 && dataLength % 4 !== 3) || (padding === 2 && dataLength % 4 !== 2)) {
+    return undefined;
+  }
+  for (let index = 0; index < dataLength; index += 1) {
+    const code = encoded.charCodeAt(index);
+    if (!(
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      code === 43 ||
+      code === 47
+    )) return undefined;
+  }
+  for (let index = dataLength; index < encoded.length; index += 1) {
+    if (encoded.charCodeAt(index) !== 61) return undefined;
+  }
+  const byteLength = (encoded.length / 4) * 3 - padding;
+  return byteLength > 0 && byteLength <= OPEN_CODE_IMAGE_MAX_BYTES ? byteLength : undefined;
+}
+
+function currentUserMessage(messages: readonly LLMMessage[]): LLMMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') return messages[index];
+  }
+  return undefined;
+}
+
+function currentUserHasImages(messages: readonly LLMMessage[]): boolean {
+  const content = currentUserMessage(messages)?.content;
+  return Array.isArray(content) && content.some((part) => part.type === 'image');
+}
+
+function requestRequiresImageInput(req: Readonly<RunAgentRequest>): boolean {
+  return req.connectionRequirements?.images === true || currentUserHasImages(req.messages);
+}
+
+function safeImageFilename(name: string | undefined): string | undefined {
+  if (!name) return undefined;
+  const basename = name.replace(/\\/gu, '/').split('/').at(-1) ?? '';
+  const cleaned = basename.replace(/[\u0000-\u001f\u007f]/gu, '').trim().slice(0, 128);
+  return cleaned || undefined;
+}
+
+function openCodePromptParts(messages: readonly LLMMessage[]): readonly OpenCodePromptPart[] | undefined {
+  const content = currentUserMessage(messages)?.content;
+  if (!Array.isArray(content) || !content.some((part) => part.type === 'image')) return undefined;
+
+  const parts: OpenCodePromptPart[] = [];
+  for (const part of content) {
+    if (part.type === 'text') {
+      parts.push({ type: 'text', text: part.text });
+      continue;
+    }
+    const mime = part.mimeType.trim().toLocaleLowerCase('en-US');
+    if (!OPEN_CODE_IMAGE_MIMES.has(mime)) {
+      throw new Error('OpenCode image attachment MIME type is unsupported.');
+    }
+    const encoded = part.data;
+    if (imagePayloadByteLength(encoded) === undefined) {
+      throw new Error('OpenCode image attachment must be valid base64 and no larger than 8 MiB.');
+    }
+    const filename = safeImageFilename(part.name);
+    parts.push({
+      type: 'file',
+      mime: mime as Extract<OpenCodePromptPart, { type: 'file' }>['mime'],
+      url: `data:${mime};base64,${encoded}`,
+      ...(filename ? { filename } : {}),
+    });
+  }
+  return Object.freeze(parts);
+}
+
+function messagesForActivityLog(messages: readonly LLMMessage[]): readonly LLMMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    content: typeof message.content === 'string'
+      ? message.content
+      : message.content.map((part) => part.type === 'image'
+        ? { ...part, data: `[image payload omitted; mime=${part.mimeType}; encodedChars=${part.data.length}]` }
+        : part),
+  }));
 }
 
 function usageNumber(value: { value?: number } | undefined): number {
@@ -386,6 +481,8 @@ export interface RunAgentRequest {
   temperature?: number;
   max_output_tokens?: number;
   provider_options?: Record<string, unknown>;
+  /** Explicit user intent to request image output from a supported provider. */
+  imageOutputRequested?: boolean;
   connectionId?: string;
   connectionRequirements?: ConnectionRequirements;
   workingDirectory?: string;
@@ -470,6 +567,10 @@ function codexGatewayConnection(req: Readonly<RunAgentRequest>): ProviderConnect
 
 async function resolveCodexProviderRoute(req: Readonly<RunAgentRequest>) {
   const connection = codexGatewayConnection(req);
+  assertConnectionCapabilities(connection, {
+    ...req.connectionRequirements,
+    images: requestRequiresImageInput(req),
+  });
   const selectedModel = req.agent.model.model.trim();
   if (!selectedModel) throw new NoModelSelectedError();
   const reasoningEffort = resolveOpenCodeVariant(req.provider_options);
@@ -812,7 +913,10 @@ function resolveOpenCodeSelection(req: Readonly<RunAgentRequest>): OpenCodeSelec
     if (auth.offlineMode && connection.mode !== 'local') {
       throw new NoModelSelectedError();
     }
-    assertConnectionCapabilities(connection, req.connectionRequirements);
+    assertConnectionCapabilities(connection, {
+      ...req.connectionRequirements,
+      images: requestRequiresImageInput(req),
+    });
     if (connection.adapterId === 'opencode-cli') {
       const providerId = req.agent.model.provider === 'local' ? 'ollama' : req.agent.model.provider;
       return {
@@ -973,6 +1077,7 @@ async function executePersistentOpenCode(
     let boundedSearchObserved = false;
     const representativeReads = new Set<string>();
     diagnosticCode = 'router_request_assembly';
+    const promptParts = openCodePromptParts(req.messages);
     const providerRequest: ProviderRequest = {
       requestId,
       connection,
@@ -983,6 +1088,7 @@ async function executePersistentOpenCode(
       worktreeId: req.worktreeId,
       toolGatewayAuthority: req.toolGatewayAuthority,
       prompt: promptForOpenCode(req.messages),
+      ...(promptParts ? { parts: promptParts } : {}),
       modelId: qualifiedModel,
       historyPrompt: req.messages.filter((message) => message.role !== 'system').length > 1
         ? req.messages.filter((message) => message.role !== 'system')
@@ -1588,7 +1694,91 @@ async function runFoundryDispatch(req: RunAgentRequest): Promise<LLMResponse> {
   return response;
 }
 
+async function dispatchOpenRouterImageOutput(req: RunAgentRequest): Promise<LLMResponse> {
+  if (req.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+  const modelId = req.agent.model.model.trim();
+  const connectionId = req.connectionId?.trim();
+  const failClosed = (message: string): never => {
+    throw new ProviderRuntimeError(providerErrorDetails(new Error(message), {
+      providerId: req.agent.model.provider,
+      modelId: modelId || 'unknown',
+      ...(connectionId ? { connectionId } : {}),
+      ...(req.requestId ? { requestId: req.requestId } : {}),
+      ...(req.protectedAttempt?.runId ? { runId: req.protectedAttempt.runId } : {}),
+    }));
+  };
+
+  if (req.backend !== 'opencode') {
+    failClosed('Image output requires the OpenCode backend and exact OpenRouter API connection.');
+  }
+  if (connectionId !== 'openrouter-api' || req.agent.model.provider !== 'openrouter' || !modelId) {
+    failClosed('Image output requires a selected OpenRouter model and exact OpenRouter API connection.');
+  }
+  const connection = getProviderConnectionDescriptor(connectionId);
+  if (!connection.enabled || connection.mode !== 'native-api' || connection.providerId !== 'openrouter') {
+    failClosed('The selected OpenRouter API connection is unavailable for image output.');
+  }
+  if (useAuthStore.getState().offlineMode) {
+    failClosed('Image output requires an online OpenRouter API connection.');
+  }
+
+  const protectedDispatch = req.compiledPrompt !== undefined || req.protectedAttempt !== undefined;
+  if (
+    protectedDispatch &&
+    (!req.compiledPrompt || !req.protectedAttempt || !req.requestId ||
+      req.requestId !== req.protectedAttempt.requestId || !req.connectionId)
+  ) {
+    failClosed('Protected OpenRouter image output requires exact request and attempt binding.');
+  }
+  const llmReq: LLMRequest = {
+    purpose: req.purpose ?? 'chat',
+    imageOutputRequested: true,
+    agent: req.compiledPrompt
+      ? { ...req.agent, system_prompt: req.compiledPrompt.systemText }
+      : req.agent,
+    messages: req.messages,
+    ...(req.compiledPrompt ? { systemPrompt: req.compiledPrompt.systemText } : {}),
+    ...(req.protectedAttempt ? { protectedAttempt: req.protectedAttempt } : {}),
+    signal: req.signal,
+    onChunk: req.onChunk,
+    temperature: req.temperature,
+    max_output_tokens: req.max_output_tokens,
+    provider_options: req.provider_options,
+  };
+
+  let response: LLMResponse;
+  try {
+    response = protectedDispatch
+      ? await runProtectedProviderAttempt(
+          { ...req.protectedAttempt!, providerId: 'openrouter', modelId },
+          (hooks) => openrouterProvider.run({
+            ...llmReq,
+            onResponseObservation: hooks.onResponseObservation,
+            onActionDispatch: hooks.onActionDispatch,
+          }),
+        )
+      : await openrouterProvider.run(llmReq);
+  } catch (error) {
+    if (isAbortError(error) || error instanceof ProviderRuntimeError) throw error;
+    throw new ProviderRuntimeError(providerErrorDetails(error, {
+      providerId: 'openrouter',
+      modelId,
+      connectionId,
+      ...(req.requestId ? { requestId: req.requestId } : {}),
+      ...(req.protectedAttempt?.runId ? { runId: req.protectedAttempt.runId } : {}),
+    }));
+  }
+  useAgentStore.getState().addTokens(
+    req.agent.id,
+    response.usage.input_tokens,
+    response.usage.output_tokens,
+    response.usage.cost_usd,
+  );
+  return response;
+}
+
 async function runAgentDispatch(req: RunAgentRequest): Promise<LLMResponse> {
+  if (req.imageOutputRequested === true) return dispatchOpenRouterImageOutput(req);
   if (KERNEL_SMOKE_ENABLED && req.agent.model.provider === KERNEL_SMOKE_PROVIDER_ID) {
     return runKernelSmokeDispatch(req);
   }
@@ -1639,7 +1829,10 @@ export async function runAgent(req: RunAgentRequest): Promise<LLMResponse> {
       model: activityModel,
       connectionId: req.connectionId,
     };
-    return await appActivityLog.trace('model', { ...identity, messages: req.messages }, () =>
+    return await appActivityLog.trace('model', {
+      ...identity,
+      messages: messagesForActivityLog(req.messages),
+    }, () =>
       runAgentDispatch({
         ...req,
         onChunk: (chunk) => {

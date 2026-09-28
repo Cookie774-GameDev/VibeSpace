@@ -22,6 +22,21 @@ export interface OpenCodePrompt {
   tools?: Readonly<Record<string, boolean>>;
 }
 
+function promptForActivity(input: OpenCodePrompt): OpenCodePrompt {
+  return {
+    ...input,
+    parts: input.parts.map((part) => {
+      if (!part || typeof part !== 'object') return part;
+      const record = part as Record<string, unknown>;
+      if (record.type !== 'file' || typeof record.url !== 'string' || !record.url.startsWith('data:')) {
+        return part;
+      }
+      const mime = typeof record.mime === 'string' ? record.mime : 'image';
+      return { ...record, url: `[image payload omitted; mime=${mime}]` };
+    }),
+  };
+}
+
 export type OpenCodeAuthPrompt =
   | {
       type: 'text';
@@ -626,7 +641,7 @@ export function createOpenCodeHttpClient(
         {
           sessionId,
           directory,
-          input,
+          input: promptForActivity(input),
           completionMeans: 'Local OpenCode HTTP acknowledgement; not upstream model receipt',
         },
         () =>

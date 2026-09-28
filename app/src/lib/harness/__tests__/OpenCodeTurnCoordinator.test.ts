@@ -14,6 +14,45 @@ const metadata: LiveModelRuntimeMetadata = {
 };
 
 describe('OpenCodeTurnCoordinator', () => {
+  it('preserves structured OpenCode image parts while keeping text for command routing', async () => {
+    const sendAsync = vi.fn(async (_input: Parameters<PersistentOpenCodeTurnClient['sendAsync']>[0]) => undefined);
+    const sessions = {
+      sessionForChat: vi.fn(async () => ({
+        sessionId: 'session',
+        runtimeGeneration: 'generation',
+        client: { createSession: vi.fn(), abort: vi.fn(), sendAsync },
+      })),
+    } as unknown as OpenCodeSessionPool;
+    const parts = [
+      { type: 'text' as const, text: 'What is this?' },
+      {
+        type: 'file' as const,
+        mime: 'image/png' as const,
+        url: 'data:image/png;base64,aGVsbG8=',
+        filename: 'tiny.png',
+      },
+    ];
+
+    await new OpenCodeTurnCoordinator(sessions).dispatch({
+      scope: { accountId: 'account', projectId: 'project' },
+      chatId: 'chat',
+      text: 'What is this?',
+      parts,
+      selection: {
+        connectionId: 'opencode-cli',
+        providerId: 'openai',
+        modelId: 'gpt-5.6-luna',
+        metadata,
+      },
+      policy: { mode: 'agent', access: 'full', approveAllForRun: false, projectRoot: 'C:/project' },
+    });
+
+    expect(sendAsync).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'What is this?',
+      parts,
+    }));
+  });
+
   it('refuses selected skills when the client cannot verify its native catalog', async () => {
     const sendAsync = vi.fn(async () => undefined);
     const sessions = {
