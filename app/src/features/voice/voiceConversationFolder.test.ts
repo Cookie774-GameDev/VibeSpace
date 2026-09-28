@@ -5,7 +5,10 @@ const mocks = vi.hoisted(() => ({
   appDataDir: vi.fn(async () => 'C:/VibeSpaceData/'),
   createDirectory: vi.fn(async (path: string) => ({ ok: true, path })),
   writeTextFile: vi.fn(async (path: string, _content: string) => ({ ok: true, path })),
-  readTextFile: vi.fn(async (path: string) => ({
+  readTextFile: vi.fn(async (path: string): Promise<
+    | { ok: false; error: { code: 'not_found' }; path: string }
+    | { ok: true; content: string; path: string }
+  > => ({
     ok: false as const,
     error: { code: 'not_found' as const },
     path,

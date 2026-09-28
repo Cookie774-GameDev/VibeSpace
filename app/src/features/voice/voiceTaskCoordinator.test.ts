@@ -31,7 +31,7 @@ function acceptedResult(requestId: string): VoiceAgentFlowResult {
 describe('voice Main request coordination', () => {
   it('deduplicates final STT repeats across modal reopens without creating a worker launch receipt', async () => {
     const coordinator = createVoiceTaskCoordinator();
-    const request: VoiceAgentRequest & { dedupeScope: string } = {
+    const request: VoiceAgentRequest & { requestId: string; dedupeScope: string } = {
       chatId: 'voice-chat-1',
       text: 'Fix the app',
       mainProvider: 'codex',
@@ -41,7 +41,14 @@ describe('voice Main request coordination', () => {
       dedupeScope: 'account-a/workspace-a',
     };
     const run = vi.fn(async (report: (status: VoiceAgentFlowStatus) => void) => {
-      report({ phase: 'main_accepted', chatId: request.chatId, elapsedMs: 2 });
+      report({
+        phase: 'main_accepted',
+        chatId: request.chatId,
+        mainProvider: request.mainProvider,
+        workerProvider: request.workerProvider,
+        requestId: request.requestId,
+        elapsedMs: 2,
+      });
       return acceptedResult(request.requestId);
     });
 
@@ -60,7 +67,7 @@ describe('voice Main request coordination', () => {
 
   it('shares the in-flight promise and accepts only after Main runtime acceptance', async () => {
     const coordinator = createVoiceTaskCoordinator();
-    const request: VoiceAgentRequest = {
+    const request: VoiceAgentRequest & { requestId: string } = {
       chatId: 'voice-chat',
       text: 'Review the patch',
       mainProvider: 'codex',
@@ -70,7 +77,14 @@ describe('voice Main request coordination', () => {
     };
     let finish!: (result: VoiceAgentFlowResult) => void;
     const run = vi.fn((report: (status: VoiceAgentFlowStatus) => void) => {
-      report({ phase: 'submitted', chatId: request.chatId, elapsedMs: 1 });
+      report({
+        phase: 'submitted',
+        chatId: request.chatId,
+        mainProvider: request.mainProvider,
+        workerProvider: request.workerProvider,
+        requestId: request.requestId,
+        elapsedMs: 1,
+      });
       return new Promise<VoiceAgentFlowResult>((resolve) => {
         finish = resolve;
       });
@@ -99,7 +113,7 @@ describe('voice Main request coordination', () => {
     'returns %s truthfully and does not convert it to accepted',
     async (status, expected) => {
       const coordinator = createVoiceTaskCoordinator();
-      const request: VoiceAgentRequest = {
+      const request: VoiceAgentRequest & { requestId: string } = {
         chatId: 'voice-chat',
         text: `Fail ${status}`,
         mainProvider: 'codex',
@@ -123,7 +137,7 @@ describe('voice Main request coordination', () => {
 
   it('keeps a failed request deduplicated for a repeated transcript', async () => {
     const coordinator = createVoiceTaskCoordinator();
-    const request: VoiceAgentRequest = {
+    const request: VoiceAgentRequest & { requestId: string } = {
       chatId: 'voice-chat',
       text: 'Check the tests',
       mainProvider: 'codex',

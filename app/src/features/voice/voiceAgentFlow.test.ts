@@ -6,6 +6,7 @@ import {
   buildVoiceMainRequestSendDetail,
   createVoiceAgentFlow,
   VOICE_BRIEF_SYSTEM_INSTRUCTION,
+  type VoiceAgentFlowDependencies,
   type VoiceAgentRequest,
 } from './voiceAgentFlow';
 import type { VoiceMainDispatchReceipt } from './voiceNativeDelegation';
@@ -45,7 +46,7 @@ function setup() {
       calls.push('persist');
       return 'message-1';
     }),
-    captureScreen: vi.fn(async () => {
+    captureScreen: vi.fn(async (): ReturnType<VoiceAgentFlowDependencies['captureScreen']> => {
       calls.push('capture');
       return {
         ok: true as const,

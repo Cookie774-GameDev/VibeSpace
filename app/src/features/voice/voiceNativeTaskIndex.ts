@@ -586,7 +586,7 @@ export async function upsertVoiceNativeTask(
   }
   return serializeScope(scope, async () => {
     const result = await loadIndex(scope);
-    if (!result.ok) return result;
+    if (!result.ok) return failure(result.error.code, result.error.message);
     const { loaded } = result;
     const position = loaded.index.records.findIndex(
       (record) => record.requestId === update.requestId,
