@@ -5,11 +5,13 @@ const api = vi.hoisted(() => ({
   fetchBenchmarkLeaderboard: vi.fn(),
   getCachedBenchmarkLeaderboard: vi.fn(() => null),
 }));
+const shareImage = vi.hoisted(() => ({ create: vi.fn() }));
 vi.mock('./benchmarkApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./benchmarkApi')>()),
   fetchBenchmarkLeaderboard: api.fetchBenchmarkLeaderboard,
   getCachedBenchmarkLeaderboard: api.getCachedBenchmarkLeaderboard,
 }));
+vi.mock('./benchmarkShareImage', () => ({ createBenchmarkShareImage: shareImage.create }));
 
 import { BenchmarkIntelligencePage, contextForBenchmarkRow } from './BenchmarkIntelligencePage';
 
@@ -394,15 +396,42 @@ describe('BenchmarkIntelligencePage', () => {
     expect(screen.getByRole('heading', { name: 'Cost ranking' })).toBeTruthy();
   });
 
-  it('copies a source-dated leaderboard summary and confirms success', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  it('creates a source-dated image of the unfiltered ranking with copy and download', async () => {
+    shareImage.create.mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
+    const write = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { write } });
+    vi.stubGlobal(
+      'ClipboardItem',
+      class {
+        constructor(public items: Record<string, Blob | Promise<Blob>>) {}
+      },
+    );
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:leaderboard'),
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    const downloadClick = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => {});
     render(<BenchmarkIntelligencePage />);
     await screen.findByText('Claude Opus 5 (Max Effort)');
+    fireEvent.change(screen.getByLabelText('Models'), { target: { value: 'OpenAI' } });
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('2026-08-14')),
-    );
-    expect(screen.getByRole('button', { name: /Copied/ })).toBeTruthy();
+    await waitFor(() => expect(shareImage.create).toHaveBeenCalled());
+    expect(shareImage.create.mock.calls[0][0]).toMatchObject({
+      category: 'Overall',
+      sourceObservedAt: '2026-08-14T23:00:00.000Z',
+      rows: [{ model: 'Claude Opus 5 (Max Effort)' }, { model: 'GPT-5.6 Sol (max)' }],
+    });
+    expect(await screen.findByAltText(/VibeSpace Overall leaderboard image/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Top 2 Overall models' })).toBeTruthy();
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Copied image' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Download PNG' }));
+    expect(downloadClick).toHaveBeenCalledTimes(1);
+    expect(downloadClick.mock.instances[0].download).toBe('vibespace-overall-top-2-2026-08-14.png');
+    downloadClick.mockRestore();
+    vi.unstubAllGlobals();
   });
 });

@@ -1,7 +1,19 @@
 import * as React from 'react';
-import { Check, ExternalLink, ImageOff, RefreshCw, Search, Share2, X } from 'lucide-react';
+import {
+  Check,
+  Copy,
+  Download,
+  ExternalLink,
+  ImageOff,
+  Loader2,
+  RefreshCw,
+  Search,
+  Share2,
+  X,
+} from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import {
@@ -13,6 +25,7 @@ import {
   type BenchmarkModelRow,
 } from './benchmarkApi';
 import { PROVIDER_LOGOS } from './providerLogos';
+import { createBenchmarkShareImage } from './benchmarkShareImage';
 import './benchmark-intelligence.css';
 import './sakura-benchmarks.css';
 
@@ -308,7 +321,16 @@ export function BenchmarkIntelligencePage() {
   const [sortDirection, setSortDirection] = React.useState<'asc' | 'desc'>('desc');
   const [category, setCategory] = React.useState<Category>('Overall');
   const [view, setView] = React.useState<'chart' | 'table'>('chart');
-  const [shared, setShared] = React.useState(false);
+  const [shareOpen, setShareOpen] = React.useState(false);
+  const [shareBusy, setShareBusy] = React.useState(false);
+  const [shareCount, setShareCount] = React.useState(0);
+  const [shareCopied, setShareCopied] = React.useState(false);
+  const [shareError, setShareError] = React.useState<string | null>(null);
+  const [sharePreview, setSharePreview] = React.useState<{
+    blob: Blob;
+    url: string;
+    fileName: string;
+  } | null>(null);
   const lastFetchRef = React.useRef(0);
   const mountedRef = React.useRef(false);
   const pendingRef = React.useRef(false);
@@ -414,19 +436,106 @@ export function BenchmarkIntelligencePage() {
     ...chartRows.map((row) => numberForSort(row, categoryMetric) ?? Infinity),
   );
 
+  React.useEffect(() => {
+    return () => {
+      if (sharePreview) URL.revokeObjectURL(sharePreview.url);
+    };
+  }, [sharePreview]);
+
   const share = async () => {
-    const sourceDate = result?.dataset?.sourceObservedAt
-      ? new Date(result.dataset.sourceObservedAt).toISOString().slice(0, 10)
-      : 'date unavailable';
-    const summary = `VibeSpace benchmarks · ${category} · Artificial Analysis · ${sourceDate}\n${window.location.href}`;
-    try {
-      await navigator.clipboard.writeText(summary);
-      setShared(true);
-      window.setTimeout(() => setShared(false), 3000);
-    } catch {
-      setShared(false);
-      toast.error('Could not copy leaderboard', 'Clipboard access is unavailable.');
+    const rows = sortBenchmarkRows(
+      (result?.rows ?? []).filter((row) => numberForSort(row, categoryMetric) != null),
+      categoryMetric,
+      lowerIsBetter ? 'asc' : 'desc',
+    ).slice(0, 25);
+    if (!rows.length) {
+      toast.error('No models to share', 'The benchmark feed has no ranked models yet.');
+      return;
     }
+    setShareOpen(true);
+    setShareBusy(true);
+    setShareCount(rows.length);
+    setShareCopied(false);
+    setShareError(null);
+    setSharePreview(null);
+    try {
+      const imagePromise = createBenchmarkShareImage({
+        category,
+        unit: categoryUnit,
+        direction: lowerIsBetter ? 'lower' : 'higher',
+        sourceObservedAt: result?.dataset?.sourceObservedAt ?? rows[0].sourceObservedAt,
+        sourceUrl: result?.dataset?.sourceUrl ?? rows[0].sourceUrl,
+        rows: rows.map((row) => {
+          const context = contextForBenchmarkRow(row);
+          return {
+            model: displayNames.get(row.id) ?? row.model,
+            provider: row.provider,
+            score:
+              category === 'Cost'
+                ? money(row.costPerTaskUsd, 4)
+                : category === 'Speed'
+                  ? decimal(row.outputTokensPerSecond)
+                  : decimal(row.intelligenceIndex),
+            inputPrice: money(row.inputPricePer1MTokensUsd),
+            outputPrice: money(row.outputPricePer1MTokensUsd),
+            context: context ? contextLabel(context.tokens) : '—',
+            logoSrc: PROVIDER_LOGOS[row.provider]?.src,
+          };
+        }),
+      });
+      const copyPromise =
+        typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write
+          ? navigator.clipboard
+              .write([new ClipboardItem({ 'image/png': imagePromise })])
+              .then(() => true)
+              .catch(() => false)
+          : Promise.resolve(false);
+      const blob = await imagePromise;
+      const copied = await copyPromise;
+      const observed = result?.dataset?.sourceObservedAt ?? rows[0].sourceObservedAt;
+      const sourceDate = Number.isNaN(new Date(observed).getTime())
+        ? 'undated'
+        : new Date(observed).toISOString().slice(0, 10);
+      setSharePreview({
+        blob,
+        url: URL.createObjectURL(blob),
+        fileName: `vibespace-${category.toLowerCase()}-top-${rows.length}-${sourceDate}.png`,
+      });
+      setShareCopied(copied);
+      if (copied) toast.success('Leaderboard image copied', 'Paste it into a message or post.');
+    } catch {
+      setShareError('The leaderboard image could not be created. Please try again.');
+      toast.error('Image export failed', 'The leaderboard image could not be created.');
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const copyShareImage = async () => {
+    if (!sharePreview) return;
+    if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+      setShareError('Image clipboard is unavailable here. Download the PNG instead.');
+      return;
+    }
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': sharePreview.blob })]);
+      setShareCopied(true);
+      setShareError(null);
+      toast.success('Leaderboard image copied', 'Paste it into a message or post.');
+    } catch {
+      setShareError('The browser blocked image copying. Download the PNG instead.');
+    }
+  };
+
+  const downloadShareImage = () => {
+    if (!sharePreview) return;
+    const link = document.createElement('a');
+    link.href = sharePreview.url;
+    link.download = sharePreview.fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    toast.success('Leaderboard image downloaded', sharePreview.fileName);
   };
 
   const changeSort = (value: string) => {
@@ -547,16 +656,13 @@ export function BenchmarkIntelligencePage() {
                 ))}
               </select>
             </label>
-            <Button variant="outline" onClick={() => void share()}>
+            <Button
+              variant="outline"
+              onClick={() => void share()}
+              disabled={shareBusy || !result?.rows.length}
+            >
               <Share2 className="mr-2 h-4 w-4" />
-              {shared ? (
-                <>
-                  <Check className="mr-1 h-4 w-4" />
-                  Copied
-                </>
-              ) : (
-                'Share'
-              )}
+              Share
             </Button>
             <Button
               variant="outline"
@@ -901,6 +1007,66 @@ export function BenchmarkIntelligencePage() {
           </section>
         ) : null}
       </main>
+      <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+        <DialogContent className="benchmark-share-dialog max-w-4xl gap-4 bg-paper-soft p-4 sm:p-6">
+          <div className="pr-9">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent-copper">
+              VibeSpace · Shareable leaderboard
+            </p>
+            <DialogTitle className="font-display mt-1 text-2xl text-foreground">
+              Top {shareCount} {category} models
+            </DialogTitle>
+            <DialogDescription className="mt-1 text-sm text-muted-foreground">
+              A source-dated image across all providers, including verified prices and context where
+              available.
+            </DialogDescription>
+          </div>
+          <div className="benchmark-share-preview flex min-h-52 items-center justify-center overflow-hidden rounded-xl border border-border bg-paper p-2">
+            {shareBusy ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+                <Loader2 className="h-4 w-4 animate-spin" /> Creating image…
+              </div>
+            ) : sharePreview ? (
+              <img
+                src={sharePreview.url}
+                alt={`VibeSpace ${category} leaderboard image showing the top ${shareCount} models`}
+                className="max-h-[min(55vh,650px)] w-full object-contain"
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">Image preview unavailable.</p>
+            )}
+          </div>
+          {shareError ? (
+            <p role="alert" className="text-sm text-destructive">
+              {shareError}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              {shareCopied
+                ? 'Copied as a PNG. Paste it anywhere images are accepted.'
+                : 'Copy the image or download the full-size PNG.'}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                onClick={() => void copyShareImage()}
+                disabled={!sharePreview || shareBusy}
+              >
+                {shareCopied ? (
+                  <Check className="mr-2 h-4 w-4" />
+                ) : (
+                  <Copy className="mr-2 h-4 w-4" />
+                )}
+                {shareCopied ? 'Copied image' : 'Copy image'}
+              </Button>
+              <Button onClick={downloadShareImage} disabled={!sharePreview || shareBusy}>
+                <Download className="mr-2 h-4 w-4" /> Download PNG
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
