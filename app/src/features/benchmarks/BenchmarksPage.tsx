@@ -8,7 +8,7 @@
  *
  * The page is fully self-contained: no parent route wiring, no provider,
  * no shared state beyond reading `useAuthStore` to allow the detail
- * drawer to switch the user's default provider.
+ * drawer to set an exact default provider/model preference.
  */
 import * as React from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
@@ -33,6 +33,7 @@ import { toast } from '@/components/ui/toast';
 import { cn, formatCost, formatRelative, formatTokenCount } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
+import { CHAT_MODEL_OPTIONS } from '@/lib/ai/models';
 import { fetchBenchmarks, isSupportedProvider, type BenchmarkRow } from './benchmarkData';
 import { OFFICIAL_BENCHMARK_EVIDENCE } from './officialBenchmarkData';
 import {
@@ -99,6 +100,24 @@ function licenseSeverity(row: BenchmarkRow): 'low' | 'med' | 'high' | 'info' {
   return 'info';
 }
 
+function normalizedModelName(value: string): string {
+  return value.normalize('NFKC').trim().toLocaleLowerCase('en-US').replace(/\s+/gu, ' ');
+}
+
+/** Arena names are display text, so only a unique exact catalog name or ID is selectable. */
+function exactCatalogModelId(row: BenchmarkRow): string | null {
+  if (!isSupportedProvider(row.provider)) return null;
+  const name = normalizedModelName(row.model);
+  const ids = new Set(
+    CHAT_MODEL_OPTIONS.filter(
+      (option) =>
+        option.provider === row.provider &&
+        (normalizedModelName(option.label) === name || normalizedModelName(option.id) === name),
+    ).map((option) => option.id),
+  );
+  return ids.size === 1 ? [...ids][0]! : null;
+}
+
 export function BenchmarksPage() {
   const warmActive = useUIStore((state) => state.theme === 'warm');
   const [rows, setRows] = React.useState<BenchmarkRow[]>([]);
@@ -116,7 +135,10 @@ export function BenchmarksPage() {
   const [sortKey, setSortKey] = React.useState<SortKey>('arena_score');
   const [sortDir, setSortDir] = React.useState<'asc' | 'desc'>('desc');
 
-  const [selectedModel, setSelectedModel] = React.useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = React.useState<Pick<
+    BenchmarkRow,
+    'model' | 'provider'
+  > | null>(null);
   const [showAll, setShowAll] = React.useState(false);
 
   // Apply a fetch result to all the relevant state slots in one shot.
@@ -269,7 +291,12 @@ export function BenchmarksPage() {
   }, [providerFilter, openOnly]);
 
   const selectedRow = React.useMemo(
-    () => (selectedModel ? (rows.find((r) => r.model === selectedModel) ?? null) : null),
+    () =>
+      selectedModel
+        ? (rows.find(
+            (r) => r.model === selectedModel.model && r.provider === selectedModel.provider,
+          ) ?? null)
+        : null,
     [rows, selectedModel],
   );
 
@@ -522,7 +549,7 @@ export function BenchmarksPage() {
                 {visibleRows.map((row, index) => (
                   <tr
                     key={`${row.model}:${row.provider}:${index}`}
-                    onClick={() => setSelectedModel(row.model)}
+                    onClick={() => setSelectedModel({ model: row.model, provider: row.provider })}
                     title={rowTooltip(row)}
                     className="border-b border-border/60 last:border-b-0 hover:bg-paper-soft cursor-pointer transition-colors [html[data-theme=monochrome]_&]:transition-none [html[data-theme=monochrome]_&]:hover:bg-muted"
                   >
@@ -738,16 +765,19 @@ interface DetailDrawerProps {
 
 function DetailDrawer({ row, dataset, onClose }: DetailDrawerProps) {
   const setDefaultProvider = useAuthStore((s) => s.setDefaultProvider);
+  const setSelectedModel = useAuthStore((s) => s.setSelectedModel);
   const open = !!row;
 
   const providerSupported = row != null && isSupportedProvider(row.provider);
+  const exactModelId = row ? exactCatalogModelId(row) : null;
 
   const handleUseModel = () => {
-    if (!row || !isSupportedProvider(row.provider)) return;
+    if (!row || !isSupportedProvider(row.provider) || !exactModelId) return;
+    setSelectedModel(row.provider, exactModelId);
     setDefaultProvider(row.provider);
     toast.success(
-      'Default provider updated',
-      `${row.model} (${row.provider}) is now the default. Add a key in Settings to actually route through it.`,
+      'Default model preference updated',
+      `${row.model} (${row.provider}) is selected where default routing applies. Existing chats keep their own selection; check Settings for provider access.`,
     );
     onClose();
   };
@@ -918,10 +948,15 @@ function DetailDrawer({ row, dataset, onClose }: DetailDrawerProps) {
               </div>
 
               <div className="border-t border-border p-5 flex items-center justify-between gap-3">
-                {providerSupported ? (
+                {providerSupported && exactModelId ? (
                   <Button variant="accent" onClick={handleUseModel}>
-                    Use this model
+                    Set as default model
                   </Button>
+                ) : providerSupported ? (
+                  <div className="text-metadata text-muted-foreground">
+                    <Badge variant="outline">Exact model unavailable</Badge>
+                    <span className="ml-2">No matching model ID is in the app catalog.</span>
+                  </div>
                 ) : (
                   <div className="text-metadata text-muted-foreground">
                     <Badge variant="outline">Provider not wired</Badge>
