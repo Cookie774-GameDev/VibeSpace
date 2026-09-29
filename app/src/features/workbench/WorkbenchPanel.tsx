@@ -1,10 +1,14 @@
 import * as React from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Copy, GripHorizontal, Minus, X } from 'lucide-react';
+import { useAuthStore } from '@/stores/auth';
+import { getTerminalPaneSessionId } from '@/features/terminals/terminalClearRegistry';
 import { RESIZE_DIRECTIONS, resizeWorkbenchBounds, type ResizeDirection } from './workbenchResize';
 import { BrowserPanel } from './BrowserPanel';
 import { ReferencePanel } from './ReferencePanel';
 import { TerminalPanel } from './TerminalPanel';
 import { detachNativeAppSurface } from './nativeApps';
+import { closeWorkbenchTerminalSession } from './workbenchTerminalClose';
 import type { WorkbenchPanel as WorkbenchPanelModel } from './types';
 
 interface WorkbenchPanelProps {
@@ -82,6 +86,27 @@ function WorkbenchPanelComponent({
 
   const closePanel = async () => {
     if (closing) return;
+    const terminalSessionId =
+      panel.kind === 'terminal'
+        ? (getTerminalPaneSessionId(panel.id) ?? panel.settings.resourceId)
+        : undefined;
+    if (panel.kind === 'terminal' && terminalSessionId) {
+      if (!window.confirm('Stop this terminal process and close its Workbench panel?')) return;
+      setClosing(true);
+      setCloseError(null);
+      try {
+        const projectId = useAuthStore.getState().projectId ?? null;
+        await closeWorkbenchTerminalSession(terminalSessionId, projectId, (command, args) =>
+          invoke(command, args),
+        );
+        onClose();
+      } catch (cause) {
+        setCloseError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        setClosing(false);
+      }
+      return;
+    }
     if (panel.kind !== 'native-app' && panel.kind !== 'ade') {
       onClose();
       return;
