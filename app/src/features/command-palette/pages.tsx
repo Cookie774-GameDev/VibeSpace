@@ -2,6 +2,7 @@ import { Command } from 'cmdk';
 import { Calendar, LayoutGrid, MessageSquare } from 'lucide-react';
 import * as React from 'react';
 import { cn, formatRelative, renderHotkey } from '@/lib/utils';
+import { toast } from '@/components/ui/toast';
 import { AgentBadge } from '@/features/agents/AgentBadge';
 import {
   createCanvasGlobalSearchIndex,
@@ -11,7 +12,9 @@ import {
   type CanvasPersistenceRepository,
 } from '@/features/canvas';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
-import { db } from '@/lib/db';
+import { chatRepo, db } from '@/lib/db';
+import type { AgentId } from '@/types';
+import type { ChatId } from '@/types/common';
 import { useAgentStore } from '@/stores/agents';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
@@ -311,9 +314,50 @@ function NewPage({ ctx }: { ctx: ActionContext }) {
 /* Switch agent page                                                         */
 /* ------------------------------------------------------------------------- */
 
+async function switchAgentForCurrentChat(agentId: AgentId, closePalette: () => void) {
+  const { activeChatId, route } = useUIStore.getState();
+  const { workspaceId, projectId } = useAuthStore.getState();
+  if (route !== 'chat' || !activeChatId || !workspaceId) {
+    toast.warning('No active chat', 'Open a chat before switching its agent.');
+    return;
+  }
+
+  try {
+    const chat = await chatRepo.getById(activeChatId as ChatId);
+    if (
+      !chat ||
+      chat.archived ||
+      chat.mode !== 'chat' ||
+      chat.workspace_id !== workspaceId ||
+      (chat.project_id ?? null) !== (projectId ?? null) ||
+      !useAgentStore.getState().agents[agentId]
+    ) {
+      throw new Error('The active chat or agent is no longer available.');
+    }
+    const currentUI = useUIStore.getState();
+    const currentAuth = useAuthStore.getState();
+    if (
+      currentUI.route !== 'chat' ||
+      currentUI.activeChatId !== activeChatId ||
+      currentAuth.workspaceId !== workspaceId ||
+      currentAuth.projectId !== projectId
+    ) {
+      throw new Error('The active chat changed. Select the agent again.');
+    }
+    if (chat.active_agent_ids.length !== 1 || chat.active_agent_ids[0] !== agentId) {
+      await chatRepo.update(chat.id, { active_agent_ids: [agentId] });
+    }
+    closePalette();
+  } catch (error) {
+    toast.error('Could not switch agent', error instanceof Error ? error.message : 'Try again.');
+  }
+}
+
 function SwitchAgentPage({ ctx }: { ctx: ActionContext }) {
-  const agents = useAgentStore((s) =>
-    Object.values(s.agents).sort((a, b) => a.name.localeCompare(b.name)),
+  const agentMap = useAgentStore((s) => s.agents);
+  const agents = React.useMemo(
+    () => Object.values(agentMap).sort((a, b) => a.name.localeCompare(b.name)),
+    [agentMap],
   );
   const customActions = useActionsForPage('switch-agent');
 
@@ -329,8 +373,7 @@ function SwitchAgentPage({ ctx }: { ctx: ActionContext }) {
             key={agent.id}
             value={`agent ${agent.slug} ${agent.name} ${agent.description}`}
             onSelect={() => {
-              emitJarvisEvent('jarvis:switch-agent', { agentId: agent.id });
-              ctx.closePalette();
+              void switchAgentForCurrentChat(agent.id, ctx.closePalette);
             }}
             className={ITEM_BASE}
           >

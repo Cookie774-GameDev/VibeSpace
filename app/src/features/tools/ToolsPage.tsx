@@ -184,16 +184,16 @@ function ToolEditor({ open, onClose, initial, templateSeed }: ToolEditorProps) {
   const create = useToolStore((s) => s.create);
   const update = useToolStore((s) => s.update);
   const remove = useToolStore((s) => s.remove);
+  const eligible = React.useMemo(() => getEligibleBaseActions(), []);
 
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [emoji, setEmoji] = React.useState('');
-  const [baseActionId, setBaseActionId] = React.useState('terminal.run');
+  const [baseActionId, setBaseActionId] = React.useState(eligible[0]?.id ?? '');
   const [paramValues, setParamValues] = React.useState<Record<string, string>>({});
   const [workflowMode, setWorkflowMode] = React.useState(false);
   const [stepsJson, setStepsJson] = React.useState('');
 
-  const eligible = React.useMemo(() => getEligibleBaseActions(), []);
   const baseAction = React.useMemo(
     () => eligible.find((a) => a.id === baseActionId),
     [eligible, baseActionId],
@@ -242,11 +242,11 @@ function ToolEditor({ open, onClose, initial, templateSeed }: ToolEditorProps) {
     setName('');
     setDescription('');
     setEmoji('');
-    setBaseActionId('terminal.run');
+    setBaseActionId(eligible[0]?.id ?? '');
     setParamValues({});
     setWorkflowMode(false);
     setStepsJson(defaultWorkflowJson());
-  }, [open, initial, templateSeed]);
+  }, [open, initial, templateSeed, eligible]);
 
   const handleSave = () => {
     if (!name.trim()) {
@@ -779,7 +779,10 @@ export function ToolsPage() {
             <CommandCenterToolCard />
             <EmpireFreezerToolCard />
             <FasterAgentsToolCard />
-            <TerminalPeerFabricToolCard onOpen={openTerminalFabric} onManage={manageTerminalFabric} />
+            <TerminalPeerFabricToolCard
+              onOpen={openTerminalFabric}
+              onManage={manageTerminalFabric}
+            />
           </div>
         </section>
 
