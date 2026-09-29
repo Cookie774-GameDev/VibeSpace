@@ -176,6 +176,38 @@ describe('SchedulePage Jarvis Action model picker', () => {
     );
   });
 
+  it('keeps a valid blank-title draft and its saved time and model choice on mount', () => {
+    const key = 'vibespace-schedule-draft-v1:workspace_1';
+    const original = JSON.stringify({
+      schemaVersion: 1,
+      quick: '',
+      title: '',
+      startInput: '2026-09-29T01:00',
+      endInput: '2026-09-29T02:00',
+      allDay: false,
+      description: '',
+      reminderOffsets: [15],
+      scheduleMode: 'event',
+      jarvisRecurrence: 'once',
+      intervalAmount: 2,
+      timingMode: 'date',
+      delayMinutes: 5,
+      intervalUnit: 'hours',
+      jarvisModelOptionId: 'qa-connection:local-model',
+    });
+    window.localStorage.setItem(key, original);
+
+    const view = render(<SchedulePage />);
+    expect(window.localStorage.getItem(key)).toBe(original);
+    view.rerender(<SchedulePage />);
+    expect(window.localStorage.getItem(key)).toBe(original);
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Edited on purpose' } });
+    expect(JSON.parse(window.localStorage.getItem(key) ?? '{}').title).toBe('Edited on purpose');
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: '' } });
+    expect(window.localStorage.getItem(key)).toBe(original);
+  });
+
   it('rehydrates the selected workspace without copying another workspace draft', async () => {
     const draftFor = (title: string) =>
       JSON.stringify({

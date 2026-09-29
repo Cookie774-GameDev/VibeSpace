@@ -491,14 +491,19 @@ export function SchedulePage() {
     return map;
   }, [timeline]);
 
-  const initialScheduleDraft = React.useMemo<ScheduleDraft>(() => {
-    return (workspaceId && readScheduleDraft(workspaceId)) || createEmptyScheduleDraft();
-  }, [workspaceId]);
+  const initialPersistedDraft = React.useMemo(
+    () => (workspaceId ? readScheduleDraft(workspaceId) : null),
+    [workspaceId],
+  );
+  const initialScheduleDraft = React.useMemo<ScheduleDraft>(
+    () => initialPersistedDraft || createEmptyScheduleDraft(),
+    [initialPersistedDraft],
+  );
   const cleanScheduleDraftRef = React.useRef<ScheduleDraft>(
-    cleanScheduleDraft(initialScheduleDraft),
+    cleanScheduleDraft(initialPersistedDraft ? createEmptyScheduleDraft() : initialScheduleDraft),
   );
   const draftWorkspaceRef = React.useRef<WorkspaceId | null>(workspaceId);
-  const skipDraftPersistenceRef = React.useRef(false);
+  const skipDraftPersistenceRef = React.useRef(Boolean(initialPersistedDraft));
   const [title, setTitle] = React.useState(initialScheduleDraft.title);
   const [startInput, setStartInput] = React.useState(initialScheduleDraft.startInput);
   const [endInput, setEndInput] = React.useState(initialScheduleDraft.endInput);
@@ -626,8 +631,11 @@ export function SchedulePage() {
     draftWorkspaceRef.current = workspaceId;
     skipDraftPersistenceRef.current = true;
 
-    const nextDraft = (workspaceId && readScheduleDraft(workspaceId)) || createEmptyScheduleDraft();
-    cleanScheduleDraftRef.current = cleanScheduleDraft(nextDraft);
+    const persistedDraft = workspaceId ? readScheduleDraft(workspaceId) : null;
+    const nextDraft = persistedDraft || createEmptyScheduleDraft();
+    cleanScheduleDraftRef.current = cleanScheduleDraft(
+      persistedDraft ? createEmptyScheduleDraft() : nextDraft,
+    );
     setTitle(nextDraft.title);
     setStartInput(nextDraft.startInput);
     setEndInput(nextDraft.endInput);
@@ -777,6 +785,7 @@ export function SchedulePage() {
   }, [scheduleMode]);
 
   React.useEffect(() => {
+    if (scheduleMode !== 'jarvis') return;
     const activeId = selectionOptionId(chatModelSelection);
     setJarvisModelOptionId((current) => {
       if (
@@ -806,7 +815,13 @@ export function SchedulePage() {
         ''
       );
     });
-  }, [chatModelSelection, editingJarvisModelSelection, jarvisModelOptions, cliModelRoutes]);
+  }, [
+    chatModelSelection,
+    editingJarvisModelSelection,
+    jarvisModelOptions,
+    cliModelRoutes,
+    scheduleMode,
+  ]);
 
   // Pick a day from the mini-calendar: pre-fill the new-event form for 9–10am
   // that day and jump the timeline to it if anything is already scheduled.
