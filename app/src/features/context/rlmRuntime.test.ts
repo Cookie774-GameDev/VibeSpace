@@ -137,7 +137,10 @@ describe('RLM runtime', () => {
     }
   });
 
-  it('uses the factual question after an explicit RLM routing request as the search query', async () => {
+  it.each([
+    'Could you explicitly use RLM to inspect the Cedar Lantern project notes across the entire project history and answer: What is the release mascot called?',
+    'Please run a recursive RLM check over the Cedar Lantern project notes across the entire project history before answering: What is the release mascot called?',
+  ])('uses the factual question after an explicit RLM routing request as the search query: %s', async (question) => {
     const item = searchItem('mascot');
     const contextTools = tools([item]);
     const childRunner = vi.fn(async (request: RlmChildRequest) => ({
@@ -147,8 +150,6 @@ describe('RLM runtime', () => {
       contextTools, childRunner,
       synthesize: vi.fn(async () => ({ answer: 'Piper', citations: [item.pointer] })),
     });
-    const question = 'Could you explicitly use RLM to inspect the Cedar Lantern project notes across the entire project history and answer: What is the release mascot called?';
-
     await runtime.investigate({ question, scope, executionIdentity, budget });
 
     expect(contextTools.search).toHaveBeenCalledWith(expect.objectContaining({

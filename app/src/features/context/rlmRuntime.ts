@@ -213,10 +213,10 @@ function retrievalQuery(question: string): string {
   if (/\bsource\s+(?:file|path)\s+[`"']?(?:[\w.-]+[\\/])+[\w.-]+\.[\w]+/iu.test(semanticQuestion)) {
     return semanticQuestion;
   }
-  // "Use RLM ... and answer: ..." names the tool before the subject. Search
-  // the factual question so the routing acronym cannot become the index key.
-  if (/\b(?:use|invoke|call)\s+(?:the\s+)?(?:RLM|vibespace_context)\b/iu.test(semanticQuestion)) {
-    const factualQuestion = semanticQuestion.match(/\band\s+answer\s*:\s*(.+)$/iu)?.[1]?.trim();
+  // Explicit tool requests can name RLM before the source question. Search
+  // the factual question so routing words cannot become the index key.
+  if (/\b(?:(?:use|invoke|call)\s+(?:the\s+)?|run\s+(?:a\s+)?(?:recursive\s+)?)(?:RLM|vibespace_context)\b/iu.test(semanticQuestion)) {
+    const factualQuestion = semanticQuestion.match(/\b(?:and\s+answer|before\s+answering)\s*:\s*(.+)$/iu)?.[1]?.trim();
     if (factualQuestion) return factualQuestion;
   }
   const bracketed = semanticQuestion.match(/\[([^\]]{1,1024})\]/u)?.[1]?.trim();
