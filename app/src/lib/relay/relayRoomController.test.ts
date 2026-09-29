@@ -174,6 +174,32 @@ describe('Relay room controller', () => {
     controller.dispose();
   });
 
+  it('does not send with a ticket obtained before Relay authority is revoked, then recovers', async () => {
+    const f = fixture();
+    const controller = createRelayRoomController(f.options);
+    await controller.refresh();
+
+    const delayedTicket = deferred<typeof f.ticket>();
+    f.getHumanControlTicket.mockImplementationOnce(() => delayedTicket.promise);
+    const pendingSend = controller.send('Do not deliver after revocation.');
+    f.roomSnapshot.mockRejectedValueOnce(new Error('access revoked'));
+    await controller.refresh();
+    expect(controller.getSnapshot()).toMatchObject({
+      room: { connection: 'offline', messages: [] },
+      humanAuthorized: false,
+    });
+
+    delayedTicket.resolve(f.ticket);
+    await expect(pendingSend).rejects.toThrow('Relay message could not be sent');
+    expect(f.humanBroadcast).not.toHaveBeenCalled();
+
+    await controller.refresh();
+    await controller.send('Authorized again.');
+    expect(f.humanBroadcast).toHaveBeenCalledOnce();
+    expect(f.humanBroadcast).toHaveBeenCalledWith('human-session', f.ticket, 'Authorized again.');
+    controller.dispose();
+  });
+
   it('uses host-authoritative session ids for stop-all and never derives them from room participants', async () => {
     const f = fixture();
     const controller = createRelayRoomController(f.options);
