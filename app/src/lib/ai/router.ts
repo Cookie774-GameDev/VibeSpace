@@ -1714,7 +1714,7 @@ async function dispatchOpenRouterImageOutput(req: RunAgentRequest): Promise<LLMR
   if (connectionId !== 'openrouter-api' || req.agent.model.provider !== 'openrouter' || !modelId) {
     failClosed('Image output requires a selected OpenRouter model and exact OpenRouter API connection.');
   }
-  const connection = getProviderConnectionDescriptor(connectionId);
+  const connection = getProviderConnectionDescriptor('openrouter-api');
   if (!connection.enabled || connection.mode !== 'native-api' || connection.providerId !== 'openrouter') {
     failClosed('The selected OpenRouter API connection is unavailable for image output.');
   }
