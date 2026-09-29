@@ -55,6 +55,7 @@ import type { ActionDef, ActionParam } from '@/lib/actions';
 import { OpenInTerminalDialog } from './open-in-terminal/OpenInTerminalDialog';
 import { CommandCenterToolCard } from './command-center/CommandCenterToolCard';
 import { EmpireFreezerToolCard } from '@/features/wellness';
+import { ClockToolPanel } from '@/features/clock';
 import { FasterAgentsToolCard } from './faster-agents/FasterAgentsToolCard';
 import { TerminalPeerFabricToolCard } from './terminal-peer-fabric/TerminalPeerFabricToolCard';
 import { useFabricPresentationStore } from './terminal-peer-fabric/fabricPresentationStore';
@@ -785,6 +786,8 @@ export function ToolsPage() {
             />
           </div>
         </section>
+
+        <ClockToolPanel />
 
         {/* Quick-start templates (always visible — they make new tools cheap) */}
         <div className="mb-8">
