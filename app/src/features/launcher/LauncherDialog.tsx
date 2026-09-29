@@ -51,6 +51,8 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
   const [search, setSearch] = React.useState('');
   const [launchingAll, setLaunchingAll] = React.useState(false);
   const launchingAllRef = React.useRef(false);
+  const [deletingGroup, setDeletingGroup] = React.useState(false);
+  const deletingGroupRef = React.useRef(false);
 
   // Edit state
   const [editing, setEditing] = React.useState<QuickLink | null>(null);
@@ -85,6 +87,7 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
     }
     return rows;
   }, [links, filter, search]);
+  const selectedGroup = groups.find((group) => group.id === filter);
 
   const onLaunch = async (link: QuickLink) => {
     const res = await launchLink(link);
@@ -160,6 +163,30 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
       toast.success('Group added', `“${grp.name}” is ready for links.`);
     } catch (err) {
       toast.error('Could not create group', err instanceof Error ? err.message : 'Try again.');
+    }
+  };
+
+  const onDeleteGroup = async (group: QuickLinkGroup) => {
+    if (!workspaceId || group.workspace_id !== workspaceId || deletingGroupRef.current) return;
+    const count = links.filter((link) => link.group_id === group.id).length;
+    if (
+      !window.confirm(
+        `Delete group "${group.name}"? Its ${count} link${count === 1 ? '' : 's'} will move to Ungrouped. The links will be kept.`,
+      )
+    ) {
+      return;
+    }
+    deletingGroupRef.current = true;
+    setDeletingGroup(true);
+    try {
+      await quickLinkGroupRepo.delete(group.id);
+      setFilter('all');
+      toast.success('Group removed', `“${group.name}” was removed; its links were kept.`);
+    } catch (err) {
+      toast.error('Could not delete group', err instanceof Error ? err.message : 'Try again.');
+    } finally {
+      deletingGroupRef.current = false;
+      setDeletingGroup(false);
     }
   };
 
@@ -272,6 +299,17 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
               <Button variant="ghost" size="sm" onClick={onAddGroup} aria-label="Add group">
                 <FolderPlus className="h-3.5 w-3.5" /> Add group
               </Button>
+              {selectedGroup && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void onDeleteGroup(selectedGroup)}
+                  disabled={deletingGroup}
+                  aria-label={`Delete group ${selectedGroup.name}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Delete group
+                </Button>
+              )}
             </div>
           </div>
 
