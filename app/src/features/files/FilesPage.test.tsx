@@ -165,6 +165,79 @@ describe('FilesPage workspace flow', () => {
     );
   });
 
+  it('clears the selected folder only after protecting unsaved tabs', async () => {
+    const view = render(<FilesPage />);
+    fireEvent.change(screen.getByLabelText('Project folder path'), {
+      target: { value: 'C:\\project' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    fireEvent.click((await screen.findByText('one.ts')).closest('button')!);
+    const editor = await screen.findByLabelText('File contents');
+    await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe('const one = 1;'));
+    fireEvent.change(editor, { target: { value: 'unsaved QA edit' } });
+
+    const confirm = vi
+      .spyOn(window, 'confirm')
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear project folder' }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('unsaved changes'));
+    expect((screen.getByLabelText('Project folder path') as HTMLInputElement).value).toBe(
+      'C:\\project',
+    );
+    expect((editor as HTMLTextAreaElement).value).toBe('unsaved QA edit');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear project folder' }));
+    expect((screen.getByLabelText('Project folder path') as HTMLInputElement).value).toBe('');
+    expect(window.localStorage.getItem('jarvis-files-root-v2:project-files')).toBe('');
+    expect(window.localStorage.getItem('jarvis-files-open-file-v1:project-files')).toBe('');
+    expect((screen.getByLabelText('File contents') as HTMLTextAreaElement).disabled).toBe(true);
+    expect(screen.queryByRole('tab', { name: /one\.ts/i })).toBeNull();
+    expect(fileContents.get('C:\\project\\one.ts')).toBe('const one = 1;');
+    view.unmount();
+    resetFileWorkspaceForTests();
+    render(<FilesPage />);
+    expect((screen.getByLabelText('Project folder path') as HTMLInputElement).value).toBe('');
+    expect(screen.getByText('No open files')).toBeTruthy();
+    confirm.mockRestore();
+  });
+
+  it('retains the last good folder when opening a missing folder fails', async () => {
+    render(<FilesPage />);
+    fireEvent.change(screen.getByLabelText('Project folder path'), {
+      target: { value: 'C:\\project' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    fireEvent.click((await screen.findByText('one.ts')).closest('button')!);
+    await waitFor(() =>
+      expect((screen.getByLabelText('File contents') as HTMLTextAreaElement).value).toBe(
+        'const one = 1;',
+      ),
+    );
+
+    vi.mocked(listDirectory).mockResolvedValueOnce({
+      ok: false,
+      path: 'C:\\missing',
+      error: { code: 'NOT_FOUND', message: 'Missing' },
+    });
+    fireEvent.change(screen.getByLabelText('Project folder path'), {
+      target: { value: 'C:\\missing' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    });
+
+    const { toast } = await import('@/components/ui/toast');
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect((screen.getByLabelText('Project folder path') as HTMLInputElement).value).toBe(
+      'C:\\project',
+    );
+    expect(screen.getAllByText('one.ts').length).toBeGreaterThan(0);
+    expect((screen.getByLabelText('File contents') as HTMLTextAreaElement).value).toBe(
+      'const one = 1;',
+    );
+  });
+
   it('keeps unsaved edits across file tabs and collapses Ask Jarvis without losing the file', async () => {
     render(<FilesPage />);
 

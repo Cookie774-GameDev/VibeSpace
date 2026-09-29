@@ -282,12 +282,12 @@ export function FilesPage() {
       if (!path.trim()) return;
       const request = ++rootRequestRef.current;
       setLoading(true);
-      setEntries([]);
       const clean = path.trim();
       const result = await listDirectory(clean, { root: clean });
       if (request !== rootRequestRef.current) return;
       setLoading(false);
       if (!result.ok) {
+        setRootDraft(getStoredProjectRoot(projectId));
         toast.error('Could not open project folder', describeFsError(result.error));
         return;
       }
@@ -374,6 +374,25 @@ export function FilesPage() {
     setRootDraft(picked);
     await loadRoot(picked);
     toast.success('Project folder selected', picked);
+  };
+
+  const clearRoot = () => {
+    const currentWorkspace = getFileWorkspaceState(projectId);
+    if (
+      currentWorkspace.tabs.some((tab) => tab.content !== tab.savedContent) &&
+      !window.confirm('Clear the project folder and discard unsaved changes in open files?')
+    ) {
+      return;
+    }
+    rootRequestRef.current += 1;
+    currentWorkspace.tabs.forEach((tab) => closeWorkspaceFile(projectId, tab.path));
+    setRootDraft('');
+    setRootDir('');
+    setCurrentDir('');
+    setEntries([]);
+    setLoading(false);
+    setStoredOpenFile(projectId, '', false);
+    setStoredProjectRoot(projectId, '');
   };
 
   const saveFile = async () => {
@@ -703,6 +722,15 @@ export function FilesPage() {
                 aria-label="Refresh files"
               >
                 <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+              </button>
+              <button
+                className="hover:text-foreground"
+                onClick={clearRoot}
+                aria-label="Clear project folder"
+                title="Clear project folder"
+                disabled={fileActionBusy}
+              >
+                Clear
               </button>
             </div>
           )}
