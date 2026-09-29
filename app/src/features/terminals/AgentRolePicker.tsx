@@ -41,16 +41,19 @@ function PickerRow({
   onClick,
   children,
   className,
+  ariaLabel,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
   className?: string;
+  ariaLabel?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      aria-label={ariaLabel}
       className={cn(
         'flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-metadata',
         'hover:bg-muted transition-colors',
@@ -212,6 +215,7 @@ export function AgentRolePicker({
                 key={option.agent.id}
                 active={active}
                 onClick={() => applySelection(selectionForOption(option))}
+                ariaLabel={option.agent.name}
               >
                 <AgentBadge agent={option.agent} showName={false} size="sm" />
                 <span className="min-w-0 flex-1 truncate font-medium text-foreground">
