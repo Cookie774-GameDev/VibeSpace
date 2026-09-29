@@ -228,17 +228,89 @@ describe('createJarvisVoiceLiveEvidenceVerifier', () => {
     ];
   }
 
-  function verifierFor(events: JarvisEvent[]) {
+  function verifierFor(events: JarvisEvent[], candidateRun: JarvisRun = run) {
     return createJarvisVoiceLiveEvidenceVerifier({
-      runs: { getById: vi.fn(async () => structuredClone(run)) } as never as JarvisRunRepository,
+      runs: { getById: vi.fn(async () => structuredClone(candidateRun)) } as never as JarvisRunRepository,
       events: {
         getBySeq: vi.fn(async (_accountId, _runId, seq) =>
           structuredClone(events.find((event) => event.seq === seq)),
         ),
-        listByRun: vi.fn(async () => structuredClone(events)),
+        listByRun: vi.fn(async (_accountId, _runId, options) => {
+          if (options.limit > 500) throw new Error('invalid_limit');
+          return structuredClone(events.filter((event) => event.seq > options.afterSeq).slice(0, options.limit));
+        }),
       } as never as JarvisEventRepository,
     });
   }
+
+  it('accepts a persisted provider start for a voice run without transport attempts', async () => {
+    const voiceRun: JarvisRun = { ...run, transportAttempts: undefined };
+    const events = voiceRows('tts');
+    const providerStart: JarvisEvent = {
+      runId: run.id,
+      seq: 1,
+      idempotencyKey: 'provider-start:request-voice',
+      type: 'model',
+      status: 'started',
+      title: 'Model response started',
+      sourceRefs: [],
+      artifactIds: [],
+      createdAt: 150,
+      producerSourceEvidence: {
+        schemaVersion: 1,
+        accountId: run.accountId,
+        runId: run.id,
+        requestId: 'request-voice',
+        attemptNumber: 1,
+        producerKind: 'provider',
+        producerIdentity: {
+          producerKind: 'provider',
+          providerId: 'openai-api',
+          modelId: 'gpt-5.5',
+          modelSnapshotRef: 'model-snapshot-voice',
+        },
+        resultRef: 'provider-start-ref',
+        observedAt: 150,
+        phase: 'start',
+        state: 'started',
+      },
+    };
+    const evidence: JarvisCanonicalLiveProducerEvidence<'voice'> = {
+      schemaVersion: 1,
+      producerKind: 'voice',
+      producerIdentity: events[0]!.producerSourceEvidence!.producerIdentity as Extract<
+        JarvisEvent['producerSourceEvidence'],
+        { producerKind: 'voice' }
+      >['producerIdentity'],
+      accountId: run.accountId,
+      runId: run.id,
+      requestId: 'request-voice',
+      attemptNumber: 1,
+      resultRef: 'voice-tts-start-ref',
+      resultEventSeq: 2,
+      state: 'busy',
+      verifiedAt: 200,
+    };
+    const withStart = verifierFor([providerStart, ...events], voiceRun);
+    const release = withStart.authorizeStart(
+      events[0]!.producerSourceEvidence as Extract<
+        JarvisEvent['producerSourceEvidence'],
+        { producerKind: 'voice' }
+      >,
+    );
+    await expect(withStart.verify(evidence)).resolves.toEqual(evidence);
+    release();
+
+    const withoutStart = verifierFor(events, voiceRun);
+    const releaseWithoutStart = withoutStart.authorizeStart(
+      events[0]!.producerSourceEvidence as Extract<
+        JarvisEvent['producerSourceEvidence'],
+        { producerKind: 'voice' }
+      >,
+    );
+    await expect(withoutStart.verify(evidence)).resolves.toBeNull();
+    releaseWithoutStart();
+  });
 
   it.each([
     ['tts', 'model'],
@@ -288,6 +360,40 @@ describe('createJarvisVoiceLiveEvidenceVerifier', () => {
       expect(JSON.stringify(events)).not.toMatch(/transcript|audio|spokenText|prompt/i);
     },
   );
+
+  it('reads voice result evidence across the repository 500-row page boundary', async () => {
+    const [start, result] = voiceRows('tts');
+    const filler: JarvisEvent[] = Array.from({ length: 500 }, (_, index) => ({
+      ...start!,
+      seq: index + 2,
+      idempotencyKey: `voice-filler-${index}`,
+      type: 'context',
+      status: 'completed',
+      producerSourceEvidence: undefined,
+    }));
+    const pagedStart = { ...start!, seq: 502 };
+    const pagedResult = { ...result!, seq: 503 };
+    const source = pagedResult.producerSourceEvidence as Extract<
+      JarvisEvent['producerSourceEvidence'],
+      { producerKind: 'voice' }
+    >;
+    const evidence: JarvisCanonicalLiveProducerEvidence<'voice'> = {
+      schemaVersion: 1,
+      producerKind: 'voice',
+      producerIdentity: source.producerIdentity,
+      accountId: run.accountId,
+      runId: run.id,
+      requestId: 'request-voice',
+      attemptNumber: 1,
+      resultRef: source.resultRef,
+      resultEventSeq: 503,
+      state: 'completed',
+      verifiedAt: 300,
+    };
+    await expect(verifierFor([...filler, pagedStart, pagedResult]).verify(evidence)).resolves.toEqual(
+      evidence,
+    );
+  });
 
   it('rejects an ordinary status or the wrong voice producer member', async () => {
     const events = voiceRows('tts');

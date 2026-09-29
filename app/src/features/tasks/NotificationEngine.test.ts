@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   release: vi.fn(),
   notifyDone: vi.fn(),
   toastInfo: vi.fn(),
+  pollEventReminders: vi.fn(),
   getAuthState: vi.fn(),
   getUiState: vi.fn(),
 }));
@@ -51,6 +52,10 @@ vi.mock('@/components/ui/toast', () => ({
   toast: {
     info: mocks.toastInfo,
   },
+}));
+
+vi.mock('./EventReminderEngine', () => ({
+  pollEventReminders: mocks.pollEventReminders,
 }));
 
 import { pollOnce, startNotificationLoop } from './NotificationEngine';
@@ -191,6 +196,7 @@ describe('NotificationEngine', () => {
       permission: 'granted',
       message: 'ok',
     });
+    mocks.pollEventReminders.mockResolvedValue(0);
   });
 
   afterEach(() => {
@@ -203,6 +209,15 @@ describe('NotificationEngine', () => {
     await expect(pollOnce(2000)).resolves.toBe(0);
     expect(mocks.listOpen).not.toHaveBeenCalled();
     expect(mocks.notifyDone).not.toHaveBeenCalled();
+    expect(mocks.pollEventReminders).not.toHaveBeenCalled();
+  });
+
+  it('polls calendar event reminders in the same notification pass', async () => {
+    mocks.pollEventReminders.mockResolvedValue(2);
+
+    await expect(pollOnce(2000)).resolves.toBe(2);
+    expect(mocks.pollEventReminders).toHaveBeenCalledOnce();
+    expect(mocks.pollEventReminders).toHaveBeenCalledWith(2000, expect.any(Function));
   });
 
   it('fires due reminders once through settings-gated notification delivery', async () => {

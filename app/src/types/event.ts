@@ -39,6 +39,15 @@ export interface EventReminder {
   offset_min: number;
   /** Channels to deliver on. */
   channels: EventChannel[];
+  /** Latest concrete occurrence that finished delivery. */
+  last_fired_start_at?: number;
+  /** Bounded persisted lease prevents overlapping polls from double delivery. */
+  delivery_claim?: {
+    id: string;
+    occurrence_start_at: number;
+    claimed_at: number;
+    expires_at: number;
+  };
 }
 
 export interface EventSourceRef {

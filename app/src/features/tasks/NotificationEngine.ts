@@ -5,6 +5,7 @@ import { toast } from '@/components/ui/toast';
 import { notifyDone } from '@/lib/notifications';
 import { useUIStore } from '@/stores/ui';
 import type { Reminder, Task } from '@/types/task';
+import { pollEventReminders } from './EventReminderEngine';
 
 /**
  * The notification engine.
@@ -117,7 +118,7 @@ export async function pollOnce(
     }
   }
 
-  return fired;
+  return fired + (await pollEventReminders(now, createClaimId));
 }
 
 function defaultClaimId(): string {

@@ -109,6 +109,22 @@ export function createJarvisVoiceLiveEvidenceVerifier(input: {
 }): JarvisVoiceLiveEvidenceVerifier {
   const activeStarts = new Map<string, Readonly<VoiceSourceEvidence>>();
   let disposed = false;
+  const listEvidenceWindow = async (accountId: string, runId: string, afterSeq: number) => {
+    const rows: JarvisEvent[] = [];
+    let cursor = afterSeq;
+    while (rows.length < 1_024) {
+      const limit = Math.min(500, 1_024 - rows.length);
+      const page = await input.events.listByRun(accountId, runId, { afterSeq: cursor, limit });
+      if (page.length === 0) break;
+      if (page.length > limit || page.some((row, index) => row.seq <= (index === 0 ? cursor : page[index - 1]!.seq))) {
+        throw new Error('voice_live_evidence_event_page_invalid');
+      }
+      rows.push(...page);
+      cursor = page[page.length - 1]!.seq;
+      if (page.length < limit) break;
+    }
+    return rows;
+  };
   return Object.freeze({
     authorizeStart(source: Readonly<VoiceSourceEvidence>) {
       if (disposed) throw new Error('voice_live_evidence_verifier_disposed');
@@ -175,7 +191,34 @@ export function createJarvisVoiceLiveEvidenceVerifier(input: {
             candidate.requestId === evidence.requestId &&
             candidate.attemptNumber === evidence.attemptNumber,
         );
-        if (!attempt || attempt.startedEventSeq >= evidence.resultEventSeq) return null;
+        let startedEventSeq = attempt?.startedEventSeq;
+        if (startedEventSeq === undefined && !run.transportAttempts?.length) {
+          // Ordinary voice turns persist provider start evidence but do not use
+          // the scheduled transport-attempt journal.
+          const prefix = await listEvidenceWindow(evidence.accountId, evidence.runId, 0);
+          const providerStarts = prefix.filter((row) => {
+            const source = row.producerSourceEvidence;
+            return (
+              row.seq < evidence.resultEventSeq &&
+              row.type === 'model' &&
+              row.status === 'started' &&
+              source?.producerKind === 'provider' &&
+              source.phase === 'start' &&
+              source.state === 'started' &&
+              source.accountId === evidence.accountId &&
+              source.runId === evidence.runId &&
+              source.requestId === evidence.requestId &&
+              source.attemptNumber === evidence.attemptNumber &&
+              stableVoiceIdentifier(source.resultRef) &&
+              source.observedAt === row.createdAt
+            );
+          });
+          if (providerStarts.length !== 1) return null;
+          startedEventSeq = providerStarts[0]!.seq;
+        }
+        if (startedEventSeq === undefined || startedEventSeq >= evidence.resultEventSeq) {
+          return null;
+        }
 
         const target = await input.events.getBySeq(
           evidence.accountId,
@@ -210,10 +253,7 @@ export function createJarvisVoiceLiveEvidenceVerifier(input: {
           return Object.freeze(structuredClone(evidence));
         }
 
-        const tail = await input.events.listByRun(evidence.accountId, evidence.runId, {
-          afterSeq: attempt.startedEventSeq,
-          limit: 1_024,
-        });
+        const tail = await listEvidenceWindow(evidence.accountId, evidence.runId, startedEventSeq);
         const ownerRows = tail.filter((row) => {
           const source = eventVoiceSource(row);
           return source !== null && sourceOwnsEvidence(source, evidence);
