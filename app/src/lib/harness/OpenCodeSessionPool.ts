@@ -30,6 +30,8 @@ export interface OpenCodeClientFactory {
 export interface PersistedSessionMapping {
   sessionId: string;
   runtimeGeneration: string;
+  /** Hash of the instructions that were active when this session was created. */
+  instructionFingerprint?: string;
 }
 
 export interface OpenCodeSessionRegistry {
@@ -44,6 +46,7 @@ interface RuntimeEntry {
   client: OpenCodeSessionClient;
   lastUsedAt: number;
   sessions: Map<string, string>;
+  sessionFingerprints: Map<string, string | undefined>;
   sessionStarting: Map<string, Promise<string>>;
   disposed: boolean;
 }
@@ -123,6 +126,7 @@ export class OpenCodeSessionPool {
         client,
         lastUsedAt: this.now(),
         sessions: new Map(),
+        sessionFingerprints: new Map(),
         sessionStarting: new Map(),
         disposed: false,
       };
@@ -174,6 +178,7 @@ export class OpenCodeSessionPool {
     entry.disposed = true;
     this.entries.delete(key);
     entry.sessions.clear();
+    entry.sessionFingerprints.clear();
     entry.sessionStarting.clear();
     await entry.handle.dispose();
   }
@@ -194,6 +199,7 @@ export class OpenCodeSessionPool {
     entry: RuntimeEntry,
     chatId: string,
     title?: string,
+    instructionFingerprint?: string,
   ): Promise<string> {
     if (entry.disposed) throw new Error('HARNESS_SCOPE_DISPOSED');
     const registry = this.options.registry;
@@ -211,13 +217,15 @@ export class OpenCodeSessionPool {
       }
     }
     if (entry.disposed) throw new Error('HARNESS_SCOPE_DISPOSED');
-    if (persisted?.runtimeGeneration === entry.handle.generation) {
+    if (persisted?.runtimeGeneration === entry.handle.generation &&
+        (instructionFingerprint === undefined || persisted.instructionFingerprint === instructionFingerprint)) {
       const valid = entry.client.getSession
         ? await entry.client.getSession(persisted.sessionId)
         : { id: persisted.sessionId };
       if (valid?.id === persisted.sessionId) {
         if (entry.disposed) throw new Error('HARNESS_SCOPE_DISPOSED');
         entry.sessions.set(chatId, persisted.sessionId);
+        entry.sessionFingerprints.set(chatId, persisted.instructionFingerprint);
         if (registry && persistedKey !== key) {
           await registry.save(key, chatId, persisted).catch(() => undefined);
         }
@@ -231,9 +239,11 @@ export class OpenCodeSessionPool {
       throw new Error('HARNESS_SCOPE_DISPOSED');
     }
     entry.sessions.set(chatId, created.id);
+    entry.sessionFingerprints.set(chatId, instructionFingerprint);
     await this.options.registry?.save(key, chatId, {
       sessionId: created.id,
       runtimeGeneration: entry.handle.generation,
+      ...(instructionFingerprint ? { instructionFingerprint } : {}),
     });
     return created.id;
   }
@@ -253,12 +263,16 @@ export class OpenCodeSessionPool {
     scope: HarnessScope,
     chatId: string,
     title?: string,
+    instructionFingerprint?: string,
   ): Promise<{
     client: OpenCodeSessionClient;
     sessionId: string;
     runtimeGeneration: string;
   }> {
     const cleanChatId = cleanScopePart(chatId, true);
+    if (instructionFingerprint !== undefined && !/^sha256:[a-f0-9]{64}$/u.test(instructionFingerprint)) {
+      throw new Error('invalid_harness_instruction_fingerprint');
+    }
     const key = openCodeScopeKey(scope);
     const requestKey = `${key}\u0000${cleanChatId}`;
     let request = this.chatRequests.get(requestKey);
@@ -267,10 +281,18 @@ export class OpenCodeSessionPool {
         const entry = await this.ensureReady(scope);
         if (entry.disposed) throw new Error('HARNESS_SCOPE_DISPOSED');
         let sessionId = entry.sessions.get(cleanChatId);
+        if (sessionId && instructionFingerprint !== undefined &&
+            entry.sessionFingerprints.get(cleanChatId) !== instructionFingerprint) {
+          // Keep the prior server session for history/audit, but bind the next
+          // turn to a new session with the newly selected agent instructions.
+          entry.sessions.delete(cleanChatId);
+          entry.sessionFingerprints.delete(cleanChatId);
+          sessionId = undefined;
+        }
         if (!sessionId) {
           let creating = entry.sessionStarting.get(cleanChatId);
           if (!creating) {
-            creating = this.createOrRestoreSession(key, entry, cleanChatId, title).finally(() =>
+            creating = this.createOrRestoreSession(key, entry, cleanChatId, title, instructionFingerprint).finally(() =>
               entry.sessionStarting.delete(cleanChatId),
             );
             entry.sessionStarting.set(cleanChatId, creating);
@@ -312,6 +334,7 @@ export class OpenCodeSessionPool {
   async forgetChat(scope: HarnessScope, chatId: string): Promise<void> {
     const key = openCodeScopeKey(scope);
     this.entries.get(key)?.sessions.delete(chatId.trim());
+    this.entries.get(key)?.sessionFingerprints.delete(chatId.trim());
     await this.options.registry?.remove(key, chatId.trim());
   }
 

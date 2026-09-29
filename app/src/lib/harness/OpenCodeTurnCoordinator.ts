@@ -92,6 +92,8 @@ export interface TurnPolicyInput {
 export interface OpenCodeTurnInput {
   scope: HarnessScope;
   chatId: string;
+  /** Same instruction binding used during the persistent adapter's preflight. */
+  instructionFingerprint?: string;
   chatTitle?: string;
   text: string;
   parts?: readonly OpenCodePromptPart[];
@@ -270,7 +272,9 @@ export class OpenCodeTurnCoordinator {
     }
 
     const permissions = buildEffectivePermissionProfile(input.policy);
-    const session = await this.sessions.sessionForChat(input.scope, input.chatId, input.chatTitle);
+    const session = await this.sessions.sessionForChat(
+      input.scope, input.chatId, input.chatTitle, input.instructionFingerprint,
+    );
     if (input.expectedSessionId && session.sessionId !== input.expectedSessionId) {
       throw new Error('kernel_explicit_root_session_changed_before_dispatch');
     }

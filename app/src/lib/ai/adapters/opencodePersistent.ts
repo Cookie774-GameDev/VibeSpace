@@ -24,6 +24,7 @@ import {
   type OpenCodeRuntimeHandle,
   type OpenCodeRuntimeSupervisor,
   type OpenCodeSessionRegistry,
+  type PersistedSessionMapping,
 } from '@/lib/harness/OpenCodeSessionPool';
 import {
   OpenCodeSdkSessionClient,
@@ -508,14 +509,14 @@ class PersistentOpenCodeClient extends OpenCodeSdkSessionClient {
 }
 
 class LocalStorageSessionRegistry implements OpenCodeSessionRegistry {
-  private read(): Record<string, Record<string, { sessionId: string; runtimeGeneration: string }>> {
+  private read(): Record<string, Record<string, PersistedSessionMapping>> {
     if (typeof localStorage === 'undefined') return {};
     try {
       const value = JSON.parse(localStorage.getItem(SESSION_REGISTRY_KEY) ?? '{}') as unknown;
       return (
         (recordOf(value) as Record<
           string,
-          Record<string, { sessionId: string; runtimeGeneration: string }>
+          Record<string, PersistedSessionMapping>
         >) ?? {}
       );
     } catch {
@@ -524,7 +525,7 @@ class LocalStorageSessionRegistry implements OpenCodeSessionRegistry {
   }
 
   private write(
-    value: Record<string, Record<string, { sessionId: string; runtimeGeneration: string }>>,
+    value: Record<string, Record<string, PersistedSessionMapping>>,
   ): void {
     if (typeof localStorage === 'undefined') return;
     try {
@@ -536,15 +537,18 @@ class LocalStorageSessionRegistry implements OpenCodeSessionRegistry {
 
   async load(scopeKey: string, chatId: string) {
     const value = this.read()[scopeKey]?.[chatId];
-    return value && cleanIdentifier(value.sessionId) && cleanIdentifier(value.runtimeGeneration)
-      ? { sessionId: value.sessionId, runtimeGeneration: value.runtimeGeneration }
+    return value && cleanIdentifier(value.sessionId) && cleanIdentifier(value.runtimeGeneration) &&
+        (value.instructionFingerprint === undefined ||
+          /^sha256:[a-f0-9]{64}$/u.test(value.instructionFingerprint))
+      ? { sessionId: value.sessionId, runtimeGeneration: value.runtimeGeneration,
+          ...(value.instructionFingerprint ? { instructionFingerprint: value.instructionFingerprint } : {}) }
       : null;
   }
 
   async save(
     scopeKey: string,
     chatId: string,
-    mapping: { sessionId: string; runtimeGeneration: string },
+    mapping: PersistedSessionMapping,
   ) {
     const all = this.read();
     const scope = { ...(all[scopeKey] ?? {}), [chatId]: mapping };
@@ -2102,6 +2106,17 @@ export function combineSystemPrompt(
   return clean ? `${clean}\n\n${addendum}` : addendum;
 }
 
+async function openCodeInstructionFingerprint(systemPrompt: string | undefined): Promise<string> {
+  const digest = await globalThis.crypto?.subtle?.digest(
+    'SHA-256',
+    new TextEncoder().encode(systemPrompt?.trim() ?? ''),
+  );
+  if (!digest) throw new Error('OpenCode instruction fingerprint hashing is unavailable.');
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
 export function toolsForPolicy(input: {
   mode: InteractionMode;
   access: AccessLevel;
@@ -2251,7 +2266,14 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
   try {
     requireActiveRequest();
     const timing = { requestId: request.requestId, chatId, model: modelId };
-    const sessionReady = appActivityLog.trace('model.prepare.session', timing, () => sessions.sessionForChat(scope, chatId));
+    // Explicit protected follow-ups are pinned to their bound session. Ordinary
+    // chat turns rotate on agent instruction changes while retaining visible
+    // VibeSpace history for the new provider session's first prompt.
+    const instructionFingerprint = request.expectedSessionId
+      ? undefined
+      : await openCodeInstructionFingerprint(request.systemPrompt);
+    const sessionReady = appActivityLog.trace('model.prepare.session', timing,
+      () => sessions.sessionForChat(scope, chatId, undefined, instructionFingerprint));
     const [sessionResult, baselineResult, catalogResult] = await awaitOpenCodePreparation(Promise.allSettled([
       sessionReady,
       sessionReady.then((session) => {
@@ -2373,6 +2395,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     const dispatch = await coordinator.dispatch({
       scope,
       chatId,
+      instructionFingerprint,
       // A preflight failure can leave a bound session with no accepted prompt.
       // Restore the bounded local history once; established sessions already own it.
       text: baselineMessages.length === 0 ? selectOpenCodeDispatchPrompt(request) : request.prompt,

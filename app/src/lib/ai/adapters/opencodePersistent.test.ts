@@ -785,6 +785,76 @@ describe('persistent OpenCode question transport authority', () => {
     },
   );
 
+  it('binds the next chat turn to a new native session when agent instructions change', async () => {
+    configureManagedQuestionTransport([{ type: 'session.idle' }]);
+    let created = 0;
+    const transport = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
+      if (/^\/session(?:\?|$)/u.test(path) && init?.method === 'POST') {
+        return jsonResponse({ id: `ses_switch_${++created}` });
+      }
+      if (path.startsWith('/session/status')) {
+        return jsonResponse({ [`ses_switch_${created}`]: { type: 'idle' } });
+      }
+      if (/^\/session\/ses_switch_\d+$/u.test(path) && init?.method === 'GET') {
+        return jsonResponse({ id: path.slice('/session/'.length) });
+      }
+      return transport(generation, path, init, timeout);
+    });
+    const chatId = 'chat-agent-switch';
+    const alpha = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('agent-alpha'),
+      chatId,
+      systemPrompt: 'Answer only ALPHA.',
+    })[Symbol.asyncIterator]();
+    await expect(alpha.next()).resolves.toMatchObject({
+      value: { type: 'session', sessionId: 'ses_switch_1' },
+    });
+    await alpha.return?.();
+
+    const beta = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('agent-beta'),
+      chatId,
+      systemPrompt: 'Answer only BETA.',
+      historyPrompt: 'user: First request.\n\nassistant: ALPHA.\n\nuser: Next request.',
+    })[Symbol.asyncIterator]();
+    await expect(beta.next()).resolves.toMatchObject({
+      value: { type: 'session', sessionId: 'ses_switch_2' },
+    });
+    await beta.return?.();
+
+    const betaRepeat = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('agent-beta-repeat'),
+      chatId,
+      systemPrompt: 'Answer only BETA.',
+    })[Symbol.asyncIterator]();
+    await expect(betaRepeat.next()).resolves.toMatchObject({
+      value: { type: 'session', sessionId: 'ses_switch_2' },
+    });
+    await betaRepeat.return?.();
+
+    const betaEdited = openCodePersistentAdapter.send!({
+      ...questionProviderRequest('agent-beta-edited'),
+      chatId,
+      systemPrompt: 'Answer only BETA2.',
+    })[Symbol.asyncIterator]();
+    await expect(betaEdited.next()).resolves.toMatchObject({
+      value: { type: 'session', sessionId: 'ses_switch_3' },
+    });
+    await betaEdited.return?.();
+
+    expect(created).toBe(3);
+    const promptCalls = nativeOpenCodeMocks.request.mock.calls.filter(([, path]) =>
+      path.includes('/prompt_async'));
+    expect(promptCalls).toHaveLength(4);
+    expect(promptCalls[0]?.[1]).toContain('/session/ses_switch_1/');
+    expect(promptCalls[1]?.[1]).toContain('/session/ses_switch_2/');
+    expect(promptCalls[2]?.[1]).toContain('/session/ses_switch_2/');
+    expect(promptCalls[3]?.[1]).toContain('/session/ses_switch_3/');
+    expect(JSON.parse(String(promptCalls[1]?.[2]?.body)).system).toContain('Answer only BETA.');
+    expect(JSON.parse(String(promptCalls[3]?.[2]?.body)).system).toContain('Answer only BETA2.');
+  });
+
   it.each([null, {}, [null], ['malformed']])('does not restore history from a malformed message baseline: %j', async (value) => {
     const original = nativeOpenCodeMocks.request.getMockImplementation()!;
     nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {

@@ -24,6 +24,47 @@ function setup(read: () => Promise<unknown> = async () => ({ id: 'persisted' }),
 }
 
 describe('persisted OpenCode session restoration', () => {
+  it('starts a new persisted session when the same chat changes agent instructions', async () => {
+    const mappings = new Map<string, PersistedSessionMapping>();
+    const registry = {
+      load: async (scopeKey: string, chatId: string) => mappings.get(`${scopeKey}:${chatId}`) ?? null,
+      save: async (scopeKey: string, chatId: string, mapping: PersistedSessionMapping) => {
+        mappings.set(`${scopeKey}:${chatId}`, mapping);
+      },
+      remove: async (scopeKey: string, chatId: string) => {
+        mappings.delete(`${scopeKey}:${chatId}`);
+      },
+    };
+    let created = 0;
+    const client = {
+      createSession: async () => ({ id: `session-${++created}` }),
+      getSession: async (id: string) => ({ id }),
+      abort: async () => undefined,
+    };
+    const makePool = () => new OpenCodeSessionPool(
+      { start: async () => ({ generation: 'generation', dispose: async () => undefined }) },
+      { connect: async () => client },
+      { registry },
+    );
+    const alpha = `sha256:${'a'.repeat(64)}`;
+    const beta = `sha256:${'b'.repeat(64)}`;
+    const first = makePool();
+    try {
+      expect((await first.sessionForChat(scope, 'chat', undefined, alpha)).sessionId).toBe('session-1');
+      expect((await first.sessionForChat(scope, 'chat', undefined, alpha)).sessionId).toBe('session-1');
+      expect((await first.sessionForChat(scope, 'chat', undefined, beta)).sessionId).toBe('session-2');
+      expect(mappings.get(`${openCodeScopeKey(scope)}:chat`)).toMatchObject({
+        sessionId: 'session-2', instructionFingerprint: beta,
+      });
+    } finally { await first.disposeAll(); }
+    const restored = makePool();
+    try {
+      expect((await restored.sessionForChat(scope, 'chat', undefined, beta)).sessionId).toBe('session-2');
+      expect((await restored.sessionForChat(scope, 'chat', undefined, alpha)).sessionId).toBe('session-3');
+      expect(created).toBe(3);
+    } finally { await restored.disposeAll(); }
+  });
+
   it.each([new Error('temporary read outage'), 'native read unavailable'])('does not replace a conversation on uncertain validation: %s', async (error) => {
     const h = setup(async () => { throw error; });
     try {
