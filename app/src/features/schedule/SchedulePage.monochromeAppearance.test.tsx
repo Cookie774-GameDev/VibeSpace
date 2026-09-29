@@ -15,6 +15,7 @@ const scheduleState = vi.hoisted(() => ({
   jarvisEvents: [] as EventRow[],
   reducedMotion: false,
   timelineEvents: [] as RecurrenceInstance[],
+  endedEvents: [] as RecurrenceInstance[],
   timelineTasks: [] as Task[],
 }));
 
@@ -45,6 +46,7 @@ vi.mock('@/features/tasks', () => ({
 
 vi.mock('./hooks', () => ({
   useUpcomingEvents: () => scheduleState.timelineEvents,
+  useRecentlyEndedEvents: () => scheduleState.endedEvents,
   useJarvisScheduleEvents: () => scheduleState.jarvisEvents,
 }));
 
@@ -82,6 +84,7 @@ describe('SchedulePage MonoChrome appearance', () => {
     scheduleState.jarvisEvents = [];
     scheduleState.reducedMotion = false;
     scheduleState.timelineEvents = [];
+    scheduleState.endedEvents = [];
     scheduleState.timelineTasks = [];
     document.documentElement.dataset.theme = 'monochrome';
     useAuthStore.setState({
@@ -151,6 +154,31 @@ describe('SchedulePage MonoChrome appearance', () => {
     expect(eventRow?.style.transform).toBe('');
     expect(ambient?.style.opacity).toBe('');
     expect(ambient?.style.transform).toBe('');
+  });
+
+  it('shows a recently expired event as Ended while a future event keeps its active state', () => {
+    const past = scheduledEvent('Finished planning');
+    const now = Date.now();
+    past.event.start_at = now - 90 * 60_000;
+    past.event.end_at = now - 30 * 60_000;
+    past.instanceStartMs = past.event.start_at;
+    past.instanceEndMs = past.event.end_at;
+    const completed = scheduledEvent('Completed planning');
+    completed.event.status = 'done';
+    scheduleState.endedEvents = [past];
+    scheduleState.timelineEvents = [scheduledEvent('Upcoming planning'), completed];
+
+    render(<SchedulePage />);
+
+    const endedRow = screen.getByText('Finished planning').closest('li');
+    const activeRow = screen.getByText('Upcoming planning').closest('li');
+    const completedRow = screen.getByText('Completed planning').closest('li');
+    expect(endedRow?.textContent).toContain('Ended');
+    expect(endedRow?.getAttribute('data-sakura-state')).toBe('complete');
+    expect(activeRow?.textContent).not.toContain('Ended');
+    expect(activeRow?.getAttribute('data-sakura-state')).toBe('scheduled');
+    expect(completedRow?.textContent).toContain('Ended');
+    expect(completedRow?.getAttribute('data-sakura-state')).toBe('complete');
   });
 
   it('keeps the Jarvis empty state still for MonoChrome and reduced-motion users', () => {

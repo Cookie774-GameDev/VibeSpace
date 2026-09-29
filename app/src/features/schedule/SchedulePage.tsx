@@ -54,7 +54,7 @@ import { completeTask, useUpcomingTasks } from '@/features/tasks';
 import type { EventReminder, EventRow } from '@/types/event';
 import type { Task } from '@/types/task';
 import type { ChatId, WorkspaceId } from '@/types/common';
-import { useJarvisScheduleEvents, useUpcomingEvents } from './hooks';
+import { useJarvisScheduleEvents, useRecentlyEndedEvents, useUpcomingEvents } from './hooks';
 import {
   parseCustomRecurrence,
   parseRecurrence,
@@ -228,6 +228,13 @@ const PLACEHOLDER_INPUT_CLASS =
 type TimelineItem =
   | { kind: 'event'; id: string; at: number; end: number; instance: RecurrenceInstance }
   | { kind: 'task'; id: string; at: number; task: Task; timeKind: 'Scheduled' | 'Due' };
+
+function isEndedOccurrence(instance: RecurrenceInstance, nowMs: number): boolean {
+  return (
+    instance.event.status === 'done' ||
+    (instance.event.status === 'scheduled' && instance.instanceEndMs <= nowMs)
+  );
+}
 
 function buildTimeline(events: RecurrenceInstance[], tasks: Task[]): TimelineItem[] {
   const eventItems = events.map((instance) => ({
@@ -456,9 +463,23 @@ export function SchedulePage() {
     }
     return [...routes.values()];
   }, [jarvisModelOptionsAll]);
+  const [timelineNow, setTimelineNow] = React.useState(Date.now);
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setTimelineNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const events = useUpcomingEvents(workspaceId, 14 * DAY_MS, 100);
+  const endedEvents = useRecentlyEndedEvents(workspaceId, timelineNow);
   const tasks = useUpcomingTasks();
-  const timeline = React.useMemo(() => buildTimeline(events, tasks), [events, tasks]);
+  const timeline = React.useMemo(() => {
+    const endedKeys = new Set(
+      endedEvents.map((instance) => `${instance.event.id}:${instance.instanceStartMs}`),
+    );
+    const uniqueEvents = events.filter(
+      (instance) => !endedKeys.has(`${instance.event.id}:${instance.instanceStartMs}`),
+    );
+    return buildTimeline([...endedEvents, ...uniqueEvents], tasks);
+  }, [endedEvents, events, tasks]);
   const dayGroups = React.useMemo(() => groupTimelineByDay(timeline), [timeline]);
   const todayKey = React.useMemo(() => localDayKey(Date.now()), []);
   const eventCountByDay = React.useMemo(() => {
@@ -1538,7 +1559,7 @@ export function SchedulePage() {
               <p className="text-secondary text-muted-foreground">
                 {timelineView === 'jarvis'
                   ? 'Scheduled prompts and their saved outputs'
-                  : 'Next two weeks · local dates and times'}
+                  : 'Recent and next two weeks · local dates and times'}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1658,7 +1679,9 @@ export function SchedulePage() {
                         key={`${item.kind}-${item.id}`}
                         data-sakura-surface="schedule-row"
                         data-sakura-state={
-                          item.kind === 'task' && item.task.status === 'done'
+                          (item.kind === 'event' &&
+                            isEndedOccurrence(item.instance, timelineNow)) ||
+                          (item.kind === 'task' && item.task.status === 'done')
                             ? 'complete'
                             : item.kind === 'task'
                               ? 'attention'
@@ -1679,6 +1702,7 @@ export function SchedulePage() {
                         {item.kind === 'event' ? (
                           <EventTimelineRow
                             item={item}
+                            nowMs={timelineNow}
                             onDelete={handleDeleteEvent}
                             onEdit={handleEditEvent}
                             onStatusChange={handleScheduleStatus}
@@ -2401,12 +2425,14 @@ export function SchedulePage() {
 
 function EventTimelineRow({
   item,
+  nowMs,
   onDelete,
   onEdit,
   onStatusChange,
   onOpenJarvis,
 }: {
   item: Extract<TimelineItem, { kind: 'event' }>;
+  nowMs: number;
   onDelete: (event: EventRow) => void;
   onEdit: (event: EventRow) => void;
   onStatusChange: (event: EventRow, status: 'scheduled' | 'cancelled') => void;
@@ -2421,6 +2447,7 @@ function EventTimelineRow({
     : null;
   const Icon = visual.icon;
   const reminderCount = event.reminders?.length ?? 0;
+  const ended = isEndedOccurrence(item.instance, nowMs);
   const accentColor = event.color_hue !== undefined ? `hsl(${event.color_hue} 70% 55%)` : undefined;
 
   return (
@@ -2471,6 +2498,11 @@ function EventTimelineRow({
               {event.status === 'cancelled' ? (
                 <Badge variant="outline" className="shrink-0 text-metadata">
                   Cancelled
+                </Badge>
+              ) : null}
+              {ended && event.status !== 'cancelled' ? (
+                <Badge variant="secondary" className="shrink-0 text-metadata">
+                  Ended
                 </Badge>
               ) : null}
               {reminderCount > 0 && (

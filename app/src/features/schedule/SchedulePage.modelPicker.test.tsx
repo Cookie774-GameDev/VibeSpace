@@ -61,6 +61,7 @@ vi.mock('@/features/tasks', () => ({
 
 vi.mock('./hooks', () => ({
   useUpcomingEvents: () => upcomingEventsState.rows,
+  useRecentlyEndedEvents: () => [],
   useJarvisScheduleEvents: () => jarvisEventsState.rows,
 }));
 

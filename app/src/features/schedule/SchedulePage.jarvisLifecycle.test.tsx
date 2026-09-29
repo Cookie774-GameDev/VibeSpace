@@ -79,6 +79,7 @@ vi.mock('@/features/jarvis-memory/caoScheduledLearningRuntime', () => ({
 
 vi.mock('./hooks', () => ({
   useUpcomingEvents: () => upcomingEventsState.rows,
+  useRecentlyEndedEvents: () => [],
   useJarvisScheduleEvents: () => jarvisEventsState.rows,
 }));
 

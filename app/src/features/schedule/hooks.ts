@@ -78,6 +78,28 @@ export function useUpcomingEvents(
   );
 }
 
+/** Keep the last day's finished occurrences visible with an ended state. */
+export function useRecentlyEndedEvents(
+  workspaceId: WorkspaceId | null,
+  nowMs: number,
+  lookbackMs = 24 * 60 * 60 * 1000,
+  limit = 100,
+): RecurrenceInstance[] {
+  return (
+    useLiveQuery(async () => {
+      if (!workspaceId) return [] as RecurrenceInstance[];
+      const rows = await db.events.where('workspace_id').equals(workspaceId).toArray();
+      const out = rows
+        .filter((event) => event.status === 'scheduled' || event.status === 'done')
+        .flatMap((event) => expandRecurrence(event, nowMs - lookbackMs, nowMs + 1))
+        .filter((instance) => instance.instanceEndMs <= nowMs)
+        .sort((a, b) => b.instanceEndMs - a.instanceEndMs)
+        .slice(0, limit);
+      return out.sort((a, b) => a.instanceStartMs - b.instanceStartMs);
+    }, [workspaceId, nowMs, lookbackMs, limit]) ?? []
+  );
+}
+
 /**
  * Events that land inside today's local-time window — including recurrence
  * expansions. The `[start, end]` bounds are computed once when the hook
