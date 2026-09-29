@@ -262,6 +262,61 @@ describe('repository retrieval seam', () => {
     });
   });
 
+  it('opens an approved Markdown note as source evidence without parsing it as code', async () => {
+    const { dependencies, files, parse, readFile } = await fixture();
+    const content = '# Launch decision\nAmber is the approved launch color, replacing blue.';
+    const path = 'notes/approved-launch-color.md';
+    files.set(path, {
+      path,
+      content,
+      contentHash: await contentHash(content),
+      byteLength: new TextEncoder().encode(content).byteLength,
+      language: 'markdown',
+      ignored: false,
+      generated: false,
+      secretRisk: false,
+      trusted: true,
+    });
+    const base = snapshot();
+    dependencies.loadActiveContextMap = async () => ({
+      ...base,
+      entities: [...base.entities, {
+        ...base.entities[0]!,
+        id: 'entity-doc',
+        label: path,
+        path,
+        provenanceIds: ['provenance-doc'],
+      }],
+      provenance: [...base.provenance, {
+        ...base.provenance[0]!,
+        id: 'provenance-doc',
+        targetId: 'entity-doc',
+        path,
+      }],
+    });
+    const result = await createRepositoryRetrievalService(dependencies).retrieve({
+      accountId: 'account-1',
+      projectId: 'project-1',
+      taskText: 'approved launch color',
+      tokenBudget: 100,
+      activePaths: ['.env'],
+    });
+    expect(result.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path,
+        representation: 'full',
+        content,
+        evidence: expect.objectContaining({
+          sourceId: 'source-1',
+          sourceRevision: 'repo-1',
+          contentHash: await contentHash(content),
+        }),
+      }),
+    ]));
+    expect(readFile.mock.calls.map(([input]) => input.path)).not.toContain('.env');
+    expect(parse.mock.calls.map(([file]) => file.language)).not.toContain('markdown');
+  });
+
   it('parses only changed hashes and does not rebuild unchanged repository files', async () => {
     const { dependencies, files, parse } = await fixture();
     const service = createRepositoryRetrievalService(dependencies);

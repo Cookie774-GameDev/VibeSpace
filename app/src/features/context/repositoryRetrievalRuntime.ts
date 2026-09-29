@@ -48,6 +48,7 @@ function languageForPath(path: string): string {
   if (lower.endsWith('.rs')) return 'rust';
   if (lower.endsWith('.py')) return 'python';
   if (lower.endsWith('.json')) return 'json';
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'markdown';
   return 'unsupported';
 }
 

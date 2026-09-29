@@ -186,7 +186,7 @@ async function hashContent(content: string): Promise<`sha256:${string}`> {
 }
 
 function languageSupported(language: string): boolean {
-  return ['typescript', 'tsx', 'javascript', 'jsx', 'rust', 'python', 'json'].includes(language);
+  return ['typescript', 'tsx', 'javascript', 'jsx', 'rust', 'python', 'json', 'markdown'].includes(language);
 }
 
 function exactEntityEvidence(
@@ -326,9 +326,26 @@ export function createRepositoryRetrievalService(
   ) {
     throw new Error('Invalid repository candidate ceiling.');
   }
-  const structural: StructuralRepositoryService = createStructuralRepositoryService(
-    dependencies.parser,
-  );
+  const structural: StructuralRepositoryService = createStructuralRepositoryService({
+    parse: async (file) => {
+      if (file.language !== 'markdown') return dependencies.parser.parse(file);
+      // Markdown has no bundled Tree-sitter grammar. Keep its verified bytes
+      // intact: there is no code signature to substitute when budget is short.
+      return {
+        path: file.path,
+        language: file.language,
+        contentHash: file.contentHash,
+        signatureTokens: file.fullTokens,
+        metadataTokens: file.fullTokens,
+        symbols: [],
+        incomingReferences: 0,
+        outgoingReferences: 0,
+        parserId: 'vibespace-plain-text:markdown',
+        parserVersion: '1',
+        astHash: file.contentHash,
+      };
+    },
+  });
   const indexedHashes = new Map<string, string>();
   const indexedFiles = new Map<string, Readonly<RepositoryRetrievalFileRead>>();
   const indexedFullTokens = new Map<string, number>();

@@ -3,6 +3,8 @@ import { formatRepositoryRetrievalItem, retrieveLiveRepositoryContext } from './
 
 const runtime = vi.hoisted(() => ({
   root: 'C:/approved/repository',
+  path: 'src/auth.ts',
+  inspected: [] as unknown[],
   read: vi.fn(),
 }));
 vi.mock('@/lib/db', () => ({ db: {}, openDb: async () => {} }));
@@ -18,12 +20,15 @@ vi.mock('./repository', () => ({ createContextGraphRepository: () => ({
   getSnapshot: async () => ({
     map: { id: 'map-1', status: 'active', projectId: 'project-1', knowledgeRevision: 1 },
     sources: [{ id: 'source-1', status: 'ready', kind: 'local_folder', localRoot: runtime.root, sourceRevision: 'revision-1' }],
-    entities: [{ kind: 'file', path: 'src/auth.ts', sourceId: 'source-1' }],
+    entities: [{ kind: 'file', path: runtime.path, sourceId: 'source-1' }],
   }),
 }) }));
 vi.mock('./repositoryRetrieval', () => ({
   createRepositoryRetrievalService: (dependencies: { inspectFiles(input: { rootId: string; paths: string[] }): Promise<unknown> }) => ({
-    retrieve: async () => dependencies.inspectFiles({ rootId: runtime.root, paths: ['src/auth.ts'] }),
+    retrieve: async () => {
+      runtime.inspected = await dependencies.inspectFiles({ rootId: runtime.root, paths: [runtime.path] }) as unknown[];
+      return runtime.inspected;
+    },
   }),
 }));
 
@@ -39,6 +44,25 @@ describe('native repository read paths', () => {
       `${root.replace(/\/+$/u, '')}/src/auth.ts`, 128 * 1024 + 1,
       { root, strictProjectBoundary: true },
     );
+  });
+
+  it('classifies a local Markdown note for bounded retrieval', async () => {
+    const originalRoot = runtime.root;
+    runtime.root = 'C:/approved/markdown-notes';
+    runtime.path = 'notes/approved.md';
+    runtime.read.mockReset();
+    runtime.read.mockResolvedValue({ ok: true, content: '# Approved\nAmber.' });
+    try {
+      await retrieveLiveRepositoryContext({
+        accountId: 'account-1', projectId: 'project-1', taskText: 'approved color', tokenBudget: 100,
+      });
+      expect(runtime.inspected).toEqual([
+        expect.objectContaining({ path: runtime.path, language: 'markdown', trusted: true }),
+      ]);
+    } finally {
+      runtime.root = originalRoot;
+      runtime.path = 'src/auth.ts';
+    }
   });
 });
 
