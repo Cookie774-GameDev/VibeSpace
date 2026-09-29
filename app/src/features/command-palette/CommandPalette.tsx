@@ -129,6 +129,8 @@ function FooterHints({ canPop }: { canPop: boolean }) {
  * ------------------------------------------------------------------------- */
 
 export function CommandPalette() {
+  const openerRef = React.useRef<HTMLElement | null>(null);
+  const inputRef = React.useRef<HTMLInputElement | null>(null);
   const open = useUIStore((s) => s.paletteOpen);
   const setPaletteOpen = useUIStore((s) => s.setPaletteOpen);
 
@@ -197,6 +199,25 @@ export function CommandPalette() {
           aria-label="Command palette"
           data-monochrome-surface="command-palette"
           data-vibespace-owned-chrome="command-palette"
+          onOpenAutoFocus={(event) => {
+            const focused = document.activeElement;
+            openerRef.current =
+              focused instanceof HTMLElement && focused !== document.body ? focused : null;
+            event.preventDefault();
+            inputRef.current?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            const opener = openerRef.current;
+            openerRef.current = null;
+            if (opener?.isConnected) {
+              opener.focus();
+            } else {
+              document
+                .querySelector<HTMLElement>('button[aria-label="Open command palette"]')
+                ?.focus();
+            }
+          }}
           onEscapeKeyDown={(e) => {
             if (canPop) {
               // On a sub-page, Esc pops one level instead of closing.
@@ -231,10 +252,10 @@ export function CommandPalette() {
             <div className="flex items-center gap-2 px-3 border-b border-border">
               <Search className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden />
               <Command.Input
+                ref={inputRef}
                 value={search}
                 onValueChange={setSearch}
                 placeholder={PLACEHOLDERS[currentPage]}
-                autoFocus
                 className={cn(
                   'flex-1 h-11 bg-transparent text-body text-foreground',
                   'placeholder:text-muted-foreground outline-none border-0',
