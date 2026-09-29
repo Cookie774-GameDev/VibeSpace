@@ -987,6 +987,10 @@ export function SchedulePage() {
     }
     const rawEnd = fromLocalDateTimeInput(endInput);
     const jarvisAction = scheduleMode === 'jarvis';
+    if (!delayed && (jarvisAction || !allDay) && !Number.isFinite(rawEnd)) {
+      toast.warning('Check the end time', 'That date/time could not be read.');
+      return;
+    }
     const end = delayed
       ? start + 5 * 60 * 1000
       : !jarvisAction && allDay

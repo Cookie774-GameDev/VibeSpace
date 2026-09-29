@@ -384,6 +384,22 @@ describe('SchedulePage Jarvis Action model picker', () => {
     });
   });
 
+  it('rejects a timed event with an empty end time before persistence', async () => {
+    const warning = vi.spyOn(toast, 'warning');
+    render(<SchedulePage />);
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Invalid end time' },
+    });
+    fireEvent.change(screen.getByLabelText('End'), { target: { value: '' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save event/i }));
+    });
+
+    expect(createEvent).not.toHaveBeenCalled();
+    expect(warning).toHaveBeenCalledWith('Check the end time', 'That date/time could not be read.');
+  });
+
   it('narrates a manual event only after persistence resolves', async () => {
     const success = vi.spyOn(toast, 'success');
     let resolveCreate: ((value: unknown) => void) | undefined;
