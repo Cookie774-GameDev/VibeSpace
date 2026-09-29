@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
+import { writeChatReasoningEffort } from '@/features/chat/reasoningSlashStore';
 import {
   SPEECH_SYNTHESIS_START_EVENT,
   STREAMING_VOICE_END_EVENT,
@@ -426,6 +427,33 @@ describe('VoiceModal hands-free turn-taking', () => {
     expect((input as HTMLInputElement).value).toBe('');
     rendered.unmount();
     window.removeEventListener('jarvis:send', send as EventListener);
+  });
+
+  it('captures the bound chat Low effort with its voice Main route', async () => {
+    const key = 'vibespace.chat-reasoning.v1';
+    const previous = localStorage.getItem(key);
+    useAuthStore.getState().setVoiceMiniBarEnabled(true);
+    const send = vi.fn();
+    window.addEventListener('jarvis:send', send as EventListener);
+    try {
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      writeChatReasoningEffort('chat_voice', 'low');
+      const input = voiceMiniBar().querySelector<HTMLInputElement>(
+        'input[aria-label="Type to Jarvis voice"]',
+      );
+      if (!input) throw new Error('voice mini bar input missing');
+      fireEvent.change(input, { target: { value: 'What is seven times eight?' } });
+      fireEvent.submit(voiceMiniBar());
+      await waitFor(() => expect(send).toHaveBeenCalledOnce());
+      const detail = (send.mock.calls[0]?.[0] as CustomEvent).detail;
+      expect(detail.modelSelectionOverride).toMatchObject({ mode: 'single' });
+      expect(detail.reasoningPreference).toEqual({ mode: 'normal', effortOverride: 'low' });
+    } finally {
+      window.removeEventListener('jarvis:send', send as EventListener);
+      if (previous === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, previous);
+    }
   });
 
   it('restores hidden mini-bar submission after a streamed reply ends', async () => {

@@ -54,6 +54,7 @@ import { syncVoiceConversationFolder } from './voiceConversationFolder';
 import { createVoiceAgentFlow } from './voiceAgentFlow';
 import { dispatchVoiceMainRequest } from './voiceNativeDelegation';
 import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
+import { readChatReasoningPreference } from '@/features/chat/reasoningSlashStore';
 import { resolveVoiceListenTimeoutMs } from './voiceConversation';
 import { createVoiceSessionBinding, newVoiceSessionId } from './voiceSessionBinding';
 import {
@@ -899,6 +900,7 @@ function VoiceModalPanel() {
           mainProvider,
           workerProvider,
           selection: mainRoute.selection,
+          reasoningPreference: readChatReasoningPreference(String(chatId)),
           voiceSession: binding,
           priorTaskContext: formatPreviousVoiceTaskContext(
             listPreviousVoiceTasks(

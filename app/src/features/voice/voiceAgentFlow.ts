@@ -1,5 +1,6 @@
 import type { ChatImageAttachment } from '@/lib/ai/vision';
 import type { ChatModelSelection } from '@/lib/ai/modelSelection';
+import type { ReasoningPreference } from '@/lib/ai/reasoningControls';
 import type { SendDetail } from '@/lib/ai/runtime';
 import type { VoiceSessionBinding } from './voiceSessionBinding';
 import type { VoiceAgentProvider } from './voiceProviderSelection';
@@ -23,6 +24,7 @@ export interface VoiceAgentRequest {
   mainProvider: VoiceAgentProvider;
   workerProvider: VoiceAgentProvider;
   selection: ChatModelSelection;
+  reasoningPreference?: ReasoningPreference;
   requestId?: string;
   dedupeScope?: string;
   voiceSession?: Readonly<VoiceSessionBinding>;
@@ -101,6 +103,7 @@ export function buildVoiceMainRequestSendDetail(input: {
   mainProvider: VoiceAgentProvider;
   workerProvider: VoiceAgentProvider;
   selection: ChatModelSelection;
+  reasoningPreference?: ReasoningPreference;
   cancellationKey: string;
   requestId: string;
   voiceSession?: Readonly<VoiceSessionBinding>;
@@ -166,6 +169,7 @@ export function buildVoiceMainRequestSendDetail(input: {
     speakReply: Boolean(input.voiceSession),
     interactionMode: 'agent',
     modelSelectionOverride: input.selection,
+    ...(input.reasoningPreference ? { reasoningPreference: input.reasoningPreference } : {}),
     autoApproveActions: false,
     localCommandContext,
     structuredContext: {
@@ -291,6 +295,7 @@ export function createVoiceAgentFlow(deps: VoiceAgentFlowDependencies) {
         mainProvider: input.mainProvider,
         workerProvider: input.workerProvider,
         selection: input.selection,
+        ...(input.reasoningPreference ? { reasoningPreference: input.reasoningPreference } : {}),
         cancellationKey,
         requestId,
         ...(input.voiceSession ? { voiceSession: input.voiceSession } : {}),

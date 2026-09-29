@@ -128,6 +128,19 @@ describe('voice Main Agent request', () => {
     expect(detail.localCommandContext).toContain('Answer simple requests directly');
   });
 
+  it('keeps the selected voice effort with the exact Main model through dispatch', async () => {
+    const preference = { mode: 'normal' as const, effortOverride: 'low' as const };
+    const { deps, flow } = setup();
+    await flow.run({ ...request, reasoningPreference: preference });
+
+    expect(deps.dispatchMain).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelSelectionOverride: selection,
+        reasoningPreference: preference,
+      }),
+    );
+  });
+
   it('keeps typed sends free of voice-only brevity and speech controls', () => {
     const detail = buildVoiceMainRequestSendDetail({
       chatId: request.chatId,
