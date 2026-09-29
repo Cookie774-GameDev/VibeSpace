@@ -2176,3 +2176,23 @@ html[data-theme='monochrome'] .jarvis-context-menu {
     opacity: 0.55;
   }
 }
+
+/* Chat annotations keep their readable dark surface under light app themes. */
+html [data-chat-annotation-editor][role='dialog'],
+html [aria-label='Attached annotation details'][role='dialog'] {
+  background: #2b2b2b !important;
+  border-color: rgb(255 255 255 / 0.12) !important;
+  color: #fff;
+  box-shadow: 0 20px 48px rgb(0 0 0 / 0.24) !important;
+}
+
+html [data-chat-annotation-editor] textarea {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: #fff !important;
+}
+
+html [data-chat-annotation-editor] textarea::placeholder {
+  color: rgb(255 255 255 / 0.55) !important;
+}
