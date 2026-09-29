@@ -93,7 +93,7 @@ export interface NotifyOptions {
     | 'credential_expired';
   /** Show an in-app toast when native/browser delivery is unavailable. */
   fallbackToast?: boolean;
-  /** Optional click handler (browser Notification API only). */
+  /** Optional click handler for browser notifications and live Windows native toasts. */
   onClick?: () => void;
 }
 
@@ -111,6 +111,54 @@ export interface NotifyResult {
 function normalizeNotificationPermission(value: unknown): NotificationPermission {
   if (value === 'granted' || value === 'denied') return value;
   return 'default';
+}
+
+interface NativeNotificationClick {
+  id: string;
+  title: string;
+  body?: string | null;
+}
+
+const nativeNotificationClickHandlers = new Map<string, () => void>();
+let nativeNotificationClickListener: Promise<void> | null = null;
+let nativeNotificationSequence = 0;
+
+function handleNativeNotificationClick(payload: NativeNotificationClick): void {
+  if (!payload || typeof payload.id !== 'string' || typeof payload.title !== 'string') return;
+  const onClick = nativeNotificationClickHandlers.get(payload.id);
+  nativeNotificationClickHandlers.delete(payload.id);
+  try {
+    window.focus();
+  } catch {
+    /* Rust also reveals and focuses the main window. */
+  }
+  try {
+    onClick?.();
+  } catch {
+    /* A caller callback must not prevent the shared click event. */
+  }
+  window.dispatchEvent(
+    new CustomEvent('jarvis:notification-click', {
+      detail: { title: payload.title, body: payload.body ?? undefined },
+    }),
+  );
+}
+
+async function ensureNativeNotificationClickListener(): Promise<void> {
+  if (!nativeNotificationClickListener) {
+    nativeNotificationClickListener = import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<NativeNotificationClick>('jarvis:notification-click', (event) => {
+          handleNativeNotificationClick(event.payload);
+        }),
+      )
+      .then(() => undefined)
+      .catch((error) => {
+        nativeNotificationClickListener = null;
+        throw error;
+      });
+  }
+  return nativeNotificationClickListener;
 }
 
 export async function getNotificationPermission(): Promise<NotificationPermissionState> {
@@ -173,12 +221,32 @@ export async function notify(
     try {
       permission = await requestNotificationPermission();
       if (permission === 'granted') {
-        await tauriInvoke('vibespace_notify', {
-          title,
-          body,
-          silent: options.silent ?? false,
-          variant: options.variant ?? null,
-        });
+        const clickId = `notification-${Date.now()}-${++nativeNotificationSequence}`;
+        try {
+          await ensureNativeNotificationClickListener();
+          if (options.onClick) {
+            if (nativeNotificationClickHandlers.size >= 128) {
+              nativeNotificationClickHandlers.delete(
+                nativeNotificationClickHandlers.keys().next().value!,
+              );
+            }
+            nativeNotificationClickHandlers.set(clickId, options.onClick);
+          }
+        } catch {
+          // OS delivery and native window focus still work if the WebView listener is unavailable.
+        }
+        try {
+          await tauriInvoke('vibespace_notify', {
+            title,
+            body,
+            silent: options.silent ?? false,
+            variant: options.variant ?? null,
+            clickId,
+          });
+        } catch (error) {
+          nativeNotificationClickHandlers.delete(clickId);
+          throw error;
+        }
         return {
           channel: 'native',
           permission,

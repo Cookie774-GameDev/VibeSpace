@@ -5,6 +5,17 @@
 #[cfg(windows)]
 const NOTIFICATION_APP_ID: &str = "ai.vibespace.notifications";
 
+#[cfg(windows)]
+use tauri::{Emitter, Manager};
+
+#[cfg(windows)]
+#[derive(Clone, serde::Serialize)]
+struct NotificationClickPayload {
+    id: String,
+    title: String,
+    body: Option<String>,
+}
+
 #[tauri::command]
 pub async fn vibespace_notify(
     app: tauri::AppHandle,
@@ -12,16 +23,40 @@ pub async fn vibespace_notify(
     body: Option<String>,
     silent: bool,
     variant: Option<String>,
+    click_id: String,
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let _ = app;
         tauri::async_runtime::spawn_blocking(move || {
             register_windows_shortcut()?;
             let plain_notification = || {
+                let activation_app = app.clone();
+                let activation_payload = NotificationClickPayload {
+                    id: click_id.clone(),
+                    title: title.clone(),
+                    body: body.clone(),
+                };
                 let mut notification = tauri_winrt_notification::Toast::new(NOTIFICATION_APP_ID)
                     .title(&title)
-                    .text1(body.as_deref().unwrap_or_default());
+                    .text1(body.as_deref().unwrap_or_default())
+                    .on_activated(move |_| {
+                        let dispatch_app = activation_app.clone();
+                        let main_app = dispatch_app.clone();
+                        let payload = activation_payload.clone();
+                        if let Err(error) = dispatch_app.run_on_main_thread(move || {
+                            crate::show_main_window(&main_app, "notification-click");
+                            if let Some(window) = main_app.get_window("main") {
+                                if let Err(error) =
+                                    window.emit("jarvis:notification-click", payload)
+                                {
+                                    eprintln!("[notification] failed to emit click: {error}");
+                                }
+                            }
+                        }) {
+                            eprintln!("[notification] failed to reveal main window: {error}");
+                        }
+                        Ok(())
+                    });
                 if silent {
                     notification = notification.sound(None);
                 }
@@ -61,6 +96,7 @@ pub async fn vibespace_notify(
         use tauri_plugin_notification::NotificationExt;
         let _ = silent;
         let _ = variant;
+        let _ = click_id;
         let mut notification = app.notification().builder().title(title);
         if let Some(body) = body {
             notification = notification.body(body);

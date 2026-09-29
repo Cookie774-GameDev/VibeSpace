@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), info: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  info: vi.fn(),
+  listen: vi.fn(),
+  nativeClick: null as
+    ((event: { payload: { id: string; title: string; body?: string } }) => void) | null,
+}));
 
 vi.mock('@/lib/utils', () => ({ isTauri: true }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: mocks.listen }));
 vi.mock('@/components/ui/toast', () => ({ toast: { info: mocks.info } }));
 
 import { notify } from './tauri';
@@ -11,6 +18,10 @@ import { notify } from './tauri';
 describe('native notification branding', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.listen.mockImplementation(async (_event, handler) => {
+      mocks.nativeClick = handler;
+      return vi.fn();
+    });
     mocks.invoke.mockImplementation(async (command: string) => {
       if (command === 'plugin:notification|is_permission_granted') return true;
       return undefined;
@@ -28,6 +39,7 @@ describe('native notification branding', () => {
       body: 'Open VibeSpace to review the failure.',
       silent: true,
       variant: null,
+      clickId: expect.any(String),
     });
     expect(
       mocks.invoke.mock.calls.some(([command]) => command === 'plugin:notification|notify'),
@@ -42,7 +54,36 @@ describe('native notification branding', () => {
       body: 'Chat: Design review',
       silent: false,
       variant: 'task_completed',
+      clickId: expect.any(String),
     });
+  });
+
+  it('routes the activated native notification to its click handler and browser event', async () => {
+    const onClick = vi.fn();
+    const browserEvent = vi.fn();
+    const focus = vi.spyOn(window, 'focus').mockImplementation(() => undefined);
+    window.addEventListener('jarvis:notification-click', browserEvent);
+    try {
+      const result = await notify('Task complete', 'Chat: Design review', { onClick });
+      expect(result.channel).toBe('native');
+      const args = mocks.invoke.mock.calls.find(([command]) => command === 'vibespace_notify')?.[1];
+      expect(typeof args?.clickId).toBe('string');
+      expect(mocks.nativeClick).toBeTypeOf('function');
+
+      mocks.nativeClick?.({
+        payload: { id: args.clickId, title: 'Task complete', body: 'Chat: Design review' },
+      });
+      expect(focus).toHaveBeenCalledOnce();
+      expect(onClick).toHaveBeenCalledOnce();
+      expect(browserEvent).toHaveBeenCalledOnce();
+      expect((browserEvent.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+        title: 'Task complete',
+        body: 'Chat: Design review',
+      });
+    } finally {
+      window.removeEventListener('jarvis:notification-click', browserEvent);
+      focus.mockRestore();
+    }
   });
 
   it.each(['task_failed', 'task_stopped', 'task_attention'] as const)(
@@ -55,6 +96,7 @@ describe('native notification branding', () => {
         body: 'Chat: Design review',
         silent: false,
         variant,
+        clickId: expect.any(String),
       });
     },
   );
