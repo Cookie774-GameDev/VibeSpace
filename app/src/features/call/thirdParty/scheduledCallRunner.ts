@@ -62,16 +62,27 @@ export function createScheduledCallRunner(
 export function startScheduledCallRunner(): () => void {
   const supabase = getSupabaseClient();
   if (!supabase) return () => undefined;
-  const runner = createScheduledCallRunner(createThirdPartyCallClient(supabase), {
-    onError: (error, schedule) => {
-      console.warn(
-        schedule
-          ? `[scheduled-call] ${schedule.id} remains server-authoritative after dispatch failure`
-          : '[scheduled-call] schedule refresh unavailable',
-        error,
-      );
+  const callClient = createThirdPartyCallClient(supabase);
+  const runner = createScheduledCallRunner(
+    {
+      listScheduled: async () => {
+        const { data, error } = await supabase.auth.getSession();
+        if (error || !data.session?.user.id) return [];
+        return callClient.listScheduled();
+      },
+      dispatchScheduled: callClient.dispatchScheduled,
     },
-  });
+    {
+      onError: (error, schedule) => {
+        console.warn(
+          schedule
+            ? `[scheduled-call] ${schedule.id} remains server-authoritative after dispatch failure`
+            : '[scheduled-call] schedule refresh unavailable',
+          error,
+        );
+      },
+    },
+  );
   void runner.runNow();
   return () => runner.stop();
 }

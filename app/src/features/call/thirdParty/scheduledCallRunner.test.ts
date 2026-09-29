@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createScheduledCallRunner } from './scheduledCallRunner';
+import { createScheduledCallRunner, startScheduledCallRunner } from './scheduledCallRunner';
 import type { ScheduledThirdPartyCall } from './types';
+
+const cloudClient = vi.hoisted(() => ({ getSupabaseClient: vi.fn() }));
+vi.mock('@/lib/supabase/client', () => cloudClient);
 
 const due: ScheduledThirdPartyCall = {
   id: 'schedule-due',
@@ -20,6 +23,41 @@ describe('scheduled call app runner', () => {
     const app = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8');
     expect(app).toContain('stopScheduledCallRunner = startScheduledCallRunner()');
     expect(app).toContain('stopScheduledCallRunner?.()');
+  });
+
+  it('skips cloud listing without a session and resumes after sign-in', async () => {
+    vi.useFakeTimers();
+    let signedIn = false;
+    const invoke = vi.fn().mockResolvedValue({ data: { schedules: [] }, error: null });
+    cloudClient.getSupabaseClient.mockReturnValue({
+      auth: {
+        getSession: vi.fn(async () => ({
+          data: { session: signedIn ? { user: { id: 'disposable-account' } } : null },
+          error: null,
+        })),
+      },
+      functions: { invoke },
+    });
+
+    const stop = startScheduledCallRunner();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(invoke).not.toHaveBeenCalled();
+
+      signedIn = true;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(invoke).toHaveBeenCalledExactlyOnceWith('third-party-call', {
+        body: { action: 'list-scheduled' },
+      });
+
+      signedIn = false;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      stop();
+      vi.useRealTimers();
+      cloudClient.getSupabaseClient.mockReset();
+    }
   });
 
   it('recovers due scheduled and expired-dispatch claims but skips future and terminal rows', async () => {
