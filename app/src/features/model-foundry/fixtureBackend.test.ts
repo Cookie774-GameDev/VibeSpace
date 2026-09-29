@@ -620,3 +620,17 @@ describe('DeterministicFixtureBackend', () => {
     expect(snapshot.improvementCycles).toHaveLength(1);
   });
 });
+
+describe('fixture backend draft cleanup', () => {
+  it('forgets only the requested project from the in-memory catalog', () => {
+    const makeId = idFactory();
+    const backend = new DeterministicFixtureBackend({ clock: () => NOW, idFactory: makeId });
+    const keep = unwrap(backend.createProject(specialist()));
+    const draft = unwrap(backend.createProject({ ...specialist(), id: 'qa-local-draft', name: 'QA local draft' }));
+
+    backend.forgetProject(draft.project.id);
+
+    expect(backend.getProject(draft.project.id).ok).toBe(false);
+    expect(unwrap(backend.getProject(keep.project.id)).project.id).toBe(keep.project.id);
+  });
+});

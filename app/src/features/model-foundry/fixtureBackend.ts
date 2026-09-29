@@ -146,6 +146,11 @@ export class DeterministicFixtureBackend {
       : this.failure('PROJECT_NOT_FOUND', 'Fixture project was not found.', false, { projectId });
   }
 
+  /** Drop a deleted local draft from this page session without changing other projects. */
+  forgetProject(projectId: string): void {
+    this.projects.delete(projectId);
+  }
+
   attachBaseModel(projectId: string, baseModel: BaseModelRecord): FoundryResult<ProjectSnapshot> {
     const existing = this.projects.get(projectId);
     if (!existing) return this.missingProject(projectId);

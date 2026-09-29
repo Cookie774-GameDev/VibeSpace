@@ -9,6 +9,7 @@ import { getPlan } from '../../lib/entitlements';
 import type { FoundryResult, ProjectSnapshot, SpecialistDefinition, TrainingJobSnapshot } from './domain';
 import { DeterministicFixtureBackend, type FixtureBackendDependencies } from './fixtureBackend';
 import { VersionedFixtureRepository, type StorageAdapter } from './localRepository';
+import { canDeleteLocalFoundryDraft, deleteLocalFoundryDraft, FOUNDRY_DRAFT_CATALOG_KEY, FOUNDRY_DRAFT_PRIVATE_CASES_KEY, FOUNDRY_DRAFT_REPOSITORY_PREFIX } from './draftDeletion';
 import { validateProjectSnapshot, VIBECODER_TEMPLATE } from './validation';
 import { createFixtureBase, createFixtureDataset, createFixtureEvaluation } from './demoFixtures';
 import {
@@ -48,8 +49,8 @@ const defaultDependencies: FixtureBackendDependencies = {
   idFactory: (kind) => `${kind}-${crypto.randomUUID()}`,
 };
 const NATIVE_RUN_STORAGE_KEY = 'vibespace.model-foundry.native-runs.v1';
-const PRIVATE_EVALUATION_STORAGE_KEY = 'vibespace.model-foundry.private-evaluation-suites.v1';
-const PROJECT_CATALOG_STORAGE_KEY = 'vibespace.model-foundry.project-catalog.v1';
+const PRIVATE_EVALUATION_STORAGE_KEY = FOUNDRY_DRAFT_PRIVATE_CASES_KEY;
+const PROJECT_CATALOG_STORAGE_KEY = FOUNDRY_DRAFT_CATALOG_KEY;
 const CREDENTIAL_SHAPED_TEXT = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z_-]{30,}|whsec_[A-Za-z0-9_-]{16,})\b|(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:@]+:[^\s@]+@/i;
 const SPECIALIST_TEMPLATES = [
   { label: 'Support classifier', name: 'Support classifier', purpose: 'Classify a customer-support request into a reviewed routing category.', input: 'A local customer-support message.', output: 'One allowed routing category with confidence.', constraints: 'Use only the supplied message and never invent account data.' },
@@ -155,7 +156,7 @@ function customSpecialist(draft: { name: string; purpose: string; input: string;
 export function FoundryPage({ storage = browserStorage, dependencies = defaultDependencies }: FoundryPageProps) {
   const [backend] = React.useState(() => new DeterministicFixtureBackend(dependencies));
   const plan = useAuthStore((state) => state.plan);
-  const [repository] = React.useState(() => new VersionedFixtureRepository(storage, 'vibespace.model-foundry', () => dependencies.idFactory('correlation')));
+  const [repository] = React.useState(() => new VersionedFixtureRepository(storage, FOUNDRY_DRAFT_REPOSITORY_PREFIX, () => dependencies.idFactory('correlation')));
   const [deployments] = React.useState(() => new FoundryDeploymentRepository(storage, dependencies.clock, () => dependencies.idFactory('deployment')));
   const [adapterRegistry] = React.useState(() => new LocalAdapterRegistry(storage, dependencies.clock));
   const [snapshot, setSnapshot] = React.useState<ProjectSnapshot | null>(null);
@@ -184,6 +185,7 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
   const [metadataSyncState, setMetadataSyncState] = React.useState<'local_only' | 'queued' | 'deletion_queued'>('local_only');
   const previousMetadataSyncEnabled = React.useRef(metadataSyncEnabled);
   const [showCustomCreator, setShowCustomCreator] = React.useState(false);
+  const [confirmDeleteDraft, setConfirmDeleteDraft] = React.useState(false);
   const [customDraft, setCustomDraft] = React.useState({ name: '', purpose: '', input: '', output: '', constraints: '', language: 'English', forbiddenAction: 'invent unsupported facts or actions', commercialIntent: 'personal' as SpecialistDefinition['commercialIntent'], latencyMs: 8000, memoryMb: 1024, threshold: 0.8 });
   const [realConfig, setRealConfig] = React.useState({ method: 'lora' as 'lora' | 'qlora', computeDevice: 'gpu' as const, seed: 7, epochs: 1, batchSize: 1, gradientAccumulation: 4, maxSequenceLength: 256, learningRate: 0.0002, loraRank: 8, loraAlpha: 16, loraDropout: 0.05 });
   const projectId = snapshot?.project.id;
@@ -303,7 +305,7 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
     const saved = repository.save(next);
     if (!saved.ok) return setError(saved.error.message);
     persistProjectCatalog([next, ...projectCatalogRef.current.filter((candidate) => candidate.project.id !== next.project.id)]);
-    setSnapshot(next); setError(null);
+    setSnapshot(next); setConfirmDeleteDraft(false); setError(null);
   }, [persistProjectCatalog, repository]);
   const refresh = React.useCallback((projectId: string) => commit({ ...unwrap(backend.getProject(projectId)) }), [backend, commit]);
   const act = (operation: () => void) => { try { operation() } catch (caught) { setError(caught instanceof Error ? caught.message : 'Foundry operation failed.') } };
@@ -472,7 +474,32 @@ const downloadSelectedModel = async () => {
   const createProject = (specialist: SpecialistDefinition = VIBECODER_TEMPLATE) => act(() => commit(unwrap(backend.createProject(specialist))));
   const createCustomProject = () => act(() => createProject(customSpecialist(customDraft, dependencies.clock())));
   const openCatalogProject = (catalogSnapshot: ProjectSnapshot) => act(() => commit(unwrap(backend.restoreProject(catalogSnapshot))));
-  const createAnotherProject = () => { setSnapshot(null); setShowCustomCreator(false); setShowDatasetStudio(false); setNativeRun(null); setSelectedModelId('fixture-base'); setLicenseApproved(false); setDownloadStatus(null); setPrivateEvaluationCases([]); setError(null); setNotice('Create a new specialist. Existing local projects remain available below.'); };
+  const createAnotherProject = () => { setSnapshot(null); setShowCustomCreator(false); setShowDatasetStudio(false); setNativeRun(null); setConfirmDeleteDraft(false); setSelectedModelId('fixture-base'); setLicenseApproved(false); setDownloadStatus(null); setPrivateEvaluationCases([]); setError(null); setNotice('Create a new specialist. Existing local projects remain available below.'); };
+  const deleteActiveDraft = () => act(() => {
+    if (!snapshot) return;
+    const removedId = snapshot.project.id;
+    const result = deleteLocalFoundryDraft({
+      storage, active: snapshot, catalog: projectCatalogRef.current,
+      adapterCount: adapterRegistry.list(removedId).length,
+      deploymentCount: deployments.list(removedId).length,
+      metadataSyncEnabled,
+    });
+    backend.forgetProject(removedId);
+    projectCatalogRef.current = result.catalog;
+    setProjectCatalog(result.catalog);
+    setSnapshot(null);
+    setShowDatasetStudio(false);
+    setNativeRun(null);
+    setPrivateEvaluationCases([]);
+    setLocalAdapters([]);
+    setDeployment(null);
+    setSelectedModelId('fixture-base');
+    setLicenseApproved(false);
+    setDownloadStatus(null);
+    setConfirmDeleteDraft(false);
+    setError(null);
+    setNotice('Local draft permanently deleted.');
+  });
   const prepare = () => act(() => { if (!projectId || !snapshot) return; unwrap(backend.attachBaseModel(projectId, createFixtureBase(dependencies.clock()))); commit(unwrap(backend.attachDatasetVersion(projectId, createFixtureDataset(projectId, dependencies.clock(), snapshot.project.specialist)))) });
   const attachStudioDataset = (dataset: Parameters<DeterministicFixtureBackend['attachDatasetVersion']>[1]) => act(() => { if (!projectId) return; unwrap(backend.attachBaseModel(projectId, createFixtureBase(dependencies.clock()))); commit(unwrap(backend.attachDatasetVersion(projectId, dataset))); setShowDatasetStudio(false); });
   const startTraining = () => act(() => { if (!projectId) return; unwrap(backend.startTraining(projectId, { method: 'lora', config: { epochs: 1, learningRate: 0.0002, rank: 8, seed: 7, batchSize: 1, gradientAccumulationSteps: 1, sequenceLength: 256, validationSplit: 0.1 } })); refresh(projectId) });
@@ -510,6 +537,7 @@ const downloadSelectedModel = async () => {
         <DeploymentPanel snapshot={snapshot} deployment={deployment} routingMode={routingMode} trafficPercent={trafficPercent} onRoutingMode={setRoutingMode} onTrafficPercent={setTrafficPercent} onActivate={activateDeployment} onPause={pauseDeployment} />
         <ImprovementPanel feedbackCount={snapshot.feedbackEvents.length} cycleCount={snapshot.improvementCycles.length} consentApproved={feedbackConsent} onConsent={setFeedbackConsent} onFeedback={recordFeedback} onCycle={createImprovementCycle} />
         <LocalStateFootprint snapshot={snapshot} projectCount={projectCatalog.length} />
+        {canDeleteLocalFoundryDraft(snapshot) && !nativeRun && localAdapters.length === 0 && !deployment && !metadataSyncEnabled && <Card className="border-border/70"><CardContent className="flex flex-wrap items-center justify-between gap-3 pt-4"><div><div className="text-ui-strong">Local draft cleanup</div><p className="text-metadata text-muted-foreground">Only untrained local drafts can be removed here. Other specialists remain available.</p></div>{confirmDeleteDraft ? <div className="flex flex-wrap items-center gap-2"><span className="text-metadata text-muted-foreground">Permanently delete this local draft and its dataset? This cannot be undone.</span><Button variant="outline" onClick={() => setConfirmDeleteDraft(false)}>Cancel draft deletion</Button><Button variant="destructive" onClick={deleteActiveDraft}>Permanently delete draft</Button></div> : <Button variant="outline" onClick={() => setConfirmDeleteDraft(true)}>Delete local draft</Button>}</CardContent></Card>}
         <ProjectCatalogPanel projects={projectCatalog} activeProjectId={projectId} onOpen={openCatalogProject} onCreate={createAnotherProject} />
       </>}
       {!snapshot && projectCatalog.length > 0 && <ProjectCatalogPanel projects={projectCatalog} onOpen={openCatalogProject} onCreate={createAnotherProject} />}

@@ -119,6 +119,49 @@ describe('FoundryPage fixture vertical slice', () => {
     expect(screen.getAllByRole('button', { name: /VibeCoder/ })).toHaveLength(2);
   });
 
+  it('requires confirmation to delete only an active local dataset draft and keeps the prior specialist available', () => {
+    const view = renderFoundry();
+    fireEvent.click(screen.getByRole('button', { name: 'Create VibeCoder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create another AI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create VibeCoder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare approved fixture inputs' }));
+    expect(screen.getByText(/2 saved specialists/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete local draft' }));
+    expect(screen.getByText(/permanently delete this local draft and its dataset/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel draft deletion' }));
+    expect(screen.getByText(/2 saved specialists/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete local draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Permanently delete draft' }));
+    expect(screen.getByText('Local specialist projects')).toBeTruthy();
+    expect(JSON.parse(view.storage.getItem('vibespace.model-foundry.project-catalog.v1') ?? '[]').map((item: { project: { id: string } }) => item.project.id)).toEqual(['project-1']);
+    view.unmount();
+    render(<FoundryPage storage={view.storage} dependencies={view.dependencies} />);
+    expect(screen.getByText(/1 saved specialist\b/)).toBeTruthy();
+  });
+
+  it('deletes a local draft after reloading its saved snapshot', () => {
+    const view = renderFoundry();
+    fireEvent.click(screen.getByRole('button', { name: 'Create VibeCoder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare approved fixture inputs' }));
+    view.unmount();
+    render(<FoundryPage storage={view.storage} dependencies={view.dependencies} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete local draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Permanently delete draft' }));
+    expect(view.storage.getItem('vibespace.model-foundry.current')).toBeNull();
+    expect(JSON.parse(view.storage.getItem('vibespace.model-foundry.project-catalog.v1') ?? 'null')).toEqual([]);
+  });
+
+  it('hides local draft deletion after fixture training starts', () => {
+    renderFoundry();
+    fireEvent.click(screen.getByRole('button', { name: 'Create VibeCoder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare approved fixture inputs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start fixture training' }));
+    expect(screen.queryByRole('button', { name: 'Delete local draft' })).toBeNull();
+  });
+
   it('keeps saved specialists available while creating another AI', () => {
     renderFoundry();
     fireEvent.click(screen.getByRole('button', { name: 'Create VibeCoder' }));
