@@ -137,6 +137,26 @@ describe('RLM runtime', () => {
     }
   });
 
+  it('uses the factual question after an explicit RLM routing request as the search query', async () => {
+    const item = searchItem('mascot');
+    const contextTools = tools([item]);
+    const childRunner = vi.fn(async (request: RlmChildRequest) => ({
+      answer: 'Piper', citations: request.sourcePointers,
+    }));
+    const runtime = createRlmRuntime({
+      contextTools, childRunner,
+      synthesize: vi.fn(async () => ({ answer: 'Piper', citations: [item.pointer] })),
+    });
+    const question = 'Could you explicitly use RLM to inspect the Cedar Lantern project notes across the entire project history and answer: What is the release mascot called?';
+
+    await runtime.investigate({ question, scope, executionIdentity, budget });
+
+    expect(contextTools.search).toHaveBeenCalledWith(expect.objectContaining({
+      query: 'What is the release mascot called?',
+    }));
+    expect(childRunner).toHaveBeenCalledWith(expect.objectContaining({ question }));
+  });
+
   it('retrieves an unquoted C macro even when a provider appends a wrong file guess', async () => {
     const item = searchItem('vfs-open');
     const contextTools = tools([item]);
