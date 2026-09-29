@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
@@ -105,6 +105,12 @@ function emitVoice(event: string, payload?: unknown) {
   voiceMockState.handlers.get(event)?.forEach((fn) => fn(payload));
 }
 
+function voicePanelRole(...[role, options]: Parameters<typeof screen.getByRole>) {
+  const panel = document.getElementById('jarvis-panel');
+  if (!panel) throw new Error('voice panel lifecycle mount missing');
+  return within(panel).getByRole(role, { ...options, hidden: true });
+}
+
 function setupAuth(handsFree: boolean) {
   useAuthStore.setState({
     voiceAutoListenOnOpen: handsFree,
@@ -143,7 +149,7 @@ describe('VoiceModal stop control and mic recovery', () => {
     expect(useUIStore.getState().voiceListening).toBe(false);
     expect(useVoiceStore.getState().state).toBe('idle');
     expect(screen.getByText('Waiting for microphone')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Cancel microphone request' })).toBeTruthy();
+    expect(voicePanelRole('button', { name: 'Cancel microphone request' })).toBeTruthy();
     act(() => {
       voiceMockState.listening = true;
       emitVoice('voice:start');
@@ -156,7 +162,7 @@ describe('VoiceModal stop control and mic recovery', () => {
     setupAuth(true);
     vi.mocked(VoiceService.startListening).mockImplementationOnce(() => true);
     render(<VoiceModal />);
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel microphone request' }));
+    fireEvent.click(voicePanelRole('button', { name: 'Cancel microphone request' }));
     expect(VoiceService.cancelListening).toHaveBeenCalledOnce();
     act(() => emitVoice('voice:start'));
     expect(useUIStore.getState().voiceListening).toBe(false);
@@ -167,7 +173,7 @@ describe('VoiceModal stop control and mic recovery', () => {
     setupAuth(false);
     render(<VoiceModal />);
     act(() => window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_START_EVENT)));
-    fireEvent.click(screen.getByRole('button', { name: /Stop response/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Stop response/i }));
     expect(useVoiceStore.getState().state).toBe('idle');
     act(() => {
       window.dispatchEvent(new CustomEvent(STREAMING_VOICE_START_EVENT));
@@ -185,7 +191,7 @@ describe('VoiceModal stop control and mic recovery', () => {
     });
     expect(useVoiceStore.getState().state).toBe('speaking');
 
-    const stop = screen.getByRole('button', { name: /Stop response/i });
+    const stop = voicePanelRole('button', { name: /Stop response/i });
     expect(stop.getAttribute('data-sik-evidence')).toBeNull();
     fireEvent.click(stop);
 
@@ -199,7 +205,7 @@ describe('VoiceModal stop control and mic recovery', () => {
 
     act(() => useVoiceStore.getState().setState('thinking'));
 
-    const stop = screen.getByRole('button', { name: /Stop response/i });
+    const stop = voicePanelRole('button', { name: /Stop response/i });
     expect(VoiceService.startListening).not.toHaveBeenCalled();
     fireEvent.click(stop);
 
@@ -225,7 +231,7 @@ describe('VoiceModal stop control and mic recovery', () => {
     });
     render(<VoiceModal />);
 
-    fireEvent.click(screen.getByRole('button', { name: /Close Jarvis voice session/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Close Jarvis voice session/i }));
 
     expect(routerMocks.handleVoiceModuleClosed).toHaveBeenCalled();
     expect(useUIStore.getState().voiceModalOpen).toBe(false);
@@ -240,7 +246,7 @@ describe('VoiceModal stop control and mic recovery', () => {
     });
     expect(useVoiceStore.getState().state).toBe('speaking');
 
-    fireEvent.click(screen.getByRole('button', { name: /Stop response/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Stop response/i }));
 
     expect(routerMocks.stopCurrentVoiceResponse).toHaveBeenCalledTimes(1);
     expect(useVoiceStore.getState().state).toBe('idle');
@@ -257,7 +263,7 @@ describe('VoiceModal stop control and mic recovery', () => {
 
     expect(useVoiceStore.getState().state).toBe('paused');
     expect(screen.getByText(/Paused — click the orb to resume/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Resume listening/i })).toBeTruthy();
+    expect(voicePanelRole('button', { name: /Resume listening/i })).toBeTruthy();
   });
 
   it('lets the user mute hands-free listening and rejects late transcript or restart events', () => {
@@ -272,12 +278,12 @@ describe('VoiceModal stop control and mic recovery', () => {
       emitVoice('voice:final', { text: 'do not send this' });
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Stop listening/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Stop listening/i }));
 
     expect(VoiceService.cancelListening).toHaveBeenCalledTimes(1);
     expect(useUIStore.getState().voiceListening).toBe(false);
     expect(useVoiceStore.getState().state).toBe('paused');
-    expect(screen.getByRole('button', { name: /Resume listening/i })).toBeTruthy();
+    expect(voicePanelRole('button', { name: /Resume listening/i })).toBeTruthy();
 
     act(() => {
       emitVoice('voice:start');
@@ -296,7 +302,7 @@ describe('VoiceModal stop control and mic recovery', () => {
     expect(VoiceService.startListening).toHaveBeenCalledTimes(1);
     expect(messageRepo.create).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: /Resume listening/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Resume listening/i }));
     expect(VoiceService.startListening).toHaveBeenCalledTimes(2);
     expect(useVoiceStore.getState().state).toBe('listening');
   });
@@ -309,7 +315,7 @@ describe('VoiceModal stop control and mic recovery', () => {
     });
     expect(useVoiceStore.getState().state).toBe('paused');
 
-    fireEvent.click(screen.getByRole('button', { name: /Resume listening/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Resume listening/i }));
 
     expect(useVoiceStore.getState().state).toBe('listening');
   });
@@ -320,7 +326,7 @@ describe('VoiceModal stop control and mic recovery', () => {
     render(<VoiceModal />);
 
     // User clicks to talk (push-to-talk).
-    fireEvent.click(screen.getByRole('button', { name: /Click to talk/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Click to talk/i }));
     expect(useVoiceStore.getState().state).toBe('listening');
     expect(VoiceService.startListening).toHaveBeenCalledTimes(1);
 
@@ -345,7 +351,7 @@ describe('VoiceModal stop control and mic recovery', () => {
     setupAuth(true);
     render(<VoiceModal />);
     act(() => window.dispatchEvent(new CustomEvent(SPEECH_SYNTHESIS_START_EVENT)));
-    fireEvent.click(screen.getByRole('button', { name: /Stop response/i }));
+    fireEvent.click(voicePanelRole('button', { name: /Stop response/i }));
     expect(VoiceService.startListening).toHaveBeenCalledTimes(2);
 
     voiceMockState.listening = false;

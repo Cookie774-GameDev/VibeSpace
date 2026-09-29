@@ -269,7 +269,7 @@ describe('SchedulePage Jarvis Action model picker', () => {
     // Schedule uses the same searchable model and effort picker as Chat.
     expect(screen.getByRole('listbox', { name: 'Available AI models' })).toBeTruthy();
     fireEvent.click(document.querySelector(`[data-value="${GEMINI_API_CONNECTION.id}:gemini-2.5-flash"]`)!);
-    fireEvent.click(document.querySelector('[data-effort-level="auto"]')!);
+    expect(screen.queryByRole('listbox')).toBeNull();
     fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Review release notes' },
     });
@@ -359,7 +359,6 @@ describe('SchedulePage Jarvis Action model picker', () => {
     const unavailable = screen.getByRole('option', { name: /GPT-5\.6 Sol Preview/i });
     expect((unavailable as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole('option', { name: /GPT-5\.6 Sol Fast/i }));
-    fireEvent.click(document.querySelector('[data-effort-level="auto"]')!);
     expect(screen.queryByRole('listbox')).toBeNull();
     fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Review the Fast route' },
