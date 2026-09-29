@@ -125,8 +125,19 @@ export type ResolvedCanvasBackground = CanvasBackground & {
   readonly wallpaper: WorkbenchWallpaperConfig;
 };
 
-export const CANVAS_BLOCK_KINDS = ['heading', 'text', 'note', 'code', 'mind-map', 'shape'] as const;
+export const CANVAS_BLOCK_KINDS = [
+  'heading',
+  'text',
+  'note',
+  'code',
+  'mind-map',
+  'shape',
+  'stroke',
+  'image',
+] as const;
 export type CanvasBlockKind = (typeof CANVAS_BLOCK_KINDS)[number];
+export const CANVAS_MAX_EMBEDDED_IMAGE_BYTES = 512 * 1024;
+export const CANVAS_MAX_INK_POINTS = 2048;
 
 export type CanvasBlockContent =
   | { readonly kind: 'heading'; readonly level: 1 | 2 | 3 | 4 | 5 | 6; readonly text: string }
@@ -134,7 +145,23 @@ export type CanvasBlockContent =
   | { readonly kind: 'note'; readonly text: string }
   | { readonly kind: 'code'; readonly language: string; readonly text: string }
   | { readonly kind: 'mind-map'; readonly map: MindMap }
-  | { readonly kind: 'shape'; readonly shape: CanvasShape };
+  | { readonly kind: 'shape'; readonly shape: CanvasShape }
+  | {
+      readonly kind: 'stroke';
+      readonly tool: 'pencil' | 'marker';
+      readonly color: string;
+      readonly width: number;
+      readonly points: readonly { readonly x: number; readonly y: number }[];
+    }
+  | {
+      readonly kind: 'image';
+      readonly name: string;
+      readonly mimeType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+      readonly dataUrl: string;
+      readonly width: number;
+      readonly height: number;
+      readonly altText: string;
+    };
 
 /** Canonical shared content object. Rendered identically by both layouts. */
 export interface CanvasBlock {
@@ -374,6 +401,8 @@ const CONTENT_KEYS_BY_KIND: Record<CanvasBlockKind, readonly string[]> = {
   code: ['kind', 'language', 'text'],
   'mind-map': ['kind', 'map'],
   shape: ['kind', 'shape'],
+  stroke: ['kind', 'tool', 'color', 'width', 'points'],
+  image: ['kind', 'name', 'mimeType', 'dataUrl', 'width', 'height', 'altText'],
 };
 
 function normalizeContent(input: unknown, path: string): CanvasBlockContent {
@@ -391,6 +420,70 @@ function normalizeContent(input: unknown, path: string): CanvasBlockContent {
   }
   if (blockKind === 'shape') {
     return { kind: 'shape', shape: parseCanvasShape(input.shape) };
+  }
+  if (blockKind === 'stroke') {
+    const tool = assertString(input.tool, `${path}.tool`);
+    if (tool !== 'pencil' && tool !== 'marker') {
+      fail('unsupported-value', `${path}.tool`, 'unsupported drawing tool');
+    }
+    const color = assertString(input.color, `${path}.color`);
+    if (!COLOR_PATTERN.test(color)) fail('unsupported-value', `${path}.color`, 'invalid ink color');
+    const width = assertFiniteNumber(input.width, `${path}.width`, { min: 0.5, max: 128 });
+    if (
+      !Array.isArray(input.points) ||
+      input.points.length < 2 ||
+      input.points.length > CANVAS_MAX_INK_POINTS
+    ) {
+      fail('unsupported-value', `${path}.points`, 'stroke must contain 2–2048 points');
+    }
+    const points = input.points.map((point, index) => {
+      const pointPath = `${path}.points[${index}]`;
+      if (!isPlainObject(point)) fail('invalid-type', pointPath, 'expected a point');
+      assertExactKeys(point, new Set(['x', 'y']), pointPath);
+      return {
+        x: assertFiniteNumber(point.x, `${pointPath}.x`, { min: 0, max: MAX_SIZE }),
+        y: assertFiniteNumber(point.y, `${pointPath}.y`, { min: 0, max: MAX_SIZE }),
+      };
+    });
+    return { kind: 'stroke', tool, color, width, points };
+  }
+  if (blockKind === 'image') {
+    const name = assertString(input.name, `${path}.name`);
+    if (!name || name.length > 200 || CONTROL_CHAR_PATTERN.test(name)) {
+      fail('unsupported-value', `${path}.name`, 'invalid image name');
+    }
+    const mimeType = assertString(input.mimeType, `${path}.mimeType`);
+    if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mimeType)) {
+      fail('unsupported-value', `${path}.mimeType`, 'unsupported raster image type');
+    }
+    const dataUrl = assertString(input.dataUrl, `${path}.dataUrl`);
+    const prefix = `data:${mimeType};base64,`;
+    const encoded = dataUrl.startsWith(prefix) ? dataUrl.slice(prefix.length) : '';
+    if (
+      !encoded ||
+      encoded.length > Math.ceil(CANVAS_MAX_EMBEDDED_IMAGE_BYTES / 3) * 4 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)
+    ) {
+      fail('unsupported-value', `${path}.dataUrl`, 'invalid or oversized raster image data');
+    }
+    const width = assertSafeInteger(input.width, `${path}.width`, { min: 1, max: 16384 });
+    const height = assertSafeInteger(input.height, `${path}.height`, { min: 1, max: 16384 });
+    if (width * height > 16_000_000) {
+      fail('unsupported-value', `${path}.width`, 'image pixel budget exceeded');
+    }
+    const altText = assertString(input.altText, `${path}.altText`);
+    if (altText.length > 500 || CONTROL_CHAR_PATTERN.test(altText)) {
+      fail('unsupported-value', `${path}.altText`, 'invalid image description');
+    }
+    return {
+      kind: 'image',
+      name,
+      mimeType: mimeType as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp',
+      dataUrl,
+      width,
+      height,
+      altText,
+    };
   }
   const text = assertString(input.text, `${path}.text`);
   if (text.length > CANVAS_MAX_TEXT_LENGTH) {

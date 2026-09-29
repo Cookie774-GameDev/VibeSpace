@@ -153,7 +153,12 @@ function pushBlock(blocks: CanvasBlockContent[], content: CanvasBlockContent): v
   if (blocks.length >= CANVAS_MARKDOWN_MAX_BLOCKS) {
     throw new CanvasValidationError('unsupported-value', 'source', 'too many blocks');
   }
-  if (content.kind === 'mind-map' || content.kind === 'shape') {
+  if (
+    content.kind === 'mind-map' ||
+    content.kind === 'shape' ||
+    content.kind === 'stroke' ||
+    content.kind === 'image'
+  ) {
     throw new CanvasValidationError(
       'unsupported-value',
       'source',

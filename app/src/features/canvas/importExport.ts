@@ -120,13 +120,7 @@ export type CanvasImportResult =
     };
 
 export type CanvasExportFormat =
-  | 'png'
-  | 'svg'
-  | 'pdf'
-  | 'markdown'
-  | 'json'
-  | 'package'
-  | 'presentation-pdf';
+  'png' | 'svg' | 'pdf' | 'markdown' | 'json' | 'package' | 'presentation-pdf';
 
 export type CanvasExportScope =
   | { readonly kind: 'all' }
@@ -1096,6 +1090,10 @@ function blockText(block: CanvasBlock): string {
       return JSON.stringify(block.content.map);
     case 'shape':
       return block.content.shape.text ?? block.content.shape.kind;
+    case 'stroke':
+      return `${block.content.tool} stroke`;
+    case 'image':
+      return `${block.content.altText || block.content.name} (image)`;
   }
 }
 
@@ -1114,6 +1112,10 @@ function markdown(document: CanvasDocument): string {
           return `\`\`\`json\n${stableJson(block.content.map)}\n\`\`\``;
         case 'shape':
           return `[Shape: ${block.content.shape.kind}] ${block.content.shape.text ?? ''}`.trimEnd();
+        case 'stroke':
+          return `[${block.content.tool === 'pencil' ? 'Pencil' : 'Marker'} stroke]`;
+        case 'image':
+          return `[Image: ${block.content.name}] ${block.content.altText}`.trimEnd();
         default:
           return block.content.text;
       }
@@ -1189,6 +1191,21 @@ function svgDocument(
     if (block.content.kind === 'shape') {
       lines.push(...svgShapeMarkup(block, y));
       y += 64;
+      continue;
+    }
+    if (block.content.kind === 'stroke') {
+      const path = block.content.points.map((point) => `${point.x + 24},${point.y + y}`).join(' ');
+      lines.push(
+        `<polyline points="${path}" fill="none" stroke="${block.content.color}" stroke-width="${block.content.width}" stroke-linecap="round" stroke-linejoin="round"/>`,
+      );
+      y += 64;
+      continue;
+    }
+    if (block.content.kind === 'image') {
+      lines.push(
+        `<image x="24" y="${y}" width="${Math.min(block.content.width, 180)}" height="${Math.min(block.content.height, 120)}" href="${block.content.dataUrl}"/>`,
+      );
+      y += Math.min(block.content.height, 120) + 16;
       continue;
     }
     lines.push(

@@ -261,6 +261,12 @@ function blockContent(block: CanvasBlock, maximum: number): string {
   if (block.content.kind === 'shape') {
     return modelText(block.content.shape.text ?? block.content.shape.kind, maximum);
   }
+  if (block.content.kind === 'stroke') {
+    return modelText(`${block.content.tool} stroke`, maximum);
+  }
+  if (block.content.kind === 'image') {
+    return modelText(`Image: ${block.content.altText || block.content.name}`, maximum);
+  }
   return modelText(block.content.text, maximum);
 }
 

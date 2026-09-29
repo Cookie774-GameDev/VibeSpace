@@ -30,6 +30,10 @@ export function blockOutlineLabel(block: CanvasBlock): string {
     }
     case 'shape':
       return `Shape (${content.shape.kind}): ${truncateText(content.shape.text ?? 'Unlabeled')}`;
+    case 'stroke':
+      return `${content.tool === 'pencil' ? 'Pencil' : 'Marker'} stroke`;
+    case 'image':
+      return `Image: ${truncateText(content.altText || content.name)}`;
   }
 }
 

@@ -177,11 +177,7 @@ export interface CanvasDocumentSearchProjection {
 // ---------------------------------------------------------------------------
 
 type CanvasSearchValidationCode =
-  | 'invalid-type'
-  | 'invalid-id'
-  | 'invalid-number'
-  | 'duplicate-id'
-  | 'unsupported-value';
+  'invalid-type' | 'invalid-id' | 'invalid-number' | 'duplicate-id' | 'unsupported-value';
 
 function fail(code: CanvasSearchValidationCode, path: string, message: string): never {
   throw new CanvasValidationError(code, path, message);
@@ -716,13 +712,12 @@ export function createCanvasSearchIndex(
         matches.push({ entry, score });
       }
       matches.sort(compareMatches);
-      const results = matches.slice(0, query.limit).map(
-        (match): CanvasSearchResult =>
-          Object.freeze({
-            object: match.entry.object,
-            score: match.score,
-            focus: match.entry.object.focus,
-          }),
+      const results = matches.slice(0, query.limit).map((match): CanvasSearchResult =>
+        Object.freeze({
+          object: match.entry.object,
+          score: match.score,
+          focus: match.entry.object.focus,
+        }),
       );
       return Object.freeze(results);
     },
@@ -807,7 +802,11 @@ export function projectCanvasDocumentForSearch(
         ? branchToOutline(block.content.map, block.content.map.rootId)
         : block.content.kind === 'shape'
           ? (block.content.shape.text ?? '')
-          : block.content.text;
+          : block.content.kind === 'stroke'
+            ? `${block.content.tool} stroke`
+            : block.content.kind === 'image'
+              ? `${block.content.name} ${block.content.altText}`
+              : block.content.text;
     inputs.push({
       id: block.id,
       objectType: block.content.kind,

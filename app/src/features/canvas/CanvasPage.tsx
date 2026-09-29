@@ -10,9 +10,12 @@ import {
   Heading,
   LassoSelect,
   ListTree,
+  ImagePlus,
   Maximize2,
   Minus,
   MousePointer2,
+  Paintbrush,
+  Pencil,
   Play,
   Plus,
   Redo2,
@@ -29,6 +32,8 @@ import {
 import { canvasBlockAccessibleLabel, canvasZoomAnnouncement } from './accessibility';
 import {
   CANVAS_MAX_TEXT_LENGTH,
+  CANVAS_MAX_EMBEDDED_IMAGE_BYTES,
+  CANVAS_MAX_INK_POINTS,
   blockById,
   createCanvasBlock,
   createCanvasDocument,
@@ -78,7 +83,12 @@ import {
 import { copyBlocks, cutBlocks, pasteBlocks, type CanvasClipboardPayload } from './clipboard';
 import { createCanvasHistory, type CanvasHistory, type CanvasHistoryActionKind } from './history';
 import { CANVAS_MARKDOWN_MAX_SOURCE_LENGTH, parseMarkdownToBlockContents } from './markdown';
-import { exportCanvas, type CanvasExportArtifact, type CanvasExportFormat } from './importExport';
+import {
+  exportCanvas,
+  importCanvas,
+  type CanvasExportArtifact,
+  type CanvasExportFormat,
+} from './importExport';
 import { decodeCanvasPackage, encodeCanvasPackage } from './packageFormat';
 import {
   createCustomCanvasTemplateStore,
@@ -192,7 +202,7 @@ import {
 import './sakura-canvas.css';
 import './canvas-experience.css';
 
-type CanvasTool = 'select' | 'lasso' | 'hand' | 'note';
+type CanvasTool = 'select' | 'lasso' | 'hand' | 'note' | 'pencil' | 'marker';
 type CanvasPlacementField = 'x' | 'y' | 'width' | 'height' | 'rotation';
 
 const CANVAS_TOOL_LABELS: Readonly<Record<CanvasTool, string>> = Object.freeze({
@@ -200,6 +210,8 @@ const CANVAS_TOOL_LABELS: Readonly<Record<CanvasTool, string>> = Object.freeze({
   lasso: 'Lasso',
   hand: 'Hand',
   note: 'Note',
+  pencil: 'Pencil',
+  marker: 'Marker',
 });
 
 const CANVAS_BLOCK_KIND_LABELS: Readonly<Record<CanvasBlockKind, string>> = Object.freeze({
@@ -209,6 +221,8 @@ const CANVAS_BLOCK_KIND_LABELS: Readonly<Record<CanvasBlockKind, string>> = Obje
   code: 'Code',
   'mind-map': 'Mind map',
   shape: 'Shape',
+  stroke: 'Stroke',
+  image: 'Image',
 });
 
 const CANVAS_BACKGROUND_LABELS: Readonly<Record<CanvasBackgroundKind, string>> = Object.freeze({
@@ -440,7 +454,11 @@ function presentationFrameLabel(block: CanvasBlock | undefined): string {
       ? content.map.nodes.find((node) => node.id === content.map.rootId)?.label
       : content.kind === 'shape'
         ? content.shape.text
-        : content.text;
+        : content.kind === 'stroke'
+          ? `${content.tool} stroke`
+          : content.kind === 'image'
+            ? content.altText || content.name
+            : content.text;
   const normalized = label?.trim().replace(/\s+/g, ' ');
   return normalized
     ? normalized.slice(0, 80)
@@ -456,6 +474,8 @@ function templateContentLabel(content: CanvasBlock['content']): string {
   if (content.kind === 'shape') {
     return content.shape.text?.trim() || `Untitled ${content.shape.kind} shape`;
   }
+  if (content.kind === 'stroke') return `${content.tool} stroke`;
+  if (content.kind === 'image') return content.altText || content.name;
   return content.text.trim() || `Untitled ${content.kind}`;
 }
 
@@ -676,6 +696,17 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
     end: { x: number; y: number };
   } | null>(null);
   const [lassoVisual, setLassoVisual] = React.useState<readonly { x: number; y: number }[] | null>(
+    null,
+  );
+  const inkGesture = React.useRef<{
+    pointerId: number;
+    tool: 'pencil' | 'marker';
+    points: { x: number; y: number }[];
+    documentId: string;
+    projectId: string;
+    ownerId: string;
+  } | null>(null);
+  const [inkPreview, setInkPreview] = React.useState<readonly { x: number; y: number }[] | null>(
     null,
   );
   const [objectSnapping, setObjectSnapping] = React.useState(true);
@@ -1487,6 +1518,8 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
       panPointer.current = null;
       activePointers.current.clear();
       pinch.current = null;
+      inkGesture.current = null;
+      setInkPreview(null);
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
@@ -1533,10 +1566,45 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
 
   const onPointerDown = (event: React.PointerEvent<HTMLElement>) => {
     if (document.layoutMode !== 'edgeless') return;
+    if (
+      activeScope &&
+      (persistenceStatus === 'loading' ||
+        documentRef.current.ownerId !== activeScope.ownerId ||
+        documentRef.current.projectId !== activeScope.projectId)
+    )
+      return;
     const point = pointerPoint(event);
     cursorScreenPoint.current = point;
     activePointers.current.set(event.pointerId, point);
     event.currentTarget.setPointerCapture?.(event.pointerId);
+
+    if (inkGesture.current && inkGesture.current.pointerId !== event.pointerId) {
+      inkGesture.current = null;
+      setInkPreview(null);
+      return;
+    }
+
+    if (
+      (tool === 'pencil' || tool === 'marker') &&
+      event.button === 0 &&
+      !(
+        event.target instanceof Element &&
+        event.target.closest('article, button, input, textarea, select')
+      )
+    ) {
+      event.preventDefault();
+      const current = documentRef.current;
+      inkGesture.current = {
+        pointerId: event.pointerId,
+        tool,
+        points: [point],
+        documentId: current.id,
+        projectId: current.projectId,
+        ownerId: current.ownerId,
+      };
+      setInkPreview([point]);
+      return;
+    }
 
     if (
       activePointers.current.size === 1 &&
@@ -1602,6 +1670,19 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
     if (document.layoutMode !== 'edgeless') return;
     const point = pointerPoint(event);
     cursorScreenPoint.current = point;
+    const ink = inkGesture.current;
+    if (ink?.pointerId === event.pointerId) {
+      const previous = ink.points.at(-1);
+      if (
+        ink.points.length < CANVAS_MAX_INK_POINTS &&
+        previous &&
+        Math.hypot(point.x - previous.x, point.y - previous.y) >= 1
+      ) {
+        ink.points.push(point);
+        setInkPreview([...ink.points]);
+      }
+      return;
+    }
     if (!activePointers.current.has(event.pointerId)) return;
     activePointers.current.set(event.pointerId, point);
 
@@ -1657,6 +1738,71 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   };
 
   const onPointerEnd = (event: React.PointerEvent<HTMLElement>) => {
+    const ink = inkGesture.current;
+    if (ink?.pointerId === event.pointerId) {
+      inkGesture.current = null;
+      setInkPreview(null);
+      activePointers.current.delete(event.pointerId);
+      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+        event.currentTarget.releasePointerCapture?.(event.pointerId);
+      }
+      const current = documentRef.current;
+      if (
+        event.type !== 'pointercancel' &&
+        current.id === ink.documentId &&
+        current.projectId === ink.projectId &&
+        current.ownerId === ink.ownerId &&
+        current.layoutMode === 'edgeless' &&
+        tool === ink.tool
+      ) {
+        const end = pointerPoint(event);
+        const screenPoints = [...ink.points];
+        if (screenPoints.length < CANVAS_MAX_INK_POINTS) screenPoints.push(end);
+        const world = screenPoints.map((point) =>
+          screenToWorld(cameraRef.current, CAMERA_VIEWPORT, point),
+        );
+        const minX = Math.min(...world.map((point) => point.x));
+        const minY = Math.min(...world.map((point) => point.y));
+        const maxX = Math.max(...world.map((point) => point.x));
+        const maxY = Math.max(...world.map((point) => point.y));
+        const pad = ink.tool === 'marker' ? 14 : 8;
+        const width = Math.max(24, maxX - minX + pad * 2);
+        const height = Math.max(24, maxY - minY + pad * 2);
+        const points = world.map((point) => ({ x: point.x - minX + pad, y: point.y - minY + pad }));
+        let blockId: string;
+        do {
+          sequence.current += 1;
+          blockId = `${documentRef.current.id}-stroke-${sequence.current}`;
+        } while (blockById(documentRef.current, blockId));
+        const strokeId = blockId;
+        commit('object-create', `Draw ${ink.tool} stroke`, (current, now) => {
+          const withStroke = withBlockAdded(
+            current,
+            createCanvasBlock({
+              id: strokeId,
+              now,
+              content: {
+                kind: 'stroke',
+                tool: ink.tool,
+                color: ink.tool === 'marker' ? '#d97757' : '#262626',
+                width: ink.tool === 'marker' ? 10 : 3,
+                points,
+              },
+            }),
+            now,
+          );
+          const placement = resolveEdgelessLayout(withStroke).get(parseCanvasBlockId(strokeId));
+          return placement
+            ? withPlacement(
+                withStroke,
+                { ...placement, x: minX - pad, y: minY - pad, width, height },
+                now,
+              )
+            : withStroke;
+        });
+      }
+      return;
+    }
     const activeLasso = lassoGesture.current;
     if (activeLasso?.pointerId === event.pointerId) {
       if (event.type === 'pointercancel') {
@@ -1731,6 +1877,8 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
     if (
       document.layoutMode !== 'edgeless' ||
       tool === 'hand' ||
+      tool === 'pencil' ||
+      tool === 'marker' ||
       spaceHeld.current ||
       event.button === 1 ||
       event.pointerType === 'touch'
@@ -2048,7 +2196,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
     commitDirectGeometry('object-rotate', 'Rotate canvas object', placement.blockId, next);
   };
 
-  const addBlock = (kind: Exclude<CanvasBlockKind, 'mind-map' | 'shape'>) => {
+  const addBlock = (kind: Extract<CanvasBlockKind, 'heading' | 'text' | 'note' | 'code'>) => {
     let blockNumber: number;
     let blockId: string;
     do {
@@ -2313,7 +2461,13 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
       'Edit canvas block',
       (current, now) => {
         const block = blockById(current, blockId);
-        if (!block || block.content.kind === 'mind-map' || block.content.kind === 'shape') {
+        if (
+          !block ||
+          block.content.kind === 'mind-map' ||
+          block.content.kind === 'shape' ||
+          block.content.kind === 'stroke' ||
+          block.content.kind === 'image'
+        ) {
           return current;
         }
         return withBlockContent(current, blockId, { ...block.content, text }, now);
@@ -2477,6 +2631,87 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
         error instanceof Error
           ? `Markdown import failed: ${error.message}`
           : 'Markdown import failed: invalid document',
+      );
+    }
+  };
+
+  const uploadImage = async (file: File) => {
+    const target = documentRef.current;
+    try {
+      if (
+        activeScope &&
+        (persistenceStatus === 'loading' ||
+          target.ownerId !== activeScope.ownerId ||
+          target.projectId !== activeScope.projectId)
+      ) {
+        throw new Error('canvas is still loading');
+      }
+      if (file.size > CANVAS_MAX_EMBEDDED_IMAGE_BYTES) {
+        throw new Error('image exceeds the 512 KiB canvas limit');
+      }
+      const bytes = await new Promise<Uint8Array>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+        reader.onerror = () => reject(reader.error ?? new Error('image read failed'));
+        reader.readAsArrayBuffer(file);
+      });
+      const inferredMimeType: Readonly<Record<string, string>> = {
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        gif: 'image/gif',
+        webp: 'image/webp',
+      };
+      const extension = file.name.split('.').at(-1)?.toLowerCase() ?? '';
+      const imported = await importCanvas({
+        name: file.name,
+        mimeType: file.type || inferredMimeType[extension] || '',
+        size: file.size,
+        data: bytes,
+      });
+      if (imported.kind !== 'asset') throw new Error('file is not a supported raster image');
+      const current = documentRef.current;
+      if (
+        current.id !== target.id ||
+        current.ownerId !== target.ownerId ||
+        current.projectId !== target.projectId
+      ) {
+        throw new Error('active canvas changed before image validation finished');
+      }
+      let encoded = '';
+      for (let offset = 0; offset < imported.bytes.length; offset += 0x8000) {
+        encoded += String.fromCharCode(...imported.bytes.subarray(offset, offset + 0x8000));
+      }
+      const dataUrl = `data:${imported.mimeType};base64,${btoa(encoded)}`;
+      let blockId: string;
+      do {
+        sequence.current += 1;
+        blockId = `${current.id}-image-${sequence.current}`;
+      } while (blockById(current, blockId));
+      const imageId = blockId;
+      commit('object-create', 'Upload canvas image', (document, now) =>
+        withBlockAdded(
+          document,
+          createCanvasBlock({
+            id: imageId,
+            now,
+            content: {
+              kind: 'image',
+              name: imported.name,
+              mimeType: imported.mimeType,
+              dataUrl,
+              width: imported.width,
+              height: imported.height,
+              altText: imported.name.replace(/\.[^.]+$/, ''),
+            },
+          }),
+          now,
+        ),
+      );
+      setPackageMessage(`Imported image ${imported.name}`);
+    } catch (error) {
+      setPackageMessage(
+        `Image import failed: ${error instanceof Error ? error.message : 'invalid image'}`,
       );
     }
   };
@@ -3075,6 +3310,37 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   const visibleEdgelessBlocks = blocks.filter((block) => visibleEdgelessBlockIds.has(block.id));
   const renderBlockEditor = (block: CanvasBlock) => {
     const content = block.content;
+    if (content.kind === 'stroke') {
+      const right = Math.max(...content.points.map((point) => point.x)) + content.width;
+      const bottom = Math.max(...content.points.map((point) => point.y)) + content.width;
+      return (
+        <svg
+          role="img"
+          aria-label={`${content.tool} stroke`}
+          className="h-full w-full overflow-visible"
+          viewBox={`0 0 ${Math.max(1, right)} ${Math.max(1, bottom)}`}
+        >
+          <polyline
+            points={content.points.map((point) => `${point.x},${point.y}`).join(' ')}
+            fill="none"
+            stroke={content.color}
+            strokeWidth={content.width}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    }
+    if (content.kind === 'image') {
+      return (
+        <img
+          src={content.dataUrl}
+          alt={content.altText || content.name}
+          draggable={false}
+          className="h-full w-full object-contain"
+        />
+      );
+    }
     if (content.kind === 'mind-map') {
       const root = content.map.nodes.find((node) => node.id === content.map.rootId);
       const nodesById = new Map(content.map.nodes.map((node) => [node.id, node]));
@@ -4025,6 +4291,11 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
                   >
                     {activePresentationBlock.content.shape.text ?? 'Unlabeled shape'}
                   </div>
+                ) : activePresentationBlock.content.kind === 'stroke' ||
+                  activePresentationBlock.content.kind === 'image' ? (
+                  <div className="mx-auto h-80 w-full max-w-3xl">
+                    {renderBlockEditor(activePresentationBlock)}
+                  </div>
                 ) : activePresentationBlock.content.kind === 'code' ? (
                   <div className="space-y-3">
                     <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -4112,6 +4383,43 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
             </ToolButton>
           </div>
           <div className="my-1 h-px w-7 bg-border" />
+          <ToolButton
+            active={tool === 'pencil'}
+            label="Pencil tool"
+            onClick={() => {
+              setLayout('edgeless');
+              setTool('pencil');
+            }}
+          >
+            <Pencil aria-hidden size={17} />
+          </ToolButton>
+          <ToolButton
+            active={tool === 'marker'}
+            label="Marker tool"
+            onClick={() => {
+              setLayout('edgeless');
+              setTool('marker');
+            }}
+          >
+            <Paintbrush aria-hidden size={17} />
+          </ToolButton>
+          <label
+            title="Upload raster image"
+            className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <ImagePlus aria-hidden size={17} />
+            <input
+              aria-label="Upload canvas image"
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              className="sr-only"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = '';
+                if (file) void uploadImage(file);
+              }}
+            />
+          </label>
           <button
             type="button"
             aria-label="Add note"
@@ -4400,6 +4708,22 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
             </div>
           )}
 
+          {inkPreview && inkPreview.length > 0 ? (
+            <svg
+              aria-hidden
+              data-canvas-ink-preview
+              className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
+            >
+              <polyline
+                points={inkPreview.map((point) => `${point.x},${point.y}`).join(' ')}
+                fill="none"
+                stroke={tool === 'marker' ? '#d97757' : '#262626'}
+                strokeWidth={tool === 'marker' ? 10 : 3}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          ) : null}
           {marqueeVisual ? (
             <div
               data-selection-marquee
@@ -4735,6 +5059,37 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
                         />
                       </label>
                     </div>
+                  ) : selectedBlock.content.kind === 'stroke' ? (
+                    <p className="text-sm text-muted-foreground">
+                      {selectedBlock.content.tool === 'pencil' ? 'Pencil' : 'Marker'} stroke ·{' '}
+                      {selectedBlock.content.points.length} points
+                    </p>
+                  ) : selectedBlock.content.kind === 'image' ? (
+                    <label className="block space-y-1 text-xs text-muted-foreground">
+                      Description
+                      <input
+                        aria-label="Image description"
+                        type="text"
+                        maxLength={500}
+                        value={selectedBlock.content.altText}
+                        disabled={selectedPlacement?.locked}
+                        onChange={(event) => {
+                          const altText = event.currentTarget.value;
+                          commit('block-change', 'Describe canvas image', (current, now) => {
+                            const block = blockById(current, selectedBlock.id);
+                            return block?.content.kind === 'image'
+                              ? withBlockContent(
+                                  current,
+                                  block.id,
+                                  { ...block.content, altText },
+                                  now,
+                                )
+                              : current;
+                          });
+                        }}
+                        className="w-full rounded border border-border bg-background px-2 py-1.5"
+                      />
+                    </label>
                   ) : (
                     <label className="block space-y-1 text-xs text-muted-foreground">
                       Content

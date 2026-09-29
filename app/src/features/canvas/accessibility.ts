@@ -67,6 +67,12 @@ export function canvasBlockAccessibleLabel(block: CanvasBlock): string {
       label = `${kind.charAt(0).toUpperCase()}${kind.slice(1)} shape: ${content.shape.text ?? 'Unlabeled'}`;
       break;
     }
+    case 'stroke':
+      label = `${content.tool === 'pencil' ? 'Pencil' : 'Marker'} stroke`;
+      break;
+    case 'image':
+      label = `Image: ${content.altText || content.name}`;
+      break;
   }
   return boundedText(label);
 }
@@ -128,7 +134,9 @@ export type CanvasAccessibilityItemKind =
   | 'note'
   | 'code'
   | 'mind-map'
-  | 'shape';
+  | 'shape'
+  | 'stroke'
+  | 'image';
 
 export interface CanvasAccessibilityItem {
   readonly id: string;
@@ -342,14 +350,7 @@ export function buildCanvasScreenReaderOutline(
 // Focus and keyboard commands
 
 export type CanvasNavigationDirection =
-  | 'next'
-  | 'previous'
-  | 'home'
-  | 'end'
-  | 'left'
-  | 'right'
-  | 'up'
-  | 'down';
+  'next' | 'previous' | 'home' | 'end' | 'left' | 'right' | 'up' | 'down';
 
 function center(bounds: CanvasAccessibilityBounds): readonly [number, number] {
   return [bounds.x + bounds.width / 2, bounds.y + bounds.height / 2];
