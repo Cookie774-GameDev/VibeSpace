@@ -24,6 +24,27 @@ function renderFoundry(storage = new InMemoryStorageAdapter()) {
 }
 
 describe('FoundryPage fixture vertical slice', () => {
+  it('previews the exact saved dataset example after versioning and reopening', async () => {
+    const view = renderFoundry();
+    fireEvent.click(screen.getByRole('button', { name: 'Create VibeCoder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Dataset Studio' }));
+    fireEvent.change(screen.getByLabelText('Input'), { target: { value: 'What is the cobalt otter index?' } });
+    fireEvent.change(screen.getByLabelText('Expected output'), { target: { value: '47' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add approved example' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Approve dataset consent' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create immutable dataset v1' }));
+
+    const saved = await screen.findByRole('region', { name: 'Saved dataset examples' });
+    expect(within(saved).getByText('What is the cobalt otter index?')).toBeTruthy();
+    expect(within(saved).getByText('47')).toBeTruthy();
+
+    view.unmount();
+    render(<FoundryPage storage={view.storage} dependencies={view.dependencies} />);
+    const reopened = screen.getByRole('region', { name: 'Saved dataset examples' });
+    expect(within(reopened).getByText('What is the cobalt otter index?')).toBeTruthy();
+    expect(within(reopened).getByText('47')).toBeTruthy();
+  });
+
   it('runs create, fixture training, evaluation, explicit promotion, and restart recovery', async () => {
     const view = renderFoundry();
 

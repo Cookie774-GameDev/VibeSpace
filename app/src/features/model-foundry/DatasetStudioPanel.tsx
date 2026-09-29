@@ -21,6 +21,19 @@ export interface DatasetStudioPanelProps {
 
 const emptyDraft = (): DatasetDraft => ({ input: '', expectedOutput: '', exampleType: 'prompt_completion', sourceKind: 'manual', sourceReference: 'local-manual-entry', license: 'user-owned', privacyClassification: 'private', tags: [] });
 
+export function DatasetExamplePreview({ examples }: { readonly examples: readonly Pick<DatasetDraft, 'input' | 'expectedOutput'>[] }) {
+  if (examples.length === 0) return <p className="text-metadata text-muted-foreground">No approved examples to preview.</p>;
+  return <ol className="max-h-64 space-y-2 overflow-y-auto pr-1">
+    {examples.map((example, index) => <li key={index} className="rounded-md border border-border bg-background/40 p-3">
+      <div className="text-metadata text-muted-foreground">Example {index + 1}</div>
+      <div className="mt-2 text-metadata text-muted-foreground">Input</div>
+      <p className="whitespace-pre-wrap break-words text-secondary">{example.input}</p>
+      <div className="mt-2 text-metadata text-muted-foreground">Expected output</div>
+      <p className="whitespace-pre-wrap break-words text-secondary">{example.expectedOutput}</p>
+    </li>)}
+  </ol>;
+}
+
 export function DatasetStudioPanel({ projectId, now, onVersion, version = 1, parentVersionId = null }: DatasetStudioPanelProps) {
   const [draft, setDraft] = React.useState<DatasetDraft>(emptyDraft);
   const [drafts, setDrafts] = React.useState<readonly DatasetDraft[]>([]);
@@ -100,7 +113,7 @@ export function DatasetStudioPanel({ projectId, now, onVersion, version = 1, par
       <div className="flex flex-wrap gap-2"><Button onClick={scan}><ScanSearch /> Scan example</Button>{findingCount > 0 && <Button variant="outline" onClick={redact}><AlertTriangle /> Redact {findingCount} findings</Button>}<Button variant="outline" onClick={stageSyntheticVariation}>Stage local synthetic variation</Button><Button variant="accent" onClick={addDraft}><Plus /> Add approved example</Button></div>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3"><div><div className="text-ui-strong">Local teacher draft</div><p className="text-metadata text-muted-foreground">Uses this project’s promoted adapter only. It never leaves VibeSpace and still requires review, scanning, and explicit approval.</p></div><label className="flex items-start gap-2 text-secondary"><input type="checkbox" aria-label="Approve local teacher draft" checked={teacherApproval} onChange={(event) => setTeacherApproval(event.target.checked)} /><span>I approve local teacher generation for this seed.</span></label><Button variant="outline" disabled={!teacherApproval || teacherBusy} onClick={() => void generateWithLocalTeacher()}>{teacherBusy ? 'Drafting locally…' : 'Draft with promoted adapter'}</Button></div>
       <div className="rounded-lg border border-border p-3"><div className="mb-2 flex items-center gap-2 text-ui-strong"><FileJson2 className="h-4 w-4" /> Scoped import</div><div className="grid gap-2 md:grid-cols-[140px_1fr_auto]"><select aria-label="Import format" className="h-8 rounded-md border border-input bg-background px-2 text-secondary" value={importFormat} onChange={(event) => setImportFormat(event.target.value as DatasetImportFormat)}><option value="jsonl">JSONL</option><option value="json">JSON</option><option value="csv">CSV mapping</option><option value="markdown">Markdown</option></select><Textarea aria-label="Selected import content" value={importText} onChange={(event) => setImportText(event.target.value)} placeholder="Paste only the explicitly selected records." /><Button onClick={importSelected} disabled={!importText.trim()}>Stage import</Button></div></div>
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3"><div><div className="text-ui-strong">Review queue <Badge variant="outline">{drafts.length}</Badge></div><div className="text-metadata text-muted-foreground">Exact and normalized duplicates are removed when the version is built.</div></div><label className="flex items-start gap-2 text-secondary"><input type="checkbox" aria-label="Approve dataset consent" checked={consent} onChange={(event) => setConsent(event.target.checked)} className="mt-0.5" /><span>I approve these selected examples for local training and evaluation.</span></label><Button variant="accent" disabled={!consent || drafts.length === 0 || building} onClick={() => void createVersion()}>{building ? 'Building version…' : `Create immutable dataset v${version}`}</Button></div>
+      <section aria-label="Review queue" className="space-y-3 rounded-lg border border-border p-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-ui-strong">Review queue <Badge variant="outline">{drafts.length}</Badge></div><div className="text-metadata text-muted-foreground">Exact and normalized duplicates are removed when the version is built.</div></div><label className="flex items-start gap-2 text-secondary"><input type="checkbox" aria-label="Approve dataset consent" checked={consent} onChange={(event) => setConsent(event.target.checked)} className="mt-0.5" /><span>I approve these selected examples for local training and evaluation.</span></label><Button variant="accent" disabled={!consent || drafts.length === 0 || building} onClick={() => void createVersion()}>{building ? 'Building version…' : `Create immutable dataset v${version}`}</Button></div><DatasetExamplePreview examples={drafts} /></section>
       {status && <p role="status" className="text-secondary text-muted-foreground">{status}</p>}
     </>}
   </CardContent></Card>;

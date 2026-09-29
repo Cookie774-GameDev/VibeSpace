@@ -1,10 +1,26 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { DatasetStudioPanel } from './DatasetStudioPanel';
 
 const NOW = '2026-07-14T12:00:00.000Z';
 
 describe('DatasetStudioPanel', () => {
+  it('shows the exact approved input and output for review before consent', () => {
+    render(<DatasetStudioPanel projectId="project-1" now={() => NOW} onVersion={() => undefined} />);
+    fireEvent.change(screen.getByLabelText('Input'), { target: { value: 'password=hunter22' } });
+    fireEvent.change(screen.getByLabelText('Expected output'), { target: { value: 'Do not expose it.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add approved example' }));
+
+    fireEvent.change(screen.getByLabelText('Input'), { target: { value: 'What is the cobalt otter index?' } });
+    fireEvent.change(screen.getByLabelText('Expected output'), { target: { value: '47' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add approved example' }));
+
+    const review = screen.getByRole('region', { name: 'Review queue' });
+    expect(within(review).getByText('What is the cobalt otter index?')).toBeTruthy();
+    expect(within(review).getByText('47')).toBeTruthy();
+    expect(within(review).queryByText('password=hunter22')).toBeNull();
+  });
+
   it('reviews and creates an immutable consented manual dataset version', async () => {
     const onVersion = vi.fn();
     render(<DatasetStudioPanel projectId="project-1" now={() => NOW} onVersion={onVersion} />);
