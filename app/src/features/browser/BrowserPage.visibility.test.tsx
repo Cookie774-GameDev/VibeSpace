@@ -157,4 +157,16 @@ describe('BrowserPage cached-route visibility', () => {
     view.rerender(<BrowserPage routeVisible />);
     await waitFor(() => expect(browserHarness.registerHost).toHaveBeenCalledTimes(2));
   });
+
+  it('stops the isolated browser when CDP connect falls back to Simple Browser', async () => {
+    browserHarness.connect.mockRejectedValue(new Error('CDP WebSocket failed'));
+    browserHarness.browserStop.mockResolvedValue(true);
+    render(<BrowserPage routeVisible />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent runtime' }));
+
+    await waitFor(() => expect(browserHarness.connect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(browserHarness.browserStop).toHaveBeenCalledTimes(1));
+    expect(useBrowserStore.getState().runtime?.running).toBe(false);
+  });
 });

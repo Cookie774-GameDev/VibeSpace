@@ -254,7 +254,7 @@ export function BrowserPage({ routeVisible = true }: { routeVisible?: boolean })
               'Agent runtime',
               'Could not start Edge/Chrome CDP — switching to Simple Browser.',
             );
-            setEngine('iframe');
+            await releaseAgentRuntime();
             navigateIframe(url);
             return;
           }
@@ -263,7 +263,7 @@ export function BrowserPage({ routeVisible = true }: { routeVisible?: boolean })
       } catch (e) {
         pushConsole('error', e instanceof Error ? e.message : 'Navigate failed');
         toast.warning('Agent navigate failed', 'Falling back to Simple Browser (iframe).');
-        setEngine('iframe');
+        await releaseAgentRuntime();
         navigateIframe(url);
       }
       if (active) updateTab(active.id, { loading: false, title: url });
@@ -296,26 +296,28 @@ export function BrowserPage({ routeVisible = true }: { routeVisible?: boolean })
     if (!result.ok) {
       toast.warning('Browser runtime', result.error.message);
       pushConsole('error', result.error.message);
-      setEngine('iframe');
-      await refreshStatus();
+      await releaseAgentRuntime();
       return;
     }
     setRuntime(result.status);
-    toast.success('Agent runtime', 'Isolated Edge/Chrome profile ready');
     if (result.status.cdp_ws_url) {
       try {
         await connectCdp(result.status.cdp_ws_url);
         if (active?.url && active.url !== 'about:blank') {
           await cdpRef.current?.navigate(active.url);
         }
+        toast.success('Agent runtime', 'Isolated Edge/Chrome profile ready');
       } catch (e) {
         pushConsole('error', e instanceof Error ? e.message : 'CDP connect failed');
-        setEngine('iframe');
+        await releaseAgentRuntime();
       }
+    } else {
+      pushConsole('error', 'CDP page target unavailable');
+      await releaseAgentRuntime();
     }
   };
 
-  const stopAgentRuntime = async () => {
+  async function releaseAgentRuntime() {
     abortAgentActions();
     hostLeaseRef.current?.revoke();
     hostLeaseRef.current = null;
@@ -326,6 +328,10 @@ export function BrowserPage({ routeVisible = true }: { routeVisible?: boolean })
     await browserStop();
     await refreshStatus();
     setEngine('iframe');
+  }
+
+  const stopAgentRuntime = async () => {
+    await releaseAgentRuntime();
     toast.info('Back to Simple Browser');
   };
 

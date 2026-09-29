@@ -46,6 +46,11 @@ struct Runtime {
 
 static RUNTIME: Mutex<Option<Runtime>> = Mutex::new(None);
 
+// Keep Chromium's CDP WebSocket Origin check. The app's own development and
+// packaged WebView origins are the only browser-based CDP clients allowed.
+const CDP_ALLOWED_ORIGINS: &str =
+    "http://localhost:5173,tauri://localhost,http://tauri.localhost,https://tauri.localhost";
+
 fn err(code: &str, message: impl Into<String>, recoverable: bool) -> CommandError {
     CommandError {
         code: code.to_string(),
@@ -130,17 +135,42 @@ fn profile_root(app: &tauri::AppHandle) -> CmdResult<PathBuf> {
     Ok(dir)
 }
 
-fn wait_for_cdp(port: u16, timeout: Duration) -> Option<String> {
+fn page_websocket_url(targets: &serde_json::Value) -> Option<&str> {
+    targets.as_array()?.iter().find_map(|target| {
+        (target.get("type")?.as_str()? == "page")
+            .then(|| target.get("webSocketDebuggerUrl")?.as_str())
+            .flatten()
+    })
+}
+
+fn browser_launch_args(port: u16, profile: &PathBuf, session_id: &str) -> Vec<String> {
+    vec![
+        format!("--remote-debugging-port={port}"),
+        "--remote-debugging-address=127.0.0.1".into(),
+        format!("--remote-allow-origins={CDP_ALLOWED_ORIGINS}"),
+        format!("--user-data-dir={}", profile.display()),
+        "--no-first-run".into(),
+        "--no-default-browser-check".into(),
+        "--disable-sync".into(),
+        "--disable-background-networking".into(),
+        "--disable-features=Translate,MediaRouter".into(),
+        "--window-size=1280,800".into(),
+        format!("--vibespace-session={session_id}"),
+        "about:blank".into(),
+    ]
+}
+
+fn wait_for_page_cdp(port: u16, timeout: Duration) -> Option<String> {
     let start = Instant::now();
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(400))
         .build()
         .ok()?;
-    let url = format!("http://127.0.0.1:{port}/json/version");
+    let url = format!("http://127.0.0.1:{port}/json/list");
     while start.elapsed() < timeout {
         if let Ok(res) = client.get(&url).send() {
             if let Ok(body) = res.json::<serde_json::Value>() {
-                if let Some(ws) = body.get("webSocketDebuggerUrl").and_then(|v| v.as_str()) {
+                if let Some(ws) = page_websocket_url(&body) {
                     return Some(ws.to_string());
                 }
             }
@@ -231,19 +261,7 @@ pub fn browser_start(
     // Headless=new still supports CDP; we use a real window off-screen-ish for reliability on Windows.
     // Isolated profile only — never the user default.
     let mut cmd = Command::new(&exe);
-    cmd.args([
-        &format!("--remote-debugging-port={port}"),
-        "--remote-debugging-address=127.0.0.1",
-        &format!("--user-data-dir={}", profile.display()),
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-sync",
-        "--disable-background-networking",
-        "--disable-features=Translate,MediaRouter",
-        "--window-size=1280,800",
-        &format!("--vibespace-session={session_id}"),
-        "about:blank",
-    ]);
+    cmd.args(browser_launch_args(port, &profile, &session_id));
     // Hide console window flash on Windows
     #[cfg(windows)]
     {
@@ -263,7 +281,7 @@ pub fn browser_start(
         )
     })?;
 
-    let ws = wait_for_cdp(port, Duration::from_secs(8));
+    let ws = wait_for_page_cdp(port, Duration::from_secs(8));
     if ws.is_none() {
         // Leave process if still starting; surface recoverable error
         *RUNTIME.lock().unwrap() = Some(Runtime {
@@ -273,11 +291,11 @@ pub fn browser_start(
             cdp_port: port,
             session_id: session_id.clone(),
             cdp_ws_url: None,
-            last_error: Some("CDP endpoint did not become ready in time.".into()),
+            last_error: Some("CDP page target did not become ready in time.".into()),
         });
         return Err(err(
             "cdp_timeout",
-            "Browser launched but CDP did not become ready. Retry Start.",
+            "Browser launched but its CDP page target did not become ready. Retry Start.",
             true,
         ));
     }
@@ -327,4 +345,37 @@ pub fn browser_open_downloads_folder(app: tauri::AppHandle) -> CmdResult<String>
         .join("downloads");
     fs::create_dir_all(&dir).map_err(|e| err("path_failed", e.to_string(), true))?;
     Ok(dir.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{browser_launch_args, page_websocket_url};
+    use std::path::PathBuf;
+
+    #[test]
+    fn isolated_browser_allows_only_app_origins() {
+        let args = browser_launch_args(58541, &PathBuf::from("browser-profile"), "vs-test");
+        assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_string()));
+        assert!(args.contains(&"--user-data-dir=browser-profile".to_string()));
+        assert!(args.contains(&"--remote-allow-origins=http://localhost:5173,tauri://localhost,http://tauri.localhost,https://tauri.localhost".to_string()));
+        assert!(!args.iter().any(|arg| arg == "--remote-allow-origins=*"));
+    }
+
+    #[test]
+    fn cdp_readiness_requires_a_page_target_socket() {
+        let targets = serde_json::json!([
+            {"type": "browser", "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/browser/one"},
+            {"type": "page", "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/page/two"}
+        ]);
+        assert_eq!(
+            page_websocket_url(&targets),
+            Some("ws://127.0.0.1/devtools/page/two")
+        );
+        assert_eq!(
+            page_websocket_url(&serde_json::json!([
+                {"type": "browser", "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/browser/one"}
+            ])),
+            None
+        );
+    }
 }
