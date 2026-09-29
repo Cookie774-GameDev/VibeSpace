@@ -31,7 +31,19 @@ export function fromLocalDateTimeInput(value: string): number {
   const hours = Number(match[4]);
   const minutes = Number(match[5]);
   if ([year, month, day, hours, minutes].some((n) => Number.isNaN(n))) return Number.NaN;
-  return new Date(year, month - 1, day, hours, minutes, 0, 0).getTime();
+  const parsed = new Date(0);
+  parsed.setFullYear(year, month - 1, day);
+  parsed.setHours(hours, minutes, 0, 0);
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day ||
+    parsed.getHours() !== hours ||
+    parsed.getMinutes() !== minutes
+  ) {
+    return Number.NaN;
+  }
+  return parsed.getTime();
 }
 
 /** Local calendar day key `YYYY-MM-DD`. */

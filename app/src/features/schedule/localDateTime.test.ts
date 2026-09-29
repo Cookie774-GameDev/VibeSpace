@@ -26,6 +26,28 @@ describe('localDateTime', () => {
     expect(d.getMinutes()).toBe(0);
   });
 
+  it.each([
+    '2026-02-30T09:00',
+    '2026-13-01T09:00',
+    '2026-06-18T24:00',
+    '2026-06-18T10:60',
+  ])('rejects an invalid local date or time: %s', (input) => {
+    expect(fromLocalDateTimeInput(input)).toBeNaN();
+  });
+
+  it('rejects a local time skipped by daylight saving time', () => {
+    const originalTimeZone = process.env.TZ;
+    try {
+      process.env.TZ = 'America/Chicago';
+      expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('America/Chicago');
+      expect(fromLocalDateTimeInput('2026-03-08T02:30')).toBeNaN();
+      expect(Number.isFinite(fromLocalDateTimeInput('2026-03-08T03:30'))).toBe(true);
+    } finally {
+      if (originalTimeZone === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTimeZone;
+    }
+  });
+
   it('labels today and tomorrow from local midnight', () => {
     const now = new Date(2026, 5, 18, 10, 0, 0, 0).getTime();
     expect(formatLocalDayHeading(now, now)).toBe('Today');
