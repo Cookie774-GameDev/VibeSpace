@@ -387,15 +387,17 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
         </DialogContent>
       </Dialog>
 
-      <LinkEditDialog
-        open={editorOpen}
-        onOpenChange={setEditorOpen}
-        link={editing}
-        defaultGroupId={
-          filter !== 'all' && filter !== 'ungrouped' ? (filter as QuickLinkGroupId) : undefined
-        }
-        groups={groups}
-      />
+      {editorOpen && (
+        <LinkEditDialog
+          open={editorOpen}
+          onOpenChange={setEditorOpen}
+          link={editing}
+          defaultGroupId={
+            filter !== 'all' && filter !== 'ungrouped' ? (filter as QuickLinkGroupId) : undefined
+          }
+          groups={groups}
+        />
+      )}
     </>
   );
 }
