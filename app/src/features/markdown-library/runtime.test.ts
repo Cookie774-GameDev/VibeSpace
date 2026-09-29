@@ -42,7 +42,11 @@ describe('Markdown Library authority', () => {
     });
     compareAndWrite = vi.fn(async ({ path, expectedSha256, content }) => {
       const current = files.get(path);
-      if (current === undefined || (await sha256Text(current)) !== expectedSha256) return false;
+      if (expectedSha256 === null) {
+        if (current !== undefined) return false;
+      } else if (current === undefined || (await sha256Text(current)) !== expectedSha256) {
+        return false;
+      }
       files.set(path, content);
       return true;
     });
@@ -582,5 +586,52 @@ describe('Markdown Library authority', () => {
     await expect(authority.rollback(scope, document.documentId, 1)).rejects.toThrow(
       'markdown_library_rollback_compensation_failed',
     );
+  });
+
+  it('creates, searches body text, edits, and reopens a saved revision', async () => {
+    const first = createMarkdownLibraryAuthority({ filePort, repository, now: () => 900 });
+    const created = await first.create(scope, {
+      title: 'Release notes',
+      body: 'Copper compass 682',
+    });
+    expect(created.title).toBe('Release notes');
+    expect(created.revision).toBe(1);
+    expect(files.get(created.path)).toBe('# Release notes\n\nCopper compass 682');
+    expect(
+      (await first.list(scope, { query: 'compass' })).map((item) => item.documentId),
+    ).toContain(created.documentId);
+
+    const saved = await first.save(
+      scope,
+      created.documentId,
+      created.revision,
+      '# Release notes\n\nUpdated fact',
+    );
+    expect(saved.revision).toBe(2);
+    expect(await first.revisionContent(scope, created.documentId, 1)).toBe(
+      '# Release notes\n\nCopper compass 682',
+    );
+    const reloaded = createMarkdownLibraryAuthority({ filePort, repository, now: () => 1000 });
+    expect(await reloaded.open(scope, created.documentId)).toEqual({
+      document: saved,
+      content: '# Release notes\n\nUpdated fact',
+    });
+    expect(
+      (await reloaded.history(scope, created.documentId)).items.map((entry) => entry.revision),
+    ).toEqual([2, 1]);
+    expect(await reloaded.list(scope, { query: 'compass' })).not.toContainEqual(saved);
+  });
+
+  it('refuses stale edits and duplicate creates without overwriting physical content', async () => {
+    const authority = createMarkdownLibraryAuthority({ filePort, repository, now: () => 900 });
+    const created = await authority.create(scope, { title: 'Daily plan', body: 'First' });
+    const saved = await authority.save(scope, created.documentId, 1, '# Daily plan\n\nSecond');
+    await expect(
+      authority.save(scope, created.documentId, 1, '# Daily plan\n\nStale'),
+    ).rejects.toThrow('markdown_library_revision_stale');
+    await expect(
+      authority.create(scope, { title: 'Daily plan', body: 'Duplicate' }),
+    ).rejects.toThrow('markdown_library_file_exists');
+    expect(files.get(saved.path)).toBe('# Daily plan\n\nSecond');
   });
 });

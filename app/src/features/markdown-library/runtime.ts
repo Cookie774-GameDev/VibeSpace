@@ -14,6 +14,9 @@ import {
   type MarkdownRevisionV1,
 } from './contracts';
 
+/** The native exact-base text mutation command accepts at most 256 KiB. */
+export const MARKDOWN_LIBRARY_MUTATION_MAX_BYTES = 256 * 1024;
+
 export type MarkdownPhysicalFile = Readonly<{
   path: string;
   content: string;
@@ -33,7 +36,7 @@ export interface MarkdownLibraryFilePort {
   compareAndWrite(input: {
     path: string;
     root: string;
-    expectedSha256: `sha256:${string}`;
+    expectedSha256: `sha256:${string}` | null;
     content: string;
   }): Promise<boolean>;
 }
@@ -89,6 +92,30 @@ function pathKey(path: string, root: string): string {
 
 function byteLength(content: string): number {
   return new TextEncoder().encode(content).byteLength;
+}
+
+function writableContent(content: string): string {
+  if (typeof content !== 'string' || byteLength(content) > MARKDOWN_LIBRARY_MUTATION_MAX_BYTES) {
+    throw new Error('markdown_library_content_invalid');
+  }
+  return content;
+}
+
+async function newDocumentPath(scope: MarkdownLibraryScope, title: string): Promise<string> {
+  const clean = title.trim();
+  if (clean.length < 1 || clean.length > 256 || /[\u0000-\u001f\u007f]/u.test(clean)) {
+    throw new Error('markdown_library_title_invalid');
+  }
+  const slug =
+    clean
+      .normalize('NFKD')
+      .toLocaleLowerCase('en-US')
+      .replace(/[^a-z0-9]+/gu, '-')
+      .replace(/^-|-$/gu, '')
+      .slice(0, 48) || 'document';
+  const digest = (await sha256Text(clean)).slice('sha256:'.length, 'sha256:'.length + 12);
+  const separator = scope.root.includes('\\') ? '\\' : '/';
+  return `${scope.root}${separator}${slug}-${digest}.md`;
 }
 
 function inferKind(path: string): MarkdownLibraryDocumentKind {
@@ -511,12 +538,100 @@ export function createMarkdownLibraryAuthority(input: {
             (document) =>
               (!filter.kind || document.kind === filter.kind) &&
               (!query ||
-                [document.title, document.path, document.kind].some((value) =>
-                  value.toLocaleLowerCase('en-US').includes(query),
-                )),
+                [
+                  document.title,
+                  document.path,
+                  document.kind,
+                  snapshot.revisions.find(
+                    (revision) =>
+                      revision.documentId === document.documentId &&
+                      revision.revision === document.revision,
+                  )?.content ?? '',
+                ].some((value) => value.toLocaleLowerCase('en-US').includes(query))),
           )
           .slice(0, limit),
       );
+    },
+
+    async create(
+      scopeInput: MarkdownLibraryScope,
+      draft: Readonly<{ title: string; body: string }>,
+    ): Promise<MarkdownDocumentMetadataV1> {
+      const { scope, snapshot } = await read(scopeInput);
+      const path = await newDocumentPath(scope, draft.title);
+      const content = writableContent(`# ${draft.title.trim()}\n\n${draft.body}`);
+      if (
+        snapshot.documents.some(
+          (document) => pathKey(document.path, scope.root) === pathKey(path, scope.root),
+        )
+      ) {
+        throw new Error('markdown_library_file_exists');
+      }
+      const created = await invokeScopeDependency(scope, () =>
+        input.filePort.compareAndWrite({ path, root: scope.root, expectedSha256: null, content }),
+      );
+      if (!created) throw new Error('markdown_library_file_exists');
+      const indexed = await authority.reindex(scope);
+      const document = indexed.find(
+        (candidate) => pathKey(candidate.path, scope.root) === pathKey(path, scope.root),
+      );
+      if (!document) throw new Error('markdown_library_index_conflict');
+      return document;
+    },
+
+    async open(scopeInput: MarkdownLibraryScope, id: string) {
+      const { scope, snapshot } = await read(scopeInput);
+      const document = snapshot.documents.find((candidate) => candidate.documentId === id);
+      if (!document) throw new Error('markdown_library_revision_unavailable');
+      const content = await invokeScopeDependency(scope, () =>
+        input.filePort.readText({ path: document.path, root: scope.root }),
+      );
+      if (content === null || (await sha256Text(content)) !== document.contentSha256) {
+        throw new Error('markdown_library_file_stale');
+      }
+      return Object.freeze({ document, content });
+    },
+
+    async save(
+      scopeInput: MarkdownLibraryScope,
+      id: string,
+      expectedRevision: number,
+      contentInput: string,
+    ): Promise<MarkdownDocumentMetadataV1> {
+      const { scope, snapshot } = await read(scopeInput);
+      const document = snapshot.documents.find((candidate) => candidate.documentId === id);
+      if (!document || document.revision !== expectedRevision) {
+        throw new Error('markdown_library_revision_stale');
+      }
+      const content = writableContent(contentInput);
+      if ((await sha256Text(content)) === document.contentSha256) return document;
+      const written = await invokeScopeDependency(scope, () =>
+        input.filePort.compareAndWrite({
+          path: document.path,
+          root: scope.root,
+          expectedSha256: document.contentSha256,
+          content,
+        }),
+      );
+      if (!written) throw new Error('markdown_library_file_stale');
+      const indexed = await authority.reindex(scope);
+      const saved = indexed.find((candidate) => candidate.documentId === id);
+      if (!saved || saved.contentSha256 !== (await sha256Text(content))) {
+        throw new Error('markdown_library_index_conflict');
+      }
+      return saved;
+    },
+
+    async revisionContent(scopeInput: MarkdownLibraryScope, id: string, revision: number) {
+      const { snapshot } = await read(scopeInput);
+      if (!snapshot.documents.some((document) => document.documentId === id)) {
+        throw new Error('markdown_library_revision_unavailable');
+      }
+      const target = snapshot.revisions.find(
+        (entry) => entry.documentId === id && entry.revision === revision,
+      );
+      if (!target) throw new Error('markdown_library_revision_unavailable');
+      return target.content;
     },
 
     async history(
@@ -729,6 +844,24 @@ export function createMarkdownLibraryAuthority(input: {
     ) {
       const scope = normalizeScope(scopeInput);
       return serializeScopeOperation(scope, () => authority.list(scope, filter));
+    },
+    create(scopeInput: MarkdownLibraryScope, draft: Readonly<{ title: string; body: string }>) {
+      const scope = normalizeScope(scopeInput);
+      return serializeScopeOperation(scope, () => authority.create(scope, draft));
+    },
+    open(scopeInput: MarkdownLibraryScope, id: string) {
+      const scope = normalizeScope(scopeInput);
+      return serializeScopeOperation(scope, () => authority.open(scope, id));
+    },
+    save(scopeInput: MarkdownLibraryScope, id: string, expectedRevision: number, content: string) {
+      const scope = normalizeScope(scopeInput);
+      return serializeScopeOperation(scope, () =>
+        authority.save(scope, id, expectedRevision, content),
+      );
+    },
+    revisionContent(scopeInput: MarkdownLibraryScope, id: string, revision: number) {
+      const scope = normalizeScope(scopeInput);
+      return serializeScopeOperation(scope, () => authority.revisionContent(scope, id, revision));
     },
     history(
       scopeInput: MarkdownLibraryScope,

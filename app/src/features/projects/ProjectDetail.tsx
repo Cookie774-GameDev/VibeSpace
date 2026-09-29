@@ -66,6 +66,7 @@ import {
   BROWSER_CHAT_PROVIDERS,
   type BrowserChatProviderId,
 } from '@/features/browser-chat/providerRegistry';
+import { MarkdownLibraryPanel } from '@/features/markdown-library/MarkdownLibraryPanel';
 
 const providerProjectLinkRepo = createProviderProjectLinkRepository(db);
 const linkableProviders = BROWSER_CHAT_PROVIDERS.filter(
@@ -476,6 +477,14 @@ export function ProjectDetail() {
               )}
             </div>
           </section>
+
+          {accountId && (
+            <MarkdownLibraryPanel
+              key={`${accountId}:${projectId}`}
+              accountId={accountId}
+              projectId={String(projectId)}
+            />
+          )}
 
           {/* Browser Chat provider project pointers */}
           <section
