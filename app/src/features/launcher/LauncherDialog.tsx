@@ -49,6 +49,8 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
 
   const [filter, setFilter] = React.useState<GroupFilter>('all');
   const [search, setSearch] = React.useState('');
+  const [launchingAll, setLaunchingAll] = React.useState(false);
+  const launchingAllRef = React.useRef(false);
 
   // Edit state
   const [editing, setEditing] = React.useState<QuickLink | null>(null);
@@ -87,6 +89,39 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
   const onLaunch = async (link: QuickLink) => {
     const res = await launchLink(link);
     if (res.ok) onOpenChange(false);
+  };
+
+  const onLaunchAll = async () => {
+    if (launchingAllRef.current || filtered.length === 0) return;
+    const selected = [...filtered];
+    if (
+      !window.confirm(`Launch ${selected.length} visible link${selected.length === 1 ? '' : 's'}?`)
+    ) {
+      return;
+    }
+
+    launchingAllRef.current = true;
+    setLaunchingAll(true);
+    let launched = 0;
+    let failed = 0;
+    try {
+      for (const link of selected) {
+        try {
+          if ((await launchLink(link)).ok) launched += 1;
+          else failed += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      if (failed > 0) {
+        toast.warning('Some links could not launch', `${launched} launched, ${failed} failed.`);
+      } else {
+        toast.success('Links launched', `${launched} launched.`);
+      }
+    } finally {
+      launchingAllRef.current = false;
+      setLaunchingAll(false);
+    }
   };
 
   const onAddStarters = async () => {
@@ -225,12 +260,16 @@ export function LauncherDialog({ open, onOpenChange }: LauncherDialogProps) {
                 Ungrouped
               </FilterChip>
               <Button
-                variant="ghost"
+                variant="secondary"
                 size="sm"
-                onClick={onAddGroup}
-                aria-label="Add group"
+                onClick={() => void onLaunchAll()}
+                disabled={filtered.length === 0 || launchingAll}
+                aria-label={`Launch All ${filtered.length} visible links`}
                 className="ml-auto"
               >
+                {launchingAll ? 'Launching…' : `Launch All (${filtered.length})`}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={onAddGroup} aria-label="Add group">
                 <FolderPlus className="h-3.5 w-3.5" /> Add group
               </Button>
             </div>
