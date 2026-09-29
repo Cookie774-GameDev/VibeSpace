@@ -62,29 +62,35 @@ afterEach(() => {
 
 describe('Workbench terminal panel close', () => {
   it('leaves the live panel and PTY alone when the user cancels', () => {
-    const confirm = vi.fn().mockReturnValue(false);
+    const confirm = vi.fn();
     vi.stubGlobal('confirm', confirm);
     const onClose = renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Close Terminal' }));
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(screen.getByRole('dialog', { name: 'Stop terminal?' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Stop terminal?' })).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
     expect(closeSession).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
 
   it('removes the panel only after exact session termination succeeds', async () => {
-    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    const confirm = vi.fn();
+    vi.stubGlobal('confirm', confirm);
     closeSession.mockResolvedValue('stopped');
     const onClose = renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Close Terminal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop terminal' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(confirm).not.toHaveBeenCalled();
     expect(closeSession).toHaveBeenCalledWith('pty-owned', 'project-owned', expect.any(Function));
   });
 
   it('keeps the panel available when termination fails', async () => {
-    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
     closeSession.mockRejectedValue(new Error('session binding changed'));
     const onClose = renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Close Terminal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop terminal' }));
     expect((await screen.findByRole('alert')).textContent).toContain('session binding changed');
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Close Terminal' }).hasAttribute('disabled')).toBe(
@@ -104,10 +110,10 @@ describe('Workbench terminal panel close', () => {
 
   it('uses the mounted pane session during the onReady persistence gap', async () => {
     paneSession.mockReturnValue('pty-just-started');
-    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
     closeSession.mockResolvedValue('stopped');
     const onClose = renderPanel({ ...panel, settings: {} });
     fireEvent.click(screen.getByRole('button', { name: 'Close Terminal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop terminal' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     expect(paneSession).toHaveBeenCalledWith('terminal-panel-owned');
     expect(closeSession).toHaveBeenCalledWith(
@@ -115,5 +121,15 @@ describe('Workbench terminal panel close', () => {
       'project-owned',
       expect.any(Function),
     );
+  });
+
+  it('retains the panel if the live pane session changes while confirmation is open', async () => {
+    paneSession.mockReturnValueOnce('pty-owned').mockReturnValue('pty-replaced');
+    const onClose = renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Close Terminal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop terminal' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Terminal session changed');
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

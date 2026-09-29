@@ -1,6 +1,15 @@
 import * as React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Copy, GripHorizontal, Minus, X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useAuthStore } from '@/stores/auth';
 import { getTerminalPaneSessionId } from '@/features/terminals/terminalClearRegistry';
 import { RESIZE_DIRECTIONS, resizeWorkbenchBounds, type ResizeDirection } from './workbenchResize';
@@ -36,6 +45,7 @@ function WorkbenchPanelComponent({
 }: WorkbenchPanelProps) {
   const [closing, setClosing] = React.useState(false);
   const [closeError, setCloseError] = React.useState<string | null>(null);
+  const [terminalCloseSessionId, setTerminalCloseSessionId] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState({
     x: panel.x,
     y: panel.y,
@@ -91,20 +101,8 @@ function WorkbenchPanelComponent({
         ? (getTerminalPaneSessionId(panel.id) ?? panel.settings.resourceId)
         : undefined;
     if (panel.kind === 'terminal' && terminalSessionId) {
-      if (!window.confirm('Stop this terminal process and close its Workbench panel?')) return;
-      setClosing(true);
       setCloseError(null);
-      try {
-        const projectId = useAuthStore.getState().projectId ?? null;
-        await closeWorkbenchTerminalSession(terminalSessionId, projectId, (command, args) =>
-          invoke(command, args),
-        );
-        onClose();
-      } catch (cause) {
-        setCloseError(cause instanceof Error ? cause.message : String(cause));
-      } finally {
-        setClosing(false);
-      }
+      setTerminalCloseSessionId(terminalSessionId);
       return;
     }
     if (panel.kind !== 'native-app' && panel.kind !== 'ade') {
@@ -115,6 +113,30 @@ function WorkbenchPanelComponent({
     setCloseError(null);
     try {
       await detachNativeAppSurface(panel.id);
+      onClose();
+    } catch (cause) {
+      setCloseError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setClosing(false);
+    }
+  };
+
+  const confirmTerminalClose = async () => {
+    const sessionId = terminalCloseSessionId;
+    if (!sessionId || closing) return;
+    setTerminalCloseSessionId(null);
+    const liveSessionId = getTerminalPaneSessionId(panel.id) ?? panel.settings.resourceId;
+    if (liveSessionId !== sessionId) {
+      setCloseError('Terminal session changed. Try closing again.');
+      return;
+    }
+    setClosing(true);
+    setCloseError(null);
+    try {
+      const projectId = useAuthStore.getState().projectId ?? null;
+      await closeWorkbenchTerminalSession(sessionId, projectId, (command, args) =>
+        invoke(command, args),
+      );
       onClose();
     } catch (cause) {
       setCloseError(cause instanceof Error ? cause.message : String(cause));
@@ -229,6 +251,29 @@ function WorkbenchPanelComponent({
         </button>
       </header>
       {closeError ? <p role="alert">{closeError}</p> : null}
+      <Dialog
+        open={terminalCloseSessionId !== null}
+        onOpenChange={(open) => {
+          if (!open) setTerminalCloseSessionId(null);
+        }}
+      >
+        <DialogContent hideClose>
+          <DialogHeader>
+            <DialogTitle>Stop terminal?</DialogTitle>
+            <DialogDescription>
+              Stop this terminal process and close its Workbench panel?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setTerminalCloseSessionId(null)}>
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void confirmTerminalClose()}>
+              Stop terminal
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <div
         className="workbench-panel-body"
         aria-hidden={panel.minimized}
