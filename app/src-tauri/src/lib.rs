@@ -1100,10 +1100,26 @@ mod tests {
         assert!(tray_show_should_reveal_main(false, false));
     }
 
-    const ORDINARY_HANDLER_AUTHORITY: &str = "\\
+    const ORDINARY_HANDLER_AUTHORITY: &str = "\
 greet
+notification_branding::vibespace_notify
 desktop_connector::desktop_connector_status
 desktop_connector::desktop_connector_setup
+relay_engine::relay_engine_start
+relay_engine::relay_engine_stop
+relay_engine::relay_engine_status
+relay_engine::relay_policy_set
+relay_engine::relay_policy_snapshot
+relay_engine::relay_participant_bind
+relay_engine::relay_tools_list
+relay_engine::relay_participant_call
+relay_engine::relay_human_room_snapshot
+relay_engine::relay_human_message
+relay_engine::relay_participant_unbind
+relay_active_context::relay_active_context_open
+relay_active_context::relay_active_context_update
+relay_active_context::relay_active_context_close
+relay_active_context::relay_active_context_snapshot
 jarvis_ambient_overlay::set_jarvis_ambient_snapshot
 jarvis_ambient_overlay::jarvis_ambient_renderer_ready
 app_version
@@ -1349,9 +1365,9 @@ wallpaper_master::wallpaper_find_local_master
 wallpaper_master::wallpaper_cache_full_master
 wallpaper_master::wallpaper_full_cache_path";
     const ORDINARY_HANDLER_AUTHORITY_SHA256: &str =
-        "f763276ceb38e3ca8db9eb62c8c027a4ca5e6dc160b434fa0029d32a1cf4d257";
+        "ea4831959f54f2bac3063edce9cebb3ebe2d3b79d2e4f35d7f5befaef6a2b692";
     const ORDINARY_HANDLER_NORMALIZED_SHA256: &str =
-        "30d221097e62ad758506c78b17ad8776ea9313df63b7ebe331e0db417a1b3792";
+        "b56012d19b16393fc83877569f0a0b285b88add2627b88d2b37cc95e7802cfcb";
 
     #[derive(Debug, PartialEq, Eq)]
     struct NativeBuilderManifest<'a> {

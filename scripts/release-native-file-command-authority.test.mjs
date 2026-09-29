@@ -29,7 +29,7 @@ test('ordinary native authority registers the exact bounded file mutation comman
   const commands = handler
     .split(/\r?\n/u)
     .map((line) => line.trim().replace(/,$/u, ''))
-    .filter((line) => line && !line.startsWith('#[cfg('));
+    .filter((line) => line && !line.startsWith('#[cfg(') && !line.startsWith('//'));
 
   for (const command of ['fsread::fs_rename_file', 'fsread::fs_delete_file']) {
     assert.equal(
@@ -49,6 +49,11 @@ test('ordinary native authority registers the exact bounded file mutation comman
   );
   assert.ok(authorityMatch, 'frozen ordinary command authority must be present');
   const frozenAuthority = authorityMatch[1].replace(/\r\n/gu, '\n');
+  assert.deepEqual(
+    frozenAuthority.split('\n'),
+    commands,
+    'frozen ordinary command authority must match the ordered registered commands',
+  );
   const normalizedHandler = handler
     .split(/\r?\n/u)
     .map((line) => line.trim().replace(/,$/u, ''))
