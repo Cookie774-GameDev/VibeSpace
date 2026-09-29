@@ -317,6 +317,43 @@ describe('repository retrieval seam', () => {
     expect(parse.mock.calls.map(([file]) => file.language)).not.toContain('markdown');
   });
 
+  it('finds a fact in verified note content when metadata paths miss the question', async () => {
+    const { dependencies, files, readFile } = await fixture();
+    const notes = [
+      ['02-meeting.md', '# Planning meeting\nThe meeting is Thursday at 14:30.'],
+      ['04-bridge.md', '# Footbridge\nThe footbridge crosses North Creek.'],
+    ] as const;
+    for (const [path, content] of notes) {
+      files.set(path, {
+        path, content, contentHash: await contentHash(content),
+        byteLength: new TextEncoder().encode(content).byteLength,
+        language: 'markdown', ignored: false, generated: false,
+        secretRisk: false, trusted: true,
+      });
+    }
+    const base = snapshot();
+    dependencies.loadActiveContextMap = async () => ({
+      ...base,
+      entities: [...base.entities, ...notes.map(([path], index) => ({
+        ...base.entities[0]!, id: `entity-note-${index}`, label: path, path,
+        summary: undefined, provenanceIds: [`provenance-note-${index}`],
+      }))],
+      provenance: [...base.provenance, ...notes.map(([path], index) => ({
+        ...base.provenance[0]!, id: `provenance-note-${index}`,
+        targetId: `entity-note-${index}`, path,
+      }))],
+    });
+    const result = await createRepositoryRetrievalService(dependencies).retrieve({
+      accountId: 'account-1', projectId: 'project-1', tokenBudget: 100,
+      taskText: 'Please consult the Cedar Lantern project notes. Could you check the entire project history and tell me which creek does the footbridge cross?',
+    });
+    expect(result.items[0]).toMatchObject({
+      path: '04-bridge.md', content: expect.stringContaining('North Creek'),
+      evidence: { contentHash: await contentHash(notes[1][1]) },
+    });
+    expect(readFile.mock.calls.map(([input]) => input.path)).not.toContain('.env');
+  });
+
   it('parses only changed hashes and does not rebuild unchanged repository files', async () => {
     const { dependencies, files, parse } = await fixture();
     const service = createRepositoryRetrievalService(dependencies);

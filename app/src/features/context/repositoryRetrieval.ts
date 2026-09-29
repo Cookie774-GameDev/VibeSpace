@@ -157,10 +157,17 @@ function stableText(value: unknown, maximum = 4_096): value is string {
   );
 }
 
+const QUERY_STOPWORDS = new Set([
+  'about', 'across', 'and', 'answer', 'check', 'consult', 'could', 'does',
+  'entire', 'evidence', 'for', 'from', 'history', 'implementation', 'in',
+  'into', 'is', 'me', 'notes', 'of', 'please', 'project', 'source', 'tell',
+  'the', 'this', 'what', 'when', 'where', 'which', 'whole', 'with', 'you',
+]);
+
 function terms(value: string): readonly string[] {
   return Object.freeze([
     ...new Set(value.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}_-]{2,}/gu) ?? []),
-  ].slice(0, 64));
+  ].filter((term) => !QUERY_STOPWORDS.has(term)).slice(0, 64));
 }
 
 function relevance(path: string, summary: string | undefined, queryTerms: readonly string[]): number {
@@ -501,12 +508,20 @@ export function createRepositoryRetrievalService(
         deletedPaths,
       });
       const parseByPath = new Map(structuralSnapshot.files.map((file) => [file.path, file]));
+      const readByPath = new Map(reads.map((file) => [file.path, file]));
+      const queryTerms = terms(request.taskText);
       const signalByPath = Object.fromEntries(
         eligible.map((candidate) => [
           candidate.entity.path!,
           {
             lexicalRelevance: candidate.lexicalRelevance,
-            taskRelevance: candidate.taskRelevance,
+            // Verified, policy-eligible bytes can resolve facts absent from a
+            // filename or summary. They only rank already-authorized files.
+            taskRelevance: Math.max(
+              candidate.taskRelevance,
+              relevance(candidate.entity.path!,
+                readByPath.get(candidate.entity.path!)?.content, queryTerms),
+            ),
             explicit: candidate.explicit,
             active: candidate.active,
             importedByActiveFile: candidate.importedByActiveFile,
