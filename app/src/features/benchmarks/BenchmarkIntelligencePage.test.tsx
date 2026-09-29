@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
@@ -189,6 +189,52 @@ describe('BenchmarkIntelligencePage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show more models (100 of 120)' }));
     expect(screen.getAllByRole('row')).toHaveLength(121);
   }, 15000);
+
+  it('renders raw and expected derived metrics from a pinned synthetic sample', async () => {
+    const recorded = await api.fetchBenchmarkLeaderboard();
+    api.fetchBenchmarkLeaderboard.mockResolvedValueOnce({
+      ...recorded,
+      dataset: {
+        ...recorded.dataset,
+        completeness: {
+          state: 'complete',
+          pagination: {
+            mode: 'page',
+            expectedPages: 1,
+            receivedPages: 1,
+            pageSize: 2,
+            receivedSourceRows: 2,
+            expectedSourceRows: 2,
+            complete: true,
+          },
+        },
+      },
+      latestRun: {
+        status: 'success',
+        completedAt: '2026-08-14T23:07:00.000Z',
+        datasetId: 'fixture-sample-run-001',
+        pagination: { complete: true },
+        errorCodes: [],
+      },
+    });
+
+    render(<BenchmarkIntelligencePage />);
+    fireEvent.click(screen.getByRole('button', { name: /^table$/i }));
+
+    const first = await screen.findByRole('row', { name: /Claude Opus 5 \(Max Effort\)/ });
+    const firstMetrics = within(first)
+      .getAllByRole('cell')
+      .slice(2, 8)
+      .map((cell) => cell.textContent);
+    expect(firstMetrics).toEqual(['61', '$0.5', '$5', '$25', '$10', '122']);
+
+    const second = screen.getByRole('row', { name: /GPT-5\.6 Sol \(max\)/ });
+    const secondMetrics = within(second)
+      .getAllByRole('cell')
+      .slice(2, 8)
+      .map((cell) => cell.textContent);
+    expect(secondMetrics).toEqual(['59', '$0.3', '$2', '$12', '$4.5', '196.67']);
+  });
 
   it('searches the full feed in Chart and Table, combines with provider, and clears', async () => {
     const saved = await api.fetchBenchmarkLeaderboard();
