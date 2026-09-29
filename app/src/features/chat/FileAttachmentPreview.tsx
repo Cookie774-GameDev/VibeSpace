@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { FileText, Loader2, X } from 'lucide-react';
-import { readTextFileSample } from '@/lib/fs';
+import { readTextFileSample, statProjectPath } from '@/lib/fs';
 
 const MAX_PREVIEW_BYTES = 64 * 1024;
 
 type PreviewState =
   | { status: 'loading' }
-  | { status: 'ready'; content: string }
+  | { status: 'ready'; content: string; truncated: boolean; sizeBytes?: number }
   | { status: 'error'; message: string };
 
 export function FileAttachmentPreview({
@@ -24,10 +24,27 @@ export function FileAttachmentPreview({
   useEffect(() => {
     let cancelled = false;
     setState({ status: 'loading' });
-    void readTextFileSample(path, MAX_PREVIEW_BYTES, { root: projectRoot }).then((result) => {
+    void readTextFileSample(path, MAX_PREVIEW_BYTES, { root: projectRoot }).then(async (result) => {
       if (cancelled) return;
       if (result.ok) {
-        setState({ status: 'ready', content: result.content });
+        let sizeBytes: number | undefined;
+        try {
+          const stat = await statProjectPath(path, false, { root: projectRoot });
+          if (stat.ok && stat.kind === 'file') sizeBytes = stat.size;
+        } catch {
+          // The bounded sample remains useful when file metadata is unavailable.
+        }
+        if (cancelled) return;
+        const sampledBytes = new TextEncoder().encode(result.content).byteLength;
+        setState({
+          status: 'ready',
+          content: result.content,
+          truncated:
+            sizeBytes === undefined
+              ? sampledBytes >= MAX_PREVIEW_BYTES
+              : sizeBytes > MAX_PREVIEW_BYTES,
+          sizeBytes,
+        });
       } else {
         setState({
           status: 'error',
@@ -65,9 +82,21 @@ export function FileAttachmentPreview({
       ) : state.status === 'error' ? (
         <p className="px-3 py-4 text-metadata text-destructive">{state.message}</p>
       ) : (
-        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[12px] leading-5 text-foreground">
-          {state.content}
-        </pre>
+        <>
+          <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[12px] leading-5 text-foreground">
+            {state.content}
+          </pre>
+          {state.truncated ? (
+            <p
+              role="note"
+              className="border-t border-border/70 px-3 py-2 text-metadata text-muted-foreground"
+            >
+              {state.sizeBytes === undefined
+                ? 'Preview may be truncated after 64 KiB. Open the project file for full content.'
+                : `Showing first 64 KiB of ${Math.ceil(state.sizeBytes / 1024)} KiB. Open the project file for full content.`}
+            </p>
+          ) : null}
+        </>
       )}
     </aside>
   );
