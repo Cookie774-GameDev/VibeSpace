@@ -111,6 +111,7 @@ export function Plugins() {
     selectInstalledPluginIdsForAccount(state, accountId),
   );
   const installPlugin = usePluginStore((state) => state.installPlugin);
+  const uninstallPlugin = usePluginStore((state) => state.uninstallPlugin);
   const pinnedPluginIds = usePluginStore((state) =>
     selectPinnedPluginIdsForAccount(state, accountId),
   );
@@ -120,6 +121,10 @@ export function Plugins() {
   const [query, setQuery] = React.useState('');
   const [filter, setFilter] = React.useState<Filter>('all');
   const [selected, setSelected] = React.useState<ClassifiedPluginManifest | null>(null);
+  const [uninstallCandidate, setUninstallCandidate] = React.useState<{
+    accountId: string;
+    plugin: ClassifiedPluginManifest;
+  } | null>(null);
   const [authorizationPanel, setAuthorizationPanel] = React.useState<AuthorizationPanel | null>(
     null,
   );
@@ -452,52 +457,65 @@ export function Plugins() {
                       {plugin.tools.length} tools declared
                     </span>
                   )}
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={connection?.state === 'connected' ? 'outline' : 'default'}
-                    disabled={
-                      !accountId || (!isExternallyBlocked && !isConnectableStatus(plugin.status))
-                    }
-                    onClick={() => {
-                      if (connection?.state === 'connected') {
-                        setSelected(plugin);
-                      } else if (isExternallyBlocked) {
-                        setSelected(plugin);
-                      } else if (!isInstalled) {
-                        installPlugin(accountId, plugin.id);
-                        toast.success(
-                          `${plugin.name} installed`,
-                          'The connector is ready. Connect your provider account when you are ready.',
-                        );
-                      } else if (usesProviderAuthorization(plugin)) {
-                        void startProviderAuthorization(plugin);
-                      } else {
-                        openManualProviderSetup(plugin);
-                      }
-                    }}
-                  >
-                    {connection?.state === 'connected' ? (
-                      <>
-                        <Settings2 className="h-3.5 w-3.5" /> Manage
-                      </>
-                    ) : isExternallyBlocked ? (
-                      <>
-                        <ExternalLink className="h-3.5 w-3.5" /> View requirements
-                      </>
-                    ) : !isInstalled ? (
-                      <>
-                        <Download className="h-3.5 w-3.5" /> Install
-                      </>
-                    ) : (
-                      <>
-                        <KeyRound className="h-3.5 w-3.5" />
-                        {connectionState === 'expired' || connectionState === 'reauthorize'
-                          ? 'Reconnect'
-                          : 'Connect'}
-                      </>
+                  <div className="flex items-center gap-2">
+                    {isInstalled && !connection && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={!accountId}
+                        onClick={() => setUninstallCandidate({ accountId, plugin })}
+                      >
+                        Uninstall
+                      </Button>
                     )}
-                  </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={connection?.state === 'connected' ? 'outline' : 'default'}
+                      disabled={
+                        !accountId || (!isExternallyBlocked && !isConnectableStatus(plugin.status))
+                      }
+                      onClick={() => {
+                        if (connection?.state === 'connected') {
+                          setSelected(plugin);
+                        } else if (isExternallyBlocked) {
+                          setSelected(plugin);
+                        } else if (!isInstalled) {
+                          installPlugin(accountId, plugin.id);
+                          toast.success(
+                            `${plugin.name} installed`,
+                            'The connector is ready. Connect your provider account when you are ready.',
+                          );
+                        } else if (usesProviderAuthorization(plugin)) {
+                          void startProviderAuthorization(plugin);
+                        } else {
+                          openManualProviderSetup(plugin);
+                        }
+                      }}
+                    >
+                      {connection?.state === 'connected' ? (
+                        <>
+                          <Settings2 className="h-3.5 w-3.5" /> Manage
+                        </>
+                      ) : isExternallyBlocked ? (
+                        <>
+                          <ExternalLink className="h-3.5 w-3.5" /> View requirements
+                        </>
+                      ) : !isInstalled ? (
+                        <>
+                          <Download className="h-3.5 w-3.5" /> Install
+                        </>
+                      ) : (
+                        <>
+                          <KeyRound className="h-3.5 w-3.5" />
+                          {connectionState === 'expired' || connectionState === 'reauthorize'
+                            ? 'Reconnect'
+                            : 'Connect'}
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
                 {connection?.state === 'connected' && (
                   <div className="flex items-center justify-end gap-1">
@@ -559,6 +577,45 @@ export function Plugins() {
           No plugins match this search.
         </div>
       )}
+
+      <Dialog
+        open={Boolean(uninstallCandidate && uninstallCandidate.accountId === accountId)}
+        onOpenChange={(open) => !open && setUninstallCandidate(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Uninstall {uninstallCandidate?.plugin.name}?</DialogTitle>
+            <DialogDescription>
+              This removes the connector from this account and its Workbench pins. Disconnect it
+              first if it has a provider connection.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setUninstallCandidate(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                if (!uninstallCandidate || uninstallCandidate.accountId !== accountId) return;
+                const removed = uninstallPlugin(accountId, uninstallCandidate.plugin.id);
+                if (removed) {
+                  toast.success(`${uninstallCandidate.plugin.name} uninstalled`);
+                } else {
+                  toast.warning(
+                    'Unable to uninstall connector',
+                    'Disconnect this connector before uninstalling it.',
+                  );
+                }
+                setUninstallCandidate(null);
+              }}
+            >
+              Uninstall
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <PluginSetupDialog
         accountId={accountId}

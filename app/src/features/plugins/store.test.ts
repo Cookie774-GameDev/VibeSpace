@@ -52,6 +52,49 @@ describe('plugin connection account scopes', () => {
     expect(selectInstalledPluginIdsForAccount(usePluginStore.getState(), ' user-a')).toEqual([]);
   });
 
+  it('uninstalls only a disconnected exact plugin, removes its pin, and stays removed after rehydration', async () => {
+    const store = usePluginStore.getState();
+    store.installPlugin('user-a', 'mock-connector');
+    store.installPlugin('user-a', 'github');
+    store.installPlugin('user-b', 'mock-connector');
+    store.pinPlugin('user-a', 'mock-connector');
+    store.pinPlugin('user-a', 'github');
+    store.pinPlugin('user-b', 'mock-connector');
+
+    expect(store.uninstallPlugin('user-a', 'mock-connector')).toBe(true);
+    expect(selectInstalledPluginIdsForAccount(usePluginStore.getState(), 'user-a')).toEqual([
+      'github',
+    ]);
+    expect(usePluginStore.getState().pinnedPluginIdsByAccount['user-a']).toEqual(['github']);
+    expect(selectInstalledPluginIdsForAccount(usePluginStore.getState(), 'user-b')).toEqual([
+      'mock-connector',
+    ]);
+    expect(usePluginStore.getState().pinnedPluginIdsByAccount['user-b']).toEqual([
+      'mock-connector',
+    ]);
+    expect(store.uninstallPlugin('user-a', 'mock-connector')).toBe(false);
+    expect(syncMock.enqueueMutation).not.toHaveBeenCalled();
+
+    await usePluginStore.persist.rehydrate();
+    expect(selectInstalledPluginIdsForAccount(usePluginStore.getState(), 'user-a')).toEqual([
+      'github',
+    ]);
+    expect(usePluginStore.getState().pinnedPluginIdsByAccount['user-a']).toEqual(['github']);
+  });
+
+  it('refuses uninstall while connection metadata still exists', () => {
+    const store = usePluginStore.getState();
+    store.installPlugin('user-a', 'mock-connector');
+    store.upsertConnection(connection('user-a', 'mock-connector'));
+    expect(store.uninstallPlugin('user-a', 'mock-connector')).toBe(false);
+    expect(selectInstalledPluginIdsForAccount(usePluginStore.getState(), 'user-a')).toEqual([
+      'mock-connector',
+    ]);
+    expect(selectPluginConnectionsForAccount(usePluginStore.getState(), 'user-a')).toHaveProperty(
+      'mock-connector',
+    );
+  });
+
   it('uses a reversible, collision-safe v2 sync row id', () => {
     expect(pluginConnectionSyncRowId('acct/a b', 'github/issues')).toBe(
       'v2:acct%2Fa%20b:github%2Fissues',

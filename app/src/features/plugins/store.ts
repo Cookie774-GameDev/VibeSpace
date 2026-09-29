@@ -15,6 +15,7 @@ export interface PluginStore {
   installedPluginIdsByAccount: Record<string, string[]>;
   pinnedPluginIdsByAccount: Record<string, string[]>;
   installPlugin(accountId: string, pluginId: string): void;
+  uninstallPlugin(accountId: string, pluginId: string): boolean;
   upsertConnection(connection: PluginConnection): void;
   removeConnection(accountId: string, pluginId: string): void;
   setEnabled(accountId: string, pluginId: string, enabled: boolean): void;
@@ -207,6 +208,35 @@ export const usePluginStore = create<PluginStore>()(
             [accountId]: [...selectInstalledPluginIdsForAccount(state, accountId), pluginId],
           },
         }));
+      },
+      uninstallPlugin: (accountId, pluginId) => {
+        exactId(accountId, 'Account ID');
+        exactId(pluginId, 'Plugin ID');
+        let removed = false;
+        set((state) => {
+          if (
+            selectPluginConnectionsForAccount(state, accountId)[pluginId] ||
+            !selectInstalledPluginIdsForAccount(state, accountId).includes(pluginId)
+          ) {
+            return state;
+          }
+          const installedPluginIdsByAccount = { ...state.installedPluginIdsByAccount };
+          const installed = selectInstalledPluginIdsForAccount(state, accountId).filter(
+            (id) => id !== pluginId,
+          );
+          if (installed.length > 0) installedPluginIdsByAccount[accountId] = installed;
+          else delete installedPluginIdsByAccount[accountId];
+
+          const pinnedPluginIdsByAccount = { ...state.pinnedPluginIdsByAccount };
+          const pinned = selectPinnedPluginIdsForAccount(state, accountId).filter(
+            (id) => id !== pluginId,
+          );
+          if (pinned.length > 0) pinnedPluginIdsByAccount[accountId] = pinned;
+          else delete pinnedPluginIdsByAccount[accountId];
+          removed = true;
+          return { installedPluginIdsByAccount, pinnedPluginIdsByAccount };
+        });
+        return removed;
       },
       upsertConnection: (connection) => {
         exactId(connection.accountId, 'Account ID');

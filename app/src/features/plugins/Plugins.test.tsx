@@ -202,6 +202,46 @@ describe('Plugins settings page', () => {
     });
   }, 15_000);
 
+  it('confirms uninstall and updates a disconnected connector card without a reload', async () => {
+    renderPlugins();
+    fireEvent.change(screen.getByLabelText('Search plugins'), {
+      target: { value: 'Mock Connector' },
+    });
+    const card = screen.getByTestId('plugin-card-mock-connector');
+    fireEvent.click(within(card).getByRole('button', { name: /^install$/i }));
+    expect(within(card).getByRole('button', { name: /^connect$/i })).toBeTruthy();
+    fireEvent.click(within(card).getByRole('button', { name: /^uninstall$/i }));
+    expect(
+      screen.getByRole('dialog', { name: /uninstall vibeSpace mock connector/i }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(within(card).getByRole('button', { name: /^connect$/i })).toBeTruthy();
+    fireEvent.click(within(card).getByRole('button', { name: /^uninstall$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^uninstall$/i }));
+    expect(within(card).getByRole('button', { name: /^install$/i })).toBeTruthy();
+    expect(usePluginStore.getState().installedPluginIdsByAccount['account-a']).toBeUndefined();
+    expect(management.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('offers uninstall only after disconnect completes', async () => {
+    renderPlugins();
+    fireEvent.change(screen.getByLabelText('Search plugins'), {
+      target: { value: 'Mock Connector' },
+    });
+    const card = screen.getByTestId('plugin-card-mock-connector');
+    fireEvent.click(within(card).getByRole('button', { name: /^install$/i }));
+    fireEvent.click(within(card).getByRole('button', { name: /^connect$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^connect$/i }));
+    await screen.findByText(/connected as local test connector/i);
+    expect(within(card).queryByRole('button', { name: /^uninstall$/i })).toBeNull();
+    fireEvent.click(screen.getAllByText('Close').find((node) => node.tagName === 'BUTTON')!);
+    fireEvent.click(within(card).getByRole('button', { name: /^manage$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /disconnect/i }));
+    await waitFor(() =>
+      expect(within(card).getByRole('button', { name: /^uninstall$/i })).toBeTruthy(),
+    );
+  }, 15_000);
+
   it('keeps bring-your-own Gmail OAuth on the supported manual configuration path', async () => {
     renderPlugins();
     fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'Gmail' } });
@@ -263,17 +303,26 @@ describe('Plugins settings page', () => {
 
   it('keeps the GitHub device code in Manage until authorization is verified', async () => {
     const connected = {
-      accountId: 'account-a', pluginId: 'github', state: 'connected' as const,
-      enabled: true, enabledProjectIds: ['*'], configuredFields: ['token'], updatedAt: 1,
+      accountId: 'account-a',
+      pluginId: 'github',
+      state: 'connected' as const,
+      enabled: true,
+      enabledProjectIds: ['*'],
+      configuredFields: ['token'],
+      updatedAt: 1,
     };
     usePluginStore.getState().upsertConnection(connected);
     vi.mocked(management.beginAuthorization).mockResolvedValueOnce({
-      ok: true, state: 'awaiting_approval', userCode: 'TEST-CODE',
+      ok: true,
+      state: 'awaiting_approval',
+      userCode: 'TEST-CODE',
       authorizationUrl: 'https://github.com/login/device',
     });
     renderPlugins();
     fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'GitHub' } });
-    fireEvent.click(within(screen.getByTestId('plugin-card-github')).getByRole('button', { name: /^manage$/i }));
+    fireEvent.click(
+      within(screen.getByTestId('plugin-card-github')).getByRole('button', { name: /^manage$/i }),
+    );
     const dialog = screen.getByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: /continue with github/i }));
     expect(await within(dialog).findByText('TEST-CODE')).toBeTruthy();
