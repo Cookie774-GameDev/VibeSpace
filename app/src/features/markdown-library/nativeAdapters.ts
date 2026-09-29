@@ -23,7 +23,10 @@ import type { MarkdownLibraryScope } from './contracts';
 
 type NativeFiles = Readonly<{
   createDirectory: (path: string, options: { root: string }) => Promise<FsDirectoryResult>;
-  list: (path: string, options: { root: string }) => Promise<FsListResult>;
+  list: (
+    path: string,
+    options: { root: string; strictProjectBoundary: true },
+  ) => Promise<FsListResult>;
   read: (path: string, options: { root: string }) => Promise<FsReadResult>;
   compareAndSwap: (
     path: string,
@@ -125,7 +128,10 @@ export async function openNativeMarkdownLibrary(
   const filePort: MarkdownLibraryFilePort = {
     async scanMarkdown(currentScope) {
       const listed = safeResult(
-        await files.list(currentScope.root, { root: currentScope.root }),
+        await files.list(currentScope.root, {
+          root: currentScope.root,
+          strictProjectBoundary: true,
+        }),
         'list',
       );
       if (!listed.ok) throw new Error('markdown_library_list_unavailable');

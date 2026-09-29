@@ -143,4 +143,40 @@ describe('native Markdown library adapters', () => {
       [created.documentId],
     );
   });
+
+  it('lists under the strict root so listed paths remain readable by the strict file port', async () => {
+    const deps = fixture();
+    const listModes: boolean[] = [];
+    const files = {
+      ...deps.files,
+      async list(path: string, options: { root: string; strictProjectBoundary?: boolean }) {
+        const result = await deps.files.list(path);
+        const strict = options.strictProjectBoundary === true;
+        listModes.push(strict);
+        return strict
+          ? result
+          : {
+              ...result,
+              entries: result.entries.map((entry) => ({
+                ...entry,
+                path: `C:\\canonical-display\\${entry.name}`,
+              })),
+            };
+      },
+    };
+    const opened = await openNativeMarkdownLibrary('account-a', 'project-a', {
+      dataRoot: 'C:\\app-data',
+      files,
+      indexStore: deps.indexStore,
+    });
+
+    const created = await opened.authority.create(opened.scope, {
+      title: 'Strict',
+      body: 'Exact file',
+    });
+    expect(listModes).toEqual([true]);
+    expect((await opened.authority.open(opened.scope, created.documentId)).content).toBe(
+      '# Strict\n\nExact file',
+    );
+  });
 });
