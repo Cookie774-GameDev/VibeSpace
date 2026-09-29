@@ -81,7 +81,9 @@ describe('pollEventReminders', () => {
 
   it('delivers 15-minute and at-time event reminders once despite denied OS permission', async () => {
     const read = persist(event());
-    await expect(pollEventReminders(ANCHOR - 15 * 60 * 1000, () => 'claim_before')).resolves.toBe(1);
+    await expect(pollEventReminders(ANCHOR - 15 * 60 * 1000, () => 'claim_before')).resolves.toBe(
+      1,
+    );
     await expect(pollEventReminders(ANCHOR, () => 'claim_at')).resolves.toBe(1);
     await expect(pollEventReminders(ANCHOR + 30 * 1000, () => 'claim_retry')).resolves.toBe(0);
     expect(mocks.toastInfo).toHaveBeenCalledTimes(2);
@@ -93,20 +95,55 @@ describe('pollEventReminders', () => {
   });
 
   it('fires each daily occurrence once after restart without replaying older occurrences', async () => {
-    const read = persist(event({ recurrence_rule: 'daily', reminders: [{ offset_min: 0, channels: ['in_app'] }] }));
+    const read = persist(
+      event({ recurrence_rule: 'daily', reminders: [{ offset_min: 0, channels: ['in_app'] }] }),
+    );
     await expect(pollEventReminders(ANCHOR, () => 'claim_first')).resolves.toBe(1);
     await expect(pollEventReminders(ANCHOR + DAY_MS, () => 'claim_second')).resolves.toBe(1);
-    await expect(pollEventReminders(ANCHOR + DAY_MS + 30_000, () => 'claim_duplicate')).resolves.toBe(0);
+    await expect(
+      pollEventReminders(ANCHOR + DAY_MS + 30_000, () => 'claim_duplicate'),
+    ).resolves.toBe(0);
     expect(read().reminders[0]?.last_fired_start_at).toBe(ANCHOR + DAY_MS);
     expect(mocks.toastInfo).toHaveBeenCalledTimes(2);
+  });
+
+  it('delivers only the current daily occurrence after a missed restart window', async () => {
+    const read = persist(
+      event({
+        recurrence_rule: 'daily',
+        reminders: [{ offset_min: 0, channels: ['in_app'] }],
+      }),
+    );
+    const currentStart = ANCHOR + 2 * DAY_MS;
+    await expect(
+      pollEventReminders(currentStart + 30 * 60 * 1000, () => 'claim_restart'),
+    ).resolves.toBe(1);
+    await expect(
+      pollEventReminders(currentStart + 31 * 60 * 1000, () => 'claim_duplicate'),
+    ).resolves.toBe(0);
+    expect(read().reminders[0]?.last_fired_start_at).toBe(currentStart);
+    expect(mocks.toastInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not replay a one-time event outside the missed-reminder window', async () => {
+    const read = persist(event({ reminders: [{ offset_min: 0, channels: ['in_app'] }] }));
+    await expect(pollEventReminders(ANCHOR + 2 * DAY_MS, () => 'claim_expired')).resolves.toBe(0);
+    expect(read().reminders[0]?.last_fired_start_at).toBeUndefined();
+    expect(mocks.toastInfo).not.toHaveBeenCalled();
   });
 
   it.each([
     ['weekly', 'weekly', new Date(2026, 9, 5, 10, 0).getTime()],
     ['monthly', 'monthly', new Date(2026, 9, 28, 10, 0).getTime()],
-    ['custom weekdays', 'RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,WE', new Date(2026, 8, 30, 10, 0).getTime()],
+    [
+      'custom weekdays',
+      'RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,WE',
+      new Date(2026, 8, 30, 10, 0).getTime(),
+    ],
   ])('fires the next %s occurrence once', async (_label, recurrence_rule, nextStart) => {
-    const read = persist(event({ recurrence_rule, reminders: [{ offset_min: 0, channels: ['in_app'] }] }));
+    const read = persist(
+      event({ recurrence_rule, reminders: [{ offset_min: 0, channels: ['in_app'] }] }),
+    );
     await expect(pollEventReminders(ANCHOR, () => 'claim_anchor')).resolves.toBe(1);
     await expect(pollEventReminders(nextStart, () => 'claim_next')).resolves.toBe(1);
     await expect(pollEventReminders(nextStart + 30_000, () => 'claim_duplicate')).resolves.toBe(0);
