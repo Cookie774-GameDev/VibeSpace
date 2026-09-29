@@ -18,7 +18,7 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => nativeWindow,
 }));
 vi.mock('./petTauriBridge', () => ({
-  hidePetPanel: vi.fn(async () => undefined), minimizePetPanel: vi.fn(async () => undefined),
+  hidePetPanel: vi.fn(async () => true), minimizePetPanel: vi.fn(async () => undefined),
   setPetOverlayPosition: vi.fn(async () => undefined), setPetPanelOpenFlag: vi.fn(),
   showPetOverlay: vi.fn(async () => ({ visible: true })),
 }));
@@ -72,7 +72,7 @@ it('closes in one click and immediately restores the pet at the panel position o
 it.each(['Close', 'Minimize'])('animates native %s and restores controls if native dismissal fails', async (action) => {
   vi.useFakeTimers();
   let rejectHide!: (reason: Error) => void;
-  vi.mocked(hidePetPanel).mockImplementationOnce(() => new Promise((_, reject) => { rejectHide = reject; }));
+  vi.mocked(hidePetPanel).mockImplementationOnce(() => new Promise<boolean>((_, reject) => { rejectHide = reject; }));
   const onClose = vi.fn();
   render(<PetMiniPanel open windowMode onClose={onClose} />);
   act(() => { vi.advanceTimersByTime(200); });
@@ -80,6 +80,18 @@ it.each(['Close', 'Minimize'])('animates native %s and restores controls if nati
   expect(screen.getByRole('dialog').getAttribute('data-pet-panel-lifecycle')).toBe(action === 'Close' ? 'closing' : 'minimizing');
   await act(async () => { rejectHide(new Error('Window busy')); });
   expect(screen.getByRole('dialog').getAttribute('data-pet-panel-lifecycle')).toBe('open');
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it.each(['Close', 'Minimize'])('keeps native %s open when hide returns a failed acknowledgement', async (action) => {
+  vi.useFakeTimers();
+  vi.mocked(hidePetPanel).mockResolvedValueOnce(false);
+  const onClose = vi.fn();
+  render(<PetMiniPanel open windowMode onClose={onClose} />);
+  act(() => { vi.advanceTimersByTime(200); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: `${action} pet panel` })); });
+  expect(screen.getByRole('dialog').getAttribute('data-pet-panel-lifecycle')).toBe('open');
+  expect(setPetPanelOpenFlag).not.toHaveBeenCalledWith(false);
   expect(onClose).not.toHaveBeenCalled();
 });
 

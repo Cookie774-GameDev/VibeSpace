@@ -12,7 +12,7 @@ vi.mock('./PetTerminalSurface', () => ({
 }));
 
 const bridge = vi.hoisted(() => ({
-  hidePetPanel: vi.fn(async () => undefined),
+  hidePetPanel: vi.fn(async () => true),
   minimizePetPanel: vi.fn(async () => undefined),
   setPetOverlayPosition: vi.fn(async () => undefined),
   showPetOverlay: vi.fn(async () => undefined),

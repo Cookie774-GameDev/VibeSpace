@@ -481,8 +481,9 @@ export async function minimizePetPanel(): Promise<void> {
   await invoke('pet_minimize_panel');
 }
 
-export async function hidePetPanel(): Promise<void> {
-  await invoke('pet_hide_panel');
+export async function hidePetPanel(): Promise<boolean> {
+  const outcome = await invokeWithStatus<void>('pet_hide_panel');
+  return outcome.status === 'ok';
 }
 
 export async function isPetPanelVisible(): Promise<boolean> {

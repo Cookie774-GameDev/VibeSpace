@@ -194,7 +194,7 @@ export function PetMiniPanel({
     if (position) await setPetOverlayPosition(position.x, position.y);
     // The native command cancels pending opens. A raw window hide cannot do
     // that. Both companion dismiss actions hide the window and retain sessions.
-    await hidePetPanel();
+    if (!(await hidePetPanel())) throw new Error('pet_panel_hide_failed');
     setPetPanelOpenFlag(false);
     await showPetOverlay();
   };

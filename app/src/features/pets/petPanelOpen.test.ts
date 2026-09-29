@@ -336,6 +336,15 @@ describe('openOrFocusPetMiniPanel / openPetPanelSafely', () => {
     window.removeEventListener('vibespace:pet-overlay-show', onShow);
   });
 
+  it('reports whether the native panel hide command actually succeeded', async () => {
+    const { hidePetPanel } = await import('./petTauriBridge');
+    invokeMock.mockResolvedValueOnce(undefined);
+    await expect(hidePetPanel()).resolves.toBe(true);
+    invokeMock.mockRejectedValueOnce(new Error('synthetic native hide failure'));
+    await expect(hidePetPanel()).resolves.toBe(false);
+    expect(invokeCount('pet_hide_panel')).toBe(2);
+  });
+
   it('bounds a stalled native overlay command and coalesces later recovery attempts', async () => {
     vi.useFakeTimers();
     invokeMock.mockImplementation(() => new Promise(() => undefined));
