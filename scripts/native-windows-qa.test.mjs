@@ -9,6 +9,191 @@ import test from 'node:test';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+// DLL header schema fixture only; never loaded and never claimed as native evidence.
+function dllHeaderFixture() {
+  const bytes = Buffer.alloc(128);
+  bytes.write('MZ');
+  bytes.writeUInt32LE(64, 60);
+  bytes.writeUInt32LE(0x4550, 64);
+  bytes.writeUInt16LE(0x8664, 68);
+  bytes.writeUInt16LE(0x2002, 86);
+  return bytes;
+}
+
+async function fixtureDllEvidence(target, evidence, dllNames) {
+  const { sha256 } = await import(
+    pathToFileURL(path.join(root, 'scripts/native-windows-qa.mjs')).href
+  );
+  const directory = path.join(evidence, 'materialized-dlls');
+  await mkdir(directory);
+  const files = [];
+  for (const name of dllNames) {
+    const bytes = dllHeaderFixture();
+    await writeFile(path.join(target, name), bytes);
+    await writeFile(path.join(directory, name), bytes);
+    files.push({ name, bytes: bytes.length, sha256: await sha256(path.join(directory, name)) });
+  }
+  const sourceSHA = '1'.repeat(40);
+  const inventory = {
+    sourceSHA,
+    executableSHA256: await sha256(path.join(target, 'jarvis.exe')),
+    directory,
+    files,
+  };
+  await writeFile(path.join(evidence, 'dll-inventory.json'), JSON.stringify(inventory));
+  await writeFile(
+    path.join(evidence, 'provenance.json'),
+    JSON.stringify({
+      sourceCommitSHA: sourceSHA,
+      dllInventorySHA256: await sha256(path.join(evidence, 'dll-inventory.json')),
+    }),
+  );
+  const reports = [
+    `Dump of file ${path.join(target, 'jarvis.exe')}\nFile Type: EXECUTABLE IMAGE\n  Image has the following dependencies:\n    KERNEL32.dll\n${dllNames.map((name) => `    ${name}\n`).join('')}`,
+  ];
+  for (const name of dllNames)
+    reports.push(
+      `Dump of file ${path.join(directory, name)}\nFile Type: DLL\n  Image has the following dependencies:\n    KERNEL32.dll\n`,
+    );
+  await writeFile(path.join(evidence, 'dll-dependencies.txt'), reports.join('\n'));
+  return inventory;
+}
+
+test('DLL closure covers transitive imports and never classifies DirectML or MSVC runtime as system DLLs', async () => {
+  const { parseDllReports, verifyDllImports } = await import(
+    pathToFileURL(path.join(root, 'scripts/native-windows-qa.mjs')).href
+  );
+  const report =
+    'Dump of file C:\\target\\jarvis.exe\nFile Type: EXECUTABLE IMAGE\n  Image has the following dependencies:\n    KERNEL32.dll\n    DirectML.dll\n\nDump of file C:\\target\\DirectML.dll\nFile Type: DLL\n  Image has the following dependencies:\n    api-ms-win-core-synch-l1-2-0.dll\n    MSVCP140.dll\n\nDump of file C:\\target\\MSVCP140.dll\nFile Type: DLL\n  Image has the following dependencies:\n    ucrtbase.dll\n';
+  const modules = parseDllReports(report);
+  assert.throws(() => verifyDllImports(modules, { files: [] }), /DLL closure is empty/u);
+  assert.throws(
+    () => verifyDllImports(modules, { files: [{ name: 'DirectML.dll' }] }),
+    /MSVCP140|msvcp140/u,
+  );
+  const edges = verifyDllImports(modules, {
+    files: [{ name: 'DirectML.dll' }, { name: 'MSVCP140.dll' }],
+  });
+  assert.equal(edges.filter((edge) => edge.kind === 'packaged').length, 2);
+  assert.equal(edges.filter((edge) => edge.kind === 'windows-system-contract').length, 3);
+  assert.throws(
+    () => parseDllReports(report + '\nDump of file C:\\other\\DirectML.dll\n'),
+    /Duplicate/u,
+  );
+  assert.throws(
+    () => parseDllReports('Dump of file C:\\target\\jarvis.exe\nFile Type: EXECUTABLE IMAGE\n'),
+    /empty/u,
+  );
+  assert.throws(
+    () =>
+      verifyDllImports(modules, {
+        files: [
+          { name: 'DirectML.dll' },
+          { name: 'MSVCP140.dll' },
+          { name: 'missing-inspection.dll' },
+        ],
+      }),
+    /not inspected/u,
+  );
+});
+
+test('DLL materialization binds approved fresh build/toolchain sources and rejects unsupported entries', async () => {
+  const { materializeDlls, sha256 } = await import(
+    pathToFileURL(path.join(root, 'scripts/native-windows-qa.mjs')).href
+  );
+  const fixture = await mkdtemp(path.join(tmpdir(), 'vibespace-native-qa-dll-'));
+  try {
+    const target = path.join(fixture, 'target/debug');
+    const redist = path.join(fixture, 'VS/VC/Redist/MSVC/14.51/x64/Microsoft.VC145.CRT');
+    await mkdir(target, { recursive: true });
+    await mkdir(redist, { recursive: true });
+    await writeFile(path.join(target, 'DirectML.dll'), dllHeaderFixture());
+    await writeFile(path.join(redist, 'MSVCP140.dll'), dllHeaderFixture());
+    const options = {
+      sourceSHA: '1'.repeat(40),
+      executableSHA256: '2'.repeat(64),
+      msvcRedistRoot: redist,
+    };
+    const directory = path.join(fixture, 'materialized');
+    const inventory = await materializeDlls(target, directory, options);
+    assert.equal(inventory.files.length, 2);
+    assert.deepEqual(inventory.files.map((file) => file.origin).sort(), [
+      'cargo-output',
+      'msvc-redist',
+    ]);
+    for (const file of inventory.files)
+      assert.equal(await sha256(path.join(directory, file.name)), file.sha256);
+    await assert.rejects(() => materializeDlls(target, directory, options), /already exists/u);
+    await mkdir(path.join(target, 'directory.dll'));
+    await assert.rejects(
+      () => materializeDlls(target, path.join(fixture, 'unsupported'), options),
+      /Unsupported DLL source/u,
+    );
+    const ownedDirectory = path.resolve(target, 'directory.dll');
+    assert.ok(ownedDirectory.startsWith(path.resolve(fixture) + path.sep));
+    await rm(ownedDirectory, { recursive: true });
+    await writeFile(path.join(target, 'bad.dll'), 'not a PE DLL');
+    await assert.rejects(
+      () => materializeDlls(target, path.join(fixture, 'invalid'), options),
+      /PE|DLL/u,
+    );
+  } finally {
+    assert.ok(path.resolve(fixture).startsWith(path.resolve(tmpdir()) + path.sep));
+    assert.ok(path.basename(fixture).startsWith('vibespace-native-qa-dll-'));
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test('artifact staging refuses an inspected but unbundled required DLL', async () => {
+  const { stageArtifact } = await import(
+    pathToFileURL(path.join(root, 'scripts/native-windows-qa.mjs')).href
+  );
+  const { createHash } = await import('node:crypto');
+  const fixture = await mkdtemp(path.join(tmpdir(), 'vibespace-native-qa-link-'));
+  try {
+    const target = path.join(fixture, 'target/debug');
+    const evidence = path.join(fixture, 'evidence');
+    const contents = {
+      'jarvis.exe': 'opaque unit packaging fixture; never executed',
+      'resources/desktop-connector/runtime.zip': 'opaque unit runtime fixture',
+      'resources/siyuan-runtime/VIBESPACE_SIYUAN_READY.json': '{}',
+    };
+    contents['resources/desktop-connector/manifest.json'] = JSON.stringify({
+      platform: 'win32-x64',
+      sha256: createHash('sha256')
+        .update(contents['resources/desktop-connector/runtime.zip'])
+        .digest('hex'),
+    });
+    for (const [name, contentsOfFile] of Object.entries(contents)) {
+      await mkdir(path.dirname(path.join(target, name)), { recursive: true });
+      await writeFile(path.join(target, name), contentsOfFile);
+    }
+    await mkdir(path.join(target, '_up_'));
+    await mkdir(evidence);
+    const inputFiles = Object.entries(contents)
+      .filter(([name]) => name.startsWith('resources/'))
+      .map(([name, content]) => ({
+        path: `app/src-tauri/${name}`,
+        sha256: createHash('sha256').update(content).digest('hex'),
+      }));
+    await writeFile(
+      path.join(evidence, 'input-manifest.json'),
+      JSON.stringify({ files: inputFiles }),
+    );
+    await writeFile(path.join(evidence, 'provenance.json'), '{}');
+    await writeFile(
+      path.join(evidence, 'dll-dependencies.txt'),
+      `Dump of file ${path.join(target, 'jarvis.exe')}\nFile Type: EXECUTABLE IMAGE\n  Image has the following dependencies:\n    DirectML.dll\n\nDump of file ${path.join(target, 'DirectML.dll')}\nFile Type: DLL\n`,
+    );
+    const output = path.join(fixture, 'work/artifact');
+    await assert.rejects(() => stageArtifact(fixture, target, output, evidence), /DLL|closure/u);
+  } finally {
+    assert.ok(path.resolve(fixture).startsWith(path.resolve(tmpdir()) + path.sep));
+    assert.ok(path.basename(fixture).startsWith('vibespace-native-qa-link-'));
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
 test('logged subprocesses record their actual exit status, including a successful PowerShell return', async () => {
   const { runLoggedCommand } = await import(
     pathToFileURL(path.join(root, 'scripts/native-windows-qa.mjs')).href
@@ -352,7 +537,7 @@ test('artifact package preserves DLL/resource paths and identifies every payload
     const target = path.join(fixture, 'target/debug');
     const files = {
       'jarvis.exe': 'fixture executable, never run',
-      'DirectML.dll': 'fixture DLL, never loaded',
+      'DirectML.dll': dllHeaderFixture(),
       'resources/desktop-connector/runtime.zip': 'fixture archive, never opened',
       'resources/siyuan-runtime/VIBESPACE_SIYUAN_READY.json': '{}',
       'resources/siyuan-runtime/%SystemDrive%/assets/.required': 'retain hidden payload',
@@ -383,8 +568,7 @@ test('artifact package preserves DLL/resource paths and identifies every payload
       path.join(evidence, 'input-manifest.json'),
       JSON.stringify({ files: resourceInputs }),
     );
-    await writeFile(path.join(evidence, 'provenance.json'), '{}');
-    await writeFile(path.join(evidence, 'dll-dependencies.txt'), 'fixture inspection');
+    await fixtureDllEvidence(target, evidence, ['DirectML.dll']);
     const manifest = await stageArtifact(fixture, target, output, evidence);
     assert.deepEqual(
       manifest.files.map((file) => file.path).sort(),
@@ -393,10 +577,45 @@ test('artifact package preserves DLL/resource paths and identifies every payload
         .sort(),
     );
     assert.ok(manifest.files.every((file) => /^[a-f0-9]{64}$/u.test(file.sha256)));
-    assert.equal(
-      await readFile(path.join(output, 'binary/DirectML.dll'), 'utf8'),
+    assert.deepEqual(
+      await readFile(path.join(output, 'binary/DirectML.dll')),
       files['DirectML.dll'],
     );
+    assert.ok(manifest.evidenceFiles.some((file) => file.path === 'dll-inventory.json'));
+    assert.equal(
+      manifest.dllClosure.dependencies.filter((edge) => edge.kind === 'packaged').length,
+      1,
+    );
+    const copiedDLL = path.join(evidence, 'materialized-dlls/DirectML.dll');
+    const changedDLL = dllHeaderFixture();
+    changedDLL[127] = 1;
+    await writeFile(copiedDLL, changedDLL);
+    await assert.rejects(
+      () =>
+        stageArtifact(fixture, target, path.join(fixture, 'work/dll-tamper/artifact'), evidence),
+      /DLL inventory hash/u,
+    );
+    await writeFile(copiedDLL, dllHeaderFixture());
+    const reportPath = path.join(evidence, 'dll-dependencies.txt');
+    const originalReport = await readFile(reportPath, 'utf8');
+    await writeFile(
+      reportPath,
+      originalReport.replace(
+        path.join(target, 'jarvis.exe'),
+        path.join(fixture, 'elsewhere/jarvis.exe'),
+      ),
+    );
+    await assert.rejects(
+      () =>
+        stageArtifact(
+          fixture,
+          target,
+          path.join(fixture, 'work/wrong-inspection/artifact'),
+          evidence,
+        ),
+      /inspection path mismatch/u,
+    );
+    await writeFile(reportPath, originalReport);
     await assert.rejects(() => hashInputs(fixture, ['../outside']), /outside|relative/u);
     await assert.rejects(() => stageArtifact(fixture, target, output, evidence), /exist/u);
     await writeFile(

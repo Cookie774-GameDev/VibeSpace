@@ -279,7 +279,13 @@ export function writeConnectionMetadata(metadata: ConnectionMetadata): Connectio
   writeConnectionPickerStates(pickerStates);
 
   // Real auth-loss event: authenticated → unauthenticated (not first hydrate).
-  if (hadSessionSnapshot) {
+  const hasAuthLoss = Object.entries(canonical).some(
+    ([id, record]) =>
+      record?.disabled !== true &&
+      baseline[id]?.auth === 'authenticated' &&
+      record?.auth === 'unauthenticated',
+  );
+  if (hadSessionSnapshot && hasAuthLoss) {
     void import('@/lib/notifications').then(({ detectAndNotifyConnectorAuthLoss }) => {
       detectAndNotifyConnectorAuthLoss(baseline, canonical);
     });

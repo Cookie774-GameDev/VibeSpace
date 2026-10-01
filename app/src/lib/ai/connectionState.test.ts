@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CODEX_CLI_CONNECTION } from './adapters/catalog';
 import { OPENAI_API_CONNECTION } from './adapters/nativeCatalog';
 import {
@@ -15,6 +15,10 @@ import {
   writeConnectionMetadata,
   writeConnectionPickerStates,
 } from './connectionState';
+
+afterEach(async () => {
+  await vi.dynamicImportSettled();
+});
 
 describe('AI connection state persistence', () => {
   beforeEach(() => {

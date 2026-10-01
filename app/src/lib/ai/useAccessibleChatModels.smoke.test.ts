@@ -4,10 +4,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@/lib/jarvis/smoke/config', () => ({ isKernelSmokeEnabled: () => true }));
 
 import { activateKernelSmokeBinding, clearKernelSmokeBinding } from './providers/kernelSmoke';
+import { ensureExternalConnectionAutoDetection } from './adapters/autoDetectConnections';
 import { useAccessibleChatModels } from './useAccessibleChatModels';
 
 describe('smoke connection model access', () => {
-  afterEach(() => clearKernelSmokeBinding());
+  afterEach(async () => {
+    await act(async () => {
+      clearKernelSmokeBinding();
+      await ensureExternalConnectionAutoDetection();
+      await vi.dynamicImportSettled();
+    });
+  });
 
   it('exposes both attested smoke transports only after the development binding activates', async () => {
     const { result } = renderHook(() => useAccessibleChatModels());

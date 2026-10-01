@@ -54,6 +54,7 @@ jobs:
       QA_WINDOWS_CONFIG_SHA256: ${{ inputs.windows_config_sha256 }}
       QA_CONNECTOR_SHA256: ${{ inputs.connector_source_sha256 }}
       CARGO_TARGET_DIR: ${{ github.workspace }}/work/native-windows-qa-target
+      ORT_CACHE_DIR: ${{ github.workspace }}/work/native-windows-qa-target/ort-cache
       CARGO_BUILD_JOBS: '1'
     steps:
       - name: Validate immutable source inputs
@@ -132,8 +133,13 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'MSVC installation not found.' }
           $dumpbin = Get-ChildItem -Path (Join-Path $vs 'VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe') -File | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $dumpbin) { throw 'dumpbin unavailable.' }
+          $redist = Get-ChildItem -Path (Join-Path $vs 'VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT') -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $redist) { throw 'MSVC x64 CRT redistribution directory unavailable.' }
+          $env:QA_MSVC_REDIST_DIR = $redist.FullName
+          node scripts/native-windows-qa.mjs materialize-dlls
+          if ($LASTEXITCODE -ne 0) { throw 'DLL materialization failed.' }
           $debug = Join-Path $env:CARGO_TARGET_DIR 'debug'
-          $files = @((Get-Item -LiteralPath (Join-Path $debug 'jarvis.exe'))) + @(Get-ChildItem -LiteralPath $debug -Filter '*.dll' -File)
+          $files = @((Get-Item -LiteralPath (Join-Path $debug 'jarvis.exe'))) + @(Get-ChildItem -LiteralPath 'work/native-windows-qa/materialized-dlls' -Filter '*.dll' -File)
           foreach ($file in $files) {
             & $dumpbin.FullName /DEPENDENTS $file.FullName | Out-File -FilePath work/native-windows-qa/dll-dependencies.txt -Append -Encoding utf8
             if ($LASTEXITCODE -ne 0) { throw 'DLL dependency inspection failed.' }
