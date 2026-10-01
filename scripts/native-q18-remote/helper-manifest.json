@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "productSource": "8579072d21e6a994b3c95f44997922997679324a",
+  "runtimeStatus": "UNRUN",
+  "files": [
+    {
+      "path": "artifact_dll_checks.py",
+      "bytes": 9003,
+      "sha256": "20da8095d8c84e1bd59fab11c8fd2b26e659a81fa74a4840e3f2120688f07a52"
+    },
+    {
+      "path": "attest.ps1",
+      "bytes": 3714,
+      "sha256": "1420234f28f5aec44e81a11c63d98954afa8abe61f3c407c423adffa9955ee45"
+    },
+    {
+      "path": "commandline.ps1",
+      "bytes": 1799,
+      "sha256": "41fd527b1a93d32c83b36dc85adffcc64d8e7b5ba3633da88c62f8c9e69f0fda"
+    },
+    {
+      "path": "commandline.test.ps1",
+      "bytes": 2650,
+      "sha256": "2706647bc78c0eb369f2a06946239704ce3ea8a37430af35d87aa2070ca1a44b"
+    },
+    {
+      "path": "consumer.ps1",
+      "bytes": 20963,
+      "sha256": "25d3e6b434f029d44fa89d6c865bb65d2702a935f3e335d5898b4e3dc90a18af"
+    },
+    {
+      "path": "contract.mjs",
+      "bytes": 7109,
+      "sha256": "91a7716d48eb2a38a3bccee4d3d40346edac7bb98df189dd43dfc4e5ebcf302f"
+    },
+    {
+      "path": "contract.test.mjs",
+      "bytes": 6322,
+      "sha256": "f548a34675fbf4ffb5e68148ae5c0d56d1de4206acddad7071dca6e8177ad257"
+    },
+    {
+      "path": "desktop-guard.ps1",
+      "bytes": 3264,
+      "sha256": "a83c47540feb9197ac53906be152d07d28bca8ee7e1885425597d4da730dbbae"
+    },
+    {
+      "path": "driver.mjs",
+      "bytes": 24867,
+      "sha256": "88ce8e079d97d2a50fb0f5756ab0af938e41071248f35743eef14a1127f5ada5"
+    },
+    {
+      "path": "entry.ps1",
+      "bytes": 2060,
+      "sha256": "b504602ac230a6de2f1dbbabcc056eb8af159565a1fbb3e5d05ff4ad77e09c8d"
+    },
+    {
+      "path": "lifecycle.ps1",
+      "bytes": 1206,
+      "sha256": "4daff91f5d216f84ea0c70343c2cd0723ab11b420ab21208694fc9ab43659fe7"
+    },
+    {
+      "path": "lifecycle.test.ps1",
+      "bytes": 1351,
+      "sha256": "9fb211c21ca56ad72fee55117442cabdf29ad75549f0ba43a176d1c6c9f32d0f"
+    },
+    {
+      "path": "run-native-supervised.ps1",
+      "bytes": 4887,
+      "sha256": "199500d6cba3feaa290366e3a46d335eddb288269a30b6a4c46a34c6a59c1f97"
+    },
+    {
+      "path": "run-preparation-checks.ps1",
+      "bytes": 3132,
+      "sha256": "c9cbaccb644816aa37ef55a00447fef89cce38c289d61df42f05daef4e20cc51"
+    },
+    {
+      "path": "run-pure-checks.ps1",
+      "bytes": 2958,
+      "sha256": "02bf921d13814a2193e2d9f770be8a01402473be7cb3d7d040472de49ac5a53e"
+    },
+    {
+      "path": "runner-proposal.txt",
+      "bytes": 8483,
+      "sha256": "8d0f829fe815d15bee31b3566886614e6b60bcf01ce8b53907f936fcc67b3e49"
+    },
+    {
+      "path": "source-identities.json",
+      "bytes": 6047,
+      "sha256": "98d7b136cd68246a49edf9a4ac9fb8185fac0e0255e9f5dca5af1671894d8ce4"
+    },
+    {
+      "path": "transfer.py",
+      "bytes": 18087,
+      "sha256": "32e560b8795d95719fdc0b59cd38c7671ad88c1c61df88bcb17934cadcdd66f3"
+    },
+    {
+      "path": "transfer.test.py",
+      "bytes": 2332,
+      "sha256": "ed92a87e0daf0435622f2fc0d9c41e3b668b676f13e7d6387af87ccd397e1beb"
+    }
+  ],
+  "originalManifestSHA256": "65d04ab824644c3be5090214e4136e6aa01d6b0b8220d0cba648a421dd8a8c87"
+}

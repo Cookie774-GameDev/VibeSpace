@@ -1,0 +1,119 @@
+Native CI488 consumer — FRESH2NS01 — PREPARED / RUNTIME UNRUN
+
+consumer.ps1 is the end-to-end callable Windows-GitHub-runner consumer. It verifies
+an approved raw helper manifest, product HEAD8579072d21e6a994b3c95f44997922997679324a,
+and fresh task/output paths before any phase. It requires separate actual ROOT
+transfer/dependency/native-setup grant IDs; a preflight PASS is not a grant.
+No CI, download, npm, browser, model, provider or native execution occurred here.
+
+Future exact invocation, after review/registration/publication and real grants:
+pwsh -NoProfile -NonInteractive -File <approved-helper>/consumer.ps1
+ -TaskId <unique FRESH2_CI488_run_attempt> -TransferGrantId <actual ROOT grant>
+ -DependencyGrantId <actual ROOT grant> -NativeSetupGrantId <actual ROOT grant>
+ -HelperManifestSHA256 <approved raw manifest SHA256>
+ -ReservedGrowthMiB <current OTHER growth> -ReservedCommitMiB <current OTHER commit>
+ [-Schedule]
+GITHUB_WORKSPACE/RUNNER_TEMP must be actual runner paths. GITHUB_TOKEN is supplied
+by the future actions:read/contents:read job, held privately, sent ONLY to fixed
+GitHub metadata/archive API endpoints and removed from the parent/other children.
+Signed redirect download has NO Authorization. No token/URL/header is serialized.
+
+Fixed transfer identity:
+CI488run36842581937/source8579072d21e6a994b3c95f44997922997679324a.
+Build11153265092 bytes777743318 SHAfe3ea024e7968dde73745dcde8cc733004093685a41014bbe7e7a1c28477969c.
+Evidence11152409776 bytes631339 SHA6030ec5109ddc34d915563146400c4972e6a1b0aec840c23c74640f52ee9678c.
+Exe102964224B SHA23974fdf89067d4f2399b0f367c54ce64e9350f82e4cdca38b11652aee61956e.
+Retention expires2026-10-04 around09:44UTC; actual successful run/metadata/digest/
+source/expiry must still match. No substitution after expiry.
+
+transfer.py adapts reviewed d5b55a25 staging code with private ephemeral API authority;
+artifact_dll_checks.py is exact reviewed20da8095 source. 1MiB streams,8MiB JSON bound,
+4MiB ZIP central directory,10000entries,2GiB combined expansion, regular files,
+traversal/alias/symlink/type/CRC/size/SHA/source/provenance/real PE import closure
+checks remain. Fresh extended paths under RUNNER_TEMP; no old DLL borrowing.
+Sequential downloads<=600seconds each; extracts/inspection<=120seconds each.
+Failed archives/receipts remain preserved; no retry under a terminal grant.
+Planning512WS/768private: fresh RAM1664/commit1984 +OTHER reservations, exact
+disk4752036225B before each operation. These are estimates, not measured ceilings.
+
+Dependency setup verifies raw frontend/lockfile bytes from the archived input
+manifest, rejects root/app .env files, then npm ci --ignore-scripts --no-audit --no-fund.
+No Chromium/model/runtime install. Separate conservative1536WS/2048private
+planning needs RAM2944/commit3584 +OTHER,8GiB minimum disk on affected volumes.
+Timeout600seconds. Node22 setup is pinned to the existing repository action.
+Existing Python and WebView2 runtime are discovered/recorded; absent or incompatible
+prerequisites fail rather than install another runtime without approval.
+
+Native setup preflight3584WS/4864private INCLUDES TWO default Coding PTYs:
+fresh RAM5504/commit7104 +OTHER,8GiB disk per affected volume. This adds512WS/
+768private for the second default shell to A3's earlier one-PTY planning. No Cargo,
+model, competing native or build phase. Actual capacity governs; not an enforced
+aggregate cap or measured peak. The parent consumer and owned children are included.
+
+Controlled child environment whitelists Windows/runner essentials, PATH contains
+only required tools/System32/PowerShell, VITE_SIK_SMOKE=false; no credentials reach
+product/Vite/PTYs. Vite uses exact absolute workspace/app argv, --host127.0.0.1
+--port5173 --strictPort. Only staged binary/jarvis.exe launches hidden from its own
+binary directory. Native app-data ai.jarvis.desktop, native local-data and WebView
+profile must be absent BEFORE launch; no deletion or unsupported app-data override.
+Startup<=90seconds requires a real installed msedgewebview2 executable, actual
+descendant/PID/birth/profile/listener and exactly one native main target at
+http://localhost:5173/. Edge alone is not accepted. A genuine runtime spec is
+created from observed processes and hashed inputs, never fixture rows.
+
+attest.ps1 uses commandline.ps1 parsing (quoted/unquoted/whitespace/port boundaries)
+and rejects wrong/sibling profiles, duplicate arguments, substring ports and
+foreign ownership. Vite root/argv/listener/PID/birth are bound. Actual app exe and
+loaded DLL hashes are inspected; packaged modules must load from staged binary/,
+DirectML must be loaded, unapproved non-system modules fail. Original CI ORT/MSVC
+source paths remain hash-bound attestations; dynamic loaded-module proof is new
+runtime evidence only after execution.
+
+driver.mjs connects playwright-core via CDP to that actual official Tauri WebView2;
+it never launches Chromium or substitutes a copied page. It checks main window/
+URL/native appDataDir, ordinary offline onboarding/local-user persistence, absence
+of provider keys and kernel-smoke binding. No auth bypass/store mutation/microphone/
+notifications/model download/chat. Existing offline state is labeled existing.
+The ordinary command-palette Open Workbench action avoids sidebar detached-window
+creation. The default5-panel Coding layout's TWO real local PTYs are each observed,
+bound by pane/session/PID/birth/instance/generation, then stopped through Close>
+Stop terminal. Templates>Blank Workbench>Apply is clicked through ordinary UI;
+empty real state is asserted. Unexpected layouts/autorun/sessions fail closed.
+
+Then actual Add Terminal creates one new bound shell. Unique harmless echo is typed
+through xterm; actual terminal://output must contain a standalone marker output
+line, not just echoed input. Close>Cancel preserves exact binding and OS process;
+Close>Stop removes only that session AND its original process. Native mutation
+commands are never used as UI substitutes. Actual phase checkpoints are preserved.
+Optional -Schedule uses ordinary Event mode, unique title7days ahead/end1hour later,
+No repeat/no reminders/manual/no source_ref, Save event, read-only bounded real
+Dexie query, reload persistence, UI Delete and absence. It proves generic local
+CRUD only; canonical issued-tool/provider approval acceptance stays UNRUN.
+
+run-native-supervised.ps1 imposes a15-minute owned driver-process deadline, with
+phase UI deadlines<=60seconds. Consumer independently bounds each child phase.
+lifecycle.ps1 selects descendants only from an exact live root PID/birth, excludes
+older PID-reuse orphans, foreign trees/cycles and caps inventory. Consumer records
+actual owned PID/birth identities during phases and stops only opened birth-matched
+handles, including tracked orphans; no process-name kills. Original profile/app-data
+and failure evidence remain. Cleanup failure/PID reuse is not success. UI process
+force-shutdown is distinct from successful UI Stop evidence.
+
+proposed-workflow.yml is a full OPTIONAL consumer workflow, not an edited .github
+file. It has60-minute job timeout, cancel-in-progress:false, product checkout fixed
+at857, separate future QA_HELPER_SOURCE_SHA checkout plus approved manifest SHA,
+actions:read/contents:read, and sanitized receipt/checkpoint/screenshot upload only.
+No private npm/app raw logs, account DB, profiles, headers or archives are uploaded.
+A new workflow must be registered on actual default branch before workflow_dispatch
+is assumed available. No helper commit exists yet: future publication must explicitly
+pin it; never invent a SHA or conflate it with product source. ROOT/GC23 owns that
+review/publication/registration/dispatch decision.
+
+Preparation evidence: original10 contract cases PASS0skip under R1; frozen receipts
+remain. New commandline17/lifecycle8/metadata-path8 fixtures require their own bounded
+ROOT pure-test grant/preflight. Fixtures are pure and make NO native acceptance.
+Remaining execution uncertainty: first real WebView startup/desktop availability,
+actual selectors/native IPC/dependency installation/phase durations/capacity/dynamic
+module resolution. All runtime commands are UNRUN until future approval. Physical-C
+installed user-instance/HWND/input/microphone/provider/cloud/packaging acceptance
+remains separate UNRUN; remote success cannot replace it.

@@ -1,0 +1,137 @@
+{
+  "sourceSHA": "8579072d21e6a994b3c95f44997922997679324a",
+  "interfaces": [
+    {
+      "path": "app/src/features/auth/AuthGate.tsx",
+      "sha256": "f651813603600731bd6a54d16a1a14f42f76806d6a70c9a6c2ec2374d99d3b78",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/auth/RequireModelAccess.tsx",
+      "sha256": "9214354472e93af866544655ee31be59656f62c1e03ea512f96aa56202f93add",
+      "workspaceMatchesPublishedBytes": false,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/onboarding/Onboarding.tsx",
+      "sha256": "399411441d8fd4f98a3f8c6021000f2c31991622105cba328ad3165d37ea202b",
+      "workspaceMatchesPublishedBytes": false,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/onboarding/steps/Welcome.tsx",
+      "sha256": "5c4088c1d05fc8845acdaab5d94111df928171883928c7439ed10f06c9fc390b",
+      "workspaceMatchesPublishedBytes": false,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/onboarding/steps/WhatsNew.tsx",
+      "sha256": "14dc274ea8a77e48ada7dab17cc5648cb17ca94689bf09743e2208c2dc6696d6",
+      "workspaceMatchesPublishedBytes": false,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/onboarding/steps/Providers.tsx",
+      "sha256": "290d03ccb6b780534237018ade627f3a73c0a74e254542841cfbcdbd749ca2ee",
+      "workspaceMatchesPublishedBytes": false,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/onboarding/steps/Demo.tsx",
+      "sha256": "c5254126185dbd855931b8b6f051b2c1b4f46fefd07448275186b1931f04c4f0",
+      "workspaceMatchesPublishedBytes": false,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/workbench/WorkbenchPage.tsx",
+      "sha256": "79f965e13846882ae39df61049f493bac6fd5e0067c9a80fc1f3ec29a6b87847",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/workbench/WorkbenchPanel.tsx",
+      "sha256": "a8855e46757a5a20edf296f5a09ad3eefb089c234df3b4294233e3ca89f30c4d",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/workbench/PanelPalette.tsx",
+      "sha256": "8a57622302e968c3e54b0826ff432cb20a10c70aec82edd22b81054c125b6de1",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/workbench/registerCommandActions.ts",
+      "sha256": "62cac7b1ac98e06289e32c287650c32ef2778c24c76ef55566c3463391ea09de",
+      "workspaceMatchesPublishedBytes": false,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/workbench/store.ts",
+      "sha256": "d66fee0b308602518111fc62ba2beb205aaed161907c9b4e5787e16353fc0539",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/workbench/templates.ts",
+      "sha256": "9f18e9464a347c39ace51932eac6ba5831e049f2db022bbc443fe5fb93215514",
+      "workspaceMatchesPublishedBytes": false,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/workbench/window.ts",
+      "sha256": "d85b453fd886a50bffce260bef0bcfde444843abe31422cf4d80abc6fe0f774b",
+      "workspaceMatchesPublishedBytes": false,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/terminals/TerminalView.tsx",
+      "sha256": "ae5b0e80d2cc4795da6fa47c0f1127582bdde35d94c892022873d6784478f794",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src-tauri/src/terminal.rs",
+      "sha256": "58417458d39dcceff42fd8a1d899977f766527643bcfbfc7d313468b386dff16",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/features/schedule/SchedulePage.tsx",
+      "sha256": "fd4d6311dff9f178f1b17d995ad3fd81d9c1446c2ba527984b8b2487cf58513d",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/lib/db/database.ts",
+      "sha256": "dd67b8f3f33c929e23397f8504cddf90e3dfc69141c0c4f1c916994a0d6498d6",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/lib/db/repositories.ts",
+      "sha256": "43a0a2eafcb45ad7308bfa9a1da6fbbc9e90a7cdedcadcfc1a0da39189affde0",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/stores/auth.ts",
+      "sha256": "640c7fba62b5681ef7f20a900231197772d59c2b533e323b97c334d0e3bb3d52",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "app/src/stores/ui.ts",
+      "sha256": "f80624e64f3e5200879a01b09fe1009a3c90ce2580030af640fa782c8ce3cee4",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "757d6e3e361b9eda7d48e79ee3bfa82376cb329be09c316768f3cdbb3ee9213d",
+      "workspaceMatchesPublishedBytes": true,
+      "workspaceMatchesPublishedTextAfterCRLFNormalization": true
+    }
+  ]
+}

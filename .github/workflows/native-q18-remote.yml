@@ -1,0 +1,90 @@
+# PROPOSAL ONLY. No workflow registration, publication, dispatch or execution has occurred.
+# Future reviewed helper publication path: scripts/native-q18-remote/.
+name: Q18 remote CI488 official native smoke
+on:
+  workflow_dispatch:
+    inputs:
+      qa_helper_sha:
+        description: Future approved helper commit full SHA, separate from product source
+        required: true
+        type: string
+      helper_manifest_sha256:
+        description: Approved helper-manifest.json raw SHA256
+        required: true
+        type: string
+      transfer_grant:
+        description: Actual ROOT approved remote transfer grant
+        required: true
+        type: string
+      dependency_grant:
+        description: Actual ROOT approved remote npm setup grant
+        required: true
+        type: string
+      native_setup_grant:
+        description: Actual ROOT approved native phase INCLUDING two initial PTYs
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: q18-native-ci488-36842581937
+  cancel-in-progress: false
+jobs:
+  consume:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Preserve published raw line endings
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 8579072d21e6a994b3c95f44997922997679324a
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.qa_helper_sha }}
+          path: qa-helper
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+      - name: Validate immutable helper publication and consume existing CI488 artifact
+        env:
+          QA_HELPER_SHA: ${{ inputs.qa_helper_sha }}
+          HELPER_MANIFEST_SHA: ${{ inputs.helper_manifest_sha256 }}
+          TRANSFER_GRANT: ${{ inputs.transfer_grant }}
+          DEPENDENCY_GRANT: ${{ inputs.dependency_grant }}
+          NATIVE_GRANT: ${{ inputs.native_setup_grant }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:QA_HELPER_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'Full immutable helper commit required.' }
+          $helper = Join-Path $env:GITHUB_WORKSPACE 'qa-helper'
+          if ((git -C $helper rev-parse HEAD).Trim() -cne $env:QA_HELPER_SHA) { throw 'Helper checkout differs.' }
+          $runTask = 'FRESH2_CI488_' + $env:GITHUB_RUN_ID + '_' + $env:GITHUB_RUN_ATTEMPT
+          & (Join-Path $helper 'scripts/native-q18-remote/entry.ps1') -TaskId $runTask -TransferGrantId $env:TRANSFER_GRANT -DependencyGrantId $env:DEPENDENCY_GRANT -NativeSetupGrantId $env:NATIVE_GRANT -HelperManifestSHA256 $env:HELPER_MANIFEST_SHA
+      - name: Upload only sanitized actual receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-consumer-ci488-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/FRESH2_CI488_*-desktop.json
+            ${{ runner.temp }}/FRESH2_CI488_*/desktop-*.json
+            ${{ runner.temp }}/FRESH2_CI488_*/official-window.json
+            ${{ runner.temp }}/FRESH2_CI488_*/consumer-terminal.json
+            ${{ runner.temp }}/FRESH2_CI488_*/admission-*.json
+            ${{ runner.temp }}/FRESH2_CI488_*/runner-image.json
+            ${{ runner.temp }}/FRESH2_CI488_*/clean-before-start.json
+            ${{ runner.temp }}/FRESH2_CI488_*/webview-runtime-inventory.json
+            ${{ runner.temp }}/FRESH2_CI488_*/owned-identities.jsonl
+            ${{ runner.temp }}/FRESH2_CI488_*/evidence/*.json
+            ${{ runner.temp }}/FRESH2_CI488_*/evidence/terminal-cleanup.png
+            ${{ runner.temp }}/FRESH2_CI488_*/supervisor/*.json
+          if-no-files-found: warn
+          retention-days: 3
