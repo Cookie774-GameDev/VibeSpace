@@ -113,7 +113,10 @@ describe('Call Anyone approval flow', () => {
   }) => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-08-31T00:00:00Z'));
     onTestFinished(() => clock.mockRestore());
-    const scheduledFor = '2026-09-01T15:00:00.000Z';
+    const localCallTime = '2026-09-01T10:00';
+    // datetime-local is a wall-clock choice in this process's real timezone.
+    const scheduledFor = new Date(2026, 8, 1, 10, 0, 0, 0).toISOString();
+    const scheduledDisplay = new Date(scheduledFor).toLocaleString();
     const schedule = {
       id: 'schedule-1',
       jobId: 'job-1',
@@ -159,25 +162,48 @@ describe('Call Anyone approval flow', () => {
 
     const first = render(<CallAnyonePanel client={client} />);
     expect(await screen.findByText(/Clinic ·/)).not.toBeNull();
+    expect(screen.getByText(`${scheduledDisplay} · revision 1`)).not.toBeNull();
     expect(screen.getByText('Ask about office hours.')).not.toBeNull();
     expect(screen.getByText('Scheduled')).not.toBeNull();
     first.unmount();
 
-    render(<CallAnyonePanel client={client} />);
+    const reloaded = render(<CallAnyonePanel client={client} />);
     await screen.findByText('Scheduled');
+    expect(screen.getByText(`${scheduledDisplay} · revision 1`)).not.toBeNull();
+    expect(client.approve).not.toHaveBeenCalled();
+    expect(client.schedule).not.toHaveBeenCalled();
+    expect(client.start).not.toHaveBeenCalled();
+    expect(client.dispatchScheduled).not.toHaveBeenCalled();
     completeRecipientStep('+13125550110');
     fireEvent.change(screen.getByLabelText('Purpose'), {
       target: { value: schedule.purpose },
     });
     fireEvent.change(screen.getByLabelText('Call time'), {
-      target: { value: '2026-09-01T10:00' },
+      target: { value: localCallTime },
     });
+    expect((screen.getByLabelText('Call time') as HTMLInputElement).value).toBe(localCallTime);
     fireEvent.click(screen.getByRole('button', { name: 'Review call' }));
     await screen.findByText(/Up to 480 shared credits/);
+    expect(client.approve).not.toHaveBeenCalled();
+    expect(client.schedule).not.toHaveBeenCalled();
+    expect(client.start).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Approve and schedule' }));
 
     await waitFor(() => expect(client.schedule).toHaveBeenCalledWith('job-1', scheduledFor));
     expect(client.approve).toHaveBeenCalledWith('job-1');
+    expect(client.approve).toHaveBeenCalledOnce();
+    expect(client.schedule).toHaveBeenCalledOnce();
+    expect(client.approve.mock.invocationCallOrder[0]).toBeLessThan(
+      client.schedule.mock.invocationCallOrder[0],
+    );
+    expect(client.start).not.toHaveBeenCalled();
+    expect(client.dispatchScheduled).not.toHaveBeenCalled();
+    reloaded.unmount();
+    render(<CallAnyonePanel client={client} />);
+    await screen.findByText('Scheduled');
+    expect(screen.getByText(`${scheduledDisplay} · revision 1`)).not.toBeNull();
+    expect(screen.getByText('Ask about office hours.')).not.toBeNull();
+    expect(client.schedule).toHaveBeenCalledOnce();
     expect(client.start).not.toHaveBeenCalled();
   });
 

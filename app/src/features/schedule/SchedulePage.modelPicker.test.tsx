@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '@/stores/auth';
 import { toast } from '@/components/ui/toast';
@@ -93,6 +93,7 @@ describe('SchedulePage Jarvis Action model picker', () => {
       connection: GEMINI_API_CONNECTION,
       connectionId: GEMINI_API_CONNECTION.id,
       available: true,
+      variants: ['low', 'medium', 'high'],
     };
     accessibleModelsState.current = {
       groups: [
@@ -268,8 +269,16 @@ describe('SchedulePage Jarvis Action model picker', () => {
     consoleError.mockRestore();
     // Schedule uses the same searchable model and effort picker as Chat.
     expect(screen.getByRole('listbox', { name: 'Available AI models' })).toBeTruthy();
-    fireEvent.click(document.querySelector(`[data-value="${GEMINI_API_CONNECTION.id}:gemini-2.5-flash"]`)!);
+    const selectedBeforeConfirmation = screen.getByText(/Selected:/).textContent;
+    fireEvent.click(
+      document.querySelector(`[data-value="${GEMINI_API_CONNECTION.id}:gemini-2.5-flash"]`)!,
+    );
+    const effortOptions = screen.getByRole('listbox', { name: 'Gemini 2.5 Flash effort options' });
+    expect(screen.getByText(/Selected:/).textContent).toBe(selectedBeforeConfirmation);
+    expect(createEvent).not.toHaveBeenCalled();
+    fireEvent.click(within(effortOptions).getByRole('option', { name: /^medium$/i }));
     expect(screen.queryByRole('listbox')).toBeNull();
+    expect(screen.getByText(/Selected:/).textContent).toContain('Gemini 2.5 Flash');
     fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Review release notes' },
     });
@@ -316,6 +325,7 @@ describe('SchedulePage Jarvis Action model picker', () => {
       connection: OPENCODE_CLI_CONNECTION,
       connectionId: OPENCODE_CLI_CONNECTION.id,
       available: true,
+      variants: ['low', 'medium', 'high'],
     };
     const fastRoute = {
       ...baseRoute,
@@ -358,8 +368,14 @@ describe('SchedulePage Jarvis Action model picker', () => {
     fireEvent.click(document.querySelector('[data-value="opencode-cli:openai/gpt-5.6-sol"]')!);
     const unavailable = screen.getByRole('option', { name: /GPT-5\.6 Sol Preview/i });
     expect((unavailable as HTMLButtonElement).disabled).toBe(true);
+    const selectedBeforeConfirmation = screen.getByText(/Selected:/).textContent;
     fireEvent.click(screen.getByRole('option', { name: /GPT-5\.6 Sol Fast/i }));
+    const effortOptions = screen.getByRole('listbox', { name: 'GPT-5.6 Sol Fast effort options' });
+    expect(screen.getByText(/Selected:/).textContent).toBe(selectedBeforeConfirmation);
+    expect(createEvent).not.toHaveBeenCalled();
+    fireEvent.click(within(effortOptions).getByRole('option', { name: /^medium$/i }));
     expect(screen.queryByRole('listbox')).toBeNull();
+    expect(screen.getByText(/Selected:/).textContent).toContain('GPT-5.6 Sol Fast');
     fireEvent.change(screen.getByLabelText(/action title/i), {
       target: { value: 'Review the Fast route' },
     });

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import * as ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TooltipProvider } from '@/components/ui';
@@ -35,7 +36,40 @@ describe('Composer selected speech engine contract', () => {
     expect(controller).toContain('await createSelectedSttSession(');
     expect(selected).toContain("if (provider === 'faster-whisper') {");
     expect(selected).toContain("if (provider === 'deepgram') {");
-    expect(selected).toContain('createWebSpeechSession(scopedEvents, assertCurrent)');
+    const syntax = ts.createSourceFile(
+      'dictationSession.ts',
+      selected,
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const webSpeechCalls: ts.CallExpression[] = [];
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'createWebSpeechSession'
+      )
+        webSpeechCalls.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(syntax);
+    expect(webSpeechCalls).toHaveLength(1);
+    const args = webSpeechCalls[0]!.arguments;
+    expect(args).toHaveLength(3);
+    const scopedEvents = args[0]!;
+    const assertCurrent = args[1]!;
+    expect(ts.isIdentifier(scopedEvents) && scopedEvents.text).toBe('scopedEvents');
+    expect(ts.isIdentifier(assertCurrent) && assertCurrent.text).toBe('assertCurrent');
+    const requester = args[2]!;
+    if (!ts.isBinaryExpression(requester) || !ts.isPropertyAccessExpression(requester.left)) {
+      throw new Error('Web Speech auto-finish must be explicitly gated by the voice requester');
+    }
+    expect(requester.operatorToken.kind).toBe(ts.SyntaxKind.EqualsEqualsEqualsToken);
+    expect(ts.isIdentifier(requester.left.expression) && requester.left.expression.text).toBe(
+      'options',
+    );
+    expect(requester.left.name.text).toBe('requester');
+    expect(ts.isStringLiteral(requester.right) && requester.right.text).toBe('jarvis-voice');
     expect(source).not.toContain('trySystemSttFallbacks');
     expect(source).not.toContain('triggerWindowsNativeDictation');
     expect(source).not.toContain('startGroqStt');

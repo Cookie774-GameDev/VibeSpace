@@ -213,6 +213,10 @@ const bootListeners = vi.hoisted(() => ({
   runtime: vi.fn(() => () => undefined),
 }));
 
+const scheduledCalls = vi.hoisted(() => ({
+  start: vi.fn(() => () => undefined),
+}));
+
 const kernelHost = vi.hoisted(() => ({
   openLiveEvidenceAccount: vi.fn(async (accountId: string) =>
     Object.freeze({
@@ -449,6 +453,13 @@ vi.mock('@/features/pets', () => ({
   PetHost: () => null,
 }));
 
+// This independent background runner reads Supabase to gate cloud refresh.
+// Its signed-out behavior is covered by scheduledCallRunner.test.ts; keep the
+// deferred session in this fixture exclusive to App's account authority boot.
+vi.mock('@/features/call/thirdParty/scheduledCallRunner', () => ({
+  startScheduledCallRunner: scheduledCalls.start,
+}));
+
 vi.mock('@/features/whats-new', () => ({
   WhatsNewHost: () => null,
   useWhatsNew: () => ({
@@ -625,6 +636,7 @@ function accountIdentityBootSuite(): void {
     try {
       await waitForAccountScopeBoot();
 
+      expect(scheduledCalls.start).toHaveBeenCalledTimes(1);
       expect(cloudBoot.getSession).toHaveBeenCalledTimes(1);
       expect(accountListeners.learning).not.toHaveBeenCalled();
       expect(accountListeners.allAboutMe).not.toHaveBeenCalled();
