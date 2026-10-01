@@ -82,6 +82,33 @@ function dependencies(
 }
 
 describe('VibeSpace slash Doctor', () => {
+  it('overlaps independent stages without losing diagnostics or repairs', async () => {
+    vi.useFakeTimers();
+    try {
+      const delay = <T,>(value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), 100));
+      const deps = dependencies({
+        runStorage: vi.fn(() => delay({ code: 'healthy', attempts: 1 } as const)),
+        inspectCodexRuntime: vi.fn(() => delay({ kind: 'missing' } as const)),
+        repairCodexRuntime: vi.fn(() => delay({ kind: 'ready', codexVersion: 'test', openCodexVersion: 'test', executableId: 'test' } as const)),
+        refreshOpenCode: vi.fn(() => delay(undefined)),
+        refreshOpenCodeProvider: vi.fn(() => delay({ label: 'OpenCode provider', ok: true, detail: 'Authenticated' })),
+        checkPlaywrightFeaturePack: vi.fn(() => delay({ label: 'Playwright acceptance runtime', ok: true, detail: 'Ready' })),
+        runAdditionalChecks: vi.fn(() => delay([{ label: 'Cloud account', ok: false, detail: 'Signed out' }])),
+      });
+      const pending = runVibeSpaceDoctorWithDependencies(deps);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(deps.runAdditionalChecks).toHaveBeenCalledOnce();
+      expect(deps.refreshContextBindings).toHaveBeenCalledOnce();
+      expect(deps.repairCodexRuntime).toHaveBeenCalledOnce();
+      const report = await pending;
+      expect(report.ok).toBe(false);
+      expect(report.text).toContain('Cloud account — Signed out');
+      expect(report.text).toContain('Codex tools — Ready');
+      expect(report.text).toContain('Route controls — Unchanged');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('shares concurrent requests and allows a fresh check after completion', async () => {
     let finish!: (value: { code: 'healthy'; attempts: 1 }) => void;
     const deps = dependencies({
@@ -105,6 +132,147 @@ describe('VibeSpace slash Doctor', () => {
     finish({ code: 'healthy', attempts: 1 });
     await second;
     expect(deps.runStorage).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares progress while isolating a failing observer and reports every stage', async () => {
+    const good = vi.fn();
+    const run = createVibeSpaceDoctorRunner(dependencies());
+    const pending = run(() => { throw new Error('observer'); });
+    expect(run(good)).toBe(pending);
+    const report = await pending;
+    expect(report.stages).toHaveLength(6);
+    expect(good).toHaveBeenLastCalledWith(expect.objectContaining({ completed: 6, total: 6 }));
+    expect(report.text).toContain('Stage timings:');
+  });
+
+  it('serializes diagnosed repairs while inspections overlap', async () => {
+    vi.useFakeTimers();
+    try {
+      let repairs = 0;
+      let peak = 0;
+      const repair = async () => {
+        repairs++;
+        peak = Math.max(peak, repairs);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        repairs--;
+      };
+      const deps = dependencies({
+        inspectCodexRuntime: vi.fn().mockResolvedValue({ kind: 'missing' }),
+        repairCodexRuntime: vi.fn(async () => { await repair(); return { kind: 'missing' }; }),
+        getOpenCodeState: vi.fn().mockReturnValue({ kind: 'missing' }),
+        getOpenCodeConnection: vi.fn().mockReturnValue(undefined),
+        repairOpenCode: vi.fn(repair),
+      });
+      const pending = runVibeSpaceDoctorWithDependencies(deps);
+      await vi.advanceTimersByTimeAsync(250);
+      await pending;
+      expect(peak).toBe(1);
+      expect(deps.repairCodexRuntime).toHaveBeenCalledOnce();
+      expect(deps.repairOpenCode).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps an active installer serialized across timed-out runs sharing dependencies', async () => {
+    vi.useFakeTimers();
+    let releaseRepair!: () => void;
+    let signalStarted!: () => void;
+    const blockedRepair = new Promise<void>((resolve) => { releaseRepair = resolve; });
+    const repairStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+    let active = 0;
+    let peak = 0;
+    const repairCodexRuntime = vi.fn(async () => {
+      active++;
+      peak = Math.max(peak, active);
+      if (repairCodexRuntime.mock.calls.length === 1) signalStarted();
+      try {
+        await blockedRepair;
+        return {
+          kind: 'ready' as const,
+          codexVersion: '0.151.0',
+          openCodexVersion: '5.0.0',
+          executableId: 'cli-executable-test',
+        };
+      } finally {
+        active--;
+      }
+    });
+    const deps = dependencies({
+      inspectCodexRuntime: vi.fn().mockResolvedValue({ kind: 'missing' }),
+      repairCodexRuntime,
+    });
+
+    try {
+      const firstRun = runVibeSpaceDoctorWithDependencies(deps);
+      await repairStarted;
+      await vi.advanceTimersByTimeAsync(180_000);
+      const firstReport = await firstRun;
+      expect(firstReport.text).toContain('codex_runtime_repair_failed');
+      expect(active).toBe(1);
+
+      const secondRun = runVibeSpaceDoctorWithDependencies(deps);
+      await vi.advanceTimersByTimeAsync(180_000);
+      const secondReport = await secondRun;
+      expect(secondReport.text).toContain('codex_runtime_repair_failed');
+
+      releaseRepair();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(repairCodexRuntime).toHaveBeenCalledOnce();
+      expect(peak).toBe(1);
+    } finally {
+      releaseRepair();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not start a queued repair after its queue deadline expires', async () => {
+    vi.useFakeTimers();
+    let releaseRepair!: () => void;
+    let signalRepairStarted!: () => void;
+    let signalOpenCodeInspected!: () => void;
+    const blockedRepair = new Promise<void>((resolve) => { releaseRepair = resolve; });
+    const repairStarted = new Promise<void>((resolve) => { signalRepairStarted = resolve; });
+    const openCodeInspected = new Promise<void>((resolve) => { signalOpenCodeInspected = resolve; });
+    const repairOpenCode = vi.fn().mockResolvedValue(undefined);
+    const deps = dependencies({
+      inspectCodexRuntime: vi.fn().mockResolvedValue({ kind: 'missing' }),
+      repairCodexRuntime: vi.fn(async () => {
+        signalRepairStarted();
+        await blockedRepair;
+        return {
+          kind: 'ready' as const,
+          codexVersion: '0.151.0',
+          openCodexVersion: '5.0.0',
+          executableId: 'cli-executable-test',
+        };
+      }),
+      getOpenCodeState: vi.fn(() => {
+        signalOpenCodeInspected();
+        return { kind: 'missing' };
+      }),
+      getOpenCodeConnection: vi.fn().mockReturnValue(undefined),
+      repairOpenCode,
+    });
+
+    try {
+      const pending = runVibeSpaceDoctorWithDependencies(deps);
+      await Promise.all([repairStarted, openCodeInspected]);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(180_000);
+      const report = await pending;
+      expect(report.text).toContain('codex_runtime_repair_failed');
+      expect(repairOpenCode).not.toHaveBeenCalled();
+
+      releaseRepair();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(repairOpenCode).not.toHaveBeenCalled();
+    } finally {
+      releaseRepair();
+      vi.useRealTimers();
+    }
   });
 
   it('continues diagnostics after storage stops responding', async () => {

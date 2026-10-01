@@ -26,6 +26,13 @@ const OPENCODE_SETTLE_TIMEOUT_MS = 20_000;
 export interface VibeSpaceDoctorReport {
   readonly ok: boolean;
   readonly text: string;
+  readonly stages: readonly { label: string; elapsedMs: number }[];
+}
+
+export interface VibeSpaceDoctorProgress {
+  readonly completed: number;
+  readonly total: number;
+  readonly label: string;
 }
 
 export interface VibeSpaceDoctorSubsystemCheck {
@@ -51,6 +58,39 @@ export interface VibeSpaceDoctorDependencies {
   readonly captureProtectedRouteState: () => string;
   readonly runAdditionalChecks: () => Promise<readonly VibeSpaceDoctorSubsystemCheck[]>;
   readonly now: () => number;
+}
+
+const DOCTOR_REPAIR_DEADLINE_MS = 180_000;
+const doctorRepairTails = new WeakMap<VibeSpaceDoctorDependencies, Promise<void>>();
+
+function queueDoctorRepair<T>(
+  dependencies: VibeSpaceDoctorDependencies,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = doctorRepairTails.get(dependencies) ?? Promise.resolve();
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const operation = previous.then(() => {
+    if (expired) throw new Error('doctor_repair_deadline_exceeded');
+    return run();
+  });
+  doctorRepairTails.set(
+    dependencies,
+    operation.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+
+  return Promise.race([
+    operation,
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => {
+        expired = true;
+        reject(new Error('doctor_repair_deadline_exceeded'));
+      }, DOCTOR_REPAIR_DEADLINE_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 export function summarizeCodexRuntime(state: CodexRuntimeState): VibeSpaceDoctorSubsystemCheck {
@@ -374,22 +414,48 @@ function captureDefaultProtectedRouteState(): string {
 
 export async function runVibeSpaceDoctorWithDependencies(
   dependencies: VibeSpaceDoctorDependencies,
+  onProgress?: (progress: VibeSpaceDoctorProgress) => void,
 ): Promise<VibeSpaceDoctorReport> {
   const startedAt = dependencies.now();
+  const stages: { label: string; elapsedMs: number }[] = [];
+  const measure = async <T,>(label: string, run: () => Promise<T>): Promise<T> => {
+    const stageStarted = dependencies.now();
+    try {
+      return await run();
+    } finally {
+      stages.push({ label, elapsedMs: Math.max(0, Math.round(dependencies.now() - stageStarted)) });
+      try { onProgress?.({ completed: stages.length, total: dependencies.nativeRuntime ? 6 : 2, label }); } catch { /* Observers cannot interrupt diagnostics. */ }
+    }
+  };
+  // Independent inspections overlap; supported repairs retain one installer at a time.
+  const repairRuntime = <T,>(run: () => Promise<T>): Promise<T> => {
+    return queueDoctorRepair(dependencies, run);
+  };
   let protectedRouteBefore: string | undefined;
   try {
     protectedRouteBefore = dependencies.captureProtectedRouteState();
   } catch {
     protectedRouteBefore = undefined;
   }
-  let storage: { ok: boolean; text: string };
+  let storage!: { ok: boolean; text: string };
+  const storageFlight = measure('Local chat storage', async () => {
   try {
     storage = storageSummary(await withDoctorDeadline(dependencies.runStorage));
   } catch {
     storage = { ok: false, text: 'Check failed safely · storage_doctor_unavailable' };
   }
+  });
 
-  let openCode: { ok: boolean; text: string };
+  // Repository reads wait for the storage check, but not unrelated runtime checks.
+  const additionalFlight = storageFlight.then(() => measure('App and cloud systems', async () => {
+    try {
+      return await withDoctorDeadline(dependencies.runAdditionalChecks);
+    } catch {
+      return [{ label: 'App systems', ok: false, detail: 'Check failed safely · subsystem_checks_unavailable' }];
+    }
+  }));
+
+  let openCode!: { ok: boolean; text: string };
   const runtimeChecks: VibeSpaceDoctorSubsystemCheck[] = [];
   if (!dependencies.nativeRuntime) {
     openCode = { ok: false, text: 'Native check unavailable in browser preview' };
@@ -409,6 +475,7 @@ export async function runVibeSpaceDoctorWithDependencies(
       detail: 'Native check unavailable in browser preview',
     });
   } else {
+    const codexFlight = measure('Codex tools', async () => {
     let codexState: CodexRuntimeState | undefined;
     let codexRepairAttempted = false;
     try {
@@ -424,7 +491,7 @@ export async function runVibeSpaceDoctorWithDependencies(
     ) {
       codexRepairAttempted = true;
       try {
-        codexState = await withDoctorDeadline(dependencies.repairCodexRuntime, 180_000);
+        codexState = await repairRuntime(dependencies.repairCodexRuntime);
       } catch {
         codexState = undefined;
       }
@@ -440,6 +507,8 @@ export async function runVibeSpaceDoctorWithDependencies(
               : 'Inspection failed safely · codex_runtime_inspection_failed',
           },
     );
+    });
+    const openCodeFlight = measure('OpenCode and provider', async () => {
     try {
       await withDoctorDeadline(dependencies.refreshOpenCode);
       await withDoctorDeadline(
@@ -454,7 +523,7 @@ export async function runVibeSpaceDoctorWithDependencies(
         (['missing', 'download_required', 'incompatible'].includes(state.kind) ||
           (state.kind === 'failed' && state.recoverable))
       ) {
-        await withDoctorDeadline(dependencies.repairOpenCode, 180_000);
+        await repairRuntime(dependencies.repairOpenCode);
         await withDoctorDeadline(
           dependencies.waitForOpenCodeSettled,
           OPENCODE_SETTLE_TIMEOUT_MS + 1_000,
@@ -477,15 +546,8 @@ export async function runVibeSpaceDoctorWithDependencies(
     } catch {
       openCode = { ok: false, text: 'Check failed safely · opencode_runtime_unavailable' };
     }
-    try {
-      runtimeChecks.push(...(await withDoctorDeadline(dependencies.refreshContextBindings)));
-    } catch {
-      runtimeChecks.push({
-        label: 'RLM / SiYuan',
-        ok: false,
-        detail: 'Check failed safely · context_runtime_unavailable',
-      });
-    }
+    });
+    const playwrightFlight = measure('Playwright acceptance runtime', async () => {
     try {
       runtimeChecks.push(await withDoctorDeadline(dependencies.checkPlaywrightFeaturePack));
     } catch {
@@ -495,20 +557,22 @@ export async function runVibeSpaceDoctorWithDependencies(
         detail: 'Check failed safely · playwright_feature_pack_unavailable',
       });
     }
+    });
+    await Promise.all([codexFlight, openCodeFlight, playwrightFlight]);
+    // Rebind only after runtime refresh/repair has settled.
+    await measure('RLM / SiYuan', async () => {
+      try {
+        runtimeChecks.push(...(await withDoctorDeadline(dependencies.refreshContextBindings)));
+      } catch {
+        runtimeChecks.push({ label: 'RLM / SiYuan', ok: false, detail: 'Check failed safely · context_runtime_unavailable' });
+      }
+    });
   }
 
-  let additionalChecks: readonly VibeSpaceDoctorSubsystemCheck[];
-  try {
-    additionalChecks = await withDoctorDeadline(dependencies.runAdditionalChecks);
-  } catch {
-    additionalChecks = [
-      {
-        label: 'App systems',
-        ok: false,
-        detail: 'Check failed safely · subsystem_checks_unavailable',
-      },
-    ];
-  }
+  await storageFlight;
+  const additionalChecks = await additionalFlight;
+  const checkOrder = ['Codex tools', 'OpenCode provider', 'RLM', 'SiYuan', 'RLM / SiYuan', 'Playwright acceptance runtime'];
+  runtimeChecks.sort((a, b) => checkOrder.indexOf(a.label) - checkOrder.indexOf(b.label));
 
   let recentSignals: readonly VibeSpaceDoctorSubsystemCheck[];
   try {
@@ -553,12 +617,14 @@ export async function runVibeSpaceDoctorWithDependencies(
   const elapsedMs = Math.max(0, Math.round(dependencies.now() - startedAt));
   return {
     ok,
+    stages,
     text: [
       `VibeSpace Doctor — ${ok ? 'Checks completed' : 'Attention needed'}`,
       `${storage.ok ? '✓' : '•'} Local chat storage — ${storage.text}`,
       `${openCode.ok ? '✓' : '•'} OpenCode — ${openCode.text}`,
       ...allChecks.map((check) => `${check.ok ? '✓' : '•'} ${check.label} — ${check.detail}`),
       `Completed in ${elapsedMs} ms.`,
+      `Stage timings: ${stages.map(stage => `${stage.label} ${stage.elapsedMs} ms`).join('; ')}. Independent stages overlap.`,
       'Checks describe verified capabilities only. Live execution, delivery, and backup restoration require separate tests.',
       ok
         ? 'No credentials, user content, or route controls were changed; only supported runtime refresh/rebind and non-destructive storage recovery ran.'
@@ -569,9 +635,16 @@ export async function runVibeSpaceDoctorWithDependencies(
 
 export function createVibeSpaceDoctorRunner(dependencies: VibeSpaceDoctorDependencies) {
   let active: Promise<VibeSpaceDoctorReport> | undefined;
-  return (): Promise<VibeSpaceDoctorReport> => {
-    active ??= runVibeSpaceDoctorWithDependencies(dependencies).finally(() => {
+  const listeners = new Set<(progress: VibeSpaceDoctorProgress) => void>();
+  return (onProgress?: (progress: VibeSpaceDoctorProgress) => void): Promise<VibeSpaceDoctorReport> => {
+    if (onProgress) listeners.add(onProgress);
+    active ??= runVibeSpaceDoctorWithDependencies(dependencies, progress => {
+      for (const listener of listeners) {
+        try { listener(progress); } catch { /* Ignore observer failures. */ }
+      }
+    }).finally(() => {
       active = undefined;
+      listeners.clear();
     });
     return active;
   };
