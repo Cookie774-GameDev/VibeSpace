@@ -55,8 +55,6 @@ jobs:
       QA_CONNECTOR_SHA256: ${{ inputs.connector_source_sha256 }}
       CARGO_TARGET_DIR: ${{ github.workspace }}/work/native-windows-qa-target
       CARGO_BUILD_JOBS: '1'
-      VIBESPACE_CONNECTOR_BUILD_DIR: ${{ runner.temp }}/native-windows-qa-connector
-      VIBESPACE_SIYUAN_CACHE_DIR: ${{ runner.temp }}/native-windows-qa-siyuan
     steps:
       - name: Validate immutable source inputs
         run: |
@@ -67,6 +65,16 @@ jobs:
           foreach ($value in @($env:QA_CARGO_LOCK_SHA256, $env:QA_WINDOWS_CONFIG_SHA256, $env:QA_CONNECTOR_SHA256)) {
             if ($value -cnotmatch '^[a-f0-9]{64}$') { throw 'Full lowercase SHA-256 inputs required.' }
           }
+
+      - name: Initialize isolated runner paths
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP) -or [string]::IsNullOrWhiteSpace($env:GITHUB_ENV)) { throw 'Runner temp and environment file required.' }
+          $connectorDirectory = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'native-windows-qa-connector'
+          $siyuanDirectory = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'native-windows-qa-siyuan'
+          @(
+            "VIBESPACE_CONNECTOR_BUILD_DIR=$connectorDirectory"
+            "VIBESPACE_SIYUAN_CACHE_DIR=$siyuanDirectory"
+          ) | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append -ErrorAction Stop
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:

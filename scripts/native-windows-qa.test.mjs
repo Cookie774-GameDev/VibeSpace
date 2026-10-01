@@ -31,6 +31,78 @@ function blockAt(source, header) {
   return lines.slice(start, end).join('\n');
 }
 
+function assertJobEnvContexts(jobEnv) {
+  // GitHub's contexts reference: jobs.<job_id>.env excludes runner, env, job and steps.
+  const allowed = new Set(['github', 'needs', 'strategy', 'matrix', 'vars', 'secrets', 'inputs']);
+  for (const expression of jobEnv.matchAll(/\$\{\{([\s\S]*?)\}\}/gu)) {
+    for (const reference of expression[1].matchAll(/\b([a-z_][a-z_0-9]*)\s*(?:\.|\[)/giu)) {
+      assert.ok(
+        allowed.has(reference[1].toLowerCase()),
+        `Unsupported job env context: ${reference[1]}`,
+      );
+    }
+  }
+}
+
+test('job environment rejects runner and other step-only expression contexts', async () => {
+  const qa = await readFile(path.join(root, '.github/workflows/native-windows-qa.yml'), 'utf8');
+  assertJobEnvContexts(blockAt(qa, '    env:'));
+  for (const context of ['runner', 'env', 'job', 'steps']) {
+    for (const reference of [`${context}.temp`, `${context}['temp']`]) {
+      assert.throws(
+        () => assertJobEnvContexts('      MISPLACED: $' + `{{ ${reference} }}`),
+        /Unsupported job env context/u,
+      );
+    }
+  }
+  assert.doesNotThrow(() => assertJobEnvContexts('      VALID: $' + '{{ github.workspace }}'));
+});
+
+test('runner paths export through GITHUB_ENV before preparation and preserve the isolated directories', async () => {
+  const qa = await readFile(path.join(root, '.github/workflows/native-windows-qa.yml'), 'utf8');
+  const step = blockAt(qa, '      - name: Initialize isolated runner paths');
+  assert.ok(qa.indexOf(step.split('\n')[0]) < qa.indexOf('-Phase before-prepare'));
+  assert.ok(qa.indexOf(step.split('\n')[0]) < qa.indexOf('npm run prepare:desktop-connector'));
+  const script = step.slice(step.indexOf('        run: |\n') + '        run: |\n'.length);
+  assert.doesNotMatch(script, /\$\{\{/u);
+  const fixture = await mkdtemp(path.join(tmpdir(), 'vibespace-qa-env-'));
+  try {
+    const runnerTemp = path.join(fixture, 'runner temp ü');
+    const envFile = path.join(fixture, 'github-env.txt');
+    await mkdir(runnerTemp);
+    await writeFile(envFile, 'EXISTING=preserved\n');
+    execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8',
+      timeout: 10000,
+      windowsHide: true,
+      env: { ...process.env, RUNNER_TEMP: runnerTemp, GITHUB_ENV: envFile },
+    });
+    assert.deepEqual((await readFile(envFile, 'utf8')).trim().split(/\r?\n/u), [
+      'EXISTING=preserved',
+      `VIBESPACE_CONNECTOR_BUILD_DIR=${path.join(runnerTemp, 'native-windows-qa-connector')}`,
+      `VIBESPACE_SIYUAN_CACHE_DIR=${path.join(runnerTemp, 'native-windows-qa-siyuan')}`,
+    ]);
+    assert.throws(() =>
+      execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        timeout: 10000,
+        windowsHide: true,
+        stdio: 'pipe',
+        env: { ...process.env, RUNNER_TEMP: '', GITHUB_ENV: envFile },
+      }),
+    );
+    assert.throws(() =>
+      execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        timeout: 10000,
+        windowsHide: true,
+        stdio: 'pipe',
+        env: { ...process.env, RUNNER_TEMP: runnerTemp, GITHUB_ENV: '' },
+      }),
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
 test('registered CI opts into the same-commit Windows QA call without requiring ordinary CI inputs', async () => {
   const ci = await readFile(path.join(root, '.github/workflows/ci.yml'), 'utf8');
   const dispatch = blockAt(ci, '  workflow_dispatch:');
