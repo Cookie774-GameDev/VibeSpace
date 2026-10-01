@@ -39,7 +39,7 @@ foreach ($file in $manifest.files) {
  Assert-NoLinks $p
  if ((Get-Item -LiteralPath $p).Length -ne $file.bytes -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.sha256) { throw 'consumer_helper_file_hash' }
 }
-foreach ($required in @('consumer.ps1','driver.mjs','contract.mjs','attest.ps1','commandline.ps1','transfer.py','artifact_dll_checks.py','run-native-supervised.ps1')) {
+foreach ($required in @('consumer.ps1','driver.mjs','contract.mjs','attest.ps1','commandline.ps1','transfer.py','artifact_dll_checks.py','run-native-supervised.ps1','dependency-launch.ps1')) {
  if (-not $seen.Contains($required)) { throw 'consumer_helper_missing' }
 }
 $head=& git -C $workspace rev-parse HEAD
@@ -57,11 +57,15 @@ $python=(Get-Command python).Source
 $pwsh=(Get-Command pwsh).Source
 $git=(Get-Command git).Source
 $npm=(Get-Command npm.cmd).Source
+$npmCLI=Join-Path (Split-Path $npm) 'node_modules/npm/bin/npm-cli.js'
+if(-not (Test-Path -LiteralPath $npmCLI -PathType Leaf)){throw 'consumer_npm_cli_missing'}
+Assert-NoLinks $npmCLI
 $phaseIndex=0
 $owned=[Collections.Generic.List[object]]::new()
 $tracked=[Collections.Generic.Dictionary[string,object]]::new()
 . (Join-Path $PSScriptRoot 'lifecycle.ps1')
 . (Join-Path $PSScriptRoot 'desktop-guard.ps1')
+. (Join-Path $PSScriptRoot 'dependency-launch.ps1')
 $result=[ordered]@{ taskId=$TaskId; sourceSHA=$source; exeSHA256=$exeSHA; helperManifestSHA256=$HelperManifestSHA256;
  startedUTC=[DateTime]::UtcNow.ToString('o'); runtimeAcceptance='UNRUN'; phases=@(); cleanup=@(); failure=$null }
 function Save-Json([string]$file,[object]$value) {
@@ -165,6 +169,9 @@ function Run-Phase([string]$name,[string]$command,[string[]]$argv,[string]$cwd,[
  if (-not $done) {Stop-OwnedTree $o}
  $code=if($o.process.HasExited){$o.process.ExitCode}else{$null}
  $log=if($o.process.HasExited){$o.stdout.GetAwaiter().GetResult()+$o.stderr.GetAwaiter().GetResult()}else{''}
+ if($name -ceq 'npm-ci'){
+  Save-Json (Join-Path $runRoot 'npm-diagnostic.json') (Get-NpmDiagnostic $log $(if($null -eq $code){-1}else{$code}) (-not $done))
+ }
  # Only these reviewed helpers produce sanitized stdout. npm diagnostics are kept private.
  if ($log.Length -gt 1048576) {throw 'consumer_child_log_budget'}
  [IO.File]::WriteAllText((Join-Path $runRoot ("$name.log")),$log)
@@ -208,7 +215,9 @@ try {
  }
  # No install scripts, browser downloads or model setup. Separate approved planning estimate.
  Assert-Capacity 1536 2048 8589934592 $DependencyGrantId
- Run-Phase 'npm-ci' $env:ComSpec @('/d','/s','/c','"'+$npm+'" ci --ignore-scripts --no-audit --no-fund') $workspace 600
+ $npmPlan=Get-NpmLaunchPlan $node $npmCLI
+ Save-Json (Join-Path $runRoot 'npm-launch-identity.json') ([ordered]@{launchMode='DIRECT_NODE_NPM_CLI';node=$node;npmCLI=$npmCLI;cliSHA256=(Get-FileHash -LiteralPath $npmCLI).Hash.ToLowerInvariant();arguments=@('ci','--ignore-scripts','--no-audit','--no-fund')})
+ Run-Phase 'npm-ci' $npmPlan.command $npmPlan.argv $workspace 600
  $config=Get-Content -LiteralPath (Join-Path $workspace 'app/src-tauri/tauri.conf.json') -Raw | ConvertFrom-Json
  if ($config.identifier -cnotmatch '^[A-Za-z0-9_.-]+$') {throw 'consumer_native_identifier'}
  $nativeData=Join-Path ([Environment]::GetFolderPath('ApplicationData')) $config.identifier
@@ -308,3 +317,4 @@ try {
  Save-Json (Join-Path $runRoot 'consumer-terminal.json') $result
 }
 if ($result.failure -or @($result.cleanup | Where-Object {$_.status -in @('CLEANUP_FAILED','PID_REUSED_UNTOUCHED')}).Count) {throw 'consumer_terminal_failed'}
+

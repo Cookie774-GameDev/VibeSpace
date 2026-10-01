@@ -25,8 +25,8 @@
     },
     {
       "path": "consumer.ps1",
-      "bytes": 20963,
-      "sha256": "25d3e6b434f029d44fa89d6c865bb65d2702a935f3e335d5898b4e3dc90a18af"
+      "bytes": 21326,
+      "sha256": "4e92d7f5b9d8e7950613b639d80e4ef85453da69723b5de51966c4b20c899012"
     },
     {
       "path": "contract.mjs",
@@ -37,6 +37,16 @@
       "path": "contract.test.mjs",
       "bytes": 6322,
       "sha256": "f548a34675fbf4ffb5e68148ae5c0d56d1de4206acddad7071dca6e8177ad257"
+    },
+    {
+      "path": "dependency-launch.ps1",
+      "bytes": 1490,
+      "sha256": "6127504ad9351c35336e07c72bba8e4170b6269a7ab85641400fc9bd8dc2423b"
+    },
+    {
+      "path": "dependency-launch.test.ps1",
+      "bytes": 3018,
+      "sha256": "900b7bc2817bef9eb75d2faa77d29fcdebdde43ff07a00b4aa6c51ff5bacf3b3"
     },
     {
       "path": "desktop-guard.ps1",
@@ -99,5 +109,6 @@
       "sha256": "ed92a87e0daf0435622f2fc0d9c41e3b668b676f13e7d6387af87ccd397e1beb"
     }
   ],
-  "originalManifestSHA256": "65d04ab824644c3be5090214e4136e6aa01d6b0b8220d0cba648a421dd8a8c87"
+  "originalManifestSHA256": "65d04ab824644c3be5090214e4136e6aa01d6b0b8220d0cba648a421dd8a8c87",
+  "repairBaseHelperSHA": "b32ccacd47459ba9e6b1c0203ce275272111e5b4"
 }

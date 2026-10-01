@@ -78,6 +78,8 @@ jobs:
             ${{ runner.temp }}/FRESH2_CI488_*/desktop-*.json
             ${{ runner.temp }}/FRESH2_CI488_*/official-window.json
             ${{ runner.temp }}/FRESH2_CI488_*/consumer-terminal.json
+            ${{ runner.temp }}/FRESH2_CI488_*/npm-diagnostic.json
+            ${{ runner.temp }}/FRESH2_CI488_*/npm-launch-identity.json
             ${{ runner.temp }}/FRESH2_CI488_*/admission-*.json
             ${{ runner.temp }}/FRESH2_CI488_*/runner-image.json
             ${{ runner.temp }}/FRESH2_CI488_*/clean-before-start.json
@@ -88,3 +90,4 @@ jobs:
             ${{ runner.temp }}/FRESH2_CI488_*/supervisor/*.json
           if-no-files-found: warn
           retention-days: 3
+
