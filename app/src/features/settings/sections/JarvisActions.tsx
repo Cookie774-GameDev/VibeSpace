@@ -6,22 +6,30 @@ import { useUIStore } from '@/stores/ui';
 import { BUILTIN_ACTION_COUNT, getAllActions } from '@/lib/actions';
 import { useToolStore } from '@/features/tools/toolStore';
 import { HOTKEYS } from '@/lib/hotkeys';
+import { askAssistantLabel, useAssistantPersonaName } from '@/lib/assistantPersona';
 
 export function JarvisActions() {
   const setRoute = useUIStore((s) => s.setRoute);
+  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
   const setActionsPaletteOpen = useUIStore((s) => s.setActionsPaletteOpen);
   const customCount = useToolStore((s) => s.tools.length);
   const totalCount = useMemo(() => getAllActions().length, [customCount]);
+  const assistantName = useAssistantPersonaName();
+  const askLabel = askAssistantLabel(assistantName);
+  const openCustomTools = () => {
+    setSettingsOpen(false);
+    setRoute('tools');
+  };
 
   return (
     <div className="mc7f-settings-jarvis-actions flex flex-col gap-6 [html[data-theme=monochrome]_&]:border-l-2 [html[data-theme=monochrome]_&]:border-l-foreground/20 [html[data-theme=monochrome]_&]:pl-4">
       <header>
-        <h2 className="text-page-title text-foreground">Jarvis Actions</h2>
+        <h2 className="text-page-title text-foreground">{assistantName} Actions</h2>
         <p className="mt-1 max-w-2xl text-secondary text-muted-foreground">
-          Jarvis can propose app commands in chat — open terminals, navigate pages, run dev scripts,
-          and more. Nothing runs until you click <strong>Approve</strong> or{' '}
+          {assistantName} can propose app commands in chat — open terminals, navigate pages, run dev
+          scripts, and more. Nothing runs until you click <strong>Approve</strong> or{' '}
           <strong>Approve all</strong>. Works with any model (Ollama, Gemini, Claude, etc.) when you
-          talk to Jarvis.
+          talk to {assistantName}.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Badge variant="outline" className="text-metadata">
@@ -31,13 +39,13 @@ export function JarvisActions() {
             {customCount} custom command{customCount === 1 ? '' : 's'}
           </Badge>
           <Badge variant="outline" className="text-metadata text-sage">
-            {totalCount} available to Jarvis
+            {totalCount} available to {assistantName}
           </Badge>
         </div>
       </header>
 
       <section className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-md border border-border bg-panel p-4 flex flex-col gap-3">
+        <div className="rounded-md border border-border bg-panel p-4 flex flex-col gap-3 transition-[border-color,background-color,transform] duration-150 hover:-translate-y-0.5 hover:border-foreground/20 hover:bg-elevated focus-within:border-ring motion-reduce:transform-none motion-reduce:transition-none">
           <div className="flex items-center gap-2 text-ui-strong text-foreground">
             <Zap className="h-4 w-4 text-accent-copper" />
             Actions palette
@@ -56,7 +64,7 @@ export function JarvisActions() {
           </Button>
         </div>
 
-        <div className="rounded-md border border-border bg-panel p-4 flex flex-col gap-3">
+        <div className="rounded-md border border-border bg-panel p-4 flex flex-col gap-3 transition-[border-color,background-color,transform] duration-150 hover:-translate-y-0.5 hover:border-foreground/20 hover:bg-elevated focus-within:border-ring motion-reduce:transform-none motion-reduce:transition-none">
           <div className="flex items-center gap-2 text-ui-strong text-foreground">
             <Wrench className="h-4 w-4 text-accent-cyan" />
             Custom commands
@@ -64,7 +72,7 @@ export function JarvisActions() {
           <p className="text-secondary text-muted-foreground text-sm">
             Save your own one-click commands or multi-step workflows Jarvis can propose later.
           </p>
-          <Button variant="outline" size="sm" className="w-fit" onClick={() => setRoute('tools')}>
+          <Button variant="outline" size="sm" className="w-fit" onClick={openCustomTools}>
             <Wrench className="h-3.5 w-3.5" />
             Manage custom tools
           </Button>
@@ -77,11 +85,11 @@ export function JarvisActions() {
           How approval works
         </div>
         <ul className="list-disc pl-5 text-secondary text-muted-foreground text-sm space-y-1.5">
-          <li>Ask Jarvis in chat or voice — e.g. “Open 5 terminals with opencode”.</li>
-          <li>Jarvis replies with an approval card showing what it wants to do.</li>
+          <li>{askLabel} in chat or voice — e.g. “Open 5 terminals with opencode”.</li>
+          <li>{assistantName} replies with an approval card showing what it wants to do.</li>
           <li>Click Approve, Approve all, or Cancel. Destructive actions are always gated.</li>
           <li>
-            Jarvis can also save new commands with{' '}
+            {assistantName} can also save new commands with{' '}
             <code className="font-mono text-foreground/90">custom.createTerminalCommand</code> or{' '}
             <code className="font-mono text-foreground/90">custom.createWorkflowTool</code>.
           </li>

@@ -299,6 +299,7 @@ async function mountedInstance() {
 describe('App JARVIS persistence coordinator mount', { timeout: 20_000 }, () => {
   beforeEach(() => {
     localStorage.clear();
+    delete document.documentElement.dataset.jarvisRuntimeListenerReady;
     vi.clearAllMocks();
     persistence.reset();
     accountListeners.reset();
@@ -314,10 +315,44 @@ describe('App JARVIS persistence coordinator mount', { timeout: 20_000 }, () => 
 
   afterEach(() => {
     cleanup();
+    delete document.documentElement.dataset.jarvisRuntimeListenerReady;
     vi.restoreAllMocks();
     useAuthStore.setState(originalAuth, true);
     useUIStore.setState(originalUi, true);
     useAgentStore.setState(originalAgents, true);
+  });
+
+  it('withholds the workspace until the real Jarvis send listener is installed', async () => {
+    let resolveAgents!: (agents: unknown[]) => void;
+    bootStorage.listAgents.mockImplementationOnce(
+      () =>
+        new Promise<unknown[]>((resolve) => {
+          resolveAgents = resolve;
+        }),
+    );
+
+    const mounted = render(<App />);
+    await waitFor(() => expect(bootStorage.listAgents).toHaveBeenCalledOnce());
+
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(document.documentElement.dataset.jarvisRuntimeListenerReady).toBeUndefined();
+    expect(mounted.container.querySelector('[data-monochrome-surface="app-shell"]')).toBeNull();
+
+    await act(async () => {
+      resolveAgents([]);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(runtime.start).toHaveBeenCalledOnce());
+    expect(document.documentElement.dataset.jarvisRuntimeListenerReady).toBe('true');
+    await waitFor(() =>
+      expect(
+        mounted.container.querySelector('[data-monochrome-surface="app-shell"]'),
+      ).not.toBeNull(),
+    );
+
+    mounted.unmount();
+    expect(document.documentElement.dataset.jarvisRuntimeListenerReady).toBeUndefined();
   });
 
   it('constructs one coordinator after database open and gates listeners until ready', async () => {

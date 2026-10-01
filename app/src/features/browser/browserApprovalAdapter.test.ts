@@ -384,6 +384,21 @@ describe('createBrowserApprovalAdapter', () => {
     expect(port.executeAutoApprovedSafe).not.toHaveBeenCalled();
   });
 
+  it('requires the canonical action call id to match the exact reviewed record', async () => {
+    const port = actionPort();
+    const adapter = createBrowserApprovalAdapter({ actions: port.narrow });
+    const valid = parentReference();
+    const mismatched = parentReference({
+      context: deepFreeze({ ...valid.context, callId: 'browser-action-other' }),
+    });
+
+    await expect(adapter.submit(reviewedAction(), mismatched)).rejects.toMatchObject({
+      code: 'context_mismatch',
+    });
+    expect(port.create).not.toHaveBeenCalled();
+    expect(port.executeAutoApprovedSafe).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       'non-positive attempt number',

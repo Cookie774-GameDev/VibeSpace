@@ -104,6 +104,7 @@ export const COPILOT_CLI_DEFINITION: CliProviderDefinition = Object.freeze({
   promptTransport: 'prefixed-preamble',
   executableName: 'copilot',
   versionArgs: Object.freeze(['version']),
+  modelListArgs: Object.freeze(['/model']),
   buildInvocation: buildCopilotInvocation,
   normalizeRecord: normalizeCopilotRecord,
 });

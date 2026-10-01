@@ -3,6 +3,12 @@
  * Tauri credentials — never in localStorage or Supabase sync payloads.
  */
 import { isTauri } from '@/lib/utils';
+import {
+  getDeepgramApiKey,
+  loadDeepgramCredential,
+  removeDeepgramCredential,
+  saveDeepgramCredential,
+} from '@/lib/deepgram';
 
 const VOICE_KEY_PROVIDERS = ['deepgram_voice', 'openai_voice'] as const;
 export type VoiceKeyProvider = (typeof VOICE_KEY_PROVIDERS)[number];
@@ -16,6 +22,16 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 export async function setVoiceApiKey(provider: VoiceKeyProvider, key: string): Promise<void> {
   const trimmed = key.trim();
+  if (provider === 'deepgram_voice') {
+    if (!trimmed) {
+      const removed = await removeDeepgramCredential();
+      if (removed.health !== 'missing') throw new Error('deepgram_secure_storage_unavailable');
+      return;
+    }
+    const saved = await saveDeepgramCredential(trimmed);
+    if (saved.health !== 'connected') throw new Error(`deepgram_${saved.errorCode ?? saved.health}`);
+    return;
+  }
   if (isTauri) {
     if (!trimmed) {
       await invoke('credential_delete', { provider });
@@ -29,6 +45,10 @@ export async function setVoiceApiKey(provider: VoiceKeyProvider, key: string): P
 }
 
 export async function getVoiceApiKey(provider: VoiceKeyProvider): Promise<string | undefined> {
+  if (provider === 'deepgram_voice') {
+    await loadDeepgramCredential();
+    return getDeepgramApiKey();
+  }
   if (isTauri) {
     const value = await invoke<string | null>('credential_get', { provider });
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;

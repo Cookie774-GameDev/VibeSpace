@@ -4,7 +4,7 @@
  *
  * Panel open path (Axo + Glitch share one function):
  *   openOrFocusPetMiniPanel → single-flight → show/focus pet-mini-panel →
- *   confirm visible → hide overlay. On failure: restore overlay, clear lock.
+ *   confirm visible while the standalone pet remains visible.
  */
 
 export function isTauriRuntime(): boolean {
@@ -89,11 +89,7 @@ export async function openOrFocusPetPanel(
   });
 }
 
-/**
- * Open mini panel, then hide the pet overlay only if the panel is actually
- * visible. Used by both PetHost (main) and PetOverlayWindow (desktop path).
- * Prevents "sprite gone + no panel" when panel open fails.
- */
+/** Open/focus the mini panel without changing standalone pet visibility. */
 export const PET_PANEL_OPEN_FLAG_KEY = 'vibespace-pet-panel-open';
 
 /** Cross-window / in-app request that the mini panel must open (fallback path). */
@@ -156,7 +152,7 @@ async function pollPanelVisible(attempts = 5, gapMs = 100): Promise<boolean> {
 }
 
 /**
- * Confirm-then-hide open used by tests and internal callers.
+ * Confirmed open used by tests and internal callers.
  * Prefer {@link openOrFocusPetMiniPanel} for production (single-flight).
  */
 export async function openPetPanelSafely(
@@ -173,8 +169,8 @@ export async function openPetPanelSafely(
  *
  * - Single-flight: concurrent clicks share one open promise (no duplicate panels).
  * - If pet-mini-panel already exists (hidden/minimized), show/unminimize/focus.
- * - Hide standalone overlay only after panel is confirmed visible.
- * - On failure: clear flag, restore overlay, signal inline fallback.
+ * - Keep the standalone overlay visible throughout open/focus.
+ * - On failure: keep the overlay visible and signal inline fallback.
  * - Also dispatches PET_OPEN_PANEL_EVENT so the main window can mount in-app UI.
  */
 export async function openOrFocusPetMiniPanel(
@@ -199,7 +195,7 @@ export async function openOrFocusPetMiniPanel(
       return { panelVisible: false, useInlineFallback: true, coalesced: false };
     }
 
-    // Optimistic flag so hosts hide the standalone sprite while opening.
+    // Optimistic flag coordinates panel state only; it never hides the pet.
     setPetPanelOpenFlag(true);
 
     await openOrFocusPetPanel(nearX, nearY, panelMode);
@@ -216,7 +212,6 @@ export async function openOrFocusPetMiniPanel(
 
     if (panelVisible) {
       setPetPanelOpenFlag(true);
-      await hidePetOverlay().catch(() => undefined);
       return { panelVisible: true, useInlineFallback: false, coalesced: false };
     }
 

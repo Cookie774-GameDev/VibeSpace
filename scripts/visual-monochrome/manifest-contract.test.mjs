@@ -12,6 +12,7 @@ import {
   MONOCHROME_MC9_BASELINE_MANIFEST,
 } from '../../tests/visual/monochrome/baseline-manifest.ts';
 import {
+  MONOCHROME_NATIVE_SOURCE_COMMIT,
   MONOCHROME_NATIVE_WINDOW_MANIFEST,
   validateMonochromeNativeWindowManifest,
 } from '../../tests/visual/monochrome/native-window-manifest.ts';
@@ -94,7 +95,9 @@ test('measured frame authority is source-locked, unique, ordered, bounded, and s
   assert.deepEqual(validateFrameAuthority(manifest, schema), []);
   assert.equal(canonicalTextSha256(schemaSource), FRAME_SCHEMA_SHA256);
   assert.equal(
-    canonicalTextSha256(Buffer.from(schemaSource.toString('utf8').replace(/\n/gu, '\r\n'))),
+    canonicalTextSha256(
+      Buffer.from(schemaSource.toString('utf8').replace(/\r\n?/gu, '\n').replace(/\n/gu, '\r\n')),
+    ),
     FRAME_SCHEMA_SHA256,
   );
   assert.equal(MONOCHROME_BASELINE_MANIFEST.captures.length, 10);
@@ -151,10 +154,12 @@ const COMMON_FIXTURE_HASHES = {
   'settings-appearance': '1531421802e9d827e011047c410dd29c6d7c459c03f2bdb9ad91154f8c5ab875',
   'terminal-workbench': 'd27d7b59bed7386b11335a93d8827deb13d251d6de216c3b5bb84bee9ba8bc2b',
 };
+const TEST_ONLY_CAPABILITY_FILES = ['monochrome-test.json'];
 const COMMON_MANIFEST_AUTHORITIES = [
   {
     name: 'fixture',
     manifest: fixtureAuthority.MONOCHROME_FIXTURE_MANIFEST,
+    expectedSourceCommit: SOURCE_COMMIT,
     ownedPaths: [
       'tests/visual/monochrome/fixture-manifest.test.ts',
       'tests/visual/monochrome/fixture-manifest.ts',
@@ -166,6 +171,7 @@ const COMMON_MANIFEST_AUTHORITIES = [
   {
     name: 'native-window',
     manifest: MONOCHROME_NATIVE_WINDOW_MANIFEST,
+    expectedSourceCommit: MONOCHROME_NATIVE_SOURCE_COMMIT,
     ownedPaths: [
       'tests/visual/monochrome/native-window-manifest.test.ts',
       'tests/visual/monochrome/native-window-manifest.ts',
@@ -176,6 +182,7 @@ const COMMON_MANIFEST_AUTHORITIES = [
   {
     name: 'primitive',
     manifest: primitiveAuthority.MONOCHROME_PRIMITIVE_MANIFEST,
+    expectedSourceCommit: SOURCE_COMMIT,
     ownedPaths: [
       'app/src/features/appearance/monochromePrimitiveManifest.test.ts',
       'app/src/features/appearance/monochromePrimitiveManifest.ts',
@@ -187,6 +194,7 @@ const COMMON_MANIFEST_AUTHORITIES = [
   {
     name: 'route',
     manifest: routeAuthority.MONOCHROME_ROUTE_MANIFEST,
+    expectedSourceCommit: SOURCE_COMMIT,
     ownedPaths: [
       'tests/visual/monochrome/route-manifest.test.ts',
       'tests/visual/monochrome/route-manifest.ts',
@@ -197,6 +205,7 @@ const COMMON_MANIFEST_AUTHORITIES = [
   {
     name: 'shell-overlay',
     manifest: shellAuthority.MONOCHROME_SHELL_OVERLAY_MANIFEST,
+    expectedSourceCommit: SOURCE_COMMIT,
     ownedPaths: [
       'tests/visual/monochrome/shell-overlay-manifest.test.ts',
       'tests/visual/monochrome/shell-overlay-manifest.ts',
@@ -1049,7 +1058,7 @@ test('all Step-7 manifests freeze exact common metadata and disjoint owned paths
   for (const authority of COMMON_MANIFEST_AUTHORITIES) {
     const { manifest } = authority;
     assert.equal(manifest.schemaVersion, 1, authority.name);
-    assert.equal(manifest.sourceCommit, SOURCE_COMMIT, authority.name);
+    assert.equal(manifest.sourceCommit, authority.expectedSourceCommit, authority.name);
     assert.equal(manifest.captureMode, 'retroactive-source-freeze', authority.name);
     assert.deepEqual(manifest.ownedPaths, authority.ownedPaths, authority.name);
     assert.deepEqual(manifest.fixtureIds, COMMON_FIXTURE_IDS, authority.name);
@@ -1064,7 +1073,14 @@ test('all Step-7 manifests freeze exact common metadata and disjoint owned paths
   const validateSet = fixtureAuthority.validateMonochromeManifestSet;
   assert.equal(typeof validateSet, 'function', 'missing common manifest set validator');
   if (typeof validateSet !== 'function') return;
-  const manifests = COMMON_MANIFEST_AUTHORITIES.map(({ name, manifest }) => ({ name, manifest }));
+  // The original set validator predates the later native-capability authority
+  // and accepts one historical source commit. Exact provenance was asserted
+  // above; normalize only that field in the validator views so its remaining
+  // cross-authority fixture and owned-path invariants still run unchanged.
+  const manifests = COMMON_MANIFEST_AUTHORITIES.map(({ name, manifest }) => ({
+    name,
+    manifest: { ...manifest, sourceCommit: SOURCE_COMMIT },
+  }));
   assert.deepEqual(validateSet(manifests), []);
   assert.match(
     validateSet([
@@ -1096,21 +1112,30 @@ test('all Step-7 manifests freeze exact common metadata and disjoint owned paths
 test('manifest contract inventories every source-commit production capability tuple', () => {
   const capabilityFiles = execFileSync(
     'git',
-    ['ls-tree', '-r', '--name-only', SOURCE_COMMIT, 'app/src-tauri/capabilities'],
+    ['ls-tree', '-r', '--name-only', MONOCHROME_NATIVE_SOURCE_COMMIT, 'app/src-tauri/capabilities'],
     { cwd: REPO_ROOT, encoding: 'utf8' },
   )
     .split(/\r?\n/u)
-    .filter((sourcePath) => sourcePath.endsWith('.json'))
+    .filter(
+      (sourcePath) =>
+        sourcePath.endsWith('.json') &&
+        !TEST_ONLY_CAPABILITY_FILES.includes(sourcePath.replace('app/src-tauri/capabilities/', '')),
+    )
     .sort();
   const discovered = capabilityFiles.map((sourcePath) => {
-    const parsed = JSON.parse(sourceAtCommit(sourcePath));
+    const parsed = JSON.parse(
+      execFileSync('git', ['show', `${MONOCHROME_NATIVE_SOURCE_COMMIT}:${sourcePath}`], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+      }),
+    );
     return [
       sourcePath.replace('app/src-tauri/capabilities/', ''),
       parsed.identifier,
       parsed.windows,
     ];
   });
-  assert.equal(MONOCHROME_NATIVE_WINDOW_MANIFEST.sourceCommit, SOURCE_COMMIT);
+  assert.equal(MONOCHROME_NATIVE_WINDOW_MANIFEST.sourceCommit, MONOCHROME_NATIVE_SOURCE_COMMIT);
   assert.deepEqual(
     MONOCHROME_NATIVE_WINDOW_MANIFEST.capabilities.map(({ file, identifier, windows }) => [
       file,
@@ -1122,11 +1147,12 @@ test('manifest contract inventories every source-commit production capability tu
 });
 
 const CAPABILITIES_DIRECTORY = 'app/src-tauri/capabilities';
-const TEST_ONLY_CAPABILITY_FILES = ['monochrome-test.json'];
 const PRODUCTION_CAPABILITY_IDENTIFIERS = [
+  'cold-start-intro',
   'default',
   'pet-mini-panel',
   'pet-overlay',
+  'taskbar-usage',
   'workbench-window',
 ];
 const TEST_ONLY_CAPABILITY_IDENTIFIER = 'monochrome-test';

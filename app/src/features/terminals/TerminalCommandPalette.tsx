@@ -10,27 +10,45 @@ import {
   Search,
   Sparkles,
   TerminalSquare,
+  Wand2,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Route } from '@/stores/ui';
+import { useAuthStore } from '@/stores/auth';
+import { useAccessibleChatModels } from '@/lib/ai/useAccessibleChatModels';
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
+import { toast } from '@/components/ui/toast';
 import type { TerminalPromptEvidence } from './terminalCommandFoundation';
 import type {
   TerminalCliInstallStatus,
   TerminalShellIntegrationStatus,
 } from './terminalCliInstall';
+import {
+  canInsertUpgradedPromptIntoTerminal,
+  runTerminalPromptUpgrade,
+  terminalDraftFromSession,
+  terminalModelOptionsFromPicker,
+} from './terminalPromptUpgrade';
 
 type PaletteItem = Readonly<{
   id: string;
   label: string;
   description: string;
   destination?: Route;
-  detail?: 'status' | 'help';
+  detail?: 'status' | 'help' | 'upgrade';
   icon: LucideIcon;
 }>;
 
 export const TERMINAL_PALETTE_ITEMS: readonly PaletteItem[] = Object.freeze([
+  {
+    id: 'upgrade-prompt',
+    label: 'Upgrade prompt',
+    description: 'Upgrade text for this terminal agent with project context',
+    detail: 'upgrade',
+    icon: Wand2,
+  },
   {
     id: 'context',
     label: 'Context Map',
@@ -109,8 +127,19 @@ export interface TerminalCommandPaletteProps {
   sessionId: string | null;
   projectId: string | null;
   evidence: TerminalPromptEvidence;
+  /** Working directory of this pane (project isolation). */
+  cwd?: string | null;
+  agentSlug?: string | null;
+  agentName?: string | null;
+  projectName?: string | null;
+  projectRoot?: string | null;
   onClose: () => void;
   onNavigate: (route: Route) => void;
+  /**
+   * Insert upgraded text into the PTY only when the host decides it is safe.
+   * Must not be called during the upgrade network/model call itself.
+   */
+  onInsertUpgradedPrompt?: (text: string) => void | Promise<void>;
   onInstallCli?: () => Promise<TerminalCliInstallStatus>;
   onUninstallCli?: () => Promise<TerminalCliInstallStatus>;
   onInstallShellIntegration?: () => Promise<TerminalShellIntegrationStatus>;
@@ -123,8 +152,14 @@ export function TerminalCommandPalette({
   sessionId,
   projectId,
   evidence,
+  cwd,
+  agentSlug,
+  agentName,
+  projectName,
+  projectRoot,
   onClose,
   onNavigate,
+  onInsertUpgradedPrompt,
   onInstallCli,
   onUninstallCli,
   onInstallShellIntegration,
@@ -132,10 +167,29 @@ export function TerminalCommandPalette({
 }: TerminalCommandPaletteProps): JSX.Element | null {
   const [query, setQuery] = React.useState('');
   const [selectedIndex, setSelectedIndex] = React.useState(0);
-  const [detail, setDetail] = React.useState<'status' | 'help' | null>(null);
+  const [detail, setDetail] = React.useState<'status' | 'help' | 'upgrade' | null>(null);
   const [cliSetupPending, setCliSetupPending] = React.useState(false);
   const [cliSetupMessage, setCliSetupMessage] = React.useState<string | null>(null);
+  const [upgradeDraft, setUpgradeDraft] = React.useState('');
+  const [upgradedText, setUpgradedText] = React.useState<string | null>(null);
+  const [upgradeStatus, setUpgradeStatus] = React.useState<string | null>(null);
+  const [upgradeBusy, setUpgradeBusy] = React.useState(false);
+  const [upgradeError, setUpgradeError] = React.useState<string | null>(null);
+  const [upgradeAddContextOpen, setUpgradeAddContextOpen] = React.useState(false);
+  const [upgradeAddContext, setUpgradeAddContext] = React.useState('');
+  const upgradeAbortRef = React.useRef<AbortController | null>(null);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
+  const upgradeTextareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+  const localUserId = useAuthStore((s) => s.localUserId);
+  const cloudSession = useAuthStore((s) => s.cloudSession);
+  const offlineMode = useAuthStore((s) => s.offlineMode);
+  const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
+  const promptForgeModelSelection = useAuthStore((s) => s.promptForgeModelSelection);
+  const chatModelSelection = useAuthStore((s) => s.chatModelSelection);
+  const accessibleChatModels = useAccessibleChatModels();
+  const accountId =
+    resolveAccountIdentity({ localUserId, cloudSession })?.accountId ?? localUserId ?? 'local';
 
   const filtered = React.useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -152,8 +206,23 @@ export function TerminalCommandPalette({
     setDetail(null);
     setCliSetupPending(false);
     setCliSetupMessage(null);
+    setUpgradeDraft('');
+    setUpgradedText(null);
+    setUpgradeStatus(null);
+    setUpgradeError(null);
+    setUpgradeBusy(false);
+    setUpgradeAddContextOpen(false);
+    setUpgradeAddContext('');
+    upgradeAbortRef.current?.abort();
+    upgradeAbortRef.current = null;
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
+
+  React.useEffect(() => {
+    if (detail === 'upgrade') {
+      requestAnimationFrame(() => upgradeTextareaRef.current?.focus());
+    }
+  }, [detail]);
 
   React.useEffect(() => {
     if (selectedIndex >= filtered.length) setSelectedIndex(Math.max(0, filtered.length - 1));
@@ -163,6 +232,13 @@ export function TerminalCommandPalette({
 
   const select = (item: PaletteItem | undefined) => {
     if (!item) return;
+    if (item.detail === 'upgrade') {
+      const seeded = terminalDraftFromSession(sessionId) || upgradeDraft.trim();
+      if (seeded) setUpgradeDraft(seeded);
+      setDetail('upgrade');
+      if (seeded) void runUpgrade(seeded);
+      return;
+    }
     if (item.detail) {
       setDetail(item.detail);
       return;
@@ -170,6 +246,114 @@ export function TerminalCommandPalette({
     if (item.destination) {
       onNavigate(item.destination);
       onClose();
+    }
+  };
+
+  const cancelUpgrade = () => {
+    upgradeAbortRef.current?.abort();
+    upgradeAbortRef.current = null;
+    setUpgradeBusy(false);
+    setUpgradeStatus(null);
+  };
+
+  const runUpgrade = async (draftOverride?: string, instructions?: string) => {
+    const draft = (draftOverride ?? upgradeDraft).trim();
+    if (upgradeBusy || !draft) return;
+    const controller = new AbortController();
+    upgradeAbortRef.current = controller;
+    setUpgradeBusy(true);
+    setUpgradeError(null);
+    setUpgradeStatus('Upgrading with terminal + project context…');
+    setUpgradedText(null);
+    try {
+      const modelOptions = terminalModelOptionsFromPicker(accessibleChatModels.flatOptions);
+      const result = await runTerminalPromptUpgrade({
+        scope: {
+          accountId: accountId || 'local',
+          projectId,
+          sessionId,
+          paneId: paneId ?? null,
+        },
+        originalDraft: draft,
+        ...(instructions?.trim() ? { regenerationInstructions: instructions.trim() } : {}),
+        modelSelection: promptForgeModelSelection,
+        modelOptions,
+        currentChatSelection:
+          chatModelSelection.mode === 'single'
+            ? {
+                mode: 'single',
+                providerId: chatModelSelection.providerId,
+                modelId: chatModelSelection.modelId,
+                ...(chatModelSelection.connectionId
+                  ? { connectionId: chatModelSelection.connectionId }
+                  : {}),
+              }
+            : chatModelSelection.mode === 'hive'
+              ? { mode: 'hive', hiveId: chatModelSelection.hiveId }
+              : { mode: 'none' },
+        offlineMode,
+        defaultLocalModel,
+        // Prefer local when offline; otherwise allow provider if user has cloud models.
+        privacyMode: offlineMode ? 'local_only' : 'provider_allowed',
+        allowPublicResearch: !offlineMode,
+        projectName,
+        projectRoot,
+        agentSlug,
+        agentName,
+        cwd,
+        workingDirectory: projectRoot ?? cwd ?? undefined,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      if (result.ok) {
+        setUpgradedText(result.upgradedPrompt);
+        setUpgradeStatus(`Ready · ${result.modelLabel}`);
+      } else {
+        setUpgradedText(null);
+        setUpgradeError(result.reason);
+        setUpgradeStatus(null);
+      }
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      setUpgradeError(
+        err instanceof Error ? err.message : 'Prompt upgrade failed. Your draft is unchanged.',
+      );
+      setUpgradeStatus(null);
+    } finally {
+      if (upgradeAbortRef.current === controller) upgradeAbortRef.current = null;
+      setUpgradeBusy(false);
+    }
+  };
+
+  const copyUpgraded = async () => {
+    const text = upgradedText?.trim() || upgradeDraft.trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success('Copied', 'Prompt copied. Terminal contents were not changed.');
+    } catch {
+      toast.error('Copy failed', 'Select the text and copy it manually.');
+    }
+  };
+
+  const insertUpgraded = async () => {
+    const text = (upgradedText ?? upgradeDraft).trim();
+    if (!text) return;
+    const gate = canInsertUpgradedPromptIntoTerminal(evidence);
+    if (!gate.ok) {
+      toast.info('Copy instead', gate.reason);
+      return;
+    }
+    if (!onInsertUpgradedPrompt) {
+      toast.info('Copy instead', 'Insert is unavailable for this terminal.');
+      return;
+    }
+    try {
+      await onInsertUpgradedPrompt(text);
+      toast.success('Inserted', 'Upgraded prompt typed at the shell prompt.');
+      onClose();
+    } catch {
+      toast.error('Insert failed', 'Copy the upgraded prompt and paste it yourself.');
     }
   };
 
@@ -192,7 +376,20 @@ export function TerminalCommandPalette({
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === 'Escape') {
       event.preventDefault();
+      if (detail === 'upgrade' && upgradeBusy) {
+        cancelUpgrade();
+        return;
+      }
+      if (detail) {
+        cancelUpgrade();
+        setDetail(null);
+        return;
+      }
       onClose();
+      return;
+    }
+    if (detail === 'upgrade') {
+      // Keep typing in the upgrade textarea; don't steal keys for list nav.
       return;
     }
     if (detail) {
@@ -247,7 +444,166 @@ export function TerminalCommandPalette({
         </button>
       </div>
 
-      {detail === 'status' ? (
+      {detail === 'upgrade' ? (
+        <div className="min-h-0 flex-1 overflow-auto p-4 text-secondary text-foreground">
+          <h3 className="font-display text-ui-strong">Upgrade prompt</h3>
+          <p className="mt-1 text-metadata text-muted-foreground">
+            Uses the text already typed in this terminal, plus project and local file context.
+            Running work is never interrupted while upgrading.
+          </p>
+          <p className="mt-1 font-mono text-metadata text-muted-foreground">
+            Scope · project {projectId ?? 'none'} · session {sessionId ?? 'none'}
+            {agentSlug ? ` · agent ${agentSlug}` : ''}
+          </p>
+          <label className="mt-3 block text-metadata text-muted-foreground" htmlFor="terminal-upgrade-draft">
+            Draft from this terminal
+          </label>
+          <textarea
+            id="terminal-upgrade-draft"
+            ref={upgradeTextareaRef}
+            value={upgradeDraft}
+            onChange={(e) => setUpgradeDraft(e.target.value)}
+            rows={5}
+            placeholder="Type in the terminal first — this uses that draft automatically."
+            disabled={upgradeBusy}
+            className="mt-1 w-full resize-y rounded-md border border-border bg-paper px-3 py-2 text-body text-foreground outline-none focus:border-accent-copper disabled:opacity-60"
+          />
+          {upgradedText ? (
+            <>
+              <label
+                className="mt-3 block text-metadata text-muted-foreground"
+                htmlFor="terminal-upgrade-result"
+              >
+                Upgraded prompt (what will be sent / inserted)
+              </label>
+              <textarea
+                id="terminal-upgrade-result"
+                value={upgradedText}
+                onChange={(e) => setUpgradedText(e.target.value)}
+                rows={8}
+                className="mt-1 w-full resize-y rounded-md border border-accent-copper/40 bg-paper px-3 py-2 text-body text-foreground outline-none focus:border-accent-copper"
+              />
+            </>
+          ) : null}
+          {upgradeStatus ? (
+            <p className="mt-2 text-metadata text-accent-copper" role="status" aria-live="polite">
+              {upgradeStatus}
+            </p>
+          ) : null}
+          {upgradeError ? (
+            <p className="mt-2 text-metadata text-destructive" role="alert">
+              {upgradeError}
+            </p>
+          ) : null}
+          {upgradeAddContextOpen ? (
+            <div className="mt-3 flex min-w-0 gap-1.5">
+              <input
+                aria-label="Additional prompt context"
+                value={upgradeAddContext}
+                onChange={(event) => setUpgradeAddContext(event.target.value)}
+                placeholder="Add constraints or missing context…"
+                className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 text-secondary outline-none focus:border-accent-copper/50"
+              />
+              <button
+                type="button"
+                disabled={!upgradeAddContext.trim() || upgradeBusy}
+                className="rounded-md border border-accent-copper/60 bg-accent-copper/10 px-3 py-1.5 text-secondary text-accent-copper disabled:opacity-50"
+                onClick={() => {
+                  const instructions = upgradeAddContext.trim();
+                  if (!instructions) return;
+                  setUpgradeAddContextOpen(false);
+                  void runUpgrade(upgradeDraft, instructions);
+                }}
+              >
+                Apply
+              </button>
+            </div>
+          ) : null}
+          {upgradedText ? (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                aria-label="Accept upgraded prompt"
+                onClick={() => void insertUpgraded()}
+                className="rounded-md border border-accent-copper/60 bg-accent-copper/10 px-2.5 py-1.5 text-secondary text-accent-copper"
+              >
+                Accept
+              </button>
+              <button
+                type="button"
+                aria-label="Retry prompt upgrade"
+                disabled={upgradeBusy || !upgradeDraft.trim()}
+                onClick={() => void runUpgrade()}
+                className="rounded-md border border-border px-2.5 py-1.5 text-secondary text-foreground disabled:opacity-50"
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                aria-label="Add context to prompt upgrade"
+                aria-expanded={upgradeAddContextOpen}
+                onClick={() => setUpgradeAddContextOpen((value) => !value)}
+                className="rounded-md border border-border px-2.5 py-1.5 text-secondary text-foreground"
+              >
+                Add context
+              </button>
+            </div>
+          ) : null}
+          <div className="mt-4 flex flex-wrap gap-2">
+            {upgradeBusy ? (
+              <button
+                type="button"
+                onClick={cancelUpgrade}
+                className="rounded-md border border-border px-3 py-2 text-secondary text-foreground"
+              >
+                Cancel upgrade
+              </button>
+            ) : upgradedText ? null : (
+              <button
+                type="button"
+                disabled={!upgradeDraft.trim()}
+                onClick={() => void runUpgrade()}
+                className="rounded-md border border-accent-copper/60 bg-accent-copper/10 px-3 py-2 text-secondary text-accent-copper disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Upgrade
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={!upgradeDraft.trim() && !upgradedText}
+              onClick={() => void copyUpgraded()}
+              className="rounded-md border border-border px-3 py-2 text-secondary text-foreground disabled:opacity-50"
+            >
+              Copy
+            </button>
+            <button
+              type="button"
+              disabled={!upgradedText?.trim() && !upgradeDraft.trim()}
+              onClick={() => void insertUpgraded()}
+              title={(() => {
+                const gate = canInsertUpgradedPromptIntoTerminal(evidence);
+                return gate.ok
+                  ? 'Type into the shell prompt without interrupting other panes'
+                  : gate.reason;
+              })()}
+              className="rounded-md border border-border px-3 py-2 text-secondary text-foreground disabled:opacity-50"
+            >
+              Insert at prompt
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                cancelUpgrade();
+                setDetail(null);
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }}
+              className="rounded-md border border-border px-3 py-2 text-secondary text-muted-foreground"
+            >
+              Back
+            </button>
+          </div>
+        </div>
+      ) : detail === 'status' ? (
         <div className="min-h-0 flex-1 overflow-auto p-4 text-secondary text-foreground">
           <h3 className="font-display text-ui-strong">Terminal status</h3>
           <p className="mt-2">

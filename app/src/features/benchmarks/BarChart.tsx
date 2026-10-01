@@ -28,14 +28,21 @@ export interface BarChartProps {
   className?: string;
 }
 
-const VB_WIDTH = 1000;
+const VB_WIDTH = 1080;
 const ROW_HEIGHT = 28;
 const ROW_PADDING = 6;
 const ROW_TOTAL = ROW_HEIGHT + ROW_PADDING;
 const BAR_THICKNESS = 18;
-const LABEL_COL_WIDTH = 200;
-const SCORE_COL_WIDTH = 80;
-const CHART_X_START = LABEL_COL_WIDTH;
+/** Horizontal space reserved for model names (right-aligned into this column). */
+const LABEL_COL_WIDTH = 240;
+/**
+ * Clear visual breathing room between the right edge of model names and the
+ * start of the intelligence score bars (and score numerals).
+ */
+const LABEL_TO_BAR_GAP = 88;
+/** Space for score numerals after the bar ends. */
+const SCORE_COL_WIDTH = 88;
+const CHART_X_START = LABEL_COL_WIDTH + LABEL_TO_BAR_GAP;
 const CHART_X_END = VB_WIDTH - SCORE_COL_WIDTH;
 const CHART_WIDTH = CHART_X_END - CHART_X_START;
 
@@ -97,14 +104,14 @@ export function BarChart({ rows, height, className }: BarChartProps) {
   const scoreToX = (s: number) => CHART_X_START + ((s - minScore) / range) * CHART_WIDTH;
 
   return (
-    <div className={cn('relative w-full', className)}>
+    <div className={cn('relative w-full overflow-x-auto', className)}>
       <svg
         viewBox={`0 0 ${VB_WIDTH} ${totalHeight}`}
         width="100%"
         preserveAspectRatio="xMinYMin meet"
-        style={{ height: height ?? 'auto', display: 'block' }}
+        style={{ height: height ?? 'auto', minWidth: 800, display: 'block' }}
         role="img"
-        aria-label={`Bar chart of top ${rows.length} models by arena score`}
+        aria-label={`Bar chart of top ${rows.length} models by Arena rating`}
       >
         {/* Vertical gridlines at quarter intervals for visual reference */}
         <g aria-hidden="true">
@@ -140,7 +147,7 @@ export function BarChart({ rows, height, className }: BarChartProps) {
 
           return (
             <g
-              key={row.model}
+              key={`${row.model}:${row.provider}:${i}`}
               onMouseEnter={(e) => setHover({ row, clientX: e.clientX, clientY: e.clientY })}
               onMouseMove={(e) => setHover({ row, clientX: e.clientX, clientY: e.clientY })}
               onMouseLeave={() => setHover(null)}
@@ -156,9 +163,9 @@ export function BarChart({ rows, height, className }: BarChartProps) {
                 fill="transparent"
               />
 
-              {/* Label on the left */}
+              {/* Label on the left — LABEL_TO_BAR_GAP keeps names clear of bars/scores */}
               <text
-                x={LABEL_COL_WIDTH - 10}
+                x={LABEL_COL_WIDTH - 8}
                 y={rowMid}
                 textAnchor="end"
                 dominantBaseline="middle"
@@ -166,7 +173,7 @@ export function BarChart({ rows, height, className }: BarChartProps) {
                 fontFamily="Plus Jakarta Sans, system-ui, sans-serif"
                 fill="hsl(var(--foreground))"
               >
-                {truncate(row.model, 18)}
+                {truncate(row.model, 24)}
               </text>
 
               {/* Bar */}
@@ -228,9 +235,9 @@ export function BarChart({ rows, height, className }: BarChartProps) {
                 </g>
               )}
 
-              {/* Score on the right */}
+              {/* Score on the right — inset so it does not crowd the bar tip */}
               <text
-                x={CHART_X_END + 10}
+                x={CHART_X_END + 16}
                 y={rowMid}
                 textAnchor="start"
                 dominantBaseline="middle"

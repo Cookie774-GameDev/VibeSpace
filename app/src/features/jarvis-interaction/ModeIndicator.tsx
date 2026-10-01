@@ -12,9 +12,19 @@ import {
   type PermissionModeOption,
 } from './modes';
 import type { JarvisInteractionMode } from './types';
+import {
+  formatPermissionPolicy,
+  PERMISSION_ACCESS_OPTIONS,
+  PERMISSION_APPROVE_OPTIONS,
+  readPermissionAccess,
+  setApproveAllForRun,
+  setPermissionAccess,
+  type PermissionAccessLevel,
+} from './permissionAccessStore';
 
 export interface ModeIndicatorProps {
   mode: JarvisInteractionMode;
+  chatId?: string;
   compact?: boolean;
   /** Select a specific mode (preferred). */
   onSelectMode?: (mode: JarvisInteractionMode) => void;
@@ -61,47 +71,76 @@ const ACCENT: Record<
 
 export function ModeIndicator({
   mode,
+  chatId,
   compact = false,
   onSelectMode,
   onCycle,
 }: ModeIndicatorProps) {
   const [open, setOpen] = React.useState(false);
+  const [step, setStep] = React.useState<'mode' | 'access'>('mode');
+  const [accessTick, setAccessTick] = React.useState(0);
   const optionTransition = useThemeMotionTransition(OPTION_TRANSITION);
   const current = permissionModeOption(mode);
   const Icon = MODE_ICONS[mode];
   const accent = ACCENT[current.accent];
+  const accessState = React.useMemo(
+    () => readPermissionAccess(chatId ?? ''),
+    [chatId, accessTick],
+  );
+
+  const applyAccess = (access: PermissionAccessLevel) => {
+    if (!chatId) return;
+    setPermissionAccess(chatId, access);
+    setAccessTick((value) => value + 1);
+  };
+
+  const applyApproveAll = (enabled: boolean) => {
+    if (!chatId) return;
+    setApproveAllForRun(chatId, enabled);
+    setAccessTick((value) => value + 1);
+  };
 
   const pick = (next: JarvisInteractionMode) => {
-    if (next === mode) {
-      setOpen(false);
-      return;
+    if (next !== mode) {
+      onSelectMode?.(next);
+      if (!onSelectMode) onCycle?.();
     }
-    onSelectMode?.(next);
-    if (!onSelectMode) onCycle?.();
-    setOpen(false);
+    setStep('access');
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) setStep('mode');
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type="button"
           className={cn(
-            'group inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-metadata font-medium transition-all',
+            'group inline-flex h-7 items-center gap-1 rounded-full border px-1.5 py-0 text-[11px] font-medium leading-none transition-all',
             'hover:brightness-110 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
             accent.chip,
             open && cn('ring-1', accent.ring),
-            compact && 'shrink-0 whitespace-nowrap px-2 py-1 text-[11px]',
+            compact && 'h-6 shrink-0 gap-0.5 whitespace-nowrap px-1.5 text-[10px]',
           )}
           title={`${interactionModeDescription(mode)} Click to change · Shift+Tab cycles · /permissions`}
           aria-label={`${interactionModeLabel(mode)}. Open permissions panel.`}
           aria-expanded={open}
           aria-haspopup="listbox"
         >
-          <Icon className={cn('h-3 w-3 shrink-0', accent.icon)} />
-          <span className="max-w-[7.5rem] truncate">{interactionModeLabel(mode)}</span>
+          <Icon className={cn('h-3 w-3 shrink-0', compact && 'h-2.5 w-2.5', accent.icon)} />
+          <span className={cn('max-w-[6.5rem] truncate', compact && 'max-w-[4.5rem]')}>
+            {interactionModeLabel(mode)}
+          </span>
           <ChevronDown
-            className={cn('h-3 w-3 shrink-0 opacity-70 transition-transform', open && 'rotate-180')}
+            className={cn(
+              'h-3 w-3 shrink-0 opacity-70 transition-transform',
+              compact && 'h-2.5 w-2.5',
+              open && 'rotate-180',
+            )}
           />
         </button>
       </PopoverTrigger>
@@ -113,6 +152,8 @@ export function ModeIndicator({
           'w-[min(320px,92vw)] overflow-hidden rounded-[16px] border border-border-mid/80 p-0',
           'bg-elevated/95 text-foreground backdrop-blur-xl',
           'shadow-[0_18px_50px_rgba(0,0,0,0.52),inset_0_1px_0_hsl(var(--foreground)/0.05),0_0_28px_hsl(var(--accent-copper)/0.12)]',
+          // Pet mini-panel is z-[81]; default popover z-50 is hidden under it.
+          compact && 'z-[120]',
         )}
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
@@ -133,49 +174,96 @@ export function ModeIndicator({
               <Icon className={cn('h-4 w-4', accent.icon)} />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-semibold tracking-tight text-foreground">Chat mode</p>
+              <p className="text-[13px] font-semibold tracking-tight text-foreground">
+                {step === 'mode' ? 'Chat mode' : `${interactionModeLabel(mode)} access`}
+              </p>
               <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                Agent, Plan, or Ask for this chat. Also:{' '}
-                <code className="text-foreground/80">/permissions</code>
+                {step === 'mode'
+                  ? 'Pick Agent, Plan, or Ask first. Access options appear after that.'
+                  : 'Read Only, Write, Full Access, and Approve All for this run.'}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="space-y-1 p-2" role="listbox" aria-label="Chat modes">
-          <AnimatePresence initial={false}>
-            {PERMISSION_MODE_OPTIONS.map((option) => {
-              const OptionIcon = MODE_ICONS[option.id];
-              const optionAccent = ACCENT[option.accent];
-              const selected = option.id === mode;
+        {step === 'mode' ? (
+          <div className="space-y-1 p-2" role="listbox" aria-label="Chat modes">
+            <AnimatePresence initial={false}>
+              {PERMISSION_MODE_OPTIONS.map((option) => {
+                const OptionIcon = MODE_ICONS[option.id];
+                const optionAccent = ACCENT[option.accent];
+                const selected = option.id === mode;
+                return (
+                  <motion.button
+                    key={option.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={optionTransition}
+                    onClick={() => pick(option.id)}
+                    className={cn(
+                      'flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left transition-all',
+                      'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                      selected ? optionAccent.active : 'border-transparent bg-transparent',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border',
+                        optionAccent.chip,
+                      )}
+                    >
+                      <OptionIcon className={cn('h-3.5 w-3.5', optionAccent.icon)} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-[12px] font-semibold text-foreground">
+                          {option.title}
+                        </span>
+                        {selected ? (
+                          <span className="inline-flex items-center gap-0.5 rounded-full bg-background/50 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-foreground/80">
+                            <Check className="h-2.5 w-2.5" />
+                            Active
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
+                        {option.description}
+                      </span>
+                    </span>
+                  </motion.button>
+                );
+              })}
+            </AnimatePresence>
+          </div>
+        ) : (
+          <div className="space-y-1 p-2" role="listbox" aria-label="Access and Approve All">
+            {PERMISSION_ACCESS_OPTIONS.map((option) => {
+              const selected = option.id === accessState.access;
+              const full = option.id === 'full';
               return (
-                <motion.button
+                <button
                   key={option.id}
                   type="button"
                   role="option"
                   aria-selected={selected}
-                  initial={{ opacity: 0, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={optionTransition}
-                  onClick={() => pick(option.id)}
+                  onClick={() => applyAccess(option.id)}
                   className={cn(
                     'flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left transition-all',
                     'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                    selected ? optionAccent.active : 'border-transparent bg-transparent',
+                    selected
+                      ? full
+                        ? 'border-amber-400/60 bg-amber-500/15'
+                        : accent.active
+                      : 'border-transparent bg-transparent',
                   )}
                 >
-                  <span
-                    className={cn(
-                      'mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border',
-                      optionAccent.chip,
-                    )}
-                  >
-                    <OptionIcon className={cn('h-3.5 w-3.5', optionAccent.icon)} />
-                  </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
                       <span className="text-[12px] font-semibold text-foreground">
-                        {option.title}
+                        {option.label}
                       </span>
                       {selected ? (
                         <span className="inline-flex items-center gap-0.5 rounded-full bg-background/50 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-foreground/80">
@@ -188,17 +276,64 @@ export function ModeIndicator({
                       {option.description}
                     </span>
                   </span>
-                </motion.button>
+                </button>
               );
             })}
-          </AnimatePresence>
-        </div>
+            {PERMISSION_APPROVE_OPTIONS.map((option) => {
+              const selected =
+                (option.id === 'approve-all' && accessState.approveAll) ||
+                (option.id === 'approve-all-off' && !accessState.approveAll);
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => applyApproveAll(option.id === 'approve-all')}
+                  className={cn(
+                    'flex w-full items-start rounded-xl border px-2.5 py-2 text-left transition-all',
+                    'hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                    selected ? accent.active : 'border-transparent bg-transparent',
+                  )}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="text-[12px] font-semibold text-foreground">{option.label}</span>
+                    <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
+                      {option.description}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+            <p className="px-2.5 py-1 text-[10px] leading-snug text-muted-foreground">
+              {formatPermissionPolicy({
+                mode,
+                access: accessState.access,
+                approveAll: accessState.approveAll,
+              })}
+            </p>
+            <div className="flex gap-1 px-1 pt-1">
+              <button
+                type="button"
+                className="rounded-lg px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted/40"
+                onClick={() => setStep('mode')}
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                className="ml-auto rounded-lg px-2 py-1 text-[11px] font-medium text-foreground hover:bg-muted/40"
+                onClick={() => setOpen(false)}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="border-t border-border/80 px-3 py-2 text-[10px] text-muted-foreground">
           Tip: <span className="text-foreground/75">Shift+Tab</span> cycles ·{' '}
-          <code className="text-foreground/75">/permissions agent</code> ·{' '}
-          <code className="text-foreground/75">/permissions plan</code> ·{' '}
-          <code className="text-foreground/75">/permissions ask</code>
+          <code className="text-foreground/75">/permissions</code> opens the same two-step control
         </div>
       </PopoverContent>
     </Popover>

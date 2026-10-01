@@ -16,6 +16,15 @@ export * from './terminalPromptProtocol';
 export * from './terminalSlashIntegration';
 export { TerminalCommandPalette } from './TerminalCommandPalette';
 export {
+  runTerminalPromptUpgrade,
+  terminalPromptUpgradeChatId,
+  canInsertUpgradedPromptIntoTerminal,
+  buildTerminalPromptUpgradeSources,
+  buildTerminalRelatedSources,
+  collectTerminalRelatedSources,
+  prepareUpgradedPromptInsert,
+} from './terminalPromptUpgrade';
+export {
   installTerminalCli,
   readTerminalCliInstallStatus,
   uninstallTerminalCli,

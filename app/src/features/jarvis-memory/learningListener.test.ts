@@ -201,15 +201,16 @@ describe('Jarvis learning event listener', () => {
     expect(save.mock.calls.at(-1)?.[1]).toContain('I prefer verified results');
   });
 
-  it('reviews ten meaningful messages from an ephemeral buffer', async () => {
+  it('keeps automatic learning memory-only through nineteen messages and writes on message twenty', async () => {
+    const save = vi.fn(async (_accountId: string, _markdown: string) => undefined);
     stop = startJarvisLearningListener({
       getAccountId: () => 'account-a',
-      save: async () => undefined,
+      save,
       debounceMs: 0,
       load: async () => null,
     });
 
-    for (let index = 0; index < 10; index += 1) {
+    for (let index = 0; index < 19; index += 1) {
       window.dispatchEvent(
         new CustomEvent('jarvis:send', {
           detail: {
@@ -221,8 +222,25 @@ describe('Jarvis learning event listener', () => {
     }
 
     await vi.waitFor(() => {
-      expect(useJarvisLearningStore.getState().currentProfile().lastEvaluationCount).toBe(10);
+      expect(useJarvisLearningStore.getState().currentProfile().meaningfulMessageCount).toBe(19);
     });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(save).not.toHaveBeenCalled();
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: {
+          chatId: 'chat-1',
+          text: 'I prefer concise status updates for workflow 19.',
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(useJarvisLearningStore.getState().currentProfile().lastEvaluationCount).toBe(20);
+    });
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenCalledWith('account-a', expect.stringContaining('Jarvis Learning'));
     expect(
       useJarvisLearningStore
         .getState()
@@ -261,7 +279,7 @@ describe('Jarvis learning event listener', () => {
     expect(load).toHaveBeenCalledWith('account-b');
   });
 
-  it('does not discard a pending save when the authenticated account changes', async () => {
+  it('does not create learning.md when the account changes before twenty messages', async () => {
     let accountId = 'account-a';
     let accountChanged: () => void = () => undefined;
     const save = vi.fn(async (_accountId: string, _markdown: string) => undefined);
@@ -293,7 +311,8 @@ describe('Jarvis learning event listener', () => {
     accountId = 'account-b';
     accountChanged();
 
-    await vi.waitFor(() => expect(save.mock.calls.some(([id]) => id === 'account-a')).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(save).not.toHaveBeenCalled();
   });
 
   it('flushes the latest debounced account write before stop resolves', async () => {

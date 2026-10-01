@@ -1058,10 +1058,10 @@
   }
 
   // ============ VIBESPACE WORKSPACE PREVIEW ============
-  // A focused visual clone for the website: it intentionally demonstrates
-  // navigation, chat, presets, and appearance without pretending to be the app.
+  // A visual, website-only desktop preview. It demonstrates the surrounding
+  // operating-system context and simple app switching; it is not a real OS.
   function initWorkspaceClone(host) {
-    var state = { shell: "mac", active: "chat", hasReply: false };
+    var state = { shell: "mac", active: "chat", hasReply: false, outsideApp: "" };
     var prompts = {
       chat: ["Plan my next feature", "Review this design", "Turn this into tasks", "Help me ship today"],
       terminals: ["Open a build terminal", "Check the latest logs", "Run a focused test", "Ask a reviewer"],
@@ -1076,6 +1076,46 @@
 
     function activeLabel() {
       return { chat: "Chat", terminals: "Terminals", agents: "Agents", files: "Files", schedule: "Schedule" }[state.active] || "Chat";
+    }
+
+    function launcher(app, icon, label) {
+      return '<button type="button" class="vsc-os-launcher' + (app === "workspace" ? " is-workspace" : "") + '" data-vsc-open="' + app + '" aria-label="Open ' + label + '"><i>' + icon + '</i><span>' + label + '</span></button>';
+    }
+
+    function externalApp() {
+      if (!state.outsideApp) return "";
+      var apps = {
+        files: {
+          title: state.shell === "mac" ? "Finder" : "File Explorer",
+          icon: "▤",
+          body: '<div class="vsc-external-files"><aside><b>Favorites</b><span>Desktop</span><span>Documents</span><span>Projects</span></aside><div><small>VIBESPACE WEBSITE</small><strong>Recent project files</strong><p><i>MD</i> launch-notes.md <em>Updated now</em></p><p><i>TS</i> workspace.tsx <em>8m ago</em></p><p><i>✦</i> project-context <em>3 linked decisions</em></p></div></div>'
+        },
+        browser: {
+          title: state.shell === "mac" ? "Safari" : "Vibe Browser",
+          icon: "◌",
+          body: '<div class="vsc-external-browser"><div><button type="button">‹</button><button type="button">›</button><span>vibespaceos.com</span></div><article><small>VIBESPACE</small><strong>One place to think, build, and keep moving.</strong><p>A live preview inside the demo desktop.</p></article></div>'
+        },
+        terminal: {
+          title: state.shell === "mac" ? "Terminal" : "Windows Terminal",
+          icon: "›_",
+          body: '<div class="vsc-external-terminal"><p><span>vibe@workspace</span>:<b>~</b>$ status</p><p>✓ project context ready</p><p>✓ build notes saved</p><p><span>vibe@workspace</span>:<b>~</b>$ <i>_</i></p></div>'
+        },
+        notes: {
+          title: "Notes",
+          icon: "✎",
+          body: '<div class="vsc-external-notes"><small>TODAY</small><strong>Homepage pass</strong><p>• make the story feel more like VibeSpace</p><p>• keep the next move clear</p><p>• ship the reviewed version</p></div>'
+        }
+      };
+      var app = apps[state.outsideApp];
+      if (!app) return "";
+      return '<section class="vsc-external-window vsc-external-window--' + state.outsideApp + '"><header><span><i>' + app.icon + '</i>' + app.title + '</span><button type="button" data-vsc-close-external aria-label="Close ' + app.title + '">×</button></header><div class="vsc-external-body">' + app.body + '</div></section>';
+    }
+
+    function desktopChrome() {
+      if (state.shell === "windows") {
+        return '<div class="vsc-desktop-icons vsc-desktop-icons--windows">' + launcher("workspace", "✦", "VibeSpace") + launcher("files", "▤", "Files") + launcher("browser", "◌", "Browser") + '</div><div class="vsc-windows-taskbar"><button type="button" class="vsc-windows-start">⊞</button>' + launcher("files", "▤", "Files") + launcher("browser", "◌", "Browser") + launcher("terminal", "›_", "Terminal") + launcher("notes", "✎", "Notes") + launcher("workspace", "✦", "VibeSpace") + '<span>12:24</span></div>';
+      }
+      return '<div class="vsc-mac-menubar"><span class="vsc-mac-apple">●</span><b>VibeSpace</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><em>◌ 12:24</em></div><div class="vsc-desktop-icons">' + launcher("files", "▤", "Finder") + launcher("browser", "◌", "Safari") + '</div><div class="vsc-mac-dock">' + launcher("files", "▤", "Finder") + launcher("browser", "◌", "Safari") + launcher("terminal", "›_", "Terminal") + launcher("notes", "✎", "Notes") + '<b></b>' + launcher("workspace", "✦", "VibeSpace") + '</div>';
     }
 
     function mainBody() {
@@ -1097,15 +1137,21 @@
     function render() {
       host.dataset.vsShell = state.shell;
       host.innerHTML = [
-        '<div class="vsc-shell">',
-          '<div class="vsc-titlebar"><div class="vsc-window-controls"><i></i><i></i><i></i></div><div class="vsc-crumb"><b>▣</b><strong>Workspace</strong><span>/</span><strong>Project</strong><span>/</span><em>' + activeLabel() + '</em></div><div class="vsc-top-actions"><button type="button" aria-label="Search">⌕</button><button type="button" aria-label="Voice">◌</button><button type="button" data-vsc-settings aria-label="Open preferences">⚙</button><i>J</i></div></div>',
-          '<div class="vsc-content">',
-            '<aside class="vsc-sidebar"><div class="vsc-side-label">WORKSPACE</div><nav>',
-              '<button data-vsc-nav="chat"><i>▱</i>Chat</button><button data-vsc-nav="terminals"><i>›_</i>Terminals</button><button data-vsc-nav="agents"><i>✦</i>Agents</button><button data-vsc-nav="schedule"><i>◫</i>Schedule</button><button data-vsc-nav="files"><i>▤</i>Files</button>',
-            '</nav><div class="vsc-side-group"><span>PROJECTS <b>+</b></span><button class="vsc-project"><i></i>VibeSpace website</button></div><div class="vsc-side-group"><span>CHATS <b>+</b></span><button class="vsc-chat-name">▱ New chat 1</button></div><div class="vsc-side-group vsc-side-agents"><span>AGENTS <b>+</b></span><button><i class="vsc-agent-dot jarvis"></i>Jarvis</button><button><i class="vsc-agent-dot coder"></i>Coder</button></div></aside>',
-            '<main class="vsc-main"><div class="vsc-mainbar"><span>New chat 1 <b>×</b></span><button type="button" data-vsc-demo="new">＋</button></div><div class="vsc-canvas">' + mainBody() + '</div><form class="vsc-composer"><div><input aria-label="Message Jarvis" placeholder="Message Jarvis… (use @ to mention an agent)" /><span>Choose model⌄</span><b>Agent Mode</b></div><button type="submit">↗</button></form></main>',
-          '</div>',
-          '<div class="vsc-settings" hidden><div class="vsc-settings-head"><strong>Preferences</strong><button type="button" data-vsc-close>×</button></div><label><span>Appearance</span><b>Dark</b></label><div class="vsc-settings-shell"><span>Window style</span><div><button type="button" data-vsc-shell="mac">Mac</button><button type="button" data-vsc-shell="windows">Windows</button></div></div><small>Changes the preview shell only.</small></div>',
+        '<div class="vsc-os vsc-os--' + state.shell + '">',
+          desktopChrome(),
+          '<section class="vsc-app-window vsc-vibespace-window">',
+            '<div class="vsc-shell">',
+              '<div class="vsc-titlebar"><div class="vsc-window-controls"><i></i><i></i><i></i></div><div class="vsc-crumb"><b>▣</b><strong>Workspace</strong><span>/</span><strong>Project</strong><span>/</span><em>' + activeLabel() + '</em></div><div class="vsc-top-actions"><button type="button" aria-label="Search">⌕</button><button type="button" aria-label="Voice">◌</button><button type="button" data-vsc-settings aria-label="Open preferences">⚙</button><i>J</i></div></div>',
+              '<div class="vsc-content">',
+                '<aside class="vsc-sidebar"><div class="vsc-side-label">WORKSPACE</div><nav>',
+                  '<button data-vsc-nav="chat"><i>▱</i>Chat</button><button data-vsc-nav="terminals"><i>›_</i>Terminals</button><button data-vsc-nav="agents"><i>✦</i>Agents</button><button data-vsc-nav="schedule"><i>◫</i>Schedule</button><button data-vsc-nav="files"><i>▤</i>Files</button>',
+                '</nav><div class="vsc-side-group"><span>PROJECTS <b>+</b></span><button class="vsc-project"><i></i>VibeSpace website</button></div><div class="vsc-side-group"><span>CHATS <b>+</b></span><button class="vsc-chat-name">▱ New chat 1</button></div><div class="vsc-side-group vsc-side-agents"><span>AGENTS <b>+</b></span><button><i class="vsc-agent-dot jarvis"></i>Jarvis</button><button><i class="vsc-agent-dot coder"></i>Coder</button></div></aside>',
+                '<main class="vsc-main"><div class="vsc-mainbar"><span>New chat 1 <b>×</b></span><button type="button" data-vsc-demo="new">＋</button></div><div class="vsc-canvas">' + mainBody() + '</div><form class="vsc-composer"><div><input aria-label="Message Jarvis" placeholder="Message Jarvis… (use @ to mention an agent)" /><span>Choose model⌄</span><b>Agent Mode</b></div><button type="submit">↗</button></form></main>',
+              '</div>',
+              '<div class="vsc-settings" hidden><div class="vsc-settings-head"><strong>Preferences</strong><button type="button" data-vsc-close>×</button></div><label><span>Appearance</span><b>Dark</b></label><div class="vsc-settings-shell"><span>Desktop style</span><div><button type="button" data-vsc-shell="mac">Mac</button><button type="button" data-vsc-shell="windows">Windows</button></div></div><small>Switches this demo desktop. VibeSpace keeps running underneath.</small></div>',
+            '</div>',
+          '</section>',
+          externalApp(),
         '</div>'
       ].join("");
       host.classList.add("is-clone-ready");
@@ -1121,6 +1167,14 @@
       host.querySelectorAll("[data-vsc-demo]").forEach(function (button) {
         button.addEventListener("click", function () { state.hasReply = true; state.active = "chat"; render(); });
       });
+      host.querySelectorAll("[data-vsc-open]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          state.outsideApp = button.dataset.vscOpen === "workspace" ? "" : button.dataset.vscOpen;
+          render();
+        });
+      });
+      var closeExternal = host.querySelector("[data-vsc-close-external]");
+      if (closeExternal) closeExternal.addEventListener("click", function () { state.outsideApp = ""; render(); });
       var form = host.querySelector(".vsc-composer");
       form.addEventListener("submit", function (event) { event.preventDefault(); state.hasReply = true; state.active = "chat"; render(); });
       var settingsButton = host.querySelector("[data-vsc-settings]");

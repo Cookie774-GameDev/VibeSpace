@@ -1,4 +1,12 @@
-import type { ContextRef, Timestamped, TaskId, ReminderId, AgentId, ProjectId, WorkspaceId } from './common';
+import type {
+  ContextRef,
+  Timestamped,
+  TaskId,
+  ReminderId,
+  AgentId,
+  ProjectId,
+  WorkspaceId,
+} from './common';
 
 /**
  * Task priority. Drives default notification channels and scheduler weight.
@@ -45,6 +53,16 @@ export type Reminder = {
   channels: NotificationChannel[];
   message_override?: string;
   status: 'scheduled' | 'fired' | 'snoozed' | 'dismissed' | 'completed';
+  /**
+   * Short-lived ownership for restart-safe, at-most-one-active delivery attempts.
+   * Delivery remains at-least-once: a crash after a visible effect but before
+   * `fired` finalization can retry after this bounded claim expires.
+   */
+  delivery_claim?: {
+    id: string;
+    claimed_at: number;
+    expires_at: number;
+  };
   snooze_history: Array<{ snoozed_at: number; until: number; reason?: string }>;
   /** Why Jarvis chose this time (verbalized to user) */
   smart_reason?: string;
@@ -120,9 +138,10 @@ export type DraftTask = {
 /**
  * Helper - input for creating a task. Sets reasonable defaults.
  */
-export type TaskInput = Pick<Task, 'title'> & Partial<Omit<Task, 'id' | 'created_at' | 'updated_at' | 'reminders'>> & {
-  reminders?: Omit<Reminder, 'id' | 'task_id' | 'snooze_history' | 'status'>[];
-};
+export type TaskInput = Pick<Task, 'title'> &
+  Partial<Omit<Task, 'id' | 'created_at' | 'updated_at' | 'reminders'>> & {
+    reminders?: Omit<Reminder, 'id' | 'task_id' | 'snooze_history' | 'status' | 'delivery_claim'>[];
+  };
 
 /**
  * Quiet-hours window. The notification engine respects these.

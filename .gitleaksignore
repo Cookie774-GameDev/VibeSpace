@@ -1,0 +1,34 @@
+# Exact, reviewed false-positive fingerprints only.
+# These commits contain synthetic detector fixtures, sanitizer inputs,
+# signature-format test data, or literal pattern matchers—not usable secrets.
+# Keep this list fingerprint-scoped; never add path-, rule-, or repository-wide ignores.
+13e556ca806e01df06a912b237e5252895abc670:workers/ai-news/README.md:curl-auth-header:111
+225e98fce2e147dd114789b582b143d93ac5b7fd:scripts/release-windows.test.mjs:generic-api-key:29
+2e042600252fa0383823fbb54f51bea4e59320c7:app/src/features/access/accessGateway.test.ts:stripe-access-token:287
+422b88d04d0b9c9fef1805fab675a855788e3d5f:scripts/build-updater-manifest.test.mjs:generic-api-key:30
+4500ddf42c695e4c8c94521884a50ec24e0bf669:app/src-tauri/src/cli_bridge.rs:generic-api-key:1831
+4dc2d3505e4c580fbcd8801abae13eab0c908611:app/src/features/context/githubContextServer.test.ts:github-app-token:16
+4dc2d3505e4c580fbcd8801abae13eab0c908611:app/src/features/context/githubContextServer.test.ts:github-app-token:132
+4dc2d3505e4c580fbcd8801abae13eab0c908611:app/src/features/context/githubContextServer.test.ts:github-app-token:226
+4dc2d3505e4c580fbcd8801abae13eab0c908611:app/src/features/context/githubContextServer.test.ts:github-app-token:333
+4dc2d3505e4c580fbcd8801abae13eab0c908611:supabase/functions/github-context/index.ts:private-key:92
+7b67646b592a918931db986132fbf8f5c0961015:app/src/lib/jarvis/artifactNormalizer.test.ts:jwt:239
+7b67646b592a918931db986132fbf8f5c0961015:app/src/lib/jarvis/artifactNormalizer.test.ts:jwt:273
+7b67646b592a918931db986132fbf8f5c0961015:app/src/lib/jarvis/artifactNormalizer.test.ts:slack-bot-token:234
+c0e96d037088f6a0c86b715c3595a256e70ffcf2:app/src/App.tsx:generic-api-key:2527
+c693602c759910d6625f0fc0343281dfb0337645:app/src/features/all-about-me/allAboutMeSecurity.test.ts:generic-api-key:11
+c693602c759910d6625f0fc0343281dfb0337645:app/src/features/all-about-me/allAboutMeSecurity.test.ts:private-key:13
+c693602c759910d6625f0fc0343281dfb0337645:app/src/lib/security/secretDetector.test.ts:generic-api-key:20
+c693602c759910d6625f0fc0343281dfb0337645:app/src/lib/security/secretDetector.test.ts:stripe-access-token:21
+caa71ed93173f08850344297d798480369aed4f6:app/src/lib/jarvis/approvalEngine.test.ts:generic-api-key:1423
+cffdaf5b267439b24e0b62c91a8ba72a3ced9a8c:app/src/lib/jarvis/sourcePolicy.test.ts:generic-api-key:150
+cffdaf5b267439b24e0b62c91a8ba72a3ced9a8c:app/src/lib/jarvis/sourcePolicy.test.ts:generic-api-key:151
+cffdaf5b267439b24e0b62c91a8ba72a3ced9a8c:app/src/lib/jarvis/sourcePolicy.test.ts:generic-api-key:152
+cffdaf5b267439b24e0b62c91a8ba72a3ced9a8c:app/src/lib/jarvis/sourcePolicy.test.ts:generic-api-key:165
+cffdaf5b267439b24e0b62c91a8ba72a3ced9a8c:app/src/lib/jarvis/sourcePolicy.test.ts:private-key:142
+deffbbd368a0f5597ddba94061f7fb2088bc53f6:app/src/features/canvas/aiContext.test.ts:generic-api-key:28
+deffbbd368a0f5597ddba94061f7fb2088bc53f6:app/src/features/canvas/aiContext.test.ts:generic-api-key:100
+e3e43dea414d5bac1d905a33a7660f27c3a96d5f:scripts/visual-monochrome/native-session.test.mjs:generic-api-key:20
+e62208bcf315488f1c96f6b90c02d9bb7c00e64a:app/src/features/context/contextCloudSync.test.ts:jwt:357
+e8e3789fdf732cfd7956349df8b9a9caa940ae7c:app/src/features/plugins/runtime.test.ts:private-key:1030
+e8e3789fdf732cfd7956349df8b9a9caa940ae7c:app/src/features/plugins/runtime.test.ts:private-key:1035

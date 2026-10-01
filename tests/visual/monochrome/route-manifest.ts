@@ -31,7 +31,6 @@ export const MONOCHROME_FINAL_ROUTE_IDS = Object.freeze([
 export type MonochromeRouteId = (typeof MONOCHROME_FINAL_ROUTE_IDS)[number];
 
 export const MONOCHROME_SETTINGS_TAB_IDS = Object.freeze([
-  'account',
   'plans',
   'providers',
   'connections',
@@ -364,7 +363,6 @@ const ROUTES: Readonly<
 });
 
 const SETTINGS_SOURCES: Readonly<Record<MonochromeSettingsTabId, string>> = Object.freeze({
-  account: 'app/src/features/settings/sections/Account.tsx',
   plans: 'app/src/features/settings/sections/Plans.tsx',
   providers: 'app/src/features/settings/sections/Providers.tsx',
   connections: 'app/src/features/settings/sections/SubscriptionCliBridge.tsx',
@@ -471,6 +469,8 @@ const settingsEntries = MONOCHROME_SETTINGS_TAB_IDS.map((tabId) => {
   return coverageEntry({
     id: `settings:${tabId}`,
     kind: 'settings',
+    // Hive settings UI is retained for recovery but product-gated by default.
+    availability: tabId === 'hive' ? 'feature-flagged' : undefined,
     sourcePaths: [SETTINGS_SOURCES[tabId]],
     testPaths: [testPath],
     fixture: 'settings-appearance',
@@ -695,7 +695,7 @@ export const MONOCHROME_ROUTE_COVERAGE_MANIFEST: MonochromeRouteCoverageManifest
     'tests/visual/monochrome/shell-overlay-manifest.ts',
   ]),
   goalSurfaceMap: Object.freeze({
-    account: Object.freeze(['route:account', 'settings:account']),
+    account: Object.freeze(['route:account']),
     agents: Object.freeze(['route:agents', 'route:agent-detail']),
     'billing-plans': Object.freeze(['route:account', 'settings:plans']),
     'browser-chat': Object.freeze(['route:browser']),

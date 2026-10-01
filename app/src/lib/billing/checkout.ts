@@ -22,9 +22,27 @@ import { getSupabaseClient, isCloudSyncConfigured } from '@/lib/supabase/client'
 
 // ── Shared result shape ───────────────────────────────────────────────────────
 
-export type BillingResult =
-  | { ok: true; url: string }
-  | { ok: false; error: string };
+export type BillingResult = { ok: true; url: string } | { ok: false; error: string };
+
+const MAX_FUNCTION_ERROR_BODY_BYTES = 4 * 1024;
+
+async function requestsCustomerPortal(error: unknown): Promise<boolean> {
+  if (!error || typeof error !== 'object' || !('context' in error)) return false;
+
+  const context = error.context;
+  if (!(context instanceof Response)) return false;
+
+  try {
+    const raw = await context.clone().text();
+    if (new TextEncoder().encode(raw).byteLength > MAX_FUNCTION_ERROR_BODY_BYTES) {
+      return false;
+    }
+    const payload = JSON.parse(raw) as Record<string, unknown>;
+    return payload.error === 'subscription_exists' && payload.action === 'open_portal';
+  } catch {
+    return false;
+  }
+}
 
 // ── callCheckoutSession ───────────────────────────────────────────────────────
 
@@ -51,9 +69,11 @@ export async function callCheckoutSession(tier: PlanId): Promise<BillingResult> 
     });
 
     if (error) {
-      const msg = typeof error === 'object' && 'message' in error
-        ? String(error.message)
-        : String(error);
+      if (await requestsCustomerPortal(error)) {
+        return callCustomerPortal();
+      }
+      const msg =
+        typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
       return { ok: false, error: msg };
     }
 
@@ -87,9 +107,8 @@ export async function callCustomerPortal(): Promise<BillingResult> {
     const { data, error } = await supa.functions.invoke('create-customer-portal', {});
 
     if (error) {
-      const msg = typeof error === 'object' && 'message' in error
-        ? String(error.message)
-        : String(error);
+      const msg =
+        typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
       return { ok: false, error: msg };
     }
 

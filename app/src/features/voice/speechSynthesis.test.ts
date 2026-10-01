@@ -105,7 +105,7 @@ describe('speech synthesis voice selection', () => {
 
     await expect(speakText(VOICE_PREVIEW_TEXT, { persona: 'jarvis' })).resolves.toBeUndefined();
 
-    expect(spoken[0]?.text).toBe("Hi, how's your day doing? Jarvis is online.");
+    expect(spoken[0]?.text).toBe('Hi, what should we get to work on?');
     expect((spoken[0]?.voice as SpeechSynthesisVoice | undefined)?.name).toContain('Ryan');
   });
 
@@ -170,10 +170,10 @@ describe('speech synthesis voice selection', () => {
       },
     });
 
-    const first = speakText('First preview.', { persona: 'athena' });
+    const first = speakText('First preview.', { persona: 'friday' });
     await vi.waitFor(() => expect(spoken).toHaveLength(1));
 
-    const second = speakText('Second preview.', { persona: 'athena' });
+    const second = speakText('Second preview.', { persona: 'friday' });
     await vi.waitFor(() => expect(spoken).toHaveLength(2));
 
     spoken[0]?.onerror?.({ error: 'interrupted' } as SpeechSynthesisErrorEvent);

@@ -4,7 +4,7 @@
  */
 
 import type { FasterWhisperModelId } from '@/types/common';
-import { FASTER_WHISPER_MODELS } from './catalog';
+import { fasterWhisperModelDef, normalizeFasterWhisperModelId } from './catalog';
 
 export interface FasterWhisperDownloadProgress {
   model: string;
@@ -32,10 +32,11 @@ async function getInvoke(): Promise<TauriInvoke | null> {
 }
 
 function buildManifest(modelId: FasterWhisperModelId) {
-  const def = FASTER_WHISPER_MODELS.find((m) => m.id === modelId)!;
+  const normalized = normalizeFasterWhisperModelId(modelId);
+  const def = fasterWhisperModelDef(normalized);
   const base = `https://huggingface.co/${def.hfRepo}/resolve/main`;
   return {
-    model: modelId,
+    model: normalized,
     files: [
       { name: 'config.json', url: `${base}/config.json`, size_bytes: 2_000, required: true },
       { name: 'tokenizer.json', url: `${base}/tokenizer.json`, size_bytes: 2_200_000, required: true },
@@ -49,8 +50,9 @@ class FasterWhisperManagerImpl {
   async getModelPath(modelId: FasterWhisperModelId): Promise<string | null> {
     const invoke = await getInvoke();
     if (!invoke) return null;
+    const model = normalizeFasterWhisperModelId(modelId);
     try {
-      return await invoke<string>('faster_whisper_model_path', { model: modelId });
+      return await invoke<string>('faster_whisper_model_path', { model });
     } catch {
       return null;
     }
@@ -59,9 +61,10 @@ class FasterWhisperManagerImpl {
   async checkInstalled(modelId: FasterWhisperModelId): Promise<boolean> {
     const invoke = await getInvoke();
     if (!invoke) return false;
+    const model = normalizeFasterWhisperModelId(modelId);
     try {
       const res = await invoke<{ installed: boolean }>('faster_whisper_check_installed', {
-        model: modelId,
+        model,
       });
       return Boolean(res?.installed);
     } catch {
@@ -72,8 +75,9 @@ class FasterWhisperManagerImpl {
   async getStatus(modelId: FasterWhisperModelId): Promise<FasterWhisperModelStatus | null> {
     const invoke = await getInvoke();
     if (!invoke) return null;
+    const model = normalizeFasterWhisperModelId(modelId);
     try {
-      return await invoke<FasterWhisperModelStatus>('faster_whisper_status', { model: modelId });
+      return await invoke<FasterWhisperModelStatus>('faster_whisper_status', { model });
     } catch {
       return null;
     }
@@ -85,16 +89,23 @@ class FasterWhisperManagerImpl {
   ): Promise<boolean> {
     const invoke = await getInvoke();
     if (!invoke) return false;
+    const model = normalizeFasterWhisperModelId(modelId);
 
     let unlisten: (() => void) | null = null;
     try {
       const { listen } = await import('@tauri-apps/api/event');
       unlisten = await listen<FasterWhisperDownloadProgress>('faster-whisper:progress', (event) => {
-        if (event.payload.model === modelId) onProgress?.(event.payload);
+        if (
+          event.payload.model === model ||
+          event.payload.model === modelId ||
+          normalizeFasterWhisperModelId(event.payload.model) === model
+        ) {
+          onProgress?.(event.payload);
+        }
       });
       await invoke('faster_whisper_download', {
-        model: modelId,
-        manifest: buildManifest(modelId),
+        model,
+        manifest: buildManifest(model),
       });
       return true;
     } catch {
@@ -104,11 +115,24 @@ class FasterWhisperManagerImpl {
     }
   }
 
+  async removeModel(modelId: FasterWhisperModelId): Promise<boolean> {
+    const invoke = await getInvoke();
+    if (!invoke) return false;
+    const model = normalizeFasterWhisperModelId(modelId);
+    try {
+      await invoke('faster_whisper_remove', { model });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async transcribe(modelId: FasterWhisperModelId, wavBlob: Blob): Promise<string> {
     const invoke = await getInvoke();
     if (!invoke) {
       throw new Error('faster-whisper is only available in the desktop app.');
     }
+    const model = normalizeFasterWhisperModelId(modelId);
     const buffer = await wavBlob.arrayBuffer();
     const bytes = new Uint8Array(buffer);
     let binary = '';
@@ -117,7 +141,7 @@ class FasterWhisperManagerImpl {
     }
     const audioBase64 = btoa(binary);
     return invoke<string>('faster_whisper_transcribe', {
-      model: modelId,
+      model,
       audioBase64,
     });
   }

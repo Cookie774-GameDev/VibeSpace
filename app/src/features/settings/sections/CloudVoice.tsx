@@ -49,7 +49,7 @@ function writePref(key: string, value: string): void {
 }
 
 const PROVIDER_ORDER: VoiceProviderId[] = [
-  'kokoro_local',
+  'jarvis_local',
   'openai_tts',
   'deepgram_tts',
   'elevenlabs_tts',
@@ -63,7 +63,7 @@ const PROVIDER_ORDER: VoiceProviderId[] = [
  */
 export function CloudVoice() {
   const [provider, setProvider] = useState<VoiceProviderId>(() =>
-    readPref<VoiceProviderId>(PROVIDER_PREF_KEY, 'kokoro_local'),
+    readPref<VoiceProviderId>(PROVIDER_PREF_KEY, 'jarvis_local'),
   );
   const [preset, setPreset] = useState<VoiceTtsPreset>(() =>
     readPref<VoiceTtsPreset>(PRESET_PREF_KEY, 'jarvis'),
@@ -114,17 +114,18 @@ export function CloudVoice() {
   async function onViewUsage() {
     const u = await TtsService.getUsage();
     setUsage(u);
-    if (!u) setNotice('Sign in to view cloud voice usage. Local Kokoro voice is always available.');
+    if (!u)
+      setNotice('Sign in to view cloud voice usage. Jarvis High is always available locally.');
   }
   async function onViewPlanUsage() {
     const u = await getCombinedUsage();
     setCombined(u);
-    if (!u) setNotice('Sign in to view plan usage. Local Kokoro voice is always available.');
+    if (!u) setNotice('Sign in to view plan usage. Jarvis High is always available locally.');
   }
   async function onDownloadRepair() {
     setDownloading(true);
     setProgress(null);
-    const ok = await ModelManager.ensureKokoroReady((p) => setProgress(p));
+    const ok = await ModelManager.ensureJarvisReady((p) => setProgress(p));
     setDownloading(false);
     setNotice(
       ok
@@ -143,10 +144,11 @@ export function CloudVoice() {
           <h2 className="text-heading text-foreground">Cloud Voice</h2>
         </div>
         <p className="text-secondary text-muted-foreground mt-1">
-          Choose how VibeSpace speaks. {UNLIMITED_LOCAL_KOKORO_LINE} Launch Deepgram gives every plan a
-          one-time fast cloud voice bonus from our $1k credit pool. Paid plans share one monthly bucket
-          for AI phone calls and in-app cloud voice — phone minutes burn faster than in-app speech.
-          Everything falls back to Kokoro automatically.
+          Choose how VibeSpace speaks. {UNLIMITED_LOCAL_KOKORO_LINE} Launch Deepgram gives every
+          plan a one-time fast cloud voice bonus from our $1k credit pool. Paid plans share one
+          monthly bucket for AI phone calls and in-app cloud voice — phone minutes burn faster than
+          in-app speech. Everything falls back to Jarvis High, then the operating-system local voice
+          if needed.
         </p>
       </div>
 
@@ -249,17 +251,33 @@ export function CloudVoice() {
           ) : (
             <>
               <p className="text-secondary text-foreground">
-                {bucketUsageCopy('AI messages', 'credits', combined.message, combined.plan as BillingPlanId)}
+                {bucketUsageCopy(
+                  'AI messages',
+                  'credits',
+                  combined.message,
+                  combined.plan as BillingPlanId,
+                )}
               </p>
               <p className="text-secondary text-foreground">
-                {bucketUsageCopy('AI phone minutes', 'min', combined.call, combined.plan as BillingPlanId)}
+                {bucketUsageCopy(
+                  'AI phone minutes',
+                  'min',
+                  combined.call,
+                  combined.plan as BillingPlanId,
+                )}
               </p>
               <p className="text-secondary text-foreground">
-                {bucketUsageCopy('SMS texts', 'texts', combined.sms, combined.plan as BillingPlanId)}
+                {bucketUsageCopy(
+                  'SMS texts',
+                  'texts',
+                  combined.sms,
+                  combined.plan as BillingPlanId,
+                )}
               </p>
               {combined.reset_date && (
                 <p className="text-metadata text-muted-foreground">
-                  Allowances reset {new Date(combined.reset_date).toLocaleDateString()} (no rollover).
+                  Allowances reset {new Date(combined.reset_date).toLocaleDateString()} (no
+                  rollover).
                 </p>
               )}
             </>
@@ -293,8 +311,8 @@ export function CloudVoice() {
             </p>
           )}
           <p className="text-metadata text-muted-foreground mt-1">
-            Plan: {planId} · Local voice {usage.local_voice_available ? 'available' : 'unavailable'} ·
-            Cloud voice {usage.cloud_voice_available ? 'available' : 'unavailable'}
+            Plan: {planId} · Local voice {usage.local_voice_available ? 'available' : 'unavailable'}{' '}
+            · Cloud voice {usage.cloud_voice_available ? 'available' : 'unavailable'}
           </p>
         </section>
       )}

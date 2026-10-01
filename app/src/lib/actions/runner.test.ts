@@ -36,6 +36,10 @@ import {
   createJarvisActionCatalog,
   DEFAULT_JARVIS_ACTION_REGISTRATIONS,
 } from '@/lib/jarvis/actions/catalog';
+import { canonicalizeBrowserJson } from '@/features/browser/browserActions';
+import { revokeBrowserGoalHostSession } from '@/features/browser/browserGoalIntegration';
+import { hashJarvisText } from '@/lib/jarvis/identity';
+import { useChatActivityStore } from '@/features/chat/activity';
 
 describe('resolveAction', () => {
   it('finds built-in actions by id', () => {
@@ -104,6 +108,7 @@ describe('runAction', () => {
     useToolStore.setState({ tools: [] });
     useTerminalCommandQueue.getState().clear();
     useDevConsoleStore.getState().clear();
+    useChatActivityStore.setState({ eventsByChat: {} });
   });
 
   it('returns a structured error for unknown ids and toasts by default', async () => {
@@ -342,6 +347,115 @@ describe('runAction', () => {
       { query: 'smoke fixture', maxResults: 1 },
       expect.objectContaining({ source: 'ai', signal }),
     );
+  });
+
+  it('shows live writing only while an approved file mutation is actually executing', async () => {
+    const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+      'files.edit',
+    )!;
+    const definition = resolveAction('files.edit')!;
+    let finishWrite!: (value: { ok: true; summary: string }) => void;
+    vi.spyOn(definition, 'run').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishWrite = resolve;
+        }),
+    );
+    const signal = new AbortController().signal;
+    const beginExternalEffect = vi.fn((begin) => ({
+      kind: 'committed' as const,
+      value: begin(signal),
+    }));
+    const dispatcher = createJarvisRegisteredBuiltinDispatcher();
+
+    const outcome = dispatcher({
+      registration,
+      params: { path: 'C:\\project\\notes.md', content: 'Updated notes.' },
+      context: {
+        source: 'ai',
+        chatId: 'chat-file-write',
+        accountId: 'account-kernel',
+        runId: 'run-file-write',
+        approvalId: 'approval-file-write',
+        requestId: 'request-file-write',
+        attemptNumber: 1,
+      },
+      execution: { beginExternalEffect } as never,
+    });
+
+    await vi.waitFor(() =>
+      expect(useChatActivityStore.getState().eventsByChat['chat-file-write']?.at(-1)).toMatchObject(
+        {
+          category: 'writing',
+          status: 'running',
+          title: 'Writing project files',
+        },
+      ),
+    );
+    finishWrite({ ok: true, summary: 'Updated notes.' });
+    await expect(outcome).resolves.toMatchObject({
+      kind: 'executor_returned',
+      result: { ok: true },
+    });
+    expect(useChatActivityStore.getState().eventsByChat['chat-file-write']?.at(-1)).toMatchObject({
+      category: 'writing',
+      status: 'done',
+      title: 'Project file update complete',
+    });
+  });
+
+  it('routes canonical browser registrations only to a live scoped host', async () => {
+    revokeBrowserGoalHostSession();
+    const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+      'browser.navigate',
+    )!;
+    const beginExternalEffect = vi.fn();
+    const dispatcher = createJarvisRegisteredBuiltinDispatcher();
+    const parameters = { url: 'https://example.test/next' };
+
+    await expect(
+      dispatcher({
+        registration,
+        params: {
+          schemaVersion: 1,
+          reviewId: 'review-runner',
+          origin: 'https://example.test',
+          tabId: 'tab-runner',
+          frameId: null,
+          target: { currentUrl: 'https://example.test/start' },
+          parameters,
+          parametersHash: await hashJarvisText(canonicalizeBrowserJson(parameters)),
+          reviewedHash: 'reviewed-action-hash',
+          expectedEffect: 'Navigate the active browser tab.',
+          reviewedRisk: 'confirm',
+          capability: { id: 'browser.operator', operation: 'browser.navigate' },
+        },
+        context: {
+          source: 'ai',
+          accountId: 'account-runner',
+          runId: 'run-runner',
+          requestId: 'request-runner',
+          attemptNumber: 1,
+          approvalId: 'approval-runner',
+        },
+        execution: {
+          approval: {
+            runId: 'run-runner',
+            requestId: 'request-runner',
+            attemptNumber: 1,
+          },
+          initialLiveProof: { accountId: 'account-runner' },
+          beginExternalEffect,
+        } as never,
+      }),
+    ).resolves.toEqual({
+      kind: 'executor_returned',
+      result: {
+        ok: false,
+        error: 'An explicit browser host source registration is required.',
+      },
+    });
+    expect(beginExternalEffect).not.toHaveBeenCalled();
   });
 
   it('queues exactly one terminal command through issued authority and propagates cancellation', async () => {

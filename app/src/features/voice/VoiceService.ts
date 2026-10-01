@@ -234,8 +234,12 @@ class VoiceServiceImpl extends VoiceEmitter {
   private wantsActive = false;
   private langPref = 'en-US';
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
-  /** `null` disables the cap (push-to-talk). */
-  private inactivityTimeoutMs: number | null = 15_000;
+  /**
+   * `null` disables the no-speech inactivity cap.
+   * Free/default system STT uses 3 minutes (180_000 ms) of silence before stop.
+   * Hands-free Jarvis may override via setInactivityTimeoutMs.
+   */
+  private inactivityTimeoutMs: number | null = 180_000;
 
   setInactivityTimeoutMs(ms: number | null): void {
     this.inactivityTimeoutMs = ms;

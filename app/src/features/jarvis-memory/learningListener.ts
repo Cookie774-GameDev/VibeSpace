@@ -81,6 +81,7 @@ export function startJarvisLearningListener(
   const debounceMs = bindings.debounceMs ?? 300;
   const accountLoads = new Map<string, Promise<void>>();
   const loadingAccounts = new Set<string>();
+  let suppressAutomaticProfilePersistence = 0;
   const timers = new Map<
     string,
     {
@@ -90,6 +91,15 @@ export function startJarvisLearningListener(
   >();
   let writeQueue: Promise<void> = Promise.resolve();
   let disposed = false;
+
+  const mutateAutomaticLearning = <T>(mutation: () => T): T => {
+    suppressAutomaticProfilePersistence += 1;
+    try {
+      return mutation();
+    } finally {
+      suppressAutomaticProfilePersistence -= 1;
+    }
+  };
 
   const loadAccount = (accountId: string) => {
     loadingAccounts.add(accountId);
@@ -190,7 +200,11 @@ export function startJarvisLearningListener(
 
   const unsubscribe = store.subscribe((state, previous) => {
     const active = state.activeAccountId;
-    if (!loadingAccounts.has(active) && state.profiles[active] !== previous.profiles[active]) {
+    if (
+      suppressAutomaticProfilePersistence === 0 &&
+      !loadingAccounts.has(active) &&
+      state.profiles[active] !== previous.profiles[active]
+    ) {
       persistProfile(active, store.getState().exportMarkdown());
     }
     if (
@@ -230,12 +244,14 @@ export function startJarvisLearningListener(
       await pendingLoad;
       if (disposed || bindings.getAccountId().trim() !== currentAccount) return;
       store.getState().setAccount(currentAccount);
-      const result = store.getState().recordUserMessage({
-        text: messageText,
-        chatId,
-        messageId,
-      });
-      if (result.explicitMemoryId) {
+      const result = mutateAutomaticLearning(() =>
+        store.getState().recordUserMessage({
+          text: messageText,
+          chatId,
+          messageId,
+        }),
+      );
+      if (result.explicitMemoryId && !result.evaluateNow) {
         publishStatus(chatId, 'updating');
         persistProfileNow(currentAccount, store.getState().exportMarkdown(), chatId);
       }
@@ -247,25 +263,27 @@ export function startJarvisLearningListener(
           text: messageText,
           chatId,
         },
-      ].slice(-10);
+      ].slice(-20);
       recentByAccount.set(currentAccount, recent);
       if (!result.evaluateNow) return;
 
       publishStatus(chatId, 'updating');
-      const seen = new Set<string>();
-      for (const message of recent) {
-        const candidate = inferredCandidate(message.text);
-        if (!candidate) continue;
-        const key = `${candidate.category}:${candidate.value.toLowerCase()}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        store.getState().remember({
-          ...candidate,
-          confidence: 0.7,
-          source: { kind: 'inferred', chatId: message.chatId },
-        });
-      }
-      store.getState().markEvaluated();
+      mutateAutomaticLearning(() => {
+        const seen = new Set<string>();
+        for (const message of recent) {
+          const candidate = inferredCandidate(message.text);
+          if (!candidate) continue;
+          const key = `${candidate.category}:${candidate.value.toLowerCase()}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          store.getState().remember({
+            ...candidate,
+            confidence: 0.7,
+            source: { kind: 'inferred', chatId: message.chatId },
+          });
+        }
+        store.getState().markEvaluated();
+      });
       recentByAccount.set(currentAccount, []);
       persistProfileNow(currentAccount, store.getState().exportMarkdown(), chatId);
     })().catch((error) => report(bindings, error));

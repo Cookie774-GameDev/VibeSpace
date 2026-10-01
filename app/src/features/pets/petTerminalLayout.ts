@@ -1,31 +1,26 @@
 /**
- * Pure terminal Tabs/Grid layout helpers for the Pet mini-panel.
- * No PTY cloning — only presentation geometry + view-mode persistence.
+ * Legacy terminal-view preference migration for the Pet mini-panel.
+ * Grid was retired because mounting several WebGL/xterm surfaces inside the
+ * tiny companion window was both visually dense and unnecessarily expensive.
  */
 
-export type PetTerminalViewMode = 'tabs' | 'grid';
+export type PetTerminalViewMode = 'tabs';
 
 export const PET_TERMINAL_VIEW_MODE_KEY = 'vibespace-pet-terminal-view-mode';
-
-/** Tailwind grid classes for 1–4 simultaneous live terminals. */
-export function gridClassForCount(count: number): string {
-  if (count <= 1) return 'grid-cols-1 grid-rows-1';
-  if (count === 2) return 'grid-cols-2 grid-rows-1';
-  // 3 and 4: 2×2 (one empty cell when count === 3)
-  return 'grid-cols-2 grid-rows-2';
-}
 
 export function loadPetTerminalViewMode(
   storage: Pick<Storage, 'getItem'> | null | undefined = typeof localStorage !== 'undefined'
     ? localStorage
     : null,
 ): PetTerminalViewMode {
+  // Read once so blocked storage remains harmless, but intentionally migrate
+  // every old "grid" value to the only supported lightweight presentation.
   try {
-    const v = storage?.getItem(PET_TERMINAL_VIEW_MODE_KEY);
-    return v === 'grid' ? 'grid' : 'tabs';
+    storage?.getItem(PET_TERMINAL_VIEW_MODE_KEY);
   } catch {
-    return 'tabs';
+    /* ignore */
   }
+  return 'tabs';
 }
 
 export function savePetTerminalViewMode(
@@ -45,6 +40,9 @@ export function savePetTerminalViewMode(
  * Whether a terminal tile should accept keyboard input.
  * Only the focused terminal receives input; others stay live for output.
  */
-export function terminalTileReceivesInput(terminalId: string, focusedTerminalId: string | null): boolean {
+export function terminalTileReceivesInput(
+  terminalId: string,
+  focusedTerminalId: string | null,
+): boolean {
   return focusedTerminalId != null && terminalId === focusedTerminalId;
 }

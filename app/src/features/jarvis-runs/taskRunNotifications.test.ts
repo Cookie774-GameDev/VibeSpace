@@ -26,7 +26,10 @@ describe('canonical Jarvis task notifications', () => {
   it('emits generic copy once per canonical run/sequence transition', async () => {
     let listener: (event: JarvisEvent) => void = () => undefined;
     const unsubscribe = vi.fn();
-    const notify = vi.fn(async (_title: string, _body: string, _status: string) => undefined);
+    const notify = vi.fn(
+      async (_title: string, _body: string, _status: string, _completionIdentity?: string) =>
+        undefined,
+    );
     const stop = startJarvisTaskRunNotifications({
       subscribe: (next) => {
         listener = next;
@@ -55,6 +58,9 @@ describe('canonical Jarvis task notifications', () => {
     expect(JSON.stringify(notify.mock.calls)).not.toMatch(
       /PRIVATE EVENT TITLE|PRIVATE SAFE SUMMARY/,
     );
+    expect(notify.mock.calls[2]?.[3]).toBe('jarvis-run:jrun-alpha');
+    expect(notify.mock.calls[3]?.[3]).toBeUndefined();
+    expect(notify.mock.calls[5]?.[3]).toBeUndefined();
 
     stop();
     expect(unsubscribe).toHaveBeenCalledOnce();

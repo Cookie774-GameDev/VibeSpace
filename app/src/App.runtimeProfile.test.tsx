@@ -10,6 +10,7 @@ import {
   resolveSettingsModalInitialTab,
   RuntimeProfileHandshakeGate,
 } from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Toaster } from './components/ui/toast';
 import { SettingsModal } from './features/settings/SettingsModal';
 import * as settingsTabMemory from './features/settings/settingsTabMemory';
@@ -90,6 +91,7 @@ describe('App runtime-profile boundary behavior', () => {
       </RuntimeProfileHandshakeGate>,
     );
     expect(mounted.queryByTestId('product')).toBeNull();
+    expect(mounted.getByRole('status').textContent).toContain('Verifying');
     expect(childEffect).not.toHaveBeenCalled();
     expect(query).toHaveBeenCalledOnce();
   });
@@ -203,6 +205,39 @@ describe('App runtime-profile boundary behavior', () => {
     );
     await act(async () => undefined);
     expect(query).toHaveBeenCalledOnce();
+  });
+
+  it('evicts only a rejected shared handshake so a boundary remount performs a fresh query', async () => {
+    const productEffect = vi.fn();
+    const query = vi
+      .fn<RuntimeProfileQuery>()
+      .mockRejectedValueOnce(new Error('Runtime profile handshake failed: native query timed out'))
+      .mockResolvedValueOnce({
+        profile: 'ordinary',
+        appIdentifier: 'ai.jarvis.desktop',
+        capabilityIdentifier: null,
+        sessionNonceHash: null,
+      });
+
+    const mounted = render(
+      <ErrorBoundary>
+        <RuntimeProfileHandshakeGate
+          plan={ordinaryPlan}
+          expectation={undefined}
+          query={query}
+          nativeRuntime
+        >
+          <EffectChild effect={productEffect} />
+        </RuntimeProfileHandshakeGate>
+      </ErrorBoundary>,
+    );
+    await waitFor(() => expect(mounted.getByRole('alert')).toBeTruthy());
+    expect(productEffect).not.toHaveBeenCalled();
+    act(() => mounted.getByRole('button', { name: 'Try again' }).click());
+    await waitFor(() => expect(mounted.getByTestId('product')).toBeTruthy());
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(productEffect).toHaveBeenCalledOnce();
   });
 });
 
@@ -1392,7 +1427,7 @@ describe('product-owned MonoChrome fixture readiness', () => {
     await waitFor(() => {
       expect(document.querySelector('#settings-tab-admin')).toBeNull();
       expect((document.querySelector('#settings-panel-admin') as HTMLElement).hidden).toBe(true);
-      expect(document.querySelector('#settings-tab-account')?.getAttribute('aria-selected')).toBe(
+      expect(document.querySelector('#settings-tab-plans')?.getAttribute('aria-selected')).toBe(
         'true',
       );
     });

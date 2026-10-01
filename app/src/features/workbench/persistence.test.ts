@@ -61,6 +61,18 @@ describe('Workbench persistence', () => {
     expect(window.localStorage.getItem(WORKBENCH_STORAGE_KEY)).not.toContain('javascript:');
   });
 
+  it('defaults wallpaper brightness to 50 percent and clamps persisted values', () => {
+    const document = createDefaultWorkbenchDocument();
+    expect(document.wallpaper.brightness).toBe(0.5);
+    const serialized = JSON.parse(JSON.stringify(document)) as {
+      wallpaper: { brightness: number };
+    };
+    serialized.wallpaper.brightness = 4;
+    window.localStorage.setItem(WORKBENCH_STORAGE_KEY, JSON.stringify(serialized));
+
+    expect(loadWorkbenchDocument(window.localStorage).document.wallpaper.brightness).toBe(1);
+  });
+
   it('rejects stale multi-window writes when storage revision is newer', () => {
     const first = createDefaultWorkbenchDocument();
     first.name = 'Window A';

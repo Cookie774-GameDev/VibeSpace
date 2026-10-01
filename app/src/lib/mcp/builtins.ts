@@ -20,6 +20,7 @@ import { isTauri } from '@/lib/utils';
 import { speakText } from '@/features/voice/speechSynthesis';
 import type { PersonaPreset } from '@/types/common';
 import { toolRegistry } from './registry';
+import { createRlmOpenCodeTool } from '@/features/context/rlm/rlmOpenCodeTool';
 
 /**
  * Lazy `invoke()` shim. Mirrors `src/lib/tauri.ts` so the browser bundle
@@ -32,6 +33,12 @@ async function tauriInvoke<T = unknown>(
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<T>(cmd, args);
 }
+
+/* -------------------------------------------------------------------------- */
+/*  vibespace_context.query                                                   */
+/* -------------------------------------------------------------------------- */
+
+toolRegistry.register(createRlmOpenCodeTool());
 
 /* -------------------------------------------------------------------------- */
 /*  fs.read                                                                   */

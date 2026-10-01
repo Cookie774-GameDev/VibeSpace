@@ -2,6 +2,9 @@ import { useRef, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { messageRepo } from '@/lib/db/repositories';
+import { respondToPersistentOpenCodeApproval } from '@/lib/ai/adapters/opencodePersistent';
+import { recordOpenCodeApprovalStatus } from '@/lib/harness/openCodeApprovalState';
+import { grantToolGatewayMutation } from '@/lib/harness/toolGatewayProduction';
 import type { MessageId, Part } from '@/types';
 import { useJarvisInteractionStore } from './sessionStore';
 import type { JarvisPermissionRequest, JarvisPermissionStatus } from './types';
@@ -27,37 +30,43 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
     const message = await messageRepo.getById(messageId);
     if (!message) return;
     await messageRepo.update(messageId, {
-      parts: message.parts.map((messagePart) => (
+      parts: message.parts.map((messagePart) =>
         messagePart.kind === 'permission_request' && messagePart.request.id === request.id
           ? {
               kind: 'permission_request',
-              request: { ...messagePart.request, status, instruction: nextInstruction ?? messagePart.request.instruction },
+              request: {
+                ...messagePart.request,
+                status,
+                instruction: nextInstruction ?? messagePart.request.instruction,
+              },
             }
-          : messagePart
-      )),
+          : messagePart,
+      ),
     });
   };
 
   const sendPermissionContext = (status: JarvisPermissionStatus, nextInstruction?: string) => {
     if (!chatId) return;
-    window.dispatchEvent(new CustomEvent('jarvis:send', {
-      detail: {
-        chatId,
-        text: nextInstruction
-          ? `Permission response for ${request.title}: ${nextInstruction}`
-          : `Permission response for ${request.title}: ${status}`,
-        interactionMode: 'agent',
-        structuredContext: {
-          kind: 'permission_response',
-          sourceMessageId: messageId,
-          payload: {
-            request,
-            status,
-            instruction: nextInstruction,
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', {
+        detail: {
+          chatId,
+          text: nextInstruction
+            ? `Permission response for ${request.title}: ${nextInstruction}`
+            : `Permission response for ${request.title}: ${status}`,
+          interactionMode: 'agent',
+          structuredContext: {
+            kind: 'permission_response',
+            sourceMessageId: messageId,
+            payload: {
+              request,
+              status,
+              instruction: nextInstruction,
+            },
           },
         },
-      },
-    }));
+      }),
+    );
   };
 
   const approve = async (status: JarvisPermissionStatus) => {
@@ -67,6 +76,26 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
     setError(null);
     try {
       await writeStatus(status);
+      if (request.harness) {
+        const response = status === 'approved_plan' ? 'always' : 'once';
+        recordOpenCodeApprovalStatus(request.harness.sessionId, request.harness.approvalId, status);
+        const revoke = grantToolGatewayMutation(
+          request.harness.sessionId,
+          request.harness.capability,
+          response,
+        );
+        try {
+          await respondToPersistentOpenCodeApproval({
+            sessionId: request.harness.sessionId,
+            approvalId: request.harness.approvalId,
+            response,
+          });
+        } catch (error) {
+          revoke?.();
+          throw error;
+        }
+        return;
+      }
       if (status === 'approved_plan' && chatId) {
         useJarvisInteractionStore.getState().setPlanSafeApproval(chatId, true);
       }
@@ -82,16 +111,57 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
   const deny = async () => {
     if (busy || request.status !== 'pending') return;
     setBusy(true);
-    await writeStatus('denied');
-    setBusy(false);
+    setError(null);
+    try {
+      await writeStatus('denied');
+      if (request.harness) {
+        recordOpenCodeApprovalStatus(
+          request.harness.sessionId,
+          request.harness.approvalId,
+          'denied',
+        );
+        await respondToPersistentOpenCodeApproval({
+          sessionId: request.harness.sessionId,
+          approvalId: request.harness.approvalId,
+          response: 'reject',
+        });
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Permission could not be denied. Please retry.',
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const edit = async () => {
     if (busy || request.status !== 'pending' || !instruction.trim()) return;
     setBusy(true);
-    await writeStatus('edited', instruction.trim());
-    sendPermissionContext('edited', instruction.trim());
-    setBusy(false);
+    setError(null);
+    try {
+      const narrowed = instruction.trim();
+      await writeStatus('edited', narrowed);
+      if (request.harness) {
+        recordOpenCodeApprovalStatus(
+          request.harness.sessionId,
+          request.harness.approvalId,
+          'edited',
+        );
+        await respondToPersistentOpenCodeApproval({
+          sessionId: request.harness.sessionId,
+          approvalId: request.harness.approvalId,
+          response: 'reject',
+        });
+      }
+      sendPermissionContext('edited', narrowed);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Permission could not be edited. Please retry.',
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -106,16 +176,31 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
         </div>
       </div>
       <div className="mb-2 flex flex-wrap gap-1.5 text-metadata">
-        <span className="rounded-full border border-border bg-background px-2 py-0.5">Risk: {request.risk}</span>
-        <span className="rounded-full border border-border bg-background px-2 py-0.5">Action: {request.action}</span>
+        <span className="rounded-full border border-border bg-background px-2 py-0.5">
+          Risk: {request.risk}
+        </span>
+        <span className="rounded-full border border-border bg-background px-2 py-0.5">
+          Action: {request.action}
+        </span>
         {request.targets?.map((target) => (
-          <span key={target} className="rounded-full border border-border bg-background px-2 py-0.5">{target}</span>
+          <span
+            key={target}
+            className="rounded-full border border-border bg-background px-2 py-0.5"
+          >
+            {target}
+          </span>
         ))}
       </div>
       {request.status !== 'pending' && (
-        <p className="mb-2 text-secondary text-muted-foreground">Permission status: {request.status}</p>
+        <p className="mb-2 text-secondary text-muted-foreground">
+          Permission status: {request.status}
+        </p>
       )}
-      {error && <p role="alert" className="mb-2 text-secondary text-destructive">{error}</p>}
+      {error && (
+        <p role="alert" className="mb-2 text-secondary text-destructive">
+          {error}
+        </p>
+      )}
       {editOpen && (
         <div className="mb-3 flex flex-col gap-2">
           <textarea
@@ -124,22 +209,52 @@ export function PermissionRequestCard({ part, messageId, chatId }: PermissionReq
             value={instruction}
             onChange={(event) => setInstruction(event.target.value)}
           />
-          <Button type="button" size="sm" variant="accent" disabled={busy || !instruction.trim()} onClick={edit}>
+          <Button
+            type="button"
+            size="sm"
+            variant="accent"
+            disabled={busy || !instruction.trim()}
+            onClick={edit}
+          >
             Send instruction
           </Button>
         </div>
       )}
       <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="accent" disabled={busy || request.status !== 'pending'} onClick={() => void approve('approved')}>
+        <Button
+          type="button"
+          size="sm"
+          variant="accent"
+          disabled={busy || request.status !== 'pending'}
+          onClick={() => void approve('approved')}
+        >
           Approve once
         </Button>
-        <Button type="button" size="sm" variant="secondary" disabled={busy || request.status !== 'pending'} onClick={() => void approve('approved_plan')}>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={busy || request.status !== 'pending'}
+          onClick={() => void approve('approved_plan')}
+        >
           Approve all safe changes
         </Button>
-        <Button type="button" size="sm" variant="secondary" disabled={busy || request.status !== 'pending'} onClick={() => setEditOpen((open) => !open)}>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          disabled={busy || request.status !== 'pending'}
+          onClick={() => setEditOpen((open) => !open)}
+        >
           Edit request
         </Button>
-        <Button type="button" size="sm" variant="ghost" disabled={busy || request.status !== 'pending'} onClick={deny}>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={busy || request.status !== 'pending'}
+          onClick={deny}
+        >
           Deny
         </Button>
       </div>

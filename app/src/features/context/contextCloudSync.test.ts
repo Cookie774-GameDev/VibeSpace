@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 
 const harness = vi.hoisted(() => {
   class CommitRejected extends Error {
@@ -368,11 +369,13 @@ describe('Context optional cloud sync boundary', () => {
     expect(harness.enqueue).not.toHaveBeenCalled();
   });
 
+  const secretIdentifier = syntheticCredentialFixture('ghp_', 'SyntheticCredentialValue1234567890');
+
   it.each([
-    ['projectId', { projectId: 'ghp_SyntheticCredentialValue1234567890' }],
-    ['id', { id: 'ghp_SyntheticCredentialValue1234567890' }],
-    ['revisionId', { revisionId: 'ghp_SyntheticCredentialValue1234567890' }],
-    ['baseRevisionId', { baseRevisionId: 'ghp_SyntheticCredentialValue1234567890' }],
+    ['projectId', { projectId: secretIdentifier }],
+    ['id', { id: secretIdentifier }],
+    ['revisionId', { revisionId: secretIdentifier }],
+    ['baseRevisionId', { baseRevisionId: secretIdentifier }],
   ] as const)('rejects a secret-bearing %s envelope identifier', async (_field, patch) => {
     await setContextCloudSyncPreference('account-1', {
       enabled: true,

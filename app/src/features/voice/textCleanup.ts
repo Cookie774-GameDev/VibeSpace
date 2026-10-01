@@ -6,7 +6,7 @@
  * speech-friendly chunks before it reaches any voice provider.
  *
  * Pure functions only — no I/O, no provider deps — so they're trivially unit
- * tested and reused by every provider (Kokoro, OpenAI, Deepgram, etc.).
+ * tested and reused by every provider (Jarvis High, OpenAI, Deepgram, etc.).
  */
 
 export interface CleanupOptions {

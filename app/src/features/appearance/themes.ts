@@ -1,5 +1,5 @@
 import {
-  THEME_DEFINITIONS,
+  RELEASE_THEME_DEFINITIONS,
   normalizePersistedTheme,
   parseSelectableTheme,
   parseThemeCommandArgument,
@@ -8,7 +8,7 @@ import type { SelectableTheme, ThemeDefinition } from './themeContract';
 
 export type { SelectableTheme, ThemeDefinition };
 
-export const SELECTABLE_THEMES: readonly ThemeDefinition[] = THEME_DEFINITIONS;
+export const SELECTABLE_THEMES: readonly ThemeDefinition[] = RELEASE_THEME_DEFINITIONS;
 
 export const migrateThemePreference = normalizePersistedTheme;
 

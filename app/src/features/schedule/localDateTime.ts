@@ -1,7 +1,9 @@
 /**
  * Local OS clock helpers for schedule date/time fields.
  * Uses the device timezone (Windows / macOS / Linux) — never UTC offsets in UI.
+ * Display hour cycle follows Settings → Ambient → Time format (presentation only).
  */
+import { formatUserDateTime, formatUserTime } from '@/lib/timeFormat';
 
 /** IANA timezone from the OS, e.g. `America/New_York`. */
 export function getLocalTimeZone(): string {
@@ -62,20 +64,11 @@ export function formatLocalDayHeading(ms: number, now = Date.now()): string {
 }
 
 export function formatLocalDateTime(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatUserDateTime(ms, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 export function formatLocalTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatUserTime(ms);
 }
 
 export function formatLocalEventRange(

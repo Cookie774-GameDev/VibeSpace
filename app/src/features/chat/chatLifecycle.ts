@@ -2,19 +2,18 @@
  * Chat bootstrapping — always keep a conversation ready for the user.
  */
 import { db, chatRepo, messageRepo } from '@/lib/db';
-import type { ChatId, MessageId } from '@/types/common';
+import type { ChatId, MessageId, ProjectId, WorkspaceId } from '@/types/common';
 import type { Message } from '@/types';
 import { newMessageId } from '@/lib/ids';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
+import type { SyncQueueOwnerSnapshot } from '@/lib/cloudSyncQueueOwner';
+import type { AccountIdentity } from '@/lib/accountIdentity';
 
 export function isDefaultChatTitle(title: string | null | undefined): boolean {
   const t = (title ?? '').trim();
   return (
-    t.length === 0 ||
-    t === 'New chat' ||
-    /^New chat( \d+)?$/i.test(t) ||
-    t.startsWith('Chat with ')
+    t.length === 0 || t === 'New chat' || /^New chat( \d+)?$/i.test(t) || t.startsWith('Chat with ')
   );
 }
 
@@ -46,6 +45,57 @@ export interface EnsureActiveChatOptions {
   titleHint?: string;
   /** Navigate to the chat route after ensuring. Default true. */
   navigateToChat?: boolean;
+}
+
+export interface CreateChatInScopeOptions {
+  readonly accountId: string;
+  readonly accountSource: AccountIdentity['source'];
+  readonly syncOwner: SyncQueueOwnerSnapshot;
+  readonly workspaceId: string;
+  readonly projectId: string | null;
+  readonly title?: string;
+  readonly titleHint?: string;
+  readonly navigateToChat?: boolean;
+  readonly isScopeCurrent: () => boolean;
+  readonly beforeActivate: (chatId: string) => boolean;
+}
+
+export async function createChatInScope(options: CreateChatInScopeOptions): Promise<ChatId | null> {
+  const ownerMatchesAccount =
+    options.accountSource === 'supabase'
+      ? options.syncOwner.state === 'cloud' && options.syncOwner.userId === options.accountId
+      : options.syncOwner.state === 'unbound';
+  if (!ownerMatchesAccount || !options.isScopeCurrent()) return null;
+
+  const rows = await db.chats
+    .where('workspace_id')
+    .equals(options.workspaceId as WorkspaceId)
+    .toArray();
+  const scoped = options.projectId
+    ? rows.filter((chat) => String(chat.project_id ?? '') === options.projectId)
+    : rows.filter((chat) => !chat.project_id);
+  const hintedTitle = options.titleHint ? deriveChatTitle(options.titleHint) : '';
+  const title = options.title?.trim() || hintedTitle || `New chat ${scoped.length + 1}`;
+  const chat = await chatRepo.createAuthorized(
+    {
+      workspace_id: options.workspaceId as WorkspaceId,
+      project_id: options.projectId ? (options.projectId as ProjectId) : undefined,
+      title,
+      mode: 'chat',
+      active_agent_ids: [],
+    },
+    options.syncOwner,
+    () => ownerMatchesAccount && options.isScopeCurrent(),
+  );
+
+  if (!chat || !options.beforeActivate(String(chat.id))) return null;
+  const ui = useUIStore.getState();
+  ui.setActiveChat(chat.id);
+  if (options.navigateToChat !== false) {
+    ui.setRoute('chat');
+    ui.setChatMode('chat');
+  }
+  return chat.id;
 }
 
 let ensureInflight: Promise<ChatId | null> | null = null;
@@ -81,10 +131,7 @@ async function ensureActiveChatInternal(
   }
 
   const hintedTitle = options.titleHint ? deriveChatTitle(options.titleHint) : '';
-  const title =
-    options.title?.trim() ||
-    hintedTitle ||
-    `New chat ${scoped.length + 1}`;
+  const title = options.title?.trim() || hintedTitle || `New chat ${scoped.length + 1}`;
 
   const chat = await chatRepo.create({
     workspace_id: auth.workspaceId,

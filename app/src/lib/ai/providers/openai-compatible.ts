@@ -13,14 +13,17 @@ import {
   systemPromptForRequest,
 } from '../types';
 import { parseSSE } from './sse';
+import { sanitizeReasoningProviderOptions } from '../reasoningControls';
+import { nativeFetch } from '@/lib/nativeFetch';
 
 export interface OpenAICompatibleConfig {
   id: ProviderId;
   name: string;
-  baseUrl: string;
+  baseUrl: string | (() => string);
   apiKeyStoreKey: ProviderId;
   defaultModel: string;
   extraHeaders?: Record<string, string>;
+  transport?: 'browser' | 'native';
 }
 
 function safeJSON(s: string): unknown {
@@ -43,8 +46,6 @@ function toOpenAiCompatibleContent(content: string | LLMContentPart[]) {
 }
 
 export function makeOpenAICompatibleProvider(cfg: OpenAICompatibleConfig): LLMProvider {
-  const chatUrl = `${cfg.baseUrl.replace(/\/+$/, '')}/chat/completions`;
-
   return {
     id: cfg.id,
     name: cfg.name,
@@ -59,6 +60,10 @@ export function makeOpenAICompatibleProvider(cfg: OpenAICompatibleConfig): LLMPr
       if (!apiKey?.trim()) throw new Error(`${cfg.name} API key not set`);
 
       const model = req.agent.model.model || cfg.defaultModel;
+      const reasoning = sanitizeReasoningProviderOptions(
+        { providerId: cfg.id, modelId: model },
+        req.provider_options,
+      );
       const systemPrompt = systemPromptForRequest(req);
       const messages = [
         { role: 'system' as const, content: systemPrompt },
@@ -77,6 +82,7 @@ export function makeOpenAICompatibleProvider(cfg: OpenAICompatibleConfig): LLMPr
         stream_options: { include_usage: true },
         temperature: req.temperature ?? req.agent.temperature ?? 0.7,
         max_tokens: req.max_output_tokens ?? req.agent.max_output_tokens ?? 4096,
+        ...reasoning,
       };
 
       const headers: Record<string, string> = {
@@ -85,7 +91,10 @@ export function makeOpenAICompatibleProvider(cfg: OpenAICompatibleConfig): LLMPr
         ...cfg.extraHeaders,
       };
 
-      const res = await fetch(chatUrl, {
+      const fetchImpl = cfg.transport === 'native' ? nativeFetch : globalThis.fetch;
+      const baseUrl = typeof cfg.baseUrl === 'function' ? cfg.baseUrl() : cfg.baseUrl;
+      const chatUrl = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+      const res = await fetchImpl(chatUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),

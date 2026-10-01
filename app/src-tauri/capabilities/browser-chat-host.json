@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "browser-chat-host",
+  "description": "Marker capability for the guarded native Browser Chat surface. The local main webview receives no generic window or webview controls, and remote provider origins receive no IPC capability.",
+  "webviews": ["main"],
+  "permissions": []
+}

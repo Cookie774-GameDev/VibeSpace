@@ -9,13 +9,16 @@ import {
   type QueuedChatMessage,
 } from './QueuedMessagesBar';
 
-const queued: QueuedChatMessage[] = [{ id: 'q_1', text: 'First queued request', createdAt: 1 }];
+const queued: QueuedChatMessage[] = [
+  { id: 'q_1', text: 'First queued request', createdAt: 1, flushMode: 'after-run' },
+];
 
 const longQueued: QueuedChatMessage[] = [
   {
     id: 'q_long',
     text: 'Jarvis make me a file here: "C:\\Users\\viper\\Downloads" okay and write a very long 500 word story about dogs and also cats and also birds so the queued text is extremely long and must not cover the multitask button controls',
     createdAt: 2,
+    flushMode: 'after-tool',
   },
 ];
 
@@ -39,6 +42,8 @@ describe('QueuedMessagesBar', () => {
     expect(screen.getByLabelText('Queued messages')).toBeTruthy();
     expect(screen.getByText('1 queued')).toBeTruthy();
     expect(screen.getByText(/First queued request/i)).toBeTruthy();
+    expect(screen.getByText(/Enter after tool/i)).toBeTruthy();
+    expect(screen.getByText(/After run/i)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /Edit queued message/i }));
     fireEvent.click(screen.getByRole('button', { name: /Start multitask for queued message/i }));
@@ -85,7 +90,9 @@ describe('QueuedMessagesBar', () => {
     const onStopAndRestart = vi.fn();
     render(
       <QueuedMessagesBar
-        messages={[{ id: 'switch-1', text: 'Use my local model.', createdAt: 3 }]}
+        messages={[
+          { id: 'switch-1', text: 'Use my local model.', createdAt: 3, flushMode: 'after-run' },
+        ]}
         onEdit={vi.fn()}
         onSendNow={vi.fn()}
         onStartMultitask={vi.fn()}
@@ -127,8 +134,8 @@ describe('queued auto-send helpers', () => {
 
   it('takes the next queued message in FIFO order', () => {
     const queue: QueuedChatMessage[] = [
-      { id: 'a', text: 'first', createdAt: 1 },
-      { id: 'b', text: 'second', createdAt: 2 },
+      { id: 'a', text: 'first', createdAt: 1, flushMode: 'after-run' },
+      { id: 'b', text: 'second', createdAt: 2, flushMode: 'after-tool' },
     ];
     const first = takeNextQueuedMessage(queue);
     expect(first.next?.id).toBe('a');
@@ -139,7 +146,9 @@ describe('queued auto-send helpers', () => {
   });
 
   it('keeps a cancelled-run restart queued until the resend is accepted', async () => {
-    let queue: QueuedChatMessage[] = [{ id: 'switch', text: 'Use my local model.', createdAt: 1 }];
+    let queue: QueuedChatMessage[] = [
+      { id: 'switch', text: 'Use my local model.', createdAt: 1, flushMode: 'after-run' },
+    ];
     const remove = (id: string) => {
       queue = queue.filter((message) => message.id !== id);
     };

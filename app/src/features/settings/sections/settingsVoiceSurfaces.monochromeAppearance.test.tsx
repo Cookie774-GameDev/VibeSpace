@@ -7,8 +7,10 @@ import { Voice } from './Voice';
 
 const mocks = vi.hoisted(() => {
   const authState = {
+    apiKeys: {},
     composerSttProvider: 'system' as const,
     fasterWhisperModel: 'small' as const,
+    hydrateApiKeysFromVault: vi.fn(async () => undefined),
     jarvisAutoApprove: false,
     personaPreset: 'jarvis',
     plan: 'free',
@@ -32,7 +34,7 @@ const mocks = vi.hoisted(() => {
     voiceCancelPhrase: 'cancel',
     voiceCommitPhrase: 'send it',
     voiceEndTrigger: 'phrase' as const,
-    voiceEngine: 'kokoro' as const,
+    voiceEngine: 'jarvis' as const,
     voiceListenTimeoutMs: 30_000,
     voicePreset: 'jarvis-prime' as const,
     voiceSilenceDelayMs: 1_500,
@@ -118,8 +120,12 @@ vi.mock('@/features/voice/voiceRouter', () => ({
 }));
 
 vi.mock('@/features/voice/modelManager', () => ({
+  JARVIS_HIGH_SOURCE_URL: 'https://huggingface.co/jgkawell/jarvis/tree/main/en/en_GB/jarvis/high',
+  JARVIS_HIGH_MANIFEST: {
+    files: [{ name: 'jarvis-high.onnx', size_bytes: 114_199_011 }],
+  },
   ModelManager: {
-    ensureKokoroReady: vi.fn(),
+    ensureJarvisReady: vi.fn(),
     status: vi.fn(),
   },
 }));
@@ -129,24 +135,18 @@ vi.mock('@/features/voice/wakeWord', () => ({
   setWakeWordEnabled: vi.fn(),
 }));
 
-vi.mock('@/features/composer-stt', () => ({
-  FASTER_WHISPER_MODELS: [
-    {
-      description: 'Compact local model',
-      id: 'tiny',
-      label: 'Tiny',
-      recommended: false,
-      sizeBytes: 1,
-      sizeLabel: '1 MB',
+vi.mock('@/features/composer-stt', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/composer-stt')>();
+  return {
+    ...actual,
+    FasterWhisperManager: {
+      checkInstalled: vi.fn(async () => false),
+      downloadModel: vi.fn(async () => false),
+      removeModel: vi.fn(async () => false),
     },
-  ],
-  FasterWhisperManager: {
-    checkInstalled: vi.fn(),
-    downloadModel: vi.fn(),
-  },
-  formatBytesShort: () => '1 MB',
-  isSystemSttAvailable: () => false,
-}));
+    isSystemSttAvailable: () => false,
+  };
+});
 
 vi.mock('@/lib/tauri', () => ({
   openSystemSpeechSettings: vi.fn(),
@@ -235,9 +235,9 @@ describe('voice-related settings MonoChrome appearance', () => {
     expectSurfaceGates('.mc7f-settings-composer-stt');
     expectGradientTextFallbacks();
     expect(screen.getByRole('heading', { name: 'Speech to Text' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /^Free \/ system/ })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: /Free System/i })).toBeTruthy();
     const providerCards = document.querySelectorAll<HTMLButtonElement>(
-      '.mc7f-settings-composer-stt button[aria-pressed]',
+      '.mc7f-settings-composer-stt button[role="radio"]',
     );
     expect(providerCards.length).toBeGreaterThan(0);
     for (const card of providerCards) {
@@ -250,7 +250,7 @@ describe('voice-related settings MonoChrome appearance', () => {
 
     expect(await screen.findByRole('heading', { name: 'Phone & Voice' })).toBeTruthy();
     expectSurfaceGates('.mc7f-settings-phone-voice');
-    expect(screen.getByText(/Your files NEVER leave this computer/)).toBeTruthy();
+    expect(screen.getByText(/Your files stay on this computer/)).toBeTruthy();
   });
 
   it('closes ambient effects without starting audio', () => {

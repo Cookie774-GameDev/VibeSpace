@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { formatUserDateTime } from '@/lib/timeFormat';
 import { PROVIDER_CATALOG, PROVIDER_CONNECTIONS } from '@/lib/ai/adapters/catalog';
 import type {
   AuthProbeResult,
@@ -13,6 +15,7 @@ import { geminiCliAdapter } from '@/lib/ai/adapters/gemini';
 import { copilotCliAdapter } from '@/lib/ai/adapters/copilot';
 import { qwenCliAdapter } from '@/lib/ai/adapters/qwen';
 import { openCodeCliAdapter } from '@/lib/ai/adapters/opencode';
+import { ensureExternalConnectionAutoDetection } from '@/lib/ai/adapters/autoDetectConnections';
 import {
   AI_CONNECTION_STATE_EVENT,
   markConnectionSessionChecked,
@@ -22,7 +25,35 @@ import {
   type ConnectionMetadata,
   type ConnectionMetadataRecord,
 } from '@/lib/ai/connectionState';
+import { useAuthStore } from '@/stores/auth';
+import { useUIStore } from '@/stores/ui';
+import { rememberSettingsTab } from '@/features/settings/settingsTabMemory';
+import { openExternal } from '@/lib/tauri';
+import { toast } from '@/components/ui/toast';
+import { cn } from '@/lib/utils';
+import { ConnectorBrandMark } from './ConnectorBrandMark';
+import {
+  connectorModeLabel,
+  connectorStatusLabel,
+  connectorStatusTone,
+  resolveConnectorUiStatus,
+  type ConnectorUiStatus,
+} from './connectorStatus';
+import type { ProviderId } from '@/types/common';
 import { McpConnections } from './McpConnections';
+import { createOpenCodeHttpClient } from '@/lib/harness/openCodeClient';
+import { harnessRuntimeManager } from '@/lib/harness/runtimeManager';
+import {
+  ANTHROPIC_SUBSCRIPTION_POLICY,
+  beginOpenCodeSubscription,
+  completeOpenCodeSubscription,
+  discoverOpenCodeSubscriptions,
+  type OpenCodeSubscriptionClient,
+  type OpenCodeSubscriptionResult,
+  type OpenCodeSubscriptionRoute,
+  type OpenCodeSubscriptionSnapshot,
+} from '@/lib/harness/subscriptionBridge';
+import { redactHarnessText } from '@/lib/harness/errors';
 
 export type { ConnectionMetadata, ConnectionMetadataRecord } from '@/lib/ai/connectionState';
 export type ConnectionAction =
@@ -30,7 +61,8 @@ export type ConnectionAction =
   | 'sign-in'
   | 'configure'
   | 'disable'
-  | 'forget'
+  | 'enable'
+  | 'clear-scan'
   | 'add-api-key';
 
 export interface SubscriptionCliBridgeProps {
@@ -42,14 +74,10 @@ export interface SubscriptionCliBridgeProps {
     action: ConnectionAction,
     connection: Readonly<ProviderConnection>,
   ) => void | Promise<void>;
-}
-
-function emitAction(action: ConnectionAction, connection: Readonly<ProviderConnection>): void {
-  window.dispatchEvent(
-    new CustomEvent('jarvis:ai-connection-action', {
-      detail: { action, connectionId: connection.id },
-    }),
-  );
+  /** When false, skip automatic session scan (tests). Default true. */
+  autoDetect?: boolean;
+  subscriptionClient?: OpenCodeSubscriptionClient;
+  openAuthorizationUrl?: (url: string) => Promise<void>;
 }
 
 const ADAPTERS: Readonly<Record<string, ProviderAdapter>> = Object.freeze(
@@ -108,98 +136,616 @@ function capabilitySummary(connection: Readonly<ProviderConnection>): string {
   return labels.length > 0 ? labels.join(' · ') : 'text';
 }
 
+function statusBadgeVariant(
+  tone: ReturnType<typeof connectorStatusTone>,
+): 'success' | 'outline' | 'destructive' | 'secondary' | 'default' {
+  switch (tone) {
+    case 'success':
+      return 'success';
+    case 'danger':
+      return 'destructive';
+    case 'warning':
+    case 'info':
+      return 'secondary';
+    case 'muted':
+    default:
+      return 'outline';
+  }
+}
+
+function productTitle(connection: Readonly<ProviderConnection>): string {
+  // Prefer short product names in hierarchy (Claude, Codex) while keeping mode separate.
+  return connection.displayName
+    .replace(/\s+CLI$/i, '')
+    .replace(/\s+API$/i, '')
+    .replace(/\s+Bridge$/i, '')
+    .trim();
+}
+
+function routeInputKey(route: OpenCodeSubscriptionRoute, key: string): string {
+  return `${route.providerId}:${route.methodIndex}:${key}`;
+}
+
+function promptIsVisible(
+  route: OpenCodeSubscriptionRoute,
+  prompt: NonNullable<OpenCodeSubscriptionRoute['prompts']>[number],
+  inputs: Readonly<Record<string, string>>,
+): boolean {
+  if (!prompt.when) return true;
+  const current = inputs[routeInputKey(route, prompt.when.key)] ?? '';
+  return prompt.when.op === 'eq' ? current === prompt.when.value : current !== prompt.when.value;
+}
+
+function OpenCodeSubscriptionCenter({
+  client,
+  openAuthorizationUrl,
+  onApiKey,
+}: {
+  client?: OpenCodeSubscriptionClient;
+  openAuthorizationUrl: (url: string) => Promise<void>;
+  onApiKey: (providerId: string) => void;
+}) {
+  const [snapshot, setSnapshot] = useState<OpenCodeSubscriptionSnapshot>();
+  const [busyRoute, setBusyRoute] = useState<string>();
+  const [pending, setPending] =
+    useState<Extract<OpenCodeSubscriptionResult, { kind: 'code_required' }>>();
+  const [code, setCode] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const [error, setError] = useState('');
+  const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [confirmedSubscriptions, setConfirmedSubscriptions] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+
+  const load = useCallback(async () => {
+    if (!client) {
+      setSnapshot(undefined);
+      return;
+    }
+    try {
+      setError('');
+      setSnapshot(await discoverOpenCodeSubscriptions(client));
+    } catch (loadError) {
+      setError(
+        redactHarnessText(
+          loadError instanceof Error ? loadError.message : 'OpenCode auth status is unavailable.',
+        ).slice(0, 512),
+      );
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const start = async (route: OpenCodeSubscriptionRoute) => {
+    if (!client) return;
+    const routeKey = `${route.providerId}:${route.methodIndex}`;
+    const promptInputs = Object.fromEntries(
+      (route.prompts ?? [])
+        .filter((prompt) => promptIsVisible(route, prompt, inputs))
+        .map((prompt) => [prompt.key, inputs[routeInputKey(route, prompt.key)] ?? '']),
+    );
+    setBusyRoute(routeKey);
+    setError('');
+    setPending(undefined);
+    setCode('');
+    try {
+      const result = await beginOpenCodeSubscription(
+        client,
+        route,
+        openAuthorizationUrl,
+        Object.keys(promptInputs).length ? promptInputs : undefined,
+      );
+      setInstructions(result.instructions);
+      if (result.kind === 'code_required') setPending(result);
+      else {
+        setConfirmedSubscriptions((current) => new Set(current).add(route.providerId));
+        await load();
+      }
+    } catch (startError) {
+      setError(
+        redactHarnessText(
+          startError instanceof Error ? startError.message : 'OpenCode sign-in failed.',
+        ).slice(0, 512),
+      );
+    } finally {
+      setBusyRoute(undefined);
+    }
+  };
+
+  const finish = async () => {
+    if (!client || !pending) return;
+    setBusyRoute(`${pending.providerId}:${pending.methodIndex}`);
+    setError('');
+    try {
+      await completeOpenCodeSubscription(client, pending, code);
+      setConfirmedSubscriptions((current) => new Set(current).add(pending.providerId));
+      setPending(undefined);
+      setCode('');
+      await load();
+    } catch (finishError) {
+      setError(
+        redactHarnessText(
+          finishError instanceof Error ? finishError.message : 'OpenCode sign-in failed.',
+        ).slice(0, 512),
+      );
+    } finally {
+      setBusyRoute(undefined);
+    }
+  };
+
+  return (
+    <section
+      className="rounded-xl border border-border bg-panel/70 p-4"
+      aria-labelledby="opencode-subscriptions-title"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 id="opencode-subscriptions-title" className="text-base font-bold text-foreground">
+            OpenCode subscriptions
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            OpenCode runs official provider authorization and owns its OAuth material. VibeSpace
+            never reads browser cookies or tokens.
+          </p>
+        </div>
+        {client ? (
+          <Button type="button" size="sm" variant="outline" onClick={() => void load()}>
+            Refresh subscriptions
+          </Button>
+        ) : null}
+      </div>
+
+      {!client ? (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Start the OpenCode harness to discover official subscription routes.
+        </p>
+      ) : null}
+      {error ? (
+        <p className="mt-3 text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        {(snapshot?.routes ?? []).map((route) => {
+          const routeKey = `${route.providerId}:${route.methodIndex}`;
+          return (
+            <article key={routeKey} className="rounded-lg border border-border/80 p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h4 className="text-sm font-semibold text-foreground">{route.displayName}</h4>
+                  <p className="text-xs text-muted-foreground">{route.label}</p>
+                </div>
+                <Badge
+                  variant={confirmedSubscriptions.has(route.providerId) ? 'success' : 'outline'}
+                >
+                  {confirmedSubscriptions.has(route.providerId)
+                    ? 'Subscription connected this session'
+                    : route.providerAvailable
+                      ? 'Provider available in OpenCode'
+                      : 'Not connected'}
+                </Badge>
+              </div>
+
+              {(route.prompts ?? []).map((prompt) => {
+                const key = routeInputKey(route, prompt.key);
+                if (!promptIsVisible(route, prompt, inputs)) return null;
+                return (
+                  <label key={prompt.key} className="mt-2 block text-xs text-muted-foreground">
+                    {prompt.message}
+                    {prompt.type === 'select' ? (
+                      <select
+                        className="mt-1 min-h-9 w-full rounded-md border border-border bg-background px-2 text-foreground"
+                        value={inputs[key] ?? ''}
+                        onChange={(event) =>
+                          setInputs((current) => ({ ...current, [key]: event.target.value }))
+                        }
+                      >
+                        <option value="">Select…</option>
+                        {prompt.options.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        className="mt-1 min-h-9 w-full rounded-md border border-border bg-background px-2 text-foreground"
+                        value={inputs[key] ?? ''}
+                        placeholder={prompt.placeholder}
+                        onChange={(event) =>
+                          setInputs((current) => ({ ...current, [key]: event.target.value }))
+                        }
+                      />
+                    )}
+                  </label>
+                );
+              })}
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={busyRoute === routeKey}
+                  onClick={() => void start(route)}
+                  aria-label={`Connect ${route.displayName} with ${route.label}`}
+                >
+                  {route.providerAvailable ? 'Connect / refresh' : 'Connect'}
+                </Button>
+                {(route.providerId === 'openai' || route.providerId === 'xai') && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onApiKey(route.providerId)}
+                  >
+                    Use API key
+                  </Button>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      {instructions ? <p className="mt-3 text-xs text-foreground">{instructions}</p> : null}
+      {pending ? (
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="min-w-56 flex-1 text-xs text-muted-foreground">
+            {snapshot?.routes.find(
+              (route) =>
+                route.providerId === pending.providerId &&
+                route.methodIndex === pending.methodIndex,
+            )?.displayName ?? pending.providerId}{' '}
+            authorization code
+            <input
+              className="mt-1 min-h-9 w-full rounded-md border border-border bg-background px-2 text-foreground"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+            />
+          </label>
+          <Button type="button" size="sm" onClick={() => void finish()}>
+            Complete{' '}
+            {snapshot?.routes.find(
+              (route) =>
+                route.providerId === pending.providerId &&
+                route.methodIndex === pending.methodIndex,
+            )?.displayName ?? pending.providerId}{' '}
+            sign-in
+          </Button>
+        </div>
+      ) : null}
+
+      <div className="mt-3 rounded-lg border border-border/70 p-3">
+        <p className="text-sm font-semibold text-foreground">Anthropic</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {snapshot?.anthropicPolicy ?? ANTHROPIC_SUBSCRIPTION_POLICY}
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-2"
+          onClick={() => onApiKey('anthropic')}
+        >
+          Use Anthropic API key
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 export function SubscriptionCliBridge({
   records,
   onScan,
   onRefresh,
   onSignIn,
   onAction,
+  autoDetect = true,
+  subscriptionClient,
+  openAuthorizationUrl = openExternal,
 }: SubscriptionCliBridgeProps) {
   const [busy, setBusy] = useState(false);
+  const [checkingIds, setCheckingIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
   const [metadata, setMetadata] = useState<ConnectionMetadata>(
     () => records ?? readConnectionMetadata(),
   );
+  const apiKeys = useAuthStore((s) => s.apiKeys);
+  const offlineMode = useAuthStore((s) => s.offlineMode);
+  const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  const selectedRouteByFamily = useAuthStore((s) => s.preferredConnectionIdByProviderFamily);
+  const setPreferredConnectionId = useAuthStore((s) => s.setPreferredConnectionId);
+  const harnessState = useSyncExternalStore(
+    harnessRuntimeManager.subscribe,
+    harnessRuntimeManager.getSnapshot,
+  );
+  const ownedConnection =
+    harnessState.kind === 'ready' ? harnessRuntimeManager.getConnection() : undefined;
+  const activeSubscriptionClient = useMemo(
+    () =>
+      subscriptionClient ??
+      (ownedConnection ? createOpenCodeHttpClient(ownedConnection) : undefined),
+    [ownedConnection, subscriptionClient],
+  );
+
   useEffect(() => {
     if (records) return undefined;
     const syncMetadata = () => setMetadata(readConnectionMetadata());
     window.addEventListener(AI_CONNECTION_STATE_EVENT, syncMetadata);
     return () => window.removeEventListener(AI_CONNECTION_STATE_EVENT, syncMetadata);
   }, [records]);
-  const inspect = async (connection: Readonly<ProviderConnection>) => {
-    const adapter = ADAPTERS[connection.adapterId];
-    if (!adapter?.detect) return;
-    const baseline = metadata[connection.id];
-    const baselineRevision = readConnectionMetadataRevision(connection.id);
-    let detection: DetectionResult;
-    let auth: AuthProbeResult = { status: 'unknown' };
-    try {
-      detection = await adapter.detect();
-      auth =
-        detection.status === 'available' && adapter.probeAuth
-          ? await adapter.probeAuth(connection)
-          : { status: 'unknown' };
-    } catch {
-      detection = { status: 'requires_attention' };
-    }
-    const inspected: ConnectionMetadataRecord = {
-      installation:
-        detection.status === 'available'
-          ? 'installed'
-          : detection.status === 'unavailable'
-            ? 'not-installed'
-            : 'unknown',
-      auth: auth.status,
-      ...(detection.executablePath ? { executablePath: detection.executablePath } : {}),
-      ...(detection.version ? { version: detection.version } : {}),
-      lastCheckedAt: Date.now(),
-      disabled: baseline?.disabled,
+
+  // Automatic read-only detection of installed CLIs + signed-in sessions.
+  useEffect(() => {
+    if (!autoDetect || records) return;
+    let cancelled = false;
+    setBusy(true);
+    void ensureExternalConnectionAutoDetection()
+      .then((next) => {
+        if (!cancelled) setMetadata(next);
+      })
+      .catch(() => {
+        /* keep last known metadata; user can Scan */
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => {
+      cancelled = true;
     };
-    setMetadata((current) => {
-      const next = mergeConnectionInspectionIfUnchanged(
-        current,
-        connection.id,
-        baseline,
-        inspected,
-        baselineRevision,
-        readConnectionMetadataRevision(connection.id),
-      );
-      if (next === current) return current;
-      persistMetadata(next);
-      markConnectionSessionChecked([connection.id]);
+  }, [autoDetect, records]);
+
+  const credentialsReadyByConnection = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    for (const connection of PROVIDER_CONNECTIONS) {
+      if (connection.mode === 'local') {
+        map[connection.id] = true; // local path is always selectable; offline is separate
+        continue;
+      }
+      if (connection.mode === 'native-api') {
+        const provider = connection.providerId as ProviderId;
+        map[connection.id] = Boolean(apiKeys[provider]?.trim());
+        continue;
+      }
+      map[connection.id] = false;
+    }
+    return map;
+  }, [apiKeys, offlineMode]);
+
+  const setChecking = (connectionId: string, value: boolean) => {
+    setCheckingIds((prev) => {
+      const next = new Set(prev);
+      if (value) next.add(connectionId);
+      else next.delete(connectionId);
       return next;
     });
   };
-  const act = (action: ConnectionAction, connection: Readonly<ProviderConnection>) => {
-    if (action === 'refresh' && onRefresh) return void onRefresh(connection);
-    if (action === 'refresh' && connection.mode === 'external-cli') return void inspect(connection);
-    if (action === 'sign-in' && onSignIn) return void onSignIn(connection);
-    if (onAction) return void onAction(action, connection);
-    if (action === 'disable' || action === 'forget') {
+
+  const inspect = useCallback(
+    async (connection: Readonly<ProviderConnection>) => {
+      const adapter = ADAPTERS[connection.adapterId];
+      setChecking(connection.id, true);
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next[connection.id];
+        return next;
+      });
+      try {
+        if (connection.mode !== 'external-cli' || !adapter?.detect) {
+          // Native/local: refresh last-check stamp only.
+          setMetadata((current) => {
+            const next = {
+              ...current,
+              [connection.id]: {
+                installation: 'installed' as const,
+                auth: (credentialsReadyByConnection[connection.id]
+                  ? 'authenticated'
+                  : 'unauthenticated') as ConnectionMetadataRecord['auth'],
+                lastCheckedAt: Date.now(),
+                disabled: current[connection.id]?.disabled,
+              },
+            };
+            persistMetadata(next);
+            markConnectionSessionChecked([connection.id]);
+            return next;
+          });
+          return;
+        }
+
+        const baseline = readConnectionMetadata()[connection.id];
+        const baselineRevision = readConnectionMetadataRevision(connection.id);
+        let detection: DetectionResult;
+        let auth: AuthProbeResult = { status: 'unknown' };
+        try {
+          detection = await adapter.detect();
+          auth =
+            detection.status === 'available' && adapter.probeAuth
+              ? await adapter.probeAuth(connection)
+              : { status: 'unknown' };
+        } catch (err) {
+          setErrors((prev) => ({
+            ...prev,
+            [connection.id]: err instanceof Error ? err.message : 'Scan failed',
+          }));
+          detection = { status: 'requires_attention' };
+        }
+        const inspected: ConnectionMetadataRecord = {
+          installation:
+            detection.status === 'available'
+              ? 'installed'
+              : detection.status === 'unavailable'
+                ? 'not-installed'
+                : 'unknown',
+          auth: auth.status,
+          ...(detection.executablePath ? { executablePath: detection.executablePath } : {}),
+          ...(detection.version ? { version: detection.version } : {}),
+          lastCheckedAt: Date.now(),
+          disabled: baseline?.disabled,
+        };
+        setMetadata((current) => {
+          const next = mergeConnectionInspectionIfUnchanged(
+            current,
+            connection.id,
+            baseline,
+            inspected,
+            baselineRevision,
+            readConnectionMetadataRevision(connection.id),
+          );
+          if (next === current) return current;
+          persistMetadata(next);
+          markConnectionSessionChecked([connection.id]);
+          return next;
+        });
+      } finally {
+        setChecking(connection.id, false);
+      }
+    },
+    [credentialsReadyByConnection],
+  );
+
+  const openSettingsTab = (
+    tab: 'providers' | 'localmodels' | 'connections',
+    providerId?: string,
+  ) => {
+    rememberSettingsTab(tab);
+    if (providerId && tab === 'providers') {
+      try {
+        window.sessionStorage.setItem('vibespace.settings.provider-focus.v1', providerId);
+      } catch {
+        // The Providers page still opens when session storage is unavailable.
+      }
+    }
+    setSettingsOpen(true);
+    window.dispatchEvent(new CustomEvent('jarvis:settings:tab', { detail: { tab, providerId } }));
+  };
+
+  const act = async (action: ConnectionAction, connection: Readonly<ProviderConnection>) => {
+    if (onAction) {
+      await onAction(action, connection);
+      return;
+    }
+
+    if (action === 'refresh') {
+      if (onRefresh) {
+        await onRefresh(connection);
+        return;
+      }
+      await inspect(connection);
+      toast.success('Refreshed', `${connection.displayName} status updated.`);
+      return;
+    }
+
+    if (action === 'sign-in') {
+      if (onSignIn) {
+        await onSignIn(connection);
+        return;
+      }
+      if (connection.mode === 'external-cli') {
+        toast.info(
+          'Legacy CLI status only',
+          'VibeSpace Chat authentication now uses the OpenCode subscription routes above.',
+        );
+        return;
+      }
+      if (connection.mode === 'native-api') {
+        openSettingsTab('providers', connection.providerId);
+        return;
+      }
+      openSettingsTab('localmodels');
+      return;
+    }
+
+    if (action === 'configure' || action === 'add-api-key') {
+      if (connection.mode === 'native-api' || action === 'add-api-key') {
+        openSettingsTab('providers', connection.providerId);
+        toast.info('API keys', 'Add or edit keys under Settings → Providers.');
+        return;
+      }
+      if (connection.mode === 'local') {
+        openSettingsTab('localmodels');
+        return;
+      }
+      // CLI configure: show path/version and re-detect — no secret scraping.
+      toast.info(
+        'CLI connector',
+        connection.displayName +
+          (metadata[connection.id]?.executablePath
+            ? ` · ${metadata[connection.id]?.executablePath}`
+            : ' · use Refresh to re-detect the installed CLI.'),
+      );
+      await inspect(connection);
+      return;
+    }
+
+    if (action === 'disable') {
       setMetadata((current) => {
-        const next = { ...current };
-        if (action === 'forget') delete next[connection.id];
-        else
-          next[connection.id] = {
-            ...(current[connection.id] ?? { installation: 'unknown', auth: 'unknown' }),
+        const next = {
+          ...current,
+          [connection.id]: {
+            ...(current[connection.id] ?? {
+              installation: 'unknown' as const,
+              auth: 'unknown' as const,
+            }),
             disabled: true,
-          };
+            lastCheckedAt: current[connection.id]?.lastCheckedAt ?? Date.now(),
+          },
+        };
         persistMetadata(next);
         return next;
       });
+      toast.success('Disabled', `${connection.displayName} will not be offered for new chats.`);
       return;
     }
-    emitAction(action, connection);
+
+    if (action === 'enable') {
+      setMetadata((current) => {
+        const prev = current[connection.id];
+        const next = {
+          ...current,
+          [connection.id]: {
+            ...(prev ?? { installation: 'unknown' as const, auth: 'unknown' as const }),
+            disabled: false,
+            lastCheckedAt: prev?.lastCheckedAt ?? Date.now(),
+          },
+        };
+        persistMetadata(next);
+        return next;
+      });
+      void inspect(connection);
+      toast.success('Enabled', `${connection.displayName} is available again.`);
+      return;
+    }
+
+    if (action === 'clear-scan') {
+      setMetadata((current) => {
+        const next = { ...current };
+        delete next[connection.id];
+        persistMetadata(next);
+        return next;
+      });
+      toast.success(
+        'Scan cache cleared',
+        'Only local install/auth status was removed. CLI credentials and API keys were not deleted.',
+      );
+    }
   };
+
   const scan = async () => {
     setBusy(true);
     try {
       if (onScan) await onScan();
-      else
+      else {
         await Promise.all(
-          PROVIDER_CONNECTIONS.filter((connection) => connection.mode === 'external-cli').map(
-            inspect,
-          ),
+          PROVIDER_CONNECTIONS.filter(
+            (connection) =>
+              connection.mode === 'external-cli' && !metadata[connection.id]?.disabled,
+          ).map((connection) => inspect(connection)),
         );
+      }
+      toast.success('Scan complete', 'CLI detection used read-only probes only.');
     } finally {
       setBusy(false);
     }
@@ -207,16 +753,19 @@ export function SubscriptionCliBridge({
 
   return (
     <section
-      className="mc7f-settings-subscription-cli space-y-4 [html[data-theme=monochrome]_&]:border-l-2 [html[data-theme=monochrome]_&]:border-l-foreground/20 [html[data-theme=monochrome]_&]:pl-4"
-      aria-labelledby="ai-connections-title"
+      className="mc7f-settings-subscription-cli space-y-5 [html[data-theme=monochrome]_&]:border-l-2 [html[data-theme=monochrome]_&]:border-l-foreground/20 [html[data-theme=monochrome]_&]:pl-4"
+      aria-labelledby="ai-connectors-title"
+      data-testid="ai-connectors-panel"
     >
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 id="ai-connections-title" className="text-lg font-semibold text-foreground">
-            AI Connections
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 id="ai-connectors-title" className="text-page-title font-semibold text-foreground">
+            AI Connectors
           </h2>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Choose exactly how Jarvis connects. Scans are read-only and never send a prompt.
+            Authenticate supported subscriptions through OpenCode, manage API keys separately, and
+            retain read-only legacy CLI status for migration. Scans never send a model prompt or
+            read secret files.
           </p>
         </div>
         <Button
@@ -226,90 +775,170 @@ export function SubscriptionCliBridge({
           disabled={busy}
           aria-label="Scan for agents"
         >
-          {busy ? 'Scanning…' : 'Scan'}
+          {busy ? 'Scanning…' : 'Scan now'}
         </Button>
       </div>
 
+      <OpenCodeSubscriptionCenter
+        client={activeSubscriptionClient}
+        openAuthorizationUrl={openAuthorizationUrl}
+        onApiKey={(providerId) => openSettingsTab('providers', providerId)}
+      />
+
       <div className="grid gap-3 lg:grid-cols-2">
-        {PROVIDER_CONNECTIONS.map((connection) => {
-          const family = Object.values(PROVIDER_CATALOG).find(
-            (entry) => entry.id === connection.providerId,
-          );
+        {Object.values(PROVIDER_CATALOG).map((family) => {
+          const connection =
+            family.connections.find(({ id }) => id === selectedRouteByFamily[family.id]) ??
+            family.connections[0];
+          if (!connection) return null;
           const record = metadata[connection.id];
-          const installed = record?.installation === 'installed';
-          const authenticated = record?.auth === 'authenticated';
-          const statusLabel = record?.disabled
-            ? 'Disabled'
-            : record?.installation === 'not-installed'
-              ? 'Not installed'
-              : record?.installation === 'unknown'
-                ? 'Needs attention'
-                : installed && authenticated
-                  ? 'Ready'
-                  : installed && record?.auth === 'unauthenticated'
-                    ? 'Sign in required'
-                    : installed
-                      ? 'Authentication unknown'
-                      : 'Not checked';
+          const checking = checkingIds.has(connection.id) || (busy && !record?.lastCheckedAt);
+          const error = errors[connection.id] ?? null;
+          const status: ConnectorUiStatus = resolveConnectorUiStatus({
+            connection,
+            record,
+            checking,
+            error,
+            credentialsReady: credentialsReadyByConnection[connection.id],
+          });
+          const tone = connectorStatusTone(status);
+          const routeTitle = productTitle(connection);
+
           return (
             <article
-              key={connection.id}
-              className="rounded-lg border border-border bg-panel/60 p-3"
+              key={family.id}
+              className="flex flex-col rounded-xl border border-border bg-panel/70 p-4 shadow-sm"
+              data-connector-id={connection.id}
+              data-connector-status={status}
+              data-connector-mode={connection.mode}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h3 className="truncate text-sm font-medium text-foreground">
-                    {connection.displayName}
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    {family?.displayName ?? connection.providerId} ·{' '}
-                    {connection.mode === 'external-cli'
-                      ? 'External agent'
-                      : connection.mode === 'native-api'
-                        ? 'API billed'
-                        : 'Local runtime'}
-                  </p>
+              <div className="flex items-start gap-3">
+                <ConnectorBrandMark
+                  providerId={connection.providerId}
+                  connectionId={connection.id}
+                  title={`${family.displayName} · ${connection.displayName}`}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="truncate text-base font-bold tracking-tight text-foreground">
+                        {family.displayName}
+                      </h3>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground/80">{routeTitle}</span>
+                        <span className="mx-1.5 text-border">·</span>
+                        <span>
+                          {connection.mode === 'external-cli'
+                            ? 'Legacy CLI status'
+                            : connectorModeLabel(connection.mode)}
+                        </span>
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground/90">
+                        {connection.displayName}
+                      </p>
+                    </div>
+                    <Badge
+                      variant={statusBadgeVariant(tone)}
+                      className={cn(
+                        'shrink-0 text-[11px] font-semibold',
+                        tone === 'info' && 'border-accent-copper/40 text-accent-copper',
+                      )}
+                    >
+                      {connection.mode === 'external-cli' && status === 'signed-in'
+                        ? 'Legacy session detected'
+                        : connectorStatusLabel(status)}
+                    </Badge>
+                  </div>
                 </div>
-                <span className="shrink-0 text-xs text-muted-foreground">{statusLabel}</span>
               </div>
-              <dl className="mt-3 grid grid-cols-[6rem_1fr] gap-x-2 gap-y-1 text-xs">
-                {record?.executablePath ? (
+
+              <div
+                className="mt-3 flex flex-wrap gap-1.5"
+                role="tablist"
+                aria-label={`${family.displayName} connection routes`}
+              >
+                {family.connections.map((routeConnection) => {
+                  const selected = routeConnection.id === connection.id;
+                  return (
+                    <button
+                      key={routeConnection.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={selected}
+                      className={cn(
+                        'min-h-9 rounded-md border px-2.5 text-xs font-medium transition-colors',
+                        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                        selected
+                          ? 'border-accent-copper/60 bg-accent-copper/10 text-foreground'
+                          : 'border-border text-muted-foreground hover:text-foreground',
+                      )}
+                      onClick={() => setPreferredConnectionId(family.id, routeConnection.id)}
+                    >
+                      {routeConnection.mode === 'external-cli'
+                        ? 'Legacy CLI status'
+                        : connectorModeLabel(routeConnection.mode)}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <dl className="mt-3 grid grid-cols-[7rem_1fr] gap-x-2 gap-y-1.5 text-xs">
+                {connection.mode === 'external-cli' && record?.executablePath ? (
                   <>
-                    <dt className="text-muted-foreground">Path</dt>
-                    <dd className="truncate font-mono" title={record.executablePath}>
+                    <dt className="text-muted-foreground">Detected path</dt>
+                    <dd className="truncate font-mono text-[11px]" title={record.executablePath}>
                       {record.executablePath}
                     </dd>
                   </>
                 ) : null}
                 <dt className="text-muted-foreground">Version</dt>
-                <dd>{record?.version ?? 'Unknown'}</dd>
+                <dd className="text-foreground/90">{record?.version ?? '—'}</dd>
                 <dt className="text-muted-foreground">Capabilities</dt>
-                <dd>{capabilitySummary(connection)}</dd>
-                <dt className="text-muted-foreground">Usage</dt>
-                <dd>{connection.capabilities.usage ? 'Available when reported' : 'Unavailable'}</dd>
+                <dd className="text-foreground/90">{capabilitySummary(connection)}</dd>
+                <dt className="text-muted-foreground">Auth source</dt>
+                <dd className="text-foreground/90">
+                  {connection.mode === 'external-cli'
+                    ? 'Legacy CLI session (migration status only)'
+                    : connection.mode === 'local'
+                      ? 'Local runtime'
+                      : 'API key (Providers)'}
+                </dd>
                 <dt className="text-muted-foreground">Last check</dt>
-                <dd>
-                  {record?.lastCheckedAt
-                    ? new Date(record.lastCheckedAt).toLocaleString()
-                    : 'Never'}
+                <dd className="text-foreground/90" data-testid={`last-check-${connection.id}`}>
+                  {record?.lastCheckedAt ? formatUserDateTime(record.lastCheckedAt) : 'Never'}
                 </dd>
               </dl>
+
+              {error ? (
+                <p className="mt-2 text-xs text-destructive" role="alert">
+                  {error}
+                </p>
+              ) : null}
+
+              {status === 'signed-in' ? (
+                <p className="mt-2 text-xs text-success">
+                  Legacy CLI session detected for migration status only. VibeSpace Chat
+                  authentication uses OpenCode provider routes above.
+                </p>
+              ) : null}
+
               <div className="mt-3 flex flex-wrap gap-1.5">
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => act('refresh', connection)}
+                  disabled={checking}
+                  onClick={() => void act('refresh', connection)}
                   aria-label={`Refresh ${connection.displayName}`}
                 >
                   Refresh
                 </Button>
-                {connection.mode === 'external-cli' ? (
+                {connection.mode === 'external-cli' && onSignIn ? (
                   <Button
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() => act('sign-in', connection)}
+                    onClick={() => void act('sign-in', connection)}
                     aria-label={`Sign in to ${connection.displayName}`}
                   >
                     Sign in
@@ -319,7 +948,7 @@ export function SubscriptionCliBridge({
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() => act('add-api-key', connection)}
+                    onClick={() => void act('add-api-key', connection)}
                     aria-label={`Add API key for ${connection.displayName}`}
                   >
                     Add API key
@@ -329,32 +958,52 @@ export function SubscriptionCliBridge({
                   type="button"
                   size="sm"
                   variant="ghost"
-                  onClick={() => act('configure', connection)}
+                  onClick={() => void act('configure', connection)}
                   aria-label={`Configure ${connection.displayName}`}
                 >
                   Configure
                 </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => act('disable', connection)}
-                  aria-label={`Disable ${connection.displayName}`}
-                >
-                  Disable
-                </Button>
+                {record?.disabled ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void act('enable', connection)}
+                    aria-label={`Enable ${connection.displayName}`}
+                  >
+                    Enable
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void act('disable', connection)}
+                    aria-label={`Disable ${connection.displayName}`}
+                  >
+                    Disable
+                  </Button>
+                )}
                 {record ? (
                   <Button
                     type="button"
                     size="sm"
                     variant="ghost"
-                    onClick={() => act('forget', connection)}
-                    aria-label={`Forget ${connection.displayName} metadata`}
+                    onClick={() => void act('clear-scan', connection)}
+                    aria-label={`Clear scan cache for ${connection.displayName}`}
+                    title="Removes only this app’s saved install/auth scan results. Does not delete CLI logins or API keys."
                   >
-                    Forget metadata
+                    Clear scan cache
                   </Button>
                 ) : null}
               </div>
+              {record ? (
+                <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+                  <span className="font-medium text-foreground/70">Clear scan cache</span> deletes
+                  only the last detected path, version, and auth status stored in VibeSpace. It does
+                  not log you out of provider CLIs or remove API keys.
+                </p>
+              ) : null}
             </article>
           );
         })}

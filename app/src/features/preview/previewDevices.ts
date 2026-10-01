@@ -167,6 +167,16 @@ export function getDevicePreset(id: string): DevicePreset {
   return DEVICE_PRESETS.find((d) => d.id === id) ?? DEVICE_PRESETS[0]!;
 }
 
+export function defaultOrientationForPreset(
+  preset: DevicePreset,
+): 'portrait' | 'landscape' {
+  return preset.category === 'laptop' ||
+    preset.category === 'desktop' ||
+    preset.category === 'responsive'
+    ? 'landscape'
+    : 'portrait';
+}
+
 /**
  * Exact CSS viewport size for the device (never scaled).
  * Scaling for display must use CSS transform so media queries still see real width/height.

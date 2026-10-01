@@ -28,7 +28,14 @@ export type BrowserActionTarget = {
   coordinates?: { x: number; y: number };
 };
 
-export type BrowserReviewedActionStatus = 'pending' | 'denied' | 'expired' | 'unavailable';
+export type BrowserReviewedActionStatus =
+  | 'pending'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'denied'
+  | 'expired'
+  | 'unavailable';
 
 export type BrowserReviewedAction = {
   id: string;

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4096 2304" role="img" aria-label="Watercolor mountain valley timeline landscape">
+  <defs>
+    <linearGradient id="distant" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#d7c7c7"/><stop offset="1" stop-color="#eee1d5"/></linearGradient>
+    <linearGradient id="sage" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#b8bea4"/><stop offset="1" stop-color="#7f8c78"/></linearGradient>
+    <linearGradient id="mauve" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#d7bccf"/><stop offset="1" stop-color="#a68fa9"/></linearGradient>
+    <linearGradient id="river" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#f7dec3"/><stop offset=".55" stop-color="#d4e1d4"/><stop offset="1" stop-color="#c6d7d0"/></linearGradient>
+  </defs>
+  <path d="M0 1700 540 1040l390 410 500-770 470 675 470-520 510 620 480-540 736 785v604H0Z" fill="url(#distant)" opacity=".72"/>
+  <path d="m0 1840 750-700 520 670 420-450 610 520 500-620 560 650 736-410v804H0Z" fill="url(#sage)" opacity=".78"/>
+  <path d="m980 2304 470-430 370-170 320 140 410 460Z" fill="#d8c19e" opacity=".75"/>
+  <path d="M2048 1600c-300 220-420 350-170 704h820c-360-265-280-492-650-704Z" fill="url(#river)" opacity=".9"/>
+  <path d="M0 2040c560-280 910-250 1420 90v174H0ZM4096 1980c-570-250-890-165-1320 190v134h1320Z" fill="#9ba58c"/>
+  <g fill="none" stroke="#65765f" stroke-linecap="round">
+    <path d="M170 2240 290 1450M290 2090 520 1610M3800 2240l-80-780M3710 2070l-280-470" stroke-width="34"/>
+    <path d="M70 2260 40 1700M4020 2260l45-590" stroke-width="26"/>
+  </g>
+  <g fill="#9aa788">
+    <ellipse cx="238" cy="1580" rx="70" ry="155" transform="rotate(-28 238 1580)"/>
+    <ellipse cx="355" cy="1740" rx="65" ry="145" transform="rotate(35 355 1740)"/>
+    <ellipse cx="500" cy="1660" rx="63" ry="140" transform="rotate(44 500 1660)"/>
+    <ellipse cx="3740" cy="1590" rx="70" ry="155" transform="rotate(25 3740 1590)"/>
+    <ellipse cx="3590" cy="1750" rx="64" ry="145" transform="rotate(-38 3590 1750)"/>
+  </g>
+  <g fill="#df9a7e">
+    <circle cx="390" cy="1920" r="55"/><circle cx="470" cy="1865" r="43"/><circle cx="3640" cy="1900" r="54"/><circle cx="3550" cy="1840" r="42"/>
+  </g>
+</svg>

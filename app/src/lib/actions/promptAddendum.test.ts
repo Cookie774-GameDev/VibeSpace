@@ -66,6 +66,16 @@ describe('buildAddendumText', () => {
     expect(text).not.toContain('plugin.invoke');
   });
 
+  it('teaches providers the real approval-gated file action ids without inventing files.write', () => {
+    const text = buildAddendumText();
+
+    expect(text).toContain('`files.read`');
+    expect(text).toContain('`files.create`');
+    expect(text).toContain('`files.edit`');
+    expect(text).not.toContain('`files.write`');
+    expect(text).toContain('do not claim you cannot read or write files');
+  });
+
   it('appends custom tools that are exposed to AI', () => {
     useToolStore.getState().create({
       name: 'My dev server',

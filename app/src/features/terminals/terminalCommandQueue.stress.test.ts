@@ -141,6 +141,22 @@ describe('terminal command queue stress', () => {
     ).toEqual([second]);
   });
 
+  it('keeps ordered startup commands and preserve-existing intent intact through a drain', () => {
+    enqueueTerminalCommand({
+      command: 'codex',
+      startupCommands: ["Set-Location -LiteralPath 'C:\\Repo'", 'codex', 'Review this PR.'],
+      preserveExisting: true,
+      cwd: 'C:\\Repo',
+    });
+
+    expect(useTerminalCommandQueue.getState().drain()[0]).toMatchObject({
+      kind: 'shell',
+      command: 'codex',
+      startupCommands: ["Set-Location -LiteralPath 'C:\\Repo'", 'codex', 'Review this PR.'],
+      preserveExisting: true,
+    });
+  });
+
   it('claims a canonical item only after its ownership handoff succeeds', async () => {
     enqueueCanonicalTerminalCommand({
       accountId: 'account-a',

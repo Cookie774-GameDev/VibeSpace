@@ -104,6 +104,7 @@ const SAFE_BODIES = new Set([
   'duplicate',
   'ok',
   'handler_error',
+  'invalid_line_items',
 ]);
 async function assertSafeBody(res) {
   const body = await res.text();
@@ -165,6 +166,7 @@ function makeDeps(opts) {
   const config = {
     configured: opts.configured === undefined ? true : opts.configured,
     appAccess: opts.appAccess || makeAppConfig(),
+    billingPrices: opts.billingPrices,
   };
 
   const featurePlans = opts.featurePlans || { price_pro: 'pro', price_starter: 'starter' };
@@ -262,6 +264,83 @@ function makeDeps(opts) {
 
   return { deps, calls, claimStore };
 }
+
+Deno.test(
+  'feature-plan subscription reconciles the exact hosted tier and never app access',
+  async () => {
+    const billingPrices = {
+      addonPriceIds: {
+        starter: 'price_orbit',
+        pro: 'price_nova',
+        ultra: 'price_singularity',
+        apex: 'price_supernova',
+      },
+    };
+    const subscription = {
+      id: SUB,
+      customer: CUS,
+      status: 'active',
+      current_period_start: T0,
+      current_period_end: T0 + 30 * DAY,
+      metadata: { supabase_user_id: UID, product_family: 'feature_plan', plan: 'pro' },
+      items: { data: [{ price: { id: 'price_nova' } }] },
+    };
+    const event = {
+      id: 'evt_combined_catalog',
+      type: 'customer.subscription.updated',
+      created: T0,
+      data: { object: subscription },
+    };
+    const { deps, calls } = makeDeps({
+      event,
+      subscription,
+      billingPrices,
+      featurePlans: { price_nova: 'pro' },
+    });
+    const response = await handleStripeWebhook(
+      makeReq('POST', { body: JSON.stringify(event) }),
+      deps,
+    );
+    assertEquals(response.status, 200);
+    assertEquals(calls.applyLegacyPlan.length, 1, 'hosted tier reconciled');
+    assertEquals(calls.applyLegacyPlan[0].plan, 'pro');
+    assertEquals(calls.applyAppAccess.length, 0, 'feature plan never grants Access');
+  },
+);
+
+Deno.test('Access subscription never reconciles a feature tier', async () => {
+  const billingPrices = {
+    accessPriceId: KNOWN[0],
+    addonPriceIds: {
+      starter: 'price_orbit',
+      pro: 'price_nova',
+      ultra: 'price_singularity',
+      apex: 'price_supernova',
+    },
+  };
+  const event = {
+    id: 'evt_access_separate',
+    type: 'customer.subscription.updated',
+    created: T0,
+    data: {
+      object: {
+        id: SUB,
+        customer: CUS,
+        status: 'active',
+        metadata: { supabase_user_id: UID, access_product: 'vibespace_access' },
+        items: { data: [{ price: { id: KNOWN[0] } }] },
+      },
+    },
+  };
+  const { deps, calls } = makeDeps({ event, billingPrices, currentRow: currentRow() });
+  const response = await handleStripeWebhook(
+    makeReq('POST', { body: JSON.stringify(event) }),
+    deps,
+  );
+  assertEquals(response.status, 200);
+  assertEquals(calls.applyLegacyPlan.length, 0);
+  assertEquals(calls.applyAppAccess.length, 1);
+});
 
 // --- verified-event builders (shape returned by deps.verifySignature) --------
 function checkoutEvent(over) {

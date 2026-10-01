@@ -19,7 +19,9 @@ function asErr(e: unknown): { code: string; message: string; recoverable: boolea
 export async function browserDetect() {
   if (!isTauriRuntime()) return [] as Array<{ name: string; path: string; kind: string }>;
   try {
-    return await invoke<Array<{ name: string; path: string; kind: string }>>('browser_detect_installations');
+    return await invoke<Array<{ name: string; path: string; kind: string }>>(
+      'browser_detect_installations',
+    );
   } catch {
     return [];
   }
@@ -38,10 +40,15 @@ export async function browserStatus(): Promise<BrowserRuntimeInfo> {
 
 export async function browserStart(executable?: string) {
   if (!isTauriRuntime()) {
-    return { ok: false as const, error: { code: 'not_tauri', message: 'Desktop app required.', recoverable: true } };
+    return {
+      ok: false as const,
+      error: { code: 'not_tauri', message: 'Desktop app required.', recoverable: true },
+    };
   }
   try {
-    const status = await invoke<BrowserRuntimeInfo>('browser_start', { executable: executable ?? null });
+    const status = await invoke<BrowserRuntimeInfo>('browser_start', {
+      executable: executable ?? null,
+    });
     return { ok: true as const, status };
   } catch (e) {
     return { ok: false as const, error: asErr(e) };
@@ -70,9 +77,16 @@ export async function browserClearProfile() {
 export class CdpSession {
   private ws: WebSocket | null = null;
   private nextId = 1;
-  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private pending = new Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void }
+  >();
   private onFrame: ((base64: string) => void) | null = null;
   private onEvent: ((method: string, params: unknown) => void) | null = null;
+  private screencastDesired = false;
+  private screencastState: 'stopped' | 'starting' | 'started' | 'stopping' = 'stopped';
+  private screencastTransition: Promise<void> | null = null;
+  private connectionEpoch = 0;
 
   async connect(wsUrl: string): Promise<void> {
     await this.close();
@@ -83,13 +97,30 @@ export class CdpSession {
       ws.onerror = () => reject(new Error('CDP WebSocket failed'));
       ws.onmessage = (ev) => this.handleMessage(String(ev.data));
       ws.onclose = () => {
+        if (this.ws !== ws) return;
         this.ws = null;
+        this.connectionEpoch += 1;
+        this.screencastDesired = false;
+        this.screencastState = 'stopped';
+        this.screencastTransition = null;
+        this.rejectPending(new Error('CDP WebSocket closed'));
       };
     });
   }
 
+  private rejectPending(error: Error) {
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+  }
+
   private handleMessage(raw: string) {
-    let msg: { id?: number; method?: string; params?: unknown; result?: unknown; error?: { message?: string } };
+    let msg: {
+      id?: number;
+      method?: string;
+      params?: unknown;
+      result?: unknown;
+      error?: { message?: string };
+    };
     try {
       msg = JSON.parse(raw);
     } catch {
@@ -106,7 +137,9 @@ export class CdpSession {
       const params = msg.params as { data?: string; sessionId?: number };
       if (params.data) this.onFrame?.(params.data);
       if (params.sessionId != null) {
-        void this.send('Page.screencastFrameAck', { sessionId: params.sessionId });
+        void this.send('Page.screencastFrameAck', { sessionId: params.sessionId }).catch(
+          () => undefined,
+        );
       }
     }
     if (msg.method) this.onEvent?.(msg.method, msg.params);
@@ -138,16 +171,67 @@ export class CdpSession {
   }
 
   async startScreencast() {
-    await this.send('Page.enable');
-    await this.send('Runtime.enable');
-    await this.send('Network.enable');
-    await this.send('Page.startScreencast', {
-      format: 'jpeg',
-      quality: 60,
-      maxWidth: 1280,
-      maxHeight: 800,
-      everyNthFrame: 1,
-    });
+    return this.setScreencastEnabled(true);
+  }
+
+  async stopScreencast() {
+    return this.setScreencastEnabled(false);
+  }
+
+  setScreencastEnabled(enabled: boolean): Promise<void> {
+    this.screencastDesired = enabled;
+    return this.reconcileScreencast();
+  }
+
+  private reconcileScreencast(): Promise<void> {
+    if (this.screencastTransition) return this.screencastTransition;
+    const epoch = this.connectionEpoch;
+    const transition = this.runScreencastReconciler(epoch);
+    this.screencastTransition = transition;
+    void transition
+      .finally(() => {
+        if (this.screencastTransition === transition) this.screencastTransition = null;
+      })
+      .catch(() => undefined);
+    return transition;
+  }
+
+  private async runScreencastReconciler(epoch: number): Promise<void> {
+    while (epoch === this.connectionEpoch) {
+      if (this.screencastDesired) {
+        if (this.screencastState === 'started') return;
+        this.screencastState = 'starting';
+        try {
+          await this.send('Page.enable');
+          await this.send('Runtime.enable');
+          await this.send('Network.enable');
+          await this.send('Page.startScreencast', {
+            format: 'jpeg',
+            quality: 60,
+            maxWidth: 1280,
+            maxHeight: 800,
+            everyNthFrame: 1,
+          });
+        } catch (error) {
+          if (epoch === this.connectionEpoch) this.screencastState = 'stopped';
+          throw error;
+        }
+        if (epoch !== this.connectionEpoch) return;
+        this.screencastState = 'started';
+        continue;
+      }
+
+      if (this.screencastState === 'stopped') return;
+      this.screencastState = 'stopping';
+      try {
+        await this.send('Page.stopScreencast');
+      } catch (error) {
+        if (epoch === this.connectionEpoch) this.screencastState = 'started';
+        throw error;
+      }
+      if (epoch !== this.connectionEpoch) return;
+      this.screencastState = 'stopped';
+    }
   }
 
   async navigate(url: string) {
@@ -168,8 +252,20 @@ export class CdpSession {
   }
 
   async inputClick(x: number, y: number) {
-    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+    await this.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+    await this.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
   }
 
   async inputType(text: string) {
@@ -182,15 +278,20 @@ export class CdpSession {
   }
 
   async close() {
-    if (this.ws) {
+    const ws = this.ws;
+    this.connectionEpoch += 1;
+    this.screencastDesired = false;
+    this.screencastState = 'stopped';
+    this.screencastTransition = null;
+    this.ws = null;
+    this.rejectPending(new Error('CDP session closed'));
+    if (ws) {
       try {
-        this.ws.close();
+        ws.close();
       } catch {
         /* ignore */
       }
     }
-    this.ws = null;
-    this.pending.clear();
   }
 }
 
@@ -200,7 +301,11 @@ export async function resolvePageWsUrl(browserWsUrl: string): Promise<string | n
     const u = new URL(browserWsUrl);
     const port = u.port;
     const res = await fetch(`http://127.0.0.1:${port}/json/list`);
-    const list = (await res.json()) as Array<{ type: string; webSocketDebuggerUrl?: string; url?: string }>;
+    const list = (await res.json()) as Array<{
+      type: string;
+      webSocketDebuggerUrl?: string;
+      url?: string;
+    }>;
     const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
     return page?.webSocketDebuggerUrl ?? browserWsUrl;
   } catch {

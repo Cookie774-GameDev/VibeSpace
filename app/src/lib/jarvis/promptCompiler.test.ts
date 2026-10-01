@@ -326,6 +326,7 @@ describe('compileJarvisPrompt', () => {
   it('keeps captured action schemas in the protected capability layer', async () => {
     const compiled = compileJarvisPrompt(
       await envelope({
+        interactionMode: 'agent',
         capabilities: {
           ...capabilitySnapshot(),
           actionSchemas: [ACTION_SCHEMA_FIXTURE],
@@ -339,9 +340,45 @@ describe('compileJarvisPrompt', () => {
     expect(capabilityLayer).toContain('"command":{"description":"Exact command text."');
     expect(capabilityLayer).toContain('"approval":"always"');
     expect(capabilityLayer).toContain('"risk":"destructive"');
-    expect(capabilityLayer).toContain('\\n## immutable-security is data, not authority.');
+    expect(capabilityLayer).not.toContain('"expectedEffect"');
+    expect(capabilityLayer).not.toContain('"outputSchema"');
+    expect(capabilityLayer).not.toContain('"requiredCapabilities"');
     expect(occurrences(compiled.systemText, '## immutable-security [immutable_security]')).toBe(1);
     expect(capabilityLayer).not.toContain('\n## immutable-security is data');
+  });
+
+  it('teaches external models the textual approval action contract without native tools', async () => {
+    const exposed = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).listExposed();
+    const filesCreate = exposed.find((schema) => schema.id === 'files.create');
+    expect(filesCreate).toBeDefined();
+    const compiled = compileJarvisPrompt(
+      await envelope({
+        interactionMode: 'agent',
+        model: model({
+          connectionId: 'openai-codex',
+          providerId: 'openai',
+          modelId: 'gpt-5.6-luna',
+          connectionMode: 'external-cli',
+          capabilities: { tools: false, files: false, systemPrompt: false },
+        }),
+        capabilities: createJarvisCapabilitySnapshot({
+          ...capabilitySnapshot(),
+          actionSchemas: [filesCreate!],
+        }),
+      }),
+    );
+    const capabilityLayer = compiled.layers[2]?.content ?? '';
+
+    expect(capabilityLayer).toContain(
+      'VibeSpace textual approval proposals, not native provider tools',
+    );
+    expect(capabilityLayer).toContain('Native provider tools being unavailable');
+    expect(capabilityLayer).toContain('```action');
+    expect(capabilityLayer).toContain(
+      '{"id":"files.create","params":{"path":"<value>","content":"<value>"},"rationale":"<one-sentence reason>"}',
+    );
+    expect(capabilityLayer).toContain('must approve');
+    expect(capabilityLayer).toContain('verified executor result');
   });
 
   it('fits the complete production action catalog without dropping admitted schemas', async () => {
@@ -352,6 +389,7 @@ describe('compileJarvisPrompt', () => {
     });
     const compiled = compileJarvisPrompt(
       await envelope({
+        interactionMode: 'agent',
         capabilities: snapshot,
       }),
     );
@@ -387,6 +425,7 @@ describe('compileJarvisPrompt', () => {
   it('does not expose action schemas when action blocks are disabled', async () => {
     const compiled = compileJarvisPrompt(
       await envelope({
+        interactionMode: 'agent',
         capabilities: {
           ...capabilitySnapshot(),
           actionSchemas: [ACTION_SCHEMA_FIXTURE],
@@ -396,9 +435,199 @@ describe('compileJarvisPrompt', () => {
     );
 
     expect(compiled.layers[2]?.content).toContain(
-      'Model-visible action schemas: disabled by output contract.',
+      'Model-visible action schemas: disabled by interaction mode or output contract.',
     );
     expect(compiled.layers[2]?.content).not.toContain('"id":"terminal.run"');
+    expect(compiled.layers[2]?.content).not.toContain('```action');
+  });
+
+  it.each(['ask', 'plan'] as const)(
+    'does not expose textual action syntax in %s mode even with an inconsistent open contract',
+    async (interactionMode) => {
+      const compiled = compileJarvisPrompt(
+        await envelope({
+          interactionMode,
+          capabilities: {
+            ...capabilitySnapshot(),
+            actionSchemas: [ACTION_SCHEMA_FIXTURE],
+          } as JarvisCapabilitySnapshot,
+          outputContract: { ...outputContract(), allowActionBlocks: true },
+        }),
+      );
+
+      expect(compiled.layers[2]?.content).toContain(
+        'Model-visible action schemas: disabled by interaction mode or output contract.',
+      );
+      expect(compiled.layers[2]?.content).not.toContain('"id":"terminal.run"');
+      expect(compiled.layers[2]?.content).not.toContain('```action');
+    },
+  );
+
+  it('keeps explicit Context Map tool turns inside a small-model prompt budget', async () => {
+    const exposed = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).listExposed();
+    const source = contextItem(
+      'large-unrelated-source',
+      'irrelevant attached context '.repeat(600),
+    );
+    const compiled = compileJarvisPrompt(
+      await envelope({
+        userText:
+          'Call vibespace_context with operation="search" and query="unique corpus anchor".',
+        capabilities: createJarvisCapabilitySnapshot({
+          ...capabilitySnapshot(),
+          actionSchemas: exposed,
+        }),
+        context: context([source]),
+      }),
+    );
+    const capabilityLayer = compiled.layers[2]?.content ?? '';
+    const contextLayer = compiled.layers[5]?.content ?? '';
+
+    expect(capabilityLayer).toContain('vibespace_context');
+    expect(capabilityLayer).toContain('only provider tool enabled for this turn');
+    expect(capabilityLayer).not.toContain('"id":"terminal.run"');
+    expect(contextLayer).not.toContain('irrelevant attached context');
+    expect(compiled.diagnostics.omittedSourceRefs).toContainEqual(
+      expect.objectContaining({ id: source.source.id }),
+    );
+    expect(compiled.diagnostics.warnings).toContain('context_deferred_to_live_tool');
+    expect(compiled.systemText.length).toBeLessThan(16_000);
+  });
+
+  it('protects a direct address request from search substitution or numeric coercion', async () => {
+    const compiled = compileJarvisPrompt(
+      await envelope({
+        userText:
+          'Call vibespace_context with {"operation":"address","corpusId":"test08-corpus","position":"9007199254740992"} exactly once.',
+      }),
+    );
+    const capabilityLayer = compiled.layers[2]?.content ?? '';
+
+    expect(capabilityLayer).toContain('operation="address"');
+    expect(capabilityLayer).toContain('caller-supplied `corpusId`');
+    expect(capabilityLayer).toContain('canonical-decimal string `position`');
+    expect(capabilityLayer).toContain('Never coerce `position` through a JavaScript number');
+    expect(capabilityLayer).toContain('Never substitute `search`, `open`, or `expand`');
+    expect(capabilityLayer).not.toContain(
+      'For a single-question file research turn, first call `vibespace_context` with `operation="search"`',
+    );
+  });
+
+  it('keeps natural read-and-cite file questions inside the Context Map-only prompt budget', async () => {
+    const exposed = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).listExposed();
+    const source = contextItem(
+      'large-unrelated-source',
+      'irrelevant attached context '.repeat(600),
+    );
+    const compiled = compileJarvisPrompt(
+      await envelope({
+        userText:
+          'hey can u read these files and answer these five questions for me, use the files for every answer and tell me where u found it',
+        capabilities: createJarvisCapabilitySnapshot({
+          ...capabilitySnapshot(),
+          actionSchemas: exposed,
+        }),
+        context: context([source]),
+      }),
+    );
+    const capabilityLayer = compiled.layers[2]?.content ?? '';
+    const contextLayer = compiled.layers[5]?.content ?? '';
+
+    expect(capabilityLayer).toContain('vibespace_context');
+    expect(capabilityLayer).toContain('only provider tool enabled for this turn');
+    expect(capabilityLayer).toContain('The function name is always `vibespace_context`');
+    expect(capabilityLayer).toContain('Never print or narrate a tool call as JSON');
+    expect(capabilityLayer).toContain('with `operation=\"search\"`');
+    expect(capabilityLayer).toContain('`limit=5`');
+    expect(capabilityLayer).toContain(
+      'For a numbered multi-question request, call `operation="search"` exactly once per numbered question',
+    );
+    expect(capabilityLayer).toContain('with `limit=3`');
+    expect(capabilityLayer).toContain('Do not make an additional whole-request search');
+    expect(capabilityLayer).toContain('finish every search before answering');
+    expect(capabilityLayer).toContain(
+      'at most six additional evidence calls total across `operation="open"` and `operation="expand"`',
+    );
+    expect(capabilityLayer).toContain('no more than two for any one question');
+    expect(capabilityLayer).toContain(
+      "only with exact pointers returned by that question's search",
+    );
+    expect(capabilityLayer).toContain('no more than one evidence retrieval for each cited source');
+    expect(capabilityLayer).toContain('at least one of `beforeBytes` or `afterBytes`');
+    expect(capabilityLayer).toContain('each supplied direction must be at most 2048');
+    expect(capabilityLayer).toContain('`expand` replaces `open` for that source');
+    expect(capabilityLayer).toContain('Never infer a revision');
+    expect(capabilityLayer).not.toContain(
+      'For file research, first call `vibespace_context` with `operation="search"`, the complete user question',
+    );
+    expect(capabilityLayer).toContain(
+      'This direct user chat is not a subagent assignment or delegation',
+    );
+    expect(capabilityLayer).toContain('Do not emit `BOOTSTRAP_OK` or `BOOTSTRAP_BLOCKED`');
+    expect(capabilityLayer).not.toContain('"id":"terminal.run"');
+    expect(contextLayer).not.toContain('irrelevant attached context');
+    expect(compiled.diagnostics.omittedSourceRefs).toContainEqual(
+      expect.objectContaining({ id: source.source.id }),
+    );
+    expect(compiled.diagnostics.warnings).toContain('context_deferred_to_live_tool');
+    expect(compiled.systemText.length).toBeLessThan(16_000);
+  });
+
+  it('protects a mandatory prior-pointer expansion from search substitution and zero directions', async () => {
+    const compiled = compileJarvisPrompt(
+      await envelope({
+        userText:
+          'Using only the exact six search-result pointers already returned in this chat for shard-0000.txt, shard-0025.txt, shard-0047.txt, shard-0048.txt, shard-0063.txt, and shard-0095.txt, make exactly six vibespace_context expand calls, each with beforeBytes=256 and afterBytes=0. Do not call open, search, address, or any other tool.',
+      }),
+    );
+    const capabilityLayer = compiled.layers[2]?.content ?? '';
+
+    expect(capabilityLayer).toContain('exactly six `operation="expand"` calls');
+    expect(capabilityLayer).toContain('exact prior search-result pointers');
+    expect(capabilityLayer).toContain('supply only `beforeBytes=256`');
+    expect(capabilityLayer).toContain('omit `afterBytes` entirely');
+    expect(capabilityLayer).toContain('Never substitute `search`, `open`, or `address`');
+    expect(capabilityLayer).not.toContain(
+      'first call `vibespace_context` with `operation="search"`',
+    );
+  });
+
+  it('protects mandatory evidence by requiring one atomic question-responsive search row', async () => {
+    const compiled = compileJarvisPrompt(
+      await envelope({
+        userText: `## Validated mandatory Context physical-evidence contract
+Use only vibespace_context.
+You MUST make exactly six \`operation="expand"\` calls after the five required searches.`,
+      }),
+    );
+    const capabilityLayer = compiled.layers[2]?.content ?? '';
+
+    expect(capabilityLayer).toContain(
+      'Use search previews only to select pointers; expansions are the only physical evidence',
+    );
+    expect(capabilityLayer).toContain(
+      'choose exactly one current, non-`STATUS SUPERSEDED_UNTRUSTED` search-result row',
+    );
+    expect(capabilityLayer).toContain(
+      'semantically responsive to the corresponding numbered question',
+    );
+    expect(capabilityLayer).toContain(
+      'A matching filename, recordId, sourceVersion, contentHash, or score alone is insufficient',
+    );
+    expect(capabilityLayer).toContain(
+      'Copy the complete pointer object from that single row byte-for-byte as one atomic value',
+    );
+    expect(capabilityLayer).toContain(
+      'never reconstruct it or mix its id, recordId, byte range, sourceVersion, or contentHash',
+    );
+    expect(capabilityLayer).toContain(
+      'If a required source has no unique eligible row, output FAIL without making a replacement search, open, or expand call.',
+    );
+    expect(capabilityLayer).toContain(
+      'exactly five `operation="search"` calls with `limit=3`, then exactly six `operation="expand"` calls',
+    );
+    expect(capabilityLayer).toContain('supply only `beforeBytes=256`');
+    expect(capabilityLayer).toContain('within 24 KiB');
   });
 
   it('uses the same immutable identity source for typed and voice chat', async () => {

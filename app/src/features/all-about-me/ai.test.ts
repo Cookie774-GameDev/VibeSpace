@@ -28,13 +28,21 @@ describe('AllAboutMe AI helpers', () => {
     expect(markdown).toContain('## Voice');
   });
 
-  it('falls back to deterministic markdown when generation fails', async () => {
+  it('falls back to deterministic markdown when the model returns unusable content', async () => {
     const complete = vi.fn(async () => 'not markdown');
 
     const markdown = await generateAllAboutMeMarkdown(answers, complete);
 
     expect(markdown).toContain('# AllAboutMe.md');
     expect(markdown).toContain('Direct and high energy');
+  });
+
+  it('propagates runtime failures so the UI can show an actionable error', async () => {
+    const complete = vi.fn(async () => {
+      throw new Error('Local model runtime is unavailable. Start Ollama.');
+    });
+
+    await expect(generateAllAboutMeMarkdown(answers, complete)).rejects.toThrow(/Start Ollama/i);
   });
 
   it('builds revision prompts that preserve the existing profile', () => {

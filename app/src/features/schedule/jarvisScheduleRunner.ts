@@ -21,6 +21,7 @@ import {
   type JarvisScheduleRunHistoryEntryV1,
   type JarvisScheduleRunHistoryStatus,
 } from './jarvisSchedules';
+import { formatUserDateTime } from '@/lib/timeFormat';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -61,9 +62,28 @@ function defaultDeps(): JarvisScheduleRunnerDeps {
 
 /**
  * Next occurrence strictly after `afterMs`, using the same expansion engine
- * as the timeline so the runner and UI agree.
+ * as the timeline so the runner and UI agree. Custom intervals use metadata.
  */
 export function computeNextJarvisRunAt(event: EventRow, afterMs: number): number | null {
+  const metadata = parseJarvisScheduleMetadata(event);
+  if (metadata?.recurrence === 'once') return null;
+
+  if (
+    metadata?.recurrence === 'custom_interval' &&
+    typeof metadata.intervalMs === 'number' &&
+    metadata.intervalMs > 0
+  ) {
+    const interval = metadata.intervalMs;
+    let next = event.start_at;
+    // Advance from the original anchor so drift does not accumulate.
+    let guard = 0;
+    while (next <= afterMs && guard < 100_000) {
+      next += interval;
+      guard += 1;
+    }
+    return next > afterMs ? next : null;
+  }
+
   const horizon = afterMs + 62 * DAY_MS;
   const instances = expandRecurrence(event, afterMs + 1, horizon);
   const next = instances.find((instance) => instance.instanceStartMs > afterMs);
@@ -302,7 +322,7 @@ export async function runDueJarvisSchedules(
           ...parsedMetadata.errorHistory,
           {
             at: now,
-            error: `Missed scheduled run at ${new Date(dueAt).toLocaleString()} (app was closed).`,
+            error: `Missed scheduled run at ${formatUserDateTime(dueAt)} (app was closed).`,
           },
         ],
       };

@@ -1,21 +1,34 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { RemoteMcpSetupConnection, RemoteMcpSetupRuntime } from '@/lib/mcp/remoteSetupRuntime';
+import type { VibeSpaceGatewayConnection, VibeSpaceMcpGateway } from '@/lib/mcp/vibeSpaceGateway';
 import { McpConnections } from './McpConnections';
 
-function runtimeHarness(initial: readonly RemoteMcpSetupConnection[] = []) {
+function runtimeHarness(initial: readonly VibeSpaceGatewayConnection[] = []) {
   let snapshot = initial;
   const listeners = new Set<() => void>();
-  const runtime: RemoteMcpSetupRuntime = {
+  const runtime: VibeSpaceMcpGateway = {
     getSnapshot: () => snapshot,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     connect: vi.fn(async () => undefined),
+    approve: vi.fn(),
+    reconnect: vi.fn(async () => undefined),
     setToolExposure: vi.fn(),
     disconnect: vi.fn(async () => undefined),
+    revoke: vi.fn(async () => undefined),
+    getCapabilitySnapshot: () => ({
+      schemaVersion: 1,
+      accountId: 'account-1',
+      projectId: 'project-1',
+      connections: [],
+    }),
+    invoke: vi.fn(async () => {
+      throw new Error('not used');
+    }),
+    getReceipts: () => [],
   };
   return { runtime };
 }
@@ -26,6 +39,10 @@ const connected = Object.freeze({
   state: 'connected' as const,
   tools: Object.freeze([]),
   exposedTools: Object.freeze([]),
+  trust: 'approved' as const,
+  schemaDigest: 'a'.repeat(16),
+  reconnectAttempt: 0,
+  durableApproval: true,
 });
 
 describe('McpConnections MonoChrome appearance', () => {
@@ -47,7 +64,7 @@ describe('McpConnections MonoChrome appearance', () => {
     expect(card?.className).toContain('bg-panel/60');
     expect(card?.className).toContain('[html[data-theme=monochrome]_&]:bg-panel');
 
-    expect(screen.getByText('MCP Connections')).toBeTruthy();
+    expect(screen.getByText('VibeSpace MCP Gateway')).toBeTruthy();
     expect(screen.getByText(/credentialless Streamable HTTP/i)).toBeTruthy();
   });
 });

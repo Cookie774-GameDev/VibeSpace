@@ -1,0 +1,15 @@
+description: VibeSpace PR31 deterministic AI boundary evaluations
+
+prompts:
+  - '{{candidate_output}}'
+
+providers:
+  - id: echo
+    label: Deterministic local fixture
+
+tests:
+  - file://tests/ai-evals/prompt-forge-preservation.yaml
+  - file://tests/ai-evals/token-optimizer-quality.yaml
+  - file://tests/ai-evals/context-map-retrieval.yaml
+  - file://tests/ai-evals/agent-tool-boundaries.yaml
+  - file://tests/ai-evals/prompt-injection.yaml

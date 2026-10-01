@@ -6,6 +6,13 @@ export type PluginStatus =
   | 'needs_credentials';
 
 export type PluginAuthType = 'token' | 'api_key' | 'oauth' | 'service_account' | 'none';
+export type PluginConnectionStrategy =
+  | 'native_oauth_pkce'
+  | 'hosted_oauth'
+  | 'device_authorization'
+  | 'app_installation'
+  | 'official_connector'
+  | 'manual_credential';
 
 export type PluginField = {
   id: string;
@@ -42,6 +49,8 @@ export type PluginManifest = {
   category: string;
   provider: string;
   authType: PluginAuthType;
+  /** Explicit interactive connection route. Defaults conservatively from authType. */
+  connectionStrategy?: PluginConnectionStrategy;
   fields: PluginField[];
   /** Exact provider permissions required by this connector's implemented operations. */
   requiredScopes?: string[];
@@ -49,6 +58,8 @@ export type PluginManifest = {
   docsUrl?: string;
   /** Official page to create API keys, OAuth apps, or tokens. */
   credentialUrl?: string;
+  /** Provider authorization endpoint. Never substitute credentialUrl for this value. */
+  authorizationUrl?: string;
   help: string;
   tools: PluginTool[];
   tags: string[];
@@ -59,7 +70,15 @@ export type PluginManifest = {
   httpTest?: PluginHttpTest;
 };
 
-export type PluginConnectionState = 'connected' | 'not_connected' | 'needs_setup' | 'error';
+export type PluginConnectionState =
+  | 'connected'
+  | 'not_connected'
+  | 'needs_setup'
+  | 'connecting'
+  | 'awaiting_approval'
+  | 'reauthorize'
+  | 'expired'
+  | 'error';
 
 export type PluginConnection = {
   accountId: string;

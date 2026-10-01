@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { History, Play, RotateCcw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/utils';
+import { formatUserDateTime } from '@/lib/timeFormat';
 import type { PromptForgeJob } from './contracts';
 import './sakura-prompt-forge.css';
 
@@ -80,7 +81,7 @@ export function PromptForgeRecovery({
             Interrupted Prompt Forge upgrade
           </p>
           <p className="truncate text-metadata text-muted-foreground">
-            Saved {new Date(job.updatedAt).toLocaleString()} · Your composer was not submitted.
+            Saved {formatUserDateTime(job.updatedAt)} · Your composer was not submitted.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-1">

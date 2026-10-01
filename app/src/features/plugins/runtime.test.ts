@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 import * as runtimeModule from './runtime';
 import {
   createAccountScopedPluginRuntime,
@@ -25,6 +26,7 @@ import type { CanonicalPluginEvidence } from '@/lib/jarvis/artifactProducerAdapt
 import { createJarvisPluginCapabilityProjection } from '@/lib/jarvis/pluginCapabilityProducer';
 import type { ZapierGatewayFactory } from './zapierProvider';
 import type { CanonicalMcpToolDescriptor } from '@/lib/mcp/serverManager';
+import type { PluginAuthorizationAuthority } from './runtime';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -54,6 +56,7 @@ function fixture(
     randomIds?: string[];
     times?: number[];
     zapierGatewayFactory?: ZapierGatewayFactory;
+    authorization?: PluginAuthorizationAuthority;
   } = {},
 ) {
   let activeAccountId: string | undefined = 'account-a';
@@ -108,6 +111,7 @@ function fixture(
     randomUUID: () => randomIds.shift() ?? 'fallback-grant',
     now: () => times.shift() ?? 999,
     zapierGatewayFactory: options.zapierGatewayFactory,
+    authorization: options.authorization,
   });
   return {
     runtime,
@@ -126,6 +130,85 @@ function fixture(
 }
 
 describe('account-scoped plugin runtime', () => {
+  it('starts OAuth through a trusted authority and exposes only a token-free receipt', async () => {
+    const authorization: PluginAuthorizationAuthority = {
+      begin: vi.fn(async () => ({
+        ok: true as const,
+        state: 'awaiting_approval' as const,
+        authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth?state=opaque',
+      })),
+      cancel: vi.fn(async () => undefined),
+    };
+    const state = fixture({ authorization, times: [100, 200] });
+
+    await expect(
+      state.runtime.management.beginAuthorization({
+        accountId: 'account-a',
+        pluginId: 'gmail',
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      state: 'awaiting_approval',
+      authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth?state=opaque',
+    });
+    expect(authorization.begin).toHaveBeenCalledWith({
+      accountId: 'account-a',
+      pluginId: 'gmail',
+      path: 'native_oauth_pkce',
+      scopes: [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.compose',
+      ],
+    });
+    expect(state.connections.at(-1)).toMatchObject({
+      pluginId: 'gmail',
+      state: 'awaiting_approval',
+      enabled: false,
+    });
+  });
+
+  it('fails OAuth closed when provider registration is absent', async () => {
+    const state = fixture();
+    const result = await state.runtime.management.beginAuthorization({
+      accountId: 'account-a',
+      pluginId: 'gmail',
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/provider authorization is not configured/i),
+    });
+    expect(state.connections).toHaveLength(0);
+  });
+
+  it('rejects token material from an authorization authority receipt', async () => {
+    const state = fixture({
+      authorization: {
+        begin: vi.fn(async () => ({
+          ok: true as const,
+          state: 'awaiting_approval' as const,
+          authorizationUrl: 'https://provider.example/authorize?access_token=leak',
+        })),
+        cancel: vi.fn(async () => undefined),
+      },
+      times: [100, 200],
+    });
+
+    await expect(
+      state.runtime.management.beginAuthorization({
+        accountId: 'account-a',
+        pluginId: 'gmail',
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/oauth_authorization_url_invalid/i),
+    });
+    expect(state.connections.at(-1)).toMatchObject({
+      pluginId: 'gmail',
+      state: 'error',
+      enabled: false,
+    });
+  });
+
   it('exports the closed factory without legacy generic plugin call APIs', () => {
     expect(Object.keys(runtimeModule).sort()).toEqual([
       'createAccountScopedPluginRuntime',
@@ -170,7 +253,7 @@ describe('account-scoped plugin runtime', () => {
         accountId: 'account-a',
         pluginId: 'supabase',
         fieldId: 'key',
-        value: 'sb_secret_synthetic_test_value',
+        value: syntheticCredentialFixture('sb_secret_', 'synthetic_test_value'),
       }),
     ).rejects.toThrow(/supabase_privileged_key_rejected/i);
     expect(request).not.toHaveBeenCalled();

@@ -24,6 +24,7 @@ import { Sparkles } from 'lucide-react';
 import { Dialog, DialogPortal, DialogOverlay } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
+import { formatUserDateTime } from '@/lib/timeFormat';
 import { parseAssistantInput } from './parse';
 import { executeIntent } from './execute';
 import { JARVIS_COMMAND_CATALOG } from './commands';
@@ -182,11 +183,7 @@ function renderPreview(intent: AssistantIntent): React.ReactNode {
               {' '}
               due{' '}
               <span className="text-foreground">
-                {new Date(intent.due_at).toLocaleString(undefined, {
-                  weekday: 'short',
-                  hour: 'numeric',
-                  minute: '2-digit',
-                })}
+                {formatUserDateTime(intent.due_at, { weekday: 'short' })}
               </span>
             </>
           ) : null}

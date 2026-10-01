@@ -9,6 +9,11 @@ import {
 
 function capability(): PluginManagementCapability {
   return {
+    beginAuthorization: vi.fn(async () => ({
+      ok: false as const,
+      error: 'not configured',
+    })),
+    cancelAuthorization: vi.fn(async () => undefined),
     saveCredential: vi.fn(async () => undefined),
     testConnection: vi.fn(async () => ({ ok: true })),
     disconnect: vi.fn(async () => undefined),

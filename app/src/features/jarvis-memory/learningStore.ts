@@ -360,7 +360,7 @@ export const useJarvisLearningStore = create<JarvisLearningState>()((set, get) =
       replaceCurrent(next, false);
       return {
         qualifies: true,
-        evaluateNow: next.enabled && next.meaningfulMessageCount - next.lastEvaluationCount >= 10,
+        evaluateNow: next.enabled && next.meaningfulMessageCount - next.lastEvaluationCount >= 20,
         explicitMemoryId,
       };
     },

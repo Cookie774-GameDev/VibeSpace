@@ -36,16 +36,24 @@ export {
   ollamaBaseUrl,
   listOllamaModels,
   listOllamaModelInfo,
+  inspectOllamaModel,
+  probeOllamaToolCalling,
   isOllamaReachable,
   ensureOllamaReadySilent,
   assertAllowedOllamaEndpoint,
   waitForOllamaReachable,
   pullOllamaModel,
+  removeOllamaModel,
+  verifyOllamaModelChat,
   validateModelName,
 } from './providers/ollama';
 export type {
   OllamaModelInfo,
+  OllamaModelDetails,
+  OllamaToolProbe,
   OllamaPullProgress,
+  OllamaPullOptions,
+  OllamaChatVerification,
   OllamaEnsureStatus,
   EnsureOllamaOptions,
 } from './providers/ollama';
@@ -55,6 +63,16 @@ export {
   sanitizeOllamaEndpointFromStore,
 } from './ollamaBootstrap';
 export type { OllamaBootstrapResult, OllamaBootstrapOptions } from './ollamaBootstrap';
+export {
+  classifyOllamaModel,
+  classifyOllamaModels,
+  clearOllamaCompatibilityCache,
+} from './ollamaCompatibility';
+export type {
+  LocalAgentCompatibility,
+  LocalAgentCompatibilityResult,
+  OllamaCompatibilityDependencies,
+} from './ollamaCompatibility';
 
 export {
   CHAT_MODEL_OPTIONS,

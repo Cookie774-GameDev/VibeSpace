@@ -77,8 +77,67 @@ describe('Jarvis typed planner', () => {
     expect(executeApprovedStep).toHaveBeenCalledTimes(1);
     expect(executeApprovedStep).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'status.read', input: {} }),
+      expect.any(AbortSignal),
     );
     expect(definition.handler).not.toHaveBeenCalled();
     expect(first.steps[0]?.verification.status).toBe('verified');
+  });
+
+  it('aborts the executing action before reporting a timeout', async () => {
+    const plan = createJarvisPlan({
+      goal: 'Run a bounded action',
+      requestedSteps: [{ action: 'bounded.run', input: {} }],
+      catalog: [action('bounded.run', { supportsCancellation: true })],
+    });
+    let executionSignal: AbortSignal | undefined;
+    const executeApprovedStep = vi.fn(
+      (...args: unknown[]) =>
+        new Promise<never>(() => {
+          executionSignal = args[1] as AbortSignal | undefined;
+        }),
+    );
+
+    const result = await executeJarvisPlan(plan, [action('bounded.run')], {
+      executeApprovedStep,
+      timeoutMs: 5,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.steps[0]?.verification.evidence).toMatch(/timed out/i);
+    expect(executionSignal).toBeInstanceOf(AbortSignal);
+    expect(executionSignal?.aborted).toBe(true);
+  });
+
+  it('reports timeout truth when the aborted executor immediately rejects with AbortError', async () => {
+    const definition = action('bounded.run', { supportsCancellation: true });
+    const plan = createJarvisPlan({
+      goal: 'Run a bounded action',
+      requestedSteps: [{ action: 'bounded.run', input: {} }],
+      catalog: [definition],
+    });
+    const executeApprovedStep = vi.fn(
+      (_step: unknown, signal: AbortSignal) =>
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => reject(new DOMException('Executor observed cancellation', 'AbortError')),
+            { once: true },
+          );
+        }),
+    );
+
+    const result = await executeJarvisPlan(plan, [definition], {
+      executeApprovedStep,
+      timeoutMs: 5,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.steps[0]).toMatchObject({
+      status: 'failed',
+      verification: {
+        status: 'failed',
+        evidence: expect.stringMatching(/timed out/i),
+      },
+    });
   });
 });

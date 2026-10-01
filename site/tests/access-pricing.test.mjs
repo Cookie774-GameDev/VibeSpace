@@ -60,12 +60,15 @@ test('billing result pages never infer entitlement from the page URL', () => {
   assert.doesNotMatch(success + cancel, /URLSearchParams|session_id|access granted/i);
 });
 
-test('account guidance uses the desktop billing surface without a fake web login', () => {
+test('account hub uses the authoritative account and keeps billing control server-backed', () => {
   const account = pages.get('account/index.html');
-  assert.match(account, /Settings.*Billing &amp; Access/is);
-  assert.match(account, /VibeSpace desktop app/i);
-  assert.doesNotMatch(account, /<form|type=["']password["']|sign in to continue/i);
-  assert.match(account, /href=["']\/download\/["']/);
+  const script = readFileSync(join(siteRoot, 'account/account.js'), 'utf8');
+  assert.match(account, /Use the same VibeSpace identity as the desktop app/i);
+  assert.match(account, /id=["']signin-form["']/i);
+  assert.match(script, /signInWithPassword/);
+  assert.match(script, /\.from\('subscriptions'\)/);
+  assert.match(script, /\.from\('desktop_presence'\)/);
+  assert.doesNotMatch(account + script, /buy\.stripe\.com|access granted/i);
 });
 
 test('terms, privacy, and cancellation copy is bounded and transparent', () => {

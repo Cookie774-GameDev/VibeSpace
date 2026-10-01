@@ -11,7 +11,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { toast } from '@/components/ui/toast';
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { cn } from '@/lib/utils';
+import { useAuthStore } from '@/stores/auth';
 import { SkillCard } from './SkillCard';
 import { SkillEditor } from './SkillEditor';
 import './sakura-skills.css';
@@ -36,6 +38,9 @@ function manifestMatchesQuery(m: SkillManifest, q: string): boolean {
 }
 
 export function SkillsPage() {
+  const cloudSession = useAuthStore((state) => state.cloudSession);
+  const localUserId = useAuthStore((state) => state.localUserId);
+  const accountId = resolveAccountIdentity({ cloudSession, localUserId })?.accountId ?? '';
   const [manifests, setManifests] = React.useState<SkillManifest[]>([]);
   const [tab, setTab] = React.useState<FilterTab>('all');
   const [query, setQuery] = React.useState('');
@@ -76,7 +81,7 @@ export function SkillsPage() {
       cancelled = true;
       unsub?.();
     };
-  }, [refresh]);
+  }, [accountId, refresh]);
 
   const counts = React.useMemo(() => {
     let presets = 0;

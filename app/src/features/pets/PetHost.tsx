@@ -3,8 +3,8 @@
  *
  * Single visible pet path:
  * - Tauri: prefer dedicated pet-overlay; inline only as fallback.
- * - Never show standalone pet while mini panel is visible.
- * - Poll isPetPanelVisible so overlay-window opens still hide the pet.
+ * - Keep the standalone pet visible while the mini panel is open.
+ * - Poll isPetPanelVisible only to reconcile panel/fallback state.
  */
 import * as React from 'react';
 import { PetOverlay } from './PetOverlay';
@@ -57,7 +57,7 @@ export function PetHost({
   const [animLabel, setAnimLabel] = React.useState<string>('welcome');
   const [claimed, setClaimed] = React.useState(!runtimeEffectsEnabled);
   const [tauri, setTauri] = React.useState(false);
-  /** Hide sprite when mini panel is open (local UI or Tauri panel). */
+  /** Tracks panel state for diagnostics and inline fallback selection. */
   const [hideSpriteForPanel, setHideSpriteForPanel] = React.useState(false);
   const [useInlineFallback, setUseInlineFallback] = React.useState(false);
   /** App is exiting / hiding — never respawn pet-overlay. */
@@ -116,7 +116,7 @@ export function PetHost({
     return () => window.removeEventListener('storage', onStorage);
   }, [claimed, runtimeEffectsEnabled]);
 
-  // Poll Tauri panel visibility so we never leave pet+panel both open.
+  // Poll Tauri panel visibility to reconcile the native and inline panel paths.
   React.useEffect(() => {
     if (!runtimeEffectsEnabled || !claimed || !tauri) return;
     let cancelled = false;
@@ -129,7 +129,6 @@ export function PetHost({
         setPetPanelOpenFlag(true);
         // Real Tauri mini panel is up — drop in-app duplicate if it was a bridge.
         setUseInlineFallback(false);
-        await hidePetOverlay().catch(() => undefined);
       } else if (readPetPanelOpenFlag()) {
         // Flag says open but Tauri panel is not visible → keep/show in-app panel.
         setPanelOpen(true);
@@ -261,7 +260,7 @@ export function PetHost({
           },
         );
         if (result.panelVisible) {
-          // Dedicated Tauri mini panel confirmed — keep standalone hidden.
+          // Dedicated Tauri mini panel confirmed; keep the pet visible.
           setHideSpriteForPanel(true);
           setUseInlineFallback(false);
         } else {

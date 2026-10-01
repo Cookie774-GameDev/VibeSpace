@@ -27,13 +27,14 @@ The exact legacy normalization is:
 - `light` → `monochrome`
 - `dark` → `default`
 - `system` → `default`
-- canonical `jarvis`, `vibespace`, `default`, and `monochrome` remain
-  canonical
+- canonical `jarvis`, `vibespace`, `default`, `monochrome`, `sakura`, `warm`,
+  and `origami` remain canonical
 - unknown, malformed, empty, or non-string values → `default`
 
-The selectable order remains `jarvis`, `vibespace`, `default`, `monochrome`.
-Migration is idempotent: applying the same normalization again does not alter
-the canonical result or any unrelated state.
+The selectable order is `jarvis`, `vibespace`, `default`, `monochrome`,
+`sakura`, `warm`, `origami`. Migration is idempotent: applying the same
+normalization again does not alter the canonical result or any unrelated
+state.
 
 ## Current-version validation
 
@@ -58,10 +59,9 @@ runs before React. It normalizes legacy values before applying
 seam. Pixel Pet surfaces stay transparent during that prepaint path.
 
 Theme synchronization publishes canonical values. Inbound detached-window
-messages accept the four canonical identifiers plus the exact legacy
-`light` value, which normalizes to MonoChrome. Invalid legacy values are
-rejected, and listener cleanup prevents duplicate subscriptions or echo
-loops.
+messages accept the seven canonical identifiers plus the exact legacy `light`
+value, which normalizes to MonoChrome. Invalid legacy values are rejected, and
+listener cleanup prevents duplicate subscriptions or echo loops.
 
 ## User-data non-impact
 
@@ -111,7 +111,7 @@ work. Use an exact reviewed path manifest and a compatibility commit instead.
 | v5 persisted `monochrome` during rollback              | Default                                    | rollback migration plus hydration integration          |
 | v5 legacy `light` during rollback                      | Default                                    | compatibility normalization test                       |
 | malformed or unknown persisted theme                   | Default                                    | table-driven migration and current-version merge tests |
-| `jarvis`, `vibespace`, or `default`                    | unchanged                                  | canonical theme matrix                                 |
+| any current canonical theme identifier                 | unchanged                                  | seven-theme canonical matrix                           |
 | pre-React persisted value                              | canonical document theme before React      | generated prepaint DOM test                            |
 | detached legacy/current message                        | normalized once, no echo, listener cleaned | sync lifecycle integration                             |
 | explicit terminal or ANSI palette                      | explicit value wins                        | terminal resolver regression                           |

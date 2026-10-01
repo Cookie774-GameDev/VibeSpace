@@ -14,23 +14,17 @@ function canonicalTextBytes(source) {
   return Buffer.from(source.toString('utf8').replaceAll('\r\n', '\n'), 'utf8');
 }
 
-test('Sakura scene is a bounded local seven-layer SVG with a stable crop contract', async () => {
+test('Sakura scene is a bounded local owner-supplied layered SVG with a stable crop contract', async () => {
   const svg = await readFile(assetUrl, 'utf8');
-  assert.match(svg, /viewBox="0 0 1920 1080"/);
+  assert.match(svg, /viewBox="0 0 1600 1000"/);
   assert.match(svg, /preserveAspectRatio="xMidYMid slice"/);
-  const groups = [...svg.matchAll(/<g\s+id="sakura-layer-[^"]+"/g)];
-  assert.equal(groups.length, 7);
-  for (const id of [
-    'sky',
-    'distant-mountains',
-    'mid-ridge',
-    'water-mist',
-    'foreground',
-    'pavilion-lantern',
-    'branch',
-  ]) {
-    assert.match(svg, new RegExp(`<g id="sakura-layer-${id}"`));
-  }
+  assert.match(svg, /<linearGradient id="sky"[\s\S]*?#f8d3c9[\s\S]*?#140e30/u);
+  assert.match(svg, /fill="url\(#mountA\)"/u);
+  assert.match(svg, /fill="url\(#mountB\)"/u);
+  assert.match(svg, /fill="url\(#water\)"/u);
+  assert.match(svg, /<!-- pavilion -->[\s\S]*?transform="translate\(132 485\)"/u);
+  assert.match(svg, /<!-- lantern -->[\s\S]*?transform="translate\(1368 635\)"/u);
+  assert.match(svg, /<!-- branch and blossoms -->/u);
 });
 
 test('Sakura asset is CSP-safe original vector content without prototype/runtime leakage', async () => {
@@ -65,9 +59,9 @@ test('production asset manifest freezes provenance, crop, size, and exact bytes'
   );
 
   assert.ok(asset, 'production Sakura scene must be recorded');
-  assert.equal(asset.origin, 'original-vibespace-vector');
-  assert.equal(asset.referenceCopyPolicy, 'informed-only-no-copied-geometry');
-  assert.equal(asset.viewBox, '0 0 1920 1080');
+  assert.equal(asset.origin, 'owner-authorized-reference-extract');
+  assert.equal(asset.referenceCopyPolicy, 'exact-owner-provided-scene-extract');
+  assert.equal(asset.viewBox, '0 0 1600 1000');
   assert.equal(asset.preserveAspectRatio, 'xMidYMid slice');
   assert.equal(asset.bytes, svg.byteLength);
   assert.equal(asset.sha256, createHash('sha256').update(svg).digest('hex').toUpperCase());

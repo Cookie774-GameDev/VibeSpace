@@ -54,6 +54,7 @@ import {
   resolveAccountTabFromSearch,
   type AccountTabId,
 } from './accountTabs';
+import { AccountSecurityPanel } from './AccountSecurityPanel';
 import './sakura-account.css';
 
 const UPGRADE_ORDER: PlanId[] = ['starter', 'pro', 'ultra', 'apex'];
@@ -86,18 +87,35 @@ export function AccountPage() {
   const [usage, setUsage] = React.useState<CombinedUsage | null>(null);
   const [usageLoading, setUsageLoading] = React.useState(false);
   const [usageError, setUsageError] = React.useState<string | null>(null);
+  const accountRef = React.useRef(cloudUserId?.trim() ?? '');
+  const accountGeneration = React.useRef(0);
+
+  React.useLayoutEffect(() => {
+    accountRef.current = cloudUserId?.trim() ?? '';
+    accountGeneration.current += 1;
+    setUsage(null);
+    setUsageError(null);
+    setUsageLoading(Boolean(accountRef.current));
+  }, [cloudUserId]);
 
   const loadUsage = React.useCallback(async () => {
-    if (!cloudUserId) {
+    const operationAccount = cloudUserId?.trim() ?? '';
+    if (!operationAccount) {
       setUsage(null);
       setUsageError(null);
       setUsageLoading(false);
       return;
     }
+    const operationGeneration = accountGeneration.current;
+    const isCurrentOperation = () =>
+      accountRef.current === operationAccount &&
+      accountGeneration.current === operationGeneration &&
+      (useAuthStore.getState().cloudSession?.user_id.trim() ?? '') === operationAccount;
     setUsageLoading(true);
     setUsageError(null);
     try {
       const data = await getCombinedUsage();
+      if (!isCurrentOperation()) return;
       if (!data) {
         setUsage(null);
         setUsageError('Could not load usage. Check your connection and try again.');
@@ -105,10 +123,11 @@ export function AccountPage() {
         setUsage(data);
       }
     } catch {
+      if (!isCurrentOperation()) return;
       setUsage(null);
       setUsageError('Could not load usage. Try again in a moment.');
     } finally {
-      setUsageLoading(false);
+      if (isCurrentOperation()) setUsageLoading(false);
     }
   }, [cloudUserId]);
 
@@ -144,7 +163,14 @@ export function AccountPage() {
       );
       return;
     }
+    const operationAccount = cloudUserId.trim();
+    const operationGeneration = accountGeneration.current;
+    const isCurrentOperation = () =>
+      accountRef.current === operationAccount &&
+      accountGeneration.current === operationGeneration &&
+      (useAuthStore.getState().cloudSession?.user_id.trim() ?? '') === operationAccount;
     const result = await callCheckoutSession(target);
+    if (!isCurrentOperation()) return;
     if (!result.ok) {
       toast.error('Checkout unavailable', result.error);
       return;
@@ -152,6 +178,7 @@ export function AccountPage() {
     try {
       await openExternal(result.url);
     } catch (err) {
+      if (!isCurrentOperation()) return;
       toast.error(
         'Could not open checkout',
         err instanceof Error ? err.message : 'Open Stripe manually.',
@@ -165,7 +192,14 @@ export function AccountPage() {
       setTab('profile');
       return;
     }
+    const operationAccount = cloudUserId.trim();
+    const operationGeneration = accountGeneration.current;
+    const isCurrentOperation = () =>
+      accountRef.current === operationAccount &&
+      accountGeneration.current === operationGeneration &&
+      (useAuthStore.getState().cloudSession?.user_id.trim() ?? '') === operationAccount;
     const result = await callCustomerPortal();
+    if (!isCurrentOperation()) return;
     if (!result.ok) {
       toast.error('Billing portal unavailable', result.error);
       return;
@@ -173,6 +207,7 @@ export function AccountPage() {
     try {
       await openExternal(result.url);
     } catch (err) {
+      if (!isCurrentOperation()) return;
       toast.error('Could not open portal', err instanceof Error ? err.message : 'Try again.');
     }
   };
@@ -182,8 +217,26 @@ export function AccountPage() {
   const who = displayName?.trim() || cloudEmail || 'You';
 
   return (
-    <main className="mc7f-account-page h-full overflow-y-auto bg-background [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&_*]:rounded-none [html[data-theme=monochrome]_&_*]:bg-none [html[data-theme=monochrome]_&_*]:shadow-none">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-0 px-4 pb-10 pt-5 sm:px-6">
+    <main
+      className="mc7f-account-page h-full overflow-y-auto bg-background [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&_*]:rounded-none [html[data-theme=monochrome]_&_*]:bg-none [html[data-theme=monochrome]_&_*]:shadow-none"
+      data-warm-account-tab={tab}
+    >
+      <div
+        className="relative mx-auto flex w-full max-w-6xl flex-col gap-0 overflow-hidden px-4 pb-10 pt-5 sm:px-6"
+        data-warm-surface="account-scene-shell"
+      >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 hidden [html[data-theme=warm]_&]:block"
+          data-warm-decoration="account-shared-scene"
+        >
+          <img
+            src="/assets/themes/warm/account-center/account-lake-panorama-v3-extended-selected.webp"
+            alt=""
+            decoding="async"
+            draggable={false}
+          />
+        </div>
         {/* Hero */}
         <header
           className="relative overflow-hidden rounded-3xl border border-border bg-slate-950 p-5 shadow-2xl sm:p-6 [html[data-theme=monochrome]_&]:rounded-none [html[data-theme=monochrome]_&]:border-l-2 [html[data-theme=monochrome]_&]:border-l-foreground/60 [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:shadow-none"
@@ -252,10 +305,15 @@ export function AccountPage() {
           <TabsContent value="profile" className="mt-0 focus-visible:ring-0">
             <PanelCard
               title="Profile"
-              subtitle="Sign in to VibeSpace Cloud and set how Jarvis addresses you."
+              subtitle="Edit how Jarvis addresses you, preview your avatar, and manage cloud sign-in."
               icon={<User2 className="h-5 w-5 text-accent-copper" />}
+              warmSurface="profile"
             >
-              <Account />
+              <Account profileOnly />
+              <AccountSecurityPanel
+                key={cloudUserId?.trim() || 'signed-out'}
+                accountId={cloudUserId?.trim() ?? ''}
+              />
             </PanelCard>
           </TabsContent>
 
@@ -552,16 +610,21 @@ function PanelCard({
   subtitle,
   icon,
   action,
+  warmSurface,
   children,
 }: {
   title: string;
   subtitle: string;
   icon: React.ReactNode;
   action?: React.ReactNode;
+  warmSurface?: 'profile';
   children: React.ReactNode;
 }) {
   return (
-    <section className="sakura-account-panel rounded-3xl border border-border bg-panel p-5 shadow-soft sm:p-6">
+    <section
+      className="sakura-account-panel rounded-3xl border border-border bg-panel p-5 shadow-soft sm:p-6"
+      data-warm-surface={warmSurface}
+    >
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-elevated">

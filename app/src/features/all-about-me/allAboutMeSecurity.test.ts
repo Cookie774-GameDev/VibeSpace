@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 
 import { containsAllAboutMeSecret, sanitizeAllAboutMeMarkdown } from './allAboutMeSecurity';
 
@@ -60,7 +61,11 @@ describe('All About Me secret policy', () => {
   it('fails closed after the bounded finding limit without retaining later secrets', () => {
     const secretLines = Array.from(
       { length: 110 },
-      (_, index) => `token=ghp_SyntheticCredentialValue${String(index).padStart(20, '0')}`,
+      (_, index) =>
+        `token=${syntheticCredentialFixture(
+          'ghp_',
+          `SyntheticCredentialValue${String(index).padStart(20, '0')}`,
+        )}`,
     );
     const sanitized = sanitizeAllAboutMeMarkdown(
       ['# All About Me', 'Safe before.', ...secretLines].join('\n'),

@@ -44,6 +44,11 @@ export interface JarvisScheduleMetadata {
   kind: 'jarvis_schedule';
   prompt: string;
   recurrence: JarvisScheduleRecurrence;
+  /**
+   * For `custom_interval` only: fixed spacing between runs in milliseconds
+   * (e.g. 2 hours = 7_200_000). Ignored for other recurrence kinds.
+   */
+  intervalMs?: number;
   modelSelection: ChatModelSelection;
   agentId: AgentId | string;
   createdBy: 'jarvis' | 'user';
@@ -53,6 +58,38 @@ export interface JarvisScheduleMetadata {
   outputChatId?: string;
   runHistory: JarvisScheduleRunHistoryEntry[];
   errorHistory: Array<{ at: number; error: string }>;
+}
+
+/** Minimum custom interval (5 minutes) so rapid loops cannot thrash the runner. */
+export const JARVIS_MIN_INTERVAL_MS = 5 * 60 * 1000;
+/** Maximum custom interval (~30 days). */
+export const JARVIS_MAX_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function normalizeJarvisIntervalMs(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const rounded = Math.round(value);
+  if (rounded < JARVIS_MIN_INTERVAL_MS || rounded > JARVIS_MAX_INTERVAL_MS) return undefined;
+  return rounded;
+}
+
+export function intervalMsFromParts(
+  amount: number,
+  unit: 'minutes' | 'hours' | 'days',
+): number | undefined {
+  if (!Number.isFinite(amount) || amount <= 0) return undefined;
+  const mult = unit === 'minutes' ? 60_000 : unit === 'hours' ? 3_600_000 : 86_400_000;
+  return normalizeJarvisIntervalMs(amount * mult);
+}
+
+export function formatJarvisIntervalLabel(intervalMs: number | undefined): string {
+  if (!intervalMs) return 'Every interval';
+  const minutes = Math.round(intervalMs / 60_000);
+  if (minutes < 60) return `Every ${minutes} min`;
+  const hours = Math.round(intervalMs / 3_600_000);
+  if (hours < 48 && intervalMs % 3_600_000 === 0) return `Every ${hours} hr`;
+  const days = Math.round(intervalMs / 86_400_000);
+  if (intervalMs % 86_400_000 === 0) return `Every ${days} day${days === 1 ? '' : 's'}`;
+  return `Every ${minutes} min`;
 }
 
 /**
@@ -145,8 +182,10 @@ export function parseJarvisScheduleMetadata(event: EventRow): JarvisScheduleMeta
   try {
     const parsed = JSON.parse(raw.slice('jarvis_schedule:'.length)) as JarvisScheduleMetadata;
     if (parsed?.kind !== 'jarvis_schedule') return null;
+    const intervalMs = normalizeJarvisIntervalMs(parsed.intervalMs);
     return {
       ...parsed,
+      ...(intervalMs !== undefined ? { intervalMs } : {}),
       runHistory: normalizeRunHistory(parsed.runHistory).slice(-JARVIS_SCHEDULE_HISTORY_CAP),
       errorHistory: Array.isArray(parsed.errorHistory)
         ? parsed.errorHistory.slice(-JARVIS_SCHEDULE_HISTORY_CAP)
@@ -180,16 +219,23 @@ export function buildJarvisScheduleEventInput(input: {
   startAt: number;
   durationMs?: number;
   recurrence: JarvisScheduleRecurrence;
+  /** Required when recurrence is `custom_interval`. */
+  intervalMs?: number;
   timezone: string;
   modelSelection: ChatModelSelection;
   agentId: AgentId | string;
   projectId?: string;
 }): EventCreateInput {
   const cleanTitle = input.title.trim() || 'Jarvis task';
+  const intervalMs =
+    input.recurrence === 'custom_interval'
+      ? normalizeJarvisIntervalMs(input.intervalMs)
+      : undefined;
   const metadata: JarvisScheduleMetadata = {
     kind: 'jarvis_schedule',
     prompt: input.prompt.trim(),
     recurrence: input.recurrence,
+    ...(intervalMs !== undefined ? { intervalMs } : {}),
     modelSelection: input.modelSelection,
     agentId: input.agentId,
     createdBy:

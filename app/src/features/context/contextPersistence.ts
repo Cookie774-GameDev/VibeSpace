@@ -36,7 +36,7 @@ export interface ContextPersistenceService {
   saveTree(
     accountId: string,
     tree: ProjectContextTree,
-    options?: { mapId?: string; name?: string },
+    options?: ContextTreeSaveOptions,
   ): Promise<ContextPersistenceState>;
   selectMap(
     accountId: string,
@@ -53,6 +53,27 @@ export interface ContextPersistenceService {
     projectId: string | null,
     path: string,
   ): Promise<ContextPersistenceState>;
+}
+
+export interface ContextTreeSaveOptions {
+  mapId?: string;
+  name?: string;
+  /** Update an already persisted map; never synthesize a replacement if it disappeared. */
+  requireExisting?: boolean;
+  /** Optional optimistic guard for callers updating a previously reviewed map. */
+  expectedUpdatedAt?: number;
+  source?: {
+    kind: 'local_folder' | 'local_file' | 'github_repository';
+    label: string;
+    branchRef?: string;
+    github?: {
+      installationId: string;
+      owner: string;
+      repository: string;
+      resolvedCommitSha: string;
+      visibility: 'public' | 'private' | 'internal';
+    };
+  };
 }
 
 type Publish = (state: ContextPersistenceState) => void;
@@ -81,6 +102,12 @@ function nodeKind(kind: ContextEntityKind): ContextNodeKind {
 function treeFromSnapshot(snapshot: ContextGraphSnapshotV2): ProjectContextTree {
   const source = snapshot.sources[0];
   if (!source) fail('source_missing');
+  const sourceRoot =
+    source.localRoot ??
+    source.localFile ??
+    (source.github
+      ? `https://github.com/${source.github.owner}/${source.github.repository}/tree/${source.github.resolvedCommitSha}`
+      : '');
   const byId = new Map(snapshot.entities.map((entity) => [entity.id, entity]));
   const children = new Map<string, string[]>();
   const childIds = new Set<string>();
@@ -126,7 +153,7 @@ function treeFromSnapshot(snapshot: ContextGraphSnapshotV2): ProjectContextTree 
   return {
     version: 1,
     projectId: snapshot.map.projectId,
-    rootDir: source.localRoot ?? source.localFile ?? '',
+    rootDir: sourceRoot,
     generatedAt: snapshot.map.lastIndexedAt ?? snapshot.map.updatedAt,
     model: 'context-map-v2',
     fileCount: snapshot.entities.filter((entity) => entity.kind === 'file').length,
@@ -142,7 +169,12 @@ function treeFromSnapshot(snapshot: ContextGraphSnapshotV2): ProjectContextTree 
 function mapFromSnapshot(snapshot: ContextGraphSnapshotV2): ContextMapRecord {
   const source = snapshot.sources[0];
   if (!source) fail('source_missing');
-  const rootDir = source.localRoot ?? source.localFile ?? '';
+  const rootDir =
+    source.localRoot ??
+    source.localFile ??
+    (source.github
+      ? `https://github.com/${source.github.owner}/${source.github.repository}/tree/${source.github.resolvedCommitSha}`
+      : '');
   return {
     id: snapshot.map.id,
     projectId: snapshot.map.projectId,
@@ -376,6 +408,15 @@ export function createContextPersistenceService(
       if (existing && existing.map.projectId !== tree.projectId) {
         fail('map_scope_conflict');
       }
+      if (options.requireExisting && !existing) {
+        fail('map_missing');
+      }
+      if (
+        options.expectedUpdatedAt !== undefined &&
+        existing?.map.updatedAt !== options.expectedUpdatedAt
+      ) {
+        fail('map_changed');
+      }
       if (
         !existing &&
         current.maps.filter((map) => map.status === 'active').length >= MAX_ACTIVE_MAPS
@@ -393,12 +434,28 @@ export function createContextPersistenceService(
         status: 'active',
         createdAt: existing?.map.createdAt ?? tree.generatedAt,
         updatedAt: Math.max(Date.now(), tree.generatedAt),
+        sourceType: options.source?.kind ?? 'local_folder',
+        sourceLabel: options.source?.label ?? 'Local folder',
+        sourceStatus: 'ready',
+        branchRef: options.source?.branchRef ?? 'workspace',
+        github: options.source?.github
+          ? {
+              owner: options.source.github.owner,
+              repository: options.source.github.repository,
+              resolvedCommitSha: options.source.github.resolvedCommitSha,
+              visibility: options.source.github.visibility,
+            }
+          : undefined,
+        lastIndexedAt: tree.generatedAt,
         tree,
       };
       const snapshot = convertContextMapRecordV1ToSnapshotV2(record, accountId, mapId, {
         knowledgeRevision: (existing?.map.knowledgeRevision ?? 0) + 1,
         sourceStatus: 'ready',
         parser: 'context-tree-v2-persistence',
+        github: options.source?.github,
+        sourceLabel: options.source?.label,
+        branchRef: options.source?.branchRef,
       });
       await repository.putSnapshot(accountId, snapshot, {
         expectedKnowledgeRevision: existing?.map.knowledgeRevision ?? 0,
@@ -604,6 +661,51 @@ export async function ensureContextPersistence(
   }
 }
 
+export interface CapturedContextPersistenceScope {
+  readonly accountId: string;
+  readonly projectId: string | null;
+  load(): Promise<ContextPersistenceState>;
+  saveExistingTree(
+    tree: ProjectContextTree,
+    options: ContextTreeSaveOptions & { mapId: string; expectedUpdatedAt: number },
+  ): Promise<ContextPersistenceState>;
+}
+
+/**
+ * Capture an already authenticated Context persistence capability. Normal
+ * reads/writes still verify the active UI scope in their caller; the bound
+ * methods retain the original account solely so a partially applied batch can
+ * compensate safely if the UI account changes between changes.
+ */
+export async function captureContextPersistenceScope(
+  accountId: string,
+  projectId: string | null,
+): Promise<CapturedContextPersistenceScope> {
+  if (activeIdentity() !== accountId) fail('identity_changed');
+  const initialized = await ensureContextPersistence(projectId);
+  if (initialized.accountId !== accountId || initialized.projectId !== projectId) {
+    fail('identity_changed');
+  }
+  assertActiveIdentity(accountId);
+  return Object.freeze({
+    accountId,
+    projectId,
+    load: () => getProductionService().load(accountId, projectId),
+    saveExistingTree: async (
+      tree: ProjectContextTree,
+      options: ContextTreeSaveOptions & { mapId: string; expectedUpdatedAt: number },
+    ) => {
+      if (tree.projectId !== projectId) fail('identity_changed');
+      const saved = await getProductionService().saveTree(accountId, tree, {
+        ...options,
+        requireExisting: true,
+      });
+      await queuePersistedMapMetadataSafely(accountId, options.mapId);
+      return saved;
+    },
+  });
+}
+
 export async function loadPersistedContextMaps(
   projectId: string | null,
 ): Promise<readonly ContextMapRecord[]> {
@@ -622,7 +724,7 @@ export async function reloadPersistedContextMaps(
 
 export async function savePersistedContextTree(
   tree: ProjectContextTree,
-  options: { mapId?: string; name?: string } = {},
+  options: ContextTreeSaveOptions = {},
 ): Promise<ContextPersistenceState> {
   const initialized = await ensureContextPersistence(tree.projectId);
   assertActiveIdentity(initialized.accountId);

@@ -13,6 +13,7 @@ import {
   Globe,
   Server,
   Cloud,
+  RefreshCw,
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth';
 import type { ProviderId } from '@/types/common';
@@ -24,9 +25,28 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { isDefaultProviderSelectable, planIncludesHostedChat } from '@/lib/ai/agentProviderOptions';
+import {
+  getModelsForProvider,
+  getProviderModelCacheState,
+  loadProviderModels,
+  refreshProviderModels,
+  type RegistryModelOption,
+} from '@/lib/ai/providerModelCatalog';
+import {
+  getProviderRegistryEntry,
+  type ProviderConnectionContext,
+} from '@/lib/ai/providerRegistry';
 import { testProviderKey } from '@/lib/ai/testKey';
 import { getMonthlyAllProviderUsage, type LocalUsageTotals } from '@/lib/usage/usageSummary';
 import { ProviderUsageCounter, type ProviderUsageData } from '../components/ProviderUsageCounter';
+import { PROVIDER_CONNECTIONS } from '@/lib/ai/adapters/catalog';
+import {
+  aggregateConnectionUsage,
+  CONNECTION_USAGE_LEDGER_EVENT,
+  type ConnectionUsageWindow,
+} from '@/lib/ai/connectionUsageLedger';
+import { DeepgramCredentialCard } from '../components/DeepgramCredentialCard';
+import { ConnectorBrandMark } from './ConnectorBrandMark';
 
 interface ProviderRow {
   id: ProviderId;
@@ -40,12 +60,12 @@ interface ProviderRow {
   color: string;
 }
 
-const BYOK_PROVIDERS: ProviderRow[] = [
+const CONFIGURED_PROVIDER_ROWS: ProviderRow[] = [
   // Major cloud providers
   {
     id: 'anthropic',
     name: 'Anthropic',
-    hint: 'Claude Opus / Sonnet / Haiku',
+    hint: 'Live Claude catalog loads after connection',
     placeholder: 'sk-ant-...',
     category: 'major',
     color: 'from-orange-500/20 to-amber-500/20',
@@ -53,7 +73,7 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   {
     id: 'openai',
     name: 'OpenAI',
-    hint: 'GPT-5, o3, embeddings, realtime',
+    hint: 'Live OpenAI catalog loads after connection',
     placeholder: 'sk-...',
     category: 'major',
     color: 'from-emerald-500/20 to-teal-500/20',
@@ -61,18 +81,28 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   {
     id: 'google',
     name: 'Gemini',
-    hint: 'Gemini 2.5 Flash/Pro (free tier available)',
+    hint: 'Live Gemini catalog loads after connection',
     placeholder: 'AIza...',
     freeKeyUrl: 'https://aistudio.google.com/apikey',
     freeKeyLabel: 'Get a free key',
     category: 'major',
     color: 'from-blue-500/20 to-indigo-500/20',
   },
+  {
+    id: 'qwen',
+    name: 'Qwen / Alibaba Cloud',
+    hint: 'Live Qwen catalog loads from Model Studio after connection',
+    placeholder: 'sk-... (Model Studio)',
+    freeKeyUrl: 'https://bailian.console.alibabacloud.com/?apiKey=1',
+    freeKeyLabel: 'Get Model Studio key',
+    category: 'major',
+    color: 'from-violet-500/20 to-blue-500/20',
+  },
   // Fast inference providers
   {
     id: 'groq',
     name: 'Groq',
-    hint: 'Llama 3.3 70B, sub-second TTFT, free tier',
+    hint: 'Live Groq model catalog loads after connection',
     placeholder: 'gsk_...',
     freeKeyUrl: 'https://console.groq.com/keys',
     freeKeyLabel: 'Get a free key (no card)',
@@ -150,7 +180,7 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   {
     id: 'openrouter',
     name: 'OpenRouter',
-    hint: 'Multi-model gateway (200+ models)',
+    hint: 'Live OpenRouter catalog loads after connection',
     placeholder: 'sk-or-...',
     category: 'gateway',
     color: 'from-fuchsia-500/20 to-purple-500/20',
@@ -228,6 +258,28 @@ const BYOK_PROVIDERS: ProviderRow[] = [
   },
 ];
 
+// Only expose providers that have an end-to-end VibeSpace Chat adapter,
+// credential probe, model selection path, and packaged-app network policy.
+// Keeping unfinished integrations out of the connectable UI prevents a saved
+// key or a green-looking row from implying chat support that does not exist.
+const CHAT_API_PROVIDER_IDS = new Set<ProviderId>([
+  'anthropic',
+  'openai',
+  'google',
+  'qwen',
+  'groq',
+  'together',
+  'xai',
+  'deepseek',
+  'mistral',
+  'openrouter',
+  'ollama',
+]);
+
+export const BYOK_PROVIDERS: readonly ProviderRow[] = CONFIGURED_PROVIDER_ROWS.filter((provider) =>
+  CHAT_API_PROVIDER_IDS.has(provider.id),
+);
+
 const CATEGORY_META: Record<ProviderRow['category'], { label: string; icon: typeof Cloud }> = {
   major: { label: 'Major Cloud Providers', icon: Cloud },
   inference: { label: 'Fast Inference', icon: Zap },
@@ -242,6 +294,7 @@ const DEFAULT_PROVIDER_OPTIONS: { id: ProviderId; label: string; description: st
   { id: 'anthropic', label: 'Anthropic', description: 'Best for reasoning and writing.' },
   { id: 'openai', label: 'OpenAI', description: 'Strong generalist with realtime voice.' },
   { id: 'google', label: 'Gemini', description: 'Long context, fast Flash tier.' },
+  { id: 'qwen', label: 'Qwen / Alibaba Cloud', description: 'Qwen 3.7 via Model Studio.' },
   { id: 'groq', label: 'Groq', description: 'Sub-second open-weights inference.' },
   { id: 'deepseek', label: 'DeepSeek', description: 'DeepSeek V4 Flash via subscription credits.' },
   { id: 'ollama', label: 'Ollama (local)', description: 'Local models on this device.' },
@@ -258,15 +311,68 @@ export function Providers() {
   const plan = useAuthStore((s) => s.plan);
   const offlineMode = useAuthStore((s) => s.offlineMode);
   const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
-  const usageByProvider = useLiveQuery(async () => {
-    const totals = await getMonthlyAllProviderUsage(BYOK_PROVIDER_IDS);
-    return BYOK_PROVIDERS.reduce<Partial<Record<ProviderId, ProviderUsageData | null>>>(
-      (acc, provider) => {
-        acc[provider.id] = toProviderUsageData(totals[provider.id] ?? emptyUsageTotals());
-        return acc;
-      },
-      {},
-    );
+  const credentialVaultState = useAuthStore((s) => s.credentialVaultState);
+  const credentialVaultFailedProviders = useAuthStore((s) => s.credentialVaultFailedProviders);
+  const hydrateApiKeysFromVault = useAuthStore((s) => s.hydrateApiKeysFromVault);
+  const [usageRevision, setUsageRevision] = useState(0);
+  const usageSnapshot = useLiveQuery(async () => {
+    try {
+      const totals = await getMonthlyAllProviderUsage(BYOK_PROVIDER_IDS);
+      return {
+        data: BYOK_PROVIDERS.reduce<Partial<Record<ProviderId, ProviderUsageData | null>>>(
+          (acc, provider) => {
+            acc[provider.id] = toProviderUsageData(totals[provider.id] ?? emptyUsageTotals());
+            return acc;
+          },
+          {},
+        ),
+        error: null,
+        updatedAt: Date.now(),
+      };
+    } catch (error) {
+      return {
+        data: {} as Partial<Record<ProviderId, ProviderUsageData | null>>,
+        error: error instanceof Error ? error.message : 'Usage data could not be read.',
+        updatedAt: Date.now(),
+      };
+    }
+  }, [usageRevision]);
+  const providerContext = useMemo<ProviderConnectionContext>(
+    () => ({ apiKeys, offlineMode, plan, defaultLocalModel }),
+    [apiKeys, offlineMode, plan, defaultLocalModel],
+  );
+
+  useEffect(() => {
+    const focusProvider = (providerId: unknown) => {
+      if (typeof providerId !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,95}$/i.test(providerId)) {
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        const input = document.getElementById(`key-${providerId}`);
+        input?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        input?.focus({ preventScroll: true });
+      });
+    };
+    try {
+      const pending = window.sessionStorage.getItem('vibespace.settings.provider-focus.v1');
+      if (pending) {
+        window.sessionStorage.removeItem('vibespace.settings.provider-focus.v1');
+        focusProvider(pending);
+      }
+    } catch {
+      // Direct event routing remains available when session storage is unavailable.
+    }
+    const onProviderFocus = (event: Event) => {
+      focusProvider((event as CustomEvent<{ providerId?: string }>).detail?.providerId);
+    };
+    window.addEventListener('jarvis:settings:provider', onProviderFocus);
+    return () => window.removeEventListener('jarvis:settings:provider', onProviderFocus);
+  }, []);
+
+  useEffect(() => {
+    const updateUsage = () => setUsageRevision((revision) => revision + 1);
+    window.addEventListener(CONNECTION_USAGE_LEDGER_EVENT, updateUsage);
+    return () => window.removeEventListener(CONNECTION_USAGE_LEDGER_EVENT, updateUsage);
   }, []);
 
   const groupedProviders = useMemo(() => {
@@ -290,15 +396,63 @@ export function Providers() {
         <p className="text-secondary text-muted-foreground mt-1">
           Bring your own keys. Stored locally and never leave this device until you make a request.
         </p>
-        <div className="flex items-center gap-2 mt-3">
+        <div className="flex flex-wrap items-center gap-2 mt-3">
           <Badge variant="outline" className="text-metadata">
-            {BYOK_PROVIDERS.length} providers
+            {BYOK_PROVIDERS.length + 1} providers
           </Badge>
           <Badge variant="outline" className="text-metadata text-sage">
             {Object.values(apiKeys).filter(Boolean).length} connected
           </Badge>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto gap-1.5"
+            onClick={() => setUsageRevision((revision) => revision + 1)}
+            aria-label="Refresh provider usage"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh usage
+          </Button>
+          {usageSnapshot?.updatedAt ? (
+            <span className="text-metadata text-muted-foreground">
+              Last updated{' '}
+              {new Date(usageSnapshot.updatedAt).toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit',
+              })}
+            </span>
+          ) : null}
         </div>
       </header>
+
+      {credentialVaultState === 'degraded' ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-foreground">
+              Secure credential vault unavailable
+            </p>
+            <p className="text-xs text-muted-foreground">
+              VibeSpace could not verify
+              {credentialVaultFailedProviders.length > 0
+                ? ` ${credentialVaultFailedProviders.length} saved provider credential${credentialVaultFailedProviders.length === 1 ? '' : 's'}`
+                : ' saved provider credentials'}
+              . They have not been marked disconnected or copied into local storage.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => void hydrateApiKeysFromVault()}
+          >
+            Retry secure vault
+          </Button>
+        </div>
+      ) : null}
 
       {/* Provider sections by category */}
       {(['major', 'inference', 'gateway', 'enterprise', 'local'] as const).map((category) => {
@@ -313,10 +467,11 @@ export function Providers() {
               <Icon className="h-4 w-4 text-accent-copper" />
               <h3 className="text-ui-strong text-foreground">{meta.label}</h3>
               <Badge variant="outline" className="text-metadata ml-auto">
-                {providers.length}
+                {providers.length + (category === 'major' ? 1 : 0)}
               </Badge>
             </div>
             <div className="grid gap-3">
+              {category === 'major' ? <DeepgramCredentialCard showUsage /> : null}
               {providers.map((p) => (
                 <ProviderKeyRow
                   key={p.id}
@@ -324,7 +479,18 @@ export function Providers() {
                   value={apiKeys[p.id] ?? ''}
                   onSave={(v) => setApiKey(p.id, v)}
                   onClear={() => clearApiKey(p.id)}
-                  usageData={usageByProvider?.[p.id] ?? null}
+                  usageData={usageSnapshot?.data[p.id] ?? null}
+                  usageStatus={
+                    usageSnapshot === undefined
+                      ? 'loading'
+                      : usageSnapshot.error
+                        ? 'error'
+                        : 'ready'
+                  }
+                  usageError={usageSnapshot?.error ?? undefined}
+                  usageUpdatedAt={usageSnapshot?.updatedAt ?? null}
+                  providerContext={providerContext}
+                  usageRevision={usageRevision}
                 />
               ))}
             </div>
@@ -413,9 +579,14 @@ export function Providers() {
 interface ProviderKeyRowProps {
   row: ProviderRow;
   value: string;
-  onSave: (value: string) => void;
+  onSave: (value: string) => Promise<{ ok: true } | { ok: false; code: string }>;
   onClear: () => void;
   usageData: ProviderUsageData | null;
+  usageStatus: 'loading' | 'ready' | 'error';
+  usageError?: string;
+  usageUpdatedAt: number | null;
+  providerContext: ProviderConnectionContext;
+  usageRevision: number;
 }
 
 function emptyUsageTotals(): LocalUsageTotals {
@@ -448,29 +619,93 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
   onSave,
   onClear,
   usageData,
+  usageStatus,
+  usageError,
+  usageUpdatedAt,
+  providerContext,
+  usageRevision,
 }: ProviderKeyRowProps) {
   const [draft, setDraft] = useState(value);
   const [revealed, setRevealed] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'unsaved' | 'saving' | 'saved' | 'error'>(
+    'idle',
+  );
+  const [validationState, setValidationState] = useState<
+    'unverified' | 'testing' | 'connected' | 'rejected' | 'network-error'
+  >('unverified');
   const [copied, setCopied] = useState(false);
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const saveRevisionRef = useRef(0);
+  const [models, setModels] = useState<RegistryModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
 
   useEffect(() => {
     setDraft(value);
     if (!value) setRevealed(false);
+    setSaveState(value ? 'saved' : 'idle');
+    setValidationState('unverified');
   }, [value]);
+
+  useEffect(() => {
+    let active = true;
+    if (!value && row.id !== 'ollama') {
+      setModels([]);
+      return;
+    }
+    setModelsLoading(true);
+    void loadProviderModels(row.id, providerContext).then((options) => {
+      if (active) {
+        setModels(options);
+        setModelsLoading(false);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [providerContext, row.id, value]);
 
   const dirty = draft !== value;
   const isSaved = !!value;
+  const apiConnectionId = PROVIDER_CONNECTIONS.find(
+    (connection) => connection.mode === 'native-api' && connection.providerId === row.id,
+  )?.id;
 
-  function handleSave() {
-    const trimmed = draft.trim();
+  async function saveDraft(candidate = draft) {
+    const trimmed = candidate.trim();
     if (!trimmed) return;
-    onSave(trimmed);
+    const revision = ++saveRevisionRef.current;
+    setSaveState('saving');
+    const result = await onSave(trimmed);
+    if (revision !== saveRevisionRef.current) return;
+    if (!result.ok) {
+      setSaveState('error');
+      toast.error(
+        `${row.name} key was not saved`,
+        'Secure storage could not verify the credential. Your previous connection was preserved.',
+      );
+      return;
+    }
+    setSaveState('saved');
+    setValidationState('unverified');
     setRevealed(false);
-    toast.success(`${row.name} key saved`, 'Stored locally on this device.');
+    toast.success(`${row.name} key saved`, 'Verified in secure storage on this device.');
   }
+
+  useEffect(() => {
+    if (!dirty || !draft.trim()) {
+      if (!dirty) setSaveState(value ? 'saved' : 'idle');
+      return undefined;
+    }
+    setSaveState('unsaved');
+    const timer = window.setTimeout(() => {
+      void saveDraft(draft);
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // onSave intentionally resolves through the current row; draft/value are the save authority.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, value, dirty]);
 
   function handleTest() {
     const key = draft.trim();
@@ -479,23 +714,27 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
       return;
     }
     setTesting(true);
+    setValidationState('testing');
     void (async () => {
       try {
         const result = await testProviderKey(row.id, key);
         switch (result.kind) {
           case 'ok':
+            setValidationState('connected');
             toast.success(
               `${row.name} key works`,
               result.detail ?? 'Provider responded successfully.',
             );
             break;
           case 'invalid':
+            setValidationState('rejected');
             toast.error(
               `${row.name} rejected the key`,
               result.detail || 'The provider returned an authentication error.',
             );
             break;
           case 'network':
+            setValidationState('network-error');
             toast.warning(
               `Couldn't reach ${row.name}`,
               row.id === 'ollama'
@@ -504,9 +743,11 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
             );
             break;
           case 'unconfigured':
+            setValidationState('unverified');
             toast.warning('No key entered');
             break;
           case 'unsupported':
+            setValidationState('unverified');
             toast.info(
               `${row.name} live validation pending`,
               'The key is saved; live validation lands when its adapter does.',
@@ -514,6 +755,7 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
             break;
         }
       } catch (err) {
+        setValidationState('network-error');
         toast.error(`${row.name} test failed`, (err as Error).message);
       } finally {
         setTesting(false);
@@ -525,6 +767,7 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
     onClear();
     setDraft('');
     setRevealed(false);
+    setValidationState('unverified');
     toast.info(`${row.name} key removed`);
   }
 
@@ -538,6 +781,13 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
     } catch {
       toast.error('Failed to copy');
     }
+  }
+
+  async function handleRefreshModels() {
+    setModelsLoading(true);
+    const next = await refreshProviderModels(row.id, providerContext);
+    setModels(next);
+    setModelsLoading(false);
   }
 
   return (
@@ -568,6 +818,12 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
       <div className="relative flex flex-col gap-3">
         {/* Header row */}
         <div className="flex items-start justify-between gap-3">
+          <ConnectorBrandMark
+            providerId={row.id}
+            connectionId={row.id}
+            title={`${row.name} logo`}
+            className="h-8 w-8"
+          />
           <div className="flex-1 min-w-0">
             <Label
               htmlFor={`key-${row.id}`}
@@ -589,17 +845,34 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
             )}
           </div>
           <AnimatePresence mode="wait">
-            {isSaved ? (
+            {saveState === 'saving' ? (
+              <Badge variant="outline">Saving securely…</Badge>
+            ) : saveState === 'error' ? (
+              <Badge variant="destructive">Storage error</Badge>
+            ) : isSaved && !dirty ? (
               <motion.div
                 key="saved"
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.8 }}
               >
-                <Badge variant="success" className="gap-1">
-                  <Check className="h-3 w-3" />
-                  Connected
-                </Badge>
+                {validationState === 'connected' ? (
+                  <Badge variant="success" className="gap-1">
+                    <Check className="h-3 w-3" />
+                    Connected
+                  </Badge>
+                ) : validationState === 'testing' ? (
+                  <Badge variant="outline">Testing…</Badge>
+                ) : validationState === 'rejected' ? (
+                  <Badge variant="destructive">Saved · rejected</Badge>
+                ) : validationState === 'network-error' ? (
+                  <Badge variant="outline">Saved · unverified</Badge>
+                ) : (
+                  <Badge variant="outline" className="gap-1 text-sage">
+                    <Check className="h-3 w-3" />
+                    Saved securely
+                  </Badge>
+                )}
               </motion.div>
             ) : dirty && draft.trim() ? (
               <motion.div
@@ -616,6 +889,54 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
           </AnimatePresence>
         </div>
 
+        {isSaved && !dirty && validationState !== 'connected' ? (
+          <p className="text-metadata text-muted-foreground" role="status">
+            {validationState === 'rejected'
+              ? 'The credential remains saved securely, but the provider rejected it.'
+              : validationState === 'network-error'
+                ? 'Saved securely · connection unverified because the provider could not be reached.'
+                : validationState === 'testing'
+                  ? 'Saved securely · testing the provider connection…'
+                  : 'Saved securely · connection unverified. Use Test to confirm provider access.'}
+          </p>
+        ) : null}
+
+        {(isSaved || row.id === 'ollama') && (
+          <div className="flex flex-wrap items-center gap-2 text-metadata text-muted-foreground">
+            <span>
+              {modelsLoading
+                ? 'Loading official model catalog…'
+                : models.length > 0
+                  ? `${models
+                      .slice(0, 4)
+                      .map((model) => model.label)
+                      .join(' · ')}${models.length > 4 ? ` · +${models.length - 4}` : ''}`
+                  : 'No provider model catalog is available for this connection.'}
+            </span>
+            {getProviderRegistryEntry(row.id)?.supportsDynamicListing ? (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-accent-copper hover:text-accent-amber focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                onClick={() => void handleRefreshModels()}
+                disabled={modelsLoading}
+              >
+                <RefreshCw
+                  className={cn(
+                    'h-3 w-3',
+                    modelsLoading && 'animate-spin motion-reduce:animate-none',
+                  )}
+                />
+                Refresh models
+              </button>
+            ) : null}
+            {getProviderModelCacheState(row.id).error ? (
+              <span role="status" className="text-destructive">
+                Live catalog unavailable; showing last verified options.
+              </span>
+            ) : null}
+          </div>
+        )}
+
         {/* Input row */}
         <div className="flex items-center gap-2">
           <div className="relative flex-1" data-jarvis-rainbow="true" data-jarvis-api-key="true">
@@ -627,11 +948,14 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onFocus={() => setFocused(true)}
-              onBlur={() => setFocused(false)}
+              onBlur={() => {
+                setFocused(false);
+                if (dirty && draft.trim()) void saveDraft();
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
-                  handleSave();
+                  void saveDraft();
                 }
               }}
               className={cn(
@@ -671,11 +995,11 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
           <Button
             variant="secondary"
             size="sm"
-            onClick={handleSave}
-            disabled={!dirty || !draft.trim()}
+            onClick={() => void saveDraft()}
+            disabled={saveState === 'saving' || !dirty || !draft.trim()}
             className="transition-all duration-200 hover:bg-accent-copper/20"
           >
-            Save
+            {saveState === 'saving' ? 'Saving…' : 'Save'}
           </Button>
           <Button
             variant="ghost"
@@ -701,8 +1025,84 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
         </div>
 
         {/* Usage counter */}
-        <ProviderUsageCounter providerId={row.id} usage={usageData} className="mt-1" />
+        <ProviderUsageCounter
+          providerId={row.id}
+          usage={usageData}
+          status={usageStatus}
+          source="vibespace"
+          error={usageError}
+          lastUpdated={usageUpdatedAt}
+          className="mt-1"
+        />
+        {apiConnectionId ? (
+          <ApiConnectionUsageAnalytics connectionId={apiConnectionId} revision={usageRevision} />
+        ) : null}
       </div>
     </motion.div>
   );
 });
+
+function usageWindowLabel(window: ConnectionUsageWindow): string {
+  if (window.requests === 0) return 'No VibeSpace requests';
+  const average = window.costUsd / window.requests;
+  return `${window.requests} request${window.requests === 1 ? '' : 's'} · ${formatUsageTokens(window.inputTokens)} in · ${formatUsageTokens(window.cachedInputTokens)} cached · ${formatUsageTokens(window.outputTokens)} out · $${window.costUsd.toFixed(4)} · $${average.toFixed(4)} avg`;
+}
+
+function formatUsageTokens(value: number): string {
+  return value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(1)}M`
+    : value >= 1_000
+      ? `${(value / 1_000).toFixed(1)}K`
+      : String(value);
+}
+
+function ApiConnectionUsageAnalytics({
+  connectionId,
+  revision,
+}: {
+  connectionId: string;
+  revision: number;
+}) {
+  const windows = useMemo(() => {
+    const now = Date.now();
+    return [
+      ['24h', aggregateConnectionUsage(connectionId, now - 24 * 60 * 60 * 1_000)],
+      ['7d', aggregateConnectionUsage(connectionId, now - 7 * 24 * 60 * 60 * 1_000)],
+      ['30d', aggregateConnectionUsage(connectionId, now - 30 * 24 * 60 * 60 * 1_000)],
+    ] as const;
+    // The revision is an explicit invalidation token from local-ledger writes/refresh.
+  }, [connectionId, revision]);
+  const lastRequestAt = windows[2][1].lastRequestAt;
+
+  return (
+    <details className="rounded-md border border-border/70 bg-background/35 px-3 py-2">
+      <summary className="cursor-pointer text-metadata font-medium text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+        API analytics · 24h / 7d / 30d
+      </summary>
+      <div className="mt-2 grid gap-2 sm:grid-cols-3">
+        {windows.map(([label, usage]) => (
+          <div key={label} className="rounded border border-border/60 bg-panel/70 p-2">
+            <p className="text-metadata font-semibold text-foreground">{label}</p>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              {usageWindowLabel(usage)}
+            </p>
+            {usage.models.length > 0 ? (
+              <p className="mt-1 text-[10px] text-muted-foreground/70">
+                Models: {usage.models.join(', ')}
+              </p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[10px] text-muted-foreground/70">
+        Requests through VibeSpace · exact connection {connectionId} · source: VibeSpace local
+        request ledger
+        {lastRequestAt ? ` · last request ${new Date(lastRequestAt).toLocaleString()}` : ''}
+      </p>
+      <p className="mt-1 text-[10px] text-muted-foreground/70">
+        Provider billing: unavailable for this credential unless separately authorized. Local totals
+        are not your complete provider bill.
+      </p>
+    </details>
+  );
+}

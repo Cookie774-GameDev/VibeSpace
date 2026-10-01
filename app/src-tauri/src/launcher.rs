@@ -66,9 +66,7 @@ fn windows_installed_exe_candidates(local_app_data: &Path) -> Vec<PathBuf> {
     let dirs = [
         local_app_data.join("Programs").join("VibeSpace"),
         local_app_data.join("VibeSpace"),
-        local_app_data
-            .join("Programs")
-            .join("Jarvis One"),
+        local_app_data.join("Programs").join("Jarvis One"),
         local_app_data.join("Jarvis One"),
     ];
     let names = ["jarvis.exe", "VibeSpace.exe"];

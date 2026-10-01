@@ -57,6 +57,13 @@ export function JarvisVoiceHeader({
             ? `Hands-free — say "${voiceCommitPhrase}" to send`
             : 'Click to let Jarvis hear you';
 
+  const statusLabel =
+    state === 'error' && errorMessage
+      ? errorMessage
+      : state === 'listening'
+        ? 'Listening'
+        : listeningHint;
+
   return (
     <div
       className="jarvis-voice-drag-row cursor-grab active:cursor-grabbing"
@@ -65,60 +72,80 @@ export function JarvisVoiceHeader({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
     >
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute right-1 top-1 z-10 flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground/80 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label="Close Jarvis voice session"
-        title="Close"
-      >
-        <X className="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
-
-      <div className="relative z-[1] flex min-h-10 items-center gap-1.5 py-1 pl-2 pr-9">
+      <div className="jarvis-voice-instrument relative z-[1] flex items-center">
         <button
           type="button"
           onClick={onToggleListening}
           className={cn(
             'jarvis-voice-orb-button flex min-h-8 min-w-8 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-copper/80',
-            (state === 'listening' || state === 'thinking' || state === 'speaking') && 'is-active',
+            state === 'speaking' && 'is-speaking',
+            state === 'listening' && 'is-listening',
           )}
           aria-label={controlLabel}
           data-sik-evidence={voiceControlEvidence}
           title={controlTitle}
         >
-          <Orb state={state} size={30} ariaLabel="Jarvis voice activity" />
+          <Orb
+            state={state}
+            ariaLabel="Jarvis voice activity"
+            presentation="signal-globe"
+            levelRef={levelRef}
+            className="jarvis-voice-orb"
+          />
         </button>
-        <div className="flex min-w-0 flex-col">
-          <span className="truncate text-xs font-semibold leading-4 text-foreground">
+        <div className="jarvis-voice-identity flex min-w-0 flex-col">
+          <span className="jarvis-voice-title truncate font-semibold leading-none text-foreground">
             {personaName}
           </span>
           <span
             role="status"
             aria-live="polite"
             aria-atomic="true"
+            title={listeningHint}
             className={cn(
-              'flex items-center gap-1 text-xs leading-4',
-              state === 'error' ? 'text-foreground' : 'text-muted-foreground',
+              'jarvis-voice-status flex items-center gap-1.5 leading-none',
+              state === 'error' ? 'text-foreground' : 'text-[#5cefff]',
             )}
           >
             <span
               className={cn(
-                'h-1.5 w-1.5 rounded-full',
+                'h-1 w-1 rounded-full',
                 state === 'error'
                   ? 'bg-destructive'
-                  : 'bg-success shadow-[0_0_5px_hsl(var(--success)/0.75)]',
+                  : 'bg-[#5cefff] shadow-[0_0_6px_#5cefff]',
               )}
               aria-hidden="true"
             />
-            {state === 'error' && errorMessage ? errorMessage : listeningHint}
+            {statusLabel}
           </span>
         </div>
-        <div className="mx-auto min-w-0 flex-1">
-          <VoiceActivityWaveform levelRef={levelRef} active={state === 'listening'} />
+        <div className="jarvis-voice-meter mx-auto min-w-0 flex-1">
+          <VoiceActivityWaveform
+            levelRef={levelRef}
+            active={state === 'listening' || state === 'speaking' || state === 'thinking'}
+          />
         </div>
-        <div className="jarvis-voice-mic flex h-7 w-7 shrink-0 items-center justify-center rounded-full">
-          <Mic className="h-3 w-3 text-muted-foreground" strokeWidth={1.8} aria-hidden="true" />
+        <div className="jarvis-voice-actions flex shrink-0 items-center">
+          <button
+            type="button"
+            className="jarvis-voice-mic flex shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-copper/80"
+            onClick={onToggleListening}
+            aria-label="Toggle microphone"
+            aria-pressed={state === 'listening'}
+            title={controlTitle}
+          >
+            <Mic className="h-2.5 w-2.5" strokeWidth={2} aria-hidden="true" />
+          </button>
+          <span className="jarvis-voice-action-divider" aria-hidden="true" />
+          <button
+            type="button"
+            onClick={onClose}
+            className="jarvis-voice-close flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Close Jarvis voice session"
+            title="Close"
+          >
+            <X className="h-2.5 w-2.5" aria-hidden="true" />
+          </button>
         </div>
       </div>
     </div>

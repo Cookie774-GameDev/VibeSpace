@@ -279,7 +279,7 @@ export function buildJarvisModelSwitchCandidates(
   options: JarvisModelSwitchCandidateBuildOptions = {},
 ): readonly JarvisModelSwitchCandidate[] {
   const connections = (options.connections ?? PROVIDER_CONNECTIONS).filter(
-    (connection) => connection.enabled,
+    (connection) => connection.enabled && connection.mode !== 'external-cli',
   );
   const connectionStates =
     options.connectionStates ??

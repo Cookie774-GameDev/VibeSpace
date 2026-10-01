@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginLogo } from './PluginLogo';
 
@@ -21,16 +21,23 @@ describe('PluginLogo runtime isolation', () => {
     const mounted = render(<PluginLogo plugin={PLUGIN} />);
 
     expect(mounted.container.querySelector('img')).toBeNull();
-    expect(mounted.container.querySelector('svg')).not.toBeNull();
+    expect(mounted.getByText('GH')).toBeTruthy();
   });
 
   it('preserves remote logo loading in ordinary runtime', () => {
     vi.stubEnv('VITE_VIBESPACE_RUNTIME_PROFILE', undefined);
 
     const mounted = render(<PluginLogo plugin={PLUGIN} />);
+    const fallback = mounted.getByTestId('plugin-logo-fallback');
+    const image = mounted.container.querySelector('img');
 
-    expect(mounted.container.querySelector('img')?.getAttribute('src')).toBe(
-      'https://cdn.simpleicons.org/github',
-    );
+    expect(fallback.textContent).toBe('GH');
+    expect(image?.getAttribute('src')).toBe('https://cdn.simpleicons.org/github');
+    expect(image?.getAttribute('loading')).toBe('lazy');
+    expect(image?.getAttribute('decoding')).toBe('async');
+    expect(image?.getAttribute('data-loaded')).toBe('false');
+
+    fireEvent.load(image!);
+    expect(image?.getAttribute('data-loaded')).toBe('true');
   });
 });

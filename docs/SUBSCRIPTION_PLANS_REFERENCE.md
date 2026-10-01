@@ -1,8 +1,16 @@
 # VibeSpace Subscription Plans — Complete Reference
 
-**Last updated:** July 2026  
-**Document path:** `docs/SUBSCRIPTION_PLANS_REFERENCE.md`  
-**Code sources:** `callVoiceMarketing.ts`, `budget.ts`, `entitlements.ts`, `planLimits.ts`, `message-complete`, migrations `0019` + `0021` + `0022` + `0029` + `0030`
+**Last updated:** August 2026
+**Document path:** `docs/SUBSCRIPTION_PLANS_REFERENCE.md`
+**Code sources:** `billingCatalog.ts`, `budget.ts`, `entitlements.ts`, `planLimits.ts`,
+`message-complete`, migrations `0019` + `0021` + `0022` + `0029` + `0030` + `0036`
+
+> **Current authority:** VibeSpace Access is a separate $20/month subscription.
+> Spark includes 1,000 shared credits ($1 company-paid provider budget); Orbit,
+> Nova, Singularity, and Supernova are optional feature-plan subscriptions with
+> the exact limits below. Older launch-promotion examples later in this document
+> are historical planning context and do not override the server catalog,
+> `docs/stripe-setup.md`, or migration `0036`.
 
 ---
 
@@ -33,13 +41,13 @@
 
 ## Plan ladder at a glance
 
-| Internal ID | Display name | Price/mo | Spark = free forever |
-|-------------|--------------|----------|----------------------|
-| `free` | **Spark** | $0 | ✓ |
-| `starter` | **Orbit** | $10 | |
-| `pro` | **Nova** | $50 | |
-| `ultra` | **Singularity** | $100 | |
-| `apex` | **Supernova** | $200 | Planned — 2× Singularity pool |
+| Internal ID | Display name | Access | Feature plan | Total/mo | Shared credits |
+|-------------|--------------|-------:|-------------:|---------:|---------------:|
+| `free` | **Spark** | $20 | $0 | $20 | 1,000 |
+| `starter` | **Orbit** | $20 | $10 | $30 | 5,500 |
+| `pro` | **Nova** | $20 | $50 | $70 | 27,500 |
+| `ultra` | **Singularity** | $20 | $100 | $120 | 55,000 |
+| `apex` | **Supernova** | $20 | $200 | $220 | 110,000 |
 
 **Monthly sticker prices never change** during launch promos. Only the **one-time Deepgram launch bonus** increases when the company pool scales to $5k.
 
@@ -96,13 +104,14 @@ Users interact with two independent wallets. Do not conflate them in marketing o
 
 ## Hosted AI chat — DeepSeek V4 Flash
 
-Paid subscribers (Orbit / Nova / Singularity) get **hosted AI message credits** — company-paid chat **without** bringing your own API key.
+Every active Access package has a bounded **shared company-credit pool** that can
+fund hosted AI and other supported cloud services without requiring a user API key.
 
 | Item | Detail |
 |------|--------|
 | **Model** | **DeepSeek V4 Flash** (API id: `deepseek-chat`) |
 | **Endpoint** | Supabase Edge Function `message-complete` |
-| **Who gets it** | Orbit+ only — Spark uses BYOK or free Gemini Flash Lite via Google AI Studio |
+| **Who gets it** | Spark through Supernova, within the server-authoritative shared balance |
 | **Metering** | Monthly **message credits** bucket (1 credit ≈ $0.001 company spend) |
 | **Rate limits** | Triple windows on every bucket: **5-hour** (8%), **weekly** (25%), **monthly** (100%) — no rollover |
 | **Fallback** | If budget exhausted or provider down → client falls back to BYOK / local models |
@@ -111,11 +120,11 @@ Paid subscribers (Orbit / Nova / Singularity) get **hosted AI message credits** 
 
 | Tier | Shared pool (credits/mo) | Notes |
 |------|--------------------------|--------|
-| Spark | 0 | BYOK / local only |
-| Orbit | **~3,300** | One pool for DeepSeek + phone + SMS |
-| Nova | **~16,500** | same |
-| Singularity | **~33,000** | same |
-| Supernova | **~66,000** | same |
+| Spark | **1,000** | One pool for supported company-hosted services |
+| Orbit | **5,500** | same |
+| Nova | **27,500** | same |
+| Singularity | **55,000** | same |
+| Supernova | **110,000** | same |
 
 **BYOK always works on every tier** for any provider the user configures. Hosted DeepSeek is an **optional convenience** on paid plans, not a replacement for BYOK. Customers never see raw dollar COGS — only credits and friendly minutes/texts in the spend breakdown.
 
@@ -123,7 +132,9 @@ Paid subscribers (Orbit / Nova / Singularity) get **hosted AI message credits** 
 
 ### Hosted chat limits
 
-Hosted chat is **not unlimited**. Each paid tier has a fixed monthly **AI credit** bucket (slider-adjustable — see below). When credits hit zero → throttle; client falls back to BYOK/local, or **opt-in PAYG** if enabled. **No silent overage.**
+Hosted chat is **not unlimited**. Each package has one fixed monthly shared
+credit pool. When credits hit zero, hosted work is denied and the client falls
+back to BYOK/local where supported. **No silent overage.**
 
 ---
 
@@ -161,7 +172,7 @@ Real usage blends all three — the wallet depletes by actual Deepgram seconds c
 | Feature | How it's paid |
 |---------|---------------|
 | **Unlimited local Kokoro** | Free on every plan — voice module default; **never** touches Deepgram promo or monthly buckets |
-| **Hosted AI chat (DeepSeek V4 Flash)** | Monthly **message credits** bucket (Orbit+ only) — separate from Deepgram |
+| **Hosted AI chat (DeepSeek)** | Monthly shared company-credit pool — BYOK bypasses it |
 | **BYOK inference** | User's own API keys — always allowed on every tier |
 | **SMS texts** | Monthly **SMS** bucket (paid tiers only) |
 | **Twilio telephony leg** | Rolled into call-minute burn from monthly call/voice bucket on paid plans |
@@ -297,8 +308,10 @@ Promos run **until the pool money runs out** — no new claims after `pause_at_u
 
 ## Monthly subscription — one shared company credit pool
 
-Paid tiers get **one fungible monthly credit pool** for DeepSeek chat, AI phone, and SMS.
-Analytics still track each service; **remaining budget is shared**. Spark gets none (BYOK + local Kokoro).
+All active Access packages get **one fungible monthly company-credit pool** for
+supported hosted chat, phone, speech, and messaging services. Analytics still
+track each service; **remaining budget is shared**. Spark receives exactly
+1,000 credits; BYOK and local Kokoro do not consume the pool.
 
 **Rates (internal units, not cash):** DeepSeek **1 credit** · phone **100 credits/min** · SMS **10 credits/text**.
 
@@ -306,9 +319,9 @@ Analytics still track each service; **remaining budget is shared**. Spark gets n
 
 | | **Spark** | **Orbit** | **Nova** | **Singularity** | **Supernova** |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **Price** | $0 | $10/mo | $50/mo | $100/mo | $200/mo |
-| **Shared company credits/mo** | — | ~3,300 | ~16,500 | ~33,000 | ~66,000 |
-| **Spend on** | — | DeepSeek · phone · SMS | same | same | same |
+| **Total price** | $20/mo | $30/mo | $70/mo | $120/mo | $220/mo |
+| **Shared company credits/mo** | 1,000 | 5,500 | 27,500 | 55,000 | 110,000 |
+| **Spend on** | Supported hosted services | same | same | same | same |
 | **Cloud voice module max/mo** | Kokoro only | up to ~140+ min Deepgram TTS | up to ~720+ min | up to ~1,400+ min | up to ~2,800+ min |
 | **Jarvis Call (PSTN)** | ✗ | ✓ | ✓ | ✓ | ✓ |
 | **Voice module (local Kokoro)** | ✓ unlimited | ✓ unlimited | ✓ unlimited | ✓ unlimited | ✓ unlimited |
@@ -325,8 +338,8 @@ Dollar caps, COGS splits, and margin targets are defined in `budget.ts` and migr
 
 | Tier | Company-hosted chat |
 |------|---------------------|
-| **Spark** | None — BYOK any provider, or free Gemini 2.5 Flash Lite via Google AI Studio (no card) |
-| **Orbit / Nova / Singularity / Supernova** | **DeepSeek V4 Flash** via `message-complete` — draws from the **shared** company credit pool (~3.3k → ~66k/mo) |
+| **Spark** | Bounded hosted service through `message-complete` — draws from its 1,000-credit shared pool |
+| **Orbit / Nova / Singularity / Supernova** | Hosted service through `message-complete` — draws from the 5,500 → 110,000 shared pool |
 
 BYOK for Anthropic, OpenAI, Groq, etc. remains available on **all** tiers regardless of hosted DeepSeek.
 
@@ -413,7 +426,7 @@ For local reference, see your private ops wiki or the maintainer-only copy of th
 
 ### Paid tier lines
 
-> **Hosted chat:** DeepSeek V4 Flash — 3,100 / 15,500 / 31,000 credits per month  
+> **Shared credits:** Spark 1,000 · Orbit 5,500 · Nova 27,500 · Singularity 55,000 · Supernova 110,000 per month
 > **Jarvis Call + cloud voice:** 30 min → 90 min → 3 hr launch Deepgram (phase 1)
 
 ### Paid tier promo line (phase 2)

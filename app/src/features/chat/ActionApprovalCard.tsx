@@ -184,7 +184,7 @@ function resultLine(status: ActionStatus, error?: string): string | undefined {
 }
 
 /** Canonical cards load bounded presentation and mutate only through the host bridge. */
-export function ActionApprovalCard({ part, presentation }: ActionApprovalCardProps) {
+export function ActionApprovalCard({ part, presentation, chatId }: ActionApprovalCardProps) {
   const definition = resolveAction(part.action_id);
   const approvalTitleId = React.useId();
   const approvalId = React.useMemo(
@@ -302,6 +302,11 @@ export function ActionApprovalCard({ part, presentation }: ActionApprovalCardPro
         if (choice === 'deny') {
           setDisplayStatus('cancelled');
           setDecisionState('submitted');
+          window.dispatchEvent(
+            new CustomEvent('jarvis:run-state', {
+              detail: { chatId, status: 'cancelled' },
+            }),
+          );
           return;
         }
         const execution = await client.executeApproval({
@@ -325,6 +330,19 @@ export function ActionApprovalCard({ part, presentation }: ActionApprovalCardPro
                 : 'error',
         );
         setDecisionState('submitted');
+        if (execution.status === 'completed' || execution.status === 'failed') {
+          window.dispatchEvent(
+            new CustomEvent('jarvis:run-state', {
+              detail: {
+                chatId,
+                status: execution.status === 'completed' ? 'done' : 'error',
+                ...(execution.status === 'failed'
+                  ? { errorCode: 'kernel_runtime_action_execution' }
+                  : {}),
+              },
+            }),
+          );
+        }
       } finally {
         client.dispose();
       }

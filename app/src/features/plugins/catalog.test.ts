@@ -176,6 +176,7 @@ describe('plugin catalog', () => {
 
     expect(implementedOauth.map((plugin) => plugin.id).sort()).toEqual([
       'canva',
+      'github',
       'gmail',
       'google-drive',
     ]);

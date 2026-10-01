@@ -30,12 +30,8 @@ import { useThemeMotionTransition } from '@/features/appearance/themeMotion';
 import './sakura-schedule.css';
 import { useAgentStore } from '@/stores/agents';
 import { findProtectedJarvisAgent } from '@/lib/jarvis/identity';
-import {
-  formatChatModelSelectionLabel,
-  modelSelectionContextFromAuth,
-  selectionFromOption,
-  selectionOptionId,
-} from '@/lib/ai/modelSelection';
+import { selectionFromOption, selectionOptionId } from '@/lib/ai/modelSelection';
+import { askAssistantLabel, useAssistantPersonaName } from '@/lib/assistantPersona';
 
 const LEGACY_SCHEDULE_TIMELINE_TRANSITION = Object.freeze({
   type: 'spring',
@@ -65,6 +61,8 @@ import {
 import { visualForEventTitle, visualForTask } from './scheduleIcons';
 import {
   buildJarvisScheduleEventInput,
+  formatJarvisIntervalLabel,
+  intervalMsFromParts,
   isJarvisScheduleEvent,
   parseJarvisScheduleMetadata,
   type JarvisScheduleRecurrence,
@@ -80,6 +78,13 @@ import {
   subscribeKernelSmokeBinding,
 } from '@/lib/ai/providers/kernelSmoke';
 import { runDueJarvisSchedules } from './jarvisScheduleRunner';
+import {
+  clearScheduleDraft,
+  readScheduleDraft,
+  scheduleDraftsEqual,
+  writeScheduleDraft,
+  type ScheduleDraft,
+} from './scheduleDraftPersistence';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -87,6 +92,34 @@ const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
   devBuild: import.meta.env.DEV,
   explicitFlag: import.meta.env.VITE_SIK_SMOKE,
 });
+
+function createEmptyScheduleDraft(): ScheduleDraft {
+  const start = defaultEventStartMs();
+  return {
+    schemaVersion: 1,
+    quick: '',
+    title: '',
+    startInput: toLocalDateTimeInput(start),
+    endInput: toLocalDateTimeInput(defaultEventEndMs(start)),
+    allDay: false,
+    description: '',
+    reminderOffsets: [15],
+    scheduleMode: 'event',
+    jarvisRecurrence: 'once',
+    intervalAmount: 2,
+    intervalUnit: 'hours',
+    jarvisModelOptionId: '',
+  };
+}
+
+function cleanScheduleDraft(draft: ScheduleDraft): ScheduleDraft {
+  return {
+    ...draft,
+    quick: '',
+    title: '',
+    description: '',
+  };
+}
 
 function formatScheduleSuccess(summary: string): string {
   return formatJarvisVerifiedNarration({ kind: 'success', summary }).text;
@@ -105,11 +138,20 @@ const JARVIS_RECURRENCE_PRESETS: { value: JarvisScheduleRecurrence; label: strin
   { value: 'weekdays', label: 'Weekdays' },
   { value: 'weekly', label: 'Weekly' },
   { value: 'monthly', label: 'Monthly' },
+  { value: 'custom_interval', label: 'Every…' },
 ];
 
-function jarvisRecurrenceLabel(recurrence: JarvisScheduleRecurrence): string {
+function jarvisRecurrenceLabel(recurrence: JarvisScheduleRecurrence, intervalMs?: number): string {
+  if (recurrence === 'custom_interval') {
+    return formatJarvisIntervalLabel(intervalMs);
+  }
   return JARVIS_RECURRENCE_PRESETS.find((preset) => preset.value === recurrence)?.label ?? 'Once';
 }
+
+const SECTION_TITLE_CLASS = 'text-sm font-semibold tracking-tight text-foreground';
+const FIELD_HINT_CLASS = 'mt-1 text-metadata text-muted-foreground';
+const PLACEHOLDER_INPUT_CLASS =
+  'placeholder:italic placeholder:text-muted-foreground/45 placeholder:font-normal';
 
 type TimelineItem =
   | { kind: 'event'; id: string; at: number; end: number; instance: RecurrenceInstance }
@@ -298,6 +340,8 @@ function MiniCalendar({
 
 export function SchedulePage() {
   const reducedMotion = useReducedMotion();
+  const personaName = useAssistantPersonaName();
+  const askLabel = askAssistantLabel(personaName);
   const timelineTransition = useThemeMotionTransition(LEGACY_SCHEDULE_TIMELINE_TRANSITION);
   const kernelSmokeBindingActive = React.useSyncExternalStore(
     subscribeKernelSmokeBinding,
@@ -310,10 +354,23 @@ export function SchedulePage() {
   const protectedJarvisAgent = useAgentStore((state) =>
     findProtectedJarvisAgent(Object.values(state.agents)),
   );
-  const modelLabel = useAuthStore((s) =>
-    formatChatModelSelectionLabel(s.chatModelSelection, modelSelectionContextFromAuth(s)),
+  const { groups: jarvisModelGroups, flatOptions: jarvisModelOptionsAll } =
+    useAccessibleChatModels();
+  /** Only models the user can actually run — never show unauthorized tiers. */
+  const jarvisModelOptions = React.useMemo(
+    () => jarvisModelOptionsAll.filter((option) => option.available !== false),
+    [jarvisModelOptionsAll],
   );
-  const { flatOptions: jarvisModelOptions } = useAccessibleChatModels();
+  const jarvisModelGroupsAvailable = React.useMemo(
+    () =>
+      jarvisModelGroups
+        .map((group) => ({
+          ...group,
+          options: group.options.filter((option) => option.available !== false),
+        }))
+        .filter((group) => group.options.length > 0),
+    [jarvisModelGroups],
+  );
   const events = useUpcomingEvents(workspaceId, 14 * DAY_MS, 100);
   const tasks = useUpcomingTasks();
   const timeline = React.useMemo(() => buildTimeline(events, tasks), [events, tasks]);
@@ -328,21 +385,36 @@ export function SchedulePage() {
     return map;
   }, [timeline]);
 
-  const [quick, setQuick] = React.useState('');
-  const [title, setTitle] = React.useState('');
-  const [startInput, setStartInput] = React.useState(() =>
-    toLocalDateTimeInput(defaultEventStartMs()),
+  const initialScheduleDraft = React.useMemo<ScheduleDraft>(() => {
+    return (workspaceId && readScheduleDraft(workspaceId)) || createEmptyScheduleDraft();
+  }, [workspaceId]);
+  const cleanScheduleDraftRef = React.useRef<ScheduleDraft>(
+    cleanScheduleDraft(initialScheduleDraft),
   );
-  const [endInput, setEndInput] = React.useState(() =>
-    toLocalDateTimeInput(defaultEventEndMs(defaultEventStartMs())),
-  );
-  const [allDay, setAllDay] = React.useState(false);
-  const [description, setDescription] = React.useState('');
-  const [reminderOffsets, setReminderOffsets] = React.useState<number[]>([15]);
+  const draftWorkspaceRef = React.useRef<WorkspaceId | null>(workspaceId);
+  const skipDraftPersistenceRef = React.useRef(false);
+  const [quick, setQuick] = React.useState(initialScheduleDraft.quick);
+  const [title, setTitle] = React.useState(initialScheduleDraft.title);
+  const [startInput, setStartInput] = React.useState(initialScheduleDraft.startInput);
+  const [endInput, setEndInput] = React.useState(initialScheduleDraft.endInput);
+  const [allDay, setAllDay] = React.useState(initialScheduleDraft.allDay);
+  const [description, setDescription] = React.useState(initialScheduleDraft.description);
+  const [reminderOffsets, setReminderOffsets] = React.useState<number[]>([
+    ...initialScheduleDraft.reminderOffsets,
+  ]);
   const [calendarOpen, setCalendarOpen] = React.useState(false);
   const [selectedDayKey, setSelectedDayKey] = React.useState<string | null>(null);
-  const [scheduleMode, setScheduleMode] = React.useState<'event' | 'jarvis'>('event');
-  const [jarvisRecurrence, setJarvisRecurrence] = React.useState<JarvisScheduleRecurrence>('once');
+  const [scheduleMode, setScheduleMode] = React.useState<'event' | 'jarvis'>(
+    initialScheduleDraft.scheduleMode,
+  );
+  const [jarvisRecurrence, setJarvisRecurrence] = React.useState<JarvisScheduleRecurrence>(
+    initialScheduleDraft.jarvisRecurrence,
+  );
+  const [intervalAmount, setIntervalAmount] = React.useState(initialScheduleDraft.intervalAmount);
+  const [intervalUnit, setIntervalUnit] = React.useState<'minutes' | 'hours' | 'days'>(
+    initialScheduleDraft.intervalUnit,
+  );
+  const [modelPickerOpen, setModelPickerOpen] = React.useState(false);
   const [timelineView, setTimelineView] = React.useState<'timeline' | 'jarvis'>('timeline');
   const [openJarvisEventId, setOpenJarvisEventId] = React.useState<string | null>(null);
   const [kernelSmokeDispatching, setKernelSmokeDispatching] = React.useState(false);
@@ -390,8 +462,73 @@ export function SchedulePage() {
     [jarvisEvents, openJarvisEventId],
   );
   const [jarvisModelOptionId, setJarvisModelOptionId] = React.useState(
-    () => selectionOptionId(chatModelSelection) ?? '',
+    () => initialScheduleDraft.jarvisModelOptionId || selectionOptionId(chatModelSelection) || '',
   );
+
+  React.useLayoutEffect(() => {
+    if (draftWorkspaceRef.current === workspaceId) return;
+    draftWorkspaceRef.current = workspaceId;
+    skipDraftPersistenceRef.current = true;
+
+    const nextDraft = (workspaceId && readScheduleDraft(workspaceId)) || createEmptyScheduleDraft();
+    cleanScheduleDraftRef.current = cleanScheduleDraft(nextDraft);
+    setQuick(nextDraft.quick);
+    setTitle(nextDraft.title);
+    setStartInput(nextDraft.startInput);
+    setEndInput(nextDraft.endInput);
+    setAllDay(nextDraft.allDay);
+    setDescription(nextDraft.description);
+    setReminderOffsets([...nextDraft.reminderOffsets]);
+    setScheduleMode(nextDraft.scheduleMode);
+    setJarvisRecurrence(nextDraft.jarvisRecurrence);
+    setIntervalAmount(nextDraft.intervalAmount);
+    setIntervalUnit(nextDraft.intervalUnit);
+    setJarvisModelOptionId(
+      nextDraft.jarvisModelOptionId || selectionOptionId(chatModelSelection) || '',
+    );
+  }, [chatModelSelection, workspaceId]);
+
+  React.useLayoutEffect(() => {
+    if (skipDraftPersistenceRef.current) {
+      skipDraftPersistenceRef.current = false;
+      return;
+    }
+    if (!workspaceId) return;
+    const draft: ScheduleDraft = {
+      schemaVersion: 1,
+      quick,
+      title,
+      startInput,
+      endInput,
+      allDay,
+      description,
+      reminderOffsets,
+      scheduleMode,
+      jarvisRecurrence,
+      intervalAmount,
+      intervalUnit,
+      jarvisModelOptionId,
+    };
+    if (scheduleDraftsEqual(draft, cleanScheduleDraftRef.current)) {
+      clearScheduleDraft(workspaceId);
+      return;
+    }
+    writeScheduleDraft(workspaceId, draft);
+  }, [
+    allDay,
+    description,
+    endInput,
+    intervalAmount,
+    intervalUnit,
+    jarvisModelOptionId,
+    jarvisRecurrence,
+    quick,
+    reminderOffsets,
+    scheduleMode,
+    startInput,
+    title,
+    workspaceId,
+  ]);
   const selectedJarvisModel = React.useMemo(() => {
     const exact = jarvisModelOptions.find((option) => option.id === jarvisModelOptionId);
     if (exact) return exact;
@@ -483,7 +620,18 @@ export function SchedulePage() {
     if (scheduleMode === 'jarvis' && !selectedJarvisModel) {
       toast.warning(
         'Connect a model',
-        'Connect a provider or download a local model before saving a Jarvis Action.',
+        `Connect a provider or download a local model before saving a ${personaName} Action.`,
+      );
+      return;
+    }
+    const customIntervalMs =
+      scheduleMode === 'jarvis' && jarvisRecurrence === 'custom_interval'
+        ? intervalMsFromParts(intervalAmount, intervalUnit)
+        : undefined;
+    if (scheduleMode === 'jarvis' && jarvisRecurrence === 'custom_interval' && !customIntervalMs) {
+      toast.warning(
+        'Check the interval',
+        'Use at least 5 minutes and at most 30 days for “Every…”.',
       );
       return;
     }
@@ -541,6 +689,7 @@ export function SchedulePage() {
               startAt: start,
               durationMs: end - start,
               recurrence: jarvisRecurrence,
+              ...(customIntervalMs !== undefined ? { intervalMs: customIntervalMs } : {}),
               timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
               modelSelection: selectedJarvisModel
                 ? selectionFromOption(
@@ -564,10 +713,14 @@ export function SchedulePage() {
             },
       );
       toast.success(
-        jarvisAction ? 'Jarvis Action saved' : 'Event saved',
+        jarvisAction ? `${personaName} Action saved` : 'Event saved',
         formatScheduleSuccess(
           jarvisAction
-            ? `“${title.trim()}” will run ${jarvisRecurrence === 'once' ? 'once' : jarvisRecurrenceLabel(jarvisRecurrence).toLowerCase()} while VibeSpace is open.`
+            ? `“${title.trim()}” will run ${
+                jarvisRecurrence === 'once'
+                  ? 'once'
+                  : jarvisRecurrenceLabel(jarvisRecurrence, customIntervalMs).toLowerCase()
+              } while VibeSpace is open.`
             : `“${title.trim()}” is on your schedule.`,
         ),
       );
@@ -575,10 +728,30 @@ export function SchedulePage() {
       setTitle('');
       setDescription('');
       const nextStart = defaultEventStartMs();
-      setStartInput(toLocalDateTimeInput(nextStart));
-      setEndInput(toLocalDateTimeInput(defaultEventEndMs(nextStart)));
+      const nextStartInput = toLocalDateTimeInput(nextStart);
+      const nextEndInput = toLocalDateTimeInput(defaultEventEndMs(nextStart));
+      cleanScheduleDraftRef.current = {
+        schemaVersion: 1,
+        quick: '',
+        title: '',
+        startInput: nextStartInput,
+        endInput: nextEndInput,
+        allDay: false,
+        description: '',
+        reminderOffsets,
+        scheduleMode,
+        jarvisRecurrence: 'once',
+        intervalAmount: 2,
+        intervalUnit: 'hours',
+        jarvisModelOptionId,
+      };
+      clearScheduleDraft(workspaceId);
+      setStartInput(nextStartInput);
+      setEndInput(nextEndInput);
       setAllDay(false);
       setJarvisRecurrence('once');
+      setIntervalAmount(2);
+      setIntervalUnit('hours');
     } catch (err) {
       toast.error('Could not save', err instanceof Error ? err.message : 'Try again.');
     }
@@ -714,6 +887,7 @@ export function SchedulePage() {
       <header
         data-monochrome-surface="schedule-header"
         data-sakura-surface="schedule-header"
+        data-warm-surface="schedule-shell-header"
         className="relative overflow-hidden border-b border-border bg-gradient-to-r from-panel via-panel to-accent-copper/5 px-5 py-4 [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-panel [html[data-theme=monochrome]_&]:bg-none"
       >
         <motion.div
@@ -724,6 +898,9 @@ export function SchedulePage() {
             reducedMotion ? undefined : { duration: 8, repeat: Infinity, ease: 'easeInOut' }
           }
         />
+        <div aria-hidden data-warm-element="schedule-conversation-chip">
+          So right now it looks really useful…
+        </div>
         <div className="relative flex flex-wrap items-end justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-metadata uppercase tracking-wider text-accent-copper">
@@ -759,13 +936,28 @@ export function SchedulePage() {
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto p-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div
+        data-warm-surface="schedule-grid"
+        className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto p-4 xl:grid-cols-[minmax(0,1fr)_420px]"
+      >
         <section
           data-monochrome-surface="schedule-timeline"
           data-sakura-surface="schedule-timeline"
+          data-warm-state={
+            timelineView === 'jarvis'
+              ? jarvisEvents.length === 0
+                ? 'empty'
+                : 'populated'
+              : timeline.length === 0
+                ? 'empty'
+                : 'populated'
+          }
           className="min-h-[360px] overflow-hidden rounded-xl border border-border bg-background/80 shadow-soft [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:shadow-none"
         >
-          <div className="flex items-center justify-between gap-3 border-b border-border bg-panel/60 px-4 py-3">
+          <div
+            data-warm-surface="schedule-timeline-header"
+            className="flex items-center justify-between gap-3 border-b border-border bg-panel/60 px-4 py-3"
+          >
             <div>
               <h2 className="font-display text-page-title text-foreground">
                 {timelineView === 'jarvis' ? 'Jarvis Actions' : 'Timeline'}
@@ -825,8 +1017,12 @@ export function SchedulePage() {
               />
             )
           ) : timeline.length === 0 ? (
-            <div className="flex h-72 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
+            <div
+              data-warm-surface="schedule-empty-content"
+              className="flex h-72 flex-col items-center justify-center gap-3 text-center text-muted-foreground"
+            >
               <motion.div
+                data-warm-element="schedule-empty-icon"
                 className="flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-panel shadow-soft motion-reduce:!transform-none [html[data-theme=monochrome]_&]:!transform-none"
                 animate={reducedMotion ? undefined : { y: [0, -6, 0] }}
                 transition={
@@ -928,14 +1124,17 @@ export function SchedulePage() {
           data-sakura-surface="schedule-editor"
           className="rounded-xl border border-border bg-panel p-4 shadow-soft [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:shadow-none"
         >
-          <div className="mb-4 rounded-lg border border-border/80 bg-background/60 p-3 [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background">
+          <div
+            data-warm-surface="schedule-editor-intro"
+            className="mb-4 rounded-lg border border-border/80 bg-background/60 p-3 [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background"
+          >
             <div className="flex items-start gap-2">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent-cyan/30 bg-accent-cyan/10">
                 <Sparkles className="h-4 w-4 text-accent-cyan" />
               </div>
               <div>
                 <h2 className="font-display text-page-title text-foreground">
-                  Ask Jarvis to schedule
+                  {askLabel} to schedule
                 </h2>
                 <p className="text-secondary text-muted-foreground">
                   Natural-language planning stays local and editable before save.
@@ -945,7 +1144,10 @@ export function SchedulePage() {
           </div>
 
           <div className="flex flex-col gap-3">
-            <div className="grid grid-cols-2 gap-2 rounded-lg border border-border/80 bg-background/40 p-1 [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background">
+            <div
+              data-warm-surface="schedule-mode-switch"
+              className="grid grid-cols-2 gap-2 rounded-lg border border-border/80 bg-background/40 p-1 [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background"
+            >
               <Button
                 type="button"
                 size="sm"
@@ -960,73 +1162,115 @@ export function SchedulePage() {
                 variant={scheduleMode === 'jarvis' ? 'secondary' : 'ghost'}
                 onClick={() => setScheduleMode('jarvis')}
               >
-                Jarvis Action
+                {personaName} Action
               </Button>
             </div>
             {scheduleMode === 'jarvis' && (
               <div className="rounded-lg border border-accent-violet/30 bg-accent-violet/10 p-3 text-secondary [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background">
-                <div className="font-display text-ui-strong text-foreground">Jarvis action</div>
-                <p className="mt-1 text-muted-foreground">
-                  Title, system prompt, model, and run time are saved as a real Jarvis schedule.
+                <div className={cn(SECTION_TITLE_CLASS, 'font-display text-base')}>
+                  {personaName} action
+                </div>
+                <p className={FIELD_HINT_CLASS}>
+                  One clear title, the instruction {personaName} should follow, a model you can
+                  access, and when to run.
                 </p>
                 <div className="mt-3 space-y-1.5">
-                  <Label
-                    htmlFor="jarvis-action-model"
-                    className="text-metadata text-muted-foreground"
-                  >
-                    Jarvis action model
+                  <Label htmlFor="jarvis-action-model" className={SECTION_TITLE_CLASS}>
+                    Model
                   </Label>
                   {jarvisModelOptions.length > 0 ? (
-                    <select
-                      id="jarvis-action-model"
-                      value={jarvisModelOptionId}
-                      onChange={(event) => {
-                        const value = event.currentTarget.value;
-                        const exact = jarvisModelOptions.find((option) => option.id === value);
-                        if (exact) {
-                          setJarvisModelOptionId(exact.id);
-                          return;
-                        }
-                        const separator = value.indexOf(':');
-                        const provider = value.slice(0, separator);
-                        const modelId = value.slice(separator + 1);
-                        const compatible = jarvisModelOptions.find(
-                          (option) =>
-                            option.provider === provider &&
-                            option.modelId === modelId &&
-                            option.available !== false,
-                        );
-                        setJarvisModelOptionId(compatible?.id ?? value);
-                      }}
-                      className="flex h-9 w-full rounded-md border border-input bg-background px-2.5 text-body text-foreground"
-                    >
-                      {[
-                        ...new Set(
-                          jarvisModelOptions.map(
-                            (option) => `${option.provider}:${option.modelId}`,
-                          ),
-                        ),
-                      ].map((id) => (
-                        <option key={`legacy-${id}`} value={id} hidden>
-                          {id}
-                        </option>
-                      ))}
-                      {jarvisModelOptions.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {getProviderDisplayName(option.provider)} · {option.label}
-                        </option>
-                      ))}
-                    </select>
+                    <Popover open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
+                      <PopoverTrigger asChild>
+                        <button
+                          id="jarvis-action-model"
+                          type="button"
+                          aria-label={`${personaName} action model`}
+                          className={cn(
+                            'flex h-10 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-2.5 text-left text-body text-foreground',
+                            'hover:border-border-mid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+                          )}
+                        >
+                          <span className="min-w-0 truncate">
+                            {selectedJarvisModel
+                              ? `${getProviderDisplayName(selectedJarvisModel.provider)} · ${selectedJarvisModel.label}`
+                              : 'Choose a connected model'}
+                          </span>
+                          <ChevronRight className="h-3.5 w-3.5 shrink-0 rotate-90 text-muted-foreground" />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        align="start"
+                        className="w-[min(22rem,calc(100vw-2rem))] max-h-72 overflow-y-auto p-2"
+                      >
+                        <div className="space-y-3" role="listbox" aria-label="Connected models">
+                          {jarvisModelGroupsAvailable.map((group) => (
+                            <div key={group.provider}>
+                              <div className="mb-1 px-1.5 text-metadata font-semibold uppercase tracking-wide text-muted-foreground">
+                                {group.label}
+                              </div>
+                              <div className="space-y-0.5">
+                                {group.options.map((option) => {
+                                  const selected = option.id === jarvisModelOptionId;
+                                  return (
+                                    <button
+                                      key={option.id}
+                                      type="button"
+                                      role="option"
+                                      aria-selected={selected}
+                                      onClick={() => {
+                                        setJarvisModelOptionId(option.id);
+                                        setModelPickerOpen(false);
+                                      }}
+                                      className={cn(
+                                        'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-secondary transition-colors',
+                                        selected
+                                          ? 'bg-accent-violet/15 text-foreground ring-1 ring-accent-violet/40'
+                                          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                                      )}
+                                    >
+                                      <span
+                                        className={cn(
+                                          'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded border text-[10px] font-bold',
+                                          selected
+                                            ? 'border-accent-violet/50 bg-accent-violet/20 text-foreground'
+                                            : 'border-border bg-background text-muted-foreground',
+                                        )}
+                                        aria-hidden
+                                      >
+                                        {getProviderDisplayName(option.provider).slice(0, 2)}
+                                      </span>
+                                      <span className="min-w-0">
+                                        <span className="block truncate font-medium text-foreground">
+                                          {option.label}
+                                        </span>
+                                        <span className="block truncate text-metadata text-muted-foreground">
+                                          {option.modeLabel ??
+                                            getProviderDisplayName(option.provider)}
+                                          {option.authLabel ? ` · ${option.authLabel}` : ''}
+                                        </span>
+                                      </span>
+                                      {selected ? (
+                                        <Check className="ml-auto mt-1 h-3.5 w-3.5 shrink-0 text-accent-violet" />
+                                      ) : null}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
                   ) : (
                     <div className="rounded-md border border-dashed border-border bg-background/50 px-2.5 py-2 text-metadata text-muted-foreground">
                       Connect a provider in Settings → Providers or download a local model before
-                      saving a Jarvis Action.
+                      saving a {personaName} Action. Inaccessible models are never listed.
                     </div>
                   )}
                 </div>
                 <div className="mt-3 space-y-1.5">
-                  <Label className="flex items-center gap-1.5 text-metadata text-muted-foreground">
-                    <Repeat className="h-3 w-3" /> Repeats
+                  <Label className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-1.5')}>
+                    <Repeat className="h-3.5 w-3.5" /> Repeats
                   </Label>
                   <div className="flex flex-wrap gap-1.5">
                     {JARVIS_RECURRENCE_PRESETS.map((preset) => (
@@ -1046,49 +1290,92 @@ export function SchedulePage() {
                       </button>
                     ))}
                   </div>
+                  {jarvisRecurrence === 'custom_interval' ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-metadata text-muted-foreground">Every</span>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={999}
+                        value={intervalAmount}
+                        onChange={(e) =>
+                          setIntervalAmount(Math.max(1, Number(e.target.value) || 1))
+                        }
+                        className="h-8 w-20"
+                        aria-label="Interval amount"
+                      />
+                      <select
+                        value={intervalUnit}
+                        onChange={(e) =>
+                          setIntervalUnit(e.target.value as 'minutes' | 'hours' | 'days')
+                        }
+                        className="h-8 rounded-md border border-input bg-background px-2 text-metadata text-foreground"
+                        aria-label="Interval unit"
+                      >
+                        <option value="minutes">minutes</option>
+                        <option value="hours">hours</option>
+                        <option value="days">days</option>
+                      </select>
+                      <span className="text-metadata text-muted-foreground">
+                        (min 5 min · max 30 days)
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
-                <p className="mt-2 text-metadata text-accent-violet">
-                  Model:{' '}
+                <p className={cn(FIELD_HINT_CLASS, 'text-accent-violet')}>
+                  Selected:{' '}
                   {selectedJarvisModel
                     ? `${getProviderDisplayName(selectedJarvisModel.provider)} · ${selectedJarvisModel.label}`
-                    : modelLabel}
+                    : 'none'}
                 </p>
-                <p className="mt-1 text-metadata text-muted-foreground">
+                <p className={FIELD_HINT_CLASS}>
                   Runs while VibeSpace is open. Runs missed by more than 6 hours are logged, not
-                  replayed.
+                  replayed. Timezone: your system local clock.
                 </p>
               </div>
             )}
-            <div>
-              <Label htmlFor="event-quick" className="flex items-center gap-1.5">
-                <Sparkles className="h-3.5 w-3.5 text-accent-cyan" /> Jarvis schedule request
-              </Label>
-              <Input
-                id="event-quick"
-                value={quick}
-                onChange={(e) => handleQuickChange(e.target.value)}
-                placeholder="Work on this chat for our project at 2am"
-              />
-              <p className="mt-1 text-metadata text-muted-foreground">
-                Try: Friday 4pm, tomorrow 9:30, call me at 2am, work on the project tonight.
-              </p>
-            </div>
+            {scheduleMode === 'event' ? (
+              <div>
+                <Label
+                  htmlFor="event-quick"
+                  className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-1.5')}
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-accent-cyan" /> Quick natural language
+                </Label>
+                <Input
+                  id="event-quick"
+                  value={quick}
+                  onChange={(e) => handleQuickChange(e.target.value)}
+                  placeholder="e.g. Work on this chat for your project at 2 a.m."
+                  className={PLACEHOLDER_INPUT_CLASS}
+                />
+                <p className={FIELD_HINT_CLASS}>
+                  Suggestion only — not saved content. Try: Friday 4pm, tomorrow 9:30, call me at
+                  2am.
+                </p>
+              </div>
+            ) : null}
 
             <div>
-              <Label htmlFor="event-title">
-                {scheduleMode === 'jarvis' ? 'Jarvis action title' : 'Title'}
+              <Label htmlFor="event-title" className={SECTION_TITLE_CLASS}>
+                {scheduleMode === 'jarvis' ? `${personaName} action title` : 'Title'}
               </Label>
               <Input
                 id="event-title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="What's the event?"
+                placeholder={
+                  scheduleMode === 'jarvis'
+                    ? `e.g. Morning briefing for ${personaName}`
+                    : "e.g. What's the event?"
+                }
+                className={PLACEHOLDER_INPUT_CLASS}
               />
             </div>
 
             <div className="rounded-lg border border-border/80 bg-background/40 p-3 [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <Label className="flex items-center gap-1.5 text-foreground">
+                <Label className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-1.5')}>
                   <Clock className="h-3.5 w-3.5 text-accent-copper" /> When
                 </Label>
               </div>
@@ -1141,8 +1428,8 @@ export function SchedulePage() {
             ) : null}
 
             <div>
-              <Label id="event-desc-label" htmlFor="event-desc">
-                {scheduleMode === 'jarvis' ? 'System prompt' : 'Notes'}
+              <Label id="event-desc-label" htmlFor="event-desc" className={SECTION_TITLE_CLASS}>
+                {scheduleMode === 'jarvis' ? `${personaName} instruction` : 'Notes'}
               </Label>
               <Textarea
                 id="event-desc"
@@ -1151,16 +1438,17 @@ export function SchedulePage() {
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder={
                   scheduleMode === 'jarvis'
-                    ? 'What should Jarvis do when this runs?'
-                    : 'Optional context...'
+                    ? `e.g. What should ${personaName} do when this runs?`
+                    : 'e.g. Optional context…'
                 }
+                className={PLACEHOLDER_INPUT_CLASS}
                 rows={4}
               />
             </div>
 
             {scheduleMode === 'event' ? (
               <div>
-                <Label className="flex items-center gap-1.5">
+                <Label className={cn(SECTION_TITLE_CLASS, 'flex items-center gap-1.5')}>
                   <Bell className="h-3.5 w-3.5 text-accent-copper" /> Reminders
                 </Label>
                 <div className="mt-1.5 flex flex-wrap gap-2">
@@ -1192,9 +1480,14 @@ export function SchedulePage() {
               </div>
             ) : null}
 
-            <Button variant="accent" onClick={() => void handleSave()} className="mt-1 w-full">
+            <Button
+              data-warm-action="schedule-save"
+              variant="accent"
+              onClick={() => void handleSave()}
+              className="mt-1 w-full"
+            >
               <Plus className="mr-1 h-3.5 w-3.5" />{' '}
-              {scheduleMode === 'jarvis' ? 'Save Jarvis Action' : 'Save event'}
+              {scheduleMode === 'jarvis' ? `Save ${personaName} Action` : 'Save event'}
             </Button>
             {KERNEL_SMOKE_ENABLED && kernelSmokeBindingActive ? (
               <div className="grid grid-cols-2 gap-2" aria-label="Kernel schedule smoke fixtures">
@@ -1323,7 +1616,10 @@ function EventTimelineRow({
                     ? jarvisMetadata.modelSelection.modelId
                     : jarvisMetadata.modelSelection.mode}
                 </span>
-                <span>Repeats: {jarvisRecurrenceLabel(jarvisMetadata.recurrence)}</span>
+                <span>
+                  Repeats:{' '}
+                  {jarvisRecurrenceLabel(jarvisMetadata.recurrence, jarvisMetadata.intervalMs)}
+                </span>
                 <span>
                   Next:{' '}
                   {formatLocalDateTime(jarvisMetadata.nextRunAt ?? item.instance.instanceStartMs)}
@@ -1432,7 +1728,7 @@ function JarvisActionsList({
                     {jarvisEventDisplayTitle(event)}
                   </span>
                   <Badge variant="outline" className="shrink-0 text-metadata">
-                    {jarvisRecurrenceLabel(metadata?.recurrence ?? 'once')}
+                    {jarvisRecurrenceLabel(metadata?.recurrence ?? 'once', metadata?.intervalMs)}
                   </Badge>
                   {event.status === 'done' && (
                     <Badge variant="secondary" className="shrink-0 text-metadata">
@@ -1510,7 +1806,7 @@ function JarvisActionOutputView({
               {jarvisEventDisplayTitle(event)}
             </div>
             <p className="text-metadata text-muted-foreground">
-              {jarvisRecurrenceLabel(metadata?.recurrence ?? 'once')}
+              {jarvisRecurrenceLabel(metadata?.recurrence ?? 'once', metadata?.intervalMs)}
               {metadata?.modelSelection.mode === 'single'
                 ? ` · ${metadata.modelSelection.modelId}`
                 : ''}

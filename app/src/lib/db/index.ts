@@ -9,9 +9,9 @@
  * The db is opened lazily; calling `openDb()` is idempotent and safe to call
  * from multiple call sites (initial bootstrap, seed, sync loop).
  *
- * V1 → V9 migrations preserve every existing row. Dexie replays each version's store
+ * V1 → V12 migrations preserve every existing row. Dexie replays each version's store
  * list, creates the newer tables, and leaves every existing row untouched.
- * New installs open directly on V9.
+ * New installs open directly on V11.
  */
 
 import Dexie, { type EntityTable, type Table } from 'dexie';
@@ -39,6 +39,13 @@ import {
   STORES_V7,
   STORES_V8,
   STORES_V9,
+  STORES_V10,
+  STORES_V11,
+  STORES_V12,
+  type BrowserChatBindingRow,
+  type BrowserChatImportRow,
+  type BrowserChatPermissionProfileRow,
+  type BrowserChatSnapshotRow,
   type CanvasAssetRow,
   type CanvasCameraRow,
   type CanvasDocumentRow,
@@ -69,6 +76,7 @@ import {
   type MemoryEvidenceHistoryRow,
   type MemoryEvidenceRow,
   type Project,
+  type ProviderProjectLinkRow,
   type PromptForgeJobRow,
   type SettingsRow,
   type SyncQueueRow,
@@ -155,6 +163,17 @@ export class JarvisDexie extends Dexie {
   // V9 curated memory evidence history (memory items remain in memory_items)
   memory_evidence_history!: EntityTable<MemoryEvidenceHistoryRow, 'id'>;
 
+  // V10 Browser Chat workspace records (local-first, account/workspace scoped)
+  browser_chat_bindings!: EntityTable<BrowserChatBindingRow, 'id'>;
+  provider_project_links!: EntityTable<ProviderProjectLinkRow, 'id'>;
+
+  // V11 official provider export snapshots (separate from native messages)
+  browser_chat_imports!: EntityTable<BrowserChatImportRow, 'id'>;
+  browser_chat_snapshots!: EntityTable<BrowserChatSnapshotRow, 'id'>;
+
+  // V12 durable Browser Chat permission profiles
+  browser_chat_permission_profiles!: EntityTable<BrowserChatPermissionProfileRow, 'id'>;
+
   constructor(name = DB_NAME, dependencies?: JarvisDexieDependencies) {
     super(name, dependencies);
     // Replay every additive schema version for existing installations.
@@ -167,6 +186,9 @@ export class JarvisDexie extends Dexie {
     this.version(7).stores(STORES_V7);
     this.version(8).stores(STORES_V8);
     this.version(9).stores(STORES_V9);
+    this.version(10).stores(STORES_V10);
+    this.version(11).stores(STORES_V11);
+    this.version(12).stores(STORES_V12);
   }
 }
 
@@ -239,6 +261,13 @@ export type {
   CanvasRevisionRow,
   CanvasTombstoneRow,
   CanvasRecoveryRow,
+  BrowserChatBindingRow,
+  BrowserChatImportRow,
+  BrowserChatPermissionProfileRow,
+  BrowserChatSnapshotMessage,
+  BrowserChatSnapshotRow,
+  BrowserChatProvider,
+  ProviderProjectLinkRow,
 } from './schema';
 export * from './repositories';
 export { seedIfEmpty } from './seed';

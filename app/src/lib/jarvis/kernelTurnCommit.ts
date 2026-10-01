@@ -1,6 +1,7 @@
 import Dexie from 'dexie';
 
 import type { Chat, Message } from '@/types';
+import type { ActionResult } from '@/lib/actions/types';
 import {
   fromJarvisArtifactRow,
   fromJarvisEventRow,
@@ -167,6 +168,7 @@ export type FinalizeActionResponseInput = Readonly<{
   accountBinding: JarvisKernelAccountBinding;
   outcome: 'completed' | 'degraded' | 'denied' | 'handoff';
   resultRef: string;
+  result?: ActionResult;
   completedAt: number;
 }>;
 
@@ -314,10 +316,76 @@ function assertFinalizeActionResponseInput(input: FinalizeActionResponseInput): 
     !Number.isSafeInteger(input.attemptNumber) ||
     input.attemptNumber < 1 ||
     !Number.isFinite(input.completedAt) ||
-    !['completed', 'degraded', 'denied', 'handoff'].includes(input.outcome)
+    !['completed', 'degraded', 'denied', 'handoff'].includes(input.outcome) ||
+    (input.result !== undefined && input.outcome !== 'completed')
   ) {
     throw new TypeError('action_response_finalize_input_invalid');
   }
+}
+
+function approvalCallId(approvalId: string): string {
+  return `jarvisapproval:${encodeURIComponent(approvalId)}`;
+}
+
+function approvalIdFromCallId(callId: string): string | undefined {
+  if (!callId.startsWith('jarvisapproval:')) return undefined;
+  try {
+    return decodeURIComponent(callId.slice('jarvisapproval:'.length));
+  } catch {
+    return undefined;
+  }
+}
+
+function fileActionBatchParts(
+  parts: Message['parts'],
+): Extract<Message['parts'][number], { kind: 'action_proposal' }>[] {
+  const proposals = parts.filter(
+    (
+      part,
+    ): part is Extract<Message['parts'][number], { kind: 'action_proposal' }> =>
+      part.kind === 'action_proposal' &&
+      (part.action_id === 'files.read' || part.action_id === 'files.create'),
+  );
+  if (proposals.length < 2 || proposals.length > 10) return [];
+  if (!proposals.every((part) => part.action_id === proposals[0]!.action_id)) return [];
+  return proposals;
+}
+
+function approvedFileReadResult(
+  actionId: string,
+  params: Readonly<Record<string, unknown>>,
+  result: ActionResult | undefined,
+): Extract<ActionResult, { ok: true }> | undefined {
+  if (result === undefined) return undefined;
+  if (
+    actionId !== 'files.read' ||
+    !result.ok ||
+    typeof result.summary !== 'string' ||
+    result.summary.length > 2_048 ||
+    !result.data ||
+    typeof result.data !== 'object' ||
+    Array.isArray(result.data)
+  ) {
+    throw new TypeError('action_response_finalize_result_invalid');
+  }
+  const data = result.data as Record<string, unknown>;
+  const path = data.path;
+  const content = data.content;
+  if (
+    typeof path !== 'string' ||
+    path.length === 0 ||
+    path.length > 4_096 ||
+    path !== params.path ||
+    typeof content !== 'string' ||
+    content.length > 48_000
+  ) {
+    throw new TypeError('action_response_finalize_result_invalid');
+  }
+  return {
+    ok: true,
+    summary: result.summary,
+    data: { path, content },
+  };
 }
 
 function assertVoicePlaybackInput(input: VoicePlaybackCommitInput): void {
@@ -434,11 +502,22 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
       const proposals = input.assistantMessage.parts.filter(
         (part) => part.kind === 'action_proposal',
       );
-      if (
-        proposals.length !== 1 ||
-        proposals[0]!.call_id !== expectedCallId ||
-        proposals[0]!.status !== 'pending'
-      ) {
+      const pendingProposals = proposals.filter((part) => part.status === 'pending');
+      const validSingle =
+        pendingProposals.length === 1 && pendingProposals[0]!.call_id === expectedCallId;
+      const validFileCreateBatch =
+        pendingProposals.length >= 2 &&
+        pendingProposals.length <= 10 &&
+        (pendingProposals[0]?.action_id === 'files.create' ||
+          pendingProposals[0]?.action_id === 'files.read') &&
+        pendingProposals.every(
+          (part) =>
+            part.action_id === pendingProposals[0]!.action_id &&
+            typeof part.call_id === 'string' &&
+            part.call_id.startsWith('jarvisapproval:'),
+        ) &&
+        pendingProposals.some((part) => part.call_id === expectedCallId);
+      if (!validSingle && !validFileCreateBatch) {
         throw new TypeError('action_response_ready_approval_projection_invalid');
       }
       const artifactIds = new Set<string>();
@@ -595,13 +674,6 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
             throw new TypeError('action_response_finalize_run_scope_mismatch');
           }
           const current = fromJarvisRunRow(runRow);
-          if (current.status !== 'running') {
-            return {
-              committed: false,
-              reason: 'status_conflict',
-              actualStatus: current.status,
-            };
-          }
           if (!storedMessage || storedMessage.chat_id !== current.chatId) {
             return {
               committed: false,
@@ -609,9 +681,32 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
               actualStatus: current.status,
             };
           }
-          const responseReady = runEvents.filter(
+          const expectedCallId = approvalCallId(input.approvalId);
+          const fileBatch = fileActionBatchParts(storedMessage.parts);
+          const isFileActionBatch =
+            fileBatch.length >= 2 && fileBatch.some((part) => part.call_id === expectedCallId);
+          if (
+            current.status !== 'running' &&
+            !(isFileActionBatch && current.status === 'awaiting_approval' && input.outcome === 'completed')
+          ) {
+            return {
+              committed: false,
+              reason: 'status_conflict',
+              actualStatus: current.status,
+            };
+          }
+          let responseReady = runEvents.filter(
             (row) => row.idempotency_key === `action-response-ready:${input.approvalId}`,
           );
+          if (responseReady.length !== 1 && isFileActionBatch) {
+            const checkpointKeys = new Set(
+              fileBatch.flatMap((part) => {
+                const siblingId = approvalIdFromCallId(part.call_id);
+                return siblingId ? [`action-response-ready:${siblingId}`] : [];
+              }),
+            );
+            responseReady = runEvents.filter((row) => checkpointKeys.has(row.idempotency_key));
+          }
           if (responseReady.length !== 1 || input.completedAt < current.updatedAt) {
             return {
               committed: false,
@@ -619,7 +714,6 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
               actualStatus: current.status,
             };
           }
-          const expectedCallId = `jarvisapproval:${encodeURIComponent(input.approvalId)}`;
           let matched = 0;
           const partStatus =
             input.outcome === 'completed'
@@ -640,9 +734,11 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
             ) {
               throw new TypeError('action_response_finalize_projection_conflict');
             }
+            const projectedResult = approvedFileReadResult(part.action_id, part.params, input.result);
             return {
               ...structuredClone(part),
               status: partStatus,
+              ...(projectedResult === undefined ? {} : { result: projectedResult }),
               ...(partStatus === 'error'
                 ? { error: 'The protected action did not complete.' }
                 : {}),
@@ -655,8 +751,18 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
               actualStatus: current.status,
             };
           }
+          const remainingBatchPending = isFileActionBatch
+            ? parts.filter(
+                (part) =>
+                  part.kind === 'action_proposal' &&
+                  (part.action_id === 'files.read' || part.action_id === 'files.create') &&
+                  (part.status === 'pending' || part.status === 'queued'),
+              ).length
+            : 0;
+          const keepAwaitingApproval =
+            isFileActionBatch && remainingBatchPending > 0 && input.outcome === 'completed';
           let transportAttempts = current.transportAttempts;
-          if (current.source === 'schedule' && input.outcome !== 'handoff') {
+          if (current.source === 'schedule' && input.outcome !== 'handoff' && !keepAwaitingApproval) {
             const attempts = structuredClone([...(current.transportAttempts ?? [])]);
             const latest = attempts.at(-1);
             if (
@@ -678,8 +784,9 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
             };
             transportAttempts = attempts;
           }
-          const terminalStatus =
-            input.outcome === 'completed'
+          const terminalStatus = keepAwaitingApproval
+            ? ('awaiting_approval' as const)
+            : input.outcome === 'completed'
               ? ('completed' as const)
               : input.outcome === 'denied'
                 ? ('cancelled' as const)
@@ -690,7 +797,9 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
             ...current,
             status: terminalStatus,
             updatedAt: input.completedAt,
-            ...(terminalStatus === 'running' ? {} : { completedAt: input.completedAt }),
+            ...(terminalStatus === 'running' || terminalStatus === 'awaiting_approval'
+              ? {}
+              : { completedAt: input.completedAt }),
             ...(transportAttempts === undefined ? {} : { transportAttempts }),
           };
           const message: Message = {
@@ -721,7 +830,9 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
                   ? 'Action completed'
                   : terminalStatus === 'cancelled'
                     ? 'Action denied'
-                    : 'Action ended with degraded state',
+                    : terminalStatus === 'awaiting_approval'
+                      ? 'Batch action completed'
+                      : 'Action ended with degraded state',
             safeSummary:
               input.outcome === 'handoff'
                 ? 'The approved action is running under its native execution owner.'
@@ -729,7 +840,9 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
                   ? 'The approved protected action completed.'
                   : terminalStatus === 'cancelled'
                     ? 'The protected action was denied and did not execute.'
-                    : 'The approved protected action did not fully complete.',
+                    : terminalStatus === 'awaiting_approval'
+                      ? 'The approved file action completed; remaining batch approvals are still pending.'
+                      : 'The approved protected action did not fully complete.',
             sourceRefs: responseReadyEvent.sourceRefs,
             artifactIds: responseReadyEvent.artifactIds,
             createdAt: input.completedAt,

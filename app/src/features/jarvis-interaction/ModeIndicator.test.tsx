@@ -16,6 +16,10 @@ describe('ModeIndicator', () => {
 
     fireEvent.click(screen.getByRole('option', { name: /Plan Mode/i }));
     expect(onSelectMode).toHaveBeenCalledWith('plan');
+    expect(screen.getByRole('listbox', { name: /Access and Approve All/i })).toBeTruthy();
+    expect(screen.getByText('Read Only')).toBeTruthy();
+    expect(screen.getByText('Full Access')).toBeTruthy();
+    expect(screen.queryByRole('listbox', { name: /Chat modes/i })).toBeNull();
   });
 
   it('highlights Ask Mode when that mode is active', () => {

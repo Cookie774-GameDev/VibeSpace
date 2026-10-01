@@ -112,6 +112,8 @@ export type PromptForgeJobScope = Readonly<{
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/u;
 const CONTROL_AND_BIDI =
   /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/u;
+const PROMPT_CONTROL_AND_BIDI =
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/u;
 const MAX_DRAFT_CHARS = 100_000;
 const MAX_REGENERATION_INSTRUCTIONS_CHARS = 10_000;
 const MAX_GENERATED_CHARS = 200_000;
@@ -188,6 +190,18 @@ function text(value: unknown, maximum: number, detail: string, allowEmpty = fals
     value.length > maximum ||
     (!allowEmpty && value.trim().length === 0) ||
     CONTROL_AND_BIDI.test(value)
+  ) {
+    fail(detail);
+  }
+  return value;
+}
+
+function promptText(value: unknown, maximum: number, detail: string): string {
+  if (
+    typeof value !== 'string' ||
+    value.length > maximum ||
+    value.trim().length === 0 ||
+    PROMPT_CONTROL_AND_BIDI.test(value)
   ) {
     fail(detail);
   }
@@ -409,11 +423,11 @@ export function createPromptForgeJob(input: {
     accountId: id(input.accountId, 'account ID'),
     chatId: id(input.chatId, 'chat ID'),
     projectId: input.projectId === null ? null : id(input.projectId, 'project ID'),
-    originalDraft: text(input.originalDraft, MAX_DRAFT_CHARS, 'draft'),
+    originalDraft: promptText(input.originalDraft, MAX_DRAFT_CHARS, 'draft'),
     regenerationInstructions:
       input.regenerationInstructions === undefined || input.regenerationInstructions === null
         ? null
-        : text(
+        : promptText(
             input.regenerationInstructions,
             MAX_REGENERATION_INSTRUCTIONS_CHARS,
             'regeneration instructions',
@@ -494,11 +508,11 @@ export function parsePromptForgeJob(value: unknown): PromptForgeJob {
       accountId: id(record.accountId, 'persisted job'),
       chatId: id(record.chatId, 'persisted job'),
       projectId: record.projectId === null ? null : id(record.projectId, 'persisted job'),
-      originalDraft: text(record.originalDraft, MAX_DRAFT_CHARS, 'persisted job'),
+      originalDraft: promptText(record.originalDraft, MAX_DRAFT_CHARS, 'persisted job'),
       regenerationInstructions:
         legacyInstructions || record.regenerationInstructions === null
           ? null
-          : text(
+          : promptText(
               record.regenerationInstructions,
               MAX_REGENERATION_INSTRUCTIONS_CHARS,
               'persisted job',
@@ -515,7 +529,7 @@ export function parsePromptForgeJob(value: unknown): PromptForgeJob {
       generatedDraft:
         record.generatedDraft === null
           ? null
-          : text(record.generatedDraft, MAX_GENERATED_CHARS, 'persisted job'),
+          : promptText(record.generatedDraft, MAX_GENERATED_CHARS, 'persisted job'),
       validation: validationSnapshot(record.validation),
       createdAt,
       updatedAt,
@@ -580,7 +594,7 @@ export function transitionPromptForgeJob(
       ? job.generatedDraft
       : update.generatedDraft === null
         ? null
-        : text(update.generatedDraft, MAX_GENERATED_CHARS, 'generated prompt');
+        : promptText(update.generatedDraft, MAX_GENERATED_CHARS, 'generated prompt');
   const terminal = ['ready', 'cancelled', 'failed'].includes(update.status);
   return Object.freeze({
     ...job,

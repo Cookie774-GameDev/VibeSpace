@@ -4,6 +4,7 @@ import type {
   ProviderId,
   WorkspaceId,
   ProjectId,
+  PersonaPreset,
   VoiceEngine,
   VoicePresetId,
   ComposerSttProvider,
@@ -21,9 +22,11 @@ import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
 import {
   SECRET_API_KEY_PROVIDERS,
   isSecretApiKeyProvider,
-  loadSecureApiKeys,
+  loadSecureApiKeysDetailed,
+  saveApiKeySecurely,
   secureDeleteApiKey,
   secureSetApiKey,
+  type ApiKeySaveResult,
 } from '@/lib/security/secureApiKeys';
 import {
   VOICE_SILENCE_DELAY_MS_DEFAULT,
@@ -41,17 +44,32 @@ import {
 } from '@/features/voice/voiceTurnCommit';
 import {
   EMPTY_CHAT_MODEL_SELECTION,
+  gateChatModelSelection,
   migrateLegacyModelSelection,
   normalizeChatModelSelection,
   selectionFromHive,
   selectionFromOption,
   type ChatModelSelection,
 } from '@/lib/ai/modelSelection';
+import { isHiveProductEnabled } from '@/lib/features/hiveProductGate';
+import { normalizeLocalSttCatalogId } from '@/features/composer-stt/catalog';
+import { normalizeAssistantPersonaId } from '@/lib/assistantPersona';
+
+function normalizeLocalSttModelId(raw: string | null | undefined): FasterWhisperModelId {
+  return normalizeLocalSttCatalogId(raw) as FasterWhisperModelId;
+}
+
+// The secure keychain remains authoritative, but hydration is deliberately
+// non-destructive. The snapshot resolves before App's outer five-second boot
+// guard and supersedes stale reads whenever the user mutates a provider key.
+const credentialHydrationSnapshot = new CredentialHydrationSnapshot(4_500);
+
 import {
   normalizePromptForgeModelSelection,
   type PromptForgeModelSelection,
 } from '@/features/prompt-forge/contracts';
 import { DEFAULT_PROMPT_FORGE_MODEL_SELECTION } from '@/features/prompt-forge/modelSelection';
+import { CredentialHydrationSnapshot } from '@/lib/harness/CredentialHydrationSnapshot';
 
 interface AuthState {
   /** Local-only profile (no cloud account) */
@@ -88,7 +106,7 @@ interface AuthState {
   defaultLocalModel: string;
 
   /** Persona preset and custom prompt overrides */
-  personaPreset: 'jarvis' | 'athena' | 'edge' | 'watson' | 'hal';
+  personaPreset: PersonaPreset;
   /** Spoken voice profile used everywhere Jarvis speaks. */
   voicePreset: VoicePresetId;
   /** Restrict speech to installed voices when local mode is selected. */
@@ -152,15 +170,24 @@ interface AuthState {
   automaticModelRoutingEnabled: boolean;
   /** Prompt Forge's independent default; changing it never changes the chat model. */
   promptForgeModelSelection: PromptForgeModelSelection;
+  /**
+   * When true, Composer upgrades the draft with Prompt Forge before each Send
+   * (falls back to the original text if upgrade fails). Manual Upgrade button remains.
+   */
+  promptForgeAutoUpgradeOnSend: boolean;
 
   /** Telemetry opt-in */
   telemetryOptIn: boolean;
+  credentialVaultState: 'idle' | 'hydrating' | 'ready' | 'degraded';
+  credentialVaultFailedProviders: ProviderId[];
+  preferredConnectionIdByProviderFamily: Partial<Record<string, string>>;
 
   // Actions
   setDisplayName: (n: string) => void;
-  setApiKey: (provider: ProviderId, key: string) => void;
+  setPreferredConnectionId: (provider: string, connectionId: string) => void;
+  setApiKey: (provider: ProviderId, key: string) => Promise<ApiKeySaveResult>;
   clearApiKey: (provider: ProviderId) => void;
-  hydrateApiKeysFromVault: () => Promise<void>;
+  hydrateApiKeysFromVault: () => Promise<'ready' | 'degraded'>;
   setDefaultProvider: (p: ProviderId) => void;
   setSelectedModel: (provider: ProviderId, model: string) => void;
   setPersona: (p: AuthState['personaPreset']) => void;
@@ -192,6 +219,7 @@ interface AuthState {
   setChatModelSelection: (selection: ChatModelSelection) => void;
   setAutomaticModelRoutingEnabled: (enabled: boolean) => void;
   setPromptForgeModelSelection: (selection: PromptForgeModelSelection) => void;
+  setPromptForgeAutoUpgradeOnSend: (enabled: boolean) => void;
   setStackCustomSteps: (steps: StackStepSpec[]) => void;
 }
 
@@ -262,7 +290,7 @@ export const useAuthStore = create<AuthState>()(
       defaultLocalModel: 'llama3.2',
       personaPreset: 'jarvis',
       voicePreset: 'jarvis-prime',
-      voiceEngine: 'kokoro',
+      voiceEngine: 'jarvis',
       speakReplies: false,
       voiceAutoListenOnOpen: true,
       voiceSilenceDelayMs: VOICE_SILENCE_DELAY_MS_DEFAULT,
@@ -273,7 +301,7 @@ export const useAuthStore = create<AuthState>()(
       jarvisAutoApprove: false,
       voiceAutoApproveActions: true,
       composerSttProvider: 'system',
-      fasterWhisperModel: 'small',
+      fasterWhisperModel: 'whisper-small-en-q8',
       plan: 'free',
       stackPreset: 'off',
       stackCustomSteps: DEFAULT_CUSTOM_STEPS,
@@ -281,22 +309,35 @@ export const useAuthStore = create<AuthState>()(
       previousChatModelSelection: EMPTY_CHAT_MODEL_SELECTION,
       automaticModelRoutingEnabled: false,
       promptForgeModelSelection: DEFAULT_PROMPT_FORGE_MODEL_SELECTION,
+      promptForgeAutoUpgradeOnSend: false,
       telemetryOptIn: false,
+      credentialVaultState: 'idle',
+      credentialVaultFailedProviders: [],
+      preferredConnectionIdByProviderFamily: {},
 
       setDisplayName: (n) => set({ displayName: n }),
-      setApiKey: (provider, key) =>
-        set((s) => {
-          const trimmed = key.trim();
-          if (isSecretApiKeyProvider(provider)) {
-            void secureSetApiKey(provider, trimmed).catch((err) => {
-              console.warn(`[credentials] Could not save ${provider} API key`, err);
-            });
-          }
-          return { apiKeys: { ...s.apiKeys, [provider]: trimmed } };
-        }),
+      setPreferredConnectionId: (provider, connectionId) =>
+        set((s) => ({
+          preferredConnectionIdByProviderFamily: {
+            ...s.preferredConnectionIdByProviderFamily,
+            [provider]: connectionId,
+          },
+        })),
+      setApiKey: async (provider, key) => {
+        const trimmed = key.trim();
+        if (isSecretApiKeyProvider(provider)) {
+          const result = await saveApiKeySecurely(provider, trimmed);
+          if (!result.ok) return result;
+          if (trimmed) credentialHydrationSnapshot.mergeVerified({ [provider]: trimmed });
+          else credentialHydrationSnapshot.removeProviders([provider]);
+        }
+        set((s) => ({ apiKeys: { ...s.apiKeys, [provider]: trimmed } }));
+        return { ok: true };
+      },
       clearApiKey: (provider) =>
         set((s) => {
           if (isSecretApiKeyProvider(provider)) {
+            credentialHydrationSnapshot.removeProviders([provider]);
             void secureDeleteApiKey(provider).catch((err) => {
               console.warn(`[credentials] Could not delete ${provider} API key`, err);
             });
@@ -305,15 +346,41 @@ export const useAuthStore = create<AuthState>()(
           return { apiKeys: rest };
         }),
       hydrateApiKeysFromVault: async () => {
-        const secureKeys = await loadSecureApiKeys();
-        set((s) => ({ apiKeys: { ...s.apiKeys, ...secureKeys } }));
+        set({ credentialVaultState: 'hydrating', credentialVaultFailedProviders: [] });
+        const current = useAuthStore.getState().apiKeys;
+        credentialHydrationSnapshot.mergeVerified(
+          Object.fromEntries(
+            SECRET_API_KEY_PROVIDERS.flatMap((provider) => {
+              const value = current[provider]?.trim();
+              return value ? [[provider, value] as const] : [];
+            }),
+          ),
+        );
+        let status: 'ready' | 'degraded' = 'ready';
+        let failedProviders: ProviderId[] = [];
+        const hydrated = await credentialHydrationSnapshot.hydrate(
+          async () => {
+            const result = await loadSecureApiKeysDetailed();
+            status = result.status;
+            failedProviders = result.failedProviders;
+            return result.keys;
+          },
+          { mode: 'merge' },
+        );
+        if (hydrated.warning) status = 'degraded';
+        set((s) => ({
+          apiKeys: { ...s.apiKeys, ...hydrated.values },
+          credentialVaultState: status,
+          credentialVaultFailedProviders: failedProviders,
+        }));
+        return status;
       },
       setDefaultProvider: (p) => set({ defaultProvider: p }),
       setSelectedModel: (provider, model) =>
         set((s) => ({
           selectedModels: { ...s.selectedModels, [provider]: model.trim() },
         })),
-      setPersona: (p) => set({ personaPreset: p }),
+      setPersona: (p) => set({ personaPreset: normalizeAssistantPersonaId(p) }),
       setVoicePreset: (p) => set({ voicePreset: p }),
       setVoiceEngine: (engine) => set({ voiceEngine: engine }),
       setSpeakReplies: (enabled) => set({ speakReplies: enabled }),
@@ -326,8 +393,17 @@ export const useAuthStore = create<AuthState>()(
       setVoiceCancelPhrase: (phrase) => set({ voiceCancelPhrase: clampVoiceCancelPhrase(phrase) }),
       setJarvisAutoApprove: (enabled) => set({ jarvisAutoApprove: enabled }),
       setVoiceAutoApproveActions: (enabled) => set({ voiceAutoApproveActions: enabled }),
-      setComposerSttProvider: (provider) => set({ composerSttProvider: provider }),
-      setFasterWhisperModel: (model) => set({ fasterWhisperModel: model }),
+      setComposerSttProvider: (provider) =>
+        set({
+          composerSttProvider:
+            provider === 'faster-whisper' || provider === 'deepgram' || provider === 'system'
+              ? provider
+              : 'system',
+        }),
+      setFasterWhisperModel: (model) =>
+        set({
+          fasterWhisperModel: normalizeLocalSttModelId(model),
+        }),
       setWorkspaceId: (id) => set({ workspaceId: id }),
       setProjectId: (id) => set({ projectId: id }),
       setCloudSession: (s) => set({ cloudSession: s }),
@@ -338,25 +414,29 @@ export const useAuthStore = create<AuthState>()(
       setPlan: (p) => set({ plan: p }),
       setStackPreset: (preset) =>
         set((s) => {
+          // Product gate: refuse Hive stack activation while scrapped.
+          const effectivePreset =
+            !isHiveProductEnabled() && preset !== 'off' ? ('off' as StackPresetId) : preset;
           const next =
-            preset === 'off'
+            effectivePreset === 'off'
               ? s.chatModelSelection.mode === 'hive'
                 ? EMPTY_CHAT_MODEL_SELECTION
                 : s.chatModelSelection
-              : selectionFromHive(preset);
+              : selectionFromHive(effectivePreset);
+          const gated = gateChatModelSelection(next);
           return {
-            stackPreset: preset,
-            chatModelSelection: next,
+            stackPreset: gated.mode === 'hive' ? gated.hiveId : 'off',
+            chatModelSelection: gated,
             previousChatModelSelection: previousSelectionForTransition(
               s.chatModelSelection,
               s.previousChatModelSelection,
-              next,
+              gated,
             ),
           };
         }),
       setChatModelSelection: (selection) =>
         set((s) => {
-          const normalized = normalizeChatModelSelection(selection);
+          const normalized = gateChatModelSelection(normalizeChatModelSelection(selection));
           const previousChatModelSelection = previousSelectionForTransition(
             s.chatModelSelection,
             s.previousChatModelSelection,
@@ -390,6 +470,8 @@ export const useAuthStore = create<AuthState>()(
       setAutomaticModelRoutingEnabled: (enabled) => set({ automaticModelRoutingEnabled: enabled }),
       setPromptForgeModelSelection: (selection) =>
         set({ promptForgeModelSelection: normalizePromptForgeModelSelection(selection) }),
+      setPromptForgeAutoUpgradeOnSend: (enabled) =>
+        set({ promptForgeAutoUpgradeOnSend: Boolean(enabled) }),
       setStackCustomSteps: (steps) =>
         set((s) => ({
           stackCustomSteps: steps.slice(0, 5).map((step) => {
@@ -453,9 +535,11 @@ export const useAuthStore = create<AuthState>()(
         previousChatModelSelection: s.previousChatModelSelection,
         automaticModelRoutingEnabled: s.automaticModelRoutingEnabled,
         promptForgeModelSelection: s.promptForgeModelSelection,
+        promptForgeAutoUpgradeOnSend: s.promptForgeAutoUpgradeOnSend,
         telemetryOptIn: s.telemetryOptIn,
+        preferredConnectionIdByProviderFamily: s.preferredConnectionIdByProviderFamily,
       }),
-      version: 14,
+      version: 17,
       migrate: (persisted, fromVersion) => {
         if (!persisted || typeof persisted !== 'object') return persisted;
         const state = persisted as Partial<AuthState>;
@@ -486,17 +570,36 @@ export const useAuthStore = create<AuthState>()(
           }
         }
         if (fromVersion < 8 && state.voiceEngine === 'system') {
-          state.voiceEngine = 'kokoro';
+          state.voiceEngine = 'jarvis';
         }
         if (fromVersion < 9) {
           if (
             state.composerSttProvider !== 'system' &&
-            state.composerSttProvider !== 'faster-whisper'
+            state.composerSttProvider !== 'faster-whisper' &&
+            state.composerSttProvider !== 'deepgram'
           ) {
             state.composerSttProvider = 'system';
           }
-          if (!state.fasterWhisperModel) state.fasterWhisperModel = 'small';
+          if (!state.fasterWhisperModel) state.fasterWhisperModel = 'whisper-small-en-q8';
         }
+        // Always normalize STT model ids onto the expanded catalog (aliases + new labels).
+        if (state.fasterWhisperModel) {
+          state.fasterWhisperModel = normalizeLocalSttModelId(String(state.fasterWhisperModel));
+        }
+        if (
+          state.composerSttProvider !== 'system' &&
+          state.composerSttProvider !== 'faster-whisper' &&
+          state.composerSttProvider !== 'deepgram'
+        ) {
+          state.composerSttProvider = 'system';
+        }
+        if (fromVersion < 15) {
+          if ((state.voiceEngine as string | undefined) === 'kokoro') {
+            state.voiceEngine = 'jarvis';
+          }
+        }
+        // Always normalize persona onto Jarvis | Friday (migrates legacy "sage", etc.).
+        state.personaPreset = normalizeAssistantPersonaId(state.personaPreset);
         if (fromVersion < 10) {
           if (state.voiceEndTrigger !== 'phrase' && state.voiceEndTrigger !== 'silence') {
             state.voiceEndTrigger = VOICE_END_TRIGGER_DEFAULT;
@@ -513,13 +616,17 @@ export const useAuthStore = create<AuthState>()(
           }
         }
         if (fromVersion < 11) {
-          state.chatModelSelection = normalizeChatModelSelection(state.chatModelSelection);
+          state.chatModelSelection = gateChatModelSelection(
+            normalizeChatModelSelection(state.chatModelSelection),
+          );
           if (state.chatModelSelection.mode === 'none') {
-            state.chatModelSelection = migrateLegacyModelSelection({
-              stackPreset: state.stackPreset ?? 'off',
-              defaultProvider: state.defaultProvider ?? 'google',
-              selectedModels: state.selectedModels ?? {},
-            });
+            state.chatModelSelection = gateChatModelSelection(
+              migrateLegacyModelSelection({
+                stackPreset: state.stackPreset ?? 'off',
+                defaultProvider: state.defaultProvider ?? 'google',
+                selectedModels: state.selectedModels ?? {},
+              }),
+            );
           }
           if (state.chatModelSelection.mode === 'single') {
             state.defaultProvider = state.chatModelSelection.providerId;
@@ -535,8 +642,22 @@ export const useAuthStore = create<AuthState>()(
           }
         }
         if (fromVersion < 12) {
-          state.previousChatModelSelection = normalizeChatModelSelection(
-            state.previousChatModelSelection,
+          state.previousChatModelSelection = gateChatModelSelection(
+            normalizeChatModelSelection(state.previousChatModelSelection),
+          );
+        }
+        // Always neutralize stale Hive selections while the product is gated.
+        if (state.chatModelSelection) {
+          state.chatModelSelection = gateChatModelSelection(
+            normalizeChatModelSelection(state.chatModelSelection),
+          );
+          if (state.chatModelSelection.mode !== 'hive') {
+            state.stackPreset = 'off';
+          }
+        }
+        if (state.previousChatModelSelection) {
+          state.previousChatModelSelection = gateChatModelSelection(
+            normalizeChatModelSelection(state.previousChatModelSelection),
           );
         }
         if (fromVersion < 13) {
@@ -552,6 +673,16 @@ export const useAuthStore = create<AuthState>()(
           } catch {
             state.promptForgeModelSelection = DEFAULT_PROMPT_FORGE_MODEL_SELECTION;
           }
+        }
+        if (fromVersion < 16 || typeof state.promptForgeAutoUpgradeOnSend !== 'boolean') {
+          state.promptForgeAutoUpgradeOnSend = false;
+        }
+        if (
+          fromVersion < 17 ||
+          !state.preferredConnectionIdByProviderFamily ||
+          typeof state.preferredConnectionIdByProviderFamily !== 'object'
+        ) {
+          state.preferredConnectionIdByProviderFamily = {};
         }
         return state;
       },

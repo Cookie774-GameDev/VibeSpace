@@ -248,12 +248,12 @@ test('migration document binds the exact v5 contract, rollback order, and immuta
   assert.equal(source.fallbackTheme, 'default');
   assert.deepEqual(
     source.selectableThemes.map(({ id }) => id),
-    ['jarvis', 'vibespace', 'default', 'monochrome', 'sakura'],
+    ['jarvis', 'vibespace', 'default', 'monochrome', 'sakura', 'warm', 'origami'],
   );
   assert.deepEqual(source.selectableThemes.at(-1), {
-    id: 'sakura',
-    label: 'Sakura',
-    description: 'Cel-painted dusk workspace.',
+    id: 'origami',
+    label: 'Origami',
+    description: 'Sculpted paper workspace in motion.',
   });
   assert.deepEqual(source.persistedLegacyThemes, {
     light: 'monochrome',

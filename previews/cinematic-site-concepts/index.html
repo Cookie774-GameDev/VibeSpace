@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>VibeSpace — Cinematic world studies</title>
+  <meta name="description" content="Five cinematic visual worlds for the next VibeSpace website.">
+  <link rel="stylesheet" href="hub.css">
+</head>
+<body>
+  <a class="skip-link" href="#concept-frame">Skip to active concept</a>
+  <header class="review-header">
+    <a class="review-brand" href="./" aria-label="VibeSpace cinematic concepts home">
+      <span class="review-brand-mark" aria-hidden="true"></span>
+      <span>VibeSpace</span>
+    </a>
+    <div class="review-heading">
+      <span>Creative direction review</span>
+      <strong>Five worlds. One product story.</strong>
+    </div>
+    <a class="review-open" id="open-concept" href="aperture.html" target="_blank" rel="noopener">
+      Open full screen <span aria-hidden="true">↗</span>
+    </a>
+  </header>
+
+  <main class="review-shell">
+    <nav class="concept-rail" aria-label="Choose a cinematic world">
+      <button type="button" data-concept-target="aperture" aria-pressed="true">
+        <span>01</span><strong>Aperture OS</strong><small>Living architecture</small>
+      </button>
+      <button type="button" data-concept-target="desk" aria-pressed="false">
+        <span>02</span><strong>Infinite Desk</strong><small>Tactile instruments</small>
+      </button>
+      <button type="button" data-concept-target="cosmos" aria-pressed="false">
+        <span>03</span><strong>Context Cosmos</strong><small>Navigable memory</small>
+      </button>
+      <button type="button" data-concept-target="foundry" aria-pressed="false">
+        <span>04</span><strong>Agent Foundry</strong><small>Visible orchestration</small>
+      </button>
+      <button type="button" data-concept-target="archive" aria-pressed="false">
+        <span>05</span><strong>Living Archive</strong><small>Organic intelligence</small>
+      </button>
+    </nav>
+
+    <section class="review-stage" aria-labelledby="active-concept-name">
+      <div class="review-meta">
+        <p id="active-concept-thesis">The workspace is not another window. It is the architecture around every window.</p>
+        <div>
+          <span id="active-concept-materials">Obsidian glass · smoked titanium · warm emissive copper</span>
+          <strong id="active-concept-name">Aperture OS</strong>
+        </div>
+      </div>
+      <iframe
+        id="concept-frame"
+        title="Aperture OS cinematic concept"
+        src="aperture.html"
+        allow="fullscreen"
+      ></iframe>
+      <p class="review-hint">Scroll inside the stage. Use the numbered rail to compare worlds.</p>
+    </section>
+  </main>
+
+  <script type="module" src="hub.mjs"></script>
+</body>
+</html>

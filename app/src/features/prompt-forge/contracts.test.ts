@@ -42,6 +42,44 @@ describe('Prompt Forge contracts', () => {
     expect(Object.isFrozen(job.originalAttachments)).toBe(true);
   });
 
+  it('preserves ordinary layout whitespace in multiline drafts and generated prompts', () => {
+    const originalDraft = 'Build a todo app.\n\nRequirements:\n\t- Include tests.';
+    const generatedDraft =
+      'Objective: Build the todo app.\r\n\r\nVerification:\r\n\t- Run the tests.';
+    const job = createPromptForgeJob({
+      id: 'forge-job-multiline',
+      accountId: 'account-1',
+      chatId: 'chat-1',
+      projectId: null,
+      originalDraft,
+      originalAttachments: [],
+      modelSelection: { mode: 'prefer_local' },
+      privacyMode: 'local_only',
+      allowPublicResearch: false,
+      now: 100,
+    });
+    const collecting = transitionPromptForgeJob(job, {
+      expectedRevision: 1,
+      status: 'collecting_context',
+      now: 110,
+    });
+    const generating = transitionPromptForgeJob(collecting, {
+      expectedRevision: 2,
+      status: 'generating',
+      now: 120,
+    });
+    const validating = transitionPromptForgeJob(generating, {
+      expectedRevision: 3,
+      status: 'validating',
+      generatedDraft,
+      now: 130,
+    });
+
+    expect(validating.originalDraft).toBe(originalDraft);
+    expect(validating.generatedDraft).toBe(generatedDraft);
+    expect(parsePromptForgeJob(JSON.parse(JSON.stringify(validating)))).toEqual(validating);
+  });
+
   it('advances only through legal idempotent transitions with optimistic revision authority', () => {
     const job = createPromptForgeJob({
       id: 'forge-job-1',

@@ -15,6 +15,7 @@
  */
 import type { AssistantIntent } from './intents';
 import type { WallpaperId, WorkbenchPanelKind } from '@/features/workbench/types';
+import type { Route } from '@/features/navigation/routeSchema';
 
 /** Filler phrases stripped from the start of the input. Order matters: longer first. */
 const FILLER_PREFIXES = [
@@ -66,7 +67,7 @@ const WEEKDAY_TO_NUM: Record<string, number> = {
 };
 
 /** Route ids accepted by `useUIStore.setRoute` (V3 top-level routes). */
-type NavRoute = 'chat' | 'workbench' | 'terminal' | 'kanban' | 'schedule' | 'agents' | 'context' | 'skills' | 'benchmarks' | 'history' | 'tools' | 'files';
+type NavRoute = Exclude<Route, 'agent-detail' | 'project-detail'>;
 
 /**
  * Map the noun the user actually typed to the canonical route id. Plurals
@@ -76,7 +77,10 @@ type NavRoute = 'chat' | 'workbench' | 'terminal' | 'kanban' | 'schedule' | 'age
  */
 const NAV_ROUTE_MAP: Record<string, NavRoute> = {
   chat: 'chat',
+  canvas: 'canvas',
   workbench: 'workbench',
+  preview: 'preview',
+  browser: 'browser',
   terminal: 'terminal',
   terminals: 'terminal',
   kanban: 'kanban',
@@ -85,6 +89,9 @@ const NAV_ROUTE_MAP: Record<string, NavRoute> = {
   agenda: 'schedule',
   agent: 'agents',
   agents: 'agents',
+  'model foundry': 'model-foundry',
+  'model-foundry': 'model-foundry',
+  foundry: 'model-foundry',
   context: 'context',
   contexts: 'context',
   skills: 'skills',
@@ -96,6 +103,8 @@ const NAV_ROUTE_MAP: Record<string, NavRoute> = {
   file: 'files',
   files: 'files',
   explorer: 'files',
+  account: 'account',
+  profile: 'account',
 };
 
 function normalizeRoute(raw: string): NavRoute {
@@ -117,34 +126,51 @@ const WORKBENCH_TEMPLATE_ALIASES: Record<string, string> = {
 };
 
 const WORKBENCH_PANEL_ALIASES: Record<string, WorkbenchPanelKind> = {
-  terminal: 'terminal', terminals: 'terminal',
-  browser: 'browser', browsers: 'browser',
-  jarvis: 'jarvis', chat: 'jarvis',
-  agent: 'agent', agents: 'agent',
-  file: 'files', files: 'files',
-  editor: 'editor', editors: 'editor',
-  kanban: 'kanban', board: 'kanban',
-  action: 'actions', actions: 'actions',
-  note: 'notes', notes: 'notes',
-  diagram: 'diagram', diagrams: 'diagram',
-  plugin: 'plugins', plugins: 'plugins', mcp: 'plugins',
-  github: 'github', supabase: 'supabase',
+  terminal: 'terminal',
+  terminals: 'terminal',
+  browser: 'browser',
+  browsers: 'browser',
+  jarvis: 'jarvis',
+  chat: 'jarvis',
+  agent: 'agent',
+  agents: 'agent',
+  file: 'files',
+  files: 'files',
+  editor: 'editor',
+  editors: 'editor',
+  kanban: 'kanban',
+  board: 'kanban',
+  action: 'actions',
+  actions: 'actions',
+  note: 'notes',
+  notes: 'notes',
+  diagram: 'diagram',
+  diagrams: 'diagram',
+  plugin: 'plugins',
+  plugins: 'plugins',
+  mcp: 'plugins',
+  github: 'github',
+  supabase: 'supabase',
   activity: 'activity',
 };
 
 const WALLPAPER_ALIASES: Record<string, WallpaperId> = {
-  none: 'none', off: 'none',
+  none: 'none',
+  off: 'none',
   'warm gradient': 'warm-gradient',
   'space clouds': 'space-clouds',
   'interactive space clouds': 'space-clouds',
-  starfield: 'starfield', stars: 'starfield',
+  starfield: 'starfield',
+  stars: 'starfield',
   'orbital lights': 'orbital-lights',
-  particles: 'particles', 'particle field': 'particles',
+  particles: 'particles',
+  'particle field': 'particles',
   'fluid gradient': 'fluid-gradient',
   aurora: 'aurora',
   'cozy night window': 'cozy-night-window',
   'night window': 'cozy-night-window',
-  'grid pulse': 'grid-pulse', grid: 'grid-pulse',
+  'grid pulse': 'grid-pulse',
+  grid: 'grid-pulse',
 };
 
 /**
@@ -207,7 +233,8 @@ function extractCasualDue(title: string): { title: string; due_at?: number } {
     return { title: trimmed.slice(0, tomorrowMatch.index).trim(), due_at: d.getTime() };
   }
   // "next monday" / "monday" — weekday suffix, optionally prefixed with "next".
-  const weekdayMatch = /\s+(?:next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/i.exec(trimmed);
+  const weekdayMatch =
+    /\s+(?:next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/i.exec(trimmed);
   if (weekdayMatch) {
     const target = WEEKDAY_TO_NUM[weekdayMatch[1].toLowerCase()];
     const now = new Date();
@@ -302,7 +329,9 @@ function parseDurationWord(value: string): number | null {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function parseTimerDuration(raw: string): { durationMinutes: number; durationSeconds?: number } | null {
+function parseTimerDuration(
+  raw: string,
+): { durationMinutes: number; durationSeconds?: number } | null {
   const text = raw.replace(/-/g, ' ').toLowerCase();
   const matches = [
     ...text.matchAll(
@@ -329,23 +358,43 @@ function parseTimerDuration(raw: string): { durationMinutes: number; durationSec
 
 function tryClockIntent(s: string): AssistantIntent | null {
   const timerBefore =
-    /^(?:set|start|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?(.+?)\s+timer(?:\s+(?:called|named)\s+(.+))?$/i.exec(s);
+    /^(?:set|start|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?(.+?)\s+timer(?:\s+(?:called|named)\s+(.+))?$/i.exec(
+      s,
+    );
   if (timerBefore) {
     const duration = parseTimerDuration(timerBefore[1]);
-    if (duration) return { kind: 'clock_timer', ...duration, label: timerBefore[2] ? unquote(timerBefore[2]) : undefined };
+    if (duration)
+      return {
+        kind: 'clock_timer',
+        ...duration,
+        label: timerBefore[2] ? unquote(timerBefore[2]) : undefined,
+      };
   }
 
   const timerAfter =
-    /^(?:set|start|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?timer\s+(?:for\s+)?(.+?)(?:\s+(?:called|named)\s+(.+))?$/i.exec(s);
+    /^(?:set|start|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?timer\s+(?:for\s+)?(.+?)(?:\s+(?:called|named)\s+(.+))?$/i.exec(
+      s,
+    );
   if (timerAfter) {
     const duration = parseTimerDuration(timerAfter[1]);
-    if (duration) return { kind: 'clock_timer', ...duration, label: timerAfter[2] ? unquote(timerAfter[2]) : undefined };
+    if (duration)
+      return {
+        kind: 'clock_timer',
+        ...duration,
+        label: timerAfter[2] ? unquote(timerAfter[2]) : undefined,
+      };
   }
 
   const alarm =
-    /^(?:set|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?alarm\s+(?:for|at)\s+(.+?)(?:\s+(?:called|named)\s+(.+))?$/i.exec(s);
+    /^(?:set|create|make)(?:\s+me)?\s+(?:a\s+|an\s+)?alarm\s+(?:for|at)\s+(.+?)(?:\s+(?:called|named)\s+(.+))?$/i.exec(
+      s,
+    );
   if (alarm) {
-    return { kind: 'clock_alarm', time: alarm[1].trim(), label: alarm[2] ? unquote(alarm[2]) : undefined };
+    return {
+      kind: 'clock_alarm',
+      time: alarm[1].trim(),
+      label: alarm[2] ? unquote(alarm[2]) : undefined,
+    };
   }
 
   return null;
@@ -354,7 +403,9 @@ function tryClockIntent(s: string): AssistantIntent | null {
 function tryOpenTerminalRunChain(raw: string): AssistantIntent | null {
   const s = clean(raw);
   const match =
-    /^(?:open|start|launch)\s+(?:(a|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(?:new\s+)?terminals?\s+(?:and\s+then|then|and)\s+(?:type|run|execute|start|launch)\s+(.+)$/i.exec(s);
+    /^(?:open|start|launch)\s+(?:(a|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(?:new\s+)?terminals?\s+(?:and\s+then|then|and)\s+(?:type|run|execute|start|launch)\s+(.+)$/i.exec(
+      s,
+    );
   if (!match) return null;
   const count = parseTerminalCount(match[1]);
   const { command, project } = splitProjectSuffix(match[2]);
@@ -398,7 +449,9 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
     return { kind: 'workbench', action: 'open' };
   }
   const spawnWorkbench =
-    /^(?:spawn|create|build|start)(?:\s+a|\s+the)?(?:\s+(coding|code|multi[- ]agent|research|web(?:[- ]development)?|supabase|content|blank))?\s+workbench$/i.exec(s);
+    /^(?:spawn|create|build|start)(?:\s+a|\s+the)?(?:\s+(coding|code|multi[- ]agent|research|web(?:[- ]development)?|supabase|content|blank))?\s+workbench$/i.exec(
+      s,
+    );
   if (spawnWorkbench) {
     const alias = spawnWorkbench[1]?.toLowerCase() ?? 'web development';
     return {
@@ -408,7 +461,9 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
     };
   }
   const addWorkbenchPanel =
-    /^(?:add|open|create|place)\s+(?:(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(terminals?|browsers?|jarvis|chat|agents?|files?|editors?|kanban|board|actions?|notes?|diagrams?|plugins?|mcp|github|supabase|activity)(?:\s+(?:to|in|inside)\s+(?:the\s+)?workbench)$/i.exec(s);
+    /^(?:add|open|create|place)\s+(?:(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(terminals?|browsers?|jarvis|chat|agents?|files?|editors?|kanban|board|actions?|notes?|diagrams?|plugins?|mcp|github|supabase|activity)(?:\s+(?:to|in|inside)\s+(?:the\s+)?workbench)$/i.exec(
+      s,
+    );
   if (addWorkbenchPanel) {
     const panelKind = WORKBENCH_PANEL_ALIASES[addWorkbenchPanel[2].toLowerCase()];
     if (panelKind) {
@@ -436,7 +491,10 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   if (openTerminalRunChain) return openTerminalRunChain;
 
   // ---- create project ----
-  const createProject = /^(?:create|new|make|add)\s+(?:a\s+)?(?:new\s+)?project\s+(?:called\s+|named\s+)?(.+)$/i.exec(s);
+  const createProject =
+    /^(?:create|new|make|add)\s+(?:a\s+)?(?:new\s+)?project\s+(?:called\s+|named\s+)?(.+)$/i.exec(
+      s,
+    );
   if (createProject) {
     const name = unquote(createProject[1]);
     if (name) return { kind: 'create_project', name, color_hue: hueFromName(name) };
@@ -458,7 +516,9 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   // ---- open N terminals ----
   // Most-specific terminal pattern: explicit count.
   const openTerms =
-    /^open\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+terminals?(?:\s+(?:with|running)\s+(.+?))?(?:\s+in\s+(.+?))?(?:\s+project)?$/i.exec(s);
+    /^open\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+terminals?(?:\s+(?:with|running)\s+(.+?))?(?:\s+in\s+(.+?))?(?:\s+project)?$/i.exec(
+      s,
+    );
   if (openTerms) {
     const count = parseTerminalCount(openTerms[1]);
     const command = normalizeTerminalCommand(openTerms[2]);
@@ -472,7 +532,9 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   }
 
   const openOneTerm =
-    /^open\s+(?:(a|one)\s+)?(?:new\s+)?terminals?(?:\s+(?:with|running)\s+(.+?))?(?:(?:\s+(?:in|inside)\s+project\s+(.+))|(?:\s+in\s+(.+?)\s+project))?$/i.exec(s);
+    /^open\s+(?:(a|one)\s+)?(?:new\s+)?terminals?(?:\s+(?:with|running)\s+(.+?))?(?:(?:\s+(?:in|inside)\s+project\s+(.+))|(?:\s+in\s+(.+?)\s+project))?$/i.exec(
+      s,
+    );
   if (openOneTerm) {
     const count = parseTerminalCount(openOneTerm[1]);
     const command = normalizeTerminalCommand(openOneTerm[2]);
@@ -492,26 +554,34 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   }
 
   // ---- run command in all terminals ----
-  const runAllTerms = /^(?:run|start|launch|execute)\s+(.+?)\s+in\s+(?:all|every|any)\s+terminals?$/i.exec(s);
+  const runAllTerms =
+    /^(?:run|start|launch|execute)\s+(.+?)\s+in\s+(?:all|every|any)\s+terminals?$/i.exec(s);
   if (runAllTerms) {
     const command = runAllTerms[1]?.trim();
     if (command) return { kind: 'run_in_terminals', command, target: 'all' };
   }
 
-  const createCustomCommand = /^(?:create|make|add|save)\s+(?:a\s+)?(?:custom\s+)?(?:command|tool|action)\s+(.+?)\s+(?:to\s+run|that\s+runs|as)\s+(.+)$/i.exec(s);
+  const createCustomCommand =
+    /^(?:create|make|add|save)\s+(?:a\s+)?(?:custom\s+)?(?:command|tool|action)\s+(.+?)\s+(?:to\s+run|that\s+runs|as)\s+(.+)$/i.exec(
+      s,
+    );
   if (createCustomCommand) {
     const name = unquote(createCustomCommand[1]);
     const command = createCustomCommand[2]?.trim();
     if (name && command) return { kind: 'create_custom_command', name, command };
   }
 
-  const runCustomCommand = /^(?:run|use|execute|start)\s+(?:my\s+)?(?:custom\s+)?(?:command|tool|action)\s+(.+)$/i.exec(s);
+  const runCustomCommand =
+    /^(?:run|use|execute|start)\s+(?:my\s+)?(?:custom\s+)?(?:command|tool|action)\s+(.+)$/i.exec(s);
   if (runCustomCommand) {
     const name = unquote(runCustomCommand[1]);
     if (name) return { kind: 'run_custom_command', name };
   }
 
-  const askProvider = /^(?:ask|tell|have)\s+(opencode|claude|codex|cursor|gemini|gpt|openai|anthropic|google|groq)\s+(?:to\s+)?(.+)$/i.exec(s);
+  const askProvider =
+    /^(?:ask|tell|have)\s+(opencode|claude|codex|cursor|gemini|gpt|openai|anthropic|google|groq)\s+(?:to\s+)?(.+)$/i.exec(
+      s,
+    );
   if (askProvider) {
     const provider = askProvider[1]?.trim();
     const prompt = askProvider[2]?.trim();
@@ -522,7 +592,11 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
     return { kind: 'give_terminals_context' };
   }
 
-  if (/^(?:create|make|generate|build)\s+(?:project\s+)?(?:context\s+)?(?:map|skill\s*tree|tree)$/i.test(s)) {
+  if (
+    /^(?:create|make|generate|build)\s+(?:project\s+)?(?:context\s+)?(?:map|skill\s*tree|tree)$/i.test(
+      s,
+    )
+  ) {
     return { kind: 'create_context_map' };
   }
 
@@ -537,7 +611,9 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   // ---- create chat ----
   // Match "create chat", "new chat", "start a chat", optionally with title and project.
   const createChat =
-    /^(?:create|new|make|start)\s+(?:a\s+)?chat(?:\s+(?:called|named|titled)\s+(.+?))?(?:\s+in\s+(.+?))?(?:\s+project)?$/i.exec(s);
+    /^(?:create|new|make|start)\s+(?:a\s+)?chat(?:\s+(?:called|named|titled)\s+(.+?))?(?:\s+in\s+(.+?))?(?:\s+project)?$/i.exec(
+      s,
+    );
   if (createChat) {
     const title = createChat[1] ? unquote(createChat[1]) : undefined;
     const projectRaw = createChat[2]?.trim();
@@ -563,13 +639,16 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
 
   // ---- create event / schedule ----
   // Schedule keyword routes to the Schedule parser at execute time.
-  const scheduleMatch = /^(?:schedule|book|add\s+event|new\s+event|create\s+event)\s+(.+)$/i.exec(s);
+  const scheduleMatch = /^(?:schedule|book|add\s+event|new\s+event|create\s+event)\s+(.+)$/i.exec(
+    s,
+  );
   if (scheduleMatch) {
     const rest = scheduleMatch[1].trim();
     if (rest) return { kind: 'create_event', raw: rest };
   }
 
-  const callMe = /^(?:call\s+me|phone\s+me|give\s+me\s+a\s+call)(?:\s+(?:at|on|about|for)\s+)?(.+)$/i.exec(s);
+  const callMe =
+    /^(?:call\s+me|phone\s+me|give\s+me\s+a\s+call)(?:\s+(?:at|on|about|for)\s+)?(.+)$/i.exec(s);
   if (callMe) {
     const rest = callMe[1]?.trim() || 'now';
     return { kind: 'schedule_call', raw: `Jarvis call: ${rest}` };
@@ -592,7 +671,11 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   if (/^fullscreen$/i.test(s) || /^enter\s+fullscreen$/i.test(s) || /^go\s+fullscreen$/i.test(s)) {
     return { kind: 'set_fullscreen', on: true };
   }
-  if (/^exit\s+fullscreen$/i.test(s) || /^leave\s+fullscreen$/i.test(s) || /^unfullscreen$/i.test(s)) {
+  if (
+    /^exit\s+fullscreen$/i.test(s) ||
+    /^leave\s+fullscreen$/i.test(s) ||
+    /^unfullscreen$/i.test(s)
+  ) {
     return { kind: 'set_fullscreen', on: false };
   }
   if (/^toggle\s+fullscreen$/i.test(s)) {
@@ -603,15 +686,28 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   // Placed BEFORE the open settings/palette/launcher/schedule block: those
   // patterns only match their exact words, so the two sets don't overlap,
   // but ordering preserves the spec's "navigate-first" intent.
+  const agentDetail = /^open\s+agent\s+(.+)$/i.exec(s);
+  if (agentDetail) {
+    return { kind: 'navigate', route: 'agent-detail', selector: unquote(agentDetail[1]) };
+  }
+  const projectDetail = /^open\s+project\s+(.+)$/i.exec(s);
+  if (projectDetail) {
+    return { kind: 'navigate', route: 'project-detail', selector: unquote(projectDetail[1]) };
+  }
+
   // Strict form: any of the four nav verbs, no "my", no trailing "please".
   const navStrict =
-    /^(?:open|go to|show|switch to)\s+(workbench|terminal(?:s)?|kanban|context(?:s)?|skills|benchmarks?|history|agents?|tools?|files?|explorer|chat)$/i.exec(s);
+    /^(?:open|go to|show|switch to)\s+(canvas|workbench|preview|browser|terminal(?:s)?|kanban|context(?:s)?|skills|benchmarks?|history|agents?|model(?: |-)?foundry|foundry|tools?|files?|explorer|account|profile|chat)$/i.exec(
+      s,
+    );
   if (navStrict) {
     return { kind: 'navigate', route: normalizeRoute(navStrict[1]) };
   }
   // Polite form: only "open"/"show", optional "my", optional trailing "please".
   const navPolite =
-    /^(?:open|show)\s+(?:my\s+)?(workbench|terminal(?:s)?|kanban|context(?:s)?|skills|benchmarks?|history|agents?|tools?|files?|explorer|chat)\s*(?:please)?$/i.exec(s);
+    /^(?:open|show)\s+(?:my\s+)?(canvas|workbench|preview|browser|terminal(?:s)?|kanban|context(?:s)?|skills|benchmarks?|history|agents?|model(?: |-)?foundry|foundry|tools?|files?|explorer|account|profile|chat)\s*(?:please)?$/i.exec(
+      s,
+    );
   if (navPolite) {
     return { kind: 'navigate', route: normalizeRoute(navPolite[1]) };
   }
@@ -633,10 +729,18 @@ function parseSingleAssistantInput(raw: string): AssistantIntent {
   }
 
   // ---- inspector / sidebar toggles ----
-  if (/^(?:close|hide|toggle)\s+(?:the\s+)?(?:right\s+)?(?:side\s+)?(?:bar\s+)?(?:inspector|panel)/i.test(s)) {
+  if (
+    /^(?:close|hide|toggle)\s+(?:the\s+)?(?:right\s+)?(?:side\s+)?(?:bar\s+)?(?:inspector|panel)/i.test(
+      s,
+    )
+  ) {
     return { kind: 'navigate', route: 'chat' }; // triggers inspector close via UI
   }
-  if (/^(?:show|open|toggle)\s+(?:the\s+)?(?:right\s+)?(?:side\s+)?(?:bar\s+)?(?:inspector|panel)/i.test(s)) {
+  if (
+    /^(?:show|open|toggle)\s+(?:the\s+)?(?:right\s+)?(?:side\s+)?(?:bar\s+)?(?:inspector|panel)/i.test(
+      s,
+    )
+  ) {
     return { kind: 'navigate', route: 'chat' }; // triggers inspector open via UI
   }
 
@@ -724,17 +828,19 @@ const COMMAND_SUGGESTIONS = [
 ];
 
 function suggestClosestCommands(raw: string): string[] {
-  const s = raw.toLowerCase().replace(/[^a-z\s]/g, '').trim();
+  const s = raw
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, '')
+    .trim();
   if (s.length < 2) return [];
-  const scored = COMMAND_SUGGESTIONS
-    .map((entry) => {
-      const kws = entry.keywords.split(' ').filter(Boolean);
-      let hits = 0;
-      for (const kw of kws) {
-        if (s.includes(kw)) hits++;
-      }
-      return { ...entry, hits };
-    })
+  const scored = COMMAND_SUGGESTIONS.map((entry) => {
+    const kws = entry.keywords.split(' ').filter(Boolean);
+    let hits = 0;
+    for (const kw of kws) {
+      if (s.includes(kw)) hits++;
+    }
+    return { ...entry, hits };
+  })
     .filter((e) => e.hits > 0)
     .sort((a, b) => b.hits - a.hits);
   return scored.slice(0, 3).map((e) => e.example);

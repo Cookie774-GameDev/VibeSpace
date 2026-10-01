@@ -82,6 +82,7 @@ export const QWEN_CLI_DEFINITION: CliProviderDefinition = Object.freeze({
   promptTransport: 'prefixed-preamble',
   executableName: 'qwen',
   versionArgs: Object.freeze(['--version']),
+  modelListArgs: Object.freeze(['/model']),
   buildInvocation: buildQwenInvocation,
   normalizeRecord: normalizeQwenRecord,
 });

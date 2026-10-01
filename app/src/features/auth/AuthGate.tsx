@@ -1,16 +1,12 @@
 import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { nanoid } from 'nanoid';
 import { useOllamaModelOptions } from '@/lib/ai/models';
-import { bootstrapOllamaConnection } from '@/lib/ai/ollamaBootstrap';
 import { OllamaConnectionHost } from '@/features/local-models/OllamaConnectionHost';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { Onboarding } from '@/features/onboarding';
 import { RequireModelAccess } from './RequireModelAccess';
-import {
-  kernelSmokeProvider,
-  subscribeKernelSmokeBinding,
-} from '@/lib/ai/providers/kernelSmoke';
+import { kernelSmokeProvider, subscribeKernelSmokeBinding } from '@/lib/ai/providers/kernelSmoke';
 import { isKernelSmokeEnabled } from '@/lib/jarvis/smoke/config';
 
 const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
@@ -66,8 +62,7 @@ export function AuthGate({ children }: AuthGateProps) {
 
   // Has the user connected a model yet? Cloud key, offline mode, or an
   // installed local Ollama model all satisfy the gate.
-  const hasModelAccess =
-    offlineMode || localModelOptions.length > 0 || hasProviderKeyAccess;
+  const hasModelAccess = offlineMode || localModelOptions.length > 0 || hasProviderKeyAccess;
 
   // 1. Generate a stable local user id on first run.
   useEffect(() => {
@@ -75,12 +70,6 @@ export function AuthGate({ children }: AuthGateProps) {
       setLocalUser(`usr_${nanoid(16)}`);
     }
   }, [localUserId, setLocalUser]);
-
-  // Start Ollama discovery before the model-access gate so local models can
-  // satisfy hasModelAccess and the catalog is warm when the shell mounts.
-  useEffect(() => {
-    void bootstrapOllamaConnection();
-  }, []);
 
   // 2. Seed the local database (idempotent). Runs once we have a user id and
   // the seed module is available. Failures are non-fatal - the rest of the
@@ -91,9 +80,7 @@ export function AuthGate({ children }: AuthGateProps) {
     (async () => {
       try {
         // @ts-ignore - module owned by another subagent, may not exist yet
-        const mod: { seedIfEmpty?: () => Promise<void> | void } = await import(
-          '@/lib/db/seed'
-        );
+        const mod: { seedIfEmpty?: () => Promise<void> | void } = await import('@/lib/db/seed');
         if (cancelled) return;
         await mod.seedIfEmpty?.();
       } catch {

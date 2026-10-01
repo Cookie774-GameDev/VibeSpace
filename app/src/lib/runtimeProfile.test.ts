@@ -488,7 +488,6 @@ describe('parseMonochromeFixtureRequest', () => {
   it.each([
     'about',
     'accessibility',
-    'account',
     'admin',
     'allaboutme',
     'ambient',
@@ -586,10 +585,10 @@ describe('parseMonochromeFixtureRequest', () => {
   });
 });
 
-describe('exact 79-row browser request authority', () => {
+describe('exact 78-row browser request authority', () => {
   const authorityVisualPlan = resolveRuntimePlan(MONOCHROME_VISUAL_TEST);
   it('matches every full authority object, not only IDs', () => {
-    expect(BROWSER_CASES).toHaveLength(79);
+    expect(BROWSER_CASES).toHaveLength(78);
     expect(() =>
       validateBrowserProjection(MONOCHROME_BROWSER_REQUEST_AUTHORITY, BROWSER_CASES),
     ).not.toThrow();
@@ -664,7 +663,7 @@ describe('exact ten-row preserved-theme B0 request authority', () => {
   }
 
   it('exports the literal ten tuples and remains bound to immutable baseline and fixture authority', () => {
-    expect(MONOCHROME_BROWSER_REQUEST_AUTHORITY).toHaveLength(79);
+    expect(MONOCHROME_BROWSER_REQUEST_AUTHORITY).toHaveLength(78);
     expect(MONOCHROME_BASELINE_REQUEST_AUTHORITY).toEqual(BASELINE_REQUEST_AUTHORITY);
     expect(MONOCHROME_BASELINE_MANIFEST.captures.map(({ caseId }) => caseId)).toEqual(
       BASELINE_REQUEST_AUTHORITY.map(({ caseId }) => caseId),
@@ -996,7 +995,7 @@ describe('exact supplementary request authority', () => {
     expect(SUPPLEMENTARY_NAMED_CASES).toHaveLength(30);
     expect(SUPPLEMENTARY_ROUTE_CASES).toHaveLength(18);
     expect(MONOCHROME_LEGACY_REQUEST_AUTHORITY).toHaveLength(48);
-    expect(MONOCHROME_BROWSER_REQUEST_AUTHORITY).toHaveLength(79);
+    expect(MONOCHROME_BROWSER_REQUEST_AUTHORITY).toHaveLength(78);
     expect(
       new Set(MONOCHROME_LEGACY_REQUEST_AUTHORITY.map(({ surfaceId }) => surfaceId)).size,
     ).toBe(48);
@@ -1324,6 +1323,30 @@ describe('verifyRuntimeProfileHandshake (frontend/native agreement)', () => {
     const result = verifyRuntimeProfileHandshake(query, ordinaryPlan, undefined, 25);
     const assertion = expect(result).rejects.toThrow(/timed out/i);
     await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+    vi.useRealTimers();
+  });
+
+  it('allows a bounded delayed native query during a busy cold-start window', async () => {
+    vi.useFakeTimers();
+    const query = vi.fn(
+      () =>
+        new Promise<RuntimeProfileEvidence>((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                profile: 'ordinary',
+                appIdentifier: 'ai.jarvis.desktop',
+                capabilityIdentifier: null,
+                sessionNonceHash: null,
+              }),
+            15_000,
+          );
+        }),
+    );
+    const result = verifyRuntimeProfileHandshake(query, ordinaryPlan);
+    const assertion = expect(result).resolves.toMatchObject({ profile: 'ordinary' });
+    await vi.advanceTimersByTimeAsync(15_000);
     await assertion;
     vi.useRealTimers();
   });

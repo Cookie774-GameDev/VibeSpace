@@ -16,6 +16,13 @@
     "tauri:build": "npm --prefix app run tauri:build",
     "typecheck": "npm --prefix app run typecheck",
     "test:release-manifest": "node --test scripts/build-updater-manifest.test.mjs",
+    "test:full:sharded": "node scripts/run-vitest-shards.mjs",
+    "verify:pr31-oss": "node scripts/pr31-oss-bundle.mjs",
+    "verify:pr31-opencode-rlm": "node scripts/verify-pr31-opencode-rlm-integration.mjs",
+    "pr31:live-watch": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pr31-live-watch.ps1",
+    "pr31:live-watch:once": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pr31-live-watch.ps1 -Once",
+    "pr31:live-watch:sync": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pr31-live-watch.ps1 -SyncFromRemote",
+    "pr31:live-watch:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pr31-live-watch.ps1 -Stop",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
     "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1",
     "release:stage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1 -SkipBuild",
@@ -26,10 +33,10 @@
     "@axe-core/playwright": "4.12.1",
     "@playwright/test": "1.61.1",
     "pixelmatch": "7.2.0",
-    "playwright-core": "^1.61.1",
+    "playwright-core": "1.61.1",
     "pngjs": "7.0.0",
     "prettier": "^3.3.3",
-    "sharp": "0.34.5"
+    "sharp": "0.35.3"
   },
   "engines": {
     "node": ">=20"

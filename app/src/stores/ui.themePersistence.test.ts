@@ -18,6 +18,7 @@ const persistedUiFixture = {
   ambientTrack: 'music-4',
   ambientVolume: 17,
   ambientAlwaysPlay: true,
+  clockFormat: 'military',
   composerStt: false,
   defaultTerminalFontSize: 15,
   notificationMaster: true,
@@ -27,8 +28,12 @@ const persistedUiFixture = {
     tasks: false,
     contextMaps: true,
     skills: false,
+    connectors: true,
+    reminders: false,
   },
   aiCompletionCue: true,
+  notificationSound: true,
+  notificationBadge: false,
   lastSeenWhatsNewVersion: 'sentinel-version',
   futurePersistedKey: { deeply: { nested: ['preserve', 42] } },
 } as const;
@@ -51,7 +56,7 @@ describe('UI store theme persistence', () => {
     expect(migrated).not.toBe(persistedUiFixture);
   });
 
-  it('preserves canonical Sakura and unrelated keys during current-version hydration', () => {
+  it('migrates deferred Sakura to Default while preserving unrelated keys', () => {
     const currentState = useUIStore.getState();
     const persisted = {
       ...persistedUiFixture,
@@ -62,10 +67,64 @@ describe('UI store theme persistence', () => {
     const migrated = migratePersistedUiState(persisted, 5);
     const merged = mergePersistedUiState(migrated, currentState);
 
-    expect(merged.theme).toBe('sakura');
+    expect(merged.theme).toBe('default');
     expect((merged as unknown as Record<string, unknown>).futurePersistedKey).toEqual(
       persisted.futurePersistedKey,
     );
+    expect(merged.setTheme).toBe(currentState.setTheme);
+  });
+
+  it('persists valid Sakura effects and repairs malformed effect preferences', () => {
+    const currentState = useUIStore.getState();
+    const valid = mergePersistedUiState(
+      {
+        theme: 'sakura',
+        sakuraPetalsEnabled: false,
+        sakuraPetalSpeed: 'fast',
+      },
+      currentState,
+    );
+    const malformed = mergePersistedUiState(
+      {
+        theme: 'sakura',
+        sakuraPetalsEnabled: 'yes',
+        sakuraPetalSpeed: 'instant',
+      },
+      currentState,
+    );
+
+    expect(valid.sakuraPetalsEnabled).toBe(false);
+    expect(valid.sakuraPetalSpeed).toBe('fast');
+    expect(malformed.sakuraPetalsEnabled).toBe(true);
+    expect(malformed.sakuraPetalSpeed).toBe('normal');
+    expect(valid.setSakuraPetalsEnabled).toBe(currentState.setSakuraPetalsEnabled);
+    expect(valid.setSakuraPetalSpeed).toBe(currentState.setSakuraPetalSpeed);
+  });
+
+  it('preserves canonical Warm during current-version hydration', () => {
+    const currentState = useUIStore.getState();
+    const merged = mergePersistedUiState({ ...persistedUiFixture, theme: 'warm' }, currentState);
+
+    expect(merged.theme).toBe('warm');
+    expect(merged.setTheme).toBe(currentState.setTheme);
+  });
+
+  it('migrates deferred VibeSpace to Default during current-version hydration', () => {
+    const currentState = useUIStore.getState();
+    const merged = mergePersistedUiState(
+      { ...persistedUiFixture, theme: 'vibespace' },
+      currentState,
+    );
+
+    expect(merged.theme).toBe('default');
+    expect(merged.setTheme).toBe(currentState.setTheme);
+  });
+
+  it('migrates deferred Origami to Default during current-version hydration', () => {
+    const currentState = useUIStore.getState();
+    const merged = mergePersistedUiState({ ...persistedUiFixture, theme: 'origami' }, currentState);
+
+    expect(merged.theme).toBe('default');
     expect(merged.setTheme).toBe(currentState.setTheme);
   });
 

@@ -14,7 +14,9 @@ const models = [
   },
 ];
 
-function filledAnswers(value = 'Short, direct, high-energy and production ready.'): Record<string, string> {
+function filledAnswers(
+  value = 'Short, direct, high-energy and production ready.',
+): Record<string, string> {
   return Object.fromEntries(ALL_ABOUT_ME_TEST_QUESTIONS.map((question) => [question.id, value]));
 }
 
@@ -24,7 +26,9 @@ describe('AllAboutMe settings section', () => {
   });
 
   it('generates AllAboutMe.md from the grade step after answers are ready', async () => {
-    const completePrompt = vi.fn(async () => '# AllAboutMe.md\n\n## Communication Style\n\nShort and intense.');
+    const completePrompt = vi.fn(
+      async () => '# AllAboutMe.md\n\n## Communication Style\n\nShort and intense.',
+    );
     useAllAboutMeStore.getState().saveTestDraft({
       selectedModelId: 'google:gemini-2.5-flash',
       mode: 'create',
@@ -37,7 +41,7 @@ describe('AllAboutMe settings section', () => {
 
     // Full draft opens grade step — model picker only here, not mid-quiz.
     expect(screen.getByRole('progressbar', { name: /All About Me test progress/i })).toBeTruthy();
-    expect(screen.getByText(/Grade with which model/i)).toBeTruthy();
+    expect(screen.getByText('Generation model')).toBeTruthy();
     expect(screen.getByLabelText(/AI model for grading/i)).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText(/AI model for grading/i), {
@@ -63,6 +67,22 @@ describe('AllAboutMe settings section', () => {
     expect(screen.getByTestId('all-about-me-q-chip-60')).toBeTruthy();
     expect(screen.queryByLabelText(/AI model for grading/i)).toBeNull();
     expect(screen.queryByText(/Grade with which model/i)).toBeNull();
+  });
+
+  it('keeps the quick test stage centered and width-constrained beside the 60-question strip', () => {
+    render(<AllAboutMe completePrompt={vi.fn()} modelOptions={models} />);
+    fireEvent.click(screen.getByRole('button', { name: /Take the test/i }));
+
+    const dialog = screen.getByRole('dialog', { name: /All About Me Test/i });
+    const stage = screen.getByTestId('all-about-me-question-stage');
+    const map = screen.getByTestId('all-about-me-question-map');
+
+    expect(dialog.className).toContain('grid-cols-[minmax(0,1fr)]');
+    expect(dialog.className).toContain('max-w-none');
+    expect(stage.className).toContain('min-w-0');
+    expect(stage.className).toContain('w-full');
+    expect(map.className).toContain('min-w-0');
+    expect(screen.getByRole('button', { name: /Skip question/i })).toBeTruthy();
   });
 
   it('allows submit and generate with zero answers', async () => {
@@ -108,7 +128,10 @@ describe('AllAboutMe settings section', () => {
     fireEvent.click(screen.getByRole('button', { name: /Resume saved test/i }));
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/AI model for grading/i)).toHaveProperty('value', 'google:gemini-2.5-flash'),
+      expect(screen.getByLabelText(/AI model for grading/i)).toHaveProperty(
+        'value',
+        'google:gemini-2.5-flash',
+      ),
     );
     expect(screen.queryByRole('option', { name: /legacy-manual-model/i })).toBeNull();
   });
@@ -117,8 +140,14 @@ describe('AllAboutMe settings section', () => {
     render(<AllAboutMe completePrompt={vi.fn()} modelOptions={[]} />);
 
     expect(screen.getByText(/Intentional profile/i)).toBeTruthy();
-    expect(screen.getByText(/changes this document only when you complete the profile flow or make an explicit edit/i)).toBeTruthy();
-    expect(screen.getByText(/Automatic interaction preferences are stored separately in learning\.md/i)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /changes this document only when you complete the profile flow or make an explicit edit/i,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/Automatic interaction preferences are stored separately in learning\.md/i),
+    ).toBeTruthy();
     expect(screen.queryByText(/After every 10 user messages/i)).toBeNull();
   });
 
@@ -140,17 +169,46 @@ describe('AllAboutMe settings section', () => {
     expect(screen.getByLabelText(/What name or nickname/i)).toHaveProperty('value', 'Viper');
   });
 
-  it('advances with Ctrl+Enter', () => {
+  it('advances with Ctrl+Enter and updates the Answered indicator live', () => {
     render(<AllAboutMe completePrompt={vi.fn()} modelOptions={models} />);
     fireEvent.click(screen.getByRole('button', { name: /Take the test/i }));
 
     expect(screen.getByTestId('all-about-me-q-chip-1').getAttribute('data-current')).toBe('true');
+    expect(screen.getByTestId('all-about-me-current-answered').getAttribute('data-answered')).toBe(
+      'false',
+    );
+    expect(screen.getByTestId('all-about-me-current-answered').textContent).toMatch(/Unanswered/i);
     const box = screen.getByRole('textbox');
     fireEvent.change(box, { target: { value: 'Viper' } });
+    expect(screen.getByTestId('all-about-me-current-answered').getAttribute('data-answered')).toBe(
+      'true',
+    );
+    expect(screen.getByTestId('all-about-me-current-answered').textContent).toMatch(/Answered/i);
+    expect(screen.getByTestId('all-about-me-question-progress').textContent).toMatch(/1\/60/);
     fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
 
     expect(screen.getByTestId('all-about-me-q-chip-2').getAttribute('data-current')).toBe('true');
     expect(screen.getByTestId('all-about-me-q-chip-1').getAttribute('data-answered')).toBe('true');
+  });
+
+  it('surfaces generation failures without silently saving a template profile', async () => {
+    const completePrompt = vi.fn(async () => {
+      throw new Error(
+        'Local model runtime is unavailable. Start Ollama, confirm the model is installed under Settings → Local Models, then try Generate again.',
+      );
+    });
+    useAllAboutMeStore.getState().saveTestDraft({
+      selectedModelId: 'google:gemini-2.5-flash',
+      mode: 'create',
+      questionValues: filledAnswers(),
+    });
+    render(<AllAboutMe completePrompt={completePrompt} modelOptions={models} />);
+    fireEvent.click(screen.getByRole('button', { name: /Resume saved test/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Generate AllAboutMe.md/i }));
+
+    await waitFor(() => expect(completePrompt).toHaveBeenCalledOnce());
+    expect(useAllAboutMeStore.getState().markdown).toBe('');
+    expect(screen.getByRole('dialog', { name: /All About Me Test/i })).toBeTruthy();
   });
 
   it('saves progress immediately on each answer and when the popup is closed (X)', () => {
@@ -201,9 +259,13 @@ describe('AllAboutMe settings section', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Close and save test/i }));
     fireEvent.click(screen.getByRole('button', { name: /Delete AllAboutMe.md/i }));
-    fireEvent.change(screen.getByLabelText(/Type delete to confirm/i), { target: { value: 'Delete' } });
+    fireEvent.change(screen.getByLabelText(/Type delete to confirm/i), {
+      target: { value: 'Delete' },
+    });
     expect(screen.getByRole('button', { name: /^Delete$/i })).toHaveProperty('disabled', true);
-    fireEvent.change(screen.getByLabelText(/Type delete to confirm/i), { target: { value: 'delete' } });
+    fireEvent.change(screen.getByLabelText(/Type delete to confirm/i), {
+      target: { value: 'delete' },
+    });
     fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
 
     expect(useAllAboutMeStore.getState().markdown).toBe('');

@@ -55,6 +55,11 @@ export interface JarvisTerminalFileActivity {
 export interface JarvisTerminalPaneSnapshot {
   readonly paneId: string;
   readonly sessionId?: string;
+  readonly executionId?: string;
+  readonly processInstanceId?: string;
+  readonly pid?: number;
+  readonly processStartedAt?: number;
+  readonly runtimeGeneration?: string;
   readonly agentSlug?: string;
   readonly cwd?: string;
   readonly launchedCommand?: string;
@@ -231,6 +236,72 @@ function executionForTranscript(
     : undefined;
 }
 
+type JarvisTerminalProcessProjection = Readonly<{
+  executionId: string;
+  processInstanceId: string;
+  pid: number;
+  processStartedAt: number;
+  runtimeGeneration: string;
+}>;
+
+function stableIdentity(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    value === value.trim() &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function processProjectionForTranscript(
+  execution: TerminalExecution | undefined,
+  transcript: SessionTranscript,
+  paneId: string,
+  executions: readonly TerminalExecution[],
+): JarvisTerminalProcessProjection | undefined {
+  const identity = execution?.processIdentity;
+  const transcriptProjectId =
+    transcript.projectId === undefined || transcript.projectId === null
+      ? null
+      : transcript.projectId;
+  if (
+    !execution ||
+    !identity ||
+    !Object.isFrozen(identity) ||
+    executions.filter((candidate) => candidate.sessionId === transcript.sessionId).length !== 1 ||
+    !stableIdentity(execution.accountId) ||
+    !stableIdentity(execution.runId) ||
+    !stableIdentity(execution.id) ||
+    !stableIdentity(transcript.sessionId) ||
+    !stableIdentity(paneId) ||
+    (transcriptProjectId !== null && !stableIdentity(transcriptProjectId)) ||
+    identity.accountId !== execution.accountId ||
+    identity.projectId !== transcriptProjectId ||
+    identity.runId !== execution.runId ||
+    identity.executionId !== execution.id ||
+    identity.paneId !== paneId ||
+    identity.sessionId !== transcript.sessionId ||
+    execution.sessionId !== transcript.sessionId ||
+    !stableIdentity(identity.processInstanceId) ||
+    !stableIdentity(identity.runtimeGeneration) ||
+    !Number.isSafeInteger(identity.pid) ||
+    identity.pid <= 0 ||
+    identity.pid > 0xffff_ffff ||
+    !Number.isSafeInteger(identity.processStartedAt) ||
+    identity.processStartedAt <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    executionId: identity.executionId,
+    processInstanceId: identity.processInstanceId,
+    pid: identity.pid,
+    processStartedAt: identity.processStartedAt,
+    runtimeGeneration: identity.runtimeGeneration,
+  };
+}
+
 function lifecycleForExecution(
   execution: TerminalExecution | undefined,
   lifecycleByExecutionId:
@@ -336,10 +407,17 @@ function paneFromTranscript(
   const launchedCommand = sanitizedScalar(transcript.command, rawOutput);
   const queuedCommand = sanitizedScalar(command?.command, rawOutput);
   const sessionId = sanitizedScalar(transcript.sessionId, rawOutput);
+  const processProjection = processProjectionForTranscript(
+    execution,
+    transcript,
+    paneId,
+    executions,
+  );
 
   return {
     paneId,
     ...(sessionId === undefined ? {} : { sessionId }),
+    ...(processProjection === undefined ? {} : processProjection),
     ...(agentSlug === undefined ? {} : { agentSlug }),
     ...(cwd === undefined ? {} : { cwd }),
     ...(launchedCommand === undefined ? {} : { launchedCommand }),

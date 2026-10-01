@@ -26,12 +26,19 @@
  * rejects path traversal, shell metacharacters, and other injection
  * vectors before any network call is made.
  */
-import type { LLMProvider, LLMRequest, LLMResponse } from '../types';
+import type { LLMContentPart, LLMMessage, LLMProvider, LLMRequest, LLMResponse } from '../types';
 import { estimateCost, estimateInputTokens, llmContentToText, observeResponseBody } from '../types';
 import { useAuthStore } from '@/stores/auth';
 import { parseSSE } from './sse';
 import { nativeFetch } from '@/lib/nativeFetch';
 import { isTauri } from '@/lib/utils';
+import { ollamaModelSupportsVision } from '../vision';
+import {
+  localAgentSystemInstruction,
+  localOllamaRequestPolicy,
+  readLocalAgentPreferences,
+  type LocalAgentMode,
+} from '../localAgentRuntime';
 
 /** Default Ollama base URL. Configurable via auth store `apiKeys.ollama`. */
 export const OLLAMA_DEFAULT_BASE = 'http://127.0.0.1:11434';
@@ -44,9 +51,247 @@ export const OLLAMA_DEFAULT_MODEL = 'llama3.2';
 /** Prepended to every Ollama request so local models answer like Jarvis. */
 export const OLLAMA_JARVIS_STYLE_PROMPT = `You are Jarvis — the user's personal AI assistant. Keep every reply short, direct, and natural (usually 1–3 sentences unless they ask for more). No filler, no long intros, no unnecessary markdown. Sound calm, capable, and conversational, as if speaking aloud. If the user asks you to do something in VibeSpace, emit the real fenced action block from the system instructions and never claim it already happened before approval.`;
 
+type NativeOllamaInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+type NativeOllamaListen = <T>(
+  event: string,
+  handler: (event: { payload: T }) => void,
+) => Promise<() => void>;
+
+function isMissingNativeOllamaChatCommand(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:unknown|not found|does not exist|not registered).*ollama_chat|ollama_chat.*(?:unknown|not found|does not exist|not registered)/i.test(
+    message,
+  );
+}
+
+/** llama3.2 and other non-thinking tags reject `think: true` with HTTP 400. */
+function isThinkUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /status_400|does not support think|unknown field ["']?think|invalid.*\bthink\b/i.test(
+    message,
+  );
+}
+
+export async function runNativeOllamaChat(
+  invoke: NativeOllamaInvoke,
+  args: {
+    model: string;
+    messages: readonly { role: string; content: string }[];
+    options: Record<string, number>;
+    think: boolean;
+    baseUrl: string;
+  },
+): Promise<{ text: string; inputTokens?: number; outputTokens?: number }> {
+  const result = await invoke<{
+    text: string;
+    inputTokens?: number;
+    outputTokens?: number;
+  }>('ollama_chat', args);
+  const text = result.text?.trim();
+  if (!text) throw new Error('Ollama returned an empty response.');
+  return { ...result, text };
+}
+
+/**
+ * Compatibility bridge for an already-running desktop process that predates
+ * the reliable `ollama_chat` IPC command. Remove only after all supported
+ * desktop builds include that command.
+ */
+export async function runLegacyNativeOllamaChat(
+  invoke: NativeOllamaInvoke,
+  listen: NativeOllamaListen,
+  args: {
+    requestId: string;
+    model: string;
+    messages: readonly { role: string; content: string }[];
+    temperature: number;
+    baseUrl: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    firstResponseTimeoutMs?: number;
+    onDelta?: (delta: string) => void;
+    options?: Record<string, number>;
+    think?: boolean;
+  },
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    let text = '';
+    let unlisten: (() => void) | undefined;
+    let overallTimeout = 0;
+    let firstResponseTimeout = 0;
+    let settled = false;
+
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(overallTimeout);
+      window.clearTimeout(firstResponseTimeout);
+      args.signal?.removeEventListener('abort', onAbort);
+      unlisten?.();
+      if (error) {
+        reject(error);
+        return;
+      }
+      const trimmed = text.trim();
+      if (!trimmed) {
+        reject(new Error('Ollama returned an empty response.'));
+        return;
+      }
+      resolve(trimmed);
+    };
+    const onAbort = () => finish(new DOMException('Aborted by user', 'AbortError'));
+
+    if (args.signal?.aborted) {
+      finish(new DOMException('Aborted by user', 'AbortError'));
+      return;
+    }
+    args.signal?.addEventListener('abort', onAbort, { once: true });
+    firstResponseTimeout = window.setTimeout(
+      () =>
+        finish(
+          new Error(
+            'Ollama did not begin responding in time. The model may be too large for the available RAM/VRAM or still warming up.',
+          ),
+        ),
+      // Cold local models can spend close to a minute loading and ingesting
+      // the protected project context before the authoritative IPC result is
+      // available. Keep this below the bounded overall deadline while avoiding
+      // a false transport failure during a healthy cold start.
+      args.firstResponseTimeoutMs ?? 120_000,
+    );
+    overallTimeout = window.setTimeout(
+      () => finish(new Error('Ollama response timed out.')),
+      args.timeoutMs ?? 180_000,
+    );
+
+    void listen<{ delta: string; done: boolean; error?: string | null }>(
+      `ollama:chat:${args.requestId}`,
+      (event) => {
+        if (event.payload.error) {
+          finish(new Error(event.payload.error));
+          return;
+        }
+        const delta = event.payload.delta ?? '';
+        if (delta) {
+          window.clearTimeout(firstResponseTimeout);
+          text += delta;
+          args.onDelta?.(delta);
+        }
+        if (event.payload.done) finish();
+      },
+    )
+      .then((stopListening) => {
+        unlisten = stopListening;
+        if (settled) {
+          stopListening();
+          return;
+        }
+        return invoke<{
+          text?: string;
+          inputTokens?: number;
+          outputTokens?: number;
+        } | void>('ollama_chat_stream', {
+          requestId: args.requestId,
+          model: args.model,
+          messages: args.messages,
+          temperature: args.temperature,
+          options: args.options,
+          think: args.think,
+          baseUrl: args.baseUrl,
+        }).then((result) => {
+          if (settled || !result?.text?.trim()) return;
+          text = result.text;
+          finish();
+        });
+      })
+      .catch(finish);
+  });
+}
+
+function isTransientOllamaTransportError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(?:connect|connection|reset|refused|timed? ?out|timeout|transport|broken pipe|empty response|unavailable)\b/i.test(
+    message,
+  );
+}
+
+export async function runReliableNativeOllamaChat(
+  invoke: NativeOllamaInvoke,
+  listen: NativeOllamaListen,
+  args: {
+    requestId: string;
+    model: string;
+    messages: readonly { role: string; content: string }[];
+    options: Record<string, number>;
+    think: boolean;
+    baseUrl: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    firstResponseTimeoutMs?: number;
+    maxAttempts?: number;
+    onDelta?: (delta: string) => void;
+  },
+): Promise<string> {
+  if (args.signal?.aborted) {
+    throw new DOMException('Aborted by user', 'AbortError');
+  }
+  const maxAttempts = Math.max(1, Math.min(args.maxAttempts ?? 2, 2));
+  let lastError: unknown;
+  let effectiveThink = args.think;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let emittedAny = false;
+    try {
+      return await runLegacyNativeOllamaChat(invoke, listen, {
+        requestId: `${args.requestId}-${attempt}`,
+        model: args.model,
+        messages: args.messages,
+        temperature: args.options.temperature ?? OLLAMA_CHAT_DEFAULT_TEMPERATURE,
+        options: args.options,
+        think: effectiveThink,
+        baseUrl: args.baseUrl,
+        signal: args.signal,
+        timeoutMs: args.timeoutMs,
+        firstResponseTimeoutMs: args.firstResponseTimeoutMs,
+        onDelta: (delta) => {
+          emittedAny = true;
+          args.onDelta?.(delta);
+        },
+      });
+    } catch (error) {
+      lastError = error;
+      if (
+        effectiveThink &&
+        attempt < maxAttempts &&
+        !emittedAny &&
+        isThinkUnsupportedError(error) &&
+        !args.signal?.aborted
+      ) {
+        effectiveThink = false;
+        continue;
+      }
+      if (
+        attempt >= maxAttempts ||
+        emittedAny ||
+        !isTransientOllamaTransportError(error) ||
+        args.signal?.aborted
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Ollama inference failed.');
+}
+
 const OLLAMA_CHAT_KEEP_ALIVE = '15m';
 const OLLAMA_CHAT_NUM_CTX = 4096;
-const OLLAMA_CHAT_NUM_PREDICT = 320;
+// Match the token optimizer's conservative fallback context window. Final
+// Boss can reserve 8K output tokens and still retain its broader protected
+// evidence instead of silently forcing Ollama back into a truncated 16K turn.
+const OLLAMA_CHAT_MAX_NUM_CTX = 32_768;
+const OLLAMA_CHAT_MAX_NUM_PREDICT = 8_192;
 const OLLAMA_CHAT_REPEAT_PENALTY = 1.18;
 const OLLAMA_CHAT_TOP_P = 0.9;
 const OLLAMA_CHAT_DEFAULT_TEMPERATURE = 0.45;
@@ -57,11 +302,33 @@ function ollamaChatTemperature(req: LLMRequest): number {
   return req.temperature ?? req.agent.temperature ?? OLLAMA_CHAT_DEFAULT_TEMPERATURE;
 }
 
-function ollamaChatOptions(req: LLMRequest): Record<string, number> {
+function ollamaChatOptions(
+  req: LLMRequest,
+  mode: LocalAgentMode,
+  inputChars: number,
+): Record<string, number> {
+  const policy = localOllamaRequestPolicy(mode);
+  const numPredict =
+    req.max_output_tokens === undefined
+      ? policy.numPredict
+      : Math.min(req.max_output_tokens, OLLAMA_CHAT_MAX_NUM_PREDICT);
+  // Code and structured action history are often denser than prose. Reserve
+  // conservatively so an approved file sample is not silently truncated just
+  // because the user selected a small output budget.
+  const requiredContext = Math.ceil(inputChars / 2) + numPredict + 512;
+  const outputContext =
+    numPredict <= 512 ? OLLAMA_CHAT_NUM_CTX : numPredict <= 2_048 ? 8_192 : OLLAMA_CHAT_MAX_NUM_CTX;
+  const inputContext =
+    requiredContext <= OLLAMA_CHAT_NUM_CTX
+      ? OLLAMA_CHAT_NUM_CTX
+      : requiredContext <= 8_192
+        ? 8_192
+        : OLLAMA_CHAT_MAX_NUM_CTX;
+  const numCtx = Math.max(outputContext, inputContext);
   return {
     temperature: ollamaChatTemperature(req),
-    num_ctx: OLLAMA_CHAT_NUM_CTX,
-    num_predict: req.max_output_tokens ?? OLLAMA_CHAT_NUM_PREDICT,
+    num_ctx: numCtx,
+    num_predict: numPredict,
     repeat_penalty: OLLAMA_CHAT_REPEAT_PENALTY,
     top_p: OLLAMA_CHAT_TOP_P,
   };
@@ -89,23 +356,140 @@ export function buildOllamaSystemPrompt(agentPrompt: string | undefined): string
   return base ? `${OLLAMA_JARVIS_STYLE_PROMPT}\n\n${base}` : OLLAMA_JARVIS_STYLE_PROMPT;
 }
 
+export type OllamaNativeChatMessage = {
+  role: string;
+  content: string;
+  /** Raw base64 images without data: prefix — Ollama /api/chat schema. */
+  images?: string[];
+};
+
+export type OllamaOpenAiChatMessage = {
+  role: string;
+  content:
+    | string
+    | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>;
+};
+
+function stripDataUrlBase64(data: string): string {
+  const trimmed = data.trim();
+  const comma = trimmed.indexOf(',');
+  if (trimmed.startsWith('data:') && comma !== -1) return trimmed.slice(comma + 1);
+  return trimmed;
+}
+
+function collectImageParts(
+  content: LLMMessage['content'],
+): Extract<LLMContentPart, { type: 'image' }>[] {
+  if (typeof content === 'string') return [];
+  return content.filter(
+    (part): part is Extract<LLMContentPart, { type: 'image' }> =>
+      part.type === 'image' && part.mimeType.startsWith('image/'),
+  );
+}
+
+/**
+ * Pure Ollama /api/chat message builder.
+ * Vision models get real base64 `images[]`; text-only models never claim sight.
+ */
+export function toOllamaNativeMessages(
+  messages: readonly LLMMessage[],
+  options: { vision: boolean },
+): OllamaNativeChatMessage[] {
+  return messages.map((message) => {
+    if (!options.vision) {
+      return {
+        role: message.role,
+        content: llmContentToText(message.content),
+      };
+    }
+    const images = collectImageParts(message.content)
+      .map((part) => stripDataUrlBase64(part.data))
+      .filter(Boolean);
+    const text = llmContentToText(
+      typeof message.content === 'string'
+        ? message.content
+        : message.content.filter((part) => part.type === 'text'),
+    );
+    if (images.length === 0) {
+      return { role: message.role, content: text || llmContentToText(message.content) };
+    }
+    return {
+      role: message.role,
+      content: text.trim() || 'Describe the attached image(s).',
+      images,
+    };
+  });
+}
+
+/** OpenAI-compatible multimodal shape for Ollama's `/v1/chat/completions`. */
+export function toOllamaOpenAiMessages(
+  messages: readonly LLMMessage[],
+  options: { vision: boolean },
+): OllamaOpenAiChatMessage[] {
+  return messages.map((message) => {
+    if (!options.vision || typeof message.content === 'string') {
+      return {
+        role: message.role,
+        content:
+          typeof message.content === 'string' ? message.content : llmContentToText(message.content),
+      };
+    }
+    const images = collectImageParts(message.content);
+    if (images.length === 0) {
+      return { role: message.role, content: llmContentToText(message.content) };
+    }
+    const parts: Array<
+      { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
+    > = [];
+    for (const part of message.content) {
+      if (part.type === 'text' && part.text.trim()) {
+        parts.push({ type: 'text', text: part.text });
+      } else if (part.type === 'image') {
+        const data = stripDataUrlBase64(part.data);
+        parts.push({
+          type: 'image_url',
+          image_url: { url: `data:${part.mimeType};base64,${data}` },
+        });
+      }
+    }
+    if (!parts.some((part) => part.type === 'text')) {
+      parts.unshift({ type: 'text', text: 'Describe the attached image(s).' });
+    }
+    return { role: message.role, content: parts };
+  });
+}
+
 export function buildOllamaRequestBody(
   req: LLMRequest,
   model = req.agent.model.model || OLLAMA_DEFAULT_MODEL,
 ) {
-  const systemPrompt = req.systemPrompt ?? buildOllamaSystemPrompt(req.agent.system_prompt);
+  const mode = readLocalAgentPreferences().mode;
+  const policy = localOllamaRequestPolicy(mode);
+  const vision = ollamaModelSupportsVision(model);
+  const baseSystemPrompt = req.systemPrompt ?? buildOllamaSystemPrompt(req.agent.system_prompt);
+  const systemPrompt =
+    req.systemPrompt === undefined
+      ? `${baseSystemPrompt}\n\n${localAgentSystemInstruction(mode)}`
+      : baseSystemPrompt;
+  const history = compactOllamaMessages(req.messages);
+  const inputChars =
+    systemPrompt.length +
+    history.reduce((total, message) => total + llmContentToText(message.content).length, 0);
   return {
     model,
     messages: [
       { role: 'system' as const, content: systemPrompt },
-      ...compactOllamaMessages(req.messages).map((message) => ({
-        role: message.role,
-        content: llmContentToText(message.content),
-      })),
-    ],
+      ...toOllamaNativeMessages(history, { vision }),
+    ] as OllamaNativeChatMessage[],
+    openAiMessages: [
+      { role: 'system' as const, content: systemPrompt },
+      ...toOllamaOpenAiMessages(history, { vision }),
+    ] as OllamaOpenAiChatMessage[],
+    vision,
     stream: true,
+    think: policy.think,
     keep_alive: OLLAMA_CHAT_KEEP_ALIVE,
-    options: ollamaChatOptions(req),
+    options: ollamaChatOptions(req, mode, inputChars),
   };
 }
 
@@ -127,8 +511,20 @@ const SANE_MODEL_RE = /^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*(?::[a-zA-Z0-9_.-]+
 
 export interface OllamaModelInfo {
   name: string;
+  digest?: string;
   size?: number;
   modifiedAt?: string;
+}
+
+export interface OllamaModelDetails {
+  digest: string;
+  capabilities: string[];
+  contextWindowTokens?: number;
+}
+
+export interface OllamaToolProbe {
+  supported: boolean;
+  reason?: string;
 }
 
 export interface OllamaPullProgress {
@@ -138,6 +534,16 @@ export interface OllamaPullProgress {
   completed?: number;
   percent?: number;
   done?: boolean;
+}
+
+export interface OllamaPullOptions {
+  /** Re-download an installed tag for repair or update. */
+  force?: boolean;
+}
+
+export interface OllamaChatVerification {
+  ok: true;
+  response: string;
 }
 
 export interface OllamaEnsureStatus {
@@ -237,10 +643,11 @@ export async function listOllamaModels(signal?: AbortSignal): Promise<string[]> 
 }
 
 function mapInvokeModels(
-  models: Array<{ name: string; size?: number; modifiedAt?: string }>,
+  models: Array<{ name: string; digest?: string; size?: number; modifiedAt?: string }>,
 ): OllamaModelInfo[] {
   return (models ?? []).map((m) => ({
     name: m.name,
+    digest: typeof m.digest === 'string' ? m.digest : undefined,
     size: typeof m.size === 'number' ? m.size : undefined,
     modifiedAt: typeof m.modifiedAt === 'string' ? m.modifiedAt : undefined,
   }));
@@ -249,10 +656,9 @@ function mapInvokeModels(
 async function listOllamaModelsViaInvoke(signal?: AbortSignal): Promise<OllamaModelInfo[]> {
   if (signal?.aborted) return [];
   const { invoke } = await import('@tauri-apps/api/core');
-  const models = await invoke<Array<{ name: string; size?: number; modifiedAt?: string }>>(
-    'ollama_list_models',
-    { baseUrl: resolvedOllamaBaseUrl() },
-  );
+  const models = await invoke<
+    Array<{ name: string; digest?: string; size?: number; modifiedAt?: string }>
+  >('ollama_list_models', { baseUrl: resolvedOllamaBaseUrl() });
   return mapInvokeModels(models);
 }
 
@@ -302,17 +708,169 @@ export async function listOllamaModelInfo(signal?: AbortSignal): Promise<OllamaM
     const models = data?.models;
     if (!Array.isArray(models)) return [];
     return models
-      .map((m: { name?: string; size?: number; modified_at?: string }): OllamaModelInfo | null => {
-        if (!m?.name || typeof m.name !== 'string') return null;
-        return {
-          name: m.name,
-          size: typeof m.size === 'number' ? m.size : undefined,
-          modifiedAt: typeof m.modified_at === 'string' ? m.modified_at : undefined,
-        };
-      })
+      .map(
+        (m: {
+          name?: string;
+          digest?: string;
+          size?: number;
+          modified_at?: string;
+        }): OllamaModelInfo | null => {
+          if (!m?.name || typeof m.name !== 'string') return null;
+          return {
+            name: m.name,
+            digest: typeof m.digest === 'string' ? m.digest : undefined,
+            size: typeof m.size === 'number' ? m.size : undefined,
+            modifiedAt: typeof m.modified_at === 'string' ? m.modified_at : undefined,
+          };
+        },
+      )
       .filter((model: OllamaModelInfo | null): model is OllamaModelInfo => Boolean(model));
   } catch {
     return [];
+  }
+}
+
+function parseModelDetails(value: unknown): OllamaModelDetails | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.digest !== 'string' || !record.digest.trim()) return null;
+  const capabilities = Array.isArray(record.capabilities)
+    ? record.capabilities
+        .filter((item): item is string => typeof item === 'string')
+        .slice(0, 32)
+        .map((item) => item.slice(0, 64))
+    : [];
+  const contextWindowTokens =
+    typeof record.contextWindowTokens === 'number' &&
+    Number.isFinite(record.contextWindowTokens) &&
+    record.contextWindowTokens > 0
+      ? Math.floor(record.contextWindowTokens)
+      : undefined;
+  return {
+    digest: record.digest.slice(0, 160),
+    capabilities,
+    ...(contextWindowTokens ? { contextWindowTokens } : {}),
+  };
+}
+
+/** Inspect bounded model metadata without starting or downloading a model. */
+export async function inspectOllamaModel(model: string): Promise<OllamaModelDetails | null> {
+  validateModelName(model);
+  if (isTauri) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return parseModelDetails(
+        await invoke<unknown>('ollama_show_model', {
+          model,
+          baseUrl: resolvedOllamaBaseUrl(),
+        }),
+      );
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const response = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/show`, {
+      method: 'POST',
+      headers: ollamaHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ model, verbose: false }),
+      timeoutMs: 15_000,
+    });
+    if (!response.ok) return null;
+    const raw = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!raw) return null;
+    const encoded = JSON.stringify(raw);
+    let hash = 2_166_136_261;
+    for (let index = 0; index < encoded.length; index += 1) {
+      hash = Math.imul(hash ^ encoded.charCodeAt(index), 16_777_619) >>> 0;
+    }
+    const modelInfo =
+      raw.model_info && typeof raw.model_info === 'object'
+        ? (raw.model_info as Record<string, unknown>)
+        : {};
+    const contextWindowTokens = Object.entries(modelInfo)
+      .filter(([key, value]) => key.endsWith('.context_length') && typeof value === 'number')
+      .reduce<number | undefined>(
+        (largest, [, value]) =>
+          largest === undefined || (value as number) > largest ? (value as number) : largest,
+        undefined,
+      );
+    return parseModelDetails({
+      digest: `metadata:${hash.toString(16).padStart(8, '0')}`,
+      capabilities: raw.capabilities,
+      contextWindowTokens,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Run the native side-effect-free tool-schema roundtrip for one installed model. */
+export async function probeOllamaToolCalling(model: string): Promise<OllamaToolProbe> {
+  validateModelName(model);
+  if (isTauri) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<unknown>('ollama_probe_tools', {
+        model,
+        baseUrl: resolvedOllamaBaseUrl(),
+      });
+      if (!result || typeof result !== 'object') {
+        return { supported: false, reason: 'The tool probe returned an invalid response.' };
+      }
+      const record = result as Record<string, unknown>;
+      return {
+        supported: record.supported === true,
+        ...(typeof record.reason === 'string' ? { reason: record.reason.slice(0, 256) } : {}),
+      };
+    } catch {
+      return { supported: false, reason: 'The safe tool probe could not be completed.' };
+    }
+  }
+  try {
+    const response = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/chat`, {
+      method: 'POST',
+      headers: ollamaHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        model,
+        stream: false,
+        messages: [
+          {
+            role: 'user',
+            content: 'Call compatibility_check exactly once with ok set to true.',
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'compatibility_check',
+              description: 'Side-effect-free local compatibility check.',
+              parameters: {
+                type: 'object',
+                properties: { ok: { type: 'boolean' } },
+                required: ['ok'],
+              },
+            },
+          },
+        ],
+        options: { temperature: 0, num_predict: 32 },
+      }),
+      timeoutMs: 30_000,
+    });
+    if (!response.ok) {
+      return { supported: false, reason: 'Ollama rejected the safe tool probe.' };
+    }
+    const value = (await response.json().catch(() => null)) as {
+      message?: { tool_calls?: unknown[] };
+    } | null;
+    const supported = Boolean(value?.message?.tool_calls?.length);
+    return {
+      supported,
+      ...(!supported ? { reason: 'No tool call was returned.' } : {}),
+    };
+  } catch {
+    return { supported: false, reason: 'The safe tool probe could not be completed.' };
   }
 }
 
@@ -327,8 +885,16 @@ function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
       resolve();
       return;
     }
-    const timer = window.setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => window.clearTimeout(timer), { once: true });
+    const finish = () => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      finish();
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -503,8 +1069,8 @@ export async function ensureOllamaReadySilent(
       ready: false,
       apiReachable: false,
       installed: installStatus.installed ?? false,
-      phase: installStatus.installed ? 'starting' : 'installing',
-      statusMsg: bootstrapStatusMessage(installStatus.installed ? 'starting' : 'installing'),
+      phase: installStatus.installed ? 'starting' : 'not_installed',
+      statusMsg: bootstrapStatusMessage(installStatus.installed ? 'starting' : 'not_installed'),
     });
 
     const native = await ensureNativeOllamaReady(resolvedOllamaBaseUrl());
@@ -703,6 +1269,7 @@ export async function pullOllamaModel(
   model: string,
   onProgress?: (progress: OllamaPullProgress) => void,
   signal?: AbortSignal,
+  options: OllamaPullOptions = {},
 ): Promise<void> {
   validateModelName(model);
   const name = model.trim();
@@ -710,6 +1277,7 @@ export async function pullOllamaModel(
   const alreadyInstalled = await listOllamaModels(signal);
   const normalized = name.trim().toLowerCase();
   if (
+    !options.force &&
     alreadyInstalled.some(
       (installedName) =>
         installedName.trim().toLowerCase() === normalized ||
@@ -784,6 +1352,9 @@ export async function pullOllamaModel(
         `Download completed but "${name}" was not found in the installed list. Try re-scanning or re-downloading.`,
       );
     }
+    const { refreshOpenCodeLocalModelRuntime } =
+      await import('@/lib/harness/localModelRuntimeRefresh');
+    await refreshOpenCodeLocalModelRuntime();
     return;
   }
 
@@ -958,6 +1529,94 @@ export async function pullOllamaModel(
       throw err;
     }
   }
+  const { refreshOpenCodeLocalModelRuntime } =
+    await import('@/lib/harness/localModelRuntimeRefresh');
+  await refreshOpenCodeLocalModelRuntime();
+}
+
+/** Remove an installed Ollama model and verify that the tag is no longer listed. */
+export async function removeOllamaModel(model: string, signal?: AbortSignal): Promise<void> {
+  validateModelName(model);
+  const name = model.trim();
+  const normalized = name.toLowerCase();
+  const installed = await listOllamaModels(signal);
+  const present = installed.some(
+    (installedName) =>
+      installedName.trim().toLowerCase() === normalized ||
+      installedName.trim().toLowerCase().startsWith(`${normalized}:`),
+  );
+  if (!present) return;
+
+  const response = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/delete`, {
+    method: 'DELETE',
+    headers: ollamaHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ name }),
+    signal,
+    timeoutMs: 30_000,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(
+      `Ollama remove failed (${response.status}): ${detail.slice(0, 300) || response.statusText}`,
+    );
+  }
+
+  const remaining = await listOllamaModels(signal);
+  if (
+    remaining.some(
+      (installedName) =>
+        installedName.trim().toLowerCase() === normalized ||
+        installedName.trim().toLowerCase().startsWith(`${normalized}:`),
+    )
+  ) {
+    throw new Error(`Ollama reported success but "${name}" is still installed.`);
+  }
+  const { refreshOpenCodeLocalModelRuntime } =
+    await import('@/lib/harness/localModelRuntimeRefresh');
+  await refreshOpenCodeLocalModelRuntime();
+}
+
+/** Run a tiny real inference to prove an installed tag can produce a local chat response. */
+export async function verifyOllamaModelChat(
+  model: string,
+  signal?: AbortSignal,
+): Promise<OllamaChatVerification> {
+  validateModelName(model);
+  const response = await nativeFetch(`${resolvedOllamaBaseUrl()}/api/chat`, {
+    method: 'POST',
+    headers: ollamaHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({
+      model: model.trim(),
+      messages: [{ role: 'user', content: 'Reply with READY.' }],
+      stream: false,
+      think: false,
+      keep_alive: 0,
+      options: { temperature: 0, num_predict: 8 },
+    }),
+    signal,
+    timeoutMs: 60_000,
+  });
+  const raw = await response.text();
+  if (raw.length > MAX_RESPONSE_BYTES) {
+    throw new Error('Ollama verification response exceeded the safe size limit.');
+  }
+  if (!response.ok) {
+    throw new Error(
+      `Ollama chat verification failed (${response.status}): ${raw.slice(0, 300) || response.statusText}`,
+    );
+  }
+  const parsed = safeJSON(raw);
+  const content =
+    parsed &&
+    typeof parsed.message === 'object' &&
+    parsed.message !== null &&
+    typeof (parsed.message as Record<string, unknown>).content === 'string'
+      ? String((parsed.message as Record<string, unknown>).content).trim()
+      : '';
+  if (!content) {
+    throw new Error('Ollama chat verification failed: the model returned no text.');
+  }
+  return { ok: true, response: content.slice(0, 160) };
 }
 
 export const ollamaProvider: LLMProvider = {
@@ -985,11 +1644,14 @@ export const ollamaProvider: LLMProvider = {
 
     const installed = await listOllamaModels(req.signal);
     const normalized = model.trim().toLowerCase();
-    const modelExists = installed.some(
-      (name) =>
-        name.trim().toLowerCase() === normalized ||
-        name.trim().toLowerCase().startsWith(`${normalized}:`),
-    );
+    const modelExists = installed.some((name) => {
+      const installedName = name.trim().toLowerCase();
+      return (
+        installedName === normalized ||
+        installedName.startsWith(`${normalized}:`) ||
+        normalized.startsWith(`${installedName}:`)
+      );
+    });
     if (!modelExists) {
       throw new Error(
         `Local model "${model}" is not installed. Open Settings → Local Models and download it.`,
@@ -999,69 +1661,64 @@ export const ollamaProvider: LLMProvider = {
     const body = buildOllamaRequestBody(req, model);
     const { messages } = body;
 
-    // Packaged Tauri build: stream chat through the Rust reqwest command (no
-    // Origin header → Ollama never 403s). Deltas arrive on a per-request event.
+    // Packaged Tauri build: listen before invoking the registered Rust stream
+    // command. This preserves CORS-free reqwest transport while delivering
+    // tokens immediately instead of making a connected model appear idle until
+    // a full stream:false completion settles.
     if (isTauri) {
       const { invoke } = await import('@tauri-apps/api/core');
       const { listen } = await import('@tauri-apps/api/event');
-      const requestId =
-        globalThis.crypto?.randomUUID?.() ??
-        `chat_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      let acc = '';
+      const baseUrl = resolvedOllamaBaseUrl();
       let first = true;
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        let unlisten: (() => void) | null = null;
-        const finish = (fn: () => void) => {
-          if (settled) return;
-          settled = true;
-          if (unlisten) unlisten();
-          req.signal?.removeEventListener('abort', onAbort);
-          fn();
-        };
-        const onAbort = () =>
-          finish(() => reject(new DOMException('Aborted by user', 'AbortError')));
-        req.signal?.addEventListener('abort', onAbort, { once: true });
-        void listen<{ delta: string; done: boolean; error?: string }>(
-          `ollama:chat:${requestId}`,
-          (event) => {
-            if (settled) return;
-            req.onResponseObservation?.({ kind: 'sdk_chunk', observedAt: Date.now() });
-            const d = event.payload;
-            if (d.error) {
-              finish(() => reject(new Error(`Ollama: ${d.error}`)));
-              return;
-            }
-            if (d.delta) {
-              acc += d.delta;
-              req.onChunk?.({ delta: d.delta, first });
-              first = false;
-            }
-            if (d.done) finish(() => resolve());
-          },
-        ).then((un) => {
-          if (settled) {
-            un();
-            return;
-          }
-          unlisten = un;
-          invoke('ollama_chat_stream', {
-            requestId,
+      const text = await runReliableNativeOllamaChat(invoke, listen, {
+        requestId: crypto.randomUUID(),
+        model,
+        messages,
+        options: body.options,
+        think: body.think,
+        baseUrl,
+        signal: req.signal,
+        onDelta: (delta) => {
+          req.onResponseObservation?.({
+            kind: 'sdk_chunk',
+            observedAt: Date.now(),
+          });
+          req.onChunk?.({ delta, first });
+          first = false;
+        },
+      }).catch(async (error) => {
+        // An already-running pre-upgrade binary may not expose the stream
+        // command. Preserve the proven result-returning command as a bounded
+        // compatibility fallback until the next app restart.
+        if (!isMissingNativeOllamaChatCommand(error)) throw error;
+        let result;
+        try {
+          result = await runNativeOllamaChat(invoke, {
             model,
             messages,
-            temperature: ollamaChatTemperature(req),
-            baseUrl: resolvedOllamaBaseUrl(),
-          }).catch((err) =>
-            finish(() => reject(err instanceof Error ? err : new Error(String(err)))),
-          );
-        });
+            options: body.options,
+            think: body.think,
+            baseUrl,
+          });
+        } catch (fallbackError) {
+          if (!body.think || !isThinkUnsupportedError(fallbackError)) throw fallbackError;
+          result = await runNativeOllamaChat(invoke, {
+            model,
+            messages,
+            options: body.options,
+            think: false,
+            baseUrl,
+          });
+        }
+        req.onChunk?.({ delta: result.text, first: true });
+        return result.text;
       });
       if (req.signal?.aborted) throw new DOMException('Aborted by user', 'AbortError');
       req.onChunk?.({ delta: '', done: true });
-      const inTok = estimateInputTokens(messages.map((m) => m.content).join('\n'));
-      const outTok = estimateInputTokens(acc);
+      const inTok = estimateInputTokens(messages.map((message) => message.content).join('\n'));
+      const outTok = estimateInputTokens(text);
       return {
-        text: acc,
+        text,
         usage: {
           input_tokens: inTok,
           output_tokens: outTok,
@@ -1073,12 +1730,22 @@ export const ollamaProvider: LLMProvider = {
       };
     }
 
+    // Browser / OpenAI-compatible path: multimodal uses content parts, not
+    // Ollama's native `images[]` field alone.
+    const openAiBody = {
+      model: body.model,
+      messages: body.openAiMessages,
+      stream: true,
+      temperature: body.options.temperature,
+      max_tokens: body.options.num_predict,
+    };
+
     let res: Response;
     try {
       res = await nativeFetch(`${base}/v1/chat/completions`, {
         method: 'POST',
         headers: ollamaHeaders({ 'content-type': 'application/json' }),
-        body: JSON.stringify(body),
+        body: JSON.stringify(openAiBody),
         signal: req.signal,
         timeoutMs: 120_000,
       });

@@ -43,6 +43,47 @@ export type ContextSemanticSearchExecutor = (
   signal?: AbortSignal,
 ) => Promise<unknown>;
 
+export interface ContextSearchDocumentInput {
+  documentId: string;
+  sourceId: string;
+  title: string;
+  path: string;
+  sourceType: string;
+  body: string;
+  tags: readonly string[];
+  properties: Readonly<Record<string, string | number | boolean | readonly string[] | null>>;
+  updatedAt: number;
+  contentHash: string;
+}
+
+export interface ContextSearchIndexStatus {
+  documentCount: number;
+  indexId: string;
+  engine: string;
+  schemaVersion: number;
+  recoveredCorruption: boolean;
+  needsRebuild: boolean;
+}
+
+export interface ContextSearchIndexMutationResult {
+  affectedDocuments: number;
+  documentCount: number;
+}
+
+export interface ContextSearchIndexPort {
+  status(accountId: string, mapId: string): Promise<ContextSearchIndexStatus>;
+  replaceDocuments(
+    accountId: string,
+    mapId: string,
+    documents: readonly ContextSearchDocumentInput[],
+  ): Promise<ContextSearchIndexMutationResult>;
+  deleteDocuments(
+    accountId: string,
+    mapId: string,
+    documentIds: readonly string[],
+  ): Promise<ContextSearchIndexMutationResult>;
+}
+
 export class ContextSearchPipelineError extends Error {
   constructor(
     readonly code: 'invalid_input' | 'invalid_result' | 'cancelled' | 'executor_failed',
@@ -405,4 +446,101 @@ export function createTauriContextLexicalSearchExecutor(): ContextLexicalSearchE
     });
     return response.results;
   };
+}
+
+function contextSearchIndexResponseInvalid(): never {
+  throw new Error('context_search_index_response_invalid');
+}
+
+function parseIndexStatus(value: unknown): ContextSearchIndexStatus {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return contextSearchIndexResponseInvalid();
+  }
+  const status = value as Record<string, unknown>;
+  const keys = [
+    'documentCount',
+    'indexId',
+    'engine',
+    'schemaVersion',
+    'recoveredCorruption',
+    'needsRebuild',
+  ];
+  if (
+    Object.keys(status).length !== keys.length ||
+    keys.some((key) => !Object.hasOwn(status, key)) ||
+    !Number.isSafeInteger(status.documentCount) ||
+    (status.documentCount as number) < 0 ||
+    (status.documentCount as number) > 1_000_000 ||
+    typeof status.indexId !== 'string' ||
+    status.indexId.length < 1 ||
+    status.indexId.length > 200 ||
+    typeof status.engine !== 'string' ||
+    status.engine.length < 1 ||
+    status.engine.length > 100 ||
+    !Number.isSafeInteger(status.schemaVersion) ||
+    (status.schemaVersion as number) < 1 ||
+    (status.schemaVersion as number) > 1_000 ||
+    typeof status.recoveredCorruption !== 'boolean' ||
+    typeof status.needsRebuild !== 'boolean'
+  ) {
+    return contextSearchIndexResponseInvalid();
+  }
+  return Object.freeze({
+    documentCount: status.documentCount as number,
+    indexId: status.indexId,
+    engine: status.engine,
+    schemaVersion: status.schemaVersion as number,
+    recoveredCorruption: status.recoveredCorruption,
+    needsRebuild: status.needsRebuild,
+  });
+}
+
+function parseMutationResult(value: unknown): ContextSearchIndexMutationResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return contextSearchIndexResponseInvalid();
+  }
+  const result = value as Record<string, unknown>;
+  if (
+    Object.keys(result).length !== 2 ||
+    !Object.hasOwn(result, 'affectedDocuments') ||
+    !Object.hasOwn(result, 'status') ||
+    !Number.isSafeInteger(result.affectedDocuments) ||
+    (result.affectedDocuments as number) < 0 ||
+    (result.affectedDocuments as number) > 1_000
+  ) {
+    return contextSearchIndexResponseInvalid();
+  }
+  const status = parseIndexStatus(result.status);
+  return Object.freeze({
+    affectedDocuments: result.affectedDocuments as number,
+    documentCount: status.documentCount,
+  });
+}
+
+export function createTauriContextSearchIndexPort(): ContextSearchIndexPort {
+  const port: ContextSearchIndexPort = {
+    async status(accountId, mapId) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return parseIndexStatus(
+        await invoke('context_search_status', { request: { accountId, mapId } }),
+      );
+    },
+    async replaceDocuments(accountId, mapId, documents) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return parseMutationResult(
+        await invoke('context_search_replace_documents', {
+          request: { accountId, mapId, documents },
+        }),
+      );
+    },
+    async deleteDocuments(accountId, mapId, documentIds) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return parseMutationResult(
+        await invoke('context_search_delete_documents', {
+          request: { accountId, mapId, documentIds },
+        }),
+      );
+    },
+  };
+  return Object.freeze(port);
 }

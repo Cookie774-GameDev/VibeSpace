@@ -14,3 +14,25 @@ import './builtins';
 
 export type { ToolDef } from './registry';
 export { toolRegistry } from './registry';
+export {
+  createMcpSdkClientAdapter,
+  fingerprintMcpSdkCatalog,
+  type McpSdkCatalog,
+  type McpSdkClientAdapter,
+  type McpSdkClientAdapterOptions,
+  type McpSdkPromptDescriptor,
+  type McpSdkResourceDescriptor,
+  type McpSdkToolClassification,
+  type McpSdkToolDescriptor,
+} from './mcpSdkClientAdapter';
+export {
+  createVibeSpaceMcpGateway,
+  getVibeSpaceMcpGateway,
+  vibeSpaceMcpGateway,
+  type VibeSpaceGatewayConnection,
+  type VibeSpaceMcpGateway,
+  type VibeSpaceMcpInvocationClassification,
+  type VibeSpaceMcpInvocationReceipt,
+  type VibeSpaceMcpInvocationRequest,
+  type VibeSpaceMcpInvocationResult,
+} from './vibeSpaceGateway';

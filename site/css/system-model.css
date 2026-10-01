@@ -4197,13 +4197,28 @@ html[data-site-appearance="vibespace"] .vs2-workbench-run {
 
 .vs2-scroll-item {
   opacity: 0;
-  transform: translateY(32px);
-  transition: opacity .72s ease, transform .72s cubic-bezier(.2,.75,.25,1);
+  transform: translateY(44px) scale(.99);
+  filter: saturate(.84) blur(3px);
+  transition: opacity .82s ease, transform .9s cubic-bezier(.18,.8,.23,1), filter .72s ease;
 }
 
 .vs2-scroll-item.vs2-scroll-visible {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateY(0) scale(1);
+  filter: saturate(1) blur(0);
+}
+
+.vs2-scroll-step {
+  opacity: 0;
+  transform: translate3d(var(--vs2-motion-x, 0), 25px, 0) scale(.985);
+  filter: blur(2px);
+  transition: opacity .66s ease var(--vs2-motion-delay, 0ms), transform .8s cubic-bezier(.18,.8,.23,1) var(--vs2-motion-delay, 0ms), filter .55s ease var(--vs2-motion-delay, 0ms);
+}
+
+.vs2-scroll-visible .vs2-scroll-step {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  filter: blur(0);
 }
 
 @keyframes vs2-team-arrive {

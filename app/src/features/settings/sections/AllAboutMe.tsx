@@ -25,6 +25,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
+import { formatUserDateTime } from '@/lib/timeFormat';
 import { generateAllAboutMeMarkdown, type AllAboutMeCompletion } from '@/features/all-about-me/ai';
 import {
   completeAllAboutMePrompt,
@@ -203,14 +204,17 @@ function ModelChoiceCard({
   selected: boolean;
   onSelect: () => void;
 }) {
+  const kind =
+    option.kind ??
+    (option.provider === 'ollama' || option.provider === 'local' ? 'local' : 'cloud');
   return (
     <label
-      className={[
-        'relative flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-all',
+      className={cn(
+        'relative flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition-all duration-150',
         selected
-          ? 'border-accent-copper/70 bg-accent-copper/10 shadow-[0_0_22px_hsl(var(--accent-copper)/0.12)]'
-          : 'border-border bg-background/40 hover:border-accent-cyan/50',
-      ].join(' ')}
+          ? 'border-accent-copper/70 bg-accent-copper/10 shadow-[0_0_18px_hsl(var(--accent-copper)/0.12)]'
+          : 'border-border/80 bg-background/40 hover:border-accent-cyan/45 hover:bg-muted/30',
+      )}
     >
       <input
         type="radio"
@@ -220,17 +224,21 @@ function ModelChoiceCard({
         onChange={onSelect}
         className="sr-only"
       />
-      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border bg-panel">
-        {selected ? (
-          <Check className="h-4 w-4 text-accent-copper" />
-        ) : (
-          <Sparkles className="h-4 w-4 text-muted-foreground" />
+      <span
+        className={cn(
+          'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors',
+          selected
+            ? 'border-accent-copper bg-accent-copper text-background'
+            : 'border-border bg-panel text-transparent',
         )}
+        aria-hidden
+      >
+        <Check className="h-3 w-3" />
       </span>
-      <span className="min-w-0">
+      <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium text-foreground">{option.label}</span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {option.provider}/{option.model}
+        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+          {kind === 'local' ? 'Local' : 'Cloud'} · {option.provider}/{option.model}
         </span>
       </span>
     </label>
@@ -496,11 +504,22 @@ export function AllAboutMe({
     };
   }, []);
 
+  // Keep the current question chip visible in the compact horizontal map.
+  React.useEffect(() => {
+    if (!testOpen || testStep !== 'questions') return;
+    const chip = document.querySelector<HTMLElement>(
+      `[data-testid="all-about-me-q-chip-${currentQuestionIndex + 1}"]`,
+    );
+    if (chip && typeof chip.scrollIntoView === 'function') {
+      chip.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+    }
+  }, [testOpen, testStep, currentQuestionIndex]);
+
   async function generateProfile() {
     if (!selectedModel) {
       toast.warning(
-        'Pick a real AI model first',
-        'AllAboutMe.md needs a configured model, not mock/demo.',
+        'Pick a generation model',
+        'Choose exactly one connected model, then generate AllAboutMe.md.',
       );
       return;
     }
@@ -520,6 +539,12 @@ export function AllAboutMe({
       clearTestDraft();
       setTestOpen(false);
       toast.success('AllAboutMe.md generated', `Saved at ${ALL_ABOUT_ME_FILE_LOCATION}.`);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Generation failed. Check your model connection and try again.';
+      toast.error('Could not generate AllAboutMe.md', message);
     } finally {
       setGenerating(false);
     }
@@ -527,27 +552,40 @@ export function AllAboutMe({
 
   const noRealModels = availableModels.length === 0;
 
+  const currentAnswered = Boolean((questionValues[currentQuestion.id] ?? '').trim());
+
   return (
     <div className="mc7f-settings-all-about-me flex flex-col gap-6 [html[data-theme=monochrome]_&]:border-l-2 [html[data-theme=monochrome]_&]:border-l-foreground/20 [html[data-theme=monochrome]_&]:pl-4 [html[data-theme=monochrome]_&_*]:rounded-none [html[data-theme=monochrome]_&_*]:bg-none [html[data-theme=monochrome]_&_*]:shadow-none">
-      <header>
-        <div className="flex items-center gap-2">
-          <Brain className="h-5 w-5 text-accent-cyan" />
-          <h2 className="text-page-title text-foreground">All About Me</h2>
+      <header className="space-y-2">
+        <div className="flex items-center gap-2.5">
+          <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-border/70 bg-panel">
+            <Brain className="h-4 w-4 text-accent-cyan" />
+          </span>
+          <div>
+            <h2 className="text-page-title text-foreground">All About Me</h2>
+            <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">
+              Private profile Jarvis uses to match your tone, preferences, and writing style.
+            </p>
+          </div>
         </div>
-        <p className="mt-1 max-w-2xl text-secondary text-muted-foreground">
-          Build `AllAboutMe.md`, a private personality profile Jarvis uses to match your tone,
-          preferences, interests, reaction patterns, and writing style across chat.
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Badge variant="outline" className="text-metadata text-sage">
+        <div className="flex flex-wrap items-center gap-2 pl-[3.25rem]">
+          <Badge
+            variant="outline"
+            className={cn(
+              'text-metadata',
+              markdown ? 'border-accent-sage/40 text-accent-sage' : 'text-muted-foreground',
+            )}
+          >
             {markdown ? 'Profile active' : 'Quiz not finished'}
           </Badge>
-          <Badge variant="outline" className="text-metadata">
-            Learns every 10 user messages
-          </Badge>
+          {testDraft ? (
+            <Badge variant="outline" className="text-metadata text-accent-copper">
+              Draft saved
+            </Badge>
+          ) : null}
           {updatedAt ? (
             <Badge variant="outline" className="text-metadata">
-              Updated {new Date(updatedAt).toLocaleString()}
+              Updated {formatUserDateTime(updatedAt)}
             </Badge>
           ) : null}
         </div>
@@ -555,33 +593,33 @@ export function AllAboutMe({
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
         <Card className="overflow-hidden">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
+          <CardHeader className="space-y-1 pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
               <Sparkles className="h-4 w-4 text-accent-copper" />
               60-question test
             </CardTitle>
             <CardDescription>
-              Fast one-question popup. Ctrl+Enter advances. Pick the grading model only at the end.
+              One question at a time. Answers autosave. Pick a generation model only at the end.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="rounded-xl border border-border bg-background/40 p-4 shadow-[inset_0_1px_0_hsl(var(--foreground)/0.04)]">
+            <div className="rounded-xl border border-border/80 bg-background/35 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0 max-w-xl">
                   <div className="text-ui-strong text-foreground">Quick popup test</div>
-                  <p className="mt-1 max-w-xl text-sm text-muted-foreground">
-                    Fly through 60 questions with a live progress bar. Answers autosave. Grade model
-                    is chosen after the last question.
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                    Fly through questions with compact progress. Choose exactly one connected model
+                    when you generate.
                   </p>
                 </div>
-                <Badge variant="outline" className="text-metadata">
-                  {availableModels.length} real model{availableModels.length === 1 ? '' : 's'}
+                <Badge variant="outline" className="shrink-0 text-metadata tabular-nums">
+                  {availableModels.length} model{availableModels.length === 1 ? '' : 's'} ready
                 </Badge>
               </div>
               {noRealModels ? (
-                <div className="mt-4 rounded-md border border-dashed border-border bg-panel/60 p-3 text-sm text-muted-foreground">
-                  Connect a real AI model in Settings → Providers or download a local model before
-                  taking the test.
+                <div className="mt-4 rounded-lg border border-dashed border-border bg-panel/50 p-3 text-sm text-muted-foreground">
+                  Connect a real AI model in Settings → Providers or install a local model in
+                  Settings → Local Models before taking the test.
                 </div>
               ) : null}
               <div className="mt-4 flex flex-wrap gap-2">
@@ -589,7 +627,7 @@ export function AllAboutMe({
                   type="button"
                   disabled={noRealModels}
                   onClick={() => openTest('create')}
-                  className="shadow-[0_0_24px_hsl(var(--accent-copper)/0.24),inset_0_1px_0_hsl(var(--foreground)/0.08)] hover:shadow-[0_0_34px_hsl(var(--accent-copper)/0.34),inset_0_1px_0_hsl(var(--foreground)/0.12)]"
+                  className="shadow-[0_0_20px_hsl(var(--accent-copper)/0.2)]"
                 >
                   <Brain className="h-3.5 w-3.5" />
                   Take the test
@@ -732,11 +770,14 @@ export function AllAboutMe({
           setTestOpen(open);
         }}
       >
-        <DialogContent hideClose className="max-h-[92vh] max-w-3xl overflow-hidden p-0">
-          {/* Status + progress + clickable question map */}
-          <div className="border-b border-border/80 bg-panel/95 px-4 pb-3 pt-3">
+        <DialogContent
+          hideClose
+          className="grid max-h-[92vh] w-[min(920px,calc(100vw-2rem))] max-w-none grid-cols-[minmax(0,1fr)] gap-0 overflow-hidden p-0"
+        >
+          {/* Compact progress + single-row question navigator */}
+          <div className="min-w-0 border-b border-border/70 bg-panel/95 px-4 pb-3 pt-3">
             <div
-              className="h-1.5 w-full overflow-hidden rounded-full bg-border/60"
+              className="h-1 w-full overflow-hidden rounded-full bg-border/50"
               role="progressbar"
               aria-label="All About Me test progress"
               aria-valuemin={0}
@@ -744,33 +785,48 @@ export function AllAboutMe({
               aria-valuenow={answeredCount}
             >
               <div
-                className="h-full bg-gradient-to-r from-accent-copper via-accent-cyan to-accent-copper transition-[width] duration-200 ease-out"
+                className="h-full rounded-full bg-accent-copper transition-[width] duration-200 ease-out"
                 style={{
-                  width: `${Math.round((answeredCount / totalQuestions) * 100)}%`,
+                  width: `${Math.round((answeredCount / Math.max(totalQuestions, 1)) * 100)}%`,
                 }}
               />
             </div>
 
-            <DialogHeader className="mt-3">
-              <div className="flex items-center justify-between gap-3">
+            <DialogHeader className="mt-2.5">
+              <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <DialogTitle className="text-[17px]">All About Me Test</DialogTitle>
-                  <DialogDescription className="mt-0.5 text-[12px]">
+                  <DialogTitle className="text-[16px] leading-tight">All About Me Test</DialogTitle>
+                  <DialogDescription className="mt-0.5 text-[12px] leading-snug">
                     {testStep === 'grade'
-                      ? 'Submit page — pick a model and generate. Blank answers are fine.'
+                      ? 'Pick one generation model, then generate. Blank answers are fine.'
                       : testMode === 'update'
-                        ? 'Retake — jump any number below, or Submit anytime.'
-                        : 'Click a number to jump. Submit anytime — even with zero answers.'}
+                        ? 'Retake — jump any number, or Submit anytime.'
+                        : 'Answer fast, jump any number, Submit anytime.'}
                   </DialogDescription>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex shrink-0 items-center gap-1.5">
                   <Badge
                     variant="outline"
                     className="text-metadata tabular-nums"
                     data-testid="all-about-me-question-progress"
                   >
-                    {answeredCount}/{totalQuestions} done
+                    {answeredCount}/{totalQuestions}
                   </Badge>
+                  {testStep === 'questions' ? (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        'text-metadata transition-colors duration-150',
+                        currentAnswered
+                          ? 'border-accent-copper/50 bg-accent-copper/10 text-accent-copper'
+                          : 'text-muted-foreground',
+                      )}
+                      data-testid="all-about-me-current-answered"
+                      data-answered={currentAnswered ? 'true' : 'false'}
+                    >
+                      {currentAnswered ? 'Answered' : 'Unanswered'}
+                    </Badge>
+                  ) : null}
                   <Button
                     type="button"
                     variant="ghost"
@@ -785,12 +841,12 @@ export function AllAboutMe({
             </DialogHeader>
 
             <div
-              className="mt-3 max-h-[88px] overflow-y-auto rounded-lg border border-border/60 bg-background/35 p-1.5"
+              className="mt-2.5 min-w-0 overflow-x-auto overflow-y-hidden rounded-lg border border-border/55 bg-background/30 px-1.5 py-1.5 [scrollbar-width:thin]"
               role="navigation"
               aria-label="Question map"
               data-testid="all-about-me-question-map"
             >
-              <div className="flex flex-wrap gap-1">
+              <div className="flex w-max gap-0.5">
                 {ALL_ABOUT_ME_TEST_QUESTIONS.map((question, index) => {
                   const answered = Boolean((questionValues[question.id] ?? '').trim());
                   const isCurrent = testStep === 'questions' && index === currentQuestionIndex;
@@ -805,12 +861,15 @@ export function AllAboutMe({
                       aria-current={isCurrent ? 'step' : undefined}
                       onClick={() => jumpToQuestion(index)}
                       className={cn(
-                        'inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-md px-1 text-[10px] font-semibold tabular-nums transition-colors',
+                        'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold tabular-nums transition-all duration-150',
                         isCurrent &&
-                          'ring-2 ring-accent-cyan/70 ring-offset-1 ring-offset-background',
-                        answered
-                          ? 'bg-accent-copper/25 text-accent-copper hover:bg-accent-copper/35'
-                          : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground',
+                          'bg-accent-cyan/20 text-foreground ring-2 ring-accent-cyan/65 ring-offset-1 ring-offset-background',
+                        !isCurrent &&
+                          answered &&
+                          'bg-accent-copper/30 text-accent-copper hover:bg-accent-copper/40',
+                        !isCurrent &&
+                          !answered &&
+                          'bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground',
                       )}
                     >
                       {index + 1}
@@ -819,24 +878,19 @@ export function AllAboutMe({
                 })}
               </div>
             </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
-              <span className="inline-flex items-center gap-1">
-                <span className="inline-block h-2 w-2 rounded-sm bg-accent-copper/40" />
-                answered
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <span className="inline-block h-2 w-2 rounded-sm bg-muted" />
-                open
-              </span>
-              <span className="text-accent-copper/90">Autosaved · click a number to jump</span>
-            </div>
+            <p className="mt-1.5 text-[10px] text-muted-foreground">
+              Autosaved · scroll the strip or click a number to jump
+            </p>
           </div>
 
-          <div className="max-h-[min(58vh,520px)] overflow-y-auto px-5 py-5">
+          <div
+            data-testid="all-about-me-question-stage"
+            className="min-w-0 max-h-[min(58vh,520px)] w-full overflow-y-auto px-4 py-5 sm:px-6"
+          >
             {testStep === 'questions' ? (
               <div
                 key={currentQuestion.id}
-                className="mx-auto max-w-xl rounded-2xl border border-border/80 bg-gradient-to-b from-background/55 to-background/25 p-5 shadow-[0_12px_40px_rgba(0,0,0,0.18),inset_0_1px_0_hsl(var(--foreground)/0.04)]"
+                className="mx-auto w-full max-w-2xl rounded-2xl border border-border/75 bg-background/40 p-5 shadow-[inset_0_1px_0_hsl(var(--foreground)/0.04)] transition-opacity duration-150"
               >
                 {currentQuestion.kind === 'written' ? (
                   <QuestionField
@@ -868,12 +922,12 @@ export function AllAboutMe({
                                 autoAdvanceChoice: true,
                               })
                             }
-                            className={[
+                            className={cn(
                               'rounded-xl border px-3 py-2.5 text-left text-sm transition-all duration-100',
                               selected
-                                ? 'border-accent-copper/70 bg-accent-copper/15 text-foreground shadow-[0_0_18px_hsl(var(--accent-copper)/0.15)]'
+                                ? 'border-accent-copper/70 bg-accent-copper/15 text-foreground'
                                 : 'border-border/80 bg-background/40 text-muted-foreground hover:border-accent-cyan/40 hover:text-foreground',
-                            ].join(' ')}
+                            )}
                           >
                             {option}
                           </button>
@@ -889,11 +943,16 @@ export function AllAboutMe({
             ) : (
               <div className="mx-auto max-w-xl space-y-4">
                 <div className="rounded-2xl border border-border/80 bg-background/40 p-4">
-                  <div className="text-ui-strong text-foreground">Grade with which model?</div>
+                  <div className="text-ui-strong text-foreground">Generation model</div>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    This model writes your AllAboutMe.md from the answers you just gave.
+                    Select exactly one model you can use right now. Only connected cloud models and
+                    installed local models are listed.
                   </p>
-                  <div className="mt-3 grid gap-2">
+                  <div
+                    className="mt-3 grid max-h-[240px] gap-1.5 overflow-y-auto pr-0.5"
+                    role="radiogroup"
+                    aria-label="Generation model"
+                  >
                     {availableModels.map((option) => (
                       <ModelChoiceCard
                         key={option.id}
@@ -939,7 +998,7 @@ export function AllAboutMe({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-panel/95 px-5 py-3">
+          <div className="min-w-0 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-panel/95 px-5 py-3">
             <p className="text-[11px] text-muted-foreground">
               {testStep === 'questions' ? (
                 <>
@@ -953,7 +1012,7 @@ export function AllAboutMe({
                   {' next · Submit anytime'}
                 </>
               ) : (
-                'Select model, then generate. Blank answers are allowed.'
+                'One model · Generate writes AllAboutMe.md'
               )}
             </p>
             <div className="flex flex-wrap gap-2">
@@ -974,10 +1033,22 @@ export function AllAboutMe({
                   <Button type="button" variant="secondary" onClick={goToSubmitPage}>
                     Submit
                   </Button>
-                  <Button type="button" onClick={goNextQuestion}>
+                  <Button
+                    type="button"
+                    onClick={goNextQuestion}
+                    aria-label={
+                      currentQuestionIndex >= ALL_ABOUT_ME_TEST_QUESTIONS.length - 1
+                        ? 'Review and submit'
+                        : currentAnswered
+                          ? 'Next question'
+                          : 'Skip question'
+                    }
+                  >
                     {currentQuestionIndex >= ALL_ABOUT_ME_TEST_QUESTIONS.length - 1
                       ? 'Submit'
-                      : 'Next'}
+                      : currentAnswered
+                        ? 'Next'
+                        : 'Skip'}
                   </Button>
                 </>
               ) : (

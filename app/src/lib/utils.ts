@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { formatUserTime } from './timeFormat';
 
 /**
  * Compose Tailwind classes safely with clsx + tailwind-merge.
@@ -64,10 +65,11 @@ export function formatRelative(ts: number, now: number = Date.now()): string {
 }
 
 /**
- * Format a clock time like "9:43 AM"
+ * Format a clock time like "9:43 AM" or "21:43" (military).
+ * Respects Settings → Ambient → Time format; never rewrites stored timestamps.
  */
 export function formatClock(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return formatUserTime(ts);
 }
 
 /**

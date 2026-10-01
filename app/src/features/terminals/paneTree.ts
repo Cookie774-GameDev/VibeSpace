@@ -60,6 +60,10 @@ export type LeafBase = {
   command?: string;
   /** Command typed into the shell immediately after a fresh pane is ready. */
   startupCommand?: string;
+  /** Ordered setup, provider, and optional prompt commands for a fresh pane. */
+  startupCommands?: string[];
+  /** Prevent native capacity handling from evicting an existing terminal. */
+  preserveExisting?: boolean;
   /** One-shot command to write into an already-mounted terminal. */
   pendingCommand?: string;
   /** Monotonic token so repeated identical commands still dispatch. */
@@ -99,6 +103,38 @@ export type PaneTreeChange = PaneNode | null | ((current: PaneNode) => PaneNode 
 
 export const MAX_PANES = 10;
 
+export type TerminalLeafBackendState = 'idle' | 'active' | 'unknown';
+
+export interface TerminalLeafRuntimeEvidence {
+  backendState: TerminalLeafBackendState;
+  transcript?: string;
+}
+
+function hasMeaningfulValue(value: string | null | undefined): boolean {
+  return Boolean(value?.trim());
+}
+
+/**
+ * Fleet work may reuse a pane only with affirmative idle evidence.
+ * Missing/unknown backend state is occupied so a live or restoring PTY
+ * is never overwritten because frontend metadata is delayed.
+ */
+export function isReusableTerminalLeaf(
+  leaf: Extract<PaneNode, { kind: 'leaf' }>,
+  runtime: TerminalLeafRuntimeEvidence | undefined,
+): boolean {
+  if (!runtime || runtime.backendState !== 'idle') return false;
+  if (hasMeaningfulValue(runtime.transcript)) return false;
+  if (hasMeaningfulValue(leaf.sessionId)) return false;
+  if (hasMeaningfulValue(leaf.startupCommand)) return false;
+  if (hasMeaningfulValue(leaf.pendingCommand)) return false;
+  if (leaf.pendingCommandId != null) return false;
+  if (hasMeaningfulValue(leaf.executionId)) return false;
+  if (hasMeaningfulValue(leaf.agentSlug)) return false;
+  if (leaf.agentMode != null) return false;
+  return true;
+}
+
 export function resizeAdjacentTracks(
   sizes: number[],
   index: number,
@@ -126,6 +162,8 @@ export function newLeaf(seed?: Partial<LeafBase>): PaneNode {
     projectId: seed?.projectId,
     command: seed?.command,
     startupCommand: seed?.startupCommand,
+    startupCommands: seed?.startupCommands ? [...seed.startupCommands] : undefined,
+    preserveExisting: seed?.preserveExisting,
     pendingCommand: seed?.pendingCommand,
     pendingCommandId: seed?.pendingCommandId,
     executionId: seed?.executionId,
@@ -265,6 +303,8 @@ function newLeafBase(seed?: Partial<LeafBase>): LeafBase {
     projectId: seed?.projectId,
     command: seed?.command,
     startupCommand: seed?.startupCommand,
+    startupCommands: seed?.startupCommands ? [...seed.startupCommands] : undefined,
+    preserveExisting: seed?.preserveExisting,
     pendingCommand: seed?.pendingCommand,
     pendingCommandId: seed?.pendingCommandId,
     executionId: seed?.executionId,

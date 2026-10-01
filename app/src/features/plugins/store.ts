@@ -6,12 +6,37 @@ import type { PluginConnection, PluginConnectionsByAccount } from './types';
 
 export const PLUGIN_CONNECTIONS_SYNC_TABLE = 'plugin_connections';
 const EMPTY_PLUGIN_CONNECTIONS: Readonly<Record<string, PluginConnection>> = Object.freeze({});
+const EMPTY_PINNED_PLUGIN_IDS: readonly string[] = Object.freeze([]);
+const EMPTY_INSTALLED_PLUGIN_IDS: readonly string[] = Object.freeze([]);
+const MAX_PINNED_PLUGINS = 10;
 
 export interface PluginStore {
   connectionsByAccount: PluginConnectionsByAccount;
+  installedPluginIdsByAccount: Record<string, string[]>;
+  pinnedPluginIdsByAccount: Record<string, string[]>;
+  installPlugin(accountId: string, pluginId: string): void;
   upsertConnection(connection: PluginConnection): void;
   removeConnection(accountId: string, pluginId: string): void;
   setEnabled(accountId: string, pluginId: string, enabled: boolean): void;
+  pinPlugin(accountId: string, pluginId: string): boolean;
+  unpinPlugin(accountId: string, pluginId: string): void;
+  movePinnedPlugin(accountId: string, pluginId: string, offset: -1 | 1): void;
+}
+
+export function selectInstalledPluginIdsForAccount(
+  state: Pick<PluginStore, 'installedPluginIdsByAccount'>,
+  accountId: string,
+): readonly string[] {
+  if (!accountId || accountId.trim() !== accountId) return EMPTY_INSTALLED_PLUGIN_IDS;
+  return state.installedPluginIdsByAccount[accountId] ?? EMPTY_INSTALLED_PLUGIN_IDS;
+}
+
+export function selectPinnedPluginIdsForAccount(
+  state: Pick<PluginStore, 'pinnedPluginIdsByAccount'>,
+  accountId: string,
+): readonly string[] {
+  if (!accountId || accountId.trim() !== accountId) return EMPTY_PINNED_PLUGIN_IDS;
+  return state.pinnedPluginIdsByAccount[accountId] ?? EMPTY_PINNED_PLUGIN_IDS;
 }
 
 function exactId(value: string, label: string): string {
@@ -75,6 +100,68 @@ function persistedConnectionsByAccount(value: unknown): PluginConnectionsByAccou
   return result;
 }
 
+function persistedPinnedPluginIdsByAccount(value: unknown): Record<string, string[]> {
+  if (!isRecord(value) || !isRecord(value.pinnedPluginIdsByAccount)) return {};
+  const result: Record<string, string[]> = {};
+  for (const [accountId, rawIds] of Object.entries(value.pinnedPluginIdsByAccount)) {
+    if (!accountId || accountId.trim() !== accountId || !Array.isArray(rawIds)) continue;
+    const ids = [
+      ...new Set(
+        rawIds.filter(
+          (id): id is string => typeof id === 'string' && id.length > 0 && id.trim() === id,
+        ),
+      ),
+    ].slice(0, MAX_PINNED_PLUGINS);
+    if (ids.length > 0) result[accountId] = ids;
+  }
+  return result;
+}
+
+function persistedInstalledPluginIdsByAccount(
+  value: unknown,
+  connectionsByAccount: PluginConnectionsByAccount,
+  pinnedPluginIdsByAccount: Record<string, string[]>,
+): Record<string, string[]> {
+  const explicitByAccount =
+    isRecord(value) && isRecord(value.installedPluginIdsByAccount)
+      ? value.installedPluginIdsByAccount
+      : {};
+  const accountIds = new Set([
+    ...Object.keys(explicitByAccount),
+    ...Object.keys(connectionsByAccount),
+    ...Object.keys(pinnedPluginIdsByAccount),
+  ]);
+  const result: Record<string, string[]> = {};
+  for (const accountId of accountIds) {
+    if (!accountId || accountId.trim() !== accountId) continue;
+    const rawIds = explicitByAccount[accountId];
+    const ids = new Set<string>();
+    if (Array.isArray(rawIds)) {
+      for (const id of rawIds) {
+        if (typeof id === 'string' && id.length > 0 && id.trim() === id) ids.add(id);
+      }
+    }
+    for (const pluginId of Object.keys(connectionsByAccount[accountId] ?? {})) ids.add(pluginId);
+    for (const pluginId of pinnedPluginIdsByAccount[accountId] ?? []) ids.add(pluginId);
+    if (ids.size > 0) result[accountId] = [...ids];
+  }
+  return result;
+}
+
+function persistedPluginState(value: unknown) {
+  const connectionsByAccount = persistedConnectionsByAccount(value);
+  const pinnedPluginIdsByAccount = persistedPinnedPluginIdsByAccount(value);
+  return {
+    connectionsByAccount,
+    installedPluginIdsByAccount: persistedInstalledPluginIdsByAccount(
+      value,
+      connectionsByAccount,
+      pinnedPluginIdsByAccount,
+    ),
+    pinnedPluginIdsByAccount,
+  };
+}
+
 function mayQueueForAccount(owner: SyncQueueOwnerSnapshot, accountId: string): boolean {
   return owner.state !== 'cloud' || owner.userId === accountId;
 }
@@ -108,6 +195,19 @@ export const usePluginStore = create<PluginStore>()(
   persist(
     (set, get) => ({
       connectionsByAccount: {},
+      installedPluginIdsByAccount: {},
+      pinnedPluginIdsByAccount: {},
+      installPlugin: (accountId, pluginId) => {
+        exactId(accountId, 'Account ID');
+        exactId(pluginId, 'Plugin ID');
+        if (selectInstalledPluginIdsForAccount(get(), accountId).includes(pluginId)) return;
+        set((state) => ({
+          installedPluginIdsByAccount: {
+            ...state.installedPluginIdsByAccount,
+            [accountId]: [...selectInstalledPluginIdsForAccount(state, accountId), pluginId],
+          },
+        }));
+      },
       upsertConnection: (connection) => {
         exactId(connection.accountId, 'Account ID');
         exactId(connection.pluginId, 'Plugin ID');
@@ -157,18 +257,64 @@ export const usePluginStore = create<PluginStore>()(
         }));
         queueConnection(updated, 'update', captureSyncQueueOwner());
       },
+      pinPlugin: (accountId, pluginId) => {
+        exactId(accountId, 'Account ID');
+        exactId(pluginId, 'Plugin ID');
+        const current = selectPinnedPluginIdsForAccount(get(), accountId);
+        if (current.includes(pluginId)) return true;
+        if (current.length >= MAX_PINNED_PLUGINS) return false;
+        set((state) => ({
+          pinnedPluginIdsByAccount: {
+            ...state.pinnedPluginIdsByAccount,
+            [accountId]: [...selectPinnedPluginIdsForAccount(state, accountId), pluginId],
+          },
+        }));
+        return true;
+      },
+      unpinPlugin: (accountId, pluginId) => {
+        exactId(accountId, 'Account ID');
+        exactId(pluginId, 'Plugin ID');
+        set((state) => {
+          const next = selectPinnedPluginIdsForAccount(state, accountId).filter(
+            (id) => id !== pluginId,
+          );
+          const pinnedPluginIdsByAccount = { ...state.pinnedPluginIdsByAccount };
+          if (next.length > 0) pinnedPluginIdsByAccount[accountId] = next;
+          else delete pinnedPluginIdsByAccount[accountId];
+          return { pinnedPluginIdsByAccount };
+        });
+      },
+      movePinnedPlugin: (accountId, pluginId, offset) => {
+        exactId(accountId, 'Account ID');
+        exactId(pluginId, 'Plugin ID');
+        set((state) => {
+          const current = [...selectPinnedPluginIdsForAccount(state, accountId)];
+          const from = current.indexOf(pluginId);
+          const to = Math.max(0, Math.min(current.length - 1, from + offset));
+          if (from < 0 || from === to) return state;
+          [current[from], current[to]] = [current[to]!, current[from]!];
+          return {
+            pinnedPluginIdsByAccount: {
+              ...state.pinnedPluginIdsByAccount,
+              [accountId]: current,
+            },
+          };
+        });
+      },
     }),
     {
       name: 'jarvis-plugin-connections-v2',
       storage: createJSONStorage(() => safeLocalStorage),
-      partialize: (state) => ({ connectionsByAccount: state.connectionsByAccount }),
-      version: 2,
-      migrate: (persistedState) => ({
-        connectionsByAccount: persistedConnectionsByAccount(persistedState),
+      partialize: (state) => ({
+        connectionsByAccount: state.connectionsByAccount,
+        installedPluginIdsByAccount: state.installedPluginIdsByAccount,
+        pinnedPluginIdsByAccount: state.pinnedPluginIdsByAccount,
       }),
+      version: 4,
+      migrate: (persistedState) => persistedPluginState(persistedState),
       merge: (persistedState, currentState) => ({
         ...currentState,
-        connectionsByAccount: persistedConnectionsByAccount(persistedState),
+        ...persistedPluginState(persistedState),
       }),
     },
   ),

@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "cold-start-intro",
+  "description": "Least-privilege authority for the cold-start intro to reveal the main window and close itself.",
+  "windows": ["cold-start-intro"],
+  "permissions": [
+    "core:window:default",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+    "core:window:allow-close",
+    "core:webview:default"
+  ]
+}

@@ -29,26 +29,28 @@ describe('AllAboutMe store', () => {
     expect(state.learningEnabled).toBe(true);
   });
 
-  it('keeps the stable profile out of automatic chat-learning cadence', () => {
+  it('queues an automatic private profile refresh after twenty user messages', () => {
     const store = useAllAboutMeStore.getState();
     store.saveQuizProfile(answers, '# AllAboutMe.md\nProfile');
-    for (let i = 0; i < 10; i += 1) store.recordUserMessage();
+    for (let i = 0; i < 19; i += 1) store.recordUserMessage();
 
-    expect(useAllAboutMeStore.getState().totalUserMessages).toBe(10);
+    expect(useAllAboutMeStore.getState().totalUserMessages).toBe(19);
     expect(useAllAboutMeStore.getState().needsLearningUpdate()).toBe(false);
+    store.recordUserMessage();
+    expect(useAllAboutMeStore.getState().needsLearningUpdate()).toBe(true);
   });
 
-  it('accepts an explicit curated revision while automatic cadence stays disabled', () => {
+  it('records the completed cadence after a curated revision', () => {
     const store = useAllAboutMeStore.getState();
     store.saveQuizProfile(answers, '# AllAboutMe.md\nOld profile');
-    for (let i = 0; i < 10; i += 1) store.recordUserMessage();
+    for (let i = 0; i < 20; i += 1) store.recordUserMessage();
 
     store.applyLearningRevision('# AllAboutMe.md\nOld profile\n\nNew repeated pattern.');
 
     const state = useAllAboutMeStore.getState();
     expect(state.source).toBe('chat-learning');
     expect(state.markdown).toContain('New repeated pattern');
-    expect(state.lastUpdatedAtMessageCount).toBe(10);
+    expect(state.lastUpdatedAtMessageCount).toBe(20);
     expect(state.needsLearningUpdate()).toBe(false);
   });
 

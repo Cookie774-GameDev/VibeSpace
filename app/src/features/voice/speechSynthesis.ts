@@ -4,7 +4,7 @@ import { PERSONAS } from './personas';
 import { DEFAULT_VOICE_PRESET, getVoiceProfile } from './voiceProfiles';
 import { resolveSpeechRate } from './speechRate';
 
-export const VOICE_PREVIEW_TEXT = "Hi, how's your day doing? Jarvis is online.";
+export const VOICE_PREVIEW_TEXT = 'Hi, what should we get to work on?';
 export const VOICE_ACKNOWLEDGEMENT_TEXT = 'Ready.';
 const VOICE_LOAD_TIMEOUT_MS = 2_500;
 const SPEECH_KEEPALIVE_MS = 4_000;
@@ -22,10 +22,7 @@ export interface SpeakTextOptions {
 
 const PREFERRED_VOICE_NAMES: Record<PersonaPreset, string[]> = {
   jarvis: ['daniel', 'ryan', 'george', 'guy', 'mark', 'david', 'alex', 'english united kingdom'],
-  athena: ['aria', 'serena', 'sonia', 'jenny', 'samantha', 'zira', 'english united kingdom'],
-  edge: ['guy', 'mark', 'alex', 'ryan', 'david', 'daniel'],
-  watson: ['jenny', 'samantha', 'aria', 'sonia', 'zira', 'serena'],
-  hal: ['david', 'daniel', 'george', 'ryan', 'mark', 'alex'],
+  friday: ['aria', 'serena', 'sonia', 'jenny', 'samantha', 'zira', 'english united kingdom'],
 };
 
 const QUALITY_HINTS = ['natural', 'premium', 'enhanced', 'neural', 'online'];
@@ -193,12 +190,12 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
   if (!trimmed) throw new Error('Speech text must be non-empty.');
 
   const state = useAuthStore.getState();
-  const engine = options.engine ?? state.voiceEngine ?? 'kokoro';
-  if (engine === 'kokoro') {
+  const engine = options.engine ?? state.voiceEngine ?? 'jarvis';
+  if (engine === 'jarvis') {
     const { speakWithSettings } = await import('./voiceRouter');
     await speakWithSettings(trimmed, {
       voicePreset: options.voicePreset ?? state.voicePreset,
-      voiceEngine: 'kokoro',
+      voiceEngine: 'jarvis',
       allowBackground: true,
     });
     return;
@@ -295,6 +292,6 @@ export function speakVoicePreview(
   text = VOICE_PREVIEW_TEXT,
   engine?: VoiceEngine,
 ): Promise<void> {
-  const resolvedEngine = engine ?? useAuthStore.getState().voiceEngine ?? 'kokoro';
+  const resolvedEngine = engine ?? useAuthStore.getState().voiceEngine ?? 'jarvis';
   return speakText(text, { voicePreset: preset, engine: resolvedEngine });
 }

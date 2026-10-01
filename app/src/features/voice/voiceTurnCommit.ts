@@ -254,7 +254,7 @@ export const VOICE_COMMIT_PHRASE_DEFAULT = 'send it';
 export const VOICE_CANCEL_PHRASE_DEFAULT = 'cancel';
 export const VOICE_COMMIT_PHRASE_MIN_LEN = 2;
 export const VOICE_COMMIT_PHRASE_MAX_LEN = 30;
-export const VOICE_REPLY_COOLDOWN_MS = 400;
+export const VOICE_REPLY_COOLDOWN_MS = 80;
 
 /** Normalize spoken text for phrase matching (same rules as wake-word). */
 export function normalizeVoicePhrase(text: string): string {

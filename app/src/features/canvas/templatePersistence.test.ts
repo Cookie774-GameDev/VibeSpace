@@ -77,6 +77,7 @@ describe('CanvasTemplatePersistenceRepository', () => {
   });
 
   it('loads only the exact account, owner, and project scope as detached frozen domain data', async () => {
+    const storedTemplate = savedStore().templates[0]!;
     await database.canvas_templates.bulkAdd([
       {
         id: 'template-a',
@@ -84,9 +85,9 @@ describe('CanvasTemplatePersistenceRepository', () => {
         ownerId: ROW_SCOPE.ownerId,
         projectId: ROW_SCOPE.projectId,
         name: 'Team board',
-        layoutMode: 'page',
-        background: { kind: 'plain', color: '#ffffff' },
-        snapshot: savedStore().templates[0]!.snapshot,
+        layoutMode: storedTemplate.snapshot.layoutMode,
+        background: storedTemplate.snapshot.background,
+        snapshot: storedTemplate.snapshot,
         createdAt: 20,
         updatedAt: 20,
       },
@@ -96,9 +97,9 @@ describe('CanvasTemplatePersistenceRepository', () => {
         ownerId: OTHER_OWNER_SCOPE.ownerId,
         projectId: OTHER_OWNER_SCOPE.projectId,
         name: 'Private board',
-        layoutMode: 'page',
-        background: { kind: 'plain', color: '#ffffff' },
-        snapshot: savedStore().templates[0]!.snapshot,
+        layoutMode: storedTemplate.snapshot.layoutMode,
+        background: storedTemplate.snapshot.background,
+        snapshot: storedTemplate.snapshot,
         createdAt: 20,
         updatedAt: 20,
       },
@@ -108,9 +109,9 @@ describe('CanvasTemplatePersistenceRepository', () => {
         ownerId: OTHER_ACCOUNT_SCOPE.ownerId,
         projectId: ROW_SCOPE.projectId,
         name: 'Other account board',
-        layoutMode: 'page',
-        background: { kind: 'plain', color: '#ffffff' },
-        snapshot: savedStore().templates[0]!.snapshot,
+        layoutMode: storedTemplate.snapshot.layoutMode,
+        background: storedTemplate.snapshot.background,
+        snapshot: storedTemplate.snapshot,
         createdAt: 20,
         updatedAt: 20,
       },

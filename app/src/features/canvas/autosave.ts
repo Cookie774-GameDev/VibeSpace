@@ -79,7 +79,7 @@ export class CanvasPersistenceConflictError extends Error {
   }
 }
 
-const DEFAULT_DELAY_MS = 400;
+const DEFAULT_DELAY_MS = 0;
 const MAX_DELAY_MS = 60_000;
 
 function safeInteger(value: number, path: string, maximum = Number.MAX_SAFE_INTEGER): number {
@@ -245,6 +245,14 @@ export function createCanvasAutosaveController(
       pendingDocument = document;
       publish({ pending: true, error: null });
       cancelTimer();
+      if (delayMs === 0) {
+        // Begin the recovery journal and transactional save before returning
+        // to the browser event loop. The controller still coalesces edits that
+        // arrive while a save is in flight, so pointer-heavy Canvas work does
+        // not create an unbounded write queue.
+        void flush();
+        return;
+      }
       timer = setTimeout(() => {
         timer = null;
         void flush();

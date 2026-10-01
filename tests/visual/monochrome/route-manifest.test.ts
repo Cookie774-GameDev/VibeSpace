@@ -36,7 +36,6 @@ const EXPECTED_ROUTES = [
 ] as const;
 
 const EXPECTED_SETTINGS_TABS = [
-  'account',
   'plans',
   'providers',
   'connections',
@@ -296,7 +295,7 @@ test('validator fails closed for every MC6 Step 3 defect', () => {
   const inventedSettings = cloneManifest();
   inventedSettings.settingsTabIds.push('invented-settings');
   const inventedSettingsEntry = structuredClone(
-    inventedSettings.entries.find(({ id }) => id === 'settings:account')!,
+    inventedSettings.entries.find(({ id }) => id === 'settings:plans')!,
   );
   inventedSettingsEntry.id = 'settings:invented-settings';
   inventedSettingsEntry.writerPaths = [];
@@ -318,7 +317,7 @@ test('validator fails closed for every MC6 Step 3 defect', () => {
 
   const inventedSettingsAlias = cloneManifest();
   const inventedSettingsAliasEntry = structuredClone(
-    inventedSettingsAlias.entries.find(({ id }) => id === 'settings:account')!,
+    inventedSettingsAlias.entries.find(({ id }) => id === 'settings:plans')!,
   );
   inventedSettingsAliasEntry.id = 'settings:invented-alias';
   inventedSettingsAliasEntry.writerPaths = [];

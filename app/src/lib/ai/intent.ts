@@ -30,7 +30,8 @@ export interface JarvisIntentInput {
   hasResolvedDestination?: boolean;
 }
 
-const GREETING_RE = /^\s*(?:hi|hey|hello|howdy|good (?:morning|afternoon|evening)|yo)[!.?\s]*$/i;
+const GREETING_RE =
+  /^\s*(?:hi|hey|hello|howdy|good (?:morning|afternoon|evening)|yo)(?:\s+there)?[!.?,\s]*(?:[A-Za-z0-9][\w.\- ]{0,48})?[!.?\s]*$/i;
 const EXPLICIT_QUESTIONS_RE = /\b(?:ask me|question me|clarify with me)\b[\s\S]{0,80}\b(?:question|questions|first|before)\b/i;
 const FILE_CREATE_RE = /\b(?:create|make|write|draft|generate|add)\b[\s\S]{0,80}\b(?:new\s+)?(?:file|document|script|page|stylesheet|config|roadmap)\b/i;
 const FILE_EDIT_RE = /\b(?:edit|update|append|replace|modify|fix)\b[\s\S]{0,80}\b(?:file|document|script|page|stylesheet|config|roadmap|\.[a-z0-9]{1,8}\b)/i;
@@ -119,6 +120,64 @@ export function classifyJarvisIntent(input: JarvisIntentInput): JarvisIntent {
     });
   }
   return result('unknown', { confidence: 0.35, reasons: ['no deterministic class matched'], destination });
+}
+
+const HEAVY_KNOWLEDGE_RE =
+  /\b(?:read|file|files|folder|folders|corpus|context|map|maps|source|sources|document|documents|note|notes|provenance|retrieve|look (?:in|at|through)|search (?:the )?(?:files|docs|notes|corpus)|where (?:did|was|is)|found it|here|this (?:project|repo|codebase|folder|map)|codebase|run the|execute the)\b/i;
+
+const MUTATING_INTENT_KINDS: readonly JarvisIntentKind[] = [
+  'file-create',
+  'file-edit',
+  'project-build',
+  'command-run',
+  'implementation',
+  'destructive',
+];
+
+/**
+ * Automatic project-tree / local-knowledge / repository retrieval is expensive
+ * when large Context maps are selected. Short conversational turns must not
+ * scan those maps. Explicit attachments and file/corpus questions still retrieve.
+ */
+const EXPLICIT_DISK_FILE_READ_RE =
+  /\bfiles\.read\b[\s\S]{0,800}[A-Za-z]:[\\/]|[A-Za-z]:[\\/][\s\S]{0,800}\bfiles\.read\b/i;
+
+/** Short conversational turns that must not wait on corpus/RLM work. */
+export function isLightweightChatTurn(intent: JarvisIntent, text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (intent.kind === 'greeting') return true;
+  if (MUTATING_INTENT_KINDS.includes(intent.kind)) return false;
+  if (HEAVY_KNOWLEDGE_RE.test(trimmed)) return false;
+  return (
+    trimmed.length <= 80 &&
+    (intent.kind === 'informational' ||
+      intent.kind === 'brainstorm' ||
+      intent.kind === 'unknown' ||
+      intent.kind === 'clarification-needed')
+  );
+}
+
+export function shouldAutoRetrieveProjectKnowledge(input: {
+  text: string;
+  intent: JarvisIntent;
+  hasExplicitAttachments?: boolean;
+}): boolean {
+  // Exact registered disk reads must not be rewritten into Context-map retrieval,
+  // even when a project already has approved maps selected.
+  if (EXPLICIT_DISK_FILE_READ_RE.test(input.text.trim())) return false;
+  if (input.hasExplicitAttachments) return true;
+  if (MUTATING_INTENT_KINDS.includes(input.intent.kind)) return true;
+  if (input.intent.kind === 'greeting') return false;
+  const text = input.text.trim();
+  if (HEAVY_KNOWLEDGE_RE.test(text)) return true;
+  if (text.length <= 280 && (input.intent.kind === 'informational' || input.intent.kind === 'brainstorm')) {
+    return false;
+  }
+  if (text.length <= 200 && (input.intent.kind === 'unknown' || input.intent.kind === 'clarification-needed')) {
+    return false;
+  }
+  return true;
 }
 
 export function formatJarvisIntentPolicy(intent: JarvisIntent): string {

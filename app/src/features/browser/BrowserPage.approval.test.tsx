@@ -4,16 +4,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserReviewedAction } from './browserTypes';
 import { useBrowserStore } from './browserStore';
 
-const { consumeReviewed, executeLegacy } = vi.hoisted(() => ({
-  consumeReviewed: vi.fn(),
+const { approveReviewed, denyReviewed, executeLegacy } = vi.hoisted(() => ({
+  approveReviewed: vi.fn(),
+  denyReviewed: vi.fn(),
   executeLegacy: vi.fn(),
+}));
+
+vi.mock('./browserCanonicalApprovalRuntime', () => ({
+  approveBrowserCanonicalReviewedAction: approveReviewed,
+  denyBrowserCanonicalReviewedAction: denyReviewed,
 }));
 
 vi.mock('./browserActions', async (importOriginal) => {
   const original = await importOriginal<typeof import('./browserActions')>();
   return {
     ...original,
-    consumeBrowserReviewedAction: consumeReviewed,
     executeBrowserTool: executeLegacy,
   };
 });
@@ -88,23 +93,27 @@ describe('BrowserPage approval interlock', () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
     resetBrowser();
-    consumeReviewed.mockReset();
+    approveReviewed.mockReset();
+    denyReviewed.mockReset();
     executeLegacy.mockReset();
-    consumeReviewed.mockImplementation(async (actionId: string, cdp: unknown) => {
-      expect(cdp).toBeNull();
+    approveReviewed.mockImplementation(async (actionId: string) => {
       useBrowserStore
         .getState()
         .resolveAgentAction(
           actionId,
-          'unavailable',
-          'Browser Operator execution is unavailable until canonical approval is active.',
+          'completed',
+          'Approved browser operation completed and was observed.',
         );
       return {
-        ok: false,
-        tool: 'browser.click',
-        message: 'Browser Operator execution is unavailable until canonical approval is active.',
-        data: { status: 'unavailable', actionId },
+        ok: true,
+        actionId,
+        status: 'completed',
+        message: 'Approved browser operation completed and was observed.',
       };
+    });
+    denyReviewed.mockImplementation((actionId: string) => {
+      useBrowserStore.getState().resolveAgentAction(actionId, 'denied', 'Denied by user.');
+      return { ok: false, actionId, status: 'denied', message: 'Denied by user.' };
     });
   });
 
@@ -131,35 +140,33 @@ describe('BrowserPage approval interlock', () => {
     expect(screen.getByRole('button', { name: 'New tab' })).toBeTruthy();
   });
 
-  it('approves by action ID and current CDP handle without summary reconstruction', async () => {
+  it('approves by exact action ID through the canonical runtime without direct CDP', async () => {
     render(<BrowserPage />);
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
 
-    await waitFor(() => expect(consumeReviewed).toHaveBeenCalledWith('action-1', null));
-    expect(consumeReviewed).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(approveReviewed).toHaveBeenCalledWith('action-1'));
+    expect(approveReviewed).toHaveBeenCalledTimes(1);
     expect(executeLegacy).not.toHaveBeenCalled();
     expect(useBrowserStore.getState().agentActions[0]).toMatchObject({
       id: 'action-1',
-      status: 'unavailable',
+      status: 'completed',
     });
     expect(
-      await screen.findByText(
-        'Browser Operator execution is unavailable until canonical approval is active.',
-      ),
+      await screen.findByText('Approved browser operation completed and was observed.'),
     ).toBeTruthy();
-    expect(screen.queryByText(/done|completed|successful/i)).toBeNull();
   });
 
-  it('denies the exact pending record', async () => {
+  it('denies the exact pending record through the canonical runtime', async () => {
     render(<BrowserPage />);
     await waitFor(() => expect(useBrowserStore.getState().runtime).toEqual({ running: false }));
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
 
+    expect(denyReviewed).toHaveBeenCalledWith('action-1');
     expect(useBrowserStore.getState().agentActions[0]).toMatchObject({
       id: 'action-1',
       status: 'denied',
     });
-    expect(consumeReviewed).not.toHaveBeenCalled();
+    expect(approveReviewed).not.toHaveBeenCalled();
     expect(executeLegacy).not.toHaveBeenCalled();
   });
 
@@ -174,7 +181,7 @@ describe('BrowserPage approval interlock', () => {
     await waitFor(() => {
       expect(useBrowserStore.getState().tabs[0]?.url).toBe('https://example.org/manual');
     });
-    expect(consumeReviewed).not.toHaveBeenCalled();
+    expect(approveReviewed).not.toHaveBeenCalled();
     expect(executeLegacy).not.toHaveBeenCalled();
   });
 });

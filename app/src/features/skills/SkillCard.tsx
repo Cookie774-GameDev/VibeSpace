@@ -12,6 +12,7 @@ import { Sparkles } from 'lucide-react';
 import type { SkillManifest } from '@/features/skills/loader';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
+import { EmojiMark } from '@/features/emoji/EmojiMark';
 
 /**
  * Pull the first prose paragraph out of a markdown body.
@@ -76,9 +77,10 @@ export function SkillCard({ manifest, selected, onSelect, onToggleEnabled }: Ski
       />
 
       <div className="pointer-events-none relative z-[1] flex items-start gap-2">
-        <span className="text-xl shrink-0 leading-none" aria-hidden>
-          {manifest.emoji ?? (manifest.isPreset ? '⚙️' : '✨')}
-        </span>
+        <EmojiMark
+          token={manifest.emoji ?? (manifest.isPreset ? '⚙️' : '✨')}
+          className="h-6 w-6 shrink-0 text-xl"
+        />
         <div className="flex-1 min-w-0 font-display font-semibold text-foreground leading-tight text-[15px] [html[data-theme=monochrome]_&]:font-mono">
           {manifest.title}
         </div>

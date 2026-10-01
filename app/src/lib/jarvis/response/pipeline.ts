@@ -6,11 +6,21 @@ import type {
 import { validateJarvisResponseEnvelope } from '@/lib/jarvis/contracts';
 import type { Part } from '@/types';
 import { parseActionBlocks } from '@/lib/actions';
+import {
+  extractCreatorStartRequest,
+  inferFallbackActionProposals,
+  shouldReplaceModelActionsWithFileCreateFallback,
+  shouldReplaceModelActionsWithFileReadFallback,
+} from '@/lib/actions/fallbackActions';
 import { parseJarvisPlanBlocks } from '@/features/jarvis-interaction/planParser';
 import { parseJarvisQuestionBlocks } from '@/features/jarvis-interaction/questionParser';
 import { parseJarvisPermissionBlocks } from '@/features/jarvis-interaction/permissionParser';
 import { deepFreezeJarvisCopy } from '@/lib/jarvis/requestEnvelope';
-import { lintJarvisProse, type JarvisLintViolation } from './linter';
+import {
+  containsProtectedInformationDisclosure,
+  lintJarvisProse,
+  type JarvisLintViolation,
+} from './linter';
 import {
   classifyJarvisResponseMode,
   hasProviderOnlyTerminalState,
@@ -59,6 +69,8 @@ const CURRENT_MODEL_QUERY_PATTERNS = Object.freeze([
   /^what(?:'s|\s+is)\s+(?:the\s+)?(?:current|active|selected)\s+model$/i,
   /^what\s+model\s+am\s+i\s+using$/i,
 ]);
+const EMPTY_PROVIDER_RESPONSE_TEMPLATE =
+  'I received an empty model reply instead of a usable answer. Please retry the request.';
 
 function isCurrentModelStatusQuestion(userText: string): boolean {
   const normalized = userText
@@ -81,14 +93,7 @@ function sanitizeProse(prose: string): {
   violations: readonly JarvisLintViolation[];
 } {
   const placeholders = prose.match(/\uE000JARVIS_REGION_\d+\uE001/g) ?? [];
-  if (
-    /\b(system prompt|hidden (?:prompt|instructions?)|developer message|chain of thought)\b/i.test(
-      prose,
-    ) ||
-    /\b(?:send|share|provide|reveal|enter)\b[\s\S]{0,80}\b(?:password|api key|token|credential|secret)\b/i.test(
-      prose,
-    )
-  ) {
+  if (containsProtectedInformationDisclosure(prose)) {
     return {
       prose: [QUARANTINED_RESPONSE_TEMPLATE, ...placeholders].join('\n\n'),
       violations: [
@@ -244,7 +249,7 @@ function convertTextParts(
 
 function validatedParts(
   displayText: string,
-  request: Readonly<Pick<JarvisRequestEnvelope, 'requestId' | 'outputContract'>>,
+  request: Readonly<Pick<JarvisRequestEnvelope, 'requestId' | 'userText' | 'outputContract'>>,
 ): Part[] {
   let parts = textParts(displayText);
   let actionIndex = 0;
@@ -328,6 +333,95 @@ function validatedParts(
       });
       return { converted: parsed.hasActionBlocks, parts: converted };
     });
+    const fallbackProposals = inferFallbackActionProposals(request.userText, displayText);
+    const parsedActionIds = parts
+      .filter((part): part is Extract<Part, { kind: 'action_proposal' }> => part.kind === 'action_proposal')
+      .map((part) => part.action_id);
+    const exactFileCreateFallback =
+      fallbackProposals.length >= 2 &&
+      fallbackProposals.length <= 10 &&
+      fallbackProposals.every((proposal) => proposal.action_id === 'files.create') &&
+      shouldReplaceModelActionsWithFileCreateFallback(parsedActionIds, fallbackProposals);
+    const exactFileReadFallback =
+      fallbackProposals.length >= 1 &&
+      fallbackProposals.length <= 10 &&
+      fallbackProposals.every((proposal) => proposal.action_id === 'files.read') &&
+      shouldReplaceModelActionsWithFileReadFallback(parsedActionIds, fallbackProposals);
+    if (exactFileCreateFallback || exactFileReadFallback || (
+      fallbackProposals.length >= 2 &&
+      fallbackProposals.length <= 10 &&
+      fallbackProposals.every((proposal) => proposal.action_id === 'files.create') &&
+      parsedActionIds.length === 0
+    )) {
+      const actionLabel = fallbackProposals
+        .map(({ action_id, rationale }) => rationale?.trim() || action_id)
+        .join(' ');
+      return [
+        {
+          kind: 'text',
+          text: formatJarvisVerifiedNarration({
+            kind: 'approval_required',
+            actionLabel,
+          }).text,
+        },
+        ...fallbackProposals.map<Part>((proposal) => ({
+          kind: 'action_proposal',
+          call_id: proposal.call_id,
+          action_id: proposal.action_id,
+          params: proposal.params,
+          rationale: proposal.rationale,
+          status: 'pending',
+        })),
+      ];
+    }
+    // The canonical kernel intentionally executes at most one approval-bound
+    // action per response. Small local models sometimes emit a create action
+    // followed by a read/verify action; passing both would reject the entire
+    // otherwise valid response. Preserve the first executable step and require
+    // subsequent effects to occur in a later, independently verified turn.
+    let keptAction = false;
+    parts = parts.filter((part) => {
+      if (part.kind !== 'action_proposal') return true;
+      if (
+        part.action_id === 'creator.start' &&
+        extractCreatorStartRequest(request.userText) === null
+      ) {
+        return false;
+      }
+      if (keptAction) return false;
+      keptAction = true;
+      return true;
+    });
+    if (parts.every((part) => part.kind === 'text')) {
+      // The kernel accepts a single approval-bound action per response. Apply
+      // that invariant to inferred actions as well as parsed action blocks.
+      const fallbackProposals = inferFallbackActionProposals(
+        request.userText,
+        displayText,
+      ).slice(0, 1);
+      if (fallbackProposals.length > 0) {
+        const actionLabel = fallbackProposals
+          .map(({ action_id, rationale }) => rationale?.trim() || action_id)
+          .join(' ');
+        return [
+          {
+            kind: 'text',
+            text: formatJarvisVerifiedNarration({
+              kind: 'approval_required',
+              actionLabel,
+            }).text,
+          },
+          ...fallbackProposals.map<Part>((proposal) => ({
+            kind: 'action_proposal',
+            call_id: proposal.call_id,
+            action_id: proposal.action_id,
+            params: proposal.params,
+            rationale: proposal.rationale,
+            status: 'pending',
+          })),
+        ];
+      }
+    }
   }
   const nonEmptyParts = parts.length > 0 ? parts : textParts(displayText);
   return nonEmptyParts.map((part) => withoutUndefined(part) as Part);
@@ -406,6 +500,7 @@ export async function processJarvisResponse(
     return deepFreezeJarvisCopy(envelope);
   }
   const tokenized = tokenizeJarvisResponse(snapshot.raw.text);
+  const emptyProviderReply = snapshot.raw.text.trim().length === 0;
   const mode = classifyJarvisResponseMode(snapshot.request, facts);
   const sensitiveTopic =
     mode === 'sensitive'
@@ -503,6 +598,8 @@ export async function processJarvisResponse(
     finalProse = buildJarvisSensitiveFallback(sensitiveTopic);
   } else if (hasQuarantine) {
     finalProse = withMissingPlaceholders(QUARANTINED_RESPONSE_TEMPLATE, validPlaceholders);
+  } else if (emptyProviderReply) {
+    finalProse = EMPTY_PROVIDER_RESPONSE_TEMPLATE;
   } else if (needsDeterministicFallback) {
     const deterministic = deterministicFallback(
       finalProse,
@@ -568,6 +665,7 @@ export async function processJarvisResponse(
       fallbackUsed:
         Boolean(sensitiveTopic) ||
         hasQuarantine ||
+        emptyProviderReply ||
         needsDeterministicFallback ||
         outputReferencePolicy.violationCodes.length > 0,
     },

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "theme": "origami",
+  "assets": [
+    {
+      "id": "origami-welcome-boat",
+      "path": "/assets/themes/origami/welcome-boat.svg",
+      "purpose": "empty-chat-welcome"
+    },
+    {
+      "id": "origami-welcome-lotus",
+      "path": "/assets/themes/origami/welcome-lotus.svg",
+      "purpose": "empty-chat-welcome"
+    }
+  ]
+}

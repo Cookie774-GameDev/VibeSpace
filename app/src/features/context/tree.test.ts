@@ -84,6 +84,71 @@ describe('generateProjectContextTree file safeguards', () => {
     expect(localStorage.getItem(contextStorageKey(null))).toBeNull();
   });
 
+  it('keeps every scanned root file addressable in the bounded structural map', async () => {
+    const entries = Array.from({ length: 20 }, (_, index) => ({
+      name: `shard-${String(index + 1).padStart(2, '0')}.txt`,
+      path: `C:\\proj\\shard-${String(index + 1).padStart(2, '0')}.txt`,
+      isDir: false,
+      size: 32,
+      modifiedMs: 1_700_000_000_000 + index,
+    }));
+    fsMocks.listDirectory.mockResolvedValue({
+      ok: true,
+      path: 'C:\\proj',
+      entries,
+    });
+    fsMocks.readTextFileSample.mockImplementation(async (path: string) => ({
+      ok: true,
+      path,
+      content: `bounded sample for ${path}`,
+    }));
+
+    const tree = await generateProjectContextTree({
+      projectId: null,
+      rootDir: 'C:\\proj',
+      provider: 'local',
+    });
+    const filePaths = tree.nodes.flatMap((node) =>
+      (node.children ?? []).flatMap((child) => (child.kind === 'file' ? [child.path] : [])),
+    );
+
+    expect(tree.fileCount).toBe(20);
+    expect(filePaths).toHaveLength(20);
+    expect(filePaths).toEqual(entries.map((entry) => entry.name));
+  });
+
+  it('continues indexing file identities after the summary sample budget is exhausted', async () => {
+    const entries = Array.from({ length: 30 }, (_, index) => ({
+      name: `corpus-${String(index + 1).padStart(2, '0')}.txt`,
+      path: `C:\\proj\\corpus-${String(index + 1).padStart(2, '0')}.txt`,
+      isDir: false,
+      size: 400_000,
+      modifiedMs: 1_700_000_000_000 + index,
+    }));
+    fsMocks.listDirectory.mockResolvedValue({
+      ok: true,
+      path: 'C:\\proj',
+      entries,
+    });
+    fsMocks.readTextFileSample.mockImplementation(async (path: string) => ({
+      ok: true,
+      path,
+      content: 'x'.repeat(12_000),
+    }));
+
+    const tree = await generateProjectContextTree({
+      projectId: null,
+      rootDir: 'C:\\proj',
+      provider: 'local',
+    });
+    const filePaths = tree.nodes.flatMap((node) =>
+      (node.children ?? []).flatMap((child) => (child.kind === 'file' ? [child.path] : [])),
+    );
+
+    expect(tree.fileCount).toBe(30);
+    expect(filePaths).toEqual(entries.map((entry) => entry.name));
+  });
+
   it('accepts image and video metadata up to 100 MB and rejects larger files', async () => {
     fsMocks.listDirectory.mockResolvedValue({
       ok: true,

@@ -115,7 +115,9 @@ export function reducePanelLifecycle(
 
 /** True when the panel should be visible on screen. */
 export function panelIsVisible(state: PetPanelLifecycleState): boolean {
-  return state === 'open' || state === 'confirmingClose' || state === 'opening' || state === 'restoring';
+  return (
+    state === 'open' || state === 'confirmingClose' || state === 'opening' || state === 'restoring'
+  );
 }
 
 /** Sessions must never be killed by panel transitions. */
@@ -125,7 +127,8 @@ export function panelPreservesSessions(state: PetPanelLifecycleState): boolean {
 
 /**
  * Authoritative rule: standalone pet-overlay visibility for both Axo and Glitch.
- * XOR with mini panel — never show both. Shutdown never restores overlay.
+ * The pet remains visible while the mini panel is open. Only explicit pet
+ * visibility preferences or application shutdown may remove it.
  */
 export function shouldShowStandalonePet(input: {
   enabled: boolean;
@@ -141,7 +144,5 @@ export function shouldShowStandalonePet(input: {
 }): boolean {
   if (input.shuttingDown) return false;
   if (!input.enabled || !input.overlayVisible) return false;
-  if (input.panelOpenFailed) return true;
-  if (input.panelOpenFlag || input.panelVisible) return false;
   return true;
 }

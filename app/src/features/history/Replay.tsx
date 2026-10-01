@@ -1,21 +1,107 @@
 import * as React from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { Play, Pause, ExternalLink, MessageSquare } from 'lucide-react';
-import { messageRepo, chatRepo } from '@/lib/db';
+import { messageRepo, chatRepo, db } from '@/lib/db';
 import { useUIStore } from '@/stores/ui';
 import { useAgentStore } from '@/stores/agents';
+import { useAuthStore } from '@/stores/auth';
 import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Hint } from '@/components/ui/tooltip';
 import { cn, clamp, formatRelative, hueFromString } from '@/lib/utils';
 import type { Agent, Chat, ChatId, Message, Part } from '@/types';
+import type { BrowserChatSnapshotRow } from '@/lib/db/schema';
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
+import { createChatGptSnapshotRepository } from '@/features/browser-chat/chatGptExport';
 
 export interface ReplayProps {
   chatId: ChatId | null;
+  snapshotId?: string | null;
 }
 
 const SPEEDS = [0.5, 1, 2, 4] as const;
 type Speed = (typeof SPEEDS)[number];
+const snapshotRepository = createChatGptSnapshotRepository(db);
+
+export function Replay({ chatId, snapshotId = null }: ReplayProps) {
+  return snapshotId ? (
+    <ProviderSnapshotReplay snapshotId={snapshotId} />
+  ) : (
+    <NativeReplay chatId={chatId} />
+  );
+}
+
+function ProviderSnapshotReplay({ snapshotId }: { snapshotId: string }) {
+  const accountId = useAuthStore((state) => resolveAccountIdentity(state)?.accountId ?? null);
+  const workspaceId = useAuthStore((state) => state.workspaceId);
+  const [snapshot, setSnapshot] = React.useState<BrowserChatSnapshotRow | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setSnapshot(null);
+    if (!accountId || !workspaceId) {
+      setLoading(false);
+      return;
+    }
+    void snapshotRepository
+      .get({ accountId, workspaceId: String(workspaceId) }, snapshotId)
+      .then((row) => {
+        if (!cancelled) setSnapshot(row ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setSnapshot(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, snapshotId, workspaceId]);
+
+  if (loading) return <ReplayEmpty message="Loading imported snapshot…" />;
+  if (!snapshot) return <ReplayEmpty message="That imported snapshot couldn't be found." />;
+
+  return (
+    <div className="flex h-full flex-col">
+      <header className="shrink-0 border-b border-border bg-paper/40 px-5 py-4">
+        <h1 className="font-display text-page-title text-foreground truncate">{snapshot.title}</h1>
+        <p className="eyebrow mt-1">
+          Imported ChatGPT snapshot · revision {snapshot.revision} · {snapshot.messages.length}{' '}
+          message{snapshot.messages.length === 1 ? '' : 's'}
+        </p>
+        <p className="mt-2 text-metadata text-muted-foreground">
+          This is inert text from a local snapshot. Replay does not fetch live provider content or
+          change the original ChatGPT conversation.
+        </p>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-[820px] flex-col gap-3 px-4 py-5">
+          {snapshot.messages.map((message) => (
+            <article
+              key={message.id}
+              className={cn(
+                'rounded-lg border px-4 py-3',
+                message.role === 'user'
+                  ? 'ml-auto max-w-[82%] border-accent-copper/30 bg-elevated'
+                  : 'mr-auto max-w-[90%] border-border bg-panel',
+              )}
+            >
+              <div className="mb-1 text-metadata font-semibold uppercase tracking-wide text-muted-foreground">
+                {message.role}
+              </div>
+              <p className="whitespace-pre-wrap break-words text-secondary text-foreground">
+                {message.text}
+              </p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * Replay surface.
@@ -32,7 +118,7 @@ type Speed = (typeof SPEEDS)[number];
  * not auto-start playback (we default to paused) and the user can still
  * scrub manually.
  */
-export function Replay({ chatId }: ReplayProps) {
+function NativeReplay({ chatId }: Pick<ReplayProps, 'chatId'>) {
   const setActiveChat = useUIStore((s) => s.setActiveChat);
   const setRoute = useUIStore((s) => s.setRoute);
 

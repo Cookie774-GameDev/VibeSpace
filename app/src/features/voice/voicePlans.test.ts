@@ -36,20 +36,14 @@ describe('VOICE_PLANS cost model', () => {
 });
 
 describe('VOICE_PRESETS', () => {
-  it('maps Jarvis to bm_george and Friday to bf_emma', () => {
-    expect(VOICE_PRESETS.jarvis.kokoroVoice).toBe('bm_george');
-    expect(VOICE_PRESETS.friday.kokoroVoice).toBe('bf_emma');
-  });
-
-  it('uses the configured Kokoro speeds', () => {
-    expect(VOICE_PRESETS.jarvis.speed).toBeCloseTo(0.92, 2);
-    expect(VOICE_PRESETS.friday.speed).toBeCloseTo(0.98, 2);
+  it('exposes only Jarvis and Friday', () => {
+    expect(Object.keys(VOICE_PRESETS)).toEqual(['jarvis', 'friday']);
   });
 });
 
 describe('VOICE_PROVIDERS', () => {
   it('flags only the three cloud providers as cloud', () => {
-    expect(VOICE_PROVIDERS.kokoro_local.cloud).toBe(false);
+    expect(VOICE_PROVIDERS.jarvis_local.cloud).toBe(false);
     expect(VOICE_PROVIDERS.system_tts_fallback.cloud).toBe(false);
     expect(VOICE_PROVIDERS.openai_tts.cloud).toBe(true);
     expect(VOICE_PROVIDERS.deepgram_tts.cloud).toBe(true);

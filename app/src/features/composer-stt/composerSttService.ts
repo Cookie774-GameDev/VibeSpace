@@ -58,7 +58,18 @@ export function getComposerSttProvider(): ComposerSttProvider {
 }
 
 export function getFasterWhisperModel(): FasterWhisperModelId {
-  return useAuthStore.getState().fasterWhisperModel ?? 'small';
+  const raw = useAuthStore.getState().fasterWhisperModel ?? 'whisper-small-en-q8';
+  // Only downloadable faster-whisper packs are valid for transcription.
+  const allowed: FasterWhisperModelId[] = [
+    'tiny',
+    'small',
+    'base',
+    'large-v3',
+    'whisper-small-en-q8',
+    'whisper-base-en-q5',
+  ];
+  if (allowed.includes(raw)) return raw;
+  return 'whisper-small-en-q8';
 }
 
 export function isSystemSttAvailable(): boolean {

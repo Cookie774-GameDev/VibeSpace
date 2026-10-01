@@ -365,6 +365,15 @@ export function convertContextMapRecordV1ToSnapshotV2(
     knowledgeRevision?: number;
     sourceStatus?: ContextSourceStatus;
     parser?: string;
+    sourceLabel?: string;
+    branchRef?: string;
+    github?: {
+      installationId: string;
+      owner: string;
+      repository: string;
+      resolvedCommitSha: string;
+      visibility: 'public' | 'private' | 'internal';
+    };
   } = {},
 ): ContextGraphSnapshotV2 {
   const knowledgeRevision = options.knowledgeRevision ?? 1;
@@ -375,6 +384,11 @@ export function convertContextMapRecordV1ToSnapshotV2(
   const updatedAt = Math.max(legacy.updatedAt, tree.generatedAt, createdAt);
   const sourceId = boundedId(`${mapId}:source`, 'ctxsrc');
   const sourceRevision = `v1-${tree.generatedAt}-${tree.fileCount}-${tree.totalBytes}`;
+  const sourceKind = options.github
+    ? ('github_repository' as const)
+    : legacy.sourceType === 'local_file'
+      ? ('local_file' as const)
+      : ('local_folder' as const);
   const entities: ContextEntityV2[] = [];
   const edges: ContextEdgeV2[] = [];
   const provenance: ContextProvenanceV2[] = [];
@@ -407,7 +421,7 @@ export function convertContextMapRecordV1ToSnapshotV2(
       targetKind: 'entity',
       targetId: entityId,
       sourceId,
-      sourceKind: 'local_folder',
+      sourceKind,
       ...(node.path ? { path: node.path } : {}),
       extractedAt: tree.generatedAt,
       parser,
@@ -440,7 +454,7 @@ export function convertContextMapRecordV1ToSnapshotV2(
         targetKind: 'edge',
         targetId: edgeId,
         sourceId,
-        sourceKind: 'local_folder',
+        sourceKind,
         ...(node.path ? { path: node.path } : {}),
         extractedAt: tree.generatedAt,
         parser,
@@ -486,10 +500,19 @@ export function convertContextMapRecordV1ToSnapshotV2(
         id: sourceId,
         accountId,
         mapId,
-        kind: 'local_folder',
-        label: legacy.name,
+        kind: sourceKind,
+        label: options.sourceLabel ?? legacy.sourceLabel ?? legacy.name,
         status: sourceStatus,
-        localRoot: tree.rootDir,
+        ...(sourceKind === 'local_folder' ? { localRoot: tree.rootDir } : {}),
+        ...(sourceKind === 'local_file' ? { localFile: tree.rootDir } : {}),
+        ...(options.github
+          ? {
+              github: {
+                ...options.github,
+                selectedRef: options.branchRef ?? legacy.branchRef ?? 'HEAD',
+              },
+            }
+          : {}),
         createdAt,
         updatedAt,
         lastIndexedAt: tree.generatedAt,

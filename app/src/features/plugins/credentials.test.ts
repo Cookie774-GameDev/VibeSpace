@@ -27,6 +27,35 @@ describe('existing plugin credential adapter', () => {
     expect(deleteRaw).toHaveBeenCalledWith('github', 'token');
   });
 
+  it('routes the Deepgram plugin locator through the canonical provider vault', async () => {
+    const readRaw = vi.fn(async () => undefined);
+    const writeRaw = vi.fn(async () => undefined);
+    const deleteRaw = vi.fn(async () => undefined);
+    const readDeepgram = vi.fn(async () => 'central-key');
+    const writeDeepgram = vi.fn(async () => true);
+    const deleteDeepgram = vi.fn(async () => true);
+    const adapter = createExistingPluginCredentialAdapter({
+      readRaw,
+      writeRaw,
+      deleteRaw,
+      readDeepgram,
+      writeDeepgram,
+      deleteDeepgram,
+    });
+    const locator = { pluginId: 'deepgram', fieldId: 'api_key' };
+
+    await expect(adapter.readExistingCredential(locator)).resolves.toBe('central-key');
+    await adapter.writeExistingCredential(locator, 'replacement');
+    await adapter.deleteExistingCredential(locator);
+
+    expect(readDeepgram).toHaveBeenCalledTimes(1);
+    expect(writeDeepgram).toHaveBeenCalledWith('replacement');
+    expect(deleteDeepgram).toHaveBeenCalledTimes(1);
+    expect(readRaw).not.toHaveBeenCalled();
+    expect(writeRaw).not.toHaveBeenCalled();
+    expect(deleteRaw).not.toHaveBeenCalled();
+  });
+
   it.each([
     { pluginId: '', fieldId: 'token' },
     { pluginId: ' github', fieldId: 'token' },

@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ContextSearchPipelineError,
   createContextSearchPipeline,
+  createTauriContextSearchIndexPort,
   type ContextProgressiveSearchResult,
 } from './contextSearchPipeline';
+
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
 function result(id: string, score: number): ContextProgressiveSearchResult {
   return {
@@ -221,5 +224,70 @@ describe('progressive Context search', () => {
     await expect(
       pipeline.search({ accountId: 'account-1', mapId: 'map-1', query: '', limit: 5 }, () => {}),
     ).rejects.toMatchObject({ code: 'invalid_input' });
+  });
+});
+
+describe('native Context search index port', () => {
+  it('uses exact account/map scopes and document payloads for mutations', async () => {
+    const { invoke } = await import('@tauri-apps/api/core');
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({
+        affectedDocuments: 1,
+        status: {
+          documentCount: 1,
+          indexId: 'index-1',
+          engine: 'tantivy-0.22.1',
+          schemaVersion: 1,
+          recoveredCorruption: false,
+          needsRebuild: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        affectedDocuments: 1,
+        status: {
+          documentCount: 0,
+          indexId: 'index-1',
+          engine: 'tantivy-0.22.1',
+          schemaVersion: 1,
+          recoveredCorruption: false,
+          needsRebuild: false,
+        },
+      });
+    const port = createTauriContextSearchIndexPort();
+    const document = {
+      documentId: 'node-1',
+      sourceId: 'node-1',
+      title: 'one.txt',
+      path: 'one.txt',
+      sourceType: 'local_file',
+      body: 'content',
+      tags: [],
+      properties: {},
+      updatedAt: 10,
+      contentHash: 'a'.repeat(64),
+    };
+
+    await expect(port.replaceDocuments('account-1', 'map-1', [document])).resolves.toEqual({
+      affectedDocuments: 1,
+      documentCount: 1,
+    });
+    await expect(port.deleteDocuments('account-1', 'map-1', ['node-1'])).resolves.toEqual({
+      affectedDocuments: 1,
+      documentCount: 0,
+    });
+    expect(invoke).toHaveBeenNthCalledWith(1, 'context_search_replace_documents', {
+      request: { accountId: 'account-1', mapId: 'map-1', documents: [document] },
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, 'context_search_delete_documents', {
+      request: { accountId: 'account-1', mapId: 'map-1', documentIds: ['node-1'] },
+    });
+  });
+
+  it('rejects malformed native mutation and status responses', async () => {
+    const { invoke } = await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockResolvedValue({ affectedDocuments: 1, status: { documentCount: -1 } });
+    await expect(
+      createTauriContextSearchIndexPort().replaceDocuments('account-1', 'map-1', []),
+    ).rejects.toThrow('context_search_index_response_invalid');
   });
 });

@@ -110,7 +110,7 @@ describe('canvas package codec', () => {
       expect(decoded.document.thumbnail).toBe('data:image/png;base64,AAAA');
       expect(decoded.document.layoutMode).toBe('edgeless');
       expect(decoded.document.camera).toEqual({ x: 12, y: -34, zoom: 1.5 });
-      expect(decoded.document.background).toEqual({ kind: 'grid', color: '#012345' });
+      expect(decoded.document.background).toEqual(doc.background);
     });
 
     it('returns a deeply frozen package and document', () => {

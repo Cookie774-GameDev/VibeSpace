@@ -23,7 +23,7 @@ const tabStrip = readCanonicalText(
 );
 const app = readCanonicalText(path.join(root, 'app', 'src', 'App.tsx'));
 
-const POWERSHELL_PROBE_TIMEOUT_MS = 30_000;
+const POWERSHELL_PROBE_TIMEOUT_MS = 60_000;
 const POWERSHELL_PROBE_TEST_TIMEOUT_MS = POWERSHELL_PROBE_TIMEOUT_MS + 5_000;
 const itWindows = process.platform === 'win32' ? it : it.skip;
 

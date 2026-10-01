@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { syntheticCredentialFixture } from '@/test/syntheticCredentialFixture';
 import {
   SECRET_CLASSES,
   applySecretPolicy,
   detectSecrets,
   hasDetectedSecret,
 } from './secretDetector';
+
+const GITHUB_TOKEN_FIXTURE = syntheticCredentialFixture(
+  'ghp_',
+  'SyntheticCredentialValue1234567890',
+);
+const STRIPE_KEY_FIXTURE = syntheticCredentialFixture('sk_test_', 'syntheticMaterial123456');
 
 describe('unified secret detector', () => {
   it('covers every approved secret class without returning secret values', () => {
@@ -14,11 +21,11 @@ describe('unified secret detector', () => {
         'private_key',
         '-----BEGIN PRIVATE KEY-----\nc3ludGhldGljLWtleS1tYXRlcmlhbA==\n-----END PRIVATE KEY-----',
       ],
-      ['token', 'ghp_SyntheticCredentialValue1234567890'],
+      ['token', GITHUB_TOKEN_FIXTURE],
       ['password', 'password=hunter2-synthetic-value'],
       ['connection_string', 'postgres://user:synthetic-pass@localhost:5432/app'],
       ['signing_material', 'signing_key=synthetic-signing-material-123456'],
-      ['environment_secret', 'STRIPE_SECRET_KEY=sk_test_syntheticMaterial123456'],
+      ['environment_secret', `STRIPE_SECRET_KEY=${STRIPE_KEY_FIXTURE}`],
       ['high_entropy_candidate', 'mJ8vQ2xN7pL4sR9tW3yK6dF1hB5cG0zA'],
     ] as const;
 
@@ -33,7 +40,7 @@ describe('unified secret detector', () => {
   });
 
   it('supports explicit exclude, redact, and ask decisions', () => {
-    const text = 'Deploy with token=ghp_SyntheticCredentialValue1234567890 today.';
+    const text = `Deploy with token=${GITHUB_TOKEN_FIXTURE} today.`;
 
     expect(applySecretPolicy(text, 'exclude')).toMatchObject({
       decision: 'excluded',
@@ -100,7 +107,11 @@ describe('unified secret detector', () => {
 
     const overflow = Array.from(
       { length: 110 },
-      (_, index) => `token=ghp_SyntheticCredentialValue${String(index).padStart(20, '0')}`,
+      (_, index) =>
+        `token=${syntheticCredentialFixture(
+          'ghp_',
+          `SyntheticCredentialValue${String(index).padStart(20, '0')}`,
+        )}`,
     ).join('\n');
     const overflowRedaction = applySecretPolicy(overflow, 'redact');
     expect(detectSecrets(overflow).length).toBeLessThanOrEqual(100);
@@ -108,7 +119,7 @@ describe('unified secret detector', () => {
   });
 
   it('bounds hostile input and returns deterministic non-overlapping findings', () => {
-    const text = `${'safe '.repeat(220_000)}token=ghp_SyntheticCredentialValue1234567890`;
+    const text = `${'safe '.repeat(220_000)}token=${GITHUB_TOKEN_FIXTURE}`;
     const first = detectSecrets(text);
     const second = detectSecrets(text);
 

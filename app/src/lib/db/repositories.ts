@@ -265,14 +265,70 @@ function laterPendingRow(left: SyncQueueRow, right: SyncQueueRow): SyncQueueRow 
   return left.id >= right.id ? left : right;
 }
 
+async function enqueueGenericLocalSyncInTransaction(
+  op: SyncOp,
+  table: StoreName,
+  rowId: string,
+  payload: unknown,
+  owner: SyncQueueOwnerSnapshot,
+  ts: number,
+): Promise<void> {
+  const candidates = await db.sync_queue
+    .where('status')
+    .equals('pending')
+    .filter((row) => row.table === table && row.row_id === rowId)
+    .toArray();
+  const coalescible: (typeof candidates)[number][] = [];
+  for (const candidate of candidates) {
+    if (await db.settings.get(cloudSyncQueueClaimKey(candidate.id))) continue;
+    if (await db.settings.get(legacyCloudSyncQueueAuthorityKey(candidate.id))) continue;
+    const stored = await db.settings.get(cloudSyncQueueOwnerKey(candidate.id));
+    const candidateOwner = parseSyncQueueOwner(candidate.id, stored?.value);
+    if (candidateOwner && ownersMayCoalesce(candidateOwner, owner)) {
+      coalescible.push(candidate);
+    }
+  }
+  if (coalescible.length > 0) {
+    const survivor = coalescible.reduce(laterPendingRow);
+    const reduced = reduceCoalescibleMutations(coalescible, op, payload, ts);
+    await db.sync_queue.update(survivor.id, {
+      op: reduced.op,
+      payload: reduced.payload,
+      created_at: ts,
+      error: undefined,
+    });
+    for (const duplicate of coalescible) {
+      if (duplicate.id === survivor.id) continue;
+      await db.sync_queue.delete(duplicate.id);
+      await db.settings.delete(cloudSyncQueueOwnerKey(duplicate.id));
+    }
+    return;
+  }
+  const id = `${SYNC_ID_PREFIX}_${nanoid(16)}`;
+  await db.sync_queue.add({
+    id,
+    op,
+    table,
+    row_id: rowId,
+    payload,
+    status: 'pending',
+    created_at: ts,
+  });
+  await db.settings.put({
+    key: cloudSyncQueueOwnerKey(id),
+    value: materializeSyncQueueOwner(id, owner),
+    updated_at: ts,
+  });
+}
+
 async function enqueueLocalSync(
   op: SyncOp,
   table: StoreName,
   rowId: string,
   payload: unknown,
   owner: SyncQueueOwnerSnapshot,
-): Promise<void> {
-  if (!SYNCABLE_TABLES.has(table)) return;
+): Promise<boolean> {
+  if (!SYNCABLE_TABLES.has(table)) return true;
   try {
     const ts = now();
     if ((table === 'messages' && op === 'insert') || (table === 'chats' && op === 'update')) {
@@ -296,58 +352,15 @@ async function enqueueLocalSync(
               },
         ),
       );
-      return;
+      return true;
     }
-    await db.transaction('rw', [db.sync_queue, db.settings], async () => {
-      const candidates = await db.sync_queue
-        .where('status')
-        .equals('pending')
-        .filter((row) => row.table === table && row.row_id === rowId)
-        .toArray();
-      const coalescible: (typeof candidates)[number][] = [];
-      for (const candidate of candidates) {
-        if (await db.settings.get(cloudSyncQueueClaimKey(candidate.id))) continue;
-        if (await db.settings.get(legacyCloudSyncQueueAuthorityKey(candidate.id))) continue;
-        const stored = await db.settings.get(cloudSyncQueueOwnerKey(candidate.id));
-        const candidateOwner = parseSyncQueueOwner(candidate.id, stored?.value);
-        if (candidateOwner && ownersMayCoalesce(candidateOwner, owner)) {
-          coalescible.push(candidate);
-        }
-      }
-      if (coalescible.length > 0) {
-        const survivor = coalescible.reduce(laterPendingRow);
-        const reduced = reduceCoalescibleMutations(coalescible, op, payload, ts);
-        await db.sync_queue.update(survivor.id, {
-          op: reduced.op,
-          payload: reduced.payload,
-          created_at: ts,
-          error: undefined,
-        });
-        for (const duplicate of coalescible) {
-          if (duplicate.id === survivor.id) continue;
-          await db.sync_queue.delete(duplicate.id);
-          await db.settings.delete(cloudSyncQueueOwnerKey(duplicate.id));
-        }
-        return;
-      }
-      const id = `${SYNC_ID_PREFIX}_${nanoid(16)}`;
-      await db.sync_queue.add({
-        id,
-        op,
-        table,
-        row_id: rowId,
-        payload,
-        status: 'pending',
-        created_at: ts,
-      });
-      await db.settings.put({
-        key: cloudSyncQueueOwnerKey(id),
-        value: materializeSyncQueueOwner(id, owner),
-        updated_at: ts,
-      });
-    });
+    await db.transaction('rw', [db.sync_queue, db.settings], () =>
+      enqueueGenericLocalSyncInTransaction(op, table, rowId, payload, owner, ts),
+    );
+    return true;
   } catch (err) {
     console.warn('[sync] failed to enqueue local mutation', { table, rowId, op, err });
+    return false;
   }
 }
 
@@ -378,8 +391,8 @@ async function syncDelete(
   table: StoreName,
   rowId: string,
   owner: SyncQueueOwnerSnapshot,
-): Promise<void> {
-  await enqueueLocalSync('delete', table, rowId, null, owner);
+): Promise<boolean> {
+  return enqueueLocalSync('delete', table, rowId, null, owner);
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +509,23 @@ export type ChatCreateInput = Omit<Chat, 'id' | 'created_at' | 'updated_at'> & {
   id?: ChatId;
 };
 
+export interface ChatDeleteOutcome {
+  localDeleted: true;
+  syncQueued: boolean;
+}
+
+export interface AuthorizedChatDeleteOutcome extends ChatDeleteOutcome {
+  deletedChatId: ChatId;
+  deletedMessageIds: MessageId[];
+}
+
+export interface ChatDeleteAuthority {
+  expectedAccountId: string;
+  expectedWorkspaceId: string;
+  getActiveAccountId(): string | null;
+  getActiveWorkspaceId(): string | null;
+}
+
 export type ChatListFilter = {
   workspace_id?: WorkspaceId;
   project_id?: ProjectId;
@@ -503,6 +533,49 @@ export type ChatListFilter = {
   mode?: ChatMode;
   limit?: number;
 };
+
+function assertChatDeleteAuthority(authority: ChatDeleteAuthority): void {
+  if (authority.getActiveAccountId() !== authority.expectedAccountId) {
+    throw new Error('The active account changed; remaining chats were not deleted.');
+  }
+  if (authority.getActiveWorkspaceId() !== authority.expectedWorkspaceId) {
+    throw new Error('The active workspace changed; remaining chats were not deleted.');
+  }
+}
+
+async function deleteChatLocally(
+  id: ChatId,
+  authority?: ChatDeleteAuthority,
+): Promise<MessageId[]> {
+  return db.transaction('rw', [db.chats, db.messages], async () => {
+    if (authority) {
+      const chat = await db.chats.get(id);
+      if (!chat) throw new Error('The chat no longer exists.');
+      if (String(chat.workspace_id) !== authority.expectedWorkspaceId) {
+        throw new Error('The chat does not belong to the reviewed workspace.');
+      }
+    }
+    const messageIds = (await db.messages.where('chat_id').equals(id).primaryKeys())
+      .map((messageId) => String(messageId) as MessageId)
+      .sort((left, right) => String(left).localeCompare(String(right)));
+    if (authority) assertChatDeleteAuthority(authority);
+    await db.messages.bulkDelete(messageIds);
+    await db.chats.delete(id);
+    return messageIds;
+  });
+}
+
+async function enqueueChatDeleteTombstones(
+  id: ChatId,
+  messageIds: readonly MessageId[],
+  syncOwner: SyncQueueOwnerSnapshot,
+): Promise<boolean> {
+  const queued = await Promise.all([
+    ...messageIds.map((messageId) => syncDelete('messages', messageId, syncOwner)),
+    syncDelete('chats', id, syncOwner),
+  ]);
+  return queued.every(Boolean);
+}
 
 /**
  * CRUD over the `chats` table.
@@ -561,6 +634,50 @@ export const chatRepo = {
     await syncInsert('chats', row, syncOwner);
     return row;
   },
+  async createAuthorized(
+    input: ChatCreateInput,
+    syncOwner: SyncQueueOwnerSnapshot,
+    authorize: () => boolean,
+  ): Promise<Chat | null> {
+    if (!authorize()) return null;
+    const ts = now();
+    const row: Chat = {
+      id: input.id ?? newChatId(),
+      workspace_id: input.workspace_id,
+      project_id: input.project_id,
+      title: input.title,
+      mode: input.mode,
+      active_agent_ids: input.active_agent_ids,
+      connection: input.connection,
+      archived: input.archived,
+      pinned: input.pinned,
+      pinned_at: input.pinned_at,
+      created_at: ts,
+      updated_at: ts,
+    };
+    let authorityRevoked = false;
+    try {
+      await db.transaction('rw', db.chats, db.sync_queue, db.settings, async () => {
+        await db.chats.add(row);
+        await enqueueGenericLocalSyncInTransaction(
+          'insert',
+          'chats',
+          String(row.id),
+          payloadForSync('chats', row),
+          syncOwner,
+          now(),
+        );
+        if (!authorize()) {
+          authorityRevoked = true;
+          throw new Error('CHAT_CREATION_AUTHORITY_REVOKED');
+        }
+      });
+    } catch (error) {
+      if (authorityRevoked) return null;
+      throw error;
+    }
+    return row;
+  },
   async update(id: ChatId, patch: Partial<Chat>): Promise<Chat> {
     const syncOwner = captureSyncQueueOwner();
     await db.chats.update(id, { ...sanitizeUpdate(patch), updated_at: now() });
@@ -568,15 +685,27 @@ export const chatRepo = {
     await syncUpdate('chats', row, syncOwner);
     return row;
   },
-  async delete(id: ChatId): Promise<void> {
+  async delete(id: ChatId): Promise<ChatDeleteOutcome> {
     const syncOwner = captureSyncQueueOwner();
-    const messages = await db.messages.where('chat_id').equals(id).toArray();
-    await db.transaction('rw', db.chats, db.messages, async () => {
-      await db.messages.where('chat_id').equals(id).delete();
-      await db.chats.delete(id);
-    });
-    await Promise.all(messages.map((message) => syncDelete('messages', message.id, syncOwner)));
-    await syncDelete('chats', id, syncOwner);
+    const messageIds = await deleteChatLocally(id);
+    return {
+      localDeleted: true,
+      syncQueued: await enqueueChatDeleteTombstones(id, messageIds, syncOwner),
+    };
+  },
+  async deleteAuthorized(
+    id: ChatId,
+    authority: ChatDeleteAuthority,
+  ): Promise<AuthorizedChatDeleteOutcome> {
+    assertChatDeleteAuthority(authority);
+    const syncOwner = captureSyncQueueOwner();
+    const messageIds = await deleteChatLocally(id, authority);
+    return {
+      localDeleted: true,
+      syncQueued: await enqueueChatDeleteTombstones(id, messageIds, syncOwner),
+      deletedChatId: id,
+      deletedMessageIds: messageIds,
+    };
   },
 };
 
@@ -624,6 +753,13 @@ export const messageRepo = {
   },
   async countByChat(chatId: ChatId): Promise<number> {
     return db.messages.where('chat_id').equals(chatId).count();
+  },
+  async mutateIfChatEmpty(chatId: ChatId, mutation: () => boolean): Promise<boolean> {
+    return db.transaction('rw', db.messages, async () => {
+      const messageCount = await db.messages.where('chat_id').equals(chatId).count();
+      if (messageCount !== 0) return false;
+      return mutation();
+    });
   },
   async create(input: MessageCreateInput): Promise<Message> {
     const syncOwner = captureSyncQueueOwner();
@@ -746,6 +882,147 @@ export type TaskListFilter = {
 
 /** Statuses considered "open" - i.e. still actionable and not completed/cancelled. */
 const OPEN_STATUSES: TaskStatus[] = ['open', 'in_progress', 'blocked'];
+
+export type ReminderMutationScope = {
+  taskId: TaskId;
+  reminderId: ReminderId;
+  claimId: string;
+  expectedWorkspaceId: WorkspaceId;
+  getActiveWorkspaceId: () => WorkspaceId | null;
+  now: number;
+};
+
+export type ReminderClaimInput = ReminderMutationScope & {
+  expiresAt: number;
+};
+
+function reminderWithoutClaim(reminder: Reminder): Reminder {
+  const { delivery_claim: _claim, ...rest } = reminder;
+  return rest;
+}
+
+function ownsReminderClaim(reminder: Reminder | undefined, claimId: string): reminder is Reminder {
+  return reminder?.status === 'scheduled' && reminder.delivery_claim?.id === claimId;
+}
+
+/**
+ * A transaction-scoped reminder CAS. Separate renderer connections serialize
+ * on the shared IndexedDB task row; the process-local delivery Set is only an
+ * optimization and is never the ownership authority.
+ */
+export function createReminderClaimRepository(database?: JarvisDexie) {
+  const resolveDatabase = (): JarvisDexie => database ?? db;
+  const syncPersistedTask = async (
+    task: Task | undefined,
+    activeDatabase: JarvisDexie,
+  ): Promise<void> => {
+    if (task && activeDatabase === db) {
+      await syncUpdate('tasks', task, captureSyncQueueOwner());
+    }
+  };
+
+  return {
+    async claim(input: ReminderClaimInput): Promise<Task | undefined> {
+      const activeDatabase = resolveDatabase();
+      const claimed = await activeDatabase.transaction('rw', activeDatabase.tasks, async () => {
+        const task = await activeDatabase.tasks.get(input.taskId);
+        const reminder = task?.reminders.find((candidate) => candidate.id === input.reminderId);
+        if (
+          !task ||
+          task.workspace_id !== input.expectedWorkspaceId ||
+          input.getActiveWorkspaceId() !== input.expectedWorkspaceId ||
+          !reminder ||
+          reminder.status !== 'scheduled' ||
+          reminder.fires_at > input.now ||
+          (reminder.delivery_claim && reminder.delivery_claim.expires_at > input.now)
+        ) {
+          return undefined;
+        }
+
+        const updated: Task = {
+          ...task,
+          reminders: task.reminders.map((candidate) =>
+            candidate.id === input.reminderId
+              ? {
+                  ...candidate,
+                  delivery_claim: {
+                    id: input.claimId,
+                    claimed_at: input.now,
+                    expires_at: input.expiresAt,
+                  },
+                }
+              : candidate,
+          ),
+          updated_at: input.now,
+        };
+        await activeDatabase.tasks.put(updated);
+        return updated;
+      });
+      await syncPersistedTask(claimed, activeDatabase);
+      return claimed;
+    },
+
+    async finalize(input: ReminderMutationScope): Promise<Task | undefined> {
+      const activeDatabase = resolveDatabase();
+      const finalized = await activeDatabase.transaction('rw', activeDatabase.tasks, async () => {
+        const task = await activeDatabase.tasks.get(input.taskId);
+        const reminder = task?.reminders.find((candidate) => candidate.id === input.reminderId);
+        if (
+          !task ||
+          task.workspace_id !== input.expectedWorkspaceId ||
+          input.getActiveWorkspaceId() !== input.expectedWorkspaceId ||
+          !ownsReminderClaim(reminder, input.claimId)
+        ) {
+          return undefined;
+        }
+
+        const updated: Task = {
+          ...task,
+          reminders: task.reminders.map((candidate) =>
+            candidate.id === input.reminderId
+              ? { ...reminderWithoutClaim(candidate), status: 'fired' as const }
+              : candidate,
+          ),
+          updated_at: input.now,
+        };
+        await activeDatabase.tasks.put(updated);
+        return updated;
+      });
+      await syncPersistedTask(finalized, activeDatabase);
+      return finalized;
+    },
+
+    async release(input: ReminderMutationScope): Promise<Task | undefined> {
+      const activeDatabase = resolveDatabase();
+      const released = await activeDatabase.transaction('rw', activeDatabase.tasks, async () => {
+        const task = await activeDatabase.tasks.get(input.taskId);
+        const reminder = task?.reminders.find((candidate) => candidate.id === input.reminderId);
+        if (
+          !task ||
+          task.workspace_id !== input.expectedWorkspaceId ||
+          input.getActiveWorkspaceId() !== input.expectedWorkspaceId ||
+          !ownsReminderClaim(reminder, input.claimId)
+        ) {
+          return undefined;
+        }
+
+        const updated: Task = {
+          ...task,
+          reminders: task.reminders.map((candidate) =>
+            candidate.id === input.reminderId ? reminderWithoutClaim(candidate) : candidate,
+          ),
+          updated_at: input.now,
+        };
+        await activeDatabase.tasks.put(updated);
+        return updated;
+      });
+      await syncPersistedTask(released, activeDatabase);
+      return released;
+    },
+  };
+}
+
+export const reminderClaimRepo = createReminderClaimRepository();
 
 async function updateTaskWithOwner(
   id: TaskId,

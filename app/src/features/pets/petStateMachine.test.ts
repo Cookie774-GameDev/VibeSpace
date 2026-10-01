@@ -5,6 +5,7 @@ import {
   clickOpensPanelAndWakes,
   createInitialPetState,
   reducePetEvent,
+  type PetMachineState,
 } from './petStateMachine';
 
 describe('petStateMachine', () => {
@@ -47,6 +48,18 @@ describe('petStateMachine', () => {
     expect(s.anim).toBe('idleFun');
     s = reducePetEvent(s, { type: 'idle_fun_done' });
     expect(s.anim).toBe('idlePrimary');
+  });
+
+  it('continues idle animations while the panel is open', () => {
+    let s: PetMachineState = {
+      ...createInitialPetState(),
+      panelOpen: true,
+      welcomePlayed: true,
+      anim: 'idlePrimary',
+    };
+    expect(canScheduleIdleFun(s)).toBe(true);
+    s = reducePetEvent(s, { type: 'idle_fun_tick' });
+    expect(s.anim).toBe('idleFun');
   });
 
   it('sleep transition enters sleepingLoop until click wakes + opens panel', () => {

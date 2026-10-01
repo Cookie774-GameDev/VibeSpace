@@ -10,7 +10,9 @@ describe('App VibeSpace Access composition', () => {
     const desktopLifecycle = source.indexOf('function useDesktopReopenLifecycle', authBoundary);
     const bootstrapSource = source.slice(bootstrap, authBoundary);
     const authBoundarySource = source.slice(authBoundary, desktopLifecycle);
-    const accessHost = bootstrapSource.indexOf('<InstalledAccessAppHost>');
+    const accessHost = bootstrapSource.indexOf(
+      '<InstalledAccessAppHost authenticatedBoundary={WorkspaceRuntimeBoundary}>',
+    );
     const workspace = bootstrapSource.indexOf('<WorkspaceRoot />', accessHost);
     const accessClose = bootstrapSource.indexOf('</InstalledAccessAppHost>', workspace);
 
@@ -22,6 +24,31 @@ describe('App VibeSpace Access composition', () => {
     expect(accessHost).toBeGreaterThan(-1);
     expect(workspace).toBeGreaterThan(accessHost);
     expect(accessClose).toBeGreaterThan(workspace);
+  });
+
+  it('keeps the account runtime owner outside the account-keyed workspace shell', () => {
+    const runtimeBoundary = source.indexOf('function WorkspaceRuntimeBoundary');
+    const workspaceRoot = source.indexOf('function WorkspaceRoot()', runtimeBoundary);
+    const workspaceEnd = source.indexOf('const defaultRuntimeProfileQuery', workspaceRoot);
+    const runtimeBoundarySource = source.slice(runtimeBoundary, workspaceRoot);
+    const workspaceSource = source.slice(workspaceRoot, workspaceEnd);
+
+    expect(runtimeBoundary).toBeGreaterThan(-1);
+    expect(workspaceRoot).toBeGreaterThan(runtimeBoundary);
+    expect(workspaceEnd).toBeGreaterThan(workspaceRoot);
+    expect(runtimeBoundarySource).toContain(
+      'const { commandCenterBinding, runtimeListenerReady } = useBoot();',
+    );
+    expect(runtimeBoundarySource).toContain('runtimeListenerReady ? children : null');
+    expect(runtimeBoundarySource).toContain(
+      '<JarvisCommandCenterProvider value={commandCenterBinding}>',
+    );
+    expect(runtimeBoundarySource).toContain(
+      '<KernelSmokeReconstructedLiveEvidenceHost binding={commandCenterBinding} />',
+    );
+    expect(workspaceSource).not.toContain('useBoot()');
+    expect(workspaceSource).not.toContain('<JarvisCommandCenterProvider');
+    expect(workspaceSource).not.toContain('<KernelSmokeReconstructedLiveEvidenceHost');
   });
 
   it('keeps dictation and pet windows ahead of the main access-gated bootstrap', () => {

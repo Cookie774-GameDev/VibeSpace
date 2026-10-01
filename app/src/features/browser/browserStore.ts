@@ -60,12 +60,19 @@ const SAFE_RESULTS = new Set([
   'Denied by local browser stop.',
   'Browser Operator execution is unavailable until canonical approval is active.',
   'Browser Operator review expired.',
+  'Approved browser operation completed and was observed.',
+  'Canonical browser operation failed before verified settlement.',
+  'Browser operation was cancelled before verified settlement.',
+  'Browser Operator canonical parent authority is unavailable.',
 ]);
 
 function safeResult(status: Exclude<BrowserReviewedActionStatus, 'pending'>, result?: string) {
   if (result && SAFE_RESULTS.has(result)) return result;
   if (status === 'denied') return 'Denied by user.';
   if (status === 'expired') return 'Browser Operator review expired.';
+  if (status === 'completed') return 'Approved browser operation completed and was observed.';
+  if (status === 'failed') return 'Canonical browser operation failed before verified settlement.';
+  if (status === 'cancelled') return 'Browser operation was cancelled before verified settlement.';
   return 'Browser Operator execution is unavailable until canonical approval is active.';
 }
 

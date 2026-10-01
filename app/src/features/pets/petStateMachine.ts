@@ -65,10 +65,7 @@ export function createInitialPetState(): PetMachineState {
   };
 }
 
-export function reducePetEvent(
-  state: PetMachineState,
-  event: PetDomainEvent,
-): PetMachineState {
+export function reducePetEvent(state: PetMachineState, event: PetDomainEvent): PetMachineState {
   if (state.shutdown && event.type !== 'boot') return state;
 
   switch (event.type) {
@@ -113,7 +110,7 @@ export function reducePetEvent(
       };
 
     case 'idle_fun_tick': {
-      if (state.dragging || state.panelOpen || state.sleeping || state.shutdown) return state;
+      if (state.dragging || state.sleeping || state.shutdown) return state;
       if (state.anim !== 'idlePrimary') return state;
       return { ...state, anim: 'idleFun' };
     }
@@ -176,7 +173,6 @@ export function canScheduleIdleFun(state: PetMachineState): boolean {
   return (
     !state.shutdown &&
     !state.dragging &&
-    !state.panelOpen &&
     !state.sleeping &&
     state.anim === 'idlePrimary' &&
     state.welcomePlayed

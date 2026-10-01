@@ -95,7 +95,10 @@ function copyEntitlements(entitlements: JarvisEntitlementSnapshot): JarvisEntitl
   };
 }
 
-function copyActionJsonSchema(schema: Readonly<JsonSchema>): JarvisActionJsonSchema {
+function copyActionJsonSchema(schema: Readonly<JsonSchema>, depth = 0): JarvisActionJsonSchema {
+  if (depth > 16 || (schema.oneOf && (schema.oneOf.length < 1 || schema.oneOf.length > 8))) {
+    throw new JarvisCapabilitySnapshotError();
+  }
   const enumValues = (schema as Readonly<JsonSchema> & { enum?: readonly string[] }).enum;
   return {
     type: schema.type,
@@ -106,7 +109,7 @@ function copyActionJsonSchema(schema: Readonly<JsonSchema>): JarvisActionJsonSch
           properties: Object.fromEntries(
             Object.entries(schema.properties).map(([key, property]) => [
               key,
-              copyActionJsonSchema(property),
+              copyActionJsonSchema(property, depth + 1),
             ]),
           ),
         }),
@@ -115,6 +118,9 @@ function copyActionJsonSchema(schema: Readonly<JsonSchema>): JarvisActionJsonSch
       ? {}
       : { additionalProperties: schema.additionalProperties }),
     ...(Array.isArray(enumValues) ? { enum: [...enumValues] } : {}),
+    ...(schema.oneOf === undefined
+      ? {}
+      : { oneOf: schema.oneOf.map((branch) => copyActionJsonSchema(branch, depth + 1)) }),
   };
 }
 

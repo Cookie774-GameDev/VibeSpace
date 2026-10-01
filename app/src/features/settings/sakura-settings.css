@@ -1,4 +1,5 @@
 html[data-theme='sakura'] .mc7f-settings-modal {
+  z-index: 90;
   border-color: hsl(var(--sakura-ivory-hsl) / var(--sakura-essential-border-alpha));
   border-radius: var(--sakura-radius-shell);
   background: var(--sakura-panel-strong-fallback);
@@ -8,6 +9,7 @@ html[data-theme='sakura'] .mc7f-settings-modal {
 }
 
 html[data-theme='sakura'] [data-sakura-overlay='settings-modal'] {
+  z-index: 89;
   background: hsl(var(--sakura-night-hsl) / 0.64);
 }
 
@@ -90,6 +92,15 @@ html[data-theme='sakura'] .mc7f-settings-modal [role='tabpanel'] h3 {
 html[data-theme='sakura'] .mc7f-settings-modal [role='tabpanel'] section,
 html[data-theme='sakura'] .mc7f-settings-modal [role='tabpanel'] article {
   border-color: hsl(var(--sakura-ivory-hsl) / var(--sakura-decorative-border-alpha));
+}
+
+html[data-theme='sakura'] .mc7f-settings-modal .sakura-appearance-effects {
+  background:
+    linear-gradient(145deg, hsl(var(--sakura-ivory-hsl) / 0.08), transparent),
+    hsl(var(--sakura-night-2-hsl) / 0.76);
+  box-shadow:
+    inset 0 1px 0 hsl(var(--sakura-ivory-hsl) / 0.08),
+    var(--shadow-soft);
 }
 
 html[data-theme='sakura'] .mc7f-settings-modal input,

@@ -7,8 +7,8 @@
  * Why a popover over a side panel:
  *   - Pane chrome is tight (28 px tall). Anything taller is too much
  *     visual weight for an "occasionally used" affordance.
- *   - The list itself is short — the cap is small and the typical use
- *     is two or three files (a spec + a target source file).
+ *   - The list scrolls; there is no small product cap. Typical use is
+ *     still a handful of files, but large pastes stay attached.
  *   - The popover keeps the data spatially close to the pane so the
  *     user sees which pane the files are bound to without reading.
  *
@@ -46,9 +46,6 @@ interface ConnectedFilesButtonProps {
   onChange: (next: string[]) => void;
 }
 
-/** Hard cap so the system prompt doesn't balloon. */
-const MAX_FILES = 8;
-
 /** Soft heuristic — anything that doesn't smell like an absolute path is rejected client-side. */
 function looksAbsolute(p: string): boolean {
   // POSIX: starts with `/`. Windows: drive letter (`C:\` or `C:/`) or UNC (`\\`).
@@ -75,7 +72,6 @@ export function ConnectedFilesButton({ files, onChange }: ConnectedFilesButtonPr
   const setRoute = useUIStore((s) => s.setRoute);
 
   const count = files.length;
-  const atCap = count >= MAX_FILES;
 
   const addCandidates = (candidates: string[]) => {
     setError(null);
@@ -101,15 +97,12 @@ export function ConnectedFilesButton({ files, onChange }: ConnectedFilesButtonPr
       );
       return;
     }
-    const next = [...files, ...accepted].slice(0, MAX_FILES);
-    onChange(next);
+    onChange([...files, ...accepted]);
     setDraft('');
     if (rejected.length > 0) {
       setError(
         `${rejected.length} path${rejected.length === 1 ? '' : 's'} rejected (not absolute).`,
       );
-    } else if (next.length === MAX_FILES && accepted.length < candidates.length) {
-      setError(`Capped at ${MAX_FILES} files.`);
     }
   };
 
@@ -118,7 +111,6 @@ export function ConnectedFilesButton({ files, onChange }: ConnectedFilesButtonPr
   };
 
   const handleChooseFiles = async () => {
-    if (atCap) return;
     const picked = await chooseProjectFiles(true);
     if (picked.length === 0) {
       setError('Use the path field, or run the desktop app for native picking.');
@@ -168,7 +160,7 @@ export function ConnectedFilesButton({ files, onChange }: ConnectedFilesButtonPr
           {count > 0 && (
             <span
               aria-hidden
-              className="absolute -right-1 -top-1 inline-flex h-3 min-w-3 items-center justify-center rounded-full bg-accent-copper px-0.5 text-[9px] font-mono text-background leading-none"
+              className="pointer-events-none absolute right-0 top-0 z-10 inline-flex h-3 min-w-3 max-w-full items-center justify-center rounded-full bg-accent-copper px-0.5 text-[8px] font-mono leading-none text-background"
             >
               {count}
             </span>
@@ -179,7 +171,7 @@ export function ConnectedFilesButton({ files, onChange }: ConnectedFilesButtonPr
         <div className="flex items-center justify-between gap-2 border-b border-border bg-paper-soft px-3 py-2">
           <div className="text-ui-strong text-foreground">Connected files</div>
           <div className="text-metadata text-muted-foreground">
-            {count}/{MAX_FILES}
+            {count === 0 ? 'None' : `${count} attached`}
           </div>
         </div>
 
@@ -229,10 +221,7 @@ export function ConnectedFilesButton({ files, onChange }: ConnectedFilesButtonPr
                   handleAdd();
                 }
               }}
-              placeholder={
-                atCap ? `Cap reached (${MAX_FILES})` : 'C:\\path\\to\\file.ts or /abs/path'
-              }
-              disabled={atCap}
+              placeholder="C:\\path\\to\\file.ts or /abs/path"
               className="font-mono text-metadata"
               spellCheck={false}
               autoComplete="off"
@@ -241,7 +230,6 @@ export function ConnectedFilesButton({ files, onChange }: ConnectedFilesButtonPr
               variant="secondary"
               size="sm"
               onClick={() => void handleChooseFiles()}
-              disabled={atCap}
               className="shrink-0 gap-1"
             >
               <FolderOpen className="h-3 w-3" />
@@ -251,7 +239,7 @@ export function ConnectedFilesButton({ files, onChange }: ConnectedFilesButtonPr
               variant="accent"
               size="sm"
               onClick={handleAdd}
-              disabled={atCap || draft.trim().length === 0}
+              disabled={draft.trim().length === 0}
               className="shrink-0 gap-1"
             >
               <Plus className="h-3 w-3" />

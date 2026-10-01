@@ -56,11 +56,11 @@ describe('AllAboutMe profile core', () => {
     expect(block).toContain('truncated by VibeSpace');
   });
 
-  it('updates after every 10 new user messages only', () => {
-    expect(ALL_ABOUT_ME_UPDATE_INTERVAL).toBe(10);
-    expect(shouldUpdateAllAboutMe({ totalUserMessages: 9, lastUpdatedAtMessageCount: 0 })).toBe(false);
-    expect(shouldUpdateAllAboutMe({ totalUserMessages: 10, lastUpdatedAtMessageCount: 0 })).toBe(true);
-    expect(shouldUpdateAllAboutMe({ totalUserMessages: 19, lastUpdatedAtMessageCount: 10 })).toBe(false);
-    expect(shouldUpdateAllAboutMe({ totalUserMessages: 20, lastUpdatedAtMessageCount: 10 })).toBe(true);
+  it('updates after every 20 new user messages only', () => {
+    expect(ALL_ABOUT_ME_UPDATE_INTERVAL).toBe(20);
+    expect(shouldUpdateAllAboutMe({ totalUserMessages: 19, lastUpdatedAtMessageCount: 0 })).toBe(false);
+    expect(shouldUpdateAllAboutMe({ totalUserMessages: 20, lastUpdatedAtMessageCount: 0 })).toBe(true);
+    expect(shouldUpdateAllAboutMe({ totalUserMessages: 39, lastUpdatedAtMessageCount: 20 })).toBe(false);
+    expect(shouldUpdateAllAboutMe({ totalUserMessages: 40, lastUpdatedAtMessageCount: 20 })).toBe(true);
   });
 });

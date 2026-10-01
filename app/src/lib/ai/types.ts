@@ -10,6 +10,7 @@
  * Nothing else in `lib/ai/` should redefine these.
  */
 import type { Agent, ProviderId } from '@/types';
+import { COST_RATES_META, evaluateFreshness } from '@/lib/dynamic-data';
 
 /**
  * Role of a message as far as the LLM is concerned.
@@ -220,6 +221,9 @@ export interface CostRates {
  * row if a specific model isn't listed. Numbers are intentionally rough; the
  * meter is for the user's awareness, not billing.
  */
+/** Last verified date + source for COST_RATES (see daily dynamic data maintenance). */
+export { COST_RATES_META };
+
 export const COST_RATES: Record<string, CostRates> = {
   // Anthropic
   'anthropic:claude-3-5-sonnet-20241022': { input_per_m: 3, output_per_m: 15 },
@@ -284,6 +288,26 @@ export function estimateCost(
 ): number {
   const r = ratesFor(provider, model);
   return (inputTokens / 1_000_000) * r.input_per_m + (outputTokens / 1_000_000) * r.output_per_m;
+}
+
+/**
+ * Estimate with freshness metadata. When rates are stale or a refresh failed,
+ * `isCurrent` is false so UI must not present the number as live billing.
+ */
+export function estimateCostWithFreshness(
+  provider: ProviderId,
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  now: Date = new Date(),
+  options: { refreshFailed?: boolean } = {},
+): { costUsd: number; isCurrent: boolean; lastUpdated: string } {
+  const freshness = evaluateFreshness(COST_RATES_META, now, options);
+  return {
+    costUsd: estimateCost(provider, model, inputTokens, outputTokens),
+    isCurrent: freshness.isCurrent,
+    lastUpdated: COST_RATES_META.lastUpdated,
+  };
 }
 
 /**

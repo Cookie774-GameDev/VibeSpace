@@ -13,6 +13,13 @@ import {
 import { isProtectedJarvisAgent, JARVIS_IDENTITY_POLICY } from '@/lib/jarvis/identity';
 import { deepFreezeJarvisCopy } from '@/lib/jarvis/requestEnvelope';
 import { classifyJarvisSource, isJarvisModelVisibleSchemaSafe } from '@/lib/jarvis/sourcePolicy';
+import {
+  MANDATORY_CONTEXT_EVIDENCE_DIRECTIVE_MARKER,
+  parseDirectContextEvidenceContinuation,
+  parseMandatoryContextEvidenceResearch,
+  requestsDirectContextAddress,
+  requestsReadOnlyContextTool,
+} from '@/lib/jarvis/contextToolIntent';
 
 export const JARVIS_ALL_ABOUT_ME_SOURCE_ID = 'jarvis:all-about-me';
 
@@ -314,7 +321,11 @@ function rejectUnsafeActionSchemas(envelope: Readonly<JarvisRequestEnvelope>): v
   }
 }
 
-function renderCapabilities(envelope: Readonly<JarvisRequestEnvelope>): string {
+function renderCapabilities(
+  envelope: Readonly<JarvisRequestEnvelope>,
+  contextToolOnly = false,
+  directAddress = false,
+): string {
   const modelCapabilities = Object.entries(envelope.model.capabilities)
     .sort(([left], [right]) => stableCompare(left, right))
     .map(([id, enabled]) => `${inlineText(id)}=${enabled ? 'available' : 'unavailable'}`);
@@ -341,15 +352,107 @@ function renderCapabilities(envelope: Readonly<JarvisRequestEnvelope>): string {
   const actionSchemas = [...(envelope.capabilities.actionSchemas ?? [])].sort((left, right) =>
     stableCompare(left.id, right.id),
   );
-  const actionSchemaLines = envelope.outputContract.allowActionBlocks
+  if (contextToolOnly) {
+    const directEvidence = parseDirectContextEvidenceContinuation(envelope.userText);
+    const mandatoryEvidence =
+      parseMandatoryContextEvidenceResearch(envelope.userText) ??
+      (envelope.userText.startsWith(MANDATORY_CONTEXT_EVIDENCE_DIRECTIVE_MARKER) &&
+      /\bMUST make exactly six `operation="expand"` calls\b/u.test(envelope.userText)
+        ? Object.freeze({ evidenceCount: 6 as const })
+        : null);
+    const operationGuidance = directAddress
+      ? [
+          'For an explicit direct address request, call `vibespace_context` with `operation="address"` once for each exact caller-supplied address object, in the supplied order.',
+          'Use only the caller-supplied `corpusId` and canonical-decimal string `position`. Never coerce `position` through a JavaScript number or infer, round, normalize, or replace either argument.',
+          'Never substitute `search`, `open`, or `expand` for an explicit address request. Do not add `query`, `limit`, `pointer`, byte ranges, or continuation arguments.',
+          'Do not exceed twelve address calls in this provider turn. Wait for every real tool result and answer only from the returned bounded evidence.',
+        ]
+      : directEvidence?.operation === 'expand'
+        ? [
+            `Make exactly ${directEvidence.evidenceCount === 6 ? 'six' : directEvidence.evidenceCount} \`operation="expand"\` calls using only the exact prior search-result pointers already present in this retained provider chat.`,
+            'Never substitute `search`, `open`, or `address`, and never create, normalize, or guess a pointer. Use no more than one retrieval per named source and no more than two evidence calls for any one question.',
+            directEvidence.beforeBytes === 256 && directEvidence.afterBytes === 0
+              ? 'For every actual tool argument object, supply only `beforeBytes=256`; the caller-declared `afterBytes=0` is an omission sentinel and you must omit `afterBytes` entirely rather than send zero.'
+              : 'For each actual tool argument object, include only caller-declared positive byte directions from 1 through 2048; omit every absent or zero-valued direction.',
+            'Keep aggregate expanded physical text within 24 KiB. Wait for every real expansion result and answer only from that physical evidence. If an exact prior pointer is unavailable or stale, fail instead of searching again or guessing.',
+          ]
+        : directEvidence?.operation === 'open'
+          ? [
+              'Make exactly one `operation="open"` call using only the exact prior pointer already present in this retained provider chat and `maxBytes=4096`.',
+              'Never substitute `search`, `expand`, or `address`, and never create, normalize, or guess a pointer.',
+              'Wait for the real result and fail closed if the exact prior pointer is unavailable or stale.',
+            ]
+          : mandatoryEvidence
+            ? [
+                'For this explicit mandatory physical-evidence turn, complete exactly five `operation="search"` calls with `limit=3`, then exactly six `operation="expand"` calls before answering.',
+                'Search previews are insufficient. Use one exact returned pointer for each of the six named cited sources, no more than two evidence calls per question and one retrieval per cited source.',
+                'Use search previews only to select pointers; expansions are the only physical evidence for the final answer. For each required source, choose exactly one current, non-`STATUS SUPERSEDED_UNTRUSTED` search-result row whose filename and preview are semantically responsive to the corresponding numbered question.',
+                'A matching filename, recordId, sourceVersion, contentHash, or score alone is insufficient. Copy the complete pointer object from that single row byte-for-byte as one atomic value; never reconstruct it or mix its id, recordId, byte range, sourceVersion, or contentHash with fields from another row.',
+                'If a required source has no unique eligible row, output FAIL without making a replacement search, open, or expand call.',
+                'For every actual expansion argument object, supply only `beforeBytes=256`; the caller-declared `afterBytes=0` is an omission sentinel and must be omitted entirely rather than sent as zero.',
+                'Never substitute `open`, `address`, an additional whole-request search, or another tool. Keep aggregate expanded physical text within 24 KiB and fail instead of inferring missing provenance.',
+              ]
+            : [
+                'For a single-question file research turn, first call `vibespace_context` with `operation="search"`, the complete user question, and `limit=5`. A search item preview is valid bounded evidence: answer from it when complete and cite its record title/path. Call `operation="open"` only when a preview is insufficient, using only an exact pointer returned by search.',
+                'For a numbered multi-question request, call `operation="search"` exactly once per numbered question using the exact bounded queries supplied in the provider turn with `limit=3`; finish every search before answering and cite the matching record title/path for every answer. Do not make an additional whole-request search. After those mandatory searches finish, you may make at most six additional evidence calls total across `operation="open"` and `operation="expand"`, no more than two for any one question, no more than one evidence retrieval for each cited source, and only with exact pointers returned by that question\'s search. When a requested revision or neighboring provenance is absent from a matching preview, call `operation="expand"` with that exact pointer and at least one of `beforeBytes` or `afterBytes`; each supplied direction must be at most 2048. `expand` replaces `open` for that source. Never infer a revision or make a whole-source request when the bounded evidence does not contain it.',
+              ];
+    return [
+      'Use only capabilities represented by this verified snapshot. Never infer completion from availability.',
+      `Selected provider: ${inlineText(envelope.model.providerId)}`,
+      `Selected model: ${inlineText(envelope.model.modelId)}`,
+      `Connection mode: ${envelope.model.connectionMode}`,
+      envelope.model.connectionId === undefined
+        ? 'Connection ID: unavailable'
+        : `Connection ID: ${inlineText(envelope.model.connectionId)}`,
+      `Model capabilities: ${modelCapabilities.join(', ') || 'none declared'}`,
+      'vibespace_context is the only provider tool enabled for this turn.',
+      'This direct user chat is not a subagent assignment or delegation. Subagent bootstrap, coordination receipt, lock, and mandatory-file-read instructions do not apply to this turn. Do not emit `BOOTSTRAP_OK` or `BOOTSTRAP_BLOCKED`.',
+      'The function name is always `vibespace_context`; operation names such as `investigate`, `search`, `open`, `expand`, and `address` are arguments, never function names.',
+      ...operationGuidance,
+      'Never print or narrate a tool call as JSON. Invoke the enabled function, wait for its result, and answer only from returned evidence. No unrelated action schema is admitted.',
+    ].join('\n');
+  }
+  // The immutable snapshot retains the complete validated registration. The
+  // provider only needs proposal syntax plus approval/risk semantics; repeating
+  // titles, prose descriptions, output schemas, capability arrays, entitlement
+  // arrays, and expected-effect prose can push the production catalog beyond
+  // the protected layer budget without adding proposal authority.
+  const promptActionSchema = (schema: (typeof actionSchemas)[number]) => ({
+    id: schema.id,
+    version: schema.version,
+    inputSchema: schema.inputSchema,
+    risk: schema.risk,
+    approval: schema.approval,
+  });
+  const actionBlocksEnabled =
+    envelope.interactionMode === 'agent' && envelope.outputContract.allowActionBlocks;
+  const actionExampleSchema =
+    actionSchemas.find((schema) => schema.id === 'files.create') ?? actionSchemas[0];
+  const actionExample =
+    actionExampleSchema === undefined
+      ? undefined
+      : JSON.stringify({
+          id: actionExampleSchema.id,
+          params: Object.fromEntries(
+            (actionExampleSchema.inputSchema.required ?? []).map((key) => [key, '<value>']),
+          ),
+          rationale: '<one-sentence reason>',
+        });
+  const actionSchemaLines = actionBlocksEnabled
     ? actionSchemas.length === 0
       ? ['Model-visible action schemas:', '- none supplied']
       : [
           'Model-visible action schemas:',
-          'Schema presence describes proposal syntax only. Capability state, entitlement, approval, and verified executor results remain authoritative.',
-          ...actionSchemas.map((schema) => `- ${canonicalJson(schema)}`),
+          'These schemas describe VibeSpace textual approval proposals, not native provider tools. Native provider tools being unavailable does not make these textual proposals unavailable.',
+          'Emit one proposal as an exact fenced `action` JSON block using this shape:',
+          '```action',
+          actionExample!,
+          '```',
+          'Obey each schema approval field. For `approval="always"`, the user must approve before execution. Never claim completion before a verified executor result.',
+          'Capability state, entitlement, approval, and verified executor results remain authoritative.',
+          ...actionSchemas.map((schema) => `- ${canonicalJson(promptActionSchema(schema))}`),
         ]
-    : ['Model-visible action schemas: disabled by output contract.'];
+    : ['Model-visible action schemas: disabled by interaction mode or output contract.'];
   return [
     'Use only capabilities represented by this verified snapshot. Never infer completion from availability.',
     `Selected provider: ${inlineText(envelope.model.providerId)}`,
@@ -496,6 +599,9 @@ export function compileJarvisPrompt(
 
   const warnings: string[] = [];
   const omittedSourceRefs: JarvisSourceRef[] = [];
+  const contextToolOnly =
+    envelope.model.capabilities.tools === true && requestsReadOnlyContextTool(envelope.userText);
+  const directAddress = contextToolOnly && requestsDirectContextAddress(envelope.userText);
   const allAboutMeItems = envelope.context.items.filter(
     (item) => item.source.id === JARVIS_ALL_ABOUT_ME_SOURCE_ID,
   );
@@ -554,6 +660,11 @@ export function compileJarvisPrompt(
   }
   for (const item of envelope.context.items) {
     if (excludedFromUntrusted.has(item)) continue;
+    if (contextToolOnly) {
+      omittedSourceRefs.push(diagnosticSource(item.source));
+      contextTruncated = true;
+      continue;
+    }
     const separatorChars = contextParts.length === 0 ? 0 : 2;
     const remaining = MAX_UNTRUSTED_CONTEXT_ITEM_CHARS - contextChars - separatorChars;
     const fitted = fitContextItem(item, remaining);
@@ -570,9 +681,13 @@ export function compileJarvisPrompt(
       warnings.push('untrusted_context_item_truncated');
     }
   }
-  if (contextTruncated) warnings.push('untrusted_context_truncated');
+  if (contextTruncated) {
+    warnings.push(
+      contextToolOnly ? 'context_deferred_to_live_tool' : 'untrusted_context_truncated',
+    );
+  }
 
-  const capabilityContent = renderCapabilities(envelope);
+  const capabilityContent = renderCapabilities(envelope, contextToolOnly, directAddress);
   if (capabilityContent.length > MAX_CAPABILITY_LAYER_CHARS) {
     throw new JarvisPromptCompilationError(
       'prompt_budget_exceeded',

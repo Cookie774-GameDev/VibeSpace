@@ -37,8 +37,8 @@ export {
   syncVoiceModuleOpenState,
   stopAllVoiceOutput,
   warmVoiceEngine,
-  ensureKokoroReadyForSpeech,
-  bootstrapKokoroVoiceOnLaunch,
+  ensureJarvisReadyForSpeech,
+  bootstrapJarvisVoiceOnLaunch,
 } from './voiceRouter';
 export { createStreamingVoiceSession, StreamingVoiceSession } from './streamingVoice';
 export type { SpeakTextOptions } from './speechSynthesis';
@@ -50,12 +50,7 @@ export { TtsService } from './TtsService';
 export type { SpeakOptions, VoiceUsageSnapshot, TtsStatus } from './TtsService';
 export { ModelManager, resolveModelPath, detectOS } from './modelManager';
 export type { ModelManifest, ModelStatus, DownloadProgress, OS } from './modelManager';
-export {
-  cleanTextForSpeech,
-  chunkText,
-  prepareForSpeech,
-  looksLikeRawData,
-} from './textCleanup';
+export { cleanTextForSpeech, chunkText, prepareForSpeech, looksLikeRawData } from './textCleanup';
 export {
   VOICE_PLANS,
   VOICE_PROVIDERS,
@@ -68,12 +63,7 @@ export {
   FALLBACK_MESSAGES,
   COST_PER_SECOND_USD,
 } from './voicePlans';
-export type {
-  VoicePlanId,
-  VoiceProviderId,
-  VoiceTtsPreset,
-  VoicePresetDef,
-} from './voicePlans';
+export type { VoicePlanId, VoiceProviderId, VoiceTtsPreset, VoicePresetDef } from './voicePlans';
 
 // Stores
 export { useVoiceStore } from './store';

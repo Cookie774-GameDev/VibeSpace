@@ -16,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png", "macos-private-api"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png", "macos-private-api", "unstable"] }
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
@@ -32,6 +32,7 @@ serde_json = "1"
 url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 sha2 = "0.10"
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 cap-std = "=3.4.5"
 cap-fs-ext = "=3.4.5"
@@ -45,16 +46,14 @@ rayon-core = "=1.12.1"
 # PTY terminal backend (slice 1 of Wave 4 — multi-pane terminal grid).
 portable-pty = "0.8"
 nanoid = "0.4"
-ort = { version = "2.0.0-rc.9", features = ["ndarray"], optional = true }
-misaki-rs = { version = "0.3.0", default-features = false, optional = true }
-hound = { version = "3.5.1", optional = true }
-ndarray = { version = "0.16", optional = true }
-ndarray-npy = { version = "0.9.1", default-features = false, features = ["npz", "compressed_npz"], optional = true }
+piper-rs = { version = "0.2.0", optional = true }
+hound = "3.5.1"
 
 [target.'cfg(unix)'.dependencies]
 users = { version = "=0.11.0", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = "=0.38.2"
 winreg = "0.52"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
@@ -65,6 +64,7 @@ windows = { version = "0.61", features = [
     "Win32_System_Environment",
     "Win32_System_JobObjects",
     "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Time",
     "Win32_UI_Shell",
@@ -96,5 +96,5 @@ opt-level = "s"
 strip = "symbols"
 
 [features]
-default = []
-kokoro = ["dep:ort", "dep:misaki-rs", "dep:hound", "dep:ndarray", "dep:ndarray-npy"]
+default = ["jarvis-voice"]
+jarvis-voice = ["dep:piper-rs"]

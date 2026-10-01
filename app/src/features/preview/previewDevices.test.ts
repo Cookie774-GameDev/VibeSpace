@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { DEVICE_PRESETS, getDevicePreset, orientSize } from './previewDevices';
+import {
+  DEVICE_PRESETS,
+  defaultOrientationForPreset,
+  getDevicePreset,
+  orientSize,
+} from './previewDevices';
 
 describe('device presets', () => {
   it('uses accurate CSS viewport sizes', () => {
@@ -29,5 +34,13 @@ describe('device presets', () => {
       expect(d.width).toBeGreaterThan(0);
       expect(d.height).toBeGreaterThan(0);
     }
+  });
+
+  it('defaults laptop and desktop previews to landscape without rotating mobile presets', () => {
+    expect(defaultOrientationForPreset(getDevicePreset('small-laptop'))).toBe('landscape');
+    expect(defaultOrientationForPreset(getDevicePreset('macbook'))).toBe('landscape');
+    expect(defaultOrientationForPreset(getDevicePreset('desktop-1080'))).toBe('landscape');
+    expect(defaultOrientationForPreset(getDevicePreset('ipad-mini'))).toBe('portrait');
+    expect(defaultOrientationForPreset(getDevicePreset('iphone-15'))).toBe('portrait');
   });
 });

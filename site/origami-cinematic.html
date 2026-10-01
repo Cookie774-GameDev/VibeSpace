@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4ede1">
+  <meta name="description" content="Travel through VibeSpace as a living handcrafted origami world.">
+  <title>VibeSpace — The Origami World</title>
+  <link rel="icon" href="images/vibespace-logo.png">
+  <link rel="stylesheet" href="css/origami-cinematic.css">
+</head>
+<body>
+  <div class="paper-grain" aria-hidden="true"></div>
+
+  <header class="world-header">
+    <a class="brand-lockup" href="./index.html" aria-label="Return to the VibeSpace Living OS">
+      <span class="brand-mark">V</span>
+      <span>
+        <strong>VibeSpace</strong>
+        <small>Living OS</small>
+      </span>
+    </a>
+
+    <div class="header-center" aria-hidden="true">
+      <span class="live-dot"></span>
+      <span>Origami world online</span>
+    </div>
+
+    <a class="return-link" href="./index.html">
+      <span>Enter the OS</span>
+      <span aria-hidden="true">↗</span>
+    </a>
+  </header>
+
+  <aside class="route-rail" aria-label="Explore the VibeSpace world">
+    <p>Journey</p>
+    <nav id="route-nav"></nav>
+  </aside>
+
+  <main id="origami-world">
+    <div class="world-stage" aria-live="polite">
+      <div class="ambient ambient-one" aria-hidden="true"></div>
+      <div class="ambient ambient-two" aria-hidden="true"></div>
+
+      <div class="media-deck" aria-label="Scroll-controlled cinematic">
+        <img class="poster-layer is-visible" id="poster-a" alt="">
+        <img class="poster-layer" id="poster-b" alt="">
+        <video class="video-layer is-visible" id="video-a" muted playsinline preload="metadata"></video>
+        <video class="video-layer" id="video-b" muted playsinline preload="metadata"></video>
+
+        <div class="cinema-vignette" aria-hidden="true"></div>
+        <div class="seam-veil" id="seam-veil" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i>
+        </div>
+      </div>
+
+      <div class="scene-copy" id="scene-copy">
+        <div class="scene-number" id="scene-number">01 / 06</div>
+        <p class="eyebrow" id="scene-eyebrow">A world that thinks with you</p>
+        <h1 id="scene-title">Your ideas become a place.</h1>
+        <p class="scene-body" id="scene-body">
+          VibeSpace connects every tool, thought, and conversation inside one living creative system.
+        </p>
+        <div class="scene-tags" id="scene-tags"></div>
+        <a class="scene-cta" id="scene-cta" href="./index.html">
+          <span>Open VibeSpace</span>
+          <span aria-hidden="true">→</span>
+        </a>
+      </div>
+
+      <div class="scroll-meter" aria-hidden="true">
+        <span>Scroll to travel</span>
+        <div class="meter-track"><i id="meter-fill"></i></div>
+        <span id="meter-percent">00%</span>
+      </div>
+
+      <div class="scroll-cue" id="scroll-cue" aria-hidden="true">
+        <span></span>
+        <p>Begin the journey</p>
+      </div>
+    </div>
+
+    <div class="chapter-track" id="chapter-track"></div>
+  </main>
+
+  <noscript>
+    <section class="no-script">
+      <h1>VibeSpace Origami World</h1>
+      <p>Enable JavaScript to travel through the scroll-controlled world.</p>
+      <a href="./index.html">Return to VibeSpace</a>
+    </section>
+  </noscript>
+
+  <script src="js/origami-cinematic.js"></script>
+</body>
+</html>

@@ -27,7 +27,7 @@ describe('SakuraBackdropView', () => {
     expect(backdrop?.getAttribute('class')).toContain('z-0');
     expect(backdrop?.querySelector('[tabindex]')).toBeNull();
     expect(backdrop?.querySelector('[data-sakura-scene]')).not.toBeNull();
-    expect(backdrop?.querySelectorAll('[data-sakura-petal]')).toHaveLength(8);
+    expect(backdrop?.querySelectorAll('[data-sakura-petal]')).toHaveLength(9);
   });
 
   it('keeps the opaque scene but suppresses atmospheric motion in static mode', () => {
@@ -37,6 +37,21 @@ describe('SakuraBackdropView', () => {
     expect(backdrop?.querySelector('[data-sakura-scene]')).not.toBeNull();
     expect(backdrop?.querySelector('[data-sakura-petal]')).toBeNull();
     expect(backdrop?.getAttribute('data-sakura-paused')).toBe('true');
+  });
+
+  it('can disable petals without removing the scenic source', () => {
+    const rendered = render(
+      <SakuraBackdropView
+        intensity="standard"
+        paused={false}
+        petalsEnabled={false}
+        petalSpeed="normal"
+        rendering="enhanced"
+      />,
+    );
+
+    expect(rendered.container.querySelector('[data-sakura-scene]')).not.toBeNull();
+    expect(rendered.container.querySelector('[data-sakura-petals]')).toBeNull();
   });
 
   it('runs one bounded startup probe, pauses across focus loss, and cleans up listeners', () => {

@@ -8,7 +8,6 @@ import {
   type ReactNode,
 } from 'react';
 import {
-  User2,
   KeyRound,
   Palette,
   Mic,
@@ -27,18 +26,27 @@ import {
   Cable,
   Shield,
   Zap,
+  Settings2,
+  MonitorCog,
   type LucideIcon,
 } from 'lucide-react';
 import { useAppAdmin } from '@/lib/admin';
+import { isHiveProductEnabled } from '@/lib/features/hiveProductGate';
 import { useUIStore } from '@/stores/ui';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { HiveModelTabIcon } from '@/components/brand';
-import { prefetchSettingsTab, type SettingsTab } from './settingsPrefetch';
+import {
+  DEFAULT_SETTINGS_TAB,
+  isLegacySettingsAccountTab,
+  prefetchSettingsTab,
+  resolveSettingsTab,
+  type SettingsTab,
+} from './settingsPrefetch';
 import { rememberSettingsTab } from './settingsTabMemory';
 import './sakura-settings.css';
 
-const Account = lazy(() => import('./sections/Account').then((m) => ({ default: m.Account })));
+const General = lazy(() => import('./sections/General').then((m) => ({ default: m.General })));
 const Providers = lazy(() =>
   import('./sections/Providers').then((m) => ({ default: m.Providers })),
 );
@@ -48,7 +56,11 @@ const SubscriptionCliBridge = lazy(() =>
 const LocalModels = lazy(() =>
   import('./sections/LocalModels').then((m) => ({ default: m.LocalModels })),
 );
+const BrowserAgentSettings = lazy(() =>
+  import('./sections/BrowserAgentSettings').then((m) => ({ default: m.BrowserAgentSettings })),
+);
 const Plans = lazy(() => import('./sections/Plans').then((m) => ({ default: m.Plans })));
+/** Retained for recovery when VITE_HIVE_ENABLED is set; not loaded while gated. */
 const Hive = lazy(() => import('./sections/Hive').then((m) => ({ default: m.Hive })));
 const AllAboutMe = lazy(() =>
   import('./sections/AllAboutMe').then((m) => ({ default: m.AllAboutMe })),
@@ -72,6 +84,9 @@ const Accessibility = lazy(() =>
 const Notifications = lazy(() =>
   import('./sections/Notifications').then((m) => ({ default: m.Notifications })),
 );
+const Telemetry = lazy(() =>
+  import('./sections/Telemetry').then((m) => ({ default: m.Telemetry })),
+);
 const Plugins = lazy(() =>
   import('@/features/plugins/Plugins').then((m) => ({ default: m.Plugins })),
 );
@@ -88,30 +103,38 @@ interface TabDef {
   brandIcon?: React.ComponentType<{ className?: string }>;
 }
 
-const TABS: TabDef[] = [
-  { id: 'account', label: 'Account', icon: User2 },
+const TABS_ALL: TabDef[] = [
+  { id: 'general', label: 'General', icon: Settings2 },
   { id: 'plans', label: 'Plans', icon: Sparkles },
   { id: 'providers', label: 'Providers', icon: KeyRound },
-  { id: 'connections', label: 'AI Connections', icon: Cable },
+  { id: 'connections', label: 'AI Connectors', icon: Cable },
   { id: 'hive', label: 'Hive', icon: Network, brandIcon: HiveModelTabIcon },
   { id: 'allaboutme', label: 'All About Me', icon: Brain },
   { id: 'plugins', label: 'Plugins', icon: Blocks },
   { id: 'localmodels', label: 'Local Models', icon: HardDriveDownload },
+  { id: 'browseragent', label: 'Browser Agent', icon: MonitorCog },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'voice', label: 'Voice', icon: Mic },
   { id: 'composerstt', label: 'Speech to Text', icon: AudioLines },
   { id: 'phone', label: 'Phone & Voice', icon: Phone },
   { id: 'ambient', label: 'Ambient', icon: Moon },
   { id: 'notifications', label: 'Notifications', icon: Bell },
+  { id: 'telemetry', label: 'Telemetry', icon: Shield },
   { id: 'accessibility', label: 'Accessibility', icon: AccessibilityIcon },
   { id: 'hotkeys', label: 'Hotkeys', icon: Keyboard },
   { id: 'jarvisactions', label: 'Jarvis Actions', icon: Zap },
   { id: 'about', label: 'About', icon: Info },
 ];
 
+/** Product-visible settings tabs (Hive hidden while product gate is off). */
+function productSettingsTabs(): TabDef[] {
+  if (isHiveProductEnabled()) return TABS_ALL;
+  return TABS_ALL.filter((tab) => tab.id !== 'hive');
+}
+
 interface SettingsModalProps {
-  /** Optional initial tab. Defaults to 'account' on each open. */
-  initialTab?: SettingsTab;
+  /** Optional initial tab. Defaults to Plans (settings root). */
+  initialTab?: SettingsTab | 'account';
   /**
    * Exposes the real non-authoritative Admin presentation for the contained
    * visual profile. This does not change the entitlement snapshot consumed by
@@ -148,14 +171,16 @@ function CachedTabPanel({
 function SettingsTabPanels({
   tab,
   visited,
+  hiveEnabled,
 }: {
   tab: SettingsTab;
   visited: ReadonlySet<SettingsTab>;
+  hiveEnabled: boolean;
 }) {
   return (
     <Suspense fallback={null}>
-      <CachedTabPanel id="account" active={tab === 'account'} visited={visited.has('account')}>
-        <Account />
+      <CachedTabPanel id="general" active={tab === 'general'} visited={visited.has('general')}>
+        <General />
       </CachedTabPanel>
       <CachedTabPanel id="plans" active={tab === 'plans'} visited={visited.has('plans')}>
         <Plans />
@@ -174,9 +199,11 @@ function SettingsTabPanels({
       >
         <SubscriptionCliBridge />
       </CachedTabPanel>
-      <CachedTabPanel id="hive" active={tab === 'hive'} visited={visited.has('hive')}>
-        <Hive />
-      </CachedTabPanel>
+      {hiveEnabled ? (
+        <CachedTabPanel id="hive" active={tab === 'hive'} visited={visited.has('hive')}>
+          <Hive />
+        </CachedTabPanel>
+      ) : null}
       <CachedTabPanel
         id="allaboutme"
         active={tab === 'allaboutme'}
@@ -193,6 +220,13 @@ function SettingsTabPanels({
         visited={visited.has('localmodels')}
       >
         <LocalModels active={tab === 'localmodels'} />
+      </CachedTabPanel>
+      <CachedTabPanel
+        id="browseragent"
+        active={tab === 'browseragent'}
+        visited={visited.has('browseragent')}
+      >
+        <BrowserAgentSettings />
       </CachedTabPanel>
       <CachedTabPanel
         id="appearance"
@@ -223,6 +257,13 @@ function SettingsTabPanels({
         visited={visited.has('notifications')}
       >
         <Notifications />
+      </CachedTabPanel>
+      <CachedTabPanel
+        id="telemetry"
+        active={tab === 'telemetry'}
+        visited={visited.has('telemetry')}
+      >
+        <Telemetry />
       </CachedTabPanel>
       <CachedTabPanel
         id="accessibility"
@@ -263,28 +304,30 @@ function SettingsTabPanels({
  * to Providers when they click "Add a key".
  */
 export function SettingsModal({
-  initialTab = 'account',
+  initialTab = DEFAULT_SETTINGS_TAB,
   visualAdminPreview = false,
 }: SettingsModalProps) {
   const open = useUIStore((s) => s.settingsOpen);
   const setOpen = useUIStore((s) => s.setSettingsOpen);
+  const setRoute = useUIStore((s) => s.setRoute);
   const isAdmin = useAppAdmin();
   const adminTabVisible = isAdmin || visualAdminPreview;
-  const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const hiveEnabled = isHiveProductEnabled();
+  const resolvedInitial = resolveSettingsTab(initialTab);
+  const [tab, setTab] = useState<SettingsTab>(resolvedInitial);
   const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<SettingsTab>>(
-    () => new Set<SettingsTab>([initialTab]),
+    () => new Set<SettingsTab>([resolvedInitial]),
   );
-  const tabs = useMemo(
-    () =>
-      adminTabVisible
-        ? [
-            ...TABS.slice(0, 1),
-            { id: 'admin' as const, label: 'Admin', icon: Shield },
-            ...TABS.slice(1),
-          ]
-        : TABS,
-    [adminTabVisible],
-  );
+  const tabs = useMemo(() => {
+    const base = productSettingsTabs();
+    return adminTabVisible
+      ? [
+          ...base.slice(0, 1),
+          { id: 'admin' as const, label: 'Admin', icon: Shield },
+          ...base.slice(1),
+        ]
+      : base;
+  }, [adminTabVisible, hiveEnabled]);
 
   const selectTab = (next: SettingsTab) => {
     rememberSettingsTab(next);
@@ -301,7 +344,7 @@ export function SettingsModal({
   };
 
   useEffect(() => {
-    if (!adminTabVisible && tab === 'admin') setTab('account');
+    if (!adminTabVisible && tab === 'admin') setTab(DEFAULT_SETTINGS_TAB);
   }, [adminTabVisible, tab]);
 
   useEffect(() => {
@@ -312,12 +355,20 @@ export function SettingsModal({
   useEffect(() => {
     if (!open) return;
     const onJump = (e: Event) => {
-      const detail = (e as CustomEvent<{ tab?: SettingsTab }>).detail;
-      if (detail?.tab) selectTab(detail.tab);
+      const detail = (e as CustomEvent<{ tab?: string }>).detail;
+      const requested = detail?.tab;
+      if (!requested) return;
+      // Retired Settings → Account: send users to the Account Center.
+      if (isLegacySettingsAccountTab(requested)) {
+        setOpen(false);
+        setRoute('account');
+        return;
+      }
+      selectTab(resolveSettingsTab(requested));
     };
     window.addEventListener('jarvis:settings:tab', onJump);
     return () => window.removeEventListener('jarvis:settings:tab', onJump);
-  }, [open]);
+  }, [open, setOpen, setRoute]);
 
   return (
     <Dialog
@@ -327,6 +378,10 @@ export function SettingsModal({
       }}
     >
       <DialogContent
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          document.getElementById(`settings-tab-${tab}`)?.focus();
+        }}
         overlayProps={{
           'data-monochrome-overlay': 'settings-modal',
           'data-sakura-overlay': 'settings-modal',
@@ -337,13 +392,32 @@ export function SettingsModal({
       >
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">
-          Configure your account, providers, appearance, voice, hotkeys, and telemetry.
+          Configure providers, appearance, voice, hotkeys, plans, and telemetry. Profile and billing
+          live in Account Center.
         </DialogDescription>
 
         <div
           className="flex-1 min-h-0 grid grid-cols-[220px_1fr] grid-rows-[1fr]"
           data-sakura-surface="settings-layout"
+          data-warm-surface="settings-canvas"
         >
+          <div
+            aria-hidden="true"
+            className="hidden [html[data-theme=warm]_&]:block"
+            data-warm-decoration="settings-scene"
+          >
+            <img
+              src="/assets/themes/warm/settings/settings-landscape-v4-selected.webp"
+              alt=""
+              decoding="async"
+              draggable={false}
+            />
+          </div>
+          <div
+            aria-hidden="true"
+            className="hidden [html[data-theme=warm]_&]:block"
+            data-warm-decoration="settings-wash"
+          />
           <aside
             className="border-r border-border bg-panel flex flex-col min-h-0"
             data-sakura-surface="settings-navigation"
@@ -402,8 +476,9 @@ export function SettingsModal({
             className="overflow-y-auto px-6 py-6 min-h-0"
             role="tablist"
             data-sakura-surface="settings-content"
+            data-warm-settings-tab={tab}
           >
-            <SettingsTabPanels tab={tab} visited={visitedTabs} />
+            <SettingsTabPanels tab={tab} visited={visitedTabs} hiveEnabled={hiveEnabled} />
           </main>
         </div>
       </DialogContent>

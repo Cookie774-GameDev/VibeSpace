@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { PromptForgeModelOption } from './modelSelection';
-import { PromptForgeModelSelectionError, resolvePromptForgeModelSelection } from './modelSelection';
+import {
+  PromptForgeModelSelectionError,
+  pickFastPromptUpgradeFallback,
+  resolvePromptForgeModelSelection,
+} from './modelSelection';
 
 const options: readonly PromptForgeModelOption[] = Object.freeze([
   {
@@ -124,5 +128,40 @@ describe('Prompt Forge model selection', () => {
         },
       ),
     ).toThrow(/single.*model/i);
+  });
+
+  it('falls back to GPT-5.3 Spark when no local model is downloaded', () => {
+    const spark: PromptForgeModelOption = {
+      id: 'openai-codex:gpt-5.3-codex-spark',
+      providerId: 'openai',
+      modelId: 'gpt-5.3-codex-spark',
+      label: 'GPT-5.3 Codex Spark',
+      connectionId: 'openai-codex',
+      connectionMode: 'external-cli',
+      localOnly: false,
+      available: true,
+    };
+    const claude: PromptForgeModelOption = {
+      id: 'anthropic-claude:claude-opus',
+      providerId: 'anthropic',
+      modelId: 'claude-opus-4-6',
+      label: 'Claude Opus',
+      connectionId: 'anthropic-claude',
+      connectionMode: 'external-cli',
+      localOnly: false,
+      available: true,
+    };
+    const cloudOnly = [spark, claude, options[1]!, options[2]!];
+    expect(pickFastPromptUpgradeFallback(cloudOnly)?.modelId).toBe('gpt-5.3-codex-spark');
+    expect(
+      resolvePromptForgeModelSelection(
+        { mode: 'prefer_local' },
+        { ...context, options: cloudOnly, defaultLocalModel: '' },
+      ),
+    ).toMatchObject({
+      providerId: 'openai',
+      modelId: 'gpt-5.3-codex-spark',
+      local: false,
+    });
   });
 });

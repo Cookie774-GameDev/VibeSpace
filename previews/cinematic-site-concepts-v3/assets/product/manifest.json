@@ -1,0 +1,57 @@
+{
+  "source": "C:\\Users\\viper\\VibeSpaceOs\\VibeSpace-IDEAS!\\VibeSpace UI Themes\\Warm",
+  "copiedAt": "2026-08-03",
+  "policy": "Original supplied Warm VibeSpace UI screenshots. No generated V3 imagery and no pixel modification.",
+  "assets": [
+    {
+      "file": "agents.png",
+      "source": "ChatGPT Image Aug 3, 2026, 01_03_44 PM (3).png",
+      "sha256": "ef3f0cacde50db146a96cf6cfd4de549317c11f9985c0a3d0bd99ab682db2cb1"
+    },
+    {
+      "file": "chat.png",
+      "source": "Default2_Chat_Start_Conversation_Notebook.png",
+      "sha256": "3dcc830be812882ad8fec5620c6aa14ae624ee569ca18ea88776c2d1b798be89"
+    },
+    {
+      "file": "context-map.png",
+      "source": "ChatGPT Image Aug 3, 2026, 01_32_01 PM (8).png",
+      "sha256": "110cf618b8ed1f3b5cf4ef9e7775dc54d6248218c51ee22b64197f1db3eefb08"
+    },
+    {
+      "file": "files.png",
+      "source": "Default2_Files_Workspace_Editor.png",
+      "sha256": "0da668afcad6d6164225e6626e84a3356790aecf391faae5414315377cd7f50f"
+    },
+    {
+      "file": "kanban.png",
+      "source": "Default2_Kanban_Tasks_and_Milestones.png",
+      "sha256": "ae46fcc9bd1048eeeafb7d73e8ed4d8ecb19aa5e3622a17d8593b986e9a33f5b"
+    },
+    {
+      "file": "quick-launch.png",
+      "source": "ChatGPT Image Aug 3, 2026, 01_32_02 PM (9).png",
+      "sha256": "2a6bab8d17ce55037d7accf123bd66a9691f3457ec0bb048562cec0ba19e67c6"
+    },
+    {
+      "file": "scheduler.png",
+      "source": "ChatGPT Image Aug 3, 2026, 01_32_01 PM (7).png",
+      "sha256": "f172df69f059f5f4cc496bcd7be524ba6340fd871b77cb8cedd4998df273954f"
+    },
+    {
+      "file": "skills.png",
+      "source": "Default2_Skill_Library_Sunset_Landscape.png",
+      "sha256": "d85609e34992bbf147083fe61c6b08d640fcb7563895e3d8052c10507cf620c6"
+    },
+    {
+      "file": "terminal.png",
+      "source": "ChatGPT Image Aug 3, 2026, 01_03_45 PM (7).png",
+      "sha256": "ae03fc653b2510636a453954ab4f7dd4584eba8291d550c193820ebe573cd530"
+    },
+    {
+      "file": "tools.png",
+      "source": "Default2_Custom_Tools_Mountain_Landscape.png",
+      "sha256": "ca291c625911fe0712cc69efd41eb3544f7fed1711c05116dea4a86ff07ba46a"
+    }
+  ]
+}

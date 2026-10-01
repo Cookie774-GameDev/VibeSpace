@@ -1,5 +1,6 @@
 import type {
   PluginAuthType,
+  PluginConnectionStrategy,
   PluginField,
   PluginHttpTest,
   PluginManifest,
@@ -12,11 +13,13 @@ type RegistryPartial = {
   provider?: string;
   description?: string;
   authType?: PluginAuthType;
+  connectionStrategy?: PluginConnectionStrategy;
   fields?: PluginField[];
   requiredScopes?: string[];
   status?: PluginStatus;
   docsUrl?: string;
   credentialUrl?: string;
+  authorizationUrl?: string;
   help?: string;
   tags?: string[];
   setupSteps?: string[];
@@ -95,6 +98,7 @@ export const PROVIDER_OVERRIDES: Record<string, RegistryPartial> = {
     status: 'implemented',
     docsUrl: 'https://developers.google.com/workspace/gmail/api/reference/rest',
     credentialUrl: 'https://console.cloud.google.com/apis/credentials',
+    authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     help: 'Use a Desktop OAuth client and a refresh grant authorized for the narrow gmail.readonly and gmail.compose scopes. VibeSpace exchanges it only in memory and requires approval before every draft or send action.',
     tags: ['google', 'gmail', 'oauth', 'email', 'restricted scopes'],
     setupSteps: [
@@ -153,6 +157,7 @@ export const PROVIDER_OVERRIDES: Record<string, RegistryPartial> = {
     status: 'implemented',
     docsUrl: 'https://developers.google.com/workspace/drive/api/reference/rest/v3',
     credentialUrl: 'https://console.cloud.google.com/apis/credentials',
+    authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     help: 'Use a Desktop OAuth client and a refresh grant authorized for the narrow drive.readonly and drive.file scopes. VibeSpace constructs fixed Drive requests locally and requires approval before document creation.',
     tags: ['google', 'drive', 'oauth', 'documents', 'restricted scope'],
     setupSteps: [
@@ -210,6 +215,7 @@ export const PROVIDER_OVERRIDES: Record<string, RegistryPartial> = {
     status: 'implemented',
     docsUrl: 'https://www.canva.dev/docs/connect/',
     credentialUrl: 'https://www.canva.com/developers/integrations',
+    authorizationUrl: 'https://www.canva.com/api/oauth/authorize',
     help: 'Create a Canva Connect integration, authorize the exact profile, design metadata/content, and brand-template scopes listed here, then save the client credentials and rotating refresh grant.',
     tags: ['canva', 'design', 'oauth', 'templates', 'connect api'],
     setupSteps: [
@@ -1714,6 +1720,7 @@ function mergeManifest(
   const provider = base.provider ?? name;
   const status = base.status ?? 'needs_credentials';
   const authType = base.authType ?? 'token';
+  const connectionStrategy = base.connectionStrategy;
   const fields = base.fields ?? GENERIC_DEFAULT.fields ?? [];
   const docsUrl = base.docsUrl;
   const credentialUrl = base.credentialUrl ?? docsUrl;
@@ -1736,11 +1743,13 @@ function mergeManifest(
     category,
     provider,
     authType,
+    connectionStrategy,
     fields,
     requiredScopes: base.requiredScopes,
     status,
     docsUrl,
     credentialUrl,
+    authorizationUrl: base.authorizationUrl,
     help,
     tools,
     tags,

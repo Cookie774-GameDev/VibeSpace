@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { openExternal } from '@/lib/tauri';
 import { normalizePreviewUrl } from '@/features/preview/previewUrl';
+import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import {
   browserStart,
   browserStatus,
@@ -22,7 +23,15 @@ import {
   isTauriRuntime,
   resolvePageWsUrl,
 } from './browserClient';
-import { consumeBrowserReviewedAction } from './browserActions';
+import {
+  approveBrowserCanonicalReviewedAction,
+  denyBrowserCanonicalReviewedAction,
+} from './browserCanonicalApprovalRuntime';
+import {
+  BROWSER_GOAL_HOST_LEASE_MS,
+  registerBrowserGoalHostSession,
+  type BrowserGoalHostLease,
+} from './browserGoalIntegration';
 import { useBrowserStore } from './browserStore';
 import './browser.css';
 import './browser.sakura.css';
@@ -32,9 +41,13 @@ import './browser.sakura.css';
  * primary surface is an in-app iframe (works for localhost + embeddable sites).
  * Optional CDP agent runtime for advanced control when Edge/Chrome is available.
  */
-export function BrowserPage() {
+export function BrowserPage({ routeVisible = true }: { routeVisible?: boolean }) {
   const cdpRef = React.useRef<CdpSession | null>(null);
+  const routeVisibleRef = React.useRef(routeVisible);
+  routeVisibleRef.current = routeVisible;
+  const hostLeaseRef = React.useRef<BrowserGoalHostLease | null>(null);
   const iframeRef = React.useRef<HTMLIFrameElement>(null);
+  const [cdpConnected, setCdpConnected] = React.useState(false);
   const [iframeBlocked, setIframeBlocked] = React.useState(false);
   const [engine, setEngine] = React.useState<'iframe' | 'agent'>('iframe');
 
@@ -57,7 +70,6 @@ export function BrowserPage() {
   const closeTab = useBrowserStore((s) => s.closeTab);
   const updateTab = useBrowserStore((s) => s.updateTab);
   const pushConsole = useBrowserStore((s) => s.pushConsole);
-  const resolveAgentAction = useBrowserStore((s) => s.resolveAgentAction);
   const abortAgentActions = useBrowserStore((s) => s.abortAgentActions);
   const setControlMode = useBrowserStore((s) => s.setControlMode);
   const setSidebarOpen = useBrowserStore((s) => s.setSidebarOpen);
@@ -79,7 +91,9 @@ export function BrowserPage() {
       const pageWs = (await resolvePageWsUrl(wsUrl)) ?? wsUrl;
       const session = new CdpSession();
       await session.connect(pageWs);
-      session.onScreencast((b64) => setFrame(`data:image/jpeg;base64,${b64}`));
+      session.onScreencast((b64) => {
+        if (routeVisibleRef.current) setFrame(`data:image/jpeg;base64,${b64}`);
+      });
       session.onCdpEvent((method, params) => {
         if (method === 'Runtime.consoleAPICalled' && params && typeof params === 'object') {
           const p = params as {
@@ -101,8 +115,24 @@ export function BrowserPage() {
           }
         }
       });
-      await session.startScreencast();
       cdpRef.current = session;
+      try {
+        if (routeVisibleRef.current) {
+          await session.startScreencast();
+        } else {
+          await session.stopScreencast();
+          setFrame(null);
+        }
+        if (cdpRef.current !== session) {
+          await session.close();
+          throw new Error('CDP session was replaced while connecting');
+        }
+      } catch (error) {
+        if (cdpRef.current === session) cdpRef.current = null;
+        await session.close();
+        throw error;
+      }
+      setCdpConnected(true);
       pushConsole('info', 'Agent CDP connected');
       return session;
     },
@@ -118,11 +148,60 @@ export function BrowserPage() {
       if (activeTabId) updateTab(activeTabId, { url: initial, title: initial });
     }
     return () => {
+      hostLeaseRef.current?.revoke();
+      hostLeaseRef.current = null;
       void cdpRef.current?.close();
       cdpRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  React.useEffect(() => {
+    const session = cdpRef.current;
+    if (!routeVisible) {
+      setFrame(null);
+      if (session) void session.stopScreencast().catch(() => undefined);
+      return;
+    }
+    if (session) void session.startScreencast().catch(() => undefined);
+  }, [routeVisible, setFrame]);
+
+  React.useEffect(() => {
+    hostLeaseRef.current?.revoke();
+    hostLeaseRef.current = null;
+    const identity = getActiveAccountIdentity();
+    const session = cdpRef.current;
+    const sessionId = runtime?.session_id;
+    if (engine !== 'agent' || !cdpConnected || !identity || !session || !sessionId || !active) {
+      return;
+    }
+    let origin = 'null';
+    try {
+      origin = new URL(active.url).origin;
+    } catch {
+      // Invalid/about URLs stay explicitly null-scoped.
+    }
+    const issuedAt = Date.now();
+    const lease = registerBrowserGoalHostSession({
+      scope: {
+        accountId: identity.accountId,
+        sessionId,
+        tabId: active.id,
+        origin,
+        purpose: 'browser_goal',
+        issuedAt,
+        expiresAt: issuedAt + BROWSER_GOAL_HOST_LEASE_MS,
+      },
+      cdp: session,
+    });
+    hostLeaseRef.current = lease;
+    const expiry = window.setTimeout(() => lease.revoke(), BROWSER_GOAL_HOST_LEASE_MS);
+    return () => {
+      window.clearTimeout(expiry);
+      lease.revoke();
+      if (hostLeaseRef.current?.id === lease.id) hostLeaseRef.current = null;
+    };
+  }, [active, cdpConnected, engine, runtime?.session_id]);
 
   const navigateIframe = (url: string) => {
     setIframeBlocked(false);
@@ -230,8 +309,11 @@ export function BrowserPage() {
 
   const stopAgentRuntime = async () => {
     abortAgentActions();
+    hostLeaseRef.current?.revoke();
+    hostLeaseRef.current = null;
     await cdpRef.current?.close();
     cdpRef.current = null;
+    setCdpConnected(false);
     setFrame(null);
     await browserStop();
     await refreshStatus();
@@ -628,7 +710,7 @@ export function BrowserPage() {
                   size="sm"
                   variant="accent"
                   onClick={() => {
-                    void consumeBrowserReviewedAction(action.id, cdpRef.current);
+                    void approveBrowserCanonicalReviewedAction(action.id);
                   }}
                 >
                   Approve
@@ -637,7 +719,7 @@ export function BrowserPage() {
                   type="button"
                   size="sm"
                   variant="ghost"
-                  onClick={() => resolveAgentAction(action.id, 'denied', 'Denied by user.')}
+                  onClick={() => denyBrowserCanonicalReviewedAction(action.id)}
                 >
                   Deny
                 </Button>
@@ -655,6 +737,8 @@ export function BrowserPage() {
                     : '[html[data-theme=monochrome]_&]:border-l-accent-cyan'
               } ${
                 action.status === 'denied' ||
+                action.status === 'cancelled' ||
+                action.status === 'failed' ||
                 action.status === 'expired' ||
                 action.status === 'unavailable'
                   ? '[html[data-theme=monochrome]_&]:border-l-dashed [html[data-theme=monochrome]_&]:text-muted-foreground'

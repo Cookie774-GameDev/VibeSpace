@@ -29,13 +29,32 @@ function toolStatus(value: unknown): Extract<ProviderEvent, { type: 'tool' }>['s
 
 export function buildCodexInvocation(request: CliInvocationRequest): CliInvocation {
   assertCliPrompt(request.prompt);
-  const args = ['exec', '--json'];
+  const enabledTools = Object.entries(request.tools ?? {})
+    .filter(([, enabled]) => enabled)
+    .map(([name]) => name);
+  if (
+    enabledTools.length > 0 &&
+    (enabledTools.length !== 1 || enabledTools[0] !== 'vibespace_context')
+  ) {
+    throw new Error('Codex CLI tool scope is unsupported');
+  }
+  const args =
+    enabledTools.length === 1
+      ? ['exec', '--json']
+      : ['exec', '--ignore-user-config', '--ephemeral', '--json'];
   if (request.workingDirectory) args.push('--cd', request.workingDirectory);
   if (request.modelId) args.push('--model', requireModelId(request.modelId, 'Codex'));
+  if (request.reasoningEffort) {
+    if (!['low', 'medium', 'high', 'xhigh'].includes(request.reasoningEffort)) {
+      throw new Error('Codex CLI reasoning effort is unsupported');
+    }
+    args.push('-c', `model_reasoning_effort="${request.reasoningEffort}"`);
+  }
   return {
     args,
     stdin: request.prompt,
     ...(request.workingDirectory ? { cwd: request.workingDirectory } : {}),
+    ...(enabledTools.length === 1 ? { toolScope: 'vibespace_context' as const } : {}),
   };
 }
 
@@ -119,26 +138,30 @@ export function normalizeCodexJsonl(input: string, limits?: JsonlParserLimits): 
   return normalizeProviderJsonl(input, normalizeCodexRecord, limits);
 }
 
-const CODEX_CHATGPT_LOGIN_STATUS = 'Logged in using ChatGPT';
-
 export function classifyCodexAuthProbe(probe: Readonly<CliProbeResult>): AuthProbeResult {
-  const reportsChatGpt =
-    !probe.timedOut &&
-    probe.exitCode === 0 &&
-    !probe.stdout.truncated &&
-    !probe.stderr.truncated &&
-    [probe.stdout.data, probe.stderr.data]
-      .flatMap((output) => output.split(/\r?\n/u))
-      .some((line) => line.trim() === CODEX_CHATGPT_LOGIN_STATUS);
-  return reportsChatGpt
-    ? {
-        status: 'authenticated',
-        detail: 'Authenticated through ChatGPT.',
-      }
-    : {
-        status: 'unauthenticated',
-        detail: 'ChatGPT subscription sign-in is not active.',
-      };
+  if (probe.timedOut || probe.exitCode !== 0 || probe.stdout.truncated || probe.stderr.truncated) {
+    return {
+      status: 'unknown',
+      detail: 'Codex sign-in status could not be verified.',
+    };
+  }
+  const output = `${probe.stdout.data}\n${probe.stderr.data}`;
+  if (/\blogged\s+in\s+(?:to|using)\s+chatgpt\b/iu.test(output)) {
+    return {
+      status: 'authenticated',
+      detail: 'Authenticated through ChatGPT.',
+    };
+  }
+  if (/\b(?:api[- ]?key|openai_api_key)\b/iu.test(output)) {
+    return {
+      status: 'unauthenticated',
+      detail: 'Codex is using an API key, not a ChatGPT subscription session.',
+    };
+  }
+  return {
+    status: 'unauthenticated',
+    detail: 'ChatGPT subscription sign-in is not active.',
+  };
 }
 
 export const CODEX_CLI_DEFINITION: CliProviderDefinition = Object.freeze({

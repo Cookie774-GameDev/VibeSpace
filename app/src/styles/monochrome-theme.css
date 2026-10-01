@@ -94,7 +94,18 @@ html[data-theme='monochrome'] body {
     -apple-system,
     BlinkMacSystemFont,
     sans-serif;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+html[data-theme='monochrome'] .text-metadata {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+html[data-theme='monochrome'] .text-secondary,
+html[data-theme='monochrome'] label {
   line-height: 1.45;
 }
 
@@ -142,8 +153,8 @@ html[data-theme='monochrome'] pre {
 
 html[data-theme='monochrome'] .eyebrow,
 html[data-theme='monochrome'] .kbd {
-  font-size: 11px;
-  line-height: 14px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 html[data-theme='monochrome'] .kbd {
@@ -151,7 +162,10 @@ html[data-theme='monochrome'] .kbd {
 }
 
 html[data-theme='monochrome']
-  button:not(.rounded-full):not([data-monochrome-control-size='preserve']),
+  button:not(.rounded-full):not([data-monochrome-control-size='preserve']) {
+  min-height: 28px;
+}
+
 html[data-theme='monochrome']
   input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not(
     [data-monochrome-control-size='preserve']
@@ -276,6 +290,17 @@ html[data-theme='monochrome'] [data-radix-popper-content-wrapper] {
 
 html[data-theme='monochrome'] [data-terminal-route-cache] {
   background: hsl(var(--background));
+}
+
+html[data-theme='monochrome'] [data-terminal-drop='pane'] .xterm {
+  font-size: max(13px, 1em);
+  line-height: 1.2;
+}
+
+html[data-theme='monochrome'] [role='dialog'] [cmdk-item],
+html[data-theme='monochrome'] [role='menu'] [role='menuitem'] {
+  min-height: 32px;
+  line-height: 1.4;
 }
 
 @media (forced-colors: active) {

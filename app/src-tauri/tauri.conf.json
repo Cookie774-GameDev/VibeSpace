@@ -23,7 +23,23 @@
         "decorations": true,
         "resizable": true,
         "transparent": false,
-        "additionalBrowserArgs": "--js-flags=--max-old-space-size=4096 --disable-renderer-backgrounding"
+        "additionalBrowserArgs": "--js-flags=--max-old-space-size=3072"
+      },
+      {
+        "label": "cold-start-intro",
+        "title": "VibeSpace",
+        "url": "index.html?view=cold-start-intro",
+        "width": 1280,
+        "height": 720,
+        "resizable": false,
+        "decorations": false,
+        "transparent": false,
+        "fullscreen": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "center": true,
+        "focus": true
       },
       {
         "label": "dictation",
@@ -41,22 +57,25 @@
       }
     ],
     "security": {
-      "capabilities": ["default", "pet-mini-panel", "pet-overlay", "workbench-window"],
+      "capabilities": [
+        "default",
+        "browser-chat-host",
+        "cold-start-intro",
+        "pet-mini-panel",
+        "pet-overlay",
+        "workbench-window",
+        "taskbar-usage"
+      ],
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$APPDATA/**",
-          "$HOME/Downloads/**",
-          "$RESOURCE/**"
-        ]
+        "scope": ["$APPDATA/**", "$HOME/Downloads/**", "$RESOURCE/**"]
       },
-      "csp": "default-src 'self'; script-src 'self' https://www.youtube.com; style-src 'self' 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: asset: http://asset.localhost https://asset.localhost; connect-src 'self' ipc: https://ipc.localhost http://127.0.0.1:11434 http://localhost:11434 https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://api.groq.com https://*.supabase.co https://*.supabase.in https://www.youtube.com https://i.ytimg.com https://www.googleapis.com https://github.com https://api.github.com https://api.figma.com https://*.myshopify.com https://slack.com https://api.wulong.dev https://lmarena.ai https://arena.ai wss: ws:; frame-src https://www.youtube-nocookie.com https://www.youtube.com; media-src 'self' blob: data: https: asset: http://asset.localhost https://asset.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self';"
+      "csp": "default-src 'self'; script-src 'self' https://www.youtube.com; style-src 'self' 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: asset: http://asset.localhost https://asset.localhost; connect-src 'self' ipc: https://ipc.localhost http://127.0.0.1:11434 http://localhost:11434 https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://api.groq.com https://openrouter.ai https://api.deepseek.com https://api.mistral.ai https://api.together.xyz https://api.x.ai https://token-plan.ap-southeast-1.maas.aliyuncs.com https://coding-intl.dashscope.aliyuncs.com https://dashscope-us.aliyuncs.com https://dashscope.aliyuncs.com https://dashscope-intl.aliyuncs.com https://*.supabase.co https://*.supabase.in https://www.youtube.com https://i.ytimg.com https://www.googleapis.com https://github.com https://api.github.com https://api.figma.com https://*.myshopify.com https://slack.com https://api.wulong.dev https://lmarena.ai https://arena.ai wss: ws:; frame-src https://www.youtube-nocookie.com https://www.youtube.com; media-src 'self' blob: data: https: asset: http://asset.localhost https://asset.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self';"
     }
   },
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://raw.githubusercontent.com/Cookie774-GameDev/VibeSpace/main/releases/channel.json",
         "https://github.com/Cookie774-GameDev/VibeSpace/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNCQzUwMUIxQjU5NkRBRDMKUldUVDJwYTFzUUhGTzl1YmF1ZjFIQUhEdkNIcXJENGN6MHNONEdMK3crUDZxUGJwSUYvUFVXcHkK",
@@ -75,6 +94,15 @@
     "homepage": "https://vibespaceos.com/",
     "shortDescription": "The AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant.",
     "longDescription": "The AI workspace where every model, agent, voice, and task lives under one persistent memory and one always-available assistant.",
+    "resources": [
+      "resources/intro/*",
+      "../../docs/oss/dependency-lock.json",
+      "../../docs/oss/grammar-license-inventory.md",
+      "../../docs/oss/THIRD_PARTY_NOTICES.md",
+      "../../docs/oss/sbom-pr31.cdx.json",
+      "../../docs/oss/browser-agent-feature-pack.json",
+      "../../docs/oss/licenses/*"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/64x64.png",

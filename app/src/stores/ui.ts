@@ -14,8 +14,19 @@ import {
   resolveDocumentTheme,
 } from '@/features/appearance/themeContract';
 import type { ResolvedDocumentTheme, SelectableTheme } from '@/features/appearance/themeContract';
+import {
+  bindClockFormatReader,
+  DEFAULT_CLOCK_FORMAT,
+  normalizeClockFormat,
+  type ClockFormat,
+} from '@/lib/timeFormat';
+import { parseRouteLocation, type Route } from '@/features/navigation/routeSchema';
+
+export type { Route } from '@/features/navigation/routeSchema';
 
 const debouncedUiStorage = createDebouncedStateStorage(safeLocalStorage);
+
+export type { ClockFormat };
 
 export function flushUiStatePersistence(): void {
   void debouncedUiStorage.flush();
@@ -33,47 +44,99 @@ export function applyThemeToDocument(theme: SelectableTheme): void {
   document.documentElement.setAttribute('data-theme-preference', theme);
 }
 
+export function normalizeAppBrightness(value: unknown): number {
+  const brightness = typeof value === 'number' && Number.isFinite(value) ? value : 100;
+  return Math.max(0, Math.min(200, Math.round(brightness)));
+}
+
+export function applyAppBrightnessToDocument(value: number): void {
+  if (typeof document === 'undefined') return;
+  const brightness = normalizeAppBrightness(value);
+  document.documentElement.setAttribute(
+    'data-app-brightness-mode',
+    brightness < 100 ? 'dim' : brightness > 100 ? 'boost' : 'normal',
+  );
+  document.documentElement.style.setProperty(
+    '--vibespace-app-brightness',
+    String(brightness / 100),
+  );
+  document.documentElement.style.setProperty(
+    '--vibespace-app-dim-opacity',
+    String(brightness < 100 ? (100 - brightness) / 100 : 0),
+  );
+  document.documentElement.style.setProperty(
+    '--vibespace-app-boost-opacity',
+    String(brightness > 100 ? ((brightness - 100) / 100) * 0.35 : 0),
+  );
+}
+
 export type AmbientTrack = 'music-1' | 'music-2' | 'music-3' | 'music-4' | 'music-5';
 
 export type ChatMode = 'chat' | 'council' | 'doc' | 'code';
+export type SakuraPetalSpeed = 'slow' | 'normal' | 'fast';
 
-export type DoneNotificationKey = 'jarvis' | 'terminal' | 'tasks' | 'contextMaps' | 'skills';
+export function normalizeSakuraPetalSpeed(value: unknown): SakuraPetalSpeed {
+  return value === 'slow' || value === 'fast' ? value : 'normal';
+}
+
+export type DoneNotificationKey =
+  | 'jarvis'
+  | 'terminal'
+  | 'tasks'
+  | 'contextMaps'
+  | 'skills'
+  | 'connectors'
+  | 'reminders';
 export type DoneNotificationSettings = Record<DoneNotificationKey, boolean>;
+
+const DONE_NOTIFICATION_KEY_LIST: readonly DoneNotificationKey[] = [
+  'jarvis',
+  'terminal',
+  'tasks',
+  'contextMaps',
+  'skills',
+  'connectors',
+  'reminders',
+] as const;
+
+export function createDefaultDoneNotifications(): DoneNotificationSettings {
+  return {
+    jarvis: false,
+    terminal: false,
+    tasks: false,
+    contextMaps: false,
+    skills: false,
+    connectors: false,
+    reminders: false,
+  };
+}
+
+/** Fill missing category keys after persistence upgrades. */
+export function normalizeDoneNotifications(value: unknown): DoneNotificationSettings {
+  const base = createDefaultDoneNotifications();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return base;
+  const record = value as Record<string, unknown>;
+  for (const key of DONE_NOTIFICATION_KEY_LIST) {
+    if (typeof record[key] === 'boolean') base[key] = record[key];
+  }
+  return base;
+}
 
 /**
  * V3 — top-level page route the workspace canvas is showing.
  * Owned by this store; consumed by `PageRouter` and `NavPane`.
  *
  * NOTE: `route` is intentionally **transient** — see `partialize` below.
- * Reloads always land back on `'chat'` unless the user navigates again.
+ * The canonical URL query owns reload/deep-link restoration instead of
+ * local-storage persistence.
  */
-export type Route =
-  | 'chat'
-  | 'canvas'
-  | 'workbench'
-  | 'preview'
-  | 'browser'
-  | 'terminal'
-  | 'kanban'
-  | 'schedule'
-  | 'agents'
-  | 'agent-detail'
-  | 'project-detail'
-  | 'context'
-  | 'skills'
-  | 'benchmarks'
-  | 'history'
-  | 'tools'
-  | 'files'
-  | 'account';
-
 /**
- * Normal reloads remain in Classic VibeSpace. The explicit query is used only
- * by the detached Workbench window so it can boot directly into its surface.
+ * Canonical route queries restore main-window navigation. The detached
+ * Workbench marker remains authoritative for its dedicated window.
  */
 export function resolveInitialRoute(search?: string): Route {
   const value = search ?? (typeof window !== 'undefined' ? window.location.search : '');
-  return new URLSearchParams(value).get('workbench') === '1' ? 'workbench' : 'chat';
+  return parseRouteLocation(value).route;
 }
 
 /**
@@ -119,6 +182,12 @@ export interface UIState {
   // Theme + layout prefs
   theme: SelectableTheme;
   density: 'compact' | 'cozy';
+  /** VibeSpace renderer-only brightness percentage. 100 is neutral. */
+  appBrightness: number;
+  /** Sakura-only local presentation preference. Reduced motion always wins. */
+  sakuraPetalsEnabled: boolean;
+  /** Sakura-only CSS animation speed. */
+  sakuraPetalSpeed: SakuraPetalSpeed;
 
   // V2 — ambient idle home
   /** User-level master switch. When false, idle never triggers ambient. */
@@ -135,9 +204,12 @@ export interface UIState {
   ambientVolume: number;
   /** When true, audio plays continuously even outside ambient mode. */
   ambientAlwaysPlay: boolean;
-
-  // V2 — fullscreen canvas
-  chatFullscreen: boolean;
+  /**
+   * Wall-clock display preference (presentation only).
+   * `local` = locale-default (12h where the locale uses it);
+   * `military` = always 24-hour. Does not alter stored timestamps.
+   */
+  clockFormat: ClockFormat;
 
   // V2 — launcher
   launcherOpen: boolean;
@@ -167,6 +239,10 @@ export interface UIState {
   notificationMaster: boolean;
   doneNotifications: DoneNotificationSettings;
   aiCompletionCue: boolean;
+  /** Play OS notification sound when the platform supports it. */
+  notificationSound: boolean;
+  /** Bump tray badge on delivered notifications when the platform supports it. */
+  notificationBadge: boolean;
 
   // V3 — pages router
   /** The page the workspace canvas is showing. Default 'chat'. Transient. */
@@ -222,6 +298,9 @@ export interface UIState {
   toggleNavSection: (id: string) => void;
   setChatMode: (mode: ChatMode) => void;
   setTheme: (t: SelectableTheme) => void;
+  setAppBrightness: (value: number) => void;
+  setSakuraPetalsEnabled: (enabled: boolean) => void;
+  setSakuraPetalSpeed: (speed: SakuraPetalSpeed) => void;
   finishOnboarding: () => void;
   setProductTutorialStatus: (status: ProductTutorialStatus) => void;
   resetUI: () => void;
@@ -234,8 +313,7 @@ export interface UIState {
   setAmbientTrack: (t: AmbientTrack) => void;
   setAmbientVolume: (v: number) => void;
   setAmbientAlwaysPlay: (v: boolean) => void;
-  toggleChatFullscreen: () => void;
-  setChatFullscreen: (v: boolean) => void;
+  setClockFormat: (format: ClockFormat) => void;
   setLauncherOpen: (v: boolean) => void;
   setAssistantOpen: (v: boolean) => void;
   setWhatsNewOpen: (v: boolean) => void;
@@ -246,6 +324,8 @@ export interface UIState {
   setNotificationMaster: (v: boolean) => void;
   setDoneNotification: (key: DoneNotificationKey, enabled: boolean) => void;
   setAiCompletionCue: (v: boolean) => void;
+  setNotificationSound: (v: boolean) => void;
+  setNotificationBadge: (v: boolean) => void;
 
   // V3 actions
   setRoute: (r: Route) => void;
@@ -273,6 +353,9 @@ const defaults: Pick<
   | 'productTutorialStatus'
   | 'theme'
   | 'density'
+  | 'appBrightness'
+  | 'sakuraPetalsEnabled'
+  | 'sakuraPetalSpeed'
   | 'ambient'
   | 'ambientActive'
   | 'ambientThresholdMs'
@@ -280,7 +363,7 @@ const defaults: Pick<
   | 'ambientTrack'
   | 'ambientVolume'
   | 'ambientAlwaysPlay'
-  | 'chatFullscreen'
+  | 'clockFormat'
   | 'launcherOpen'
   | 'assistantOpen'
   | 'whatsNewOpen'
@@ -291,6 +374,8 @@ const defaults: Pick<
   | 'notificationMaster'
   | 'doneNotifications'
   | 'aiCompletionCue'
+  | 'notificationSound'
+  | 'notificationBadge'
   | 'route'
   | 'callModalOpen'
   | 'lastSeenWhatsNewVersion'
@@ -314,6 +399,9 @@ const defaults: Pick<
   productTutorialStatus: null,
   theme: 'default',
   density: 'cozy',
+  appBrightness: 100,
+  sakuraPetalsEnabled: true,
+  sakuraPetalSpeed: 'normal',
   ambient: true,
   ambientActive: false,
   ambientThresholdMs: 5 * 60 * 1000,
@@ -321,7 +409,7 @@ const defaults: Pick<
   ambientTrack: 'music-1',
   ambientVolume: 55,
   ambientAlwaysPlay: false,
-  chatFullscreen: false,
+  clockFormat: DEFAULT_CLOCK_FORMAT,
   launcherOpen: false,
   assistantOpen: false,
   whatsNewOpen: false,
@@ -330,14 +418,10 @@ const defaults: Pick<
   composerSttListening: false,
   defaultTerminalFontSize: 9,
   notificationMaster: false,
-  doneNotifications: {
-    jarvis: false,
-    terminal: false,
-    tasks: false,
-    contextMaps: false,
-    skills: false,
-  },
+  doneNotifications: createDefaultDoneNotifications(),
   aiCompletionCue: false,
+  notificationSound: true,
+  notificationBadge: false,
   route: resolveInitialRoute(),
   callModalOpen: false,
   lastSeenWhatsNewVersion: null,
@@ -398,14 +482,10 @@ export function migratePersistedUiState(
     state = {
       ...state,
       notificationMaster: false,
-      doneNotifications: {
-        jarvis: false,
-        terminal: false,
-        tasks: false,
-        contextMaps: false,
-        skills: false,
-      },
+      doneNotifications: createDefaultDoneNotifications(),
       aiCompletionCue: false,
+      notificationSound: true,
+      notificationBadge: false,
     };
   }
 
@@ -443,6 +523,22 @@ export function mergePersistedUiState(persistedState: unknown, currentState: UIS
     ? {
         ...persistedState,
         theme: normalizePersistedTheme(persistedState.theme),
+        appBrightness: normalizeAppBrightness(persistedState.appBrightness),
+        clockFormat: normalizeClockFormat(persistedState.clockFormat),
+        doneNotifications: normalizeDoneNotifications(persistedState.doneNotifications),
+        sakuraPetalsEnabled:
+          typeof persistedState.sakuraPetalsEnabled === 'boolean'
+            ? persistedState.sakuraPetalsEnabled
+            : currentState.sakuraPetalsEnabled,
+        sakuraPetalSpeed: normalizeSakuraPetalSpeed(persistedState.sakuraPetalSpeed),
+        notificationSound:
+          typeof persistedState.notificationSound === 'boolean'
+            ? persistedState.notificationSound
+            : currentState.notificationSound,
+        notificationBadge:
+          typeof persistedState.notificationBadge === 'boolean'
+            ? persistedState.notificationBadge
+            : currentState.notificationBadge,
       }
     : { theme: THEME_FALLBACK_ID };
 
@@ -495,6 +591,13 @@ export const useUIStore = create<UIState>()(
         set({ theme: t });
         publishThemePreference(t);
       },
+      setAppBrightness: (value) => {
+        const appBrightness = normalizeAppBrightness(value);
+        applyAppBrightnessToDocument(appBrightness);
+        set({ appBrightness });
+      },
+      setSakuraPetalsEnabled: (enabled) => set({ sakuraPetalsEnabled: Boolean(enabled) }),
+      setSakuraPetalSpeed: (speed) => set({ sakuraPetalSpeed: normalizeSakuraPetalSpeed(speed) }),
       finishOnboarding: () =>
         set((s) => ({
           onboardingComplete: true,
@@ -504,6 +607,7 @@ export const useUIStore = create<UIState>()(
       setProductTutorialStatus: (status) => set({ productTutorialStatus: status }),
       resetUI: () => {
         applyThemeToDocument(defaults.theme);
+        applyAppBrightnessToDocument(defaults.appBrightness);
         set(defaults);
       },
 
@@ -519,20 +623,7 @@ export const useUIStore = create<UIState>()(
       setAmbientTrack: (t) => set({ ambientTrack: t }),
       setAmbientVolume: (v) => set({ ambientVolume: Math.max(0, Math.min(100, v)) }),
       setAmbientAlwaysPlay: (v) => set({ ambientAlwaysPlay: v }),
-      toggleChatFullscreen: () =>
-        set((s) => {
-          const next = !s.chatFullscreen;
-          if (typeof document !== 'undefined') {
-            document.documentElement.setAttribute('data-fullscreen', next ? 'true' : 'false');
-          }
-          return { chatFullscreen: next };
-        }),
-      setChatFullscreen: (v) => {
-        if (typeof document !== 'undefined') {
-          document.documentElement.setAttribute('data-fullscreen', v ? 'true' : 'false');
-        }
-        set({ chatFullscreen: v });
-      },
+      setClockFormat: (format) => set({ clockFormat: normalizeClockFormat(format) }),
       setLauncherOpen: (v) => set({ launcherOpen: v }),
       setAssistantOpen: (v) => set({ assistantOpen: v }),
       setWhatsNewOpen: (v) => set({ whatsNewOpen: v }),
@@ -550,6 +641,8 @@ export const useUIStore = create<UIState>()(
           },
         })),
       setAiCompletionCue: (v) => set({ aiCompletionCue: v }),
+      setNotificationSound: (v) => set({ notificationSound: Boolean(v) }),
+      setNotificationBadge: (v) => set({ notificationBadge: Boolean(v) }),
 
       // V3
       setRoute: (r) => set({ route: r }),
@@ -588,6 +681,9 @@ export const useUIStore = create<UIState>()(
         chatMode: s.chatMode,
         theme: s.theme,
         density: s.density,
+        appBrightness: s.appBrightness,
+        sakuraPetalsEnabled: s.sakuraPetalsEnabled,
+        sakuraPetalSpeed: s.sakuraPetalSpeed,
         onboardingComplete: s.onboardingComplete,
         productTutorialStatus: s.productTutorialStatus,
         ambient: s.ambient,
@@ -596,16 +692,21 @@ export const useUIStore = create<UIState>()(
         ambientTrack: s.ambientTrack,
         ambientVolume: s.ambientVolume,
         ambientAlwaysPlay: s.ambientAlwaysPlay,
+        clockFormat: s.clockFormat,
         composerStt: s.composerStt,
         defaultTerminalFontSize: s.defaultTerminalFontSize,
         notificationMaster: s.notificationMaster,
         doneNotifications: s.doneNotifications,
         aiCompletionCue: s.aiCompletionCue,
+        notificationSound: s.notificationSound,
+        notificationBadge: s.notificationBadge,
         lastSeenWhatsNewVersion: s.lastSeenWhatsNewVersion,
       }),
     },
   ),
 );
+
+bindClockFormatReader(() => useUIStore.getState().clockFormat);
 
 // Trigger debug-gated boot diagnostics on initialization
 measureStorageSizes('boot');

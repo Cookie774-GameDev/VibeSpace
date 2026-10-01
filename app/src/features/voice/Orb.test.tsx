@@ -21,6 +21,14 @@ function setReducedMotion(matches: boolean) {
 describe('Orb motion policy', () => {
   beforeEach(() => setReducedMotion(false));
 
+  it('keeps the signal globe still while listening and only speaks from output energy', () => {
+    const view = render(<Orb state="listening" presentation="signal-globe" />);
+    expect(screen.getByRole('img').getAttribute('data-orb-motion')).toBe('idle');
+    view.rerender(<Orb state="speaking" presentation="signal-globe" />);
+    expect(screen.getByRole('img').getAttribute('data-orb-motion')).toBe('active');
+    expect(screen.getByRole('img').getAttribute('data-speaking')).toBe('true');
+  });
+
   it('keeps idle presentation still and reserves continuous expression for active voice', () => {
     const view = render(<Orb state="idle" />);
     expect(screen.getByRole('img').getAttribute('data-orb-motion')).toBe('idle');

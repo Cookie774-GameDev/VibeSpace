@@ -119,4 +119,29 @@ describe('projectJarvisEventsForLegacyActivity', () => {
     expect(projected.map((item) => item.status)).toEqual(['pending', 'cancelled', 'error']);
     expect(projectJarvisEventsForLegacyActivity({ run: run(), events: [] })).toEqual([]);
   });
+
+  it('projects canonical event types into structured activity categories', () => {
+    const projected = projectJarvisEventsForLegacyActivity({
+      run: run(),
+      events: [
+        event(1, { type: 'run_state' }),
+        event(2, { type: 'context' }),
+        event(3, { type: 'retrieval' }),
+        event(4, { type: 'tool' }),
+        event(5, { type: 'terminal' }),
+        event(6, { type: 'artifact' }),
+        event(7, { type: 'message' }),
+      ],
+    });
+
+    expect(projected.map(({ category }) => category)).toEqual([
+      'thinking',
+      'context',
+      'file',
+      'thinking',
+      'thinking',
+      'file',
+      'response',
+    ]);
+  });
 });

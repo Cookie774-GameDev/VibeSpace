@@ -2,6 +2,27 @@ use keyring::{Entry, Error};
 
 const SERVICE: &str = "ai.jarvis.desktop";
 const ACCOUNT_PREFIX: &str = "llm-api-key";
+const MAX_HARNESS_CREDENTIAL_BYTES: usize = 32 * 1024;
+
+pub(crate) const HARNESS_API_KEY_PROVIDERS: [&str; 17] = [
+    "anthropic",
+    "openai",
+    "google",
+    "xai",
+    "openrouter",
+    "groq",
+    "deepseek",
+    "mistral",
+    "together",
+    "qwen",
+    "cohere",
+    "perplexity",
+    "fireworks",
+    "replicate",
+    "hyperbolic",
+    "novita",
+    "lambda",
+];
 
 /// Stable named-profile identifiers for each privileged credential-store effect.
 /// These match the frozen MC0B side-effect inventory row ids so the guard and the
@@ -238,6 +259,27 @@ pub fn credential_delete(provider: String) -> Result<(), String> {
     sink().delete_credential(SERVICE, &account)
 }
 
+pub(crate) fn harness_api_keys() -> Result<Vec<(String, String)>, String> {
+    let mut keys = Vec::new();
+    for provider in HARNESS_API_KEY_PROVIDERS {
+        ensure_effect_allowed(EFFECT_KEYRING_ENTRY)?;
+        ensure_effect_allowed(EFFECT_KEYRING_READ)?;
+        let account = account_for(provider)?;
+        let Some(value) = sink().get_password(SERVICE, &account)? else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if value.len() > MAX_HARNESS_CREDENTIAL_BYTES {
+            return Err("credential is too large for the OpenCode child environment".to_string());
+        }
+        keys.push((provider.to_string(), value.to_string()));
+    }
+    Ok(keys)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +334,37 @@ mod tests {
         assert_eq!(sink.count(EFFECT_KEYRING_DELETE), 1);
         assert_eq!(sink.count(EFFECT_KEYRING_SET), 1);
         assert_eq!(sink.count(EFFECT_KEYRING_READ), 1);
+    }
+
+    #[test]
+    fn harness_snapshot_tracks_add_update_and_delete_without_logging_values() {
+        install_test_guard(ordinary_guard());
+        let _sink = install_counting_sink();
+
+        assert_eq!(
+            credential_set("openai".into(), "first-secret".into()),
+            Ok(())
+        );
+        let first = harness_api_keys().unwrap();
+        assert!(first
+            .iter()
+            .any(|(provider, key)| { provider == "openai" && key == "first-secret" }));
+
+        assert_eq!(
+            credential_set("openai".into(), "second-secret".into()),
+            Ok(())
+        );
+        let second = harness_api_keys().unwrap();
+        assert!(second
+            .iter()
+            .any(|(provider, key)| { provider == "openai" && key == "second-secret" }));
+        assert!(!second.iter().any(|(_, key)| key == "first-secret"));
+
+        assert_eq!(credential_delete("openai".into()), Ok(()));
+        assert!(!harness_api_keys()
+            .unwrap()
+            .iter()
+            .any(|(provider, _)| provider == "openai"));
     }
 
     #[test]

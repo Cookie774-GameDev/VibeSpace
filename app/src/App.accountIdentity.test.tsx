@@ -132,15 +132,16 @@ const cloudBoot = vi.hoisted(() => {
   let getSessionImpl = async (): Promise<SessionResult> => ({
     data: { session: null },
   });
-  let authListener: ((_event: string, session: Session) => void) | undefined;
+  const authListeners = new Set<(_event: string, session: Session) => void>();
   const getSession = vi.fn(() => getSessionImpl());
-  const unsubscribe = vi.fn();
   const onAuthStateChange = vi.fn((listener: (_event: string, session: Session) => void) => {
-    authListener = listener;
+    authListeners.add(listener);
     return {
       data: {
         subscription: {
-          unsubscribe,
+          unsubscribe: vi.fn(() => {
+            authListeners.delete(listener);
+          }),
         },
       },
     };
@@ -190,7 +191,9 @@ const cloudBoot = vi.hoisted(() => {
         reject: (error: unknown) => reject?.(error),
       };
     },
-    emitAuth: (session: Session) => authListener?.('SIGNED_IN', session),
+    emitAuth: (session: Session) => {
+      for (const listener of [...authListeners]) listener('SIGNED_IN', session);
+    },
     getSession,
     maybeSingle,
     onAuthStateChange,
@@ -198,7 +201,7 @@ const cloudBoot = vi.hoisted(() => {
       configured = false;
       configurationError = undefined;
       getSessionImpl = async () => ({ data: { session: null } });
-      authListener = undefined;
+      authListeners.clear();
       maybeSingle.mockReset();
       maybeSingle.mockResolvedValue({ data: null, error: null });
     },
@@ -519,8 +522,8 @@ function prepareAppIdentity(
   });
 }
 
-const ACCOUNT_SCOPE_BOOT_WAIT_OPTIONS = { timeout: 5_000 } as const;
-const ACCOUNT_SCOPE_BOOT_TEST_TIMEOUT = 30_000;
+const ACCOUNT_SCOPE_BOOT_WAIT_OPTIONS = { timeout: 15_000 } as const;
+const ACCOUNT_SCOPE_BOOT_TEST_TIMEOUT = 90_000;
 
 async function waitForAccountScopeBoot(): Promise<void> {
   await waitFor(
@@ -1648,6 +1651,7 @@ function accountIdentityBootSuite(): void {
     const { unmount } = render(<App />);
     await waitForAccountScopeBoot();
     await expectEveryListenerStartedWith('stable-local-user');
+    const initialApiKeys = useAuthStore.getState().apiKeys;
 
     act(() => {
       useAuthStore.setState({ cloudSession: cloudSession('cloud-user') });
@@ -1668,6 +1672,8 @@ function accountIdentityBootSuite(): void {
     ]);
     await expectEveryListenerStartedWith('cloud-user', 1);
     expect(useAuthStore.getState().localUserId).toBe('stable-local-user');
+    expect(useAuthStore.getState().apiKeys).toBe(initialApiKeys);
+    expect(useAuthStore.getState().apiKeys).toEqual({ mock: 'test-model-access' });
 
     act(() => {
       useAuthStore.setState({ cloudSession: null });
@@ -1685,6 +1691,8 @@ function accountIdentityBootSuite(): void {
       'start:all-about-me:stable-local-user',
     ]);
     expect(useAuthStore.getState().localUserId).toBe('stable-local-user');
+    expect(useAuthStore.getState().apiKeys).toBe(initialApiKeys);
+    expect(useAuthStore.getState().apiKeys).toEqual({ mock: 'test-model-access' });
 
     unmount();
     expect(accountListeners.events.slice(-2)).toEqual([

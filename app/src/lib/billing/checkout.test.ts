@@ -19,11 +19,7 @@ vi.mock('@/lib/supabase/client', () => ({
   isCloudSyncConfigured: () => true,
 }));
 
-import {
-  callCheckoutSession,
-  callCustomerPortal,
-  isBackendBillingConfigured,
-} from './checkout';
+import { callCheckoutSession, callCustomerPortal, isBackendBillingConfigured } from './checkout';
 
 beforeEach(() => {
   mockInvoke.mockReset();
@@ -60,6 +56,38 @@ describe('callCheckoutSession', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/billing_unconfigured/);
+  });
+
+  it('opens the account-scoped portal when checkout reports an existing subscription', async () => {
+    mockInvoke
+      .mockResolvedValueOnce({
+        data: null,
+        error: {
+          message: 'Edge Function returned a non-2xx status code',
+          context: new Response(
+            JSON.stringify({ error: 'subscription_exists', action: 'open_portal' }),
+            {
+              status: 409,
+              headers: { 'content-type': 'application/json' },
+            },
+          ),
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { url: 'https://billing.stripe.com/session/portal_existing' },
+        error: null,
+      });
+
+    const result = await callCheckoutSession('pro');
+
+    expect(mockInvoke).toHaveBeenNthCalledWith(1, 'create-checkout-session', {
+      body: { plan: 'pro' },
+    });
+    expect(mockInvoke).toHaveBeenNthCalledWith(2, 'create-customer-portal', {});
+    expect(result).toEqual({
+      ok: true,
+      url: 'https://billing.stripe.com/session/portal_existing',
+    });
   });
 
   it('returns ok:false when the response has no URL', async () => {

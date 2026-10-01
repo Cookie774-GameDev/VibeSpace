@@ -81,10 +81,9 @@ export function UpdateWarningHost({
     );
     try {
       await checkForAppUpdate({ install: true });
-    } catch (err) {
+    } catch {
       setIsUpdating(false);
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      toast.error('Update failed', `Silent update installation failed: ${msg}`);
+      toast.error('Update failed', 'The signed update could not be installed. Please try again.');
       startCountdown(30 * 60);
     }
   };
@@ -132,8 +131,8 @@ export function UpdateWarningHost({
         );
         if (timeLeft === null) startCountdown();
       }
-    } catch (err) {
-      console.warn('[updates] Background update check failed:', err);
+    } catch {
+      console.warn('[updates] Background update check failed.');
     }
   };
 

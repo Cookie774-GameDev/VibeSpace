@@ -1,4 +1,5 @@
 import type { ProviderId } from '@/types';
+import { promotedAdapterForProject } from '@/features/model-foundry/adapterRegistry';
 import { nativeFetch } from '@/lib/nativeFetch';
 import {
   CHAT_MODEL_OPTIONS,
@@ -14,8 +15,30 @@ import {
   isProviderConnected,
   type ProviderConnectionContext,
 } from './providerRegistry';
+import { setDiscoveredConnectionModels } from './connectionCatalog';
+import { verifiedQwenCompatibleBaseUrl } from './nativeConnectionProbe';
 
-export type ModelAvailability = 'stable' | 'preview' | 'experimental' | 'deprecated' | 'custom';
+const NATIVE_CONNECTION_ID_BY_PROVIDER: Partial<Record<ProviderId, string>> = {
+  openai: 'openai-api',
+  anthropic: 'anthropic-api',
+  google: 'google-gemini-api',
+  groq: 'groq-api',
+  deepseek: 'deepseek-api',
+  zai: 'zai-api',
+  qwen: 'qwen-api',
+  mistral: 'mistral-api',
+  together: 'together-api',
+  xai: 'xai-api',
+  openrouter: 'openrouter-api',
+};
+
+export type ModelAvailability =
+  | 'stable'
+  | 'preview'
+  | 'experimental'
+  | 'deprecated'
+  | 'custom'
+  | 'unverified';
 
 export interface RegistryModelOption {
   id: string;
@@ -59,7 +82,7 @@ const FRONTIER_BY_PROVIDER: Partial<Record<ProviderId, string[]>> = {
   xai: [HIVE_FRONTIER_MODELS.grok],
   deepseek: [HIVE_FRONTIER_MODELS.deepseek_pro, HIVE_FRONTIER_MODELS.deepseek_flash],
   mistral: [HIVE_FRONTIER_MODELS.mistral_large],
-  groq: ['llama-3.3-70b-versatile'],
+  groq: ['openai/gpt-oss-20b'],
 };
 
 const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -83,7 +106,10 @@ function sanitizeModelId(raw: string): string {
   return sanitizeModelIdForInput(raw);
 }
 
-function toRegistryOption(option: ModelOption, availability: ModelAvailability = 'stable'): RegistryModelOption {
+function toRegistryOption(
+  option: ModelOption,
+  availability: ModelAvailability = 'stable',
+): RegistryModelOption {
   return {
     id: option.id,
     label: option.label,
@@ -148,11 +174,19 @@ export function getModelsForProvider(
     return [];
   }
 
-  const staticModels = staticOptionsForProvider(providerId, ctx);
-  const frontier = frontierOptionsForProvider(providerId);
   const cached = dynamicModelCache.get(providerId)?.models ?? [];
-
-  return mergeModelOptions(providerId, [frontier, staticModels, cached]);
+  if (cached.length > 0) {
+    return mergeModelOptions(providerId, [cached]);
+  }
+  const staticModels = staticOptionsForProvider(providerId, ctx).map((option) => ({
+    ...option,
+    availability: 'unverified' as const,
+  }));
+  const frontier = frontierOptionsForProvider(providerId).map((option) => ({
+    ...option,
+    availability: 'unverified' as const,
+  }));
+  return mergeModelOptions(providerId, [frontier, staticModels]);
 }
 
 export function getModelLabelForProvider(
@@ -160,6 +194,20 @@ export function getModelLabelForProvider(
   modelId: string,
   ctx: ProviderConnectionContext,
 ): string {
+  if (providerId === 'foundry') {
+    const match = /^([A-Za-z0-9_-]{1,64})--([A-Za-z0-9_-]{1,64})$/.exec(modelId);
+    if (match && typeof window !== 'undefined') {
+      try {
+        const adapter = promotedAdapterForProject(window.localStorage, match[1]!);
+        if (adapter?.jobId === match[2] && adapter.projectName?.trim()) {
+          return adapter.projectName.trim();
+        }
+      } catch {
+        // Storage access is optional; fall back to the opaque adapter id.
+      }
+    }
+    return `VibeModel adapter · ${modelId}`;
+  }
   const options = getModelsForProvider(providerId, ctx, modelId);
   return options.find((option) => option.id === modelId)?.label ?? modelId;
 }
@@ -172,7 +220,10 @@ export function modelBelongsToProvider(providerId: ProviderId, modelId: string):
   );
   if (staticMatch) return true;
   const frontier = FRONTIER_BY_PROVIDER[providerId] ?? [];
-  return frontier.some((candidate) => candidate.toLowerCase() === id.toLowerCase());
+  if (frontier.some((candidate) => candidate.toLowerCase() === id.toLowerCase())) return true;
+  return (dynamicModelCache.get(providerId)?.models ?? []).some(
+    (option) => option.id.toLowerCase() === id.toLowerCase(),
+  );
 }
 
 export function validateProviderModelSelection(
@@ -213,7 +264,38 @@ export function validateProviderModelSelection(
     };
   }
 
+  if (match.availability === 'unverified') {
+    return {
+      ok: true,
+      warning: 'STALE / UNVERIFIED catalog. Refresh models before treating this ID as current.',
+    };
+  }
+
   return { ok: true };
+}
+
+export function resolveSelectedModelOrDisable(
+  providerId: ProviderId,
+  selectedModelId: string,
+  ctx: ProviderConnectionContext,
+): { status: 'available' | 'missing'; modelId: string; error?: string } {
+  const trimmed = sanitizeModelId(selectedModelId);
+  if (!trimmed) {
+    return {
+      status: 'missing',
+      modelId: '',
+      error: `Select a ${getProviderDisplayName(providerId)} model.`,
+    };
+  }
+  const match = getModelsForProvider(providerId, ctx).find(
+    (option) => option.id.toLowerCase() === trimmed.toLowerCase(),
+  );
+  if (match) return { status: 'available', modelId: match.id };
+  return {
+    status: 'missing',
+    modelId: trimmed,
+    error: `${trimmed} is no longer available for ${getProviderDisplayName(providerId)}. Choose another model.`,
+  };
 }
 
 export function resolveModelOnProviderChange(
@@ -222,9 +304,14 @@ export function resolveModelOnProviderChange(
   ctx: ProviderConnectionContext,
 ): string {
   const options = getModelsForProvider(nextProvider, ctx, currentModel);
-  const keep = options.find((option) => option.id.toLowerCase() === sanitizeModelId(currentModel).toLowerCase());
+  const keep = options.find(
+    (option) => option.id.toLowerCase() === sanitizeModelId(currentModel).toLowerCase(),
+  );
   if (keep && !keep.isCustom) return keep.id;
-  return options.find((option) => !option.isCustom)?.id ?? defaultModelForProvider(nextProvider, ctx.defaultLocalModel);
+  return (
+    options.find((option) => !option.isCustom)?.id ??
+    defaultModelForProvider(nextProvider, ctx.defaultLocalModel)
+  );
 }
 
 export function getProviderModelCacheState(providerId: ProviderId): {
@@ -248,12 +335,28 @@ async function timedFetch(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
+interface OpenAiCompatibleModelRow {
+  id?: string;
+  type?: string;
+  capabilities?: { completion_chat?: boolean };
+}
+
+function isOpenAiCompatibleModelRow(value: unknown): value is OpenAiCompatibleModelRow {
+  return typeof value === 'object' && value !== null;
+}
+
 function parseOpenAiCompatibleModels(
   providerId: ProviderId,
-  payload: { data?: Array<{ id?: string }> },
+  payload: { data?: unknown[] } | unknown[],
 ): RegistryModelOption[] {
-  const rows = payload.data ?? [];
+  const rows = (Array.isArray(payload) ? payload : payload.data ?? []).filter(
+    isOpenAiCompatibleModelRow,
+  );
   return rows
+    .filter(
+      (row) => !row.type || row.type === 'chat' || row.type === 'language' || row.type === 'code',
+    )
+    .filter((row) => row.capabilities?.completion_chat !== false)
     .map((row) => row.id?.trim())
     .filter((id): id is string => Boolean(id))
     .filter((id) => !id.includes('embed') && !id.includes('whisper') && !id.includes('tts'))
@@ -267,7 +370,9 @@ function parseOpenAiCompatibleModels(
     }));
 }
 
-function parseGoogleModels(payload: { models?: Array<{ name?: string; displayName?: string }> }): RegistryModelOption[] {
+function parseGoogleModels(payload: {
+  models?: Array<{ name?: string; displayName?: string }>;
+}): RegistryModelOption[] {
   const rows: RegistryModelOption[] = [];
   for (const row of payload.models ?? []) {
     const raw = row.name?.replace(/^models\//, '').trim();
@@ -327,9 +432,34 @@ async function fetchModelsFromProvider(
       return parseGoogleModels(await res.json());
     }
     case 'groq':
-    case 'openrouter': {
+    case 'openrouter':
+    case 'deepseek':
+    case 'zai':
+    case 'mistral':
+    case 'together':
+    case 'xai':
+    case 'qwen': {
+      const endpoints: Record<string, string> = {
+        groq: 'https://api.groq.com/openai/v1/models',
+        openrouter: 'https://openrouter.ai/api/v1/models/user',
+        deepseek: 'https://api.deepseek.com/models',
+        zai: 'https://api.z.ai/api/paas/v4/models',
+        mistral: 'https://api.mistral.ai/v1/models',
+        together: 'https://api.together.xyz/models',
+        xai: 'https://api.x.ai/v1/language-models',
+        qwen: '',
+      };
       const base =
-        providerId === 'groq' ? 'https://api.groq.com/openai/v1/models' : 'https://openrouter.ai/api/v1/models';
+        providerId === 'qwen'
+          ? (() => {
+              const verified = verifiedQwenCompatibleBaseUrl();
+              if (!verified) {
+                throw new Error('Qwen has no authenticated endpoint for the current credential.');
+              }
+              return `${verified}/models`;
+            })()
+          : endpoints[providerId];
+      if (!base) return [];
       const res = await timedFetch(base, {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
@@ -378,6 +508,18 @@ export async function loadProviderModels(
         models: dynamic,
         stale: false,
       });
+      const connectionId = NATIVE_CONNECTION_ID_BY_PROVIDER[providerId];
+      if (connectionId && dynamic.length > 0) {
+        setDiscoveredConnectionModels(
+          connectionId,
+          dynamic.map((model) => ({
+            id: model.id,
+            label: model.label,
+            source: 'provider_list' as const,
+            lastVerifiedAt: Date.now(),
+          })),
+        );
+      }
       return getModelsForProvider(providerId, ctx);
     } catch (err) {
       dynamicModelCache.set(providerId, {

@@ -32,7 +32,7 @@ describe('ProviderModelSelect', () => {
     render(
       <ProviderModelSelect
         providerId="deepseek"
-        modelId="deepseek-chat"
+        modelId="deepseek-v4-flash"
         onProviderChange={vi.fn()}
         onModelChange={vi.fn()}
         providers={['deepseek']}
@@ -41,8 +41,8 @@ describe('ProviderModelSelect', () => {
 
     const modelSelect = screen.getByLabelText('Model');
     expect(modelSelect.tagName).toBe('SELECT');
-    expect(screen.getByRole('option', { name: /DeepSeek V3 Chat/i })).toBeTruthy();
-    expect(screen.getByRole('option', { name: /DeepSeek R1/i })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /DeepSeek V4 Flash/i })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /DeepSeek V4 Pro/i })).toBeTruthy();
     expect(screen.queryByLabelText(/Advanced: custom model ID/i)).toBeNull();
     expect(screen.queryByPlaceholderText(/custom-model-id/i)).toBeNull();
   });

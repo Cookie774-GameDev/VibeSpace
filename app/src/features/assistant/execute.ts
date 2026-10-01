@@ -12,9 +12,10 @@
  *   - Terminal intents are routed into the live terminal command queue so
  *     they spawn real PTYs or write into existing panes.
  */
-import { chatRepo, eventRepo, projectRepo, taskRepo } from '@/lib/db';
+import { agentRepo, chatRepo, eventRepo, projectRepo, taskRepo } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
+import { useFullscreenStore } from '@/features/fullscreen/fullscreenStore';
 import { parseEventInput } from '@/features/schedule/parseEventInput';
 import {
   broadcastTerminalCommand,
@@ -30,6 +31,7 @@ import { useToolStore, slugify } from '@/features/tools/toolStore';
 import { runAction } from '@/lib/actions';
 import { useWorkbenchStore } from '@/features/workbench/store';
 import { formatJarvisVerifiedNarration } from '@/lib/jarvis/response/templates';
+import { formatUserDateTime } from '@/lib/timeFormat';
 import type { AgentId, ProjectId, WorkspaceId } from '@/types/common';
 import type { AssistantIntent, AssistantResult } from './intents';
 
@@ -351,7 +353,7 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
           created_by: 'user_text',
         });
         const dueNote = intent.due_at
-          ? ` (due ${new Date(intent.due_at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })})`
+          ? ` (due ${formatUserDateTime(intent.due_at, { weekday: 'short' })})`
           : '';
         return ok(`Added task '${title}'${dueNote}.`);
       }
@@ -371,13 +373,17 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
           source: 'ai',
           created_by: useAuthStore.getState().localUserId ?? 'usr_local',
         });
-        const when = new Date(parsed.start_at).toLocaleString(undefined, {
-          weekday: 'short',
-          month: 'short',
-          day: 'numeric',
-          hour: parsed.all_day ? undefined : 'numeric',
-          minute: parsed.all_day ? undefined : '2-digit',
-        });
+        const when = parsed.all_day
+          ? new Date(parsed.start_at).toLocaleDateString(undefined, {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+            })
+          : formatUserDateTime(parsed.start_at, {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+            });
         return ok(`Scheduled '${parsed.title}' for ${when}.`);
       }
 
@@ -397,9 +403,10 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
           created_by: useAuthStore.getState().localUserId ?? 'usr_local',
         });
         const delay = parsed.start_at - Date.now();
+        const whenLabel = formatUserDateTime(parsed.start_at);
         const callContext = {
           title: parsed.title || 'Scheduled Jarvis call',
-          details: `User requested a Jarvis call for ${new Date(parsed.start_at).toLocaleString()}.`,
+          details: `User requested a Jarvis call for ${whenLabel}.`,
           scheduled_for: parsed.start_at,
         };
         if (delay <= 30_000) {
@@ -407,7 +414,7 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
         } else if (typeof window !== 'undefined') {
           window.setTimeout(() => fireOutboundCall('manual', callContext), delay);
         }
-        return ok(`Scheduled Jarvis to call you at ${new Date(parsed.start_at).toLocaleString()}.`);
+        return ok(`Scheduled Jarvis to call you at ${whenLabel}.`);
       }
 
       // ----------------------------------------------------------------
@@ -427,17 +434,19 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
 
       // ----------------------------------------------------------------
       case 'set_fullscreen': {
-        const ui = useUIStore.getState();
+        const fullscreen = useFullscreenStore.getState();
         if (intent.on === undefined) {
-          ui.toggleChatFullscreen();
+          fullscreen.toggleFocus();
           return ok(
-            useUIStore.getState().chatFullscreen ? 'Entered fullscreen.' : 'Exited fullscreen.',
+            useFullscreenStore.getState().focusActive
+              ? 'Entered Focus Mode.'
+              : 'Exited Focus Mode.',
           );
         }
-        if (ui.chatFullscreen !== intent.on) {
-          ui.setChatFullscreen(intent.on);
+        if (fullscreen.focusActive !== intent.on) {
+          fullscreen.setFocusActive(intent.on);
         }
-        return ok(intent.on ? 'Entered fullscreen.' : 'Exited fullscreen.');
+        return ok(intent.on ? 'Entered Focus Mode.' : 'Exited Focus Mode.');
       }
 
       // ----------------------------------------------------------------
@@ -464,6 +473,46 @@ export async function executeIntent(intent: AssistantIntent): Promise<AssistantR
       // slice hasn't landed yet this case will tsc-error — the integrator
       // is expected to reconcile.
       case 'navigate': {
+        if (intent.route === 'agent-detail') {
+          const selector = intent.selector?.trim();
+          if (!selector) return fail('Tell me which agent to open.');
+          const agents = await agentRepo.list();
+          const exactId = agents.find((agent) => agent.id === selector);
+          const normalized = selector.toLowerCase();
+          const nameMatches = agents.filter(
+            (agent) => agent.name.trim().toLowerCase() === normalized,
+          );
+          const agent = exactId ?? (nameMatches.length === 1 ? nameMatches[0] : undefined);
+          if (!agent) {
+            return fail(
+              nameMatches.length > 1
+                ? `More than one agent is named '${selector}'. Use its exact id.`
+                : `No agent named '${selector}'.`,
+            );
+          }
+          useUIStore.getState().setActiveAgent(agent.id);
+        }
+        if (intent.route === 'project-detail') {
+          const workspaceId = getWorkspaceId();
+          if (!workspaceId) return fail('No active workspace yet.');
+          const selector = intent.selector?.trim();
+          if (!selector) return fail('Tell me which project to open.');
+          const projects = await projectRepo.listByWorkspace(workspaceId);
+          const exactId = projects.find((project) => project.id === selector);
+          const normalized = selector.toLowerCase();
+          const nameMatches = projects.filter(
+            (project) => project.name.trim().toLowerCase() === normalized,
+          );
+          const project = exactId ?? (nameMatches.length === 1 ? nameMatches[0] : undefined);
+          if (!project) {
+            return fail(
+              nameMatches.length > 1
+                ? `More than one project is named '${selector}'. Use its exact id.`
+                : `No project named '${selector}'.`,
+            );
+          }
+          useAuthStore.getState().setProjectId(project.id);
+        }
         useUIStore.getState().setRoute(intent.route);
         return ok(`Showing ${intent.route}.`);
       }

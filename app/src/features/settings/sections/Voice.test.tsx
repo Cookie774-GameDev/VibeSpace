@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
     setPersona: vi.fn(),
     voicePreset: 'jarvis-prime',
     setVoicePreset: vi.fn(),
-    voiceEngine: 'kokoro' as 'deepgram' | 'kokoro' | 'local' | 'system',
+    voiceEngine: 'jarvis' as 'deepgram' | 'jarvis' | 'local' | 'system',
     setVoiceEngine: vi.fn(),
     speakReplies: false,
     setSpeakReplies: vi.fn(),
@@ -84,8 +84,12 @@ vi.mock('@/features/voice/providers/deepgramSpeak', () => ({
 }));
 
 vi.mock('@/features/voice/modelManager', () => ({
+  JARVIS_HIGH_SOURCE_URL: 'https://huggingface.co/jgkawell/jarvis/tree/main/en/en_GB/jarvis/high',
+  JARVIS_HIGH_MANIFEST: {
+    files: [{ name: 'jarvis-high.onnx', size_bytes: 114_199_011 }],
+  },
   ModelManager: {
-    ensureKokoroReady: vi.fn(async () => false),
+    ensureJarvisReady: vi.fn(async () => false),
     status: vi.fn(async () => ({ ready: false })),
   },
 }));
@@ -107,33 +111,27 @@ vi.mock('@/components/ui/switch', () => ({
   Switch: () => null,
 }));
 
+vi.mock('@/features/settings/components/MicrophoneTestPanel', () => ({
+  MicrophoneTestPanel: () => <button type="button">Test microphone</button>,
+}));
+
 const EXPECTED = {
   localInspection:
     'The action failed, sir. Action: Installed voice inspection. Cause: Installed voices could not be inspected. Check Windows speech voice packages, then try the check again.',
   localUnsupported:
-    'The action failed, sir. Action: Local voice availability. Cause: This runtime does not provide system speech synthesis. Select Kokoro or another available voice engine in Settings → Voice.',
-  microphoneAccess:
-    'The action failed, sir. Action: Microphone permission test. Cause: Microphone access was not granted. Check the operating-system and VibeSpace microphone permissions, confirm an input device is available, then try again.',
-  microphoneCapture:
-    'The action failed, sir. Action: Microphone capture. Cause: The selected microphone could not be opened. Close other apps using the device, check the input settings, then try again.',
-  microphoneDevice:
-    'The action failed, sir. Action: Microphone device check. Cause: No usable microphone input was found. Connect or enable an input device, confirm it is selected in the operating-system settings, then try again.',
-  microphoneUnknown:
-    'The action failed, sir. Action: Microphone test. Cause: Microphone access could not be verified. Check permissions and the selected input device, then try again.',
-  microphoneUnsupported:
-    'The action failed, sir. Action: Microphone availability. Cause: This runtime does not provide microphone access. Open VibeSpace in the desktop app or a browser with microphone support, then try again.',
+    'The action failed, sir. Action: Local voice availability. Cause: This runtime does not provide system speech synthesis. Select Jarvis High or another available voice engine in Settings → Voice.',
   preview: {
     deepgram:
       'The action failed, sir. Action: Deepgram voice preview. Cause: The selected voice could not play. Check the Deepgram engine in Settings → Voice, then try the preview again.',
-    kokoro:
-      'The action failed, sir. Action: Kokoro voice preview. Cause: The selected voice could not play. Check the Kokoro engine in Settings → Voice, then try the preview again.',
+    jarvis:
+      'The action failed, sir. Action: Jarvis High voice preview. Cause: The selected voice could not play. Check the Jarvis High engine in Settings → Voice, then try the preview again.',
     local:
       'The action failed, sir. Action: Local voice preview. Cause: The selected voice could not play. Check the Local engine in Settings → Voice, then try the preview again.',
     system:
       'The action failed, sir. Action: System voice preview. Cause: The selected voice could not play. Check the System engine in Settings → Voice, then try the preview again.',
   },
-  kokoro:
-    'The action failed, sir. Action: Kokoro voice test. Cause: The local neural voice could not synthesize the test phrase. Jarvis will use the Windows Natural voice; check the local model in Settings → Voice, then try again.',
+  jarvis:
+    'The action failed, sir. Action: Jarvis High voice test. Cause: The local Piper voice could not synthesize the test phrase. Jarvis will use the operating-system fallback; check the local model in Settings → Voice, then try again.',
   settings:
     'The action failed, sir. Action: Windows speech settings. Cause: Windows Speech settings could not be opened automatically. Open Settings → Time & language → Speech manually, install a voice package, then check local voices again.',
 } as const;
@@ -149,7 +147,10 @@ function toastPayload(): string {
 describe('Voice settings failure narration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.authState.voiceEngine = 'kokoro';
+    mocks.authState.voiceEngine = 'jarvis';
+    mocks.authState.voiceAutoListenOnOpen = true;
+    mocks.authState.voiceEndTrigger = 'phrase';
+    mocks.authState.voiceSilenceDelayMs = 1_500;
     mocks.isSpeechSynthesisSupported.mockReturnValue(true);
     mocks.getInstalledSpeechVoices.mockResolvedValue([]);
     mocks.previewVoiceWithSettings.mockResolvedValue(undefined);
@@ -164,91 +165,48 @@ describe('Voice settings failure narration', () => {
     });
   });
 
-  it('gives an actionable closed diagnostic when microphone access is unsupported', () => {
-    Object.defineProperty(navigator, 'mediaDevices', {
-      configurable: true,
-      value: undefined,
-    });
+  it('shows Jarvis High as default, credits the model, labels OS fallback, and exposes two personas', () => {
     renderVoice();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Test microphone' }));
-
-    expect(mocks.toast.error).toHaveBeenCalledWith(
-      'Microphone unavailable',
-      EXPECTED.microphoneUnsupported,
-    );
-    expect(toastPayload()).not.toContain('mediaDevices API');
+    expect(
+      screen.getByRole('button', { name: /Jarvis HighDefault offline Piper voice/i }),
+    ).toBeTruthy();
+    expect(screen.getByText(/108\.91 MiB/)).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLAnchorElement>('link', { name: 'Jack Kawell on Hugging Face' }).href,
+    ).toBe('https://huggingface.co/jgkawell/jarvis/tree/main/en/en_GB/jarvis/high');
+    expect(screen.getByRole('button', { name: /OS local fallback/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /JarvisCrisp, attentive/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /FridayWarm, capable/i })).toBeTruthy();
+    expect(screen.queryByText('Athena')).toBeNull();
+    expect(screen.queryByText('Edge')).toBeNull();
+    expect(screen.queryByText('Watson')).toBeNull();
+    expect(screen.queryByText('HAL')).toBeNull();
   });
 
-  it('does not expose a microphone permission exception', async () => {
-    const rawDetail = 'RAW_MIC_DEVICE_ID_AND_PERMISSION_SENTINEL';
-    Object.defineProperty(navigator, 'mediaDevices', {
-      configurable: true,
-      value: {
-        getUserMedia: vi.fn(async () =>
-          Promise.reject(new DOMException(rawDetail, 'NotAllowedError')),
-        ),
-      },
-    });
+  it('shows no duration or hands-free timeout in explicit send-it mode', () => {
     renderVoice();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Test microphone' }));
-
-    await vi.waitFor(() =>
-      expect(mocks.toast.warning).toHaveBeenCalledWith(
-        'Mic test failed',
-        EXPECTED.microphoneAccess,
-      ),
-    );
-    expect(toastPayload()).not.toContain(rawDetail);
+    expect(screen.getByText(/keeps listening until you say "send it"/i)).toBeTruthy();
+    expect(document.querySelector('#voice-silence-delay')).toBeNull();
+    expect(document.querySelector('#voice-listen-timeout')).toBeNull();
   });
 
-  it.each([
-    ['NotFoundError', EXPECTED.microphoneDevice],
-    ['NotReadableError', EXPECTED.microphoneCapture],
-  ] as const)(
-    'truthfully classifies %s without exposing its microphone exception',
-    async (name, expectedMessage) => {
-      const rawDetail = `RAW_${name}_MICROPHONE_SENTINEL`;
-      Object.defineProperty(navigator, 'mediaDevices', {
-        configurable: true,
-        value: {
-          getUserMedia: vi.fn(async () => Promise.reject(new DOMException(rawDetail, name))),
-        },
-      });
-      renderVoice();
-
-      fireEvent.click(screen.getByRole('button', { name: 'Test microphone' }));
-
-      await vi.waitFor(() =>
-        expect(mocks.toast.warning).toHaveBeenCalledWith('Mic test failed', expectedMessage),
-      );
-      expect(toastPayload()).not.toContain(rawDetail);
-    },
-  );
-
-  it('uses a truthful closed fallback for an unrecognized microphone exception', async () => {
-    const rawDetail = 'RAW_UNKNOWN_MICROPHONE_SENTINEL';
-    Object.defineProperty(navigator, 'mediaDevices', {
-      configurable: true,
-      value: {
-        getUserMedia: vi.fn(async () => Promise.reject(new Error(rawDetail))),
-      },
-    });
+  it('shows exactly one 1-60 second silence control in pause mode', () => {
+    mocks.authState.voiceEndTrigger = 'silence';
+    mocks.authState.voiceSilenceDelayMs = 60_000;
     renderVoice();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Test microphone' }));
-
-    await vi.waitFor(() =>
-      expect(mocks.toast.warning).toHaveBeenCalledWith(
-        'Mic test failed',
-        EXPECTED.microphoneUnknown,
-      ),
-    );
-    expect(toastPayload()).not.toContain(rawDetail);
+    const control = document.querySelector<HTMLInputElement>('#voice-silence-delay');
+    expect(control).not.toBeNull();
+    expect(control?.min).toBe('1000');
+    expect(control?.max).toBe('60000');
+    expect(screen.getAllByText('60 seconds')).toHaveLength(2);
+    expect(document.querySelector('#voice-listen-timeout')).toBeNull();
+    expect(screen.getAllByText(/silence duration/i)).toHaveLength(2);
   });
 
-  it.each(['deepgram', 'kokoro', 'local', 'system'] as const)(
+  it.each(['deepgram', 'jarvis', 'local', 'system'] as const)(
     'does not expose a %s preview exception and identifies the selected engine',
     async (engine) => {
       const rawDetail = `RAW_${engine.toUpperCase()}_PROVIDER_PREVIEW_SENTINEL`;
@@ -298,15 +256,15 @@ describe('Voice settings failure narration', () => {
     expect(toastPayload()).not.toContain(rawDetail);
   });
 
-  it('uses the same safe Kokoro fallback diagnostic in the toast and inline status', async () => {
-    const rawDetail = 'RAW_KOKORO_SYNTHESIS_SENTINEL';
+  it('uses the same safe Jarvis fallback diagnostic in the toast and inline status', async () => {
+    const rawDetail = 'RAW_JARVIS_SYNTHESIS_SENTINEL';
     mocks.previewVoiceWithSettings.mockRejectedValueOnce(new Error(rawDetail));
     renderVoice();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Test Kokoro voice' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test Jarvis High voice' }));
 
-    expect(await screen.findByText(EXPECTED.kokoro)).toBeTruthy();
-    expect(mocks.toast.error).toHaveBeenCalledWith('Kokoro test failed', EXPECTED.kokoro);
+    expect(await screen.findByText(EXPECTED.jarvis)).toBeTruthy();
+    expect(mocks.toast.error).toHaveBeenCalledWith('Jarvis High test failed', EXPECTED.jarvis);
     expect(screen.queryByText(rawDetail)).toBeNull();
     expect(toastPayload()).not.toContain(rawDetail);
   });

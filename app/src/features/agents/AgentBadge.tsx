@@ -11,32 +11,31 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import type { Agent } from '@/types';
 import { Avatar } from '@/components/ui/avatar';
 import { cn, hueFromString } from '@/lib/utils';
+import { EmojiMark } from '@/features/emoji/EmojiMark';
 import { getAgentIcon } from './icons';
 
-const badgeVariants = cva(
-  'inline-flex items-center gap-1.5 select-none transition-colors',
-  {
-    variants: {
-      variant: {
-        plain: '',
-        chip: 'rounded-full border border-border bg-elevated px-2 py-0.5',
-        button:
-          'rounded-md border border-border bg-elevated hover:bg-muted px-2 py-1 cursor-pointer',
-      },
-      size: {
-        sm: 'text-metadata',
-        md: 'text-secondary',
-        lg: 'text-body',
-      },
+const badgeVariants = cva('inline-flex items-center gap-1.5 select-none transition-colors', {
+  variants: {
+    variant: {
+      plain: '',
+      chip: 'rounded-full border border-border bg-elevated px-2 py-0.5',
+      button: 'rounded-md border border-border bg-elevated hover:bg-muted px-2 py-1 cursor-pointer',
     },
-    defaultVariants: { variant: 'plain', size: 'md' },
+    size: {
+      sm: 'text-metadata',
+      md: 'text-secondary',
+      lg: 'text-body',
+    },
   },
-);
+  defaultVariants: { variant: 'plain', size: 'md' },
+});
 
 const avatarSize = { sm: 14, md: 18, lg: 22 } as const;
+const emojiSize = { sm: 'h-3.5 w-3.5', md: 'h-[18px] w-[18px]', lg: 'h-[22px] w-[22px]' } as const;
 
 export interface AgentBadgeProps
-  extends Omit<React.HTMLAttributes<HTMLSpanElement>, 'children'>,
+  extends
+    Omit<React.HTMLAttributes<HTMLSpanElement>, 'children'>,
     VariantProps<typeof badgeVariants> {
   /** The agent to render. */
   agent: Agent;
@@ -79,13 +78,17 @@ export const AgentBadge = React.forwardRef<HTMLSpanElement, AgentBadgeProps>(
 
     return (
       <span ref={ref} className={cn(badgeVariants({ variant, size }), className)} {...props}>
-        <Avatar
-          size={avatarSize[sizeKey]}
-          seed={seed}
-          className="ring-1 ring-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)]"
-        >
-          <Icon size={iconSize} strokeWidth={2.4} aria-hidden />
-        </Avatar>
+        {agent.emoji ? (
+          <EmojiMark token={agent.emoji} className={emojiSize[sizeKey]} />
+        ) : (
+          <Avatar
+            size={avatarSize[sizeKey]}
+            seed={seed}
+            className="ring-1 ring-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)]"
+          >
+            <Icon size={iconSize} strokeWidth={2.4} aria-hidden />
+          </Avatar>
+        )}
         {showName && (
           <span className="font-medium text-foreground truncate max-w-[160px]">
             {label ?? agent.name}

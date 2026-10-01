@@ -457,6 +457,7 @@ function validateParent(
   const contextRunId = requiredOwnDataValue(context, 'runId', 'context_mismatch');
   const contextRequestId = requiredOwnDataValue(context, 'requestId', 'context_mismatch');
   const contextAttemptNumber = requiredOwnDataValue(context, 'attemptNumber', 'context_mismatch');
+  const contextCallId = requiredOwnDataValue(context, 'callId', 'context_mismatch');
   if (
     contextSource !== 'ai' ||
     !stableText(contextAccountId) ||
@@ -467,7 +468,8 @@ function validateParent(
     contextAccountId !== parentAccountId ||
     contextRunId !== parentRunId ||
     contextRequestId !== attemptIdentity.requestId ||
-    contextAttemptNumber !== attemptIdentity.attemptNumber
+    contextAttemptNumber !== attemptIdentity.attemptNumber ||
+    contextCallId !== action.id
   ) {
     reject('context_mismatch');
   }

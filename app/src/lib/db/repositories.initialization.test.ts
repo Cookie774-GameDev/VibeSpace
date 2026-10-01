@@ -30,3 +30,10 @@ it('does not bind the database into a repository during module initialization', 
     /export const memoryEvidenceRepo\s*=\s*createMemoryEvidenceRepository\(db\);/u,
   );
 });
+
+it('does not evaluate the circular database binding while constructing reminder claims', () => {
+  const source = readFileSync(resolve('src/lib/db/repositories.ts'), 'utf8');
+  expect(source).not.toMatch(
+    /createReminderClaimRepository\s*\(\s*database:\s*JarvisDexie\s*=\s*db\s*\)/u,
+  );
+});

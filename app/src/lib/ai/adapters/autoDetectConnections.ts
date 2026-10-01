@@ -163,12 +163,32 @@ export async function detectExternalConnectionStates(
 
 export function createExternalConnectionAutoDetector(
   dependencies: ExternalConnectionDetectionDependencies = DEFAULT_DEPENDENCIES,
-): Readonly<{ ensure: () => Promise<ConnectionMetadata> }> {
-  let sessionScan: Promise<ConnectionMetadata> | undefined;
+  ttlMs = 60_000,
+): Readonly<{
+  ensure: (options?: Readonly<{ force?: boolean }>) => Promise<ConnectionMetadata>;
+  invalidate: () => void;
+}> {
+  let inFlight: Promise<ConnectionMetadata> | undefined;
+  let lastCompletedAt = Number.NEGATIVE_INFINITY;
   return Object.freeze({
-    ensure(): Promise<ConnectionMetadata> {
-      sessionScan ??= detectExternalConnectionStates(dependencies);
-      return sessionScan;
+    ensure(options): Promise<ConnectionMetadata> {
+      if (inFlight) return inFlight;
+      if (!options?.force && dependencies.now() - lastCompletedAt < ttlMs) {
+        return Promise.resolve(dependencies.readMetadata());
+      }
+      const scan = detectExternalConnectionStates(dependencies);
+      inFlight = scan;
+      const complete = () => {
+        if (inFlight === scan) {
+          lastCompletedAt = dependencies.now();
+          inFlight = undefined;
+        }
+      };
+      void scan.then(complete, complete);
+      return scan;
+    },
+    invalidate(): void {
+      lastCompletedAt = Number.NEGATIVE_INFINITY;
     },
   });
 }
@@ -177,4 +197,9 @@ const defaultDetector = createExternalConnectionAutoDetector();
 
 export function ensureExternalConnectionAutoDetection(): Promise<ConnectionMetadata> {
   return defaultDetector.ensure();
+}
+
+export function refreshExternalConnectionAutoDetection(): Promise<ConnectionMetadata> {
+  defaultDetector.invalidate();
+  return defaultDetector.ensure({ force: true });
 }

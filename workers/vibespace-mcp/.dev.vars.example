@@ -1,0 +1,2 @@
+RELAY_TICKET_KEY=replace-with-32-or-more-random-bytes
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_replace_with_vibespace_public_key

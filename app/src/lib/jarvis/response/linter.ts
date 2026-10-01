@@ -103,20 +103,29 @@ function withoutEpistemicCompletionLanguage(prose: string): string {
     .replace(/\bif\b[^.!?\n]{0,80}?\b(?:done|completed|finished|succeeded|successful)\b/gi, '');
 }
 
+export function containsProtectedInformationDisclosure(prose: string): boolean {
+  return (
+    /\bhidden\s+(?:system\s+prompt|prompt|instructions?)\b/i.test(prose) ||
+    /\b(?:here\s+is|verbatim|exact)\s+(?:the\s+)?(?:system\s+prompt|developer\s+message|chain\s+of\s+thought)\b/i.test(
+      prose,
+    ) ||
+    /\b(?:system\s+prompt|developer\s+message|chain\s+of\s+thought)\s*:/i.test(prose) ||
+    /\b(?:reveal|show|print|provide|send|share|repeat|expose)\b[\s\S]{0,80}\b(?:system\s+prompt|hidden\s+(?:prompt|instructions?)|developer\s+message|chain\s+of\s+thought)\b/i.test(
+      prose,
+    ) ||
+    /\b(?:send|share|provide|reveal|enter)\b[\s\S]{0,80}\b(?:password|api key|token|credential|secret)\b/i.test(
+      prose,
+    )
+  );
+}
+
 export function lintJarvisProse(
   prose: string,
   mode: JarvisResponseMode,
   facts: Readonly<JarvisVerifiedFacts>,
 ): readonly JarvisLintViolation[] {
   const violations: JarvisLintViolation[] = [];
-  if (
-    /\b(system prompt|hidden (?:prompt|instructions?)|developer message|chain of thought)\b/i.test(
-      prose,
-    ) ||
-    /\b(?:send|share|provide|reveal|enter)\b[\s\S]{0,80}\b(?:password|api key|token|credential|secret)\b/i.test(
-      prose,
-    )
-  ) {
+  if (containsProtectedInformationDisclosure(prose)) {
     violations.push(
       violation('protected_information_leak', 'quarantine', 'Protected information disclosure.'),
     );

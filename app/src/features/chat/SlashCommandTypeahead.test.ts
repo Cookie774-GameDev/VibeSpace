@@ -9,6 +9,7 @@ import {
   slashCmdMatchScore,
   type SlashCommandDef,
 } from './SlashCommandTypeahead';
+import { SECTION_20_COMMANDS } from './slashCommandRouting';
 
 describe('orderSlashCommandsForDisplay', () => {
   it('matches the grouped visual order used by the slash dropdown', () => {
@@ -25,7 +26,7 @@ describe('orderSlashCommandsForDisplay', () => {
     ]);
   });
 
-  it('includes Hive as a chat command for the composer', () => {
+  it('archives Hive in the full table but hides it from product resolution by default', () => {
     const hive = SLASH_COMMANDS.find((cmd) => cmd.cmd === 'hive');
 
     expect(hive).toMatchObject({
@@ -34,6 +35,8 @@ describe('orderSlashCommandsForDisplay', () => {
       description: 'Reference Hive Balanced in chat',
     });
     expect(SLASH_COMMANDS.some((cmd) => cmd.cmd === 'vibehive')).toBe(false);
+    // Product gate: /hive is not findable while VITE_HIVE_ENABLED is off.
+    expect(findSlashCommandDef('hive')).toBeUndefined();
   });
 
   it('does not duplicate terminal navigation and attach commands', () => {
@@ -47,7 +50,13 @@ describe('orderSlashCommandsForDisplay', () => {
     expect(SLASH_COMMANDS.some((cmd) => cmd.cmd === 'skillspage')).toBe(false);
   });
 
+  it('registers every canonical Section 20 command exactly once', () => {
+    expect(SLASH_COMMANDS.map(({ cmd }) => cmd)).toEqual(SECTION_20_COMMANDS);
+    expect(new Set(SLASH_COMMANDS.map(({ cmd }) => cmd)).size).toBe(SECTION_20_COMMANDS.length);
+  });
+
   it('normalizes legacy slash spellings', () => {
+    expect(normalizeSlashCmd('mode')).toBe('mode');
     expect(normalizeSlashCmd('terminal')).toBe('terminals');
     expect(normalizeSlashCmd('contextmap')).toBe('context');
     expect(normalizeSlashCmd('subagent')).toBe('subagents');
@@ -57,11 +66,36 @@ describe('orderSlashCommandsForDisplay', () => {
     expect(normalizeSlashCmd('multitaksk')).toBe('multitask');
     expect(normalizeSlashCmd('clearfile')).toBe('clearfiles');
     expect(normalizeSlashCmd('cearfile')).toBe('clearfiles');
+    expect(normalizeSlashCmd('themes')).toBe('theme');
+  });
+
+  it('keeps Agent, Plan, and Ask under the explicit /permissions picker', () => {
+    expect(findSlashCommandDef('permissions')).toMatchObject({
+      cmd: 'permissions',
+      hasOptions: true,
+      argPlaceholder: 'agent | plan | ask | read | write | full | approve-all',
+    });
+  });
+
+  it('registers /output for chat media inventory', () => {
+    expect(findSlashCommandDef('output')).toMatchObject({
+      cmd: 'output',
+      category: 'chat',
+    });
   });
 
   it('marks /file as a project-file attach picker command', () => {
     expect(findSlashCommandDef('file')?.hasOptions).toBe(true);
     expect(isChatAttachSlashCmd('file')).toBe(true);
+  });
+
+  it('offers /md as a structured Markdown document generator', () => {
+    expect(findSlashCommandDef('md')).toMatchObject({
+      cmd: 'md',
+      category: 'chat',
+      takesArg: true,
+      hasOptions: true,
+    });
   });
 
   it('marks /canvas as a structured Canvas attachment picker', () => {
@@ -109,14 +143,66 @@ describe('orderSlashCommandsForDisplay', () => {
     expect(findSlashCommandDef('redo')?.cmd).toBe('redo');
   });
 
-  it('advertises Sakura in the local /theme utility command', () => {
+  it('separates scoped /theme profiles from global /appearance', () => {
     expect(findSlashCommandDef('theme')).toMatchObject({
       cmd: 'theme',
       category: 'utility',
       takesArg: true,
-      description: 'Switch Jarvis Core, VibeSpace, Default, MonoChrome, or Sakura',
-      argPlaceholder: 'jarvis | vibespace | default | monochrome | sakura',
+      description: 'Style this agentic chat console',
+      argPlaceholder: 'paper white | sakura mist | graphite | oled void',
     });
-    expect(JSON.stringify(findSlashCommandDef('theme'))).not.toMatch(/\b(?:light|dusk|blossom)\b/i);
+    expect(findSlashCommandDef('theme')?.hasOptions).toBe(true);
+    expect(findSlashCommandDef('themes')).toMatchObject({ cmd: 'theme' });
+    expect(findSlashCommandDef('appearance')).toMatchObject({
+      cmd: 'appearance',
+      category: 'utility',
+      takesArg: true,
+      hasOptions: true,
+      description: 'Switch the global VibeSpace appearance',
+    });
+  });
+
+  it('offers /rlm as a default-on context control', () => {
+    expect(findSlashCommandDef('rlm')).toMatchObject({
+      cmd: 'rlm',
+      category: 'chat',
+      takesArg: true,
+      hasOptions: true,
+      argPlaceholder: 'on | off | status | refresh | trace',
+    });
+  });
+
+  it('offers provider-aware effort and policy mode pickers', () => {
+    expect(findSlashCommandDef('effort')).toMatchObject({
+      cmd: 'effort',
+      category: 'chat',
+      takesArg: true,
+      hasOptions: true,
+    });
+    expect(findSlashCommandDef('mode')).toMatchObject({
+      cmd: 'mode',
+      category: 'chat',
+      takesArg: true,
+      hasOptions: true,
+    });
+  });
+
+  it('exposes Token Final Boss only through the /mode picker', () => {
+    expect(findSlashCommandDef('mode')).toMatchObject({
+      cmd: 'mode',
+      hasOptions: true,
+      argPlaceholder: 'token saver | normal | token final boss',
+    });
+    expect(findSlashCommandDef('token')).toBeUndefined();
+    expect(SLASH_COMMANDS.some((cmd) => cmd.label === 'Token Boss')).toBe(false);
+    expect(SLASH_COMMANDS.some((cmd) => cmd.displayCommand === '/token boss')).toBe(false);
+  });
+
+  it('offers /chat as a two-engine option picker instead of a navigation reference', () => {
+    expect(findSlashCommandDef('chat')).toMatchObject({
+      cmd: 'chat',
+      category: 'chat',
+      hasOptions: true,
+    });
   });
 });

@@ -6,7 +6,7 @@
  * subscription, quota, and rate limits, then returns base64 audio.
  *
  * On any non-OK response (quota_exceeded, cloud_unavailable, etc.) we throw a
- * coded error so the TtsService can fall back to local Kokoro / system voice.
+ * coded error so the TtsService can fall back to local Jarvis High / system voice.
  */
 import type { SpeakChunkOptions, VoiceProvider } from './types';
 import type { VoiceProviderId } from '../voicePlans';

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import {
+  ArrowLeft,
   BrainCircuit,
   Boxes,
   ChevronRight,
@@ -31,12 +32,14 @@ import { Button, Input, toast } from '@/components/ui';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { cn } from '@/lib/utils';
+import { formatUserDateTime } from '@/lib/timeFormat';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { notifyDone } from '@/lib/notifications';
 import type { ProviderId } from '@/types';
 import {
   basename,
   chooseProjectFolder,
+  chooseProjectFiles,
   getStoredProjectRoot,
   setStoredProjectRoot,
 } from '@/features/files/projectFiles';
@@ -78,7 +81,9 @@ import {
   selectPersistedContextMap,
 } from './contextPersistence';
 import type { ContextRecoverySummary } from './contextRecovery';
-import { ContextRecoveryNotice } from './ContextRecoveryNotice';
+import { NightlySecondBrainPanel } from './NightlySecondBrainPanel';
+import { searchContextNodes } from './contextSearch';
+import { createContextSearchIndexPopulationPort } from './contextSearchIndexing';
 import {
   CONTEXT_CENTER_MODES,
   CONTEXT_INSPECTOR_TABS,
@@ -96,6 +101,13 @@ import {
   type ContextSourceCard,
   type ContextWorkspaceSectionId,
 } from './contextWorkspaceUi';
+import { ContextGalaxy } from './ContextGalaxy';
+import { contextTreeToGalaxyData, publishContextGalaxySnapshot } from './contextGalaxyRegistry';
+import {
+  createSupabaseGitHubContextServerExecutor,
+  type GitHubContextServerRepository,
+} from './githubContextAuth';
+import { buildGitHubProjectContextTree } from './githubContextTree';
 import './sakura-context.css';
 
 const PROJECT_ROOT_NODE_ID = '__jarvis-context-root__';
@@ -112,6 +124,12 @@ const MAP_CENTER = { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 };
 const MAX_CONTEXT_MAP_LAYOUT_NODES = 100_000;
 const MAX_CONTEXT_MAP_LAYOUT_EDGES = 500_000;
 const DEFAULT_VIEW = centeredView(3000, 2100);
+const WARM_CONTEXT_SOURCE_ART: Record<ContextSourceCard['kind'], string> = {
+  local_folder: '/assets/themes/warm/context/context-folder-v1.webp',
+  local_file: '/assets/themes/warm/context/context-file-v1.webp',
+  github_repository: '/assets/themes/warm/context/context-repository-v1.webp',
+};
+const contextSearchIndexPopulation = createContextSearchIndexPopulationPort();
 
 type ProviderKeys = Partial<Record<ProviderId, string>>;
 
@@ -135,6 +153,14 @@ export function ContextPage() {
   const [centerMode, setCenterMode] = React.useState<ContextCenterModeId>('graph');
   const [inspectorTab, setInspectorTab] = React.useState<ContextInspectorTabId>('details');
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [focusedMap, setFocusedMap] = React.useState(false);
+  const [githubPickerOpen, setGithubPickerOpen] = React.useState(false);
+  const [githubInstallationId, setGithubInstallationId] = React.useState('');
+  const [githubRepositories, setGithubRepositories] = React.useState<
+    readonly GitHubContextServerRepository[]
+  >([]);
+  const [githubBusy, setGithubBusy] = React.useState(false);
+  const [githubError, setGithubError] = React.useState('');
   const [jarvisUi, setJarvisUi] = React.useState<ContextJarvisUi>(() => buildJarvisContextUi(null));
   const lastAppliedFileRef = React.useRef('');
   const generationAbortRef = React.useRef<AbortController | null>(null);
@@ -417,18 +443,37 @@ export function ContextPage() {
     async (mapId: string) => {
       try {
         const state = await selectPersistedContextMap(projectId, mapId);
-        if (!applyPersistenceState(state)) return;
+        if (!applyPersistenceState(state)) return false;
       } catch (error) {
         toast.error(
           'Could not select Context map',
           error instanceof Error ? error.message : 'Unknown persistence error',
         );
-        return;
+        return false;
       }
       setSelectedId(PROJECT_ROOT_NODE_ID);
+      return true;
     },
     [applyPersistenceState, projectId],
   );
+
+  const openFocusedMap = React.useCallback(
+    async (mapId: string) => {
+      if (!(await selectMap(mapId))) return;
+      setCenterMode('graph');
+      setFocusedMap(true);
+    },
+    [selectMap],
+  );
+
+  React.useEffect(() => {
+    if (!focusedMap) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFocusedMap(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [focusedMap]);
 
   const deleteMap = React.useCallback(
     async (mapId: string) => {
@@ -463,6 +508,125 @@ export function ContextPage() {
     setStoredProjectRoot(projectId, picked);
     toast.success('Project folder selected', picked);
   };
+
+  const openFilePicker = async () => {
+    const [picked] = await chooseProjectFiles(false, {
+      title: 'Choose a file for this Context map',
+      initialPath: rootDraft.trim() || undefined,
+    });
+    if (!picked) return;
+    const containingFolder = parentDirectory(picked);
+    setRootDraft(containingFolder);
+    setStoredProjectRoot(projectId, containingFolder);
+    setStatus(
+      `Selected ${basename(picked)}. Create Map will securely index its containing folder.`,
+    );
+    toast.success('Context file selected', basename(picked));
+  };
+
+  const loadGitHubRepositories = React.useCallback(async () => {
+    const installationId = githubInstallationId.trim();
+    if (!accountId) {
+      setGithubError('Sign in before connecting a GitHub repository.');
+      return;
+    }
+    if (!/^[1-9]\d{0,15}$/u.test(installationId)) {
+      setGithubError('Enter the numeric installation ID from the VibeSpace GitHub App setup.');
+      return;
+    }
+    setGithubBusy(true);
+    setGithubError('');
+    try {
+      const executor = createSupabaseGitHubContextServerExecutor(
+        () => resolveAccountIdentity(useAuthStore.getState())?.accountId ?? null,
+      );
+      const result = await executor.execute(accountId, {
+        operation: 'list_repositories',
+        installationId,
+        page: 1,
+      });
+      if (result.operation !== 'list_repositories')
+        throw new Error('github_context_response_invalid');
+      setGithubRepositories(result.repositories);
+      setStatus(
+        result.repositories.length
+          ? `Choose one of ${result.repositories.length} read-only GitHub repositories.`
+          : 'This GitHub App installation has no accessible repositories.',
+      );
+    } catch (error) {
+      setGithubRepositories([]);
+      setGithubError(
+        error instanceof Error
+          ? error.message
+          : 'The read-only GitHub repository list is unavailable.',
+      );
+    } finally {
+      setGithubBusy(false);
+    }
+  }, [accountId, githubInstallationId]);
+
+  const createGitHubMap = React.useCallback(
+    async (repository: GitHubContextServerRepository) => {
+      const installationId = githubInstallationId.trim();
+      if (!accountId || githubBusy) return;
+      if (activeMapCount >= MAX_ACTIVE_CONTEXT_MAPS) {
+        toast.warning(
+          'Active Context map limit reached',
+          `Delete an active map first. Jarvis keeps up to ${MAX_ACTIVE_CONTEXT_MAPS} active maps per project.`,
+        );
+        return;
+      }
+      setGithubBusy(true);
+      setGithubError('');
+      setStatus(`Reading ${repository.fullName} at ${repository.defaultBranch}...`);
+      try {
+        const executor = createSupabaseGitHubContextServerExecutor(
+          () => resolveAccountIdentity(useAuthStore.getState())?.accountId ?? null,
+        );
+        const result = await executor.execute(accountId, {
+          operation: 'read_tree',
+          installationId,
+          repositoryId: repository.id,
+          ref: repository.defaultBranch,
+        });
+        if (result.operation !== 'read_tree') throw new Error('github_context_response_invalid');
+        const generated = buildGitHubProjectContextTree({ projectId, repository, result });
+        const persisted = await savePersistedContextTree(generated, {
+          name: `${repository.fullName} Context Map`,
+          source: {
+            kind: 'github_repository',
+            label: repository.fullName,
+            branchRef: repository.defaultBranch,
+            github: {
+              installationId,
+              owner: repository.owner,
+              repository: repository.name,
+              resolvedCommitSha: result.sha,
+              visibility: repository.private ? 'private' : 'public',
+            },
+          },
+        });
+        if (!applyPersistenceState(persisted)) return;
+        setSelectedId(PROJECT_ROOT_NODE_ID);
+        setCenterMode('graph');
+        setGithubPickerOpen(false);
+        setStatus(
+          `${repository.fullName} mapped at ${result.sha.slice(0, 12)}${
+            result.truncated ? ' (GitHub returned a partial tree).' : '.'
+          }`,
+        );
+        toast.success('GitHub Context map ready', repository.fullName);
+      } catch (error) {
+        setGithubError(
+          error instanceof Error ? error.message : 'The GitHub Context map could not be created.',
+        );
+        setStatus('GitHub Context map creation failed.');
+      } finally {
+        setGithubBusy(false);
+      }
+    },
+    [accountId, activeMapCount, applyPersistenceState, githubBusy, githubInstallationId, projectId],
+  );
 
   const rememberRoot = () => {
     const clean = rootDraft.trim();
@@ -536,6 +700,31 @@ export function ContextPage() {
         return;
       }
       const persisted = await savePersistedContextTree(generated);
+      const persistedMap = persisted.maps.find(
+        (map) => map.id === persisted.selectedMapId && map.status === 'active',
+      );
+      if (!persistedMap) throw new Error('context_search_index_snapshot_invalid');
+      setStatus(`Indexing ${generated.fileCount} Context files...`);
+      try {
+        await contextSearchIndexPopulation.populateCreatedMap(
+          persisted.accountId,
+          persistedMap,
+          controller.signal,
+        );
+      } catch (indexError) {
+        await deletePersistedContextMap(projectId, persistedMap.id).catch(() => undefined);
+        throw indexError;
+      }
+      const indexedAuth = useAuthStore.getState();
+      if (
+        controller.signal.aborted ||
+        generationAbortRef.current !== controller ||
+        resolveAccountIdentity(indexedAuth)?.accountId !== accountId ||
+        (indexedAuth.projectId ?? null) !== (projectId ?? null)
+      ) {
+        setStructuralPreview(null);
+        return;
+      }
       if (!applyPersistenceState(persisted)) return;
       setStructuralPreview(null);
       setSelectedId(PROJECT_ROOT_NODE_ID);
@@ -613,15 +802,48 @@ export function ContextPage() {
         return;
       }
       if (kind === 'local_file') {
-        setStatus('Open Files to select and inspect an individual local file.');
-        setRoute('files');
+        void openFilePicker();
         return;
       }
-      setStatus('Open Tools to connect or manage the read-only VibeSpace GitHub App.');
-      setRoute('tools');
+      setStatus(
+        'GitHub repository selection stays here. Connect the read-only GitHub App if no repositories are available.',
+      );
+      setGithubPickerOpen(true);
     },
-    [openFolderPicker, setRoute],
+    [openFolderPicker],
   );
+
+  if (focusedMap && tree && rootNode && selected) {
+    return (
+      <div
+        data-monochrome-route="context"
+        data-sakura-route="context"
+        data-context-focused-map
+        className="h-full min-h-0 w-full overflow-hidden bg-background p-3"
+      >
+        <ContextMapWorkspace
+          accountId={accountId}
+          tree={tree}
+          rootNode={rootNode}
+          selected={selected}
+          selectedId={selected.id}
+          onSelect={setSelectedId}
+          flash={mapFlash}
+          mode="graph"
+          onModeChange={setCenterMode}
+          inspectorTab={inspectorTab}
+          onInspectorTabChange={setInspectorTab}
+          searchQuery={searchQuery}
+          onSearchQueryChange={setSearchQuery}
+          map={selectedMap}
+          githubBadge={githubBadge}
+          jarvisUi={jarvisUi}
+          focused
+          onExitFocus={() => setFocusedMap(false)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -654,25 +876,40 @@ export function ContextPage() {
               </p>
             </div>
             <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setRoute('files')}
-              aria-label="Open Files page"
+              variant="accent"
+              size="sm"
+              onClick={() => setWorkspaceSection('sources')}
+              aria-label="Create Context map"
+              className="gap-1.5"
             >
-              <FolderOpen className="h-4 w-4" />
+              <Sparkles className="h-4 w-4" />
+              Create map
             </Button>
           </div>
 
           <ContextWorkspaceNavigation active={workspaceSection} onSelect={selectWorkspaceSection} />
-          <ContextRecoveryNotice recovery={recovery} />
 
           {workspaceSection === 'sources' ? (
-            <ContextSourceCards
-              cards={sourceCards}
-              selectedMap={selectedMap}
-              githubBadge={githubBadge}
-              onOpen={openSourceCard}
-            />
+            <div className="space-y-2">
+              <ContextSourceCards
+                cards={sourceCards}
+                selectedMap={selectedMap}
+                githubBadge={githubBadge}
+                onOpen={openSourceCard}
+              />
+              {githubPickerOpen ? (
+                <GitHubRepositoryPicker
+                  installationId={githubInstallationId}
+                  onInstallationIdChange={setGithubInstallationId}
+                  repositories={githubRepositories}
+                  busy={githubBusy}
+                  error={githubError}
+                  onLoad={() => void loadGitHubRepositories()}
+                  onChoose={(repository) => void createGitHubMap(repository)}
+                  onClose={() => setGithubPickerOpen(false)}
+                />
+              ) : null}
+            </div>
           ) : (
             <div className="space-y-2 rounded-xl border border-border bg-paper-soft p-2.5 shadow-soft [html[data-theme=monochrome]_&]:shadow-none">
               <label
@@ -757,9 +994,10 @@ export function ContextPage() {
             maps={maps}
             selectedMapId={selectedMap?.id ?? null}
             activeMapCount={activeMapCount}
-            onSelect={selectMap}
+            onSelect={openFocusedMap}
             onDelete={deleteMap}
           />
+          <NightlySecondBrainPanel />
           <p className="min-h-4 text-metadata text-muted-foreground">{status}</p>
 
           {tree && selected ? (
@@ -818,6 +1056,8 @@ export function ContextPage() {
             map={selectedMap}
             githubBadge={githubBadge}
             jarvisUi={jarvisUi}
+            focused={false}
+            onExitFocus={() => setFocusedMap(false)}
           />
         )}
       </main>
@@ -892,6 +1132,98 @@ function ContextWorkspaceNavigation({
         );
       })}
     </nav>
+  );
+}
+
+function GitHubRepositoryPicker({
+  installationId,
+  onInstallationIdChange,
+  repositories,
+  busy,
+  error,
+  onLoad,
+  onChoose,
+  onClose,
+}: {
+  installationId: string;
+  onInstallationIdChange: (value: string) => void;
+  repositories: readonly GitHubContextServerRepository[];
+  busy: boolean;
+  error: string;
+  onLoad: () => void;
+  onChoose: (repository: GitHubContextServerRepository) => void;
+  onClose: () => void;
+}) {
+  return (
+    <section
+      className="rounded-xl border border-accent-copper/30 bg-paper p-3 shadow-soft"
+      aria-label="Choose GitHub repository"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-secondary font-semibold text-foreground">Read-only GitHub Context</h3>
+          <p className="mt-0.5 text-metadata text-muted-foreground">
+            VibeSpace reads repository metadata and files through its GitHub App. It never asks for
+            a personal access token.
+          </p>
+        </div>
+        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>
+          Close
+        </Button>
+      </div>
+      <label
+        htmlFor="context-github-installation-id"
+        className="mt-3 block text-metadata font-medium text-foreground"
+      >
+        GitHub App installation ID
+      </label>
+      <div className="mt-1 flex gap-2">
+        <Input
+          id="context-github-installation-id"
+          inputMode="numeric"
+          autoComplete="off"
+          value={installationId}
+          onChange={(event) => onInstallationIdChange(event.target.value.replace(/\D/gu, ''))}
+          placeholder="Example: 12345678"
+          disabled={busy}
+        />
+        <Button size="sm" variant="secondary" onClick={onLoad} disabled={busy}>
+          {busy ? 'Connecting…' : 'Load repositories'}
+        </Button>
+      </div>
+      {error ? (
+        <p role="alert" className="mt-2 text-metadata text-destructive">
+          {error}
+        </p>
+      ) : null}
+      {repositories.length ? (
+        <ul className="mt-3 max-h-64 space-y-1.5 overflow-y-auto" aria-label="GitHub repositories">
+          {repositories.map((repository) => (
+            <li
+              key={repository.id}
+              className="flex items-center justify-between gap-2 rounded-lg border border-border bg-paper-soft px-2.5 py-2"
+            >
+              <div className="min-w-0">
+                <div className="truncate font-mono text-secondary text-foreground">
+                  {repository.fullName}
+                </div>
+                <div className="text-metadata text-muted-foreground">
+                  {repository.private ? 'Private' : 'Public'} · {repository.defaultBranch}
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => onChoose(repository)}
+              >
+                Create map
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
   );
 }
 
@@ -1119,20 +1451,33 @@ function NoContextHero({
   onOpenSource: (kind: ContextSourceCard['kind']) => void;
 }) {
   return (
-    <div className="flex h-full items-center justify-center">
-      <div className="relative max-w-2xl rounded-3xl border border-accent-copper/25 bg-panel/90 p-8 shadow-[0_24px_80px_hsl(var(--accent-copper)/0.16)] backdrop-blur [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&]:backdrop-blur-none">
-        <div className="absolute inset-0 rounded-3xl bg-[radial-gradient(circle_at_30%_20%,hsl(var(--accent-copper)/0.18),transparent_34%),radial-gradient(circle_at_80%_80%,hsl(var(--accent-amber)/0.14),transparent_32%)] [html[data-theme=monochrome]_&]:bg-none" />
-        <div className="relative space-y-5">
-          <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-accent-copper/40 bg-accent-copper/15 text-accent-copper shadow-soft [html[data-theme=monochrome]_&]:shadow-none">
+    <div className="flex h-full items-center justify-center overflow-y-auto [html[data-theme=warm]_&]:items-start [html[data-theme=warm]_&]:p-2">
+      <div
+        data-warm-surface="context-hero"
+        className="relative max-w-2xl overflow-hidden rounded-3xl border border-accent-copper/25 bg-panel/90 p-8 shadow-[0_24px_80px_hsl(var(--accent-copper)/0.16)] backdrop-blur [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&]:backdrop-blur-none [html[data-theme=warm]_&]:w-full [html[data-theme=warm]_&]:max-w-3xl [html[data-theme=warm]_&]:p-6 [html[data-theme=warm]_&]:pb-40"
+      >
+        <div
+          data-warm-decoration="context-legacy-glow"
+          className="absolute inset-0 rounded-3xl bg-[radial-gradient(circle_at_30%_20%,hsl(var(--accent-copper)/0.18),transparent_34%),radial-gradient(circle_at_80%_80%,hsl(var(--accent-amber)/0.14),transparent_32%)] [html[data-theme=monochrome]_&]:bg-none [html[data-theme=warm]_&]:hidden"
+        />
+        <img
+          src="/assets/themes/warm/context/context-valley-v2.webp"
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="pointer-events-none absolute inset-x-0 bottom-0 hidden h-64 w-full object-cover object-bottom [html[data-theme=warm]_&]:block"
+        />
+        <div className="relative space-y-5 [html[data-theme=warm]_&]:space-y-4 [html[data-theme=warm]_&]:text-center">
+          <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl border border-accent-copper/40 bg-accent-copper/15 text-accent-copper shadow-soft [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=warm]_&]:mx-auto">
             <Network className="h-7 w-7" />
           </div>
           <div>
             <div className="eyebrow">Context power layer</div>
-            <h2 className="mt-2 font-display text-4xl font-semibold leading-tight text-foreground">
+            <h2 className="mt-2 font-display text-4xl font-semibold leading-tight text-foreground [html[data-theme=warm]_&]:text-[28px] [html[data-theme=warm]_&]:leading-[1.12]">
               Turn this project into an interactive AI context map.
             </h2>
           </div>
-          <p className="text-body text-muted-foreground">
+          <p className="text-body text-muted-foreground [html[data-theme=warm]_&]:mx-auto [html[data-theme=warm]_&]:max-w-xl">
             Jarvis scans the project, uses your selected saved provider key when available, and
             builds a warm string map that every AI prompt can use before deciding which files
             matter.
@@ -1148,7 +1493,9 @@ function NoContextHero({
                 key={card.kind}
                 type="button"
                 onClick={() => onOpenSource(card.kind)}
-                className="rounded-xl border border-border bg-paper-soft p-3 text-left transition-colors hover:border-accent-copper/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                data-warm-surface="context-source-card"
+                data-warm-source={card.kind}
+                className="rounded-xl border border-border bg-paper-soft p-3 text-left transition-colors hover:border-accent-copper/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [html[data-theme=warm]_&]:flex [html[data-theme=warm]_&]:min-h-[165px] [html[data-theme=warm]_&]:flex-col"
               >
                 <span className="block text-secondary font-semibold text-foreground">
                   {card.label}
@@ -1157,9 +1504,16 @@ function NoContextHero({
                   {card.kind === 'local_folder'
                     ? 'Choose a folder, select the local model, then create a map.'
                     : card.kind === 'local_file'
-                      ? 'Open Files to inspect or attach one local file.'
-                      : 'Open Tools to connect the read-only GitHub App.'}
+                      ? 'Choose a file here, then create a map from its containing folder.'
+                      : 'Check the read-only GitHub App here, then choose an accessible repository.'}
                 </span>
+                <img
+                  src={WARM_CONTEXT_SOURCE_ART[card.kind]}
+                  alt=""
+                  aria-hidden="true"
+                  draggable={false}
+                  className="pointer-events-none mt-auto hidden h-20 w-full object-contain pt-2 [html[data-theme=warm]_&]:block"
+                />
               </button>
             ))}
           </div>
@@ -1168,7 +1522,8 @@ function NoContextHero({
             size="lg"
             onClick={onGenerate}
             disabled={disabled}
-            className="gap-2"
+            data-warm-action="context-create"
+            className="gap-2 [html[data-theme=warm]_&]:mx-auto"
           >
             <Sparkles className="h-4 w-4" /> Create Context Map
           </Button>
@@ -1330,6 +1685,8 @@ function ContextMapWorkspace({
   map,
   githubBadge,
   jarvisUi,
+  focused,
+  onExitFocus,
 }: {
   accountId: string | null;
   tree: ProjectContextTree;
@@ -1347,6 +1704,8 @@ function ContextMapWorkspace({
   map: ContextMapRecord | null;
   githubBadge: ContextGitHubMapBadge | null;
   jarvisUi: ContextJarvisUi;
+  focused: boolean;
+  onExitFocus: () => void;
 }) {
   const flatNodes = React.useMemo(() => flattenContextNodes(tree.nodes), [tree]);
   return (
@@ -1355,32 +1714,65 @@ function ContextMapWorkspace({
         data-monochrome-surface="context-mode-bar"
         className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border bg-panel/90 p-2 shadow-soft backdrop-blur [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:bg-panel [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&]:backdrop-blur-none"
       >
-        <div className="flex flex-wrap gap-1" role="tablist" aria-label="Context center mode">
-          {CONTEXT_CENTER_MODES.map((item) => (
-            <button
-              key={item.id}
-              id={`context-center-tab-${item.id}`}
-              type="button"
-              role="tab"
-              aria-selected={mode === item.id}
-              aria-controls="context-center-panel"
-              data-context-tab-id={item.id}
-              tabIndex={mode === item.id ? 0 : -1}
-              onClick={() => onModeChange(item.id)}
-              onKeyDown={(event) =>
-                handleContextTabKeyDown(event, CONTEXT_CENTER_MODES, mode, onModeChange)
-              }
-              className={cn(
-                'rounded-xl px-3 py-2 text-secondary font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                mode === item.id
-                  ? 'bg-accent-copper/12 text-accent-copper shadow-soft'
-                  : 'text-muted-foreground hover:bg-paper-soft hover:text-foreground',
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+        {focused ? (
+          <>
+            <div className="flex min-w-0 items-center gap-3">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={onExitFocus}
+                className="shrink-0 gap-1.5"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button>
+              <div className="min-w-0">
+                <h1 className="truncate font-display text-xl font-semibold text-foreground">
+                  {map?.name ?? tree.summary}
+                </h1>
+                <p className="flex flex-wrap items-center gap-x-3 text-metadata text-muted-foreground">
+                  <span className="inline-flex items-center gap-1">
+                    <Move className="h-3.5 w-3.5 text-accent-copper" />
+                    Drag to orbit · Shift-drag to pan
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <MousePointer2 className="h-3.5 w-3.5 text-accent-honey" />
+                    Select a node to inspect details, links, and backlinks
+                  </span>
+                  <span>Esc closes focused view</span>
+                </p>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="flex flex-wrap gap-1" role="tablist" aria-label="Context center mode">
+            {CONTEXT_CENTER_MODES.map((item) => (
+              <button
+                key={item.id}
+                id={`context-center-tab-${item.id}`}
+                type="button"
+                role="tab"
+                aria-selected={mode === item.id}
+                aria-controls="context-center-panel"
+                data-context-tab-id={item.id}
+                tabIndex={mode === item.id ? 0 : -1}
+                onClick={() => onModeChange(item.id)}
+                onKeyDown={(event) =>
+                  handleContextTabKeyDown(event, CONTEXT_CENTER_MODES, mode, onModeChange)
+                }
+                className={cn(
+                  'rounded-xl px-3 py-2 text-secondary font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  mode === item.id
+                    ? 'bg-accent-copper/12 text-accent-copper shadow-soft'
+                    : 'text-muted-foreground hover:bg-paper-soft hover:text-foreground',
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
         {jarvisUi.visible ? (
           <button
             type="button"
@@ -1392,26 +1784,40 @@ function ContextMapWorkspace({
           </button>
         ) : null}
       </header>
-      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
+      <div
+        className={cn(
+          'min-h-0 flex-1 gap-4',
+          focused ? 'relative' : 'grid xl:grid-cols-[minmax(0,1fr)_400px]',
+        )}
+      >
         <section
           id="context-center-panel"
           role="tabpanel"
           aria-labelledby={`context-center-tab-${mode}`}
-          className="relative min-h-0 overflow-hidden rounded-3xl border border-border bg-panel/80 shadow-soft backdrop-blur [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&]:backdrop-blur-none"
-          data-jarvis-suppress-context-menu={mode === 'graph' ? true : undefined}
+          className={cn(
+            'relative min-h-0 overflow-hidden rounded-3xl border border-border bg-panel/80 shadow-soft backdrop-blur [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-background [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&]:backdrop-blur-none',
+            focused && 'h-full',
+          )}
+          data-jarvis-suppress-context-menu={focused || mode === 'graph' ? true : undefined}
         >
-          {mode === 'graph' ? (
+          {focused || mode === 'graph' ? (
             <>
-              <div className="absolute left-4 top-4 z-20 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-paper/90 p-2 shadow-soft backdrop-blur">
-                <div className="flex items-center gap-2 px-2 text-metadata text-muted-foreground">
-                  <Move className="h-3.5 w-3.5 text-accent-copper" /> Right-click drag
+              {!focused ? (
+                <div className="absolute left-4 top-4 z-20 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-paper/90 p-2 shadow-soft backdrop-blur">
+                  <div className="flex items-center gap-2 px-2 text-metadata text-muted-foreground">
+                    <Move className="h-3.5 w-3.5 text-accent-copper" /> Drag to orbit · Shift-drag
+                    to pan
+                  </div>
+                  <div className="flex items-center gap-2 px-2 text-metadata text-muted-foreground">
+                    <MousePointer2 className="h-3.5 w-3.5 text-accent-honey" /> Left-click nodes or
+                    strings
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 px-2 text-metadata text-muted-foreground">
-                  <MousePointer2 className="h-3.5 w-3.5 text-accent-honey" /> Left-click nodes or
-                  strings
-                </div>
-              </div>
-              <ContextMapCanvas
+              ) : null}
+              <ContextGalaxyWorkspace
+                accountId={accountId}
+                projectId={tree.projectId}
+                mapId={map?.id ?? `context:${tree.rootDir}`}
                 tree={tree}
                 rootNode={rootNode}
                 selectedId={selectedId}
@@ -1451,16 +1857,33 @@ function ContextMapWorkspace({
             />
           )}
         </section>
-        <ContextInspector
-          tree={tree}
-          map={map}
-          node={selected}
-          onSelect={onSelect}
-          tab={inspectorTab}
-          onTabChange={onInspectorTabChange}
-          githubBadge={githubBadge}
-          jarvisUi={jarvisUi}
-        />
+        {focused ? (
+          <div className="absolute bottom-4 left-4 z-30 h-[min(42%,390px)] w-[min(520px,calc(100%-2rem))]">
+            <ContextInspector
+              tree={tree}
+              map={map}
+              node={selected}
+              onSelect={onSelect}
+              tab={inspectorTab}
+              onTabChange={onInspectorTabChange}
+              githubBadge={githubBadge}
+              jarvisUi={jarvisUi}
+              compact
+            />
+          </div>
+        ) : (
+          <ContextInspector
+            tree={tree}
+            map={map}
+            node={selected}
+            onSelect={onSelect}
+            tab={inspectorTab}
+            onTabChange={onInspectorTabChange}
+            githubBadge={githubBadge}
+            jarvisUi={jarvisUi}
+            compact={false}
+          />
+        )}
       </div>
     </div>
   );
@@ -1634,20 +2057,7 @@ function ContextSearchView({
   onSelect: (id: string) => void;
 }) {
   const normalized = query.trim().toLocaleLowerCase();
-  const results = React.useMemo(
-    () =>
-      normalized
-        ? nodes
-            .filter((node) =>
-              [node.title, node.summary, node.path ?? '', ...(node.tags ?? [])]
-                .join('\n')
-                .toLocaleLowerCase()
-                .includes(normalized),
-            )
-            .slice(0, 200)
-        : [],
-    [nodes, normalized],
-  );
+  const results = React.useMemo(() => searchContextNodes(nodes, normalized), [nodes, normalized]);
   return (
     <div className="flex h-full min-h-0 flex-col p-5">
       <div>
@@ -1678,7 +2088,7 @@ function ContextSearchView({
           />
         ) : (
           <div className="space-y-1">
-            {results.map((node) => (
+            {results.map(({ node, reason }) => (
               <button
                 key={node.id}
                 type="button"
@@ -1690,6 +2100,9 @@ function ContextSearchView({
                 </span>
                 <span className="mt-0.5 block line-clamp-2 text-metadata text-muted-foreground">
                   {node.path ?? node.summary}
+                </span>
+                <span className="mt-1 block text-[10px] uppercase tracking-wide text-accent-copper">
+                  Matched {reason}
                 </span>
               </button>
             ))}
@@ -1724,6 +2137,61 @@ function ContextModeEmpty({
         <h3 className="mt-3 font-display text-2xl font-semibold text-foreground">{title}</h3>
         <p className="mt-1 text-secondary text-muted-foreground">{body}</p>
       </div>
+    </div>
+  );
+}
+
+function ContextGalaxyWorkspace({
+  accountId,
+  projectId,
+  mapId,
+  tree,
+  rootNode,
+  selectedId,
+  highlightedNodeIds,
+  onSelect,
+  flash,
+}: {
+  accountId: string | null;
+  projectId: string | null;
+  mapId: string;
+  tree: ProjectContextTree;
+  rootNode: ContextTreeNode;
+  selectedId: string;
+  highlightedNodeIds: readonly string[];
+  onSelect: (id: string) => void;
+  flash: boolean;
+}) {
+  const galaxy = React.useMemo(
+    () => contextTreeToGalaxyData({ ...tree, nodes: [rootNode] }),
+    [rootNode, tree],
+  );
+  React.useEffect(() => {
+    if (!accountId) return;
+    return publishContextGalaxySnapshot({
+      accountId,
+      projectId,
+      mapId,
+      nodes: galaxy.nodes,
+      edges: galaxy.edges,
+      selectedId,
+      activityNodeIds: highlightedNodeIds,
+    });
+  }, [accountId, galaxy, highlightedNodeIds, mapId, projectId, selectedId]);
+
+  return (
+    <div className="relative h-full min-h-[28rem] w-full overflow-hidden">
+      <ContextGalaxy
+        nodes={galaxy.nodes}
+        edges={galaxy.edges}
+        selectedId={selectedId}
+        activityNodeIds={highlightedNodeIds}
+        onSelect={onSelect}
+        className="absolute inset-0 min-h-0 rounded-none border-0"
+      />
+      {flash ? (
+        <div className="context-map-birth pointer-events-none absolute inset-0 z-30" />
+      ) : null}
     </div>
   );
 }
@@ -2782,6 +3250,7 @@ function ContextInspector({
   onTabChange,
   githubBadge,
   jarvisUi,
+  compact,
 }: {
   tree: ProjectContextTree;
   map: ContextMapRecord | null;
@@ -2791,6 +3260,7 @@ function ContextInspector({
   onTabChange: (tab: ContextInspectorTabId) => void;
   githubBadge: ContextGitHubMapBadge | null;
   jarvisUi: ContextJarvisUi;
+  compact: boolean;
 }) {
   const onDragStart = useContextDrag(tree, node);
   const [packOpen, setPackOpen] = React.useState(false);
@@ -2975,14 +3445,22 @@ function ContextInspector({
     <aside
       data-monochrome-surface="context-inspector"
       data-sakura-surface="context-inspector"
-      className="min-h-0 overflow-hidden rounded-3xl border border-border bg-panel/90 shadow-soft backdrop-blur [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-panel [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&]:backdrop-blur-none"
+      className={cn(
+        'h-full min-h-0 overflow-hidden rounded-3xl border border-border bg-panel/90 shadow-soft backdrop-blur [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-panel [html[data-theme=monochrome]_&]:shadow-none [html[data-theme=monochrome]_&]:backdrop-blur-none',
+        compact && 'bg-panel/95',
+      )}
     >
       <div className="flex h-full min-h-0 flex-col">
-        <header className="border-b border-border p-4">
+        <header className={cn('border-b border-border', compact ? 'p-2.5' : 'p-4')}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="eyebrow">{node.kind} node</div>
-              <h2 className="mt-1 truncate font-display text-3xl font-semibold text-foreground">
+              <h2
+                className={cn(
+                  'mt-1 truncate font-display font-semibold text-foreground',
+                  compact ? 'text-xl' : 'text-3xl',
+                )}
+              >
                 {node.title}
               </h2>
               {node.path && (
@@ -3009,7 +3487,10 @@ function ContextInspector({
         </header>
 
         <div
-          className="grid grid-cols-2 gap-1 border-b border-border bg-paper-soft/70 p-2"
+          className={cn(
+            'grid gap-1 border-b border-border bg-paper-soft/70 p-2',
+            compact ? 'grid-cols-4' : 'grid-cols-2',
+          )}
           role="tablist"
           aria-label="Context inspector"
         >
@@ -3047,7 +3528,10 @@ function ContextInspector({
           id="context-inspector-panel"
           role="tabpanel"
           aria-labelledby={`context-inspector-tab-${tab}`}
-          className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-hidden"
+          className={cn(
+            'min-h-0 flex-1 overflow-y-auto scrollbar-hidden',
+            compact ? 'p-2.5' : 'p-4',
+          )}
         >
           {content}
         </div>
@@ -3449,12 +3933,18 @@ function formatBytes(bytes: number | undefined): string {
 }
 
 function formatDate(value: number | undefined): string {
-  return typeof value === 'number' ? new Date(value).toLocaleString() : '-';
+  return typeof value === 'number' ? formatUserDateTime(value) : '-';
 }
 
 function rootTitle(rootDir: string): string {
   const normalized = rootDir.replace(/[\\/]$/g, '');
   return normalized.split(/[\\/]/).filter(Boolean).pop() || 'Project Context';
+}
+
+function parentDirectory(path: string): string {
+  const normalized = path.trim().replace(/[\\/]$/g, '');
+  const separatorIndex = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'));
+  return separatorIndex > 0 ? normalized.slice(0, separatorIndex) : normalized;
 }
 
 function splitLabel(label: string, maxChars: number): string[] {

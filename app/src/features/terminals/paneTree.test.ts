@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   flattenLeaves,
   fromLeaves,
+  isReusableTerminalLeaf,
   newLeaf,
   resolvePaneAgentMode,
   resizeAdjacentTracks,
@@ -84,5 +85,18 @@ describe('resolvePaneAgentMode', () => {
     expect(resolvePaneAgentMode({ agentSlug: 'coder', agentMode: 'coordinated' })).toBe(
       'coordinated',
     );
+  });
+});
+
+describe('isReusableTerminalLeaf', () => {
+  it('reuses only an affirmatively idle empty leaf', () => {
+    const leaf = newLeaf({ command: 'powershell.exe' }) as Extract<PaneNode, { kind: 'leaf' }>;
+    expect(isReusableTerminalLeaf(leaf, { backendState: 'idle' })).toBe(true);
+    expect(isReusableTerminalLeaf(leaf, { backendState: 'unknown' })).toBe(false);
+    expect(isReusableTerminalLeaf(leaf, { backendState: 'active' })).toBe(false);
+    expect(isReusableTerminalLeaf({ ...leaf, sessionId: 'pty_1' }, { backendState: 'idle' })).toBe(
+      false,
+    );
+    expect(isReusableTerminalLeaf(leaf, { backendState: 'idle', transcript: 'hello' })).toBe(false);
   });
 });

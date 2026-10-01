@@ -70,6 +70,8 @@ export type Agent = {
    * UI color hue (HSL hue 0..359). If omitted, derived deterministically from slug hash.
    */
   color_hue?: number;
+  /** Stable built-in or uploaded emoji token used for the agent avatar. */
+  emoji?: string;
   /** Capability tags */
   capabilities: AgentCapability[];
   /** Built-in agents shipped with the app cannot be deleted */
@@ -111,7 +113,7 @@ export interface AgentEffortCustom {
  * user agents pick from the catalog. 'custom' means the agent's own
  * `system_prompt` body fully owns the voice (no addendum applied).
  */
-export type AgentPersona = 'jarvis' | 'athena' | 'edge' | 'watson' | 'hal' | 'custom';
+export type AgentPersona = 'jarvis' | 'friday';
 
 /**
  * Where the agent definition came from.

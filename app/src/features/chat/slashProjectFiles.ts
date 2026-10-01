@@ -24,6 +24,20 @@ const SKIP_DIRS = new Set([
   'venv',
 ]);
 
+const MAX_ATTACHMENT_PATH_LENGTH = 4_096;
+
+export function isSafeAbsoluteAttachmentPath(path: string): boolean {
+  if (!path || path !== path.trim() || path.length > MAX_ATTACHMENT_PATH_LENGTH) return false;
+  if (/[\u0000-\u001f\u007f]/u.test(path) || /^[a-z][a-z0-9+.-]*:\/\//iu.test(path)) {
+    return false;
+  }
+  const isWindowsDrive = /^[A-Za-z]:[\\/]/u.test(path);
+  const isUnc = /^\\\\[^\\/]+\\[^\\/]+/u.test(path);
+  const isPosix = path.startsWith('/') && !path.startsWith('//');
+  if (!isWindowsDrive && !isUnc && !isPosix) return false;
+  return !path.split(/[\\/]+/u).some((segment) => segment === '..');
+}
+
 export interface ListProjectFileOptionsParams {
   projectId: string | null;
   maxFiles?: number;
@@ -93,7 +107,8 @@ export async function listProjectFileOptions(
       id: file.path,
       label: file.name,
       description: rel !== file.name ? rel : undefined,
-      metadata: file.path === openFile ? 'open' : file.size != null ? formatBytes(file.size) : undefined,
+      metadata:
+        file.path === openFile ? 'open' : file.size != null ? formatBytes(file.size) : undefined,
     };
   });
 
@@ -149,13 +164,10 @@ export function getInlineSlashContext(
  * Does not strip /multitask tasks with long args mid-sentence aggressively —
  * only known attach/utility commands.
  */
-const INLINE_CLEAR_RE =
-  /(^|[\s([{'"`,;:])\/(clearfiles?|clear-files|cearfiles?)\b/gi;
+const INLINE_CLEAR_RE = /(^|[\s([{'"`,;:])\/(clearfiles?|clear-files|cearfiles?)\b/gi;
 // Path token allows dots (readme.md). Trailing sentence punct is trimmed later.
-const INLINE_FILE_RE =
-  /(^|[\s([{'"`,;:])\/(file|attach)(?:[ \t]+("([^"]+)"|'([^']+)'|(\S+)))?/gi;
-const INLINE_HELP_RE =
-  /(^|[\s([{'"`,;:])\/(usage|help|commands)\b/gi;
+const INLINE_FILE_RE = /(^|[\s([{'"`,;:])\/(file|attach)(?:[ \t]+("([^"]+)"|'([^']+)'|(\S+)))?/gi;
+const INLINE_HELP_RE = /(^|[\s([{'"`,;:])\/(usage|help|commands)\b/gi;
 
 function normalizeUtilityCmd(cmd: string): string {
   const c = cmd.toLowerCase();
@@ -182,8 +194,7 @@ export function extractInlineUtilitySlashCommands(text: string): {
       const raw = full.slice(prefix.length).trim();
       const rest = restFromMatch(m).trim();
       utilities.unshift({ cmd, rest, raw });
-      cleaned =
-        cleaned.slice(0, m.index) + prefix + cleaned.slice((m.index ?? 0) + full.length);
+      cleaned = cleaned.slice(0, m.index) + prefix + cleaned.slice((m.index ?? 0) + full.length);
     }
   };
 
@@ -196,6 +207,9 @@ export function extractInlineUtilitySlashCommands(text: string): {
   collect(INLINE_CLEAR_RE, () => '');
   collect(INLINE_HELP_RE, () => '');
 
-  cleaned = cleaned.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  cleaned = cleaned
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   return { cleaned, utilities };
 }

@@ -1591,6 +1591,7 @@ export function createJarvisKernelRuntime(
   const loadCanonicalActionScope = async (
     suppliedParent: JarvisRun,
     suppliedAttempt?: Readonly<{ runId: string; requestId: string; attemptNumber: number }>,
+    responseBackedApprovalId?: string,
   ): Promise<CanonicalActionScope> => {
     const canonicalParent = await repositories.run.getById(
       suppliedParent.accountId,
@@ -1621,25 +1622,25 @@ export function createJarvisKernelRuntime(
     }
 
     if (canonicalParent.source === 'schedule') throw new Error('kernel_action_scope_mismatch');
-    const providerStarts = (
+    const runEvents = (
       await input.db.jarvis_events.where('run_id').equals(canonicalParent.id).toArray()
-    )
-      .map(fromJarvisEventRow)
-      .filter((event) => {
-        const source = event.producerSourceEvidence;
-        return (
-          event.type === 'model' &&
-          event.status === 'started' &&
-          source?.producerKind === 'provider' &&
-          source.phase === 'start' &&
-          source.state === 'started' &&
-          source.accountId === canonicalParent.accountId &&
-          source.runId === canonicalParent.id
-        );
-      });
+    ).map(fromJarvisEventRow);
+    const providerStarts = runEvents.filter((event) => {
+      const source = event.producerSourceEvidence;
+      return (
+        event.type === 'model' &&
+        event.status === 'started' &&
+        source?.producerKind === 'provider' &&
+        source.phase === 'start' &&
+        source.state === 'started' &&
+        source.accountId === canonicalParent.accountId &&
+        source.runId === canonicalParent.id
+      );
+    });
     if (providerStarts.length !== 1) throw new Error('kernel_action_scope_mismatch');
     const providerScope = providerStarts[0]!.producerSourceEvidence!;
     if (
+      providerScope.producerKind !== 'provider' ||
       !providerScope.requestId ||
       !Number.isSafeInteger(providerScope.attemptNumber) ||
       providerScope.attemptNumber < 1 ||
@@ -1649,6 +1650,97 @@ export function createJarvisKernelRuntime(
           suppliedAttempt.attemptNumber !== providerScope.attemptNumber))
     ) {
       throw new Error('kernel_action_scope_mismatch');
+    }
+    if (responseBackedApprovalId) {
+      if (canonicalParent.status !== 'awaiting_approval') {
+        throw new Error('kernel_action_scope_mismatch');
+      }
+      const approval = await repositories.approval.getById(
+        canonicalParent.accountId,
+        responseBackedApprovalId,
+      );
+      if (
+        !approval ||
+        !['pending', 'approved'].includes(approval.status) ||
+        approval.runId !== canonicalParent.id ||
+        approval.requestId !== providerScope.requestId ||
+        approval.attemptNumber !== providerScope.attemptNumber ||
+        approval.expiresAt <= input.now()
+      ) {
+        throw new Error('kernel_action_scope_mismatch');
+      }
+      const providerResultEvents = runEvents.filter(
+        (event) =>
+          event.runId === canonicalParent.id &&
+          event.producerSourceEvidence?.producerKind === 'provider' &&
+          event.producerSourceEvidence.phase === 'result',
+      );
+      const isCompletedResponseCheckpoint = (event: (typeof runEvents)[number]): boolean =>
+        event.type === 'message' &&
+        event.status === 'approval_required' &&
+        event.producerSourceEvidence?.producerKind === 'provider' &&
+        event.producerSourceEvidence.phase === 'result' &&
+        event.producerSourceEvidence.state === 'completed';
+      let responseCheckpoints = runEvents.filter(
+        (event) =>
+          event.idempotencyKey === `action-response-ready:${responseBackedApprovalId}` &&
+          isCompletedResponseCheckpoint(event),
+      );
+      if (
+        responseCheckpoints.length !== 1 &&
+        (approval.actionId === 'files.create' || approval.actionId === 'files.read')
+      ) {
+        const siblings = await repositories.approval.listByRun(
+          canonicalParent.accountId,
+          canonicalParent.id,
+          {
+            requestId: providerScope.requestId,
+            attemptNumber: providerScope.attemptNumber,
+            limit: 10,
+          },
+        );
+        const filesCreateBatch = siblings.filter(
+          (candidate) =>
+            candidate.actionId === approval.actionId &&
+            (candidate.status === 'pending' ||
+              candidate.status === 'approved' ||
+              candidate.status === 'consumed'),
+        );
+        if (
+          filesCreateBatch.length >= 2 &&
+          filesCreateBatch.length <= 10 &&
+          filesCreateBatch.some((candidate) => candidate.id === approval.id)
+        ) {
+          const checkpointKeys = new Set(
+            filesCreateBatch.map((candidate) => `action-response-ready:${candidate.id}`),
+          );
+          responseCheckpoints = runEvents.filter(
+            (event) =>
+              checkpointKeys.has(event.idempotencyKey) && isCompletedResponseCheckpoint(event),
+          );
+        }
+      }
+      const checkpoint = responseCheckpoints.length === 1 ? responseCheckpoints[0] : undefined;
+      const matchedProviderResult = checkpoint
+        ? providerResultEvents.find((event) => event.seq === checkpoint.seq)
+        : providerResultEvents.length === 1
+          ? providerResultEvents[0]
+          : undefined;
+      const matchedEvidence = matchedProviderResult?.producerSourceEvidence;
+      if (
+        !checkpoint ||
+        !matchedProviderResult ||
+        matchedEvidence?.producerKind !== 'provider' ||
+        matchedEvidence.state !== 'completed' ||
+        matchedEvidence.accountId !== canonicalParent.accountId ||
+        matchedEvidence.runId !== canonicalParent.id ||
+        matchedEvidence.requestId !== providerScope.requestId ||
+        matchedEvidence.attemptNumber !== providerScope.attemptNumber ||
+        matchedEvidence.producerIdentity.providerId !== providerScope.producerIdentity.providerId ||
+        matchedEvidence.producerIdentity.modelId !== providerScope.producerIdentity.modelId
+      ) {
+        throw new Error('kernel_action_scope_mismatch');
+      }
     }
     return Object.freeze({
       parentRun: canonicalParent,
@@ -1668,7 +1760,43 @@ export function createJarvisKernelRuntime(
       .filter((row) => row.idempotency_key === responseKey)
       .toArray();
     if (matches.length > 1) throw new Error('kernel_action_response_checkpoint_conflict');
-    return matches.length === 1;
+    if (matches.length === 1) return true;
+    const siblings = await repositories.approval.listByRun(
+      scope.parentRun.accountId,
+      scope.parentRun.id,
+      {
+        requestId: scope.requestId,
+        attemptNumber: scope.attemptNumber,
+        limit: 10,
+      },
+    );
+    const self = siblings.find((candidate) => candidate.id === approvalId);
+    if (
+      !self ||
+      (self.actionId !== 'files.create' && self.actionId !== 'files.read')
+    ) {
+      return false;
+    }
+    const fileBatch = siblings.filter(
+      (candidate) =>
+        candidate.actionId === self.actionId &&
+        (candidate.status === 'pending' ||
+          candidate.status === 'approved' ||
+          candidate.status === 'consumed'),
+    );
+    if (fileBatch.length < 2 || fileBatch.length > 10) {
+      return false;
+    }
+    const checkpointKeys = new Set(
+      fileBatch.map((candidate) => `action-response-ready:${candidate.id}`),
+    );
+    const siblingMatches = await input.db.jarvis_events
+      .where('run_id')
+      .equals(scope.parentRun.id)
+      .filter((row) => checkpointKeys.has(row.idempotency_key))
+      .toArray();
+    if (siblingMatches.length > 1) throw new Error('kernel_action_response_checkpoint_conflict');
+    return siblingMatches.length === 1;
   };
 
   const issueApprovalLifecycle = (
@@ -2029,6 +2157,7 @@ export function createJarvisKernelRuntime(
             accountBinding: binding,
             outcome: result.state,
             resultRef: result.resultRef,
+            ...(result.responseResult === undefined ? {} : { result: result.responseResult }),
             completedAt: result.completedAt,
           });
           if (!finalized.committed) {
@@ -3546,7 +3675,11 @@ export function createJarvisKernelRuntime(
       );
     },
     async decide(actionInput: Parameters<JarvisKernelActionPort['decide']>[0]) {
-      const scope = await loadCanonicalActionScope(actionInput.parentRun);
+      const scope = await loadCanonicalActionScope(
+        actionInput.parentRun,
+        undefined,
+        actionInput.approvalId,
+      );
       return invokeActionCapability(scope, async (capability, parentRun, binding) => {
         const responseBacked = await hasActionResponseCheckpoint(scope, actionInput.approvalId);
         const value = await capability.decide({ ...actionInput, parentRun });
@@ -3576,7 +3709,11 @@ export function createJarvisKernelRuntime(
       });
     },
     async execute(actionInput: Parameters<JarvisKernelActionPort['execute']>[0]) {
-      const scope = await loadCanonicalActionScope(actionInput.parentRun);
+      const scope = await loadCanonicalActionScope(
+        actionInput.parentRun,
+        undefined,
+        actionInput.approvalId,
+      );
       return invokeActionCapability(scope, async (capability, parentRun, binding) => {
         const responseBacked = await hasActionResponseCheckpoint(scope, actionInput.approvalId);
         const value = await capability.execute({ ...actionInput, parentRun });

@@ -482,6 +482,12 @@ struct HostClaim {
     destroy_capture: OwnerCapture,
 }
 
+#[derive(Debug)]
+struct ReloadedHostClaim {
+    claim: HostClaim,
+    released: Vec<ClientDelivery>,
+}
+
 #[derive(Debug, Clone)]
 struct Owner {
     capture: OwnerCapture,
@@ -525,12 +531,9 @@ impl KernelHostBroker {
         Ok(self.epoch)
     }
 
-    fn register(&mut self, label: &str, token: String) -> Result<HostClaim, &'static str> {
+    fn claim(&mut self, label: &str, token: String) -> Result<HostClaim, &'static str> {
         if label != HOST_LABEL {
             return Err("kernel_host_wrong_window");
-        }
-        if self.owner.is_some() {
-            return Err("kernel_host_already_registered");
         }
         if !nonblank(&token) {
             return Err("kernel_host_token_invalid");
@@ -557,6 +560,33 @@ impl KernelHostBroker {
             },
             destroy_capture: capture,
         })
+    }
+
+    #[cfg(test)]
+    fn register(&mut self, label: &str, token: String) -> Result<HostClaim, &'static str> {
+        if self.owner.is_some() {
+            return Err("kernel_host_already_registered");
+        }
+        self.claim(label, token)
+    }
+
+    fn register_reloaded_main(
+        &mut self,
+        label: &str,
+        token: String,
+    ) -> Result<ReloadedHostClaim, &'static str> {
+        if label != HOST_LABEL {
+            return Err("kernel_host_wrong_window");
+        }
+        if !nonblank(&token) {
+            return Err("kernel_host_token_invalid");
+        }
+        let previous_epoch = self.owner.as_ref().map(|owner| owner.capture.epoch);
+        let claim = self.claim(label, token)?;
+        let released = previous_epoch
+            .map(|epoch| self.drain_epoch(epoch, KernelUnavailableReason::HostReleased))
+            .unwrap_or_default();
+        Ok(ReloadedHostClaim { claim, released })
     }
 
     #[cfg(test)]
@@ -827,7 +857,13 @@ pub fn register_kernel_host(
     state: State<'_, KernelHostState>,
 ) -> Result<KernelHostRegistration, String> {
     let token = nanoid::nanoid!(48);
-    let claim = with_broker(&state, |broker| broker.register(window.label(), token))?;
+    let replacement = with_broker(&state, |broker| {
+        broker.register_reloaded_main(window.label(), token)
+    })?;
+    for delivery in replacement.released {
+        emit_delivery(&app, delivery);
+    }
+    let claim = replacement.claim;
     let capture = claim.destroy_capture.clone();
     let destroy_app = app.clone();
     window.on_window_event(move |event| {
@@ -968,6 +1004,48 @@ mod tests {
         assert_eq!(owner.destroy_capture.process_id, std::process::id());
         assert!(broker.register("main", "owner-token-2".into()).is_err());
         assert_eq!(broker.owner_epoch(), Some(1));
+    }
+
+    #[test]
+    fn main_webview_reload_rotates_stale_authority_and_fails_old_pending_requests() {
+        let mut broker = KernelHostBroker::default();
+        let first = broker.register("main", "owner-token-1".into()).unwrap();
+        let pending = broker
+            .request("workbench-main", cancel_request(), 100, 1_000)
+            .unwrap();
+
+        let replacement = broker
+            .register_reloaded_main("main", "owner-token-2".into())
+            .unwrap();
+
+        assert!(replacement.claim.registration.epoch > first.registration.epoch);
+        assert_eq!(
+            replacement
+                .released
+                .iter()
+                .map(|delivery| &delivery.event.response)
+                .collect::<Vec<_>>(),
+            vec![&KernelClientResponseV1::Unavailable {
+                version: 1,
+                request_kind: KernelRequestKind::Cancel,
+                reason: KernelUnavailableReason::HostReleased,
+            }]
+        );
+        assert_eq!(
+            broker.respond(
+                "main",
+                first.registration.epoch,
+                "owner-token-1",
+                &pending.registration.request_id,
+                cancellation_response(),
+                101,
+            ),
+            Err("kernel_host_stale_owner")
+        );
+        assert!(matches!(
+            broker.register_reloaded_main("workbench-main", "secondary-token".into()),
+            Err("kernel_host_wrong_window")
+        ));
     }
 
     #[test]

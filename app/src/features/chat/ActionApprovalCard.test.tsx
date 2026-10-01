@@ -124,6 +124,38 @@ describe('ActionApprovalCard canonical adapter', () => {
     expect(kernelClient.dispose).toHaveBeenCalledOnce();
   });
 
+  it('releases the public chat run after a settled canonical action', async () => {
+    kernelClient.decideApproval.mockResolvedValueOnce({
+      kind: 'approval_decided',
+      approvalId: 'jappr_1',
+      status: 'approved',
+    });
+    kernelClient.executeApproval.mockResolvedValueOnce({
+      kind: 'approval_execution',
+      approvalId: 'jappr_1',
+      runId: 'jrun_1',
+      status: 'completed',
+    });
+    const events: Array<{ chatId?: string; status?: string }> = [];
+    const listener = (event: Event) => {
+      events.push((event as CustomEvent<{ chatId?: string; status?: string }>).detail);
+    };
+    window.addEventListener('jarvis:run-state', listener);
+    renderCard(part('jarvisapproval:jappr_1'), {
+      actionId: 'files.read',
+      expectedEffect: 'Read one approved file.',
+      risk: 'confirm',
+      parameters: [],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve fixed action' }));
+
+    await waitFor(() =>
+      expect(events).toContainEqual({ chatId: 'chat_1', status: 'done' }),
+    );
+    window.removeEventListener('jarvis:run-state', listener);
+  });
+
   it('loads the bounded canonical presentation before exposing production controls', async () => {
     kernelClient.getApprovalPresentation.mockResolvedValueOnce({
       version: 1,
@@ -186,11 +218,18 @@ describe('ActionApprovalCard canonical adapter', () => {
       parameters: [],
     });
 
+    const events: Array<{ chatId?: string; status?: string }> = [];
+    const listener = (event: Event) => {
+      events.push((event as CustomEvent<{ chatId?: string; status?: string }>).detail);
+    };
+    window.addEventListener('jarvis:run-state', listener);
     fireEvent.click(screen.getByRole('button', { name: 'Deny action' }));
 
     await waitFor(() =>
       expect(container.firstElementChild?.getAttribute('data-status')).toBe('cancelled'),
     );
+    expect(events).toContainEqual({ chatId: 'chat_1', status: 'cancelled' });
+    window.removeEventListener('jarvis:run-state', listener);
     expect(kernelClient.decideApproval).toHaveBeenCalledWith({
       accountId: 'account-smoke',
       approvalId: 'jappr_1',

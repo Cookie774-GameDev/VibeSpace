@@ -154,7 +154,11 @@ export function WallpaperHost({ config }: WallpaperHostProps) {
       data-paused={paused ? 'true' : 'false'}
       className={`workbench-wallpaper workbench-wallpaper--${config.id}`}
       style={
-        { pointerEvents: 'none', '--wallpaper-intensity': config.intensity } as React.CSSProperties
+        {
+          pointerEvents: 'none',
+          '--wallpaper-intensity': config.intensity,
+          '--wallpaper-brightness': config.brightness,
+        } as React.CSSProperties
       }
       aria-hidden="true"
     >

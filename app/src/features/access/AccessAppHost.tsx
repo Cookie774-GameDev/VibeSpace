@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { Button } from '@/components/ui/button';
 import { SignInDialog } from '@/features/auth/SignInDialog';
+import { DesktopPresencePublisher } from './DesktopPresencePublisher';
 import { getSupabaseClient, type TypedSupabaseClient } from '@/lib/supabase/client';
 import { openExternal } from '@/lib/tauri';
 import { useAuthStore } from '@/stores/auth';
@@ -60,6 +61,16 @@ function safeHttpsUrl(value: string | undefined): string | undefined {
 }
 
 const noop = () => undefined;
+
+async function openAuthorizedExternalUrl(
+  signal: AbortSignal,
+  createUrl: () => Promise<string>,
+  openUrl: (url: string) => Promise<void>,
+) {
+  const url = await createUrl();
+  if (signal.aborted) return;
+  await openUrl(url);
+}
 
 export function AccessAppHost({
   children,
@@ -179,10 +190,12 @@ export function AccessAppHost({
         onManageBilling={() => {
           void runAction(
             'manage-billing',
-            async (signal) => {
-              const url = await runtime.createPortalUrl(signal);
-              await runtime.openExternalUrl(url);
-            },
+            (signal) =>
+              openAuthorizedExternalUrl(
+                signal,
+                () => runtime.createPortalUrl(signal),
+                (url) => runtime.openExternalUrl(url),
+              ),
             'Billing could not be opened. Please try again.',
           );
         }}
@@ -224,10 +237,12 @@ export function AccessAppHost({
         const checkout = () =>
           runAction(
             'subscribe',
-            async (signal) => {
-              const url = await runtime.createCheckoutUrl(signal);
-              await runtime.openExternalUrl(url);
-            },
+            (signal) =>
+              openAuthorizedExternalUrl(
+                signal,
+                () => runtime.createCheckoutUrl(signal),
+                (url) => runtime.openExternalUrl(url),
+              ),
             'Checkout could not be opened. Please try again.',
           );
         const paywall = (
@@ -246,10 +261,12 @@ export function AccessAppHost({
             onManageBilling={() => {
               void runAction(
                 'manage-billing',
-                async (signal) => {
-                  const url = await runtime.createPortalUrl(signal);
-                  await runtime.openExternalUrl(url);
-                },
+                (signal) =>
+                  openAuthorizedExternalUrl(
+                    signal,
+                    () => runtime.createPortalUrl(signal),
+                    (url) => runtime.openExternalUrl(url),
+                  ),
                 'Billing could not be opened. Please try again.',
               );
             }}
@@ -454,7 +471,6 @@ function createInstalledRuntime(
     async signOut() {
       const client = requireClient();
       const { error } = await client.auth.signOut();
-      useAuthStore.setState({ cloudSession: null, plan: 'free' });
       if (error) throw new Error('Sign out failed.');
     },
     async backupLocalData() {
@@ -481,9 +497,12 @@ export function isAccessGateEnabled(environment: AccessBuildEnvironment): boolea
 
 function publishInstalledCloudSession(session: Session | null): boolean {
   const userId = session?.user.id?.trim() ?? '';
-  const previousUserId = useAuthStore.getState().cloudSession?.user_id.trim() ?? '';
+  const authState = useAuthStore.getState();
+  const previousUserId = authState.cloudSession?.user_id.trim() ?? '';
   if (!userId) {
-    useAuthStore.setState({ cloudSession: null, plan: 'free' });
+    if (authState.cloudSession !== null || authState.plan !== 'free') {
+      useAuthStore.setState({ cloudSession: null, plan: 'free' });
+    }
     return false;
   }
   useAuthStore.setState({
@@ -506,13 +525,24 @@ function InstalledCloudAuthentication({
   onSignIn: () => void;
   onCreateAccount: () => void;
 }) {
+  const headingRef = React.useRef<HTMLHeadingElement>(null);
+  const focused = React.useRef(false);
+
+  React.useLayoutEffect(() => {
+    if (focused.current) return;
+    focused.current = true;
+    headingRef.current?.focus();
+  }, []);
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
       <section className="w-full max-w-md rounded-3xl border border-border/80 bg-elevated p-7 shadow-2xl">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent-copper">
           VibeSpace Access
         </p>
-        <h1 className="mt-3 text-2xl font-semibold text-foreground">Sign in to VibeSpace</h1>
+        <h1 ref={headingRef} tabIndex={-1} className="mt-3 text-2xl font-semibold text-foreground">
+          Sign in to VibeSpace
+        </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           Sign in or create an account before VibeSpace verifies your trial or subscription.
         </p>
@@ -521,8 +551,8 @@ function InstalledCloudAuthentication({
             className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100"
             role="alert"
           >
-            Cloud authentication is not configured in this build. Install the official release
-            or contact VibeSpace support.
+            Cloud authentication is not configured in this build. Install the official release or
+            contact VibeSpace support.
           </p>
         ) : null}
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
@@ -538,8 +568,14 @@ function InstalledCloudAuthentication({
   );
 }
 
-export function InstalledAccessAppHost({ children }: { children: React.ReactNode }) {
+export function InstalledAccessAppHost({
+  children,
+  authenticatedBoundary: AuthenticatedBoundary,
+}: React.PropsWithChildren<{
+  authenticatedBoundary?: React.ComponentType<React.PropsWithChildren>;
+}>) {
   const featureTier = useAuthStore((state) => state.plan);
+  const cloudUserId = useAuthStore((state) => state.cloudSession?.user_id.trim() ?? '');
   const environment = import.meta.env as AccessBuildEnvironment;
   const accessGateEnabled = isAccessGateEnabled(environment);
   const appVersion = environment.VITE_APP_VERSION?.trim() || '0.0.0';
@@ -551,7 +587,7 @@ export function InstalledAccessAppHost({ children }: { children: React.ReactNode
   const [signInMode, setSignInMode] = React.useState<'signin' | 'signup'>('signin');
   const runtime = React.useMemo(
     () => createInstalledRuntime(featureTier, appVersion, publicKeyConfiguration),
-    [appVersion, featureTier, publicKeyConfiguration],
+    [appVersion, cloudUserId, featureTier, publicKeyConfiguration],
   );
 
   React.useEffect(() => {
@@ -569,18 +605,28 @@ export function InstalledAccessAppHost({ children }: { children: React.ReactNode
     }
 
     let active = true;
+    let authGeneration = 0;
     const publish = (session: Session | null) => {
       if (!active) return;
       setHasCloudSession(publishInstalledCloudSession(session));
       setAuthReady(true);
     };
 
+    const bootstrapGeneration = authGeneration;
     void client.auth
       .getSession()
-      .then(({ data, error }) => publish(error ? null : data.session))
-      .catch(() => publish(null));
+      .then(({ data, error }) => {
+        if (bootstrapGeneration !== authGeneration) return;
+        publish(error ? null : data.session);
+      })
+      .catch(() => {
+        if (bootstrapGeneration === authGeneration) publish(null);
+      });
 
-    const { data } = client.auth.onAuthStateChange((_event, session) => publish(session));
+    const { data } = client.auth.onAuthStateChange((_event, session) => {
+      authGeneration += 1;
+      publish(session);
+    });
     return () => {
       active = false;
       data.subscription.unsubscribe();
@@ -610,23 +656,33 @@ export function InstalledAccessAppHost({ children }: { children: React.ReactNode
           onSignIn={() => openAuthentication('signin')}
           onCreateAccount={() => openAuthentication('signup')}
         />
-        <SignInDialog
-          open={signInOpen}
-          onOpenChange={setSignInOpen}
-          initialMode={signInMode}
-        />
+        <SignInDialog open={signInOpen} onOpenChange={setSignInOpen} initialMode={signInMode} />
       </>
     );
   }
 
-  return (
+  const protectedWorkspace = accessGateEnabled ? (
     <AccessAppHost
-      enabled={accessGateEnabled}
+      key={cloudUserId}
+      enabled
       runtime={runtime}
       privacyUrl={safeHttpsUrl(environment.VITE_PRIVACY_URL)}
       termsUrl={safeHttpsUrl(environment.VITE_TERMS_URL)}
     >
       {children}
     </AccessAppHost>
+  ) : (
+    children
+  );
+
+  return (
+    <>
+      <DesktopPresencePublisher appVersion={appVersion} />
+      {AuthenticatedBoundary ? (
+        <AuthenticatedBoundary>{protectedWorkspace}</AuthenticatedBoundary>
+      ) : (
+        protectedWorkspace
+      )}
+    </>
   );
 }

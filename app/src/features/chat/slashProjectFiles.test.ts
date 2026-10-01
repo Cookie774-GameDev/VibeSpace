@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   extractInlineUtilitySlashCommands,
   getInlineSlashContext,
+  isSafeAbsoluteAttachmentPath,
   relativeDisplayPath,
 } from './slashProjectFiles';
 
@@ -41,5 +42,22 @@ describe('relativeDisplayPath', () => {
     expect(
       relativeDisplayPath('C:\\Users\\viper\\proj', 'C:\\Users\\viper\\proj\\src\\App.tsx'),
     ).toBe('src\\App.tsx');
+  });
+});
+
+describe('isSafeAbsoluteAttachmentPath', () => {
+  it('accepts bounded Windows, UNC, and POSIX absolute paths', () => {
+    expect(isSafeAbsoluteAttachmentPath('C:\\work tree\\notes.md')).toBe(true);
+    expect(isSafeAbsoluteAttachmentPath('\\\\server\\share\\notes.md')).toBe(true);
+    expect(isSafeAbsoluteAttachmentPath('/workspace/notes.md')).toBe(true);
+  });
+
+  it('rejects relative, traversal, URI, control-character, and oversized paths', () => {
+    expect(isSafeAbsoluteAttachmentPath('notes.md')).toBe(false);
+    expect(isSafeAbsoluteAttachmentPath('..\\secrets.txt')).toBe(false);
+    expect(isSafeAbsoluteAttachmentPath('C:\\work\\..\\secrets.txt')).toBe(false);
+    expect(isSafeAbsoluteAttachmentPath('file:///C:/work/notes.md')).toBe(false);
+    expect(isSafeAbsoluteAttachmentPath('C:\\work\\bad\nname.md')).toBe(false);
+    expect(isSafeAbsoluteAttachmentPath(`C:\\${'x'.repeat(4_096)}`)).toBe(false);
   });
 });

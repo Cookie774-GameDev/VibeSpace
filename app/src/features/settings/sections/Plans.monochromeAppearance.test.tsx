@@ -31,9 +31,9 @@ describe('Plans MonoChrome appearance', () => {
     expect(className).toContain('[html[data-theme=monochrome]_&]:bg-none');
     expect(className).toContain('bg-[radial-gradient');
 
-    // Meaningful product copy is preserved.
-    expect(screen.getByText('Select your Jarvis intelligence tier')).toBeTruthy();
-    expect(screen.getByText(/Choose Your Power/)).toBeTruthy();
+    // Website-parity product copy is preserved.
+    expect(screen.getByText('Access first. Features when you want them.')).toBeTruthy();
+    expect(screen.getByText(/Two separate ledgers/)).toBeTruthy();
   });
 
   it('neutralizes the current-plan ring under exact monochrome only', () => {

@@ -2,10 +2,11 @@
   "storageKey": "jarvis-ui",
   "storeVersion": 5,
   "fallbackTheme": "default",
+  "deferredThemes": ["vibespace", "sakura", "origami"],
   "selectableThemes": [
     {
       "id": "jarvis",
-      "label": "Jarvis Core",
+      "label": "Jarvis One",
       "description": "High-contrast command center."
     },
     {
@@ -27,6 +28,16 @@
       "id": "sakura",
       "label": "Sakura",
       "description": "Cel-painted dusk workspace."
+    },
+    {
+      "id": "warm",
+      "label": "Warm",
+      "description": "Espresso and ivory paper workspace."
+    },
+    {
+      "id": "origami",
+      "label": "Origami",
+      "description": "Sculpted paper workspace in motion."
     }
   ],
   "documentThemes": {
@@ -34,7 +45,9 @@
     "vibespace": "vibespace",
     "default": "dark",
     "monochrome": "monochrome",
-    "sakura": "sakura"
+    "sakura": "sakura",
+    "warm": "warm",
+    "origami": "origami"
   },
   "persistedLegacyThemes": {
     "light": "monochrome",
@@ -47,6 +60,7 @@
   "commandAliases": {
     "jarvis": "jarvis",
     "jarvis core": "jarvis",
+    "jarvis one": "jarvis",
     "core": "jarvis",
     "vibespace": "vibespace",
     "vibe": "vibespace",
@@ -57,6 +71,10 @@
     "terminal": "monochrome",
     "light": "monochrome",
     "sakura": "sakura",
-    "sakura dusk": "sakura"
+    "sakura dusk": "sakura",
+    "warm": "warm",
+    "cozy": "warm",
+    "origami": "origami",
+    "paperfold": "origami"
   }
 }

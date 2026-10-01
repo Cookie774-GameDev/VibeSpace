@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4096 2304" role="img" aria-label="Warm sunset meadow and mountain landscape">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff6e9" stop-opacity="0"/><stop offset="1" stop-color="#f4d7c4" stop-opacity=".62"/></linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#e6a285"/><stop offset="1" stop-color="#b97867"/></linearGradient>
+    <linearGradient id="sage" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#aab393"/><stop offset="1" stop-color="#75836d"/></linearGradient>
+  </defs>
+  <rect width="4096" height="2304" fill="url(#sky)"/>
+  <circle cx="2140" cy="1180" r="210" fill="#efbd71" opacity=".86"/>
+  <path d="m0 1870 720-530 490 420 560-640 620 670 560-460 520 390 626-510v1094H0Z" fill="#b9adc0" opacity=".72"/>
+  <path d="m0 2010 830-420 600 500 690-590 540 410 650-650 785 530v514H0Z" fill="url(#coral)" opacity=".9"/>
+  <path d="M0 2140c680-360 1180-250 1740 164H0Zm4096-100c-690-310-1240-190-1740 264h1740Z" fill="url(#sage)"/>
+  <g fill="none" stroke="#64755f" stroke-linecap="round" stroke-width="24">
+    <path d="M155 2304 260 1700M365 2304l120-540M3910 2304l-95-630M3700 2304l-125-500"/>
+  </g>
+  <g fill="#9eab8c">
+    <ellipse cx="225" cy="1810" rx="55" ry="120" transform="rotate(-24 225 1810)"/>
+    <ellipse cx="400" cy="1900" rx="52" ry="112" transform="rotate(31 400 1900)"/>
+    <ellipse cx="3830" cy="1800" rx="56" ry="122" transform="rotate(24 3830 1800)"/>
+    <ellipse cx="3650" cy="1910" rx="53" ry="115" transform="rotate(-34 3650 1910)"/>
+  </g>
+  <g fill="#d98678"><circle cx="320" cy="2020" r="38"/><circle cx="460" cy="2110" r="34"/><circle cx="3760" cy="2020" r="38"/><circle cx="3630" cy="2110" r="34"/></g>
+  <g fill="none" stroke="#8d776f" stroke-linecap="round" stroke-width="14" opacity=".55">
+    <path d="m1710 1430 54-26 54 26M1835 1360l44-22 44 22M2690 1430l50-24 50 24"/>
+  </g>
+</svg>

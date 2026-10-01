@@ -59,6 +59,7 @@ function safeSettings(value: unknown, forTemplate = false): WorkbenchPanelSettin
     'note',
     'language',
     'filePath',
+    'pluginId',
   ] as const) {
     if (typeof input[key] === 'string') {
       if (forTemplate && (key === 'resourceId' || key === 'filePath')) continue;
@@ -140,6 +141,7 @@ export function emptyWorkbenchDocument(): WorkbenchDocument {
       paused: false,
       interactive: true,
       intensity: 0.72,
+      brightness: 0.5,
       quality: 'balanced',
     },
     customTemplates: [],
@@ -193,6 +195,7 @@ export function sanitizeWorkbenchDocument(
       paused: wallpaperInput.paused === true,
       interactive: wallpaperInput.interactive !== false,
       intensity: finite(wallpaperInput.intensity, 0.72, 0, 1),
+      brightness: finite(wallpaperInput.brightness, 0.5, 0, 1),
       quality:
         wallpaperInput.quality === 'low' || wallpaperInput.quality === 'high'
           ? wallpaperInput.quality

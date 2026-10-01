@@ -1007,7 +1007,22 @@ export async function createPendingApprovalInContext(
     return readBackApprovalCommit(context, toJarvisRunRow(run), desiredRow, eventRows);
   }
   requireExpectedApprovalTail(input.expectedEventTailSeq, tail?.seq ?? 0);
-  if (run.status !== 'running') repositoryError('approval_status_conflict');
+  const openApprovals = open.map((row) => fromJarvisApprovalRow(row));
+  const canExtendFileActionBatch =
+    (input.approval.actionId === 'files.create' || input.approval.actionId === 'files.read') &&
+    !cancellation &&
+    openApprovals.length + 1 <= 10 &&
+    openApprovals.every(
+      (existing) =>
+        existing.actionId === input.approval.actionId &&
+        existing.status === 'pending' &&
+        existing.requestId === input.approval.requestId &&
+        existing.attemptNumber === input.approval.attemptNumber,
+    ) &&
+    (run.status === 'running' || run.status === 'awaiting_approval');
+  if (run.status !== 'running' && !canExtendFileActionBatch) {
+    repositoryError('approval_status_conflict');
+  }
   if (input.approval.createdAt < run.updatedAt) repositoryError('approval_integrity_error');
   const attempts = currentApprovalAttempts(
     run,
@@ -1015,7 +1030,9 @@ export async function createPendingApprovalInContext(
     input.approval.attemptNumber,
     'create',
   );
-  if (open.length > 0 || cancellation) repositoryError('approval_status_conflict');
+  if ((open.length > 0 || cancellation) && !canExtendFileActionBatch) {
+    repositoryError('approval_status_conflict');
+  }
   const updatedRun: JarvisRun = {
     ...run,
     status: 'awaiting_approval',
@@ -1131,9 +1148,22 @@ export async function decideApprovalInContext(
     return readBackApprovalCommit(context, toJarvisRunRow(run), approvalRow, eventRows);
   }
   requireExpectedApprovalTail(input.expectedEventTailSeq, tail?.seq ?? 0);
+  const filesCreateBatchOpen =
+    (approval.actionId === 'files.create' || approval.actionId === 'files.read') &&
+    open.length >= 1 &&
+    open.length <= 10 &&
+    open.every((row) => {
+      const existing = fromJarvisApprovalRow(row);
+      return (
+        existing.actionId === approval.actionId &&
+        existing.status === 'pending' &&
+        existing.requestId === input.requestId &&
+        existing.attemptNumber === input.attemptNumber
+      );
+    });
   if (
     cancellation ||
-    !hasOnlyOpenApproval(open, approval.id) ||
+    (!hasOnlyOpenApproval(open, approval.id) && !filesCreateBatchOpen) ||
     run.status !== 'awaiting_approval' ||
     approval.status !== 'pending' ||
     input.decidedAt < run.updatedAt
@@ -1158,6 +1188,7 @@ function buildApprovalClaimRows(
   approval: JarvisApprovalV1,
   run: JarvisRun,
   attempts: readonly JarvisTransportAttemptV1[] | undefined,
+  keepAwaitingApproval = false,
 ) {
   const consumed: JarvisApprovalV1 = {
     ...approval,
@@ -1166,7 +1197,7 @@ function buildApprovalClaimRows(
   };
   const updatedRun: JarvisRun = {
     ...run,
-    status: 'running',
+    status: keepAwaitingApproval ? 'awaiting_approval' : 'running',
     updatedAt: input.startedAt,
     ...(attempts ? { transportAttempts: dirtyApprovalAttempt(attempts, input.startedAt) } : {}),
   };
@@ -1278,9 +1309,22 @@ export async function claimApprovedExecutionInContext(
     };
   }
   requireExpectedApprovalTail(input.expectedEventTailSeq, tail?.seq ?? 0);
+  const filesCreateBatchClaim =
+    (approval.actionId === 'files.create' || approval.actionId === 'files.read') &&
+    open.length >= 1 &&
+    open.length <= 10 &&
+    open.every((row) => {
+      const existing = fromJarvisApprovalRow(row);
+      return (
+        existing.actionId === approval.actionId &&
+        existing.requestId === input.requestId &&
+        existing.attemptNumber === input.attemptNumber &&
+        (existing.status === 'pending' || existing.id === approval.id)
+      );
+    });
   if (
     cancellation ||
-    !hasOnlyOpenApproval(open, approval.id) ||
+    (!hasOnlyOpenApproval(open, approval.id) && !filesCreateBatchClaim) ||
     run.status !== 'awaiting_approval' ||
     approval.status !== 'approved' ||
     input.startedAt < run.updatedAt
@@ -1288,9 +1332,12 @@ export async function claimApprovedExecutionInContext(
     repositoryError('approval_status_conflict');
   }
   const attempts = currentApprovalAttempts(run, input.requestId, input.attemptNumber, 'claim');
+  const remainingPending = open.filter(
+    (row) => row.id !== approval.id && row.status === 'pending',
+  ).length;
   return commitApprovalClaim(
     context,
-    buildApprovalClaimRows(input, approval, run, attempts),
+    buildApprovalClaimRows(input, approval, run, attempts, remainingPending > 0),
     false,
   );
 }

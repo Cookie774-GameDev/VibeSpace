@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  VOICE_LISTEN_TIMEOUT_MS_DEFAULT,
   VOICE_SILENCE_DELAY_MS_DEFAULT,
-  clampVoiceListenTimeoutMs,
   clampVoiceSilenceDelayMs,
   resolveVoiceListenTimeoutMs,
-  voiceListenTimeoutLabel,
   voiceSilenceDelayLabel,
 } from './voiceConversation';
 
@@ -15,25 +12,19 @@ describe('voiceConversation', () => {
     expect(voiceSilenceDelayLabel(VOICE_SILENCE_DELAY_MS_DEFAULT)).toBe('2 seconds');
   });
 
-  it('defaults hands-free listen timeout to fifteen seconds', () => {
-    expect(VOICE_LISTEN_TIMEOUT_MS_DEFAULT).toBe(15_000);
-    expect(voiceListenTimeoutLabel(VOICE_LISTEN_TIMEOUT_MS_DEFAULT)).toBe('15 seconds');
-  });
-
-  it('clamps silence delay into the supported range', () => {
+  it('clamps the single pause duration into the supported 1-60 second range', () => {
     expect(clampVoiceSilenceDelayMs(500)).toBe(1000);
     expect(clampVoiceSilenceDelayMs(2500)).toBe(2500);
-    expect(clampVoiceSilenceDelayMs(9000)).toBe(4000);
+    expect(clampVoiceSilenceDelayMs(90_000)).toBe(60_000);
   });
 
-  it('clamps listen timeout into the supported range', () => {
-    expect(clampVoiceListenTimeoutMs(1000)).toBe(5000);
-    expect(clampVoiceListenTimeoutMs(15_000)).toBe(15_000);
-    expect(clampVoiceListenTimeoutMs(120_000)).toBe(60_000);
+  it('disables inactivity timeout for send-it and click-to-talk modes', () => {
+    expect(resolveVoiceListenTimeoutMs(false, 'silence', 15_000)).toBeNull();
+    expect(resolveVoiceListenTimeoutMs(true, 'phrase', 15_000)).toBeNull();
   });
 
-  it('disables listen timeout for push-to-talk', () => {
-    expect(resolveVoiceListenTimeoutMs(false, 15_000)).toBeNull();
-    expect(resolveVoiceListenTimeoutMs(true, 20_000)).toBe(20_000);
+  it('uses the same bounded duration for hands-free pause submission', () => {
+    expect(resolveVoiceListenTimeoutMs(true, 'silence', 20_000)).toBe(20_000);
+    expect(resolveVoiceListenTimeoutMs(true, 'silence', 90_000)).toBe(60_000);
   });
 });

@@ -1,4 +1,5 @@
 import type { ChatModelSelection } from '@/lib/ai/modelSelection';
+import { isHiveProductEnabled } from '@/lib/features/hiveProductGate';
 import type { ProviderId } from '@/types';
 import { deepFreezeJarvisCopy } from './requestEnvelope';
 
@@ -118,6 +119,7 @@ export function parseJarvisModelSwitchIntent(
     return frozenIntent({ kind: 'fastest_connected' });
   }
   if (/^(?:switch(?: me)? to|use)\s+hive balanced$/i.test(text)) {
+    // Intent is still parseable for recovery/tests; execution fails closed when gated.
     return frozenIntent({ kind: 'hive_balanced' });
   }
   if (/^(?:switch(?: me)? to|use)\s+the strongest coding model$/i.test(text)) {
@@ -301,6 +303,9 @@ export function planJarvisModelSwitch(
   input: JarvisModelSwitchDecisionInput,
 ): Readonly<JarvisModelSwitchDecision> {
   if (input.intent.kind === 'hive_balanced') {
+    if (!isHiveProductEnabled()) {
+      return frozenDecision({ status: 'not_configured', reason: 'target_not_configured' });
+    }
     const assessment = input.hiveBalanced;
     if (!assessment?.configured) {
       return frozenDecision({ status: 'not_configured', reason: 'target_not_configured' });
