@@ -51,6 +51,42 @@ function nativeStatus(args?: Record<string, unknown>) {
 }
 
 describe('Workbench NativeAppPanel', () => {
+  it('settles a closed native app to idle instead of retaining its ready badge', async () => {
+    let closed = false;
+    native.invoke.mockImplementation(async (command, args) => {
+      if (
+        command === 'workbench_native_app_surface_open' ||
+        command === 'workbench_native_app_surface_status'
+      ) {
+        return { ...nativeStatus(args), embedded: !closed, running: !closed, fallback: closed };
+      }
+    });
+    const updates = vi.fn();
+    function HostedPanel() {
+      const [panel, setPanel] = React.useState(appPanel());
+      return (
+        <NativeAppPanel
+          panel={panel}
+          onUpdate={(patch) => {
+            updates(patch);
+            setPanel((current) => ({ ...current, ...patch }));
+          }}
+        />
+      );
+    }
+    render(
+      <div className="workbench-canvas">
+        <HostedPanel />
+      </div>,
+    );
+    await waitFor(() => expect(updates).toHaveBeenCalledWith({ status: 'ready' }));
+    updates.mockClear();
+    closed = true;
+    act(() => window.dispatchEvent(new Event('focus')));
+    await screen.findByText('ChatGPT · Closed');
+    expect(updates).toHaveBeenCalledWith({ status: 'idle' });
+  });
+
   it('releases an app window when its panel is removed instead of merely changing routes', async () => {
     const view = render(
       <div className="workbench-canvas">

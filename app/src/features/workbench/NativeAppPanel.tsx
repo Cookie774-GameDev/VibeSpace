@@ -168,7 +168,7 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
             visibleRef.current = true;
             setHost(result);
             setError(null);
-            setPanelStatus('ready');
+            setPanelStatus(result.running ? 'ready' : 'idle');
           } catch (cause) {
             if (!desiredRef.current || pendingRef.current) continue;
             lastSettledKeyRef.current = current.key;
@@ -273,6 +273,7 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
         const value = await nativeAppSurfaceAction(panel.id, operationId, 'status');
         if (!disposed && value && value.panelId === panel.id && value.operationId === operationId) {
           setHost(value);
+          setPanelStatus(value.running ? 'ready' : 'idle');
         }
       } catch (cause) {
         if (!disposed) {
@@ -304,7 +305,10 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
       }
       await nativeAppSurfaceAction(panel.id, operationId, host?.running ? 'focus' : 'launch');
       const value = await nativeAppSurfaceAction(panel.id, operationId, 'status');
-      if (value && value.panelId === panel.id && value.operationId === operationId) setHost(value);
+      if (value && value.panelId === panel.id && value.operationId === operationId) {
+        setHost(value);
+        setPanelStatus(value.running ? 'ready' : 'idle');
+      }
     } catch (cause) {
       setError(failureMessage(cause));
     } finally {
