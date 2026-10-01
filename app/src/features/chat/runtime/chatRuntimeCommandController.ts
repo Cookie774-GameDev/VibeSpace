@@ -7,6 +7,7 @@ import {
 import {
   DEFAULT_PERFORMANCE_PROFILE,
   parsePerformanceCommand,
+  performancePolicy,
   type PerformanceCommand,
   type PerformanceProfile,
 } from './performanceProfile';
@@ -71,13 +72,13 @@ export function applyChatRuntimeCommand(
   if (command.kind === 'performance') {
     if (!command.value) return { kind: 'picker', picker: 'performance', settings };
     if (command.value === 'status') {
-      return { kind: 'status', settings, message: `Performance profile: ${settings.performance}` };
+      return { kind: 'status', settings, message: describePerformance(settings.performance) };
     }
     settings.performance = command.value;
     return {
       kind: 'updated',
       settings,
-      message: `Performance profile set to ${command.value}; model, effort, and provider Fast mode are unchanged.`,
+      message: describePerformance(command.value),
     };
   }
 
@@ -97,4 +98,9 @@ export function applyChatRuntimeCommand(
     settings,
     message: `RLM turned ${command.enabled ? 'on' : 'off'}.`,
   };
+}
+
+export function describePerformance(profile: PerformanceProfile): string {
+  const policy = performancePolicy(profile);
+  return `Performance profile: ${profile}. This per-chat setting controls context lookup for broad questions: up to ${policy.maxSubcalls} subcalls, ${policy.maxConcurrentChildren} concurrent lookups, and ${policy.maxEvidenceBytes / 1024} KiB of evidence. Responsive favors direct answers; Quality allows more investigation; Balanced is between them. It appears in the slash-command menu so you can choose that tradeoff. Selected model, effort, and provider Fast mode are unchanged. Use /performance responsive, balanced, or quality to change it.`;
 }

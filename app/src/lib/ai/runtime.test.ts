@@ -7831,7 +7831,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       value: { kind: 'settled' as const, result: { ok: true as const, summary: 'Created', data: { id: 'owned-schedule' } } } }));
     interceptNextKernelRuntime(kernel => Object.freeze({ ...kernel, actions: {
       ...kernel.actions,
-      create: async input => {
+      create: async (input: Parameters<typeof kernel.actions.create>[0]) => {
         approval = { schemaVersion: 1, id: 'jappr_runtime_tool', runId: input.parentRun.id,
           requestId: input.attempt.requestId, attemptNumber: input.attempt.attemptNumber,
           actionId: input.actionId, actionVersion: input.actionVersion, params: input.params,
@@ -7840,7 +7840,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         await database.jarvis_approvals.add(toJarvisApprovalRow(approval));
         return { kind: 'committed' as const, value: approval };
       },
-      decide: async input => {
+      decide: async (input: Parameters<typeof kernel.actions.decide>[0]) => {
         approval = { ...approval, status: input.decision === 'approve' ? 'approved' : 'denied' };
         await database.jarvis_approvals.put(toJarvisApprovalRow(approval));
         return { kind: 'committed' as const, value: approval };

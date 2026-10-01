@@ -8,6 +8,8 @@ import { publishChatRunState } from './runtime/chatRunState';
 
 const mocks = vi.hoisted(() => ({
   backend: 'codex' as 'codex' | 'opencode',
+  projectRoot: 'C:\\skill-project',
+  chooseProjectFolder: vi.fn(),
   listOpenCodeSkills: vi.fn(),
   listSkills: vi.fn(),
   listMcpServerStatus: vi.fn(),
@@ -22,7 +24,12 @@ vi.mock('@/lib/ai/adapters/opencodePersistent', async (original) => ({
 }));
 vi.mock('@/features/files/projectFiles', async (original) => ({
   ...(await original<typeof import('@/features/files/projectFiles')>()),
-  getStoredProjectRoot: () => 'C:\\skill-project',
+  getStoredProjectRoot: () => mocks.projectRoot,
+  chooseProjectFolder: mocks.chooseProjectFolder,
+  setStoredProjectRoot: (projectId: string | null, path: string) => {
+    mocks.projectRoot = path;
+    window.dispatchEvent(new CustomEvent('jarvis:files:root-changed', { detail: { projectId, path } }));
+  },
 }));
 vi.mock('@/lib/ai/adapters/codexPersistent', async (original) => {
   const actual = await original<typeof import('@/lib/ai/adapters/codexPersistent')>();
@@ -55,6 +62,8 @@ afterEach(() => {
   publishChatRunState({ chatId: 'skill-controls-steer', status: 'done' });
   publishChatRunState({ chatId: 'skill-controls-queue', status: 'done' });
   mocks.backend = 'codex';
+  mocks.projectRoot = skill.cwd;
+  mocks.chooseProjectFolder.mockReset();
   mocks.listOpenCodeSkills.mockReset();
   mocks.listSkills.mockReset();
   mocks.listMcpServerStatus.mockReset();
@@ -67,6 +76,27 @@ afterEach(() => {
     projectId: originalAuth.projectId,
     chatModelSelection: originalAuth.chatModelSelection,
   });
+});
+
+it('chooses a folder from $skill and discovers skills without a project record', async () => {
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  mocks.projectRoot = '';
+  mocks.chooseProjectFolder.mockResolvedValue(skill.cwd);
+  mocks.listSkills.mockResolvedValue([{ cwd: skill.cwd, skills: [skill], errors: [] }]);
+  useAuthStore.setState({
+    localUserId: 'skill-folder-account', cloudSession: null,
+    workspaceId: 'skill-workspace' as never, projectId: null,
+  });
+  render(<TooltipProvider><Composer chatId={'skill-folder-chat' as never} /></TooltipProvider>);
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: '$rev', selectionStart: 4 } });
+  expect(await screen.findByText('Choose a project folder to use native skills.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }));
+  await waitFor(() => expect(mocks.chooseProjectFolder).toHaveBeenCalledOnce());
+  await waitFor(() => expect(mocks.listSkills).toHaveBeenCalledWith({ workingDirectory: skill.cwd, forceReload: false }));
+  expect(await screen.findByRole('option', { name: /review-diff/u })).toBeTruthy();
+  expect(input.value).toBe('$rev');
 });
 
 it.each(['steer', 'queue'] as const)('forwards selected Codex skills through native %s without cancelling the turn', async (action) => {

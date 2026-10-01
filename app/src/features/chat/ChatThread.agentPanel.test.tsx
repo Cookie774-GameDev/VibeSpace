@@ -184,8 +184,9 @@ describe('ChatThread agent panel attachment', () => {
       expect(screen.getByText('Selected child transcript.')).toBeTruthy();
       expect(useUIStore.getState()).toMatchObject({ activeChatId: 'chat_parent', route: 'chat' });
       view.unmount();
-      expect(remove.mock.calls.some(([name]) => name === 'vibespace:open-child-chat-panel')).toBe(
-        true,
+      expect(remove).toHaveBeenCalledWith(
+        'vibespace:open-child-chat-panel',
+        expect.any(Function),
       );
     } finally {
       view.unmount();

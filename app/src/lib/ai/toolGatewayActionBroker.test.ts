@@ -209,7 +209,7 @@ describe('protected Tool Gateway action broker', () => {
       dispose: () => f.controller.abort(),
     };
     const capability = engine.bindIssuedLifecycle(lifecycle);
-    const input = {
+    const input: Parameters<typeof capability.create>[0] = {
       parentRun: f.parentRun,
       attempt: { kind: 'initial' as const, runId: 'run', requestId: 'provider', attemptNumber: 1 },
       actionId: 'schedule.create',

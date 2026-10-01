@@ -223,4 +223,20 @@ describe('NativeSkillTypeahead', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(onRefresh).toHaveBeenCalledOnce();
   });
+
+  it('offers a folder choice when discovery has no project root', () => {
+    const onRefresh = vi.fn();
+    const onChooseProjectFolder = vi.fn();
+    renderPicker({
+      skills: [],
+      error: 'Choose a project folder to use native skills.',
+      needsProjectFolder: true,
+      onRefresh,
+      onChooseProjectFolder,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }));
+    expect(onChooseProjectFolder).toHaveBeenCalledOnce();
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
 });

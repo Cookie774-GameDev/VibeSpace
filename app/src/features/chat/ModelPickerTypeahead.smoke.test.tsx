@@ -342,8 +342,7 @@ describe('ModelPickerTypeahead smoke transports', () => {
     const option = container.querySelector('[data-model-price="free"]');
     expect(option).not.toBeNull();
     fireEvent.click(option!);
-    expect(onSelect).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('option', { name: /auto/i }));
+    expect(screen.queryByRole('option', { name: /auto/i })).toBeNull();
     expect(onSelect).toHaveBeenCalledWith('opencode', 'openai/gpt-free', openCode, 'auto');
   });
 
@@ -391,8 +390,7 @@ describe('ModelPickerTypeahead smoke transports', () => {
     expect(surface?.className).toContain('[html[data-theme=monochrome]_&_*]:bg-none');
     expect(surface?.className).toContain('[html[data-theme=monochrome]_&_*]:shadow-none');
     fireEvent.click(cliControl!);
-    expect(onSelect).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('option', { name: /auto/i }));
+    expect(screen.queryByRole('option', { name: /auto/i })).toBeNull();
     expect(onSelect).toHaveBeenCalledWith('vibespace-kernel-smoke', 'kernel-smoke-v1', cli, 'auto');
   });
 
@@ -513,8 +511,6 @@ describe('ModelPickerTypeahead smoke transports', () => {
 
     expect(screen.queryByRole('group', { name: 'GPT-5.6 Sol routes' })).toBeNull();
     act(() => ref.current?.selectCurrent());
-    expect(onSelect).not.toHaveBeenCalled();
-    act(() => ref.current?.selectCurrent());
     expect(onSelect).toHaveBeenCalledWith(
       'opencode',
       'openrouter/openai/gpt-5.6-sol',
@@ -609,7 +605,7 @@ describe('ModelPickerTypeahead smoke transports', () => {
                     label: 'GPT-5.6 Luna',
                     connection: openCode,
                     available: true,
-                    variants: ['max'],
+                    variants: ['low', 'max'],
                   },
                 ],
               },
@@ -647,7 +643,7 @@ describe('ModelPickerTypeahead smoke transports', () => {
     const movedEffortDescendant = effortListbox.getAttribute('aria-activedescendant');
     expect(movedEffortDescendant).not.toBe(initialEffortDescendant);
     expect(document.getElementById(movedEffortDescendant!)).not.toBeNull();
-    expect(screen.getByRole('option', { name: /auto/i }).getAttribute('aria-selected')).toBe(
+    expect(screen.getByRole('option', { name: 'low' }).getAttribute('aria-selected')).toBe(
       'true',
     );
     expect(screen.getByRole('option', { name: 'max' }).getAttribute('aria-selected')).toBe('false');
@@ -695,17 +691,16 @@ describe('ModelPickerTypeahead smoke transports', () => {
     expect(selectedModel).not.toBeNull();
     act(() => ref.current?.selectCurrent());
     expect(onSelect).not.toHaveBeenCalled();
-    expect(screen.getByRole('option', { name: /auto/i })).not.toBeNull();
+    expect(screen.queryByRole('option', { name: /auto/i })).toBeNull();
     expect(screen.getByRole('option', { name: 'medium' })).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'low' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'high' })).toBeNull();
     expect(screen.queryByText(/fast/i)).toBeNull();
-    const selectedEffort = screen.getByRole('option', { name: /auto/i });
+    const selectedEffort = screen.getByRole('option', { name: 'medium' });
     expect(selectedModel?.className).toContain('jarvis-slash-item-selected');
     expect(selectedEffort.className).toContain('border-accent-copper/60');
     expect(selectedEffort.className).toContain('jarvis-slash-item-selected');
-    expect(selectedEffort.querySelector('[data-effort-icon="auto"]')).not.toBeNull();
-    act(() => ref.current?.moveDown());
+    expect(selectedEffort.querySelector('[data-effort-icon="medium"]')).not.toBeNull();
     act(() => ref.current?.selectCurrent());
     expect(onSelect).toHaveBeenCalledWith(
       'opencode',
@@ -766,7 +761,7 @@ describe('ModelPickerTypeahead smoke transports', () => {
     fireEvent.click(
       document.querySelector('[role="option"][data-value="openai-codex:gpt-6-luna"]')!,
     );
-    fireEvent.click(screen.getByRole('option', { name: /^auto/i }));
+    expect(screen.queryByRole('option', { name: /^auto/i })).toBeNull();
     expect(onSelect).toHaveBeenCalledWith('openai', 'gpt-6-luna', codex, 'auto');
   });
 
@@ -795,7 +790,7 @@ describe('ModelPickerTypeahead smoke transports', () => {
     );
 
     fireEvent.click(screen.getByText('GPT-5.6 Sol'));
-    expect(document.querySelector('[data-effort-icon="auto"]')).not.toBeNull();
+    expect(document.querySelector('[data-effort-icon="auto"]')).toBeNull();
     expect(document.querySelector('[data-effort-icon="ultra"]')).not.toBeNull();
     const ultra = screen.getByRole('option', { name: /xhigh/i });
     expect(ultra.querySelector('[data-ultra-roots="true"]')).not.toBeNull();
@@ -832,10 +827,32 @@ describe('ModelPickerTypeahead smoke transports', () => {
     const labels = Array.from(document.querySelectorAll('[data-effort-level]')).map((node) =>
       node.getAttribute('data-effort-level'),
     );
-    expect(labels).toEqual(['auto', 'minimal', 'low', 'medium', 'high', 'ultra', 'max']);
-    expect(screen.getByRole('option', { name: /^none$/i })).toBeTruthy();
+    expect(labels).toEqual(['low', 'medium', 'high', 'ultra', 'max']);
+    expect(screen.queryByRole('option', { name: /^none$/i })).toBeNull();
+    expect(screen.queryByRole('option', { name: /^auto$/i })).toBeNull();
     expect(screen.getByRole('option', { name: /^xhigh$/i })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /ultra/i })).toBeNull();
+  });
+
+  it('keeps a real minimal effort when a model also exposes none', () => {
+    render(
+      <ModelPickerTypeahead
+        groups={[{
+          provider: 'openai', label: 'OpenAI', options: [{
+            id: 'openai-api:gpt-minimal', provider: 'openai', modelId: 'gpt-minimal',
+            label: 'GPT Minimal', connection: connection('openai-api', 'native-api'),
+            variants: ['none', 'minimal', 'low'],
+          }],
+        }]}
+        selectedId="openai-api:gpt-minimal"
+        onSelect={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText('GPT Minimal'));
+    expect(screen.getByRole('option', { name: 'minimal' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'low' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'none' })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'auto' })).toBeNull();
   });
 
   it('cancels a pending model without changing the committed selection', () => {
@@ -874,7 +891,7 @@ describe('ModelPickerTypeahead smoke transports', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it('restores a supported saved effort and falls back to Auto when unsupported', () => {
+  it('restores a supported saved effort and falls back to the first supported effort', () => {
     const openCode = connection('opencode-cli', 'external-cli');
     const onSelect = vi.fn();
     const { unmount } = render(
@@ -930,7 +947,7 @@ describe('ModelPickerTypeahead smoke transports', () => {
       />,
     );
     fireEvent.click(screen.getByText('GPT-5.6 Terra'));
-    expect(screen.getByRole('option', { name: /auto/i }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('option', { name: 'low' }).getAttribute('aria-pressed')).toBe('true');
   });
 
   it('independently collapses and expands every provider heading', () => {

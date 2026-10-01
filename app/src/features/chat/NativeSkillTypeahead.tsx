@@ -26,6 +26,8 @@ export interface NativeSkillTypeaheadProps {
   onHoverKey?: (key: string) => void;
   onSelect: (skill: CodexDiscoveredSkill) => void;
   onRefresh: () => void;
+  needsProjectFolder?: boolean;
+  onChooseProjectFolder?: () => void;
 }
 
 export interface NativeSkillTypeaheadHandle {
@@ -59,6 +61,8 @@ export const NativeSkillTypeahead = forwardRef<
     onHoverKey,
     onSelect,
     onRefresh,
+    needsProjectFolder = false,
+    onChooseProjectFolder,
   },
   ref,
 ) {
@@ -190,12 +194,12 @@ export const NativeSkillTypeahead = forwardRef<
         <button
           type="button"
           className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-60"
-          aria-label="Refresh skills"
-          onClick={onRefresh}
+          aria-label={needsProjectFolder ? 'Choose project folder' : 'Refresh skills'}
+          onClick={needsProjectFolder ? onChooseProjectFolder : onRefresh}
           disabled={loading}
         >
           <RotateCcw aria-hidden="true" className="size-3.5" />
-          Refresh
+          {needsProjectFolder ? 'Choose folder' : 'Refresh'}
         </button>
       </header>
 
@@ -210,9 +214,9 @@ export const NativeSkillTypeahead = forwardRef<
           <button
             type="button"
             className="shrink-0 text-xs font-medium text-foreground underline underline-offset-2"
-            onClick={onRefresh}
+            onClick={needsProjectFolder ? onChooseProjectFolder : onRefresh}
           >
-            Retry
+            {needsProjectFolder ? 'Choose folder' : 'Retry'}
           </button>
         </div>
       )}

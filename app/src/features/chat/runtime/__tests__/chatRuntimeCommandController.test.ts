@@ -6,6 +6,16 @@ import {
 } from '../chatRuntimeCommandController';
 
 describe('chat runtime command controller', () => {
+  it('explains the context lookup budget and preserved model controls', () => {
+    const result = applyChatRuntimeCommand(DEFAULT_CHAT_RUNTIME_SETTINGS, { kind: 'performance', value: 'status' });
+    expect(result.kind).toBe('status');
+    if (result.kind !== 'status') throw new Error('missing status');
+    expect(result.message).toContain('context lookup');
+    expect(result.message).toContain('6');
+    expect(result.message).toContain('256 KiB');
+    expect(result.message).toContain('model, effort');
+    expect(result.settings).toEqual(DEFAULT_CHAT_RUNTIME_SETTINGS);
+  });
   it('keeps effort, provider Fast mode, performance, and RLM independent', () => {
     let settings = { ...DEFAULT_CHAT_RUNTIME_SETTINGS };
     for (const input of ['/fast on', '/effort high', '/performance responsive', '/rlm off']) {

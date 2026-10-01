@@ -65,6 +65,13 @@ const EFFORT_ICONS: Record<EffortLabel, LucideIcon> = {
   max: Cpu,
 };
 
+function selectableEfforts(option: ModelPickerOption) {
+  return listEffortOptions(
+    (option.variants ?? []).filter((id) => id.trim().toLocaleLowerCase() !== 'none').map((id) => ({ id })),
+    option.modelId,
+  ).filter((effort) => effort.available && effort.label !== 'auto' && effort.upstreamEffort !== 'none');
+}
+
 function UltraRoots() {
   return (
     <svg
@@ -100,6 +107,12 @@ function UltraSigil() {
       <circle className="vibespace-ultra-sigil-star" cx="14" cy="14" r="1.7" />
     </svg>
   );
+}
+
+export function ModelEffortIcon({ effort }: { effort: EffortLabel }) {
+  if (effort === 'ultra') return <UltraSigil />;
+  const Icon = EFFORT_ICONS[effort];
+  return <Icon aria-hidden="true" className="h-3.5 w-3.5" />;
 }
 
 function searchableOptionText(option: ModelPickerOption): string {
@@ -320,11 +333,7 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
     }, [selectedGroupId, selectedId]);
 
     const effortOptions = useMemo(
-      () =>
-        listEffortOptions(
-          (pendingOption?.variants ?? []).map((id) => ({ id })),
-          pendingOption?.modelId,
-        ).filter((option) => option.available),
+      () => pendingOption ? selectableEfforts(pendingOption) : [],
       [pendingOption],
     );
     const committedEffort = effortOptions.some((effort) => effort.label === initialEffort)
@@ -343,11 +352,14 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
     const beginSelection = (option: ModelPickerOption) => {
       if (option.available === false) return;
       setPendingRoutes(null);
+      const supported = selectableEfforts(option);
+      if (supported.length === 0) {
+        onSelect(option.provider, option.modelId, option.connection, 'auto');
+        setPendingOption(null);
+        setEffortIndex(0);
+        return;
+      }
       setPendingOption(option);
-      const supported = listEffortOptions(
-        (option.variants ?? []).map((id) => ({ id })),
-        option.modelId,
-      ).filter((candidate) => candidate.available);
       const savedIndex = supported.findIndex((candidate) => candidate.label === initialEffort);
       setEffortIndex(savedIndex >= 0 ? savedIndex : 0);
     };
@@ -635,7 +647,6 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
             <div role="group" aria-label={`${pendingOption.label} effort`} className="py-1">
               {effortOptions.map((effort, index) =>
                 (() => {
-                  const EffortIcon = EFFORT_ICONS[effort.label];
                   const selected = index === effortIndex;
                   return (
                     <button
@@ -664,20 +675,11 @@ export const ModelPickerTypeahead = forwardRef<ModelPickerTypeaheadRef, ModelPic
                             : 'border-border/70 bg-background/35 text-muted-foreground',
                         )}
                       >
-                        {effort.label === 'ultra' ? (
-                          <UltraSigil />
-                        ) : (
-                          <EffortIcon aria-hidden="true" className="h-3.5 w-3.5" />
-                        )}
+                        <ModelEffortIcon effort={effort.label} />
                       </span>
                       <span className="relative z-[1] min-w-0 flex-1 font-medium">
                         {effort.upstreamEffort ?? effort.label}
                       </span>
-                      {effort.label === 'auto' ? (
-                        <span className="relative z-[1] text-[10px] normal-case text-muted-foreground">
-                          Provider default
-                        </span>
-                      ) : null}
                     </button>
                   );
                 })(),
