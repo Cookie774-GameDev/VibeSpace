@@ -64,6 +64,50 @@ export function failureDiagnostic(stage,error) {
     kind:ERROR_KINDS.has(error?.name)?error.name:'OTHER',
     systemCode:error?.code==null?'NONE':SYSTEM_CODES.has(error.code)?error.code:Number.isSafeInteger(error.code)?'CHILD_EXIT':'OTHER'};
 }
+const ATTESTATION_PHASES = new Set(['BEGIN','SPEC_READ','PROCESS_INVENTORY','PROCESS_IDENTITIES','WEBVIEW_ARGUMENTS','CDP_LISTENER','FRONTEND_LISTENER','FRONTEND_IDENTITY','ANCESTRY','LOADED_MODULES','GIT_HEAD','SHELL_IDENTITY','FINAL_OBSERVATION','COMPLETE']);
+const CHILD_SIGNALS = new Set(['SIGTERM','SIGKILL','SIGINT','SIGABRT','SIGSEGV']);
+export function parseAttestationPhase(stderr) {
+  const unknown={phase:'UNKNOWN',phaseMarks:0};
+  if(typeof stderr!=='string' || Buffer.byteLength(stderr,'utf8')>8192) return unknown;
+  let phase='UNKNOWN',phaseMarks=0;
+  for(const line of stderr.split(/\r?\n/u)) {
+    const match=/^FRESH2_Q18_ATTEST_PHASE=([A-Z_]+)$/u.exec(line);
+    if(match && ATTESTATION_PHASES.has(match[1])) {phase=match[1];phaseMarks++;if(phaseMarks>32) return unknown;}
+  }
+  return {phase,phaseMarks};
+}
+export async function runObservedChild(command,args,options,onDiagnostic,execute=run) {
+  const started=performance.now();
+  const pending=execute(command,args,options);
+  const child=pending.child,originalKill=child.kill;
+  let killRequestedAtMs=null;
+  // Observe this private child's existing kill call. Forward identical this/args/return.
+  // Node22 execFile calls it for its timeout or buffer limit; no added timer or kill.
+  child.kill=function(...args) {
+    killRequestedAtMs=Math.min(900000,Math.max(0,Math.floor(performance.now()-started)));
+    return Reflect.apply(originalKill,this,args);
+  };
+  const project=(error,result)=>{
+    const elapsedMs=Math.min(900000,Math.max(0,Math.floor(performance.now()-started)));
+    const configuredTimeoutMs=Number.isSafeInteger(options.timeout)&&options.timeout>0&&options.timeout<=10000?options.timeout:null;
+    const killRequestObserved=killRequestedAtMs!==null;
+    let innerTimerAttribution='NO_KILL_REQUEST_OBSERVED';
+    if(killRequestObserved) {
+      if(error?.code==='ERR_CHILD_PROCESS_STDIO_MAXBUFFER') innerTimerAttribution='MAX_BUFFER_KILL_OBSERVED';
+      else if(process.versions.node.split('.')[0]!=='22' || options.signal!=null) innerTimerAttribution='UNATTRIBUTED_KILL_REQUEST';
+      else if(error?.killed===true && error.code==null && error.signal==='SIGTERM' && options.killSignal==null && configuredTimeoutMs!==null && killRequestedAtMs>=configuredTimeoutMs) innerTimerAttribution='TIMEOUT_KILL_OBSERVED';
+      else innerTimerAttribution='UNATTRIBUTED_KILL_REQUEST';
+    }
+    return {status:error?'FAILURE':'SUCCESS',configuredTimeoutMs,elapsedMs,killRequestObserved,killRequestedAtMs,
+      killed:child.killed===true,signal:error?.signal==null?'NONE':CHILD_SIGNALS.has(error.signal)?error.signal:'OTHER',
+      innerTimerAttribution,...parseAttestationPhase(error?.stderr??result?.stderr)};
+  };
+  try {
+    const result=await pending;onDiagnostic(project(null,result));return result;
+  } catch(error) {
+    onDiagnostic(project(error,null));throw error;
+  } finally {child.kill=originalKill;}
+}
 async function verifyInputs(s,mark=()=>{}) {
   const inputPath=path.join(s.artifactRoot,'input-manifest.json');
   mark('INPUT_RAW_HASH');
@@ -100,11 +144,11 @@ async function verifyInputs(s,mark=()=>{}) {
   requireThat(inventory.sourceSHA===s.sourceSHA && inventory.executableSHA256===s.exeSHA256 && await hash(path.join(s.artifactRoot,'dll-inventory.json'))===provenance.dllInventorySHA256,'dll_inventory_identity');
   return { inputs, selected, manifest, inventory, provenance };
 }
-async function probe(s,specPath,binding,timeout) {
+async function probe(s,specPath,binding,timeout,onDiagnostic) {
   const args=['-NoProfile','-NonInteractive','-File',path.join(here,'attest.ps1'),'-SpecPath',specPath];
   if(binding) args.push('-ShellPid',String(binding.pid),'-ShellBornMs',String(binding.processStartedAt));
   let stdout;
-  try { ({stdout}=await run('pwsh',args,{windowsHide:true,timeout,maxBuffer:1024*1024})); }
+  try { ({stdout}=await runObservedChild('pwsh',args,{windowsHide:true,timeout,maxBuffer:1024*1024},onDiagnostic)); }
   catch(error) { throw recoverAttestationFailure(error); }
   const observation=JSON.parse(stdout); verifyAttestation(s,observation); return observation;
 }
@@ -163,6 +207,7 @@ export async function executeNative(specPath) {
     providerAcceptance:'UNRUN',physicalCAcceptance:'UNRUN',canonicalToolApprovalAcceptance:'UNRUN',
     microphoneModelCloudAcceptance:'UNRUN',startedAtUTC:new Date().toISOString(),errors:[]};
   let browser,page,ownedPanelId,ownedEvent,observation,inputs,frontendBinding;
+  let probeDiagnostic=null;
   let stage='VERIFY_INPUTS';
   const mark=value=>{stage=value;};
   const preparationPanels=[];
@@ -171,7 +216,8 @@ export async function executeNative(specPath) {
   let timedOut=false;
   const watchdog=setTimeout(()=>{timedOut=true; void browser?.close().catch(()=>{});},s.totalMs);
   const guard=async(binding)=>{
-    requireThat(!timedOut,'deadline_exceeded'); observation=await probe(s,specPath,binding,budget.remaining(10000));
+    probeDiagnostic=null;
+    requireThat(!timedOut,'deadline_exceeded'); observation=await probe(s,specPath,binding,budget.remaining(10000),value=>{probeDiagnostic=value;});
     const f=observation.frontend; requireThat(f?.matchesRoot===true && path.win32.basename(f.exePath).toLowerCase()==='node.exe','frontend_process_root');
     if(frontendBinding) requireThat(f.pid===frontendBinding.pid && f.bornMs===frontendBinding.bornMs,'frontend_process_changed');
     else frontendBinding=f;
@@ -366,7 +412,7 @@ export async function executeNative(specPath) {
     mark('FINAL_VERIFICATION');
     await verifyInputs(s); await guard(); receipt.loadedModules=moduleClosure(s,observation,inputs.inventory);
     receipt.runtimeStatus='PASS'; verifyReceipt(receipt);
-  } catch(error) { receipt.diagnostic=failureDiagnostic(stage,error); receipt.errors.push(safeFailure(error)); }
+  } catch(error) { receipt.diagnostic=failureDiagnostic(stage,error); if(probeDiagnostic) receipt.diagnostic.attestationChild=probeDiagnostic; receipt.errors.push(safeFailure(error)); }
   finally {
     // UI cleanup is attempted only for the owned binding, before the global deadline.
     if(receipt.binding && !receipt.cleanup.sessionAbsent && page && !timedOut) {

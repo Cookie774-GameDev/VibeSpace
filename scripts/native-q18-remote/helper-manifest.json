@@ -10,8 +10,8 @@
     },
     {
       "path": "attest.ps1",
-      "bytes": 3714,
-      "sha256": "1420234f28f5aec44e81a11c63d98954afa8abe61f3c407c423adffa9955ee45"
+      "bytes": 4575,
+      "sha256": "f6c6321aa9a97d3423007919424bc8cb0042c956fb31dc836d2cc6c69ae662cd"
     },
     {
       "path": "cdp-diagnostic.ps1",
@@ -65,8 +65,8 @@
     },
     {
       "path": "driver.mjs",
-      "bytes": 28463,
-      "sha256": "571480ea1b9b1f00d855ed55484a75daffb9e4a89863f5b572eeeaea749983e6"
+      "bytes": 31609,
+      "sha256": "77a3f23857fb7033db93863686b2f78f51981beb41e9178ef95646e7e8b3bf11"
     },
     {
       "path": "entry.ps1",
@@ -150,6 +150,6 @@
     }
   ],
   "originalManifestSHA256": "65d04ab824644c3be5090214e4136e6aa01d6b0b8220d0cba648a421dd8a8c87",
-  "repairBaseHelperSHA": "af790cee714e7f27fd701a61e9f5fdf25ad7c77e",
-  "proposalBaseManifestSHA256": "881fee77e2a80eedd85a5ffac80f5b58459bacb504ed4c143128f2b540154287"
+  "repairBaseHelperSHA": "7fc6228beb2e773e723aa81782b053a19f73e4bc",
+  "proposalBaseManifestSHA256": "d08ddb265c063aa332d9c040ebf4014c1573a964daf9e10f34ae75317eaf2757"
 }
