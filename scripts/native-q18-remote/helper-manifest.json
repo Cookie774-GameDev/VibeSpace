@@ -14,6 +14,16 @@
       "sha256": "1420234f28f5aec44e81a11c63d98954afa8abe61f3c407c423adffa9955ee45"
     },
     {
+      "path": "cdp-diagnostic.ps1",
+      "bytes": 5741,
+      "sha256": "0d0c57778d36ca23e077978316d233c6f9469af717029a28c09ffae552d372e8"
+    },
+    {
+      "path": "cdp-diagnostic.test.ps1",
+      "bytes": 4024,
+      "sha256": "ca64cd1a5883cd0ab6f6c6c54509aae2350d6e0f1342808b474239934b0d20c5"
+    },
+    {
       "path": "commandline.ps1",
       "bytes": 1799,
       "sha256": "41fd527b1a93d32c83b36dc85adffcc64d8e7b5ba3633da88c62f8c9e69f0fda"
@@ -25,8 +35,8 @@
     },
     {
       "path": "consumer.ps1",
-      "bytes": 24515,
-      "sha256": "1bf9743cd266eabf372be726f94d8841f80315cfb6c24282c14acbecff3f6903"
+      "bytes": 26160,
+      "sha256": "bdec043dd7ce005c495c195a372a7d0a49b95cb9eab0ddc1a5e651ab52d56a12"
     },
     {
       "path": "contract.mjs",
@@ -120,5 +130,5 @@
     }
   ],
   "originalManifestSHA256": "65d04ab824644c3be5090214e4136e6aa01d6b0b8220d0cba648a421dd8a8c87",
-  "repairBaseHelperSHA": "3a9eaff51394a499db552e1b2eca31b4b64805af"
+  "repairBaseHelperSHA": "23febbd1da9d25d00132f10bf203d0f5c7d64269"
 }

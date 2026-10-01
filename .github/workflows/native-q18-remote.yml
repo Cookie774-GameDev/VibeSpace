@@ -79,6 +79,8 @@ jobs:
             ${{ runner.temp }}/FRESH2_CI488_*/official-window.json
             ${{ runner.temp }}/FRESH2_CI488_*/consumer-terminal.json
             ${{ runner.temp }}/FRESH2_CI488_*/startup-diagnostic.json
+            ${{ runner.temp }}/FRESH2_CI488_*/cdp-launch-request.json
+            ${{ runner.temp }}/FRESH2_CI488_*/cdp-diagnostic.json
             ${{ runner.temp }}/FRESH2_CI488_*/npm-diagnostic.json
             ${{ runner.temp }}/FRESH2_CI488_*/npm-launch-identity.json
             ${{ runner.temp }}/FRESH2_CI488_*/admission-*.json

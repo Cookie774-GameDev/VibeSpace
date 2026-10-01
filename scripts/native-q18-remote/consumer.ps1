@@ -39,7 +39,7 @@ foreach ($file in $manifest.files) {
  Assert-NoLinks $p
  if ((Get-Item -LiteralPath $p).Length -ne $file.bytes -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.sha256) { throw 'consumer_helper_file_hash' }
 }
-foreach ($required in @('consumer.ps1','driver.mjs','contract.mjs','attest.ps1','commandline.ps1','transfer.py','artifact_dll_checks.py','run-native-supervised.ps1','dependency-launch.ps1','startup-predicate.ps1')) {
+foreach ($required in @('consumer.ps1','driver.mjs','contract.mjs','attest.ps1','commandline.ps1','transfer.py','artifact_dll_checks.py','run-native-supervised.ps1','dependency-launch.ps1','startup-predicate.ps1','cdp-diagnostic.ps1')) {
  if (-not $seen.Contains($required)) { throw 'consumer_helper_missing' }
 }
 $head=& git -C $workspace rev-parse HEAD
@@ -67,6 +67,7 @@ $tracked=[Collections.Generic.Dictionary[string,object]]::new()
 . (Join-Path $PSScriptRoot 'desktop-guard.ps1')
 . (Join-Path $PSScriptRoot 'dependency-launch.ps1')
 . (Join-Path $PSScriptRoot 'startup-predicate.ps1')
+. (Join-Path $PSScriptRoot 'cdp-diagnostic.ps1')
 $result=[ordered]@{ taskId=$TaskId; sourceSHA=$source; exeSHA256=$exeSHA; helperManifestSHA256=$HelperManifestSHA256;
  startedUTC=[DateTime]::UtcNow.ToString('o'); runtimeAcceptance='UNRUN'; phases=@(); cleanup=@(); failure=$null }
 function Save-Json([string]$file,[object]$value) {
@@ -121,6 +122,9 @@ function Start-Owned([string]$name,[string]$command,[string[]]$argv,[string]$cwd
  $o=[ordered]@{name=$name;process=$p;pid=$p.Id;bornMs=([DateTimeOffset]$birth).ToUnixTimeMilliseconds();bornUTC=$birth.ToString('o');
   stdout=$p.StandardOutput.ReadToEndAsync();stderr=$p.StandardError.ReadToEndAsync()}
  $script:owned.Add($o)
+ if($name -ceq 'jarvis'){
+  Save-Json (Join-Path $runRoot 'cdp-launch-request.json') (Get-CdpLaunchRequestFacts $p.StartInfo.Environment $profile $cdpPort)
+ }
  Save-Json (Join-Path $runRoot ("start-$name.json")) ([ordered]@{name=$name;pid=$o.pid;bornMs=$o.bornMs;bornUTC=$o.bornUTC;command=$command;argv=$argv;workingDirectory=$cwd})
  return $o
 }
@@ -186,6 +190,7 @@ $app=$null
 $vite=$null
 $webviewOwned=$null
 $startupDiagnostic=$null
+$cdpDiagnostic=$null
 try {
  $image=[ordered]@{ImageOS=$env:ImageOS;ImageVersion=$env:ImageVersion;runnerOS=$env:RUNNER_OS;sessionId=(Get-Process -Id $PID).SessionId;cpuCount=[Environment]::ProcessorCount}
  Save-Json (Join-Path $runRoot 'runner-image.json') $image
@@ -257,11 +262,22 @@ try {
  $startup=[Diagnostics.Stopwatch]::StartNew()
  $startupDiagnostic=[ordered]@{first=$null;last=$null;lastFingerprint=$null;changedStates=0;
   changes=[Collections.Generic.List[object]]::new();iterations=0;appLaunchRequestedStyle='Normal';startupBudgetMs=90000;nativeAcceptance='UNRUN'}
+ $cdpDiagnostic=[ordered]@{first=$null;last=$null;probes=0;failedProbes=0;policyFacts=@();policyProbeFailed=$false;
+  policyScope='Read-only fixed candidate policy values; applicability/effective policy unverified';nativeAcceptance='UNRUN'}
+ try{$cdpDiagnostic.policyFacts=@(Get-RemoteCdpPolicyFacts)}catch{$cdpDiagnostic.policyProbeFailed=$true}
+ $lastCdpDiagnosticProbe=-5000
  $viteHTTPResponded=$null;$lastViteHTTPProbe=-5000
  $webview=$null
  $ready=$false
  while ($startup.ElapsedMilliseconds -lt 90000) {
   Capture-Owned
+  if($startup.ElapsedMilliseconds-$lastCdpDiagnosticProbe -ge 5000 -and $cdpDiagnostic.probes -lt 18){
+   $lastCdpDiagnosticProbe=$startup.ElapsedMilliseconds
+   try{
+    $facts=Get-RemoteOwnedCdpSnapshot $app $profile $cdpPort
+    Update-CdpDiagnostic $cdpDiagnostic $startup.ElapsedMilliseconds $facts $false
+   }catch{Update-CdpDiagnostic $cdpDiagnostic $startup.ElapsedMilliseconds $null $true}
+  }
   $startupDiagnostic.iterations++
   $snapshot=[ordered]@{elapsedMs=[long]$startup.ElapsedMilliseconds;appAlive=(-not $app.process.HasExited);viteAlive=(-not $vite.process.HasExited)}
   $viteListeners=@(Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue|Where-Object{$_.LocalAddress -in @('127.0.0.1','::1')})
@@ -344,6 +360,10 @@ try {
    startupBudgetMs=90000;nativeAcceptance='UNRUN';scope='Typed predicate booleans/counts only; no URL/title/commandline/log/exception/credential'};
   try{Save-Json (Join-Path $runRoot 'startup-diagnostic.json') $export}
   catch{$result.startupDiagnosticWriteFailed=$true;if(-not $result.failure){$result.failure='consumer_startup_diagnostic_write_failed'}}
+ }
+ if($cdpDiagnostic){
+  try{Save-Json (Join-Path $runRoot 'cdp-diagnostic.json') $cdpDiagnostic}
+  catch{$result.cdpDiagnosticWriteFailed=$true;if(-not $result.failure){$result.failure='consumer_cdp_diagnostic_write_failed'}}
  }
  # Stop tracked WebView independently even if jarvis exited and children became orphaned.
  foreach ($o in @($webviewOwned,$app,$vite) | Where-Object {$null -ne $_}) {
