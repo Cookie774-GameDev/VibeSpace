@@ -1,0 +1,156 @@
+name: Native Windows debug QA artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Frozen published source commit (full SHA)
+        required: true
+        type: string
+      cargo_lock_sha256:
+        description: Frozen .github/native-windows-qa/Cargo.lock SHA-256
+        required: true
+        type: string
+      windows_config_sha256:
+        description: Frozen Windows resource configuration SHA-256
+        required: true
+        type: string
+      connector_source_sha256:
+        description: Expected connector source fingerprint from the frozen packet
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-windows-qa-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      QA_SOURCE_SHA: ${{ inputs.source_sha }}
+      QA_CARGO_LOCK_SHA256: ${{ inputs.cargo_lock_sha256 }}
+      QA_WINDOWS_CONFIG_SHA256: ${{ inputs.windows_config_sha256 }}
+      QA_CONNECTOR_SHA256: ${{ inputs.connector_source_sha256 }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/work/native-windows-qa-target
+      CARGO_BUILD_JOBS: '1'
+      VIBESPACE_CONNECTOR_BUILD_DIR: ${{ runner.temp }}/native-windows-qa-connector
+      VIBESPACE_SIYUAN_CACHE_DIR: ${{ runner.temp }}/native-windows-qa-siyuan
+    steps:
+      - name: Validate immutable source inputs
+        run: |
+          # Hash the published blob bytes consistently on this isolated runner.
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+          if ($env:QA_SOURCE_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Full source SHA required.' }
+          foreach ($value in @($env:QA_CARGO_LOCK_SHA256, $env:QA_WINDOWS_CONFIG_SHA256, $env:QA_CONNECTOR_SHA256)) {
+            if ($value -cnotmatch '^[a-f0-9]{64}$') { throw 'Full lowercase SHA-256 inputs required.' }
+          }
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Verify source and frozen dependency/resource inputs
+        run: |
+          if ((git rev-parse HEAD) -cne $env:QA_SOURCE_SHA) { throw 'Checkout source mismatch.' }
+          $lock = '.github/native-windows-qa/Cargo.lock'
+          if ((Get-FileHash -LiteralPath $lock).Hash.ToLowerInvariant() -cne $env:QA_CARGO_LOCK_SHA256) { throw 'Cargo lock mismatch.' }
+          if ((Get-FileHash -LiteralPath 'app/src-tauri/tauri.windows.conf.json').Hash.ToLowerInvariant() -cne $env:QA_WINDOWS_CONFIG_SHA256) { throw 'Windows resource configuration mismatch.' }
+          Copy-Item -LiteralPath $lock -Destination 'app/src-tauri/Cargo.lock'
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.96.0
+          targets: x86_64-pc-windows-msvc
+
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: app/src-tauri
+          cache-targets: false
+          key: native-windows-qa-1.96.0
+
+      - name: Verify focused source contracts
+        run: |
+          node --test scripts/native-windows-qa.test.mjs scripts/tauri-windows-resource-contract.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Admit resource preparation
+        run: ./scripts/native-windows-qa-preflight.ps1 -Phase before-prepare
+
+      - name: Prepare verified resources with existing hooks
+        run: |
+          npm run prepare:desktop-connector
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:siyuan-runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Snapshot exact source and prepared resource inputs
+        run: node scripts/native-windows-qa.mjs snapshot
+
+      - name: Admit and build debug executable
+        run: |
+          ./scripts/native-windows-qa-preflight.ps1 -Phase before-cargo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --manifest-path app/src-tauri/Cargo.toml --bin jarvis --features jarvis-voice --locked -j 1 2>&1 | Tee-Object -FilePath work/native-windows-qa/cargo-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Inspect executable and DLL dependencies
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'MSVC installation not found.' }
+          $dumpbin = Get-ChildItem -Path (Join-Path $vs 'VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe') -File | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin unavailable.' }
+          $debug = Join-Path $env:CARGO_TARGET_DIR 'debug'
+          $files = @((Get-Item -LiteralPath (Join-Path $debug 'jarvis.exe'))) + @(Get-ChildItem -LiteralPath $debug -Filter '*.dll' -File)
+          foreach ($file in $files) {
+            & $dumpbin.FullName /DEPENDENTS $file.FullName | Out-File -FilePath work/native-windows-qa/dll-dependencies.txt -Append -Encoding utf8
+            if ($LASTEXITCODE -ne 0) { throw 'DLL dependency inspection failed.' }
+          }
+
+      - name: Stage verified executable, DLLs and Tauri resources
+        run: node scripts/native-windows-qa.mjs stage
+
+      - name: Upload build-only artifact
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-windows-debug-${{ inputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work/native-windows-qa/artifact/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          # Only the explicitly staged verified payload is included; preserve its closure.
+          include-hidden-files: true
+
+      - name: Record uploaded artifact identity
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          "Source: $env:QA_SOURCE_SHA; artifact ID: $env:ARTIFACT_ID; upload SHA-256: $env:ARTIFACT_DIGEST" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-windows-qa-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            work/native-windows-qa/*.json
+            work/native-windows-qa/*.txt
+            work/native-windows-qa/*.log
+          if-no-files-found: warn
+          retention-days: 3

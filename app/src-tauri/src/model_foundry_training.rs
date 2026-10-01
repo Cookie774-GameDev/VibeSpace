@@ -963,13 +963,59 @@ fn read_bounded_capture(path: &Path, operation: &str, stream: &str) -> Result<Ve
     Ok(bytes)
 }
 
+fn foundry_worker_environment_paths(root: &Path) -> Vec<(&'static str, PathBuf)> {
+    let cache_root = root.join("worker-cache");
+    let temp = cache_root.join("temp");
+    let hf_home = cache_root.join("huggingface");
+    let hf_hub = hf_home.join("hub");
+    vec![
+        ("TEMP", temp.clone()),
+        ("TMP", temp.clone()),
+        ("TMPDIR", temp),
+        ("PIP_CACHE_DIR", cache_root.join("pip")),
+        ("UV_CACHE_DIR", cache_root.join("uv")),
+        ("HF_HOME", hf_home.clone()),
+        ("HF_HUB_CACHE", hf_hub.clone()),
+        ("HUGGINGFACE_HUB_CACHE", hf_hub),
+        ("HF_XET_CACHE", hf_home.join("xet")),
+        ("HF_ASSETS_CACHE", hf_home.join("assets")),
+        ("HF_DATASETS_CACHE", hf_home.join("datasets")),
+        ("TRANSFORMERS_CACHE", hf_home.join("transformers")),
+        ("TORCH_HOME", cache_root.join("torch")),
+        ("TORCHINDUCTOR_CACHE_DIR", cache_root.join("torch-inductor")),
+        ("TRITON_CACHE_DIR", cache_root.join("triton")),
+        ("CUDA_CACHE_PATH", cache_root.join("cuda")),
+        ("PYTHONPYCACHEPREFIX", cache_root.join("python-bytecode")),
+        ("XDG_CACHE_HOME", cache_root.join("xdg")),
+        ("MPLCONFIGDIR", cache_root.join("matplotlib")),
+    ]
+}
+
+fn configure_foundry_worker_environment(command: &mut Command, root: &Path) -> Result<(), String> {
+    for (name, path) in foundry_worker_environment_paths(root) {
+        fs::create_dir_all(&path).map_err(|error| {
+            format!("Could not prepare the private Model Foundry {name} directory: {error}")
+        })?;
+        command.env(name, path);
+    }
+    command.env("HF_HUB_DISABLE_TELEMETRY", "1");
+    Ok(())
+}
+
+fn process_capture_root(root: &Path) -> PathBuf {
+    root.join("worker-cache").join("process-captures")
+}
+
 fn bounded_process_output(
     mut command: Command,
+    capture_parent: &Path,
     timeout: Duration,
     operation: &str,
 ) -> Result<Output, String> {
+    fs::create_dir_all(capture_parent)
+        .map_err(|error| format!("Could not prepare {operation} capture: {error}"))?;
     let capture_root =
-        std::env::temp_dir().join(format!("vibespace-foundry-process-{}", nanoid::nanoid!()));
+        capture_parent.join(format!("vibespace-foundry-process-{}", nanoid::nanoid!()));
     fs::create_dir(&capture_root)
         .map_err(|error| format!("Could not prepare {operation} capture: {error}"))?;
     let stdout_path = capture_root.join("stdout.log");
@@ -1132,13 +1178,12 @@ fn create_private_python(root: &Path) -> Result<PathBuf, String> {
         fs::remove_dir_all(&env_dir)
             .map_err(|error| format!("Could not repair the private Python runtime: {error}"))?;
     }
-    let status = python_command(&system)
-        .args(["-m", "venv"])
-        .arg(&env_dir)
-        .status()
-        .map_err(|error| {
-            format!("Could not create the private Model Foundry Python runtime: {error}")
-        })?;
+    let mut command = python_command(&system);
+    command.args(["-m", "venv"]).arg(&env_dir);
+    configure_foundry_worker_environment(&mut command, root)?;
+    let status = command.status().map_err(|error| {
+        format!("Could not create the private Model Foundry Python runtime: {error}")
+    })?;
     if !status.success() || !python.is_file() {
         return Err("Could not create the private Model Foundry Python runtime.".into());
     }
@@ -1168,7 +1213,8 @@ fn install_private_training_packages(
     fs::rename(&temporary, &requirements_path).map_err(|error| {
         format!("Could not activate the pinned training runtime manifest: {error}")
     })?;
-    let install_status = hidden_command(&program)
+    let mut command = hidden_command(&program);
+    command
         .args([
             "-m",
             "pip",
@@ -1178,11 +1224,11 @@ fn install_private_training_packages(
             "--require-hashes",
             "--requirement",
         ])
-        .arg(&requirements_path)
-        .status()
-        .map_err(|error| {
-            format!("Could not install the pinned private Model Foundry runtime: {error}")
-        })?;
+        .arg(&requirements_path);
+    configure_foundry_worker_environment(&mut command, root)?;
+    let install_status = command.status().map_err(|error| {
+        format!("Could not install the pinned private Model Foundry runtime: {error}")
+    })?;
     if !install_status.success() {
         return Err("The pinned private Model Foundry runtime installation failed.".into());
     }
@@ -1277,7 +1323,13 @@ fn probe_worker(
     let mut command = hidden_command(python);
     command.arg(path).arg("probe").stdin(Stdio::null());
     let result = (|| {
-        let output = bounded_process_output(command, WORKER_PROBE_TIMEOUT, "worker probe")?;
+        configure_foundry_worker_environment(&mut command, root)?;
+        let output = bounded_process_output(
+            command,
+            &process_capture_root(root),
+            WORKER_PROBE_TIMEOUT,
+            "worker probe",
+        )?;
         if !output.status.success() {
             return Err(
                 "The verified local training worker could not inspect its libraries.".into(),
@@ -1360,8 +1412,13 @@ fn calibration_failure_detail(output: &Output) -> String {
     )
 }
 
-fn bounded_calibration_output(command: Command) -> Result<Output, String> {
-    match bounded_process_output(command, CALIBRATION_TIMEOUT, "calibration") {
+fn bounded_calibration_output(command: Command, root: &Path) -> Result<Output, String> {
+    match bounded_process_output(
+        command,
+        &process_capture_root(root),
+        CALIBRATION_TIMEOUT,
+        "calibration",
+    ) {
         Err(error) if error == "calibration timed out." => {
             Err("Training calibration timed out after 10 minutes.".into())
         }
@@ -1369,8 +1426,12 @@ fn bounded_calibration_output(command: Command) -> Result<Output, String> {
     }
 }
 
-fn run_calibration_worker(command: Command, request_path: &Path) -> Result<Output, String> {
-    let output = bounded_calibration_output(command);
+fn run_calibration_worker(
+    command: Command,
+    request_path: &Path,
+    root: &Path,
+) -> Result<Output, String> {
+    let output = bounded_calibration_output(command, root);
     let _ = fs::remove_file(request_path);
     output
 }
@@ -1486,7 +1547,11 @@ fn run_training_calibration(
         .env("TRANSFORMERS_OFFLINE", "1")
         .env("TOKENIZERS_PARALLELISM", "false")
         .stdin(Stdio::null());
-    let output = match run_calibration_worker(command, &request_path) {
+    if let Err(error) = configure_foundry_worker_environment(&mut command, root) {
+        let _ = fs::remove_file(&request_path);
+        return failed_calibration(request, error);
+    }
+    let output = match run_calibration_worker(command, &request_path, root) {
         Ok(output) => output,
         Err(error) => {
             return failed_calibration(request, format!("Could not start calibration: {error}"))
@@ -2328,7 +2393,8 @@ pub(crate) fn run_training_worker(
     fs::rename(&temporary, &request_path)
         .map_err(|error| format!("Could not activate the local training request: {error}"))?;
 
-    let mut child = Command::new(python)
+    let mut command = Command::new(python);
+    command
         .arg(&worker)
         .arg("train")
         .arg(&request_path)
@@ -2338,7 +2404,9 @@ pub(crate) fn run_training_worker(
         .env("TOKENIZERS_PARALLELISM", "false")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_foundry_worker_environment(&mut command, &root)?;
+    let mut child = command
         .spawn()
         .map_err(|error| format!("Could not start the verified local training worker: {error}"))?;
     let stdout = child
@@ -2500,7 +2568,8 @@ pub(crate) fn run_foundry_inference(
         .map_err(|error| format!("Could not activate local inference request: {error}"))?;
 
     let result: Result<FoundryInferenceResult, String> = (|| {
-        let child = Command::new(python)
+        let mut command = Command::new(python);
+        command
             .arg(&worker)
             .arg("infer")
             .arg(&request_path)
@@ -2510,11 +2579,11 @@ pub(crate) fn run_foundry_inference(
             .env("TOKENIZERS_PARALLELISM", "false")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                format!("Could not start the verified local inference worker: {error}")
-            })?;
+            .stderr(Stdio::null());
+        configure_foundry_worker_environment(&mut command, &root)?;
+        let child = command.spawn().map_err(|error| {
+            format!("Could not start the verified local inference worker: {error}")
+        })?;
         let child = Arc::new(Mutex::new(child));
         {
             let mut active = ACTIVE_INFERENCE
@@ -2873,6 +2942,82 @@ print(json.dumps({"protocol": 1, "localOnly": True, "ready": bool(methods), "met
     }
 
     #[test]
+    fn foundry_worker_environment_and_process_capture_use_selected_root() {
+        let root = std::env::temp_dir().join(format!(
+            "vibespace-foundry-worker-environment-{}",
+            nanoid::nanoid!()
+        ));
+        fs::create_dir_all(&root).unwrap();
+
+        let mut command = hidden_command(if cfg!(target_os = "windows") {
+            "cmd"
+        } else {
+            "sh"
+        });
+        configure_foundry_worker_environment(&mut command, &root)
+            .expect("Foundry worker paths should be configured under its store");
+        for name in [
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+            "PIP_CACHE_DIR",
+            "UV_CACHE_DIR",
+            "HF_HOME",
+            "HF_HUB_CACHE",
+            "HUGGINGFACE_HUB_CACHE",
+            "HF_XET_CACHE",
+            "HF_ASSETS_CACHE",
+            "HF_DATASETS_CACHE",
+            "TRANSFORMERS_CACHE",
+            "TORCH_HOME",
+            "TORCHINDUCTOR_CACHE_DIR",
+            "TRITON_CACHE_DIR",
+            "CUDA_CACHE_PATH",
+            "PYTHONPYCACHEPREFIX",
+            "XDG_CACHE_HOME",
+            "MPLCONFIGDIR",
+        ] {
+            let value = command
+                .get_envs()
+                .find(|(key, _)| *key == name)
+                .and_then(|(_, value)| value)
+                .expect("every large worker cache must have a private path");
+            let path = PathBuf::from(value);
+            assert!(
+                path.starts_with(&root),
+                "{name} escaped the selected Foundry root: {path:?}"
+            );
+            assert!(path.is_dir(), "{name} should be prepared before launch");
+        }
+
+        let capture_root = root.join("worker-cache").join("process-captures");
+        #[cfg(target_os = "windows")]
+        let mut capture_command = {
+            let mut command = hidden_command("cmd");
+            command.args(["/C", "echo foundry-capture"]);
+            command
+        };
+        #[cfg(not(target_os = "windows"))]
+        let mut capture_command = {
+            let mut command = hidden_command("sh");
+            command.args(["-c", "printf foundry-capture"]);
+            command
+        };
+        let output = bounded_process_output(
+            capture_command,
+            &capture_root,
+            Duration::from_secs(5),
+            "selected-root test worker",
+        )
+        .expect("bounded worker output should use the selected root");
+
+        assert!(output.status.success());
+        assert!(capture_root.is_dir());
+        assert!(fs::read_dir(&capture_root).unwrap().next().is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn worker_process_capture_times_out_without_pipe_deadlock() {
         #[cfg(target_os = "windows")]
         let command = {
@@ -2888,12 +3033,21 @@ print(json.dumps({"protocol": 1, "localOnly": True, "ready": bool(methods), "met
         };
 
         let started = Instant::now();
-        let error =
-            bounded_process_output(command, Duration::from_millis(100), "test worker probe")
-                .unwrap_err();
+        let capture_root = std::env::temp_dir().join(format!(
+            "vibespace-foundry-timeout-capture-{}",
+            nanoid::nanoid!()
+        ));
+        let error = bounded_process_output(
+            command,
+            &capture_root,
+            Duration::from_millis(100),
+            "test worker probe",
+        )
+        .unwrap_err();
 
         assert!(error.contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(10));
+        let _ = fs::remove_dir_all(capture_root);
     }
 
     #[cfg(target_os = "windows")]
@@ -2920,8 +3074,17 @@ print(json.dumps({"protocol": 1, "localOnly": True, "ready": bool(methods), "met
             (command, None)
         };
 
-        let output_result =
-            bounded_process_output(command, Duration::from_secs(10), "noisy test worker probe");
+        let capture_root = std::env::temp_dir().join(format!(
+            "vibespace-foundry-output-capture-{}",
+            nanoid::nanoid!()
+        ));
+        let output_result = bounded_process_output(
+            command,
+            &capture_root,
+            Duration::from_secs(10),
+            "noisy test worker probe",
+        );
+        let _ = fs::remove_dir_all(capture_root);
         if let Some(fixture) = capture_fixture {
             let _ = fs::remove_dir_all(fixture);
         }
@@ -2946,12 +3109,18 @@ print(json.dumps({"protocol": 1, "localOnly": True, "ready": bool(methods), "met
         };
 
         let started = Instant::now();
+        let capture_root = std::env::temp_dir().join(format!(
+            "vibespace-foundry-limit-capture-{}",
+            nanoid::nanoid!()
+        ));
         let error = bounded_process_output(
             command,
+            &capture_root,
             Duration::from_secs(10),
             "oversized test worker probe",
         )
         .unwrap_err();
+        let _ = fs::remove_dir_all(capture_root);
         if let Some(fixture) = capture_fixture {
             let _ = fs::remove_dir_all(fixture);
         }
@@ -3016,7 +3185,7 @@ torch.utils.checkpoint: use_reentrant should be passed explicitly.
             command
         };
 
-        let output = run_calibration_worker(command, &request_path)
+        let output = run_calibration_worker(command, &request_path, &root)
             .expect("calibration worker should see its request file");
         assert!(output.status.success());
         assert!(!request_path.exists());

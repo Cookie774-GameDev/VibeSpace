@@ -41,6 +41,75 @@ class OptionalProbeTests(unittest.TestCase):
         with patch.object(self.worker.subprocess, "run", return_value=result):
             self.assertFalse(self.worker._optional_probe("raise SystemExit(1)"))
 
+    def test_optional_probe_timeout_reports_category_without_exception_text(self):
+        diagnostic = {}
+        timeout = subprocess.TimeoutExpired(["private-path", "private-script"], 20)
+        with patch.object(self.worker.subprocess, "run", side_effect=timeout):
+            self.assertFalse(self.worker._optional_probe("probe", diagnostic))
+        self.assertEqual(diagnostic["status"], "timeout")
+        self.assertEqual(diagnostic["timeoutSeconds"], 20.0)
+        self.assertNotIn("private", json.dumps(diagnostic))
+
+    def test_optional_probe_distinguishes_launch_and_import_failure(self):
+        for failure, expected_status, expected_exit in (
+            (OSError("private-path"), "launch_error", None),
+            (subprocess.CompletedProcess(["python"], 7), "failed", 7),
+        ):
+            diagnostic = {}
+            with self.subTest(status=expected_status), patch.object(
+                self.worker.subprocess,
+                "run",
+                side_effect=failure if isinstance(failure, Exception) else None,
+                return_value=failure,
+            ):
+                self.assertFalse(self.worker._optional_probe("probe", diagnostic))
+            self.assertEqual(diagnostic["status"], expected_status)
+            self.assertEqual(diagnostic["exitCode"], expected_exit)
+            self.assertNotIn("private", json.dumps(diagnostic))
+
+    def test_optional_probe_success_preserves_offline_and_bounded_execution(self):
+        diagnostic = {}
+        with patch.object(
+            self.worker.subprocess, "run", return_value=subprocess.CompletedProcess(["python"], 0)
+        ) as run:
+            self.assertTrue(self.worker._optional_probe("probe", diagnostic))
+        self.assertEqual(diagnostic["status"], "ready")
+        self.assertEqual(diagnostic["exitCode"], 0)
+        self.assertEqual(run.call_args.kwargs["timeout"], 20.0)
+        self.assertEqual(run.call_args.kwargs["env"]["HF_HUB_OFFLINE"], "1")
+        self.assertEqual(run.call_args.kwargs["stderr"], subprocess.DEVNULL)
+
+    def test_probe_keeps_installed_metadata_when_peft_times_out(self):
+        class FakeCuda:
+            @staticmethod
+            def is_available():
+                return True
+
+            @staticmethod
+            def is_bf16_supported():
+                return False
+
+        class FakeTorch:
+            cuda = FakeCuda()
+
+        with (
+            patch.object(self.worker, "_core_module_version", return_value="installed"),
+            patch.object(self.worker.importlib, "import_module", return_value=FakeTorch()),
+            patch.object(self.worker, "_module_installed", side_effect=lambda name: name in ("peft", "bitsandbytes")),
+            patch.object(self.worker, "_installed_version", side_effect=lambda name: {"peft": "0.16.0", "bitsandbytes": "0.46.1"}.get(name)),
+            patch.object(self.worker.subprocess, "run", side_effect=subprocess.TimeoutExpired(["python"], 20)),
+            patch.object(self.worker.sys, "stdout", new_callable=io.StringIO) as stdout,
+        ):
+            self.assertEqual(self.worker.probe(), 0)
+        report = json.loads(stdout.getvalue())
+        self.assertEqual(report["packages"]["peft"], "0.16.0")
+        self.assertEqual(report["packages"]["bitsandbytes"], "0.46.1")
+        self.assertEqual(report["optionalProbeDiagnostics"]["lora"]["status"], "timeout")
+        self.assertEqual(report["optionalProbeDiagnostics"]["qlora"]["status"], "lora_unavailable")
+        self.assertEqual(report["optionalProbeDiagnostics"]["media"]["status"], "not_installed")
+        self.assertEqual(report["methods"], ["full"])
+        self.assertIn("LoRA library check timed out after 20 seconds", report["reason"])
+
     def test_full_capability_does_not_depend_on_optional_probes(self):
         class FakeCuda:
             @staticmethod

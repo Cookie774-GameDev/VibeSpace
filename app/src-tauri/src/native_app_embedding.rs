@@ -7,18 +7,22 @@ use windows::Win32::{
         EnumChildWindows, GetClassNameW, GetParent, GetWindowLongPtrW, GetWindowPlacement,
         GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetParent, SetWindowLongPtrW,
         SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_RESTORE, SW_SHOWNA,
+        SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA,
         WINDOWPLACEMENT, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_POPUP, WS_THICKFRAME,
+        WS_VISIBLE,
     },
 };
 
 pub struct EmbeddedWindow {
     hwnd: isize,
+    frame: isize,
     parent: isize,
     pid: u32,
     style: isize,
     ex_style: isize,
     placement: WINDOWPLACEMENT,
+    frame_placement: WINDOWPLACEMENT,
+    window_visible: bool,
     original_parent: isize,
     frame_visible: bool,
 }
@@ -61,7 +65,27 @@ fn handle(value: isize) -> HWND {
 }
 
 fn child_style(style: isize) -> isize {
-    (style & !((WS_POPUP | WS_CAPTION | WS_THICKFRAME).0 as isize)) | WS_CHILD.0 as isize
+    (style & !((WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_VISIBLE).0 as isize))
+        | WS_CHILD.0 as isize
+}
+
+fn restore_show_state(window: HWND, placement: &WINDOWPLACEMENT, visible: bool) {
+    let command = if visible {
+        SHOW_WINDOW_CMD(placement.showCmd as i32)
+    } else {
+        SW_HIDE
+    };
+    unsafe {
+        let _ = ShowWindow(window, command);
+    }
+}
+
+fn placement_for_restore(placement: &WINDOWPLACEMENT, visible: bool) -> WINDOWPLACEMENT {
+    let mut restored = *placement;
+    if !visible {
+        restored.showCmd = SW_HIDE.0 as u32;
+    }
+    restored
 }
 
 impl EmbeddedWindow {
@@ -95,25 +119,66 @@ impl EmbeddedWindow {
             ..Default::default()
         };
         unsafe { GetWindowPlacement(window, &mut placement) }.map_err(|e| e.to_string())?;
+        let mut frame_placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        if frame == window {
+            frame_placement = placement;
+        } else {
+            unsafe { GetWindowPlacement(frame, &mut frame_placement) }
+                .map_err(|e| e.to_string())?;
+        }
+        let window_visible = unsafe { IsWindowVisible(window) }.as_bool();
+        let frame_visible = unsafe { IsWindowVisible(frame) }.as_bool();
         let lease = Self {
             hwnd,
+            frame: frame.0 as isize,
             parent,
             pid,
             placement,
+            frame_placement,
+            window_visible,
             style: unsafe { GetWindowLongPtrW(window, GWL_STYLE) },
             ex_style: unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) },
             original_parent,
-            frame_visible: original_parent != 0 && unsafe { IsWindowVisible(frame) }.as_bool(),
+            frame_visible,
         };
+        #[cfg(debug_assertions)]
+        let frame_class = class_name(frame);
+        #[cfg(debug_assertions)]
+        let content_class = class_name(window);
         let parent_error;
+        #[cfg(debug_assertions)]
+        let style_error;
+        #[cfg(debug_assertions)]
+        let ex_style_error;
         unsafe {
-            let _ = ShowWindow(window, SW_RESTORE);
+            // Hide the actual top-level frame before touching a packaged child. This
+            // prevents ApplicationFrameHost from remaining visible on the desktop
+            // while its content HWND is moved into the Workbench window.
+            if frame != window {
+                let _ = ShowWindow(frame, SW_HIDE);
+            }
+            let _ = ShowWindow(window, SW_HIDE);
+            #[cfg(debug_assertions)]
+            SetLastError(WIN32_ERROR(0));
             SetWindowLongPtrW(window, GWL_STYLE, child_style(lease.style));
+            #[cfg(debug_assertions)]
+            {
+                style_error = GetLastError();
+            }
+            #[cfg(debug_assertions)]
+            SetLastError(WIN32_ERROR(0));
             SetWindowLongPtrW(
                 window,
                 GWL_EXSTYLE,
                 lease.ex_style & !(WS_EX_APPWINDOW.0 as isize),
             );
+            #[cfg(debug_assertions)]
+            {
+                ex_style_error = GetLastError();
+            }
             // A successful SetParent can return NULL for a previous desktop parent.
             // Verify the resulting relationship instead of treating NULL as failure.
             SetLastError(WIN32_ERROR(0));
@@ -121,10 +186,30 @@ impl EmbeddedWindow {
             parent_error = GetLastError();
         }
         if !lease.is_attached() {
+            #[cfg(debug_assertions)]
+            let parent_after = unsafe { GetParent(window) }.map_or(0, |current| current.0 as isize);
+            #[cfg(debug_assertions)]
+            let style_after = unsafe { GetWindowLongPtrW(window, GWL_STYLE) };
+            #[cfg(debug_assertions)]
+            let ex_style_after = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
+            #[cfg(debug_assertions)]
+            let mut host_pid = 0;
+            #[cfg(debug_assertions)]
+            let host_thread =
+                unsafe { GetWindowThreadProcessId(handle(parent), Some(&mut host_pid)) };
+            #[cfg(debug_assertions)]
+            let content_thread = unsafe { GetWindowThreadProcessId(window, None) };
             unsafe {
-                SetWindowLongPtrW(window, GWL_STYLE, lease.style);
+                let _ = SetParent(
+                    window,
+                    (lease.original_parent != 0).then(|| handle(lease.original_parent)),
+                );
+                SetWindowLongPtrW(window, GWL_STYLE, lease.style & !(WS_VISIBLE.0 as isize));
                 SetWindowLongPtrW(window, GWL_EXSTYLE, lease.ex_style);
-                let _ = SetWindowPlacement(window, &lease.placement);
+                let _ = SetWindowPlacement(
+                    window,
+                    &placement_for_restore(&lease.placement, lease.window_visible),
+                );
                 let _ = SetWindowPos(
                     window,
                     None,
@@ -138,16 +223,44 @@ impl EmbeddedWindow {
                         | windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE
                         | windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE,
                 );
+                restore_show_state(window, &lease.placement, lease.window_visible);
+                if frame != window {
+                    let _ = SetWindowPlacement(
+                        frame,
+                        &placement_for_restore(&lease.frame_placement, lease.frame_visible),
+                    );
+                    restore_show_state(frame, &lease.frame_placement, lease.frame_visible);
+                }
             }
+            #[cfg(debug_assertions)]
+            {
+                return Err(format!(
+                    "Windows could not embed this app (SetParent error {}; debug frame_class={}, content_class={}, frame={:#x}, content={:#x}, target={:#x}, original_parent={:#x}, parent_after={:#x}, content_pid={}, host_pid={}, content_thread={}, host_thread={}, style_before={:#x}, style_after={:#x}, style_error={}, ex_style_before={:#x}, ex_style_after={:#x}, ex_style_error={}).",
+                    parent_error.0,
+                    frame_class,
+                    content_class,
+                    frame.0 as isize,
+                    hwnd,
+                    parent,
+                    original_parent,
+                    parent_after,
+                    pid,
+                    host_pid,
+                    content_thread,
+                    host_thread,
+                    lease.style,
+                    style_after,
+                    style_error.0,
+                    lease.ex_style,
+                    ex_style_after,
+                    ex_style_error.0,
+                ));
+            }
+            #[cfg(not(debug_assertions))]
             return Err(format!(
                 "Windows could not embed this app (SetParent error {}).",
                 parent_error.0
             ));
-        }
-        if lease.original_parent != 0 {
-            unsafe {
-                let _ = ShowWindow(handle(lease.original_parent), SW_HIDE);
-            }
         }
         Ok(lease)
     }
@@ -220,9 +333,17 @@ impl Drop for EmbeddedWindow {
                 handle(self.hwnd),
                 (self.original_parent != 0).then(|| handle(self.original_parent)),
             );
-            SetWindowLongPtrW(handle(self.hwnd), GWL_STYLE, self.style);
+            // Keep it hidden until the original placement and parent are restored.
+            SetWindowLongPtrW(
+                handle(self.hwnd),
+                GWL_STYLE,
+                self.style & !(WS_VISIBLE.0 as isize),
+            );
             SetWindowLongPtrW(handle(self.hwnd), GWL_EXSTYLE, self.ex_style);
-            let _ = SetWindowPlacement(handle(self.hwnd), &self.placement);
+            let _ = SetWindowPlacement(
+                handle(self.hwnd),
+                &placement_for_restore(&self.placement, self.window_visible),
+            );
             let _ = SetWindowPos(
                 handle(self.hwnd),
                 None,
@@ -236,8 +357,14 @@ impl Drop for EmbeddedWindow {
                     | windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE
                     | windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE,
             );
-            if self.frame_visible {
-                let _ = ShowWindow(handle(self.original_parent), SW_SHOWNA);
+            restore_show_state(handle(self.hwnd), &self.placement, self.window_visible);
+            if self.frame != self.hwnd {
+                let frame = handle(self.frame);
+                let _ = SetWindowPlacement(
+                    frame,
+                    &placement_for_restore(&self.frame_placement, self.frame_visible),
+                );
+                restore_show_state(frame, &self.frame_placement, self.frame_visible);
             }
         }
     }
@@ -256,7 +383,25 @@ mod tests {
         check_external_window(true);
     }
 
+    #[test]
+    fn restores_a_hidden_content_frame_after_hosting() {
+        check_external_window_with_visibility(true, false);
+    }
+
+    #[test]
+    fn restores_the_original_hidden_state_of_a_hosted_window() {
+        check_external_window_visibility(false);
+    }
+
     fn check_external_window(content: bool) {
+        check_external_window_with_visibility(content, true);
+    }
+
+    fn check_external_window_visibility(initially_visible: bool) {
+        check_external_window_with_visibility(false, initially_visible);
+    }
+
+    fn check_external_window_with_visibility(content: bool, initially_visible: bool) {
         use std::{
             io::{BufRead, BufReader},
             os::windows::process::CommandExt,
@@ -290,8 +435,7 @@ mod tests {
             }
         }
         // Only this disposable helper is terminated. No installed/user app is touched.
-        let mut child = Child(Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", r#"
+        let script = r#"
                 Add-Type -AssemblyName System.Windows.Forms
                 $form = New-Object System.Windows.Forms.Form
                 $form.Text = 'VibeSpace native host unit test'
@@ -300,10 +444,24 @@ mod tests {
                 $panel = New-Object System.Windows.Forms.Panel
                 $panel.SetBounds(12, 18, 240, 160)
                 $form.Controls.Add($panel)
-                $form.Add_Shown({ [Console]::WriteLine(('{0},{1}' -f $form.Handle.ToInt64(), $panel.Handle.ToInt64())); [Console]::Out.Flush() })
+                $hideBeforeAttach = [bool]::Parse($env:VIBESPACE_EMBED_TEST_HIDE_BEFORE_ATTACH)
+                $form.Add_Shown({ if ($hideBeforeAttach) { $form.Hide() }; [Console]::WriteLine(('{0},{1}' -f $form.Handle.ToInt64(), $panel.Handle.ToInt64())); [Console]::Out.Flush() })
                 [System.Windows.Forms.Application]::Run($form)
-            "#]).creation_flags(0x0800_0000).stdout(Stdio::piped()).stderr(Stdio::null())
-            .spawn().unwrap());
+            "#;
+        let hide_before_attach = (!initially_visible).to_string();
+        let mut child = Child(
+            Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", script])
+                .env(
+                    "VIBESPACE_EMBED_TEST_HIDE_BEFORE_ATTACH",
+                    &hide_before_attach,
+                )
+                .creation_flags(0x0800_0000)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
         let output = child.0.stdout.take().unwrap();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -371,9 +529,16 @@ mod tests {
         }
         if content {
             assert_eq!(unsafe { GetParent(handle(hwnd)) }.unwrap(), handle(frame));
-            assert!(unsafe { IsWindowVisible(handle(frame)) }.as_bool());
+            assert_eq!(
+                unsafe { IsWindowVisible(handle(frame)) }.as_bool(),
+                initially_visible
+            );
         } else {
             assert!(unsafe { GetParent(handle(hwnd)) }.is_err());
+            assert_eq!(
+                unsafe { IsWindowVisible(handle(hwnd)) }.as_bool(),
+                initially_visible
+            );
         }
         assert_eq!(
             unsafe { GetWindowLongPtrW(handle(hwnd), GWL_STYLE) },
@@ -386,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn child_style_preserves_app_flags_and_removes_only_the_desktop_frame() {
+    fn child_style_hides_until_resize_and_keeps_child_clipping() {
         use windows::Win32::UI::WindowsAndMessaging::{WS_CLIPCHILDREN, WS_VISIBLE};
         let original =
             (WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_VISIBLE | WS_CLIPCHILDREN).0 as isize;
@@ -396,9 +561,26 @@ mod tests {
             child & (WS_POPUP | WS_CAPTION | WS_THICKFRAME).0 as isize,
             0
         );
+        assert_eq!(child & WS_VISIBLE.0 as isize, 0);
         assert_eq!(
-            child & (WS_VISIBLE | WS_CLIPCHILDREN).0 as isize,
-            (WS_VISIBLE | WS_CLIPCHILDREN).0 as isize
+            child & WS_CLIPCHILDREN.0 as isize,
+            WS_CLIPCHILDREN.0 as isize
+        );
+    }
+
+    #[test]
+    fn hidden_window_restore_does_not_reopen_it_on_the_desktop() {
+        let placement = WINDOWPLACEMENT {
+            showCmd: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            placement_for_restore(&placement, false).showCmd,
+            SW_HIDE.0 as u32
+        );
+        assert_eq!(
+            placement_for_restore(&placement, true).showCmd,
+            placement.showCmd
         );
     }
 }

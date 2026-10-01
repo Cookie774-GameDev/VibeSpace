@@ -144,16 +144,29 @@ def _installed_version(name: str) -> str | None:
         return None
 
 
-def _optional_probe(script: str) -> bool:
+def _optional_probe(script: str, diagnostic: dict[str, Any] | None = None) -> bool:
     """Run one optional capability check in a bounded child process.
 
     Optional libraries can import large ML stacks or initialize native codecs.
     A slow/broken optional probe must never hold up the verified Full path.
     The child is local-only and offline; a timeout is an unavailable capability.
+    Diagnostics contain categories and counters, never paths or exception text.
     """
     environment = os.environ.copy()
     environment["HF_HUB_OFFLINE"] = "1"
     environment["TRANSFORMERS_OFFLINE"] = "1"
+    started = time.monotonic()
+
+    def finish(status: str, exit_code: int | None = None) -> bool:
+        if diagnostic is not None:
+            diagnostic.update(
+                status=status,
+                exitCode=exit_code,
+                elapsedMs=round((time.monotonic() - started) * 1000),
+                timeoutSeconds=OPTIONAL_PROBE_TIMEOUT_SECONDS,
+            )
+        return status == "ready"
+
     try:
         result = subprocess.run(
             [sys.executable, "-c", script],
@@ -164,9 +177,11 @@ def _optional_probe(script: str) -> bool:
             timeout=OPTIONAL_PROBE_TIMEOUT_SECONDS,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return finish("timeout")
+    except OSError:
+        return finish("launch_error")
+    return finish("ready" if result.returncode == 0 else "failed", result.returncode)
 
 
 def _core_module_version(name: str) -> str | None:
@@ -183,7 +198,12 @@ def probe() -> int:
         name: _core_module_version(name)
         for name in ("torch", "transformers", "accelerate")
     }
-    packages.update({name: _installed_version(name) for name in ("datasets", "trl")})
+    packages.update(
+        {
+            name: _installed_version(name)
+            for name in ("datasets", "trl", "peft", "PIL", "av", "bitsandbytes")
+        }
+    )
     core_ready = all(packages.get(name) for name in ("torch", "transformers", "accelerate"))
     methods: list[str] = []
     precisions: list[str] = []
@@ -211,30 +231,36 @@ def probe() -> int:
     lora_ready = False
     media_ready = False
     qlora_smoke_ready = False
+    optional_diagnostics: dict[str, dict[str, Any]] = {
+        name: {"status": "core_unavailable"} for name in ("lora", "media", "qlora")
+    }
     if core_ready:
+        optional_diagnostics["lora"]["status"] = "not_installed"
+        optional_diagnostics["media"]["status"] = "not_installed"
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="optional-probe") as executor:
             lora_future = (
-                executor.submit(_optional_probe, _PEFT_PROBE)
+                executor.submit(_optional_probe, _PEFT_PROBE, optional_diagnostics["lora"])
                 if _module_installed("peft")
                 else None
             )
             media_future = (
-                executor.submit(_optional_probe, _MEDIA_PROBE)
+                executor.submit(_optional_probe, _MEDIA_PROBE, optional_diagnostics["media"])
                 if _module_installed("PIL") and _module_installed("av")
                 else None
             )
             lora_ready = lora_future.result() if lora_future is not None else False
             media_ready = media_future.result() if media_future is not None else False
         if lora_ready:
-            packages["peft"] = _installed_version("peft")
             methods.append("lora")
-        if media_ready:
-            packages["PIL"] = _installed_version("PIL")
-            packages["av"] = _installed_version("av")
+        optional_diagnostics["qlora"]["status"] = (
+            "lora_unavailable"
+            if not lora_ready
+            else "cuda_unavailable"
+            if not cuda_ready
+            else "not_installed"
+        )
         if lora_ready and cuda_ready and _module_installed("bitsandbytes"):
-            qlora_smoke_ready = _optional_probe(_QLORA_PROBE)
-            if qlora_smoke_ready:
-                packages["bitsandbytes"] = _installed_version("bitsandbytes")
+            qlora_smoke_ready = _optional_probe(_QLORA_PROBE, optional_diagnostics["qlora"])
     if qlora_smoke_ready:
         methods.append("qlora")
         precisions.extend(("int8", "int4"))
@@ -256,6 +282,17 @@ def probe() -> int:
             + ", ".join(optional_unavailable)
             + "."
         )
+        for name, label in (("lora", "LoRA"), ("media", "Image/video"), ("qlora", "QLoRA")):
+            status = optional_diagnostics[name]["status"]
+            if status == "timeout":
+                reason += (
+                    f" {label} library check timed out after "
+                    f"{OPTIONAL_PROBE_TIMEOUT_SECONDS:g} seconds."
+                )
+            elif status == "launch_error":
+                reason += f" {label} library check could not start."
+            elif status == "failed":
+                reason += f" {label} library check failed."
     print(
         json.dumps(
             {
@@ -271,6 +308,7 @@ def probe() -> int:
                     "qlora": qlora_smoke_ready,
                     "media": media_ready,
                 },
+                "optionalProbeDiagnostics": optional_diagnostics,
                 "reason": reason,
             },
             separators=(",", ":"),
