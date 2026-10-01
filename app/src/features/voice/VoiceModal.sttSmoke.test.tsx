@@ -12,6 +12,18 @@ const voiceHandlers = vi.hoisted(() => new Map<string, Set<(payload?: unknown) =
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@/lib/db', () => ({ messageRepo: { create: messageCreate } }));
 vi.mock('@/features/chat/hooks', () => ({ useChatMessages: () => [] }));
+vi.mock('@/features/whats-new', () => ({
+  useWhatsNew: () => ({ hasUpdate: false, currentVersion: 'test' }),
+}));
+vi.mock('@/lib/admin', () => ({ useAppAdmin: () => false }));
+vi.mock('@/features/call', () => ({
+  isCallConfigured: () => false,
+  loadCallService: vi.fn(),
+}));
+vi.mock('@/features/browser-chat', () => ({ ChatEngineMenu: () => null }));
+vi.mock('@/components/ui/tooltip', () => ({
+  Hint: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
 vi.mock('./JarvisVoiceInputService', () => ({
   JarvisVoiceInputService: {
     isSupported: () => true,
@@ -57,6 +69,7 @@ vi.mock('./voiceChatRouting', () => ({
 }));
 vi.mock('./voiceRouter', () => ({
   handleVoiceModuleClosed: vi.fn(),
+  syncVoiceModuleOpenState: vi.fn(),
   stopCurrentVoiceResponse: vi.fn(),
   speakWithSettings: vi.fn(async () => undefined),
 }));
@@ -90,13 +103,20 @@ vi.mock('./voiceNativeDelegation', () => ({
 async function renderVoice(flag: string) {
   vi.resetModules();
   vi.stubEnv('VITE_SIK_SMOKE', flag);
-  const [{ VoiceModal }, { useVoiceStore }, { useUIStore }, { useAuthStore }] = await Promise.all([
-    import('./VoiceModal'),
-    import('./store'),
-    import('@/stores/ui'),
-    import('@/stores/auth'),
-  ]);
-  useUIStore.setState({ voiceModalOpen: true, voiceListening: false, activeChatId: 'chat_voice' });
+  const [{ VoiceModal }, { useVoiceStore }, { useUIStore }, { useAuthStore }, { TopBar }] =
+    await Promise.all([
+      import('./VoiceModal'),
+      import('./store'),
+      import('@/stores/ui'),
+      import('@/stores/auth'),
+      import('@/components/layout/TopBar'),
+    ]);
+  useUIStore.setState({
+    voiceModalOpen: false,
+    voiceListening: false,
+    activeChatId: 'chat_voice',
+    route: 'chat',
+  });
   useAuthStore.setState({
     localUserId: 'account-smoke',
     cloudSession: null,
@@ -105,14 +125,39 @@ async function renderVoice(flag: string) {
     voiceCommitPhrase: 'send it',
     voiceCancelPhrase: 'cancel',
     voiceAutoApproveActions: false,
+    voiceMiniBarEnabled: true,
     fasterWhisperModel: 'small',
     apiKeys: { groq: 'gsk_test' },
     stackCustomSteps: DEFAULT_CUSTOM_STEPS,
     chatModelSelection: selectionFromOption('groq', GROQ_DEFAULT_MODEL),
   });
   useVoiceStore.getState().reset();
-  render(<VoiceModal />);
+  function VisibleVoiceHost() {
+    const open = useUIStore((state) => state.voiceModalOpen);
+    return (
+      <>
+        <TopBar />
+        {open ? <VoiceModal /> : null}
+      </>
+    );
+  }
+  render(<VisibleVoiceHost />);
+  const opener = screen.getByRole('button', { name: 'Start Jarvis voice' });
+  expect(opener.getAttribute('aria-pressed')).toBe('false');
+  fireEvent.click(opener);
   await waitFor(() => expect(useVoiceStore.getState().session).not.toBeNull());
+  expect(
+    screen.getByRole('button', { name: 'Stop Jarvis voice' }).getAttribute('aria-pressed'),
+  ).toBe('true');
+  expect(screen.queryByRole('complementary', { name: 'Jarvis voice session' })).toBeNull();
+  const legacyPanel = document.getElementById('jarvis-panel');
+  expect(legacyPanel?.hasAttribute('hidden')).toBe(true);
+  expect(legacyPanel?.getAttribute('aria-hidden')).toBe('true');
+  expect(legacyPanel?.hasAttribute('inert')).toBe(true);
+  const legacyMiniBar = document.querySelector('form[aria-label="Jarvis voice mini bar"]');
+  expect(legacyMiniBar?.hasAttribute('hidden')).toBe(true);
+  expect(legacyMiniBar?.getAttribute('aria-hidden')).toBe('true');
+  expect(legacyMiniBar?.hasAttribute('inert')).toBe(true);
 }
 
 describe('VoiceModal native smoke fixtures', () => {
@@ -129,6 +174,8 @@ describe('VoiceModal native smoke fixtures', () => {
 
   it('exposes no smoke controls when the exact browser gate is off', async () => {
     await renderVoice('');
+    expect(screen.queryByRole('button', { name: 'Submit fixed transcript' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Transcribe fixed audio' })).toBeNull();
     expect(document.querySelector('[data-sik-evidence="voice.transcript"]')).toBeNull();
     expect(document.querySelector('[data-sik-evidence="voice.stt-fixture"]')).toBeNull();
   }, 20_000);
@@ -155,7 +202,7 @@ describe('VoiceModal native smoke fixtures', () => {
     window.removeEventListener('jarvis:send', send as EventListener);
   }, 20_000);
 
-  it('passes only pinned native bytes to real Faster Whisper and submits its transcript', async () => {
+  it('passes pinned fixture bytes to the native STT command and submits its transcript', async () => {
     const audioBase64 = 'UklGRnNhZmU=';
     invoke
       .mockResolvedValueOnce({
@@ -214,5 +261,49 @@ describe('VoiceModal native smoke fixtures', () => {
         ?.getAttribute('data-blocker-code'),
     ).toBe('engine_failed');
     expect(messageCreate).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it('rejects unpinned native fixture bytes before transcription or dispatch', async () => {
+    invoke.mockResolvedValueOnce({
+      audioBase64: 'UklGRnNhZmU=',
+      sha256: 'unexpected-fixture',
+      mimeType: 'audio/wav',
+    });
+    await renderVoice('1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Transcribe fixed audio' }));
+
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector('[data-sik-evidence="voice.stt-state"]')
+          ?.getAttribute('data-blocker-code'),
+      ).toBe('fixture_contract'),
+    );
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('sik_smoke_voice_fixture');
+    expect(messageCreate).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it('rejects an unexpected engine transcript without fallback or dispatch', async () => {
+    invoke
+      .mockResolvedValueOnce({
+        audioBase64: 'UklGRnNhZmU=',
+        sha256: 'b3bab750a95495ae54c457b54cb9a066147e36acc6a711e1a09ea05265c272f7',
+        mimeType: 'audio/wav',
+      })
+      .mockResolvedValueOnce('An unrelated acoustic result.');
+    await renderVoice('1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Transcribe fixed audio' }));
+
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector('[data-sik-evidence="voice.stt-state"]')
+          ?.getAttribute('data-blocker-code'),
+      ).toBe('transcript_mismatch'),
+    );
+    expect(messageCreate).not.toHaveBeenCalled();
+    expect(document.documentElement.outerHTML).not.toContain('An unrelated acoustic result.');
   }, 20_000);
 });

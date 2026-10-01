@@ -18,11 +18,9 @@ describe('VoiceModal MonoChrome appearance', () => {
     const css = readFileSync(resolve(__dirname, 'voice-module.css'), 'utf8');
 
     expect(panelClass).not.toMatch(/\b(?:jarvis-glass-panel|border|bg-elevated|backdrop-blur)\b/);
+    expect(source).toMatch(/id="jarvis-panel"[\s\S]*?hidden[\s\S]*?aria-hidden="true"/);
     expect(source).toMatch(
-      /id="jarvis-panel"[\s\S]*?hidden[\s\S]*?aria-hidden="true"[\s\S]*?inert/,
-    );
-    expect(source).toMatch(
-      /aria-label="Jarvis voice mini bar"[\s\S]*?hidden[\s\S]*?aria-hidden="true"[\s\S]*?inert/,
+      /aria-label="Jarvis voice mini bar"[\s\S]*?hidden[\s\S]*?aria-hidden="true"/,
     );
     expect(source).toContain('data-vibespace-owned-chrome="voice"');
     expect(css).toMatch(

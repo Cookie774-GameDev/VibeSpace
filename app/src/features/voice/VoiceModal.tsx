@@ -1292,41 +1292,6 @@ function VoiceModalPanel() {
           onPointerCancel={handleDragEnd}
         />
 
-        {KERNEL_SMOKE_ENABLED ? (
-          <div className="relative z-[1] flex gap-1 border-t border-white/[0.06] px-2 py-1 [[data-theme=monochrome]_&]:border-border">
-            <button
-              type="button"
-              data-sik-evidence={SIK_EVIDENCE.voiceTranscript}
-              onClick={() =>
-                flushUtteranceRef.current(KERNEL_SMOKE_SCENARIOS.voice_turn_stop.safeTextFixture)
-              }
-              className="min-h-7 rounded border border-border px-2 py-1 text-xs text-muted-foreground"
-            >
-              Submit fixed transcript
-            </button>
-            <button
-              type="button"
-              data-sik-evidence={SIK_EVIDENCE.voiceSttFixture}
-              onClick={() => void runSmokeSttFixture()}
-              disabled={smokeSttState === 'transcribing'}
-              className="min-h-7 rounded border border-border px-2 py-1 text-xs text-muted-foreground disabled:opacity-50"
-            >
-              Transcribe fixed audio
-            </button>
-            <output
-              hidden
-              data-sik-evidence={SIK_EVIDENCE.voiceSttState}
-              data-stt-state={smokeSttState}
-              data-engine-id="faster-whisper"
-              data-model-id={fasterWhisperModel ?? 'small'}
-              data-fixture-sha256={KERNEL_SMOKE_VOICE_FIXTURE_SHA256}
-              data-session-bound={session ? 'true' : 'false'}
-              data-run-bound={smokeSttRunBound ? 'true' : 'false'}
-              data-blocker-code={smokeSttBlockerCode}
-            />
-          </div>
-        ) : null}
-
         {/* Command Center disclosure */}
         {voiceFlowStatus ? (
           <output
@@ -1485,6 +1450,44 @@ function VoiceModalPanel() {
             document.body,
           )}
       </motion.aside>
+      {KERNEL_SMOKE_ENABLED ? (
+        <section
+          key="voice-smoke-controls"
+          aria-label="Jarvis voice smoke controls"
+          className="fixed bottom-3 right-3 z-[91] flex gap-1 rounded border border-border bg-background p-2"
+        >
+          <button
+            type="button"
+            data-sik-evidence={SIK_EVIDENCE.voiceTranscript}
+            onClick={() =>
+              flushUtteranceRef.current(KERNEL_SMOKE_SCENARIOS.voice_turn_stop.safeTextFixture)
+            }
+            className="min-h-7 rounded border border-border px-2 py-1 text-xs text-muted-foreground"
+          >
+            Submit fixed transcript
+          </button>
+          <button
+            type="button"
+            data-sik-evidence={SIK_EVIDENCE.voiceSttFixture}
+            onClick={() => void runSmokeSttFixture()}
+            disabled={smokeSttState === 'transcribing'}
+            className="min-h-7 rounded border border-border px-2 py-1 text-xs text-muted-foreground disabled:opacity-50"
+          >
+            Transcribe fixed audio
+          </button>
+          <output
+            hidden
+            data-sik-evidence={SIK_EVIDENCE.voiceSttState}
+            data-stt-state={smokeSttState}
+            data-engine-id="faster-whisper"
+            data-model-id={fasterWhisperModel ?? 'small'}
+            data-fixture-sha256={KERNEL_SMOKE_VOICE_FIXTURE_SHA256}
+            data-session-bound={session ? 'true' : 'false'}
+            data-run-bound={smokeSttRunBound ? 'true' : 'false'}
+            data-blocker-code={smokeSttBlockerCode}
+          />
+        </section>
+      ) : null}
     </AnimatePresence>
   );
 }
