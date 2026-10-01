@@ -137,10 +137,10 @@ interface LoadedIndex {
 
 const pendingWrites = new Map<string, Promise<unknown>>();
 
-function failure<T>(
+function failure(
   code: VoiceNativeTaskIndexErrorCode,
   message: string,
-): VoiceNativeTaskIndexResult<T> {
+): Extract<VoiceNativeTaskIndexResult<never>, { ok: false }> {
   return { ok: false, error: { code, message } };
 }
 

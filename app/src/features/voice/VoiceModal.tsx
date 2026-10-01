@@ -127,6 +127,9 @@ const VOICE_MESSAGE_SAVE_FAILURE = formatVoiceFailure(
 const KERNEL_SMOKE_VOICE_FIXTURE_SHA256 =
   'b3bab750a95495ae54c457b54cb9a066147e36acc6a711e1a09ea05265c272f7';
 
+// React 18's HTML types omit inert; retain the native attribute on legacy chrome.
+const LEGACY_VOICE_INERT_ATTRIBUTES = { inert: '' };
+
 type SmokeSttState = 'idle' | 'transcribing' | 'submitted' | 'blocked_external';
 type SmokeSttBlocker =
   | 'fixture_contract'
@@ -1257,7 +1260,7 @@ function VoiceModalPanel() {
         aria-label="Jarvis voice session"
         hidden
         aria-hidden="true"
-        inert=""
+        {...LEGACY_VOICE_INERT_ATTRIBUTES}
         data-monochrome-surface="voice"
         data-vibespace-owned-chrome="voice"
         data-voice-appearance-state={state}
@@ -1453,7 +1456,7 @@ function VoiceModalPanel() {
               aria-label="Jarvis voice mini bar"
               hidden
               aria-hidden="true"
-              inert=""
+              {...LEGACY_VOICE_INERT_ATTRIBUTES}
               onSubmit={(event) => {
                 event.preventDefault();
                 const text = miniBarText.trim();

@@ -56,6 +56,18 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Verify clean-checkout connector preparation
+        run: node --test scripts/prepare-desktop-connector.ci.test.mjs
+
+      # Direct Cargo checks bypass Tauri's npm hooks. Linux still needs the
+      # preparer's explicit unsupported-platform manifest for the resource glob.
+      - name: Prepare verified Desktop Connector resource
+        run: npm run prepare:desktop-connector
+
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: Install Linux deps

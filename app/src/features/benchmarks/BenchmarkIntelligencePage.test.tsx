@@ -476,7 +476,11 @@ describe('BenchmarkIntelligencePage', () => {
     expect(screen.getByRole('button', { name: 'Copied image' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Download PNG' }));
     expect(downloadClick).toHaveBeenCalledTimes(1);
-    expect(downloadClick.mock.instances[0].download).toBe('vibespace-overall-top-2-2026-08-14.png');
+    const downloadedAnchor = downloadClick.mock.instances[0];
+    if (!(downloadedAnchor instanceof HTMLAnchorElement)) {
+      throw new Error('Expected the PNG download click to use an anchor element.');
+    }
+    expect(downloadedAnchor.download).toBe('vibespace-overall-top-2-2026-08-14.png');
     downloadClick.mockRestore();
     vi.unstubAllGlobals();
   });
