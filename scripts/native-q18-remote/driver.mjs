@@ -45,33 +45,67 @@ export function verifyInputManifest(inputs) {
   requireThat(createHash('sha256').update(JSON.stringify(inputs.files)).digest('hex')===inputs.sha256, 'input_manifest_content_hash');
   return inputs;
 }
-async function verifyInputs(s) {
+// Bounded diagnostics only: no raw exceptions, subprocess output, paths or URLs.
+const ATTESTATION_FAILURES = new Set(['smoke_windows_required','smoke_process_absent','smoke_ambiguous_cdp_listener','smoke_frontend_listener','smoke_git_head_failed','smoke_attestation_failed']);
+const DIAGNOSTIC_STAGES = new Set(['VERIFY_INPUTS','INPUT_RAW_HASH','INPUT_JSON','INPUT_SCHEMA','FRONTEND_SELECTION','FRONTEND_HASHES','PROVENANCE_JSON','ARTIFACT_JSON','PROVENANCE_IDENTITY','STAGED_EXE_HASH','PAYLOAD_SCHEMA','PAYLOAD_HASHES','DLL_JSON','DLL_IDENTITY','ATTESTATION_PRECONNECT','PLAYWRIGHT_RESOLVE','CDP_CONNECT','MAIN_TARGET','TAURI_LABEL','NATIVE_DATA_PATH','CDP_TARGET_INFO','DLL_CLOSURE','IDENTITY_CHECKPOINT','ONBOARDING','TERMINAL','SCHEDULE','FINAL_VERIFICATION']);
+const ERROR_KINDS = new Set(['Error','SyntaxError','TypeError','RangeError','TimeoutError']);
+const SYSTEM_CODES = new Set(['ENOENT','EACCES','EPERM','EIO','ENOTDIR','MODULE_NOT_FOUND','ERR_MODULE_NOT_FOUND','ETIMEDOUT','ECONNREFUSED','ECONNRESET','ERR_CHILD_PROCESS_STDIO_MAXBUFFER']);
+export function recoverAttestationFailure(error) {
+  // Accept only an ordinary exit 1 and the exact small JSON schema attest.ps1 emits.
+  if(error?.code!==1 || error.killed===true || error.signal!=null || typeof error.stdout!=='string' || Buffer.byteLength(error.stdout,'utf8')>4096) return error;
+  try {
+    const result=JSON.parse(error.stdout);
+    if(result && !Array.isArray(result) && Object.keys(result).length===1 && ATTESTATION_FAILURES.has(result.failure)) return new Error(result.failure);
+  } catch {}
+  return error;
+}
+export function failureDiagnostic(stage,error) {
+  return {stage:DIAGNOSTIC_STAGES.has(stage)?stage:'UNKNOWN',
+    kind:ERROR_KINDS.has(error?.name)?error.name:'OTHER',
+    systemCode:error?.code==null?'NONE':SYSTEM_CODES.has(error.code)?error.code:Number.isSafeInteger(error.code)?'CHILD_EXIT':'OTHER'};
+}
+async function verifyInputs(s,mark=()=>{}) {
   const inputPath=path.join(s.artifactRoot,'input-manifest.json');
+  mark('INPUT_RAW_HASH');
   requireThat(await hash(inputPath)===s.inputManifestSHA256, 'input_manifest_file_hash');
+  mark('INPUT_JSON');
   const inputs=await json(inputPath);
+  mark('INPUT_SCHEMA');
   verifyInputManifest(inputs);
+  mark('FRONTEND_SELECTION');
   const selected=inputs.files.filter(f=>f.path==='package.json'||f.path==='package-lock.json'||(f.path.startsWith('app/')&&!f.path.startsWith('app/src-tauri/')));
   for (const required of ['package.json','package-lock.json','app/package.json','app/src/features/auth/AuthGate.tsx','app/src/features/terminals/TerminalView.tsx','app/src/features/workbench/WorkbenchPanel.tsx']) requireThat(selected.some(f=>f.path===required),'required_frontend_input');
+  mark('FRONTEND_HASHES');
   for (const item of selected) requireThat(await hash(relativeFile(s.frontendRoot,item.path))===item.sha256,'frontend_source_drift');
+  mark('PROVENANCE_JSON');
   const provenance=await json(path.join(s.artifactRoot,'provenance.json'));
+  mark('ARTIFACT_JSON');
   const manifest=await json(path.join(s.artifactRoot,'artifact-manifest.json'));
+  mark('PROVENANCE_IDENTITY');
   requireThat(provenance.sourceCommitSHA===s.sourceSHA && provenance.build.output.sha256===s.exeSHA256 && provenance.inputSHA256===inputs.sha256,'artifact_provenance');
+  mark('STAGED_EXE_HASH');
   requireThat(await hash(s.app.exePath)===s.exeSHA256,'staged_exe_hash');
+  mark('PAYLOAD_SCHEMA');
   requireThat(Array.isArray(manifest.files) && manifest.files.length<=10000 && Array.isArray(manifest.evidenceFiles),'artifact_manifest');
   const all=[...manifest.files,...manifest.evidenceFiles]; const names=new Set();
+  mark('PAYLOAD_HASHES');
   for(const item of all) {
     requireThat(!names.has(item.path),'artifact_manifest_duplicate'); names.add(item.path);
     const file=relativeFile(s.artifactRoot,item.path); const info=await lstat(file);
     requireThat(info.size===item.bytes && await hash(file)===item.sha256,'artifact_payload_drift');
   }
+  mark('DLL_JSON');
   const inventory=await json(path.join(s.artifactRoot,'dll-inventory.json'));
+  mark('DLL_IDENTITY');
   requireThat(inventory.sourceSHA===s.sourceSHA && inventory.executableSHA256===s.exeSHA256 && await hash(path.join(s.artifactRoot,'dll-inventory.json'))===provenance.dllInventorySHA256,'dll_inventory_identity');
   return { inputs, selected, manifest, inventory, provenance };
 }
 async function probe(s,specPath,binding,timeout) {
   const args=['-NoProfile','-NonInteractive','-File',path.join(here,'attest.ps1'),'-SpecPath',specPath];
   if(binding) args.push('-ShellPid',String(binding.pid),'-ShellBornMs',String(binding.processStartedAt));
-  const {stdout}=await run('pwsh',args,{windowsHide:true,timeout,maxBuffer:1024*1024});
+  let stdout;
+  try { ({stdout}=await run('pwsh',args,{windowsHide:true,timeout,maxBuffer:1024*1024})); }
+  catch(error) { throw recoverAttestationFailure(error); }
   const observation=JSON.parse(stdout); verifyAttestation(s,observation); return observation;
 }
 function moduleClosure(s,o,inventory) {
@@ -129,6 +163,8 @@ export async function executeNative(specPath) {
     providerAcceptance:'UNRUN',physicalCAcceptance:'UNRUN',canonicalToolApprovalAcceptance:'UNRUN',
     microphoneModelCloudAcceptance:'UNRUN',startedAtUTC:new Date().toISOString(),errors:[]};
   let browser,page,ownedPanelId,ownedEvent,observation,inputs,frontendBinding;
+  let stage='VERIFY_INPUTS';
+  const mark=value=>{stage=value;};
   const preparationPanels=[];
   let checkpointIndex=0;
   const checkpoint=async()=>writeFile(path.join(output,`checkpoint-${checkpointIndex++}.json`),JSON.stringify(receipt,null,2)+'\n',{flag:'wx'});
@@ -176,23 +212,32 @@ export async function executeNative(specPath) {
     await page.getByRole('region',{name:'VibeSpace Workbench',exact:true}).waitFor({state:'visible',timeout:left()});
   };
   try {
-    inputs=await verifyInputs(s); await guard();
+    inputs=await verifyInputs(s,mark); mark('ATTESTATION_PRECONNECT'); await guard();
+    mark('PLAYWRIGHT_RESOLVE');
     const requireFromWorkspace=createRequire(path.join(s.frontendRoot,'package.json'));
     const {chromium}=requireFromWorkspace('playwright-core');
+    mark('CDP_CONNECT');
     browser=await chromium.connectOverCDP(`http://127.0.0.1:${s.cdpPort}`,{timeout:budget.remaining(90000)});
+    mark('MAIN_TARGET');
     const pages=browser.contexts().flatMap(c=>c.pages()).filter(p=>p.url()===s.mainURL);
     requireThat(pages.length===1,'main_target_ambiguous'); page=pages[0];
     page.setDefaultTimeout(Math.min(s.phaseMs,budget.remaining())); page.setDefaultNavigationTimeout(Math.min(s.phaseMs,budget.remaining()));
+    mark('TAURI_LABEL');
     const label=await page.evaluate(()=>window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label);
     requireThat(label===s.windowLabel,'tauri_main_window');
+    mark('NATIVE_DATA_PATH');
     const actualDataPath=await page.evaluate(async url=>(await import(url)).appDataDir(),moduleURL(s,'node_modules/@tauri-apps/api/path.js'));
     requireThat(windowsPath(actualDataPath.replace(/[\\/]$/u,''))===windowsPath(s.nativeDataPath),'actual_native_data_path');
+    mark('CDP_TARGET_INFO');
     const cdp=await page.context().newCDPSession(page); const target=await cdp.send('Target.getTargetInfo'); await cdp.detach();
     requireThat(target.targetInfo.type==='page' && target.targetInfo.url===s.mainURL,'cdp_main_target');
     receipt.targetId=target.targetInfo.targetId; receipt.attestation=observation;
+    mark('DLL_CLOSURE');
     receipt.loadedModules=moduleClosure(s,observation,inputs.inventory); receipt.steps.identity='PASS';
+    mark('IDENTITY_CHECKPOINT');
     await checkpoint();
 
+    mark('ONBOARDING');
     let left=phase(); const onboarding=page.getByRole('dialog',{name:'Onboarding',exact:true});
     const present=await onboarding.isVisible(); receipt.onboardingEntry=present?'ordinary_first_run_UI':'existing_offline_state';
     if(present) {
@@ -210,6 +255,7 @@ export async function executeNative(specPath) {
     receipt.steps.onboarding='PASS';
     await checkpoint();
 
+    mark('TERMINAL');
     left=phase(); requireThat((await nativeList(page)).length===0,'baseline_terminal_not_empty');
     const existingPanels=await workbenchState(page);
     // Future consumer admission includes TWO default PTYs; preparation is real UI only.
@@ -293,6 +339,7 @@ export async function executeNative(specPath) {
     await page.screenshot({path:path.join(output,'terminal-cleanup.png'),timeout:left()});
 
     if(s.schedule) {
+      mark('SCHEDULE');
       left=phase(); const marker=`FRESH2_EVENT_${s.taskId}`;
       requireThat(await eventRow(page,marker)===null,'event_marker_collision');
       await click(page.getByRole('button',{name:'Schedule',exact:true}),left);
@@ -316,9 +363,10 @@ export async function executeNative(specPath) {
       receipt.steps.schedule='PASS';
       await checkpoint();
     }
+    mark('FINAL_VERIFICATION');
     await verifyInputs(s); await guard(); receipt.loadedModules=moduleClosure(s,observation,inputs.inventory);
     receipt.runtimeStatus='PASS'; verifyReceipt(receipt);
-  } catch(error) { receipt.errors.push(safeFailure(error)); }
+  } catch(error) { receipt.diagnostic=failureDiagnostic(stage,error); receipt.errors.push(safeFailure(error)); }
   finally {
     // UI cleanup is attempted only for the owned binding, before the global deadline.
     if(receipt.binding && !receipt.cleanup.sessionAbsent && page && !timedOut) {
