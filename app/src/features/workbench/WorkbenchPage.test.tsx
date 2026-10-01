@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as tauriCore from '@tauri-apps/api/core';
 import { WorkbenchPage } from './WorkbenchPage';
 import { useWorkbenchStore } from './store';
 import { usePluginStore } from '@/features/plugins';
@@ -13,9 +14,21 @@ const PROJECT_A = 'project-a' as ProjectId;
 const PROJECT_B = 'project-b' as ProjectId;
 const PROJECT_C = 'project-c' as ProjectId;
 vi.mock('@/features/terminals/TerminalView', () => ({
-  TerminalView: ({ onReady }: { onReady?: (id: string) => void }) => {
-    React.useEffect(() => onReady?.('pty-test-session'), [onReady]);
-    return <div data-testid="live-terminal">Live PTY terminal</div>;
+  TerminalView: ({
+    paneId,
+    startupCommand,
+    onReady,
+  }: {
+    paneId: string;
+    startupCommand?: string;
+    onReady?: (id: string) => void;
+  }) => {
+    React.useEffect(() => onReady?.(`pty-${paneId}`), [onReady, paneId]);
+    return (
+      <div data-testid="live-terminal" data-startup-command={startupCommand}>
+        Live PTY terminal
+      </div>
+    );
   },
 }));
 
@@ -102,14 +115,109 @@ describe('WorkbenchPage', () => {
     ).toBe(true);
   });
 
-  it('adds and removes a real terminal panel without auto-running a command', () => {
+  it('adds and removes a real terminal panel without auto-running a command', async () => {
     render(<WorkbenchPage />);
     const before = screen.getAllByTestId('live-terminal').length;
+    const existingPanelIds = useWorkbenchStore.getState().panels.map((panel) => panel.id);
     fireEvent.click(screen.getByRole('button', { name: 'Add Terminal' }));
     expect(screen.getAllByTestId('live-terminal')).toHaveLength(before + 1);
     expect(useWorkbenchStore.getState().panels.at(-1)?.settings.command).toBeUndefined();
+    expect(
+      screen.getAllByTestId('live-terminal').at(-1)?.hasAttribute('data-startup-command'),
+    ).toBe(false);
+    const addedPanel = useWorkbenchStore.getState().panels.at(-1)!;
+    expect(addedPanel.settings.resourceId).toBe(`pty-${addedPanel.id}`);
+    const binding = {
+      projectId: null,
+      processInstanceId: 'instance-added',
+      pid: 4242,
+      processStartedAt: 1700000000,
+      runtimeGeneration: 'generation-added',
+    };
+    let finishStop!: (result: { kind: string }) => void;
+    const stopResult = new Promise<{ kind: string }>((resolve) => {
+      finishStop = resolve;
+    });
+    let stopped = false;
+    const invoke = vi.spyOn(tauriCore, 'invoke').mockImplementation(async (command) => {
+      if (command === 'terminal_list') {
+        return stopped ? [] : [{ sessionId: addedPanel.settings.resourceId, ...binding }];
+      }
+      if (command === 'terminal_kill') {
+        const result = await stopResult;
+        stopped = true;
+        return result;
+      }
+      return undefined;
+    });
+    invoke.mockClear();
     fireEvent.click(screen.getAllByRole('button', { name: /Close Terminal/i }).at(-1)!);
+    expect(screen.getByRole('dialog', { name: 'Stop terminal?' })).toBeTruthy();
+    expect(screen.getAllByTestId('live-terminal')).toHaveLength(before + 1);
+    expect(invoke).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Stop terminal?' })).toBeNull();
+    expect(screen.getAllByTestId('live-terminal')).toHaveLength(before + 1);
+    expect(invoke).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Close Terminal/i }).at(-1)!);
+    fireEvent.click(screen.getByRole('button', { name: 'Stop terminal' }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('terminal_kill', {
+        sessionId: addedPanel.settings.resourceId,
+        expectedBinding: binding,
+      }),
+    );
+    expect(screen.getAllByTestId('live-terminal')).toHaveLength(before + 1);
+    expect(useWorkbenchStore.getState().panels.some((panel) => panel.id === addedPanel.id)).toBe(
+      true,
+    );
+    await act(async () => finishStop({ kind: 'signal_delivered' }));
+    await waitFor(() => expect(screen.getAllByTestId('live-terminal')).toHaveLength(before));
+    expect(useWorkbenchStore.getState().panels.map((panel) => panel.id)).toEqual(existingPanelIds);
+    expect(invoke.mock.calls.filter(([command]) => command.startsWith('terminal_'))).toEqual([
+      ['terminal_list', undefined],
+      ['terminal_kill', { sessionId: addedPanel.settings.resourceId, expectedBinding: binding }],
+      ['terminal_list', undefined],
+    ]);
+  });
+
+  it('keeps the added terminal panel available when the native stop fails', async () => {
+    render(<WorkbenchPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add Terminal' }));
+    const before = screen.getAllByTestId('live-terminal').length;
+    const addedPanel = useWorkbenchStore.getState().panels.at(-1)!;
+    const invoke = vi.spyOn(tauriCore, 'invoke').mockImplementation(async (command) => {
+      if (command === 'terminal_list') {
+        return [
+          {
+            sessionId: addedPanel.settings.resourceId,
+            projectId: null,
+            processInstanceId: 'instance-added',
+            pid: 4242,
+            processStartedAt: 1700000000,
+            runtimeGeneration: 'generation-added',
+          },
+        ];
+      }
+      if (command === 'terminal_kill') throw new Error('Native stop failed');
+      return undefined;
+    });
+    invoke.mockClear();
+    fireEvent.click(screen.getAllByRole('button', { name: /Close Terminal/i }).at(-1)!);
+    fireEvent.click(screen.getByRole('button', { name: 'Stop terminal' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Native stop failed');
     expect(screen.getAllByTestId('live-terminal')).toHaveLength(before);
+    expect(useWorkbenchStore.getState().panels.some((panel) => panel.id === addedPanel.id)).toBe(
+      true,
+    );
+    expect(
+      screen
+        .getAllByRole('button', { name: /Close Terminal/i })
+        .at(-1)
+        ?.hasAttribute('disabled'),
+    ).toBe(false);
+    expect(invoke.mock.calls.filter(([command]) => command === 'terminal_kill')).toHaveLength(1);
   });
 
   it('opens a canonical account artifact through the production digest-validating provider', async () => {

@@ -11,7 +11,13 @@ describe('safeLocalStorage theme fallback', () => {
     ['light', 'monochrome'],
     ['dark', 'default'],
     ['system', 'default'],
-    ['unknown', 'default'],
+    ['unknown', 'warm'],
+    ['vibespace', 'warm'],
+    ['sakura', 'warm'],
+    ['origami', 'warm'],
+    ['jarvis', 'jarvis'],
+    ['default', 'default'],
+    ['warm', 'warm'],
     ['monochrome', 'monochrome'],
   ])('writes a version-5 canonical fallback for %s', (storedTheme, expectedTheme) => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);

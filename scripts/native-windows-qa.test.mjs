@@ -9,6 +9,90 @@ import test from 'node:test';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+test('logged subprocesses record their actual exit status, including a successful PowerShell return', async () => {
+  const { runLoggedCommand } = await import(
+    pathToFileURL(path.join(root, 'scripts/native-windows-qa.mjs')).href
+  );
+  assert.equal(typeof runLoggedCommand, 'function');
+  const fixture = await mkdtemp(path.join(tmpdir(), 'vibespace-qa-process-'));
+  try {
+    const script = path.join(fixture, 'returns-without-exit.ps1');
+    await writeFile(script, "Write-Output 'PREFLIGHT_RETURNED'");
+    const options = (name) => ({
+      cwd: fixture,
+      logFile: path.join(fixture, `${name}.log`),
+      resultFile: path.join(fixture, `${name}.json`),
+    });
+    const admitted = await runLoggedCommand(
+      'pwsh',
+      ['-NoProfile', '-NonInteractive', '-File', script],
+      options('preflight'),
+    );
+    assert.equal(admitted.code, 0);
+    assert.match(await readFile(options('preflight').logFile, 'utf8'), /PREFLIGHT_RETURNED/u);
+    const next = await runLoggedCommand(
+      process.execPath,
+      ['-e', "console.log('NEXT_PROCESS_REACHED'); console.error('STDERR_CAPTURED')"],
+      options('next'),
+    );
+    assert.equal(next.code, 0);
+    const log = await readFile(options('next').logFile, 'utf8');
+    assert.match(log, /NEXT_PROCESS_REACHED/u);
+    assert.match(log, /STDERR_CAPTURED/u);
+    await assert.rejects(
+      runLoggedCommand(
+        process.execPath,
+        ['-e', "console.error('REAL_FAILURE'); process.exit(17)"],
+        options('failed'),
+      ),
+      /exit code 17/u,
+    );
+    assert.equal(JSON.parse(await readFile(options('failed').resultFile, 'utf8')).code, 17);
+    assert.match(await readFile(options('failed').logFile, 'utf8'), /REAL_FAILURE/u);
+    await assert.rejects(
+      runLoggedCommand(path.join(fixture, 'missing-command'), [], options('not-found')),
+      /spawn|ENOENT/u,
+    );
+    assert.equal(
+      JSON.parse(await readFile(options('not-found').resultFile, 'utf8')).spawnError.code,
+      'ENOENT',
+    );
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test(
+  'zero subprocess exit cannot certify a missing or non-executable output',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    const { runLoggedCommand, inspectBuiltExecutable } = await import(
+      pathToFileURL(path.join(root, 'scripts/native-windows-qa.mjs')).href
+    );
+    assert.equal(typeof inspectBuiltExecutable, 'function');
+    const fixture = await mkdtemp(path.join(tmpdir(), 'vibespace-qa-output-'));
+    try {
+      await runLoggedCommand(process.execPath, ['-e', 'process.exit(0)'], {
+        cwd: fixture,
+        logFile: path.join(fixture, 'empty.log'),
+        resultFile: path.join(fixture, 'empty.json'),
+      });
+      await assert.rejects(inspectBuiltExecutable(path.join(fixture, 'jarvis.exe')), {
+        code: 'ENOENT',
+      });
+      const text = path.join(fixture, 'not-an-executable.txt');
+      await writeFile(text, 'ordinary text, never an executable');
+      await assert.rejects(inspectBuiltExecutable(text), /PE|executable/u);
+      // Read the real Node executable's header only; never fabricate or execute jarvis.exe.
+      const knownExecutable = await inspectBuiltExecutable(process.execPath);
+      assert.equal(knownExecutable.machine, 'x86_64');
+      assert.ok(knownExecutable.bytes > 0);
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  },
+);
+
 const proofInputs = [
   'source_sha',
   'cargo_lock_sha256',
@@ -203,11 +287,32 @@ test('Windows QA workflow only builds and uploads with read-only repository acce
   for (const match of workflow.matchAll(/uses: ([^\s#]+)/gu)) {
     assert.match(match[1], /@[a-f0-9]{40}$/u, 'Every action uses a full pinned commit');
   }
-  const cargo = workflow.indexOf('cargo build --manifest-path');
+  const cargo = workflow.indexOf('node scripts/native-windows-qa.mjs build');
   assert.ok(cargo > workflow.indexOf('npm run prepare:desktop-connector'));
   assert.ok(cargo > workflow.indexOf('npm run prepare:siyuan-runtime'));
-  assert.ok(cargo > workflow.indexOf('-Phase before-cargo'));
-  assert.match(workflow, /--bin jarvis --features jarvis-voice --locked -j 1/u);
+  const helper = await readFile(path.join(root, 'scripts/native-windows-qa.mjs'), 'utf8');
+  const { NATIVE_QA_CARGO_ARGS } = await import(
+    pathToFileURL(path.join(root, 'scripts/native-windows-qa.mjs')).href
+  );
+  assert.deepEqual(NATIVE_QA_CARGO_ARGS, [
+    'build',
+    '--manifest-path',
+    'app/src-tauri/Cargo.toml',
+    '--bin',
+    'jarvis',
+    '--features',
+    'jarvis-voice',
+    '--locked',
+    '-j',
+    '1',
+  ]);
+  assert.match(helper, /'-Phase',\s*'before-cargo'/u);
+  assert.ok(helper.includes("await runLoggedCommand('cargo', NATIVE_QA_CARGO_ARGS"));
+  assert.ok(helper.includes('await inspectBuiltExecutable(executable)'));
+  assert.doesNotMatch(
+    blockAt(workflow, '      - name: Admit and build debug executable'),
+    /\$LASTEXITCODE/u,
+  );
   assert.match(workflow, /include-hidden-files: true/u);
   assert.match(workflow, /if-no-files-found: error/u);
   assert.match(workflow, /retention-days: 3/u);

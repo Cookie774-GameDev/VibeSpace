@@ -40,12 +40,16 @@ describe('appearance theme registry', () => {
     expect(migrateThemePreference('light')).toBe('monochrome');
     expect(migrateThemePreference('dark')).toBe('default');
     expect(migrateThemePreference('system')).toBe('default');
-    expect(migrateThemePreference('vibespace')).toBe('default');
-    expect(migrateThemePreference('sakura')).toBe('default');
+    // The approved Warm fallback also applies to deferred/unknown saved preferences.
+    expect(migrateThemePreference('vibespace')).toBe('warm');
+    expect(migrateThemePreference('sakura')).toBe('warm');
     expect(migrateThemePreference('warm')).toBe('warm');
-    expect(migrateThemePreference('origami')).toBe('default');
-    expect(migrateThemePreference('dusk')).toBe('default');
-    expect(migrateThemePreference('unknown')).toBe('default');
+    expect(migrateThemePreference('origami')).toBe('warm');
+    expect(migrateThemePreference('dusk')).toBe('warm');
+    expect(migrateThemePreference('unknown')).toBe('warm');
+    for (const selected of ['jarvis', 'default', 'monochrome', 'warm'] as const) {
+      expect(migrateThemePreference(selected)).toBe(selected);
+    }
   });
 
   it('parses friendly /theme arguments', () => {

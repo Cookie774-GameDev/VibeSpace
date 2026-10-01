@@ -123,11 +123,7 @@ jobs:
         run: node scripts/native-windows-qa.mjs snapshot
 
       - name: Admit and build debug executable
-        run: |
-          ./scripts/native-windows-qa-preflight.ps1 -Phase before-cargo
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --manifest-path app/src-tauri/Cargo.toml --bin jarvis --features jarvis-voice --locked -j 1 2>&1 | Tee-Object -FilePath work/native-windows-qa/cargo-build.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: node scripts/native-windows-qa.mjs build
 
       - name: Inspect executable and DLL dependencies
         run: |

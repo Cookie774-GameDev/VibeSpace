@@ -56,7 +56,7 @@ describe('UI store theme persistence', () => {
     expect(migrated).not.toBe(persistedUiFixture);
   });
 
-  it('migrates deferred Sakura to Default while preserving unrelated keys', () => {
+  it('migrates deferred Sakura to Warm while preserving unrelated keys', () => {
     const currentState = useUIStore.getState();
     const persisted = {
       ...persistedUiFixture,
@@ -67,7 +67,7 @@ describe('UI store theme persistence', () => {
     const migrated = migratePersistedUiState(persisted, 5);
     const merged = mergePersistedUiState(migrated, currentState);
 
-    expect(merged.theme).toBe('default');
+    expect(merged.theme).toBe('warm');
     expect((merged as unknown as Record<string, unknown>).futurePersistedKey).toEqual(
       persisted.futurePersistedKey,
     );
@@ -101,30 +101,33 @@ describe('UI store theme persistence', () => {
     expect(valid.setSakuraPetalSpeed).toBe(currentState.setSakuraPetalSpeed);
   });
 
-  it('preserves canonical Warm during current-version hydration', () => {
-    const currentState = useUIStore.getState();
-    const merged = mergePersistedUiState({ ...persistedUiFixture, theme: 'warm' }, currentState);
+  it.each(['jarvis', 'default', 'monochrome', 'warm'] as const)(
+    'preserves the selected %s theme during current-version hydration',
+    (theme) => {
+      const currentState = useUIStore.getState();
+      const merged = mergePersistedUiState({ ...persistedUiFixture, theme }, currentState);
 
-    expect(merged.theme).toBe('warm');
-    expect(merged.setTheme).toBe(currentState.setTheme);
-  });
+      expect(merged.theme).toBe(theme);
+      expect(merged.setTheme).toBe(currentState.setTheme);
+    },
+  );
 
-  it('migrates deferred VibeSpace to Default during current-version hydration', () => {
+  it('migrates deferred VibeSpace to Warm during current-version hydration', () => {
     const currentState = useUIStore.getState();
     const merged = mergePersistedUiState(
       { ...persistedUiFixture, theme: 'vibespace' },
       currentState,
     );
 
-    expect(merged.theme).toBe('default');
+    expect(merged.theme).toBe('warm');
     expect(merged.setTheme).toBe(currentState.setTheme);
   });
 
-  it('migrates deferred Origami to Default during current-version hydration', () => {
+  it('migrates deferred Origami to Warm during current-version hydration', () => {
     const currentState = useUIStore.getState();
     const merged = mergePersistedUiState({ ...persistedUiFixture, theme: 'origami' }, currentState);
 
-    expect(merged.theme).toBe('default');
+    expect(merged.theme).toBe('warm');
     expect(merged.setTheme).toBe(currentState.setTheme);
   });
 
@@ -144,12 +147,12 @@ describe('UI store theme persistence', () => {
     expect(merged.paletteOpen).toBe(currentState.paletteOpen);
   });
 
-  it('normalizes malformed roots to the default without losing current methods', () => {
+  it('normalizes malformed roots to Warm without losing current methods', () => {
     const currentState = useUIStore.getState();
 
     for (const malformed of [null, undefined, 'broken', [], 42]) {
       const merged = mergePersistedUiState(malformed, currentState);
-      expect(merged.theme).toBe('default');
+      expect(merged.theme).toBe('warm');
       expect(merged.setTheme).toBe(currentState.setTheme);
       expect(merged.navOpen).toBe(currentState.navOpen);
     }

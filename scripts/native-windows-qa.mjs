@@ -1,10 +1,102 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { createReadStream } from 'node:fs';
-import { cp, lstat, mkdir, readFile, readdir, statfs, writeFile } from 'node:fs/promises';
+import { execFileSync, spawn } from 'node:child_process';
+import { closeSync, createReadStream, openSync, writeSync } from 'node:fs';
+import { cp, lstat, mkdir, open, readFile, readdir, statfs, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+export const NATIVE_QA_CARGO_ARGS = Object.freeze([
+  'build',
+  '--manifest-path',
+  'app/src-tauri/Cargo.toml',
+  '--bin',
+  'jarvis',
+  '--features',
+  'jarvis-voice',
+  '--locked',
+  '-j',
+  '1',
+]);
+
+export async function runLoggedCommand(command, args, { cwd, logFile, resultFile }) {
+  const startedAtUTC = new Date().toISOString();
+  const descriptor = openSync(logFile, 'wx');
+  let result;
+  try {
+    result = await new Promise((resolve) => {
+      const child = spawn(command, args, {
+        cwd,
+        windowsHide: true,
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let spawnError = null;
+      child.once('error', (error) => {
+        spawnError = { code: error.code, message: error.message };
+      });
+      child.stdout.on('data', (chunk) => {
+        writeSync(descriptor, chunk);
+        process.stdout.write(chunk);
+      });
+      child.stderr.on('data', (chunk) => {
+        writeSync(descriptor, chunk);
+        process.stderr.write(chunk);
+      });
+      child.once('close', (code, signal) =>
+        resolve({
+          command,
+          args,
+          pid: child.pid,
+          code,
+          signal,
+          spawnError,
+          startedAtUTC,
+          finishedAtUTC: new Date().toISOString(),
+        }),
+      );
+    });
+  } finally {
+    closeSync(descriptor);
+  }
+  await writeFile(resultFile, JSON.stringify(result, null, 2) + '\n', { flag: 'wx' });
+  assert.equal(
+    result.spawnError,
+    null,
+    `spawn failed: ${result.spawnError?.code}: ${result.spawnError?.message}`,
+  );
+  assert.equal(result.signal, null, `Subprocess terminated by ${result.signal}`);
+  assert.equal(result.code, 0, `Subprocess exit code ${result.code}: ${command}`);
+  return result;
+}
+
+export async function inspectBuiltExecutable(executable) {
+  const info = await lstat(executable);
+  assert.ok(
+    info.isFile() && !info.isSymbolicLink() && info.size >= 64,
+    'Expected a regular PE executable',
+  );
+  const handle = await open(executable, 'r');
+  try {
+    const dos = Buffer.alloc(64);
+    assert.equal((await handle.read(dos, 0, dos.length, 0)).bytesRead, dos.length);
+    assert.equal(dos.toString('ascii', 0, 2), 'MZ', 'Expected a PE executable DOS header');
+    const offset = dos.readUInt32LE(60);
+    assert.ok(offset >= 64 && offset + 24 <= info.size, 'Invalid PE header location');
+    const pe = Buffer.alloc(24);
+    assert.equal((await handle.read(pe, 0, pe.length, offset)).bytesRead, pe.length);
+    assert.equal(pe.readUInt32LE(0), 0x00004550, 'Expected PE executable signature');
+    assert.equal(pe.readUInt16LE(4), 0x8664, 'Expected Windows x86_64 executable');
+    const characteristics = pe.readUInt16LE(22);
+    assert.ok(
+      (characteristics & 2) !== 0 && (characteristics & 0x2000) === 0,
+      'Expected an executable image, not a DLL',
+    );
+    return { executable, bytes: info.size, machine: 'x86_64' };
+  } finally {
+    await handle.close();
+  }
+}
 
 function within(root, relative) {
   assert.ok(!path.isAbsolute(relative) && !relative.includes('\\'), 'Use a relative portable path');
@@ -134,7 +226,49 @@ async function main(command) {
   const sourceSHA = git('rev-parse', 'HEAD');
   assert.equal(sourceSHA, process.env.QA_SOURCE_SHA);
   git('diff', '--exit-code');
-  if (command === 'snapshot') {
+  if (command === 'build') {
+    assert.ok(process.env.CARGO_TARGET_DIR, 'Explicit Cargo target directory required');
+    const target = path.resolve(process.env.CARGO_TARGET_DIR);
+    assert.equal(target, path.join(root, 'work/native-windows-qa-target'));
+    const executable = path.join(target, 'debug', 'jarvis.exe');
+    await lstat(executable).then(
+      () => {
+        throw new Error('Refusing a preexisting QA executable');
+      },
+      (error) => {
+        if (error.code !== 'ENOENT') throw error;
+      },
+    );
+    const logs = (phase) => ({
+      cwd: root,
+      logFile: path.join(evidence, `${phase}.log`),
+      resultFile: path.join(evidence, `${phase}.json`),
+    });
+    const preflight = await runLoggedCommand(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-File',
+        path.join(root, 'scripts/native-windows-qa-preflight.ps1'),
+        '-Phase',
+        'before-cargo',
+      ],
+      logs('preflight-process'),
+    );
+    const cargo = await runLoggedCommand('cargo', NATIVE_QA_CARGO_ARGS, logs('cargo-build'));
+    const built = await inspectBuiltExecutable(executable);
+    built.sha256 = await sha256(executable);
+    const provenancePath = path.join(evidence, 'provenance.json');
+    const provenance = JSON.parse(await readFile(provenancePath, 'utf8'));
+    provenance.build = { preflight, cargo, output: built };
+    await writeFile(provenancePath, JSON.stringify(provenance, null, 2) + '\n');
+    await writeFile(
+      path.join(evidence, 'build-output.json'),
+      JSON.stringify(built, null, 2) + '\n',
+      { flag: 'wx' },
+    );
+  } else if (command === 'snapshot') {
     const { fingerprint } = await import('./prepare-desktop-connector.mjs');
     assert.equal(await fingerprint(), process.env.QA_CONNECTOR_SHA256);
     const names = git('ls-files', '-z').split('\0').filter(Boolean);
@@ -185,7 +319,7 @@ async function main(command) {
     const target = path.resolve(process.env.CARGO_TARGET_DIR, 'debug');
     await stageArtifact(root, target, path.join(evidence, 'artifact'), evidence);
   } else {
-    throw new Error('Expected snapshot or stage');
+    throw new Error('Expected snapshot, build or stage');
   }
 }
 

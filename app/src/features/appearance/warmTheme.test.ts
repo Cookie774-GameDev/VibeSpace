@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parse } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
 const css = readFileSync(resolve(__dirname, '../../styles/warm-theme.css'), 'utf8');
@@ -107,7 +108,22 @@ describe('Warm theme presentation contract', () => {
     expect(css).toMatch(
       /\[data-nav-pane='true'\]\s*\{[\s\S]*?var\(--warm-shell-900\)[\s\S]*?var\(--warm-shell-950\)/u,
     );
-    expect(css).not.toMatch(/(?:-webkit-)?mask-image\s*:/u);
+    // BM04 softened only its decorative benchmark image. Shell/control masks remain forbidden.
+    const maskDeclarations: { selector: string; property: string; value: string }[] = [];
+    parse(css).walkDecls(/^(?:-webkit-)?mask-image$/u, (declaration) => {
+      maskDeclarations.push({
+        selector: declaration.parent?.type === 'rule' ? declaration.parent.selector : '',
+        property: declaration.prop,
+        value: declaration.value,
+      });
+    });
+    expect(maskDeclarations).toEqual([
+      {
+        selector: "html[data-theme='warm'] [data-warm-decoration='benchmarks-scene'] > img",
+        property: 'mask-image',
+        value: 'linear-gradient(to right, transparent 43%, #000 58%)',
+      },
+    ]);
     expect(css).not.toMatch(/mix-blend-mode\s*:/u);
 
     expect(css).toContain('--warm-sidebar-w: 240px');
