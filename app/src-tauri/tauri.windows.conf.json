@@ -1,6 +1,7 @@
 {
   "bundle": {
     "resources": [
+      "resources/desktop-connector/*",
       "resources/intro/*",
       "../../docs/oss/dependency-lock.json",
       "../../docs/oss/grammar-license-inventory.md",
