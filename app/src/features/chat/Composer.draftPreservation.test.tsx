@@ -1,10 +1,23 @@
 import 'fake-indexeddb/auto';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createHash } from 'node:crypto';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TooltipProvider } from '@/components/ui';
 import { messageRepo } from '@/lib/db';
 import { useAuthStore } from '@/stores/auth';
+import type { Message } from '@/types';
+import { clearRedoStack, peekRedoDepth, popRedoTurn } from './chatUndoRedo';
 import { Composer } from './Composer';
+
+const LARGE_DRAFT =
+  '  Native synthetic multiline draft — 東京\n' + 'Preserve every complete line.\n'.repeat(3500);
+const LARGE_DRAFT_SHA256 = '8f2fceda614b93895d9b51d1ea3e91a4165b49a97e98686d4626ef52c0085fb0';
+
+function expectLargeDraft(input: HTMLTextAreaElement) {
+  expect(input.value).toHaveLength(105040);
+  expect(input.value).toBe(LARGE_DRAFT);
+  expect(createHash('sha256').update(input.value).digest('hex')).toBe(LARGE_DRAFT_SHA256);
+}
 
 const fixture = vi.hoisted(() => ({ empty: [] as unknown[] }));
 vi.mock('dexie-react-hooks', () => ({
@@ -42,6 +55,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   useAuthStore.setState(originalAuth);
+  clearRedoStack('draft-undo-preservation');
 });
 
 it('preserves a large multiline draft when an immediate command is selected at its end', async () => {
@@ -51,9 +65,11 @@ it('preserves a large multiline draft when an immediate command is selected at i
     </TooltipProvider>,
   );
   const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
-  const draft =
-    '  Native synthetic multiline draft — 東京\n' + 'Preserve every complete line.\n'.repeat(3500);
-  fireEvent.change(input, { target: { value: draft + '/connect' } });
+  fireEvent.change(input, { target: { value: LARGE_DRAFT + '/connect' } });
+  expect(input.value).toHaveLength(105048);
+  expect(createHash('sha256').update(input.value).digest('hex')).toBe(
+    'b99d5635731a8daf2752ab76147bc8075e2d6e096ff1f1702c357a78a176ca26',
+  );
   input.setSelectionRange(input.value.length, input.value.length);
   fireEvent.keyUp(input, { key: 't' });
   await waitFor(() =>
@@ -65,9 +81,13 @@ it('preserves a large multiline draft when an immediate command is selected at i
     '[role="option"][data-value="vibespace:vibespace:connect"]',
   )!;
   fireEvent.click(option);
-  await waitFor(() => expect(input.value).toBe(draft));
-  await new Promise((resolve) => setTimeout(resolve, 80));
-  expect(input.value).toBe(draft);
+  await waitFor(() => expectLargeDraft(input));
+  await waitFor(() =>
+    expect(['succeeded', 'failed', 'cancelled']).toContain(
+      document.querySelector('[data-slash-command-state]')?.getAttribute('data-slash-command-state'),
+    ),
+  );
+  expectLargeDraft(input);
 });
 
 it('does not erase a newer draft when an asynchronous local result settles', async () => {
@@ -87,12 +107,12 @@ it('does not erase a newer draft when an asynchronous local result settles', asy
   fireEvent.change(input, { target: { value: '/performance status' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
   await waitFor(() => expect(messageRepo.create).toHaveBeenCalled());
-  fireEvent.change(input, { target: { value: 'A newer unsent draft\nKeep all of it.' } });
+  fireEvent.change(input, { target: { value: LARGE_DRAFT } });
   finish({ id: 'draft-result' } as never);
   await waitFor(() =>
     expect(document.querySelector('[data-slash-command-state="succeeded"]')).not.toBeNull(),
   );
-  expect(input.value).toBe('A newer unsent draft\nKeep all of it.');
+  expectLargeDraft(input);
 });
 
 it('restores text-only drafts when the same composer changes chats', async () => {
@@ -102,7 +122,7 @@ it('restores text-only drafts when the same composer changes chats', async () =>
     </TooltipProvider>,
   );
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {
-    target: { value: 'First chat\nA full unsent draft' },
+    target: { value: LARGE_DRAFT },
   });
   view.rerender(
     <TooltipProvider>
@@ -123,8 +143,83 @@ it('restores text-only drafts when the same composer changes chats', async () =>
     </TooltipProvider>,
   );
   await waitFor(() =>
-    expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe(
-      'First chat\nA full unsent draft',
-    ),
+    expectLargeDraft(screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement),
   );
+});
+
+it('preserves the exact large draft while undo removes the prior complete turn and retains redo', async () => {
+  clearRedoStack('draft-undo-preservation');
+  render(
+    <TooltipProvider>
+      <Composer chatId={'draft-undo-preservation' as never} />
+    </TooltipProvider>,
+  );
+  const history: Message[] = [
+    {
+      id: 'draft-prior-user' as Message['id'],
+      chat_id: 'draft-undo-preservation' as Message['chat_id'],
+      role: 'user',
+      parts: [{ kind: 'text', text: 'Previous user turn.' }],
+      created_at: 1,
+      updated_at: 1,
+    },
+    {
+      id: 'draft-prior-assistant' as Message['id'],
+      chat_id: 'draft-undo-preservation' as Message['chat_id'],
+      role: 'assistant',
+      parts: [{ kind: 'text', text: 'Previous complete reply.' }],
+      created_at: 2,
+      updated_at: 2,
+    },
+  ];
+  let finish!: (messages: Message[]) => void;
+  const readHistory = vi.spyOn(messageRepo, 'listByChat').mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const removeMessage = vi.spyOn(messageRepo, 'delete').mockResolvedValue(undefined);
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: '/undo' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+  await waitFor(() => expect(readHistory).toHaveBeenCalled());
+  fireEvent.change(input, { target: { value: LARGE_DRAFT } });
+  finish(history);
+  await waitFor(() =>
+    expect(document.querySelector('[data-slash-command-state="succeeded"]')).not.toBeNull(),
+  );
+  expect(removeMessage.mock.calls).toEqual(history.map(message => [message.id]));
+  expect(peekRedoDepth('draft-undo-preservation')).toBe(1);
+  expect(popRedoTurn('draft-undo-preservation')?.messages).toEqual(history);
+  expectLargeDraft(input);
+});
+
+it('restores the exact large draft after remount and isolates a different account in the same chat', async () => {
+  const view = render(
+    <TooltipProvider>
+      <Composer chatId={'draft-account-preservation' as never} />
+    </TooltipProvider>,
+  );
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {
+    target: { value: LARGE_DRAFT },
+  });
+  act(() => useAuthStore.setState({ localUserId: 'draft-test-other-user' as never }));
+  await waitFor(() =>
+    expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe(''),
+  );
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {
+    target: { value: 'Other account draft.' },
+  });
+  act(() => useAuthStore.setState({ localUserId: 'draft-test-user' as never }));
+  await waitFor(() =>
+    expectLargeDraft(screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement),
+  );
+  view.unmount();
+  render(
+    <TooltipProvider>
+      <Composer chatId={'draft-account-preservation' as never} />
+    </TooltipProvider>,
+  );
+  expectLargeDraft(screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement);
 });
