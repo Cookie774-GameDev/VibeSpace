@@ -36,10 +36,49 @@ function event(
 }
 
 describe('resolveChatListActivity', () => {
+  it('keeps concurrent work running when another run has just finished', () => {
+    expect(
+      resolveChatListActivity({
+        runs: [run('running', NOW - 1000), run('completed')],
+        events: [],
+        nowMs: NOW,
+      }).state,
+    ).toBe('thinking');
+  });
+
+  it('does not call a finished tool or subagent a finished chat', () => {
+    for (const kind of ['tool', 'file', 'subagent'] as const) {
+      expect(
+        resolveChatListActivity({ runs: [], events: [event('done', kind)], nowMs: NOW }).state,
+      ).toBe('idle');
+    }
+  });
+
+  it('distinguishes cancellation from failure and successful completion', () => {
+    expect(
+      resolveChatListActivity({ runs: [run('cancelled')], events: [], nowMs: NOW }).state,
+    ).toBe('cancelled');
+    expect(
+      resolveChatListActivity({ runs: [], events: [event('cancelled', 'agent')], nowMs: NOW })
+        .state,
+    ).toBe('cancelled');
+  });
   it('shows authoritative manual recovery instead of stale running events', () => {
     const recovering = { ...run('running', NOW - 60_000), requiresManualRecovery: true };
-    expect(resolveChatListActivity({ runs: [recovering], events: [event('running', 'tool')], nowMs: NOW }).label).toBe('needs attention');
-    expect(resolveChatListActivity({ runs: [recovering, run('completed')], events: [event('running', 'tool')], nowMs: NOW }).state).toBe('complete');
+    expect(
+      resolveChatListActivity({
+        runs: [recovering],
+        events: [event('running', 'tool')],
+        nowMs: NOW,
+      }).label,
+    ).toBe('needs attention');
+    expect(
+      resolveChatListActivity({
+        runs: [recovering, run('completed')],
+        events: [event('running', 'tool')],
+        nowMs: NOW,
+      }).state,
+    ).toBe('complete');
   });
   it('maps canonical run and tool states without inventing activity', () => {
     expect(resolveChatListActivity({ runs: [], events: [], nowMs: NOW }).state).toBe('idle');
@@ -114,7 +153,47 @@ describe('resolveChatListActivity', () => {
 });
 
 describe('ChatListActivityIndicator', () => {
-  it('uses a slow soft-blue completion signal and hides it for the open chat row', () => {
+  it('filters other chats and announces the specific finished chat', () => {
+    const view = render(
+      <ChatListActivityIndicator
+        chatId="chat-1"
+        chatLabel="Research"
+        runs={[run('completed'), { ...run('running'), chatId: 'chat-2' }]}
+        events={[]}
+        now={() => NOW}
+      />,
+    );
+    expect(view.getByRole('status').textContent).toBe('Research: Reply ready');
+    expect(
+      view.getByTestId('chat-activity-slot').querySelectorAll('[data-chat-activity-cell]'),
+    ).toHaveLength(0);
+  });
+
+  it('acknowledges one completion but allows the next reply to notify again', () => {
+    const view = render(
+      <ChatListActivityIndicator
+        runs={[run('completed')]}
+        events={[]}
+        acknowledgedThrough={NOW}
+        now={() => NOW}
+      />,
+    );
+    expect(
+      view.getByTestId('chat-activity-slot').querySelector('[data-chat-activity-indicator]'),
+    ).toBeNull();
+    view.rerender(
+      <ChatListActivityIndicator
+        runs={[run('completed', NOW + 1)]}
+        events={[]}
+        acknowledgedThrough={NOW}
+        now={() => NOW + 1}
+      />,
+    );
+    expect(
+      view.getByTestId('chat-activity-slot').querySelector('[data-chat-activity-completion-dot]'),
+    ).not.toBeNull();
+  });
+  it('uses a slow soft-blue completion signal and stops motion for reduced-motion users', () => {
     const stylesheet = readFileSync(
       resolve(process.cwd(), 'src/features/chat/activity/chat-list-activity.css'),
       'utf8',
@@ -127,9 +206,7 @@ describe('ChatListActivityIndicator', () => {
     expect(stylesheet).toMatch(
       /\.chat-activity-completion-dot\s*\{[^}]*animation:\s*chat-activity-completion-dot\s+3\.6s/s,
     );
-    expect(stylesheet).toMatch(
-      /\[aria-current='page'\][\s\S]*\.chat-activity-indicator\[data-state='complete'\][^}]*display:\s*none/s,
-    );
+    expect(stylesheet).toMatch(/prefers-reduced-motion: reduce[\s\S]*animation:\s*none !important/);
   });
 
   it('reserves a stable non-interactive slot and mounts motion only for real work', () => {

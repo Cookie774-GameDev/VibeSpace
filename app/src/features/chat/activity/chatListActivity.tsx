@@ -3,7 +3,7 @@ import type { ChatActivityEvent } from './types';
 import './chat-list-activity.css';
 
 export type ChatListActivityVisualState =
-  'idle' | 'queued' | 'thinking' | 'streaming' | 'tool' | 'complete' | 'error';
+  'idle' | 'queued' | 'thinking' | 'streaming' | 'tool' | 'complete' | 'error' | 'cancelled';
 
 export interface ChatListRunSignal {
   chatId?: string;
@@ -18,6 +18,7 @@ export interface ChatListActivityResolution {
   cycleMs: number;
   intensity: number;
   expiresAt?: number;
+  terminalAt?: number;
 }
 
 const ERROR_SETTLE_MS = 3_200;
@@ -35,7 +36,8 @@ const QUEUED_STATUSES = new Set([
 const THINKING_STATUSES = new Set(['planning', 'thinking', 'preparing']);
 const RUNNING_STATUSES = new Set(['running', 'streaming', 'in_progress']);
 const COMPLETE_STATUSES = new Set(['completed', 'complete', 'done', 'succeeded']);
-const ERROR_STATUSES = new Set(['failed', 'error', 'timed_out', 'cancelled']);
+const ERROR_STATUSES = new Set(['failed', 'error', 'timed_out']);
+const CANCELLED_STATUSES = new Set(['cancelled', 'canceled']);
 
 function timestamp(value: string | number | undefined): number {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
@@ -55,7 +57,9 @@ function labelFor(state: ChatListActivityVisualState): string {
     case 'tool':
       return 'running a tool';
     case 'complete':
-      return 'completed';
+      return 'Reply ready';
+    case 'cancelled':
+      return 'Cancelled';
     case 'error':
       return 'needs attention';
     default:
@@ -68,6 +72,7 @@ function resolution(
   cycleMs: number,
   intensity: number,
   expiresAt?: number,
+  terminalAt?: number,
 ): ChatListActivityResolution {
   return {
     state,
@@ -75,6 +80,7 @@ function resolution(
     cycleMs,
     intensity,
     ...(expiresAt === undefined ? {} : { expiresAt }),
+    ...(terminalAt === undefined ? {} : { terminalAt }),
   };
 }
 
@@ -87,19 +93,36 @@ export function resolveChatListActivity({
   events: readonly ChatActivityEvent[];
   nowMs?: number;
 }): ChatListActivityResolution {
-  const latestRun = [...runs].sort(
+  const orderedRuns = [...runs].sort(
     (left, right) => timestamp(right.updatedAt) - timestamp(left.updatedAt),
-  )[0];
+  );
+  // A terminal run cannot stop the animation for another run still doing work.
+  const latestRun =
+    orderedRuns.find((run) => {
+      const status = run.status.toLowerCase();
+      return (
+        !run.requiresManualRecovery &&
+        (RUNNING_STATUSES.has(status) ||
+          THINKING_STATUSES.has(status) ||
+          QUEUED_STATUSES.has(status))
+      );
+    }) ?? orderedRuns[0];
   const status = latestRun?.status.toLowerCase() ?? '';
   const latestEvent = [...events].sort((left, right) => right.ts - left.ts)[0];
   const activeEvent = [...events]
     .reverse()
     .find((event) => event.status === 'pending' || event.status === 'running');
 
-  if (ERROR_STATUSES.has(status)) {
+  if (ERROR_STATUSES.has(status) || CANCELLED_STATUSES.has(status)) {
     const changedAt = timestamp(latestRun?.updatedAt);
     if (changedAt > 0 && nowMs - changedAt <= ERROR_SETTLE_MS) {
-      return resolution('error', 460, 1, changedAt + ERROR_SETTLE_MS);
+      return resolution(
+        CANCELLED_STATUSES.has(status) ? 'cancelled' : 'error',
+        0,
+        1,
+        changedAt + ERROR_SETTLE_MS,
+        changedAt,
+      );
     }
     return resolution('idle', 0, 0);
   }
@@ -107,7 +130,7 @@ export function resolveChatListActivity({
   if (COMPLETE_STATUSES.has(status)) {
     const changedAt = timestamp(latestRun?.updatedAt);
     if (changedAt > 0 && nowMs - changedAt <= COMPLETION_SETTLE_MS) {
-      return resolution('complete', 3_600, 0.72, changedAt + COMPLETION_SETTLE_MS);
+      return resolution('complete', 3_600, 0.72, changedAt + COMPLETION_SETTLE_MS, changedAt);
     }
     return resolution('idle', 0, 0);
   }
@@ -136,31 +159,63 @@ export function resolveChatListActivity({
   if (THINKING_STATUSES.has(status)) return resolution('thinking', 1_100, 0.45);
   if (QUEUED_STATUSES.has(status)) return resolution('queued', 1_600, 0.28);
 
-  if (latestEvent?.status === 'error' && nowMs - latestEvent.ts <= ERROR_SETTLE_MS) {
-    return resolution('error', 460, 1, latestEvent.ts + ERROR_SETTLE_MS);
+  if (
+    (latestEvent?.status === 'error' || latestEvent?.status === 'cancelled') &&
+    nowMs - latestEvent.ts <= ERROR_SETTLE_MS
+  ) {
+    return resolution(
+      latestEvent.status === 'cancelled' ? 'cancelled' : 'error',
+      0,
+      1,
+      latestEvent.ts + ERROR_SETTLE_MS,
+      latestEvent.ts,
+    );
   }
-  if (latestEvent?.status === 'done' && nowMs - latestEvent.ts <= COMPLETION_SETTLE_MS) {
-    return resolution('complete', 3_600, 0.72, latestEvent.ts + COMPLETION_SETTLE_MS);
+  // Only the top-level agent finishing can stand in for a missing run signal.
+  if (
+    latestEvent?.kind === 'agent' &&
+    latestEvent.status === 'done' &&
+    nowMs - latestEvent.ts <= COMPLETION_SETTLE_MS
+  ) {
+    return resolution(
+      'complete',
+      3_600,
+      0.72,
+      latestEvent.ts + COMPLETION_SETTLE_MS,
+      latestEvent.ts,
+    );
   }
   return resolution('idle', 0, 0);
 }
 
 export interface ChatListActivityIndicatorProps {
+  chatId?: string;
+  chatLabel?: string;
+  acknowledgedThrough?: number;
   runs: readonly ChatListRunSignal[];
   events: readonly ChatActivityEvent[];
   now?: () => number;
 }
 
 export function ChatListActivityIndicator({
+  chatId,
+  chatLabel = 'Chat',
+  acknowledgedThrough = 0,
   runs,
   events,
   now = Date.now,
 }: ChatListActivityIndicatorProps) {
   const [nowMs, setNowMs] = React.useState(now);
-  const resolved = React.useMemo(
-    () => resolveChatListActivity({ runs, events, nowMs }),
-    [events, nowMs, runs],
-  );
+  const resolved = React.useMemo(() => {
+    const result = resolveChatListActivity({
+      runs: chatId ? runs.filter((run) => run.chatId === chatId) : runs,
+      events: chatId ? events.filter((event) => String(event.chatId) === chatId) : events,
+      nowMs,
+    });
+    return result.terminalAt && result.terminalAt <= acknowledgedThrough
+      ? resolution('idle', 0, 0)
+      : result;
+  }, [acknowledgedThrough, chatId, events, nowMs, runs]);
 
   React.useEffect(() => {
     setNowMs(now());
@@ -185,6 +240,7 @@ export function ChatListActivityIndicator({
         className="chat-activity-slot"
         data-testid="chat-activity-slot"
         data-chat-activity-label={resolved.label}
+        title={`${chatLabel}: ${resolved.label}`}
       >
         {resolved.state === 'idle' ? null : (
           <span
@@ -195,11 +251,19 @@ export function ChatListActivityIndicator({
             style={style}
           >
             {resolved.state === 'complete' ? (
-              <i
+              <span
                 aria-hidden="true"
                 className="chat-activity-completion-dot"
                 data-chat-activity-completion-dot
-              />
+              >
+                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="m3 6 2 2 4-4" />
+                </svg>
+              </span>
+            ) : resolved.state === 'error' || resolved.state === 'cancelled' ? (
+              <span className="chat-activity-terminal" aria-hidden="true">
+                {resolved.state === 'error' ? '!' : '−'}
+              </span>
             ) : (
               Array.from({ length: 16 }, (_, index) => (
                 <i
@@ -212,9 +276,9 @@ export function ChatListActivityIndicator({
           </span>
         )}
       </span>
-      {resolved.state === 'idle' ? null : (
-        <span className="sr-only">Chat activity: {resolved.label}</span>
-      )}
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {resolved.state === 'idle' ? '' : `${chatLabel}: ${resolved.label}`}
+      </span>
     </>
   );
 }

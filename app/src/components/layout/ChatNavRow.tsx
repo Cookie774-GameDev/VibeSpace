@@ -45,7 +45,41 @@ export function ChatNavRow({
   onTogglePin,
 }: ChatNavRowProps) {
   const [actionsOpen, setActionsOpen] = React.useState(false);
+  const [acknowledgedThrough, setAcknowledgedThrough] = React.useState(0);
   const label = (chat.title || 'Untitled chat').trim() || 'Untitled chat';
+  const latestActivityAt = Math.max(
+    0,
+    ...activityRuns
+      .filter((run) => run.chatId === String(chat.id))
+      .map((run) =>
+        typeof run.updatedAt === 'number'
+          ? Number.isFinite(run.updatedAt)
+            ? run.updatedAt
+            : 0
+          : Date.parse(run.updatedAt ?? '') || 0,
+      ),
+    ...activityEvents
+      .filter((event) => String(event.chatId) === String(chat.id))
+      .map((event) => event.ts),
+  );
+  React.useEffect(() => {
+    if (active) setAcknowledgedThrough((seen) => Math.max(seen, latestActivityAt));
+  }, [active, latestActivityAt]);
+  const openChat = () => {
+    setAcknowledgedThrough((seen) => Math.max(seen, latestActivityAt));
+    onOpen();
+  };
+  const activityIndicator = (
+    <ChatListActivityIndicator
+      chatId={String(chat.id)}
+      chatLabel={label}
+      runs={activityRuns}
+      events={activityEvents}
+      acknowledgedThrough={
+        active ? Math.max(acknowledgedThrough, latestActivityAt) : acknowledgedThrough
+      }
+    />
+  );
   const pinned = isChatPinned(chat);
   const dragProps = {
     ...useChatPointerDrag(chat),
@@ -62,7 +96,7 @@ export function ChatNavRow({
       <button
         {...dragProps}
         type="button"
-        onClick={onOpen}
+        onClick={openChat}
         title={pinned ? `${label} (pinned)` : label}
         aria-label={pinned ? `${label}, pinned` : label}
         aria-current={active ? 'page' : undefined}
@@ -74,6 +108,7 @@ export function ChatNavRow({
         )}
       >
         <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="absolute -right-0.5 top-1/2 -translate-y-1/2">{activityIndicator}</span>
         {pinned ? (
           <Pin className="absolute right-1 top-1 h-2 w-2 fill-accent-copper text-accent-copper" />
         ) : null}
@@ -94,13 +129,13 @@ export function ChatNavRow({
     >
       <button
         type="button"
-        onClick={onOpen}
+        onClick={openChat}
         className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-body text-foreground focus-visible:outline-none focus-visible:ring-inset focus-visible:ring-1 focus-visible:ring-ring [html[data-theme=sakura]_&]:min-h-6"
       >
         <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-left">{label}</span>
       </button>
-      <ChatListActivityIndicator runs={activityRuns} events={activityEvents} />
+      {activityIndicator}
       <button
         type="button"
         onClick={(event) => {
