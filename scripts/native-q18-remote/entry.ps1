@@ -2,7 +2,8 @@ param([Parameter(Mandatory)][string]$TaskId,
  [Parameter(Mandatory)][string]$TransferGrantId,
  [Parameter(Mandatory)][string]$DependencyGrantId,
  [Parameter(Mandatory)][string]$NativeSetupGrantId,
- [Parameter(Mandatory)][string]$HelperManifestSHA256)
+ [Parameter(Mandatory)][string]$HelperManifestSHA256,
+ [Parameter(Mandatory)][string]$WebViewPolicyGrantId)
 $ErrorActionPreference='Stop'
 if(-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true'){throw 'consumer_remote_entry_only'}
 if($TaskId -cnotmatch '^[A-Z0-9_]{8,64}$' -or $HelperManifestSHA256 -cnotmatch '^[a-f0-9]{64}$'){throw 'consumer_entry_identity'}
@@ -22,7 +23,7 @@ $desktopPath=Join-Path $env:RUNNER_TEMP ($TaskId+'-desktop.json')
 $stream=[IO.File]::Open($desktopPath,[IO.FileMode]::CreateNew)
 try{$bytes=[Text.Encoding]::UTF8.GetBytes(($desktop|ConvertTo-Json));$stream.Write($bytes,0,$bytes.Length)}finally{$stream.Dispose()}
 $argsForConsumer=@{TaskId=$TaskId;TransferGrantId=$TransferGrantId;DependencyGrantId=$DependencyGrantId;NativeSetupGrantId=$NativeSetupGrantId;
- HelperManifestSHA256=$HelperManifestSHA256;ReservedGrowthMiB=0;ReservedCommitMiB=0}
+ WebViewPolicyGrantId=$WebViewPolicyGrantId;HelperManifestSHA256=$HelperManifestSHA256;ReservedGrowthMiB=0;ReservedCommitMiB=0}
 if(-not $desktop.interactive){$argsForConsumer.StaticOnly=$true}
 & (Join-Path $PSScriptRoot 'consumer.ps1') @argsForConsumer
 if(-not $desktop.interactive){

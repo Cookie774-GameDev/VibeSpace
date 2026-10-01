@@ -20,6 +20,10 @@ on:
         description: Actual ROOT approved remote npm setup grant
         required: true
         type: string
+      webview_policy_grant:
+        description: Explicit ROOT grant for four ephemeral HKLM64 per-app WebView2 values and exact cleanup
+        required: true
+        type: string
       native_setup_grant:
         description: Actual ROOT approved native phase INCLUDING two initial PTYs
         required: true
@@ -61,13 +65,14 @@ jobs:
           TRANSFER_GRANT: ${{ inputs.transfer_grant }}
           DEPENDENCY_GRANT: ${{ inputs.dependency_grant }}
           NATIVE_GRANT: ${{ inputs.native_setup_grant }}
+          WEBVIEW_POLICY_GRANT: ${{ inputs.webview_policy_grant }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           if ($env:QA_HELPER_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'Full immutable helper commit required.' }
           $helper = Join-Path $env:GITHUB_WORKSPACE 'qa-helper'
           if ((git -C $helper rev-parse HEAD).Trim() -cne $env:QA_HELPER_SHA) { throw 'Helper checkout differs.' }
           $runTask = 'FRESH2_CI488_' + $env:GITHUB_RUN_ID + '_' + $env:GITHUB_RUN_ATTEMPT
-          & (Join-Path $helper 'scripts/native-q18-remote/entry.ps1') -TaskId $runTask -TransferGrantId $env:TRANSFER_GRANT -DependencyGrantId $env:DEPENDENCY_GRANT -NativeSetupGrantId $env:NATIVE_GRANT -HelperManifestSHA256 $env:HELPER_MANIFEST_SHA
+          & (Join-Path $helper 'scripts/native-q18-remote/entry.ps1') -TaskId $runTask -TransferGrantId $env:TRANSFER_GRANT -DependencyGrantId $env:DEPENDENCY_GRANT -NativeSetupGrantId $env:NATIVE_GRANT -HelperManifestSHA256 $env:HELPER_MANIFEST_SHA -WebViewPolicyGrantId $env:WEBVIEW_POLICY_GRANT
       - name: Upload only sanitized actual receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -85,6 +90,9 @@ jobs:
             ${{ runner.temp }}/FRESH2_CI488_*/npm-launch-identity.json
             ${{ runner.temp }}/FRESH2_CI488_*/admission-*.json
             ${{ runner.temp }}/FRESH2_CI488_*/runner-image.json
+            ${{ runner.temp }}/FRESH2_CI488_*/webview-elevation-admission.json
+            ${{ runner.temp }}/FRESH2_CI488_*/webview-policy-install.json
+            ${{ runner.temp }}/FRESH2_CI488_*/webview-policy-cleanup.json
             ${{ runner.temp }}/FRESH2_CI488_*/clean-before-start.json
             ${{ runner.temp }}/FRESH2_CI488_*/webview-runtime-inventory.json
             ${{ runner.temp }}/FRESH2_CI488_*/owned-identities.jsonl

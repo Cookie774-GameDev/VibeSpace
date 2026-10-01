@@ -35,8 +35,8 @@
     },
     {
       "path": "consumer.ps1",
-      "bytes": 26160,
-      "sha256": "bdec043dd7ce005c495c195a372a7d0a49b95cb9eab0ddc1a5e651ab52d56a12"
+      "bytes": 27884,
+      "sha256": "f8e7634871588e4e158c6276ca91fa906159bc76d0c27355b613df24b74a32be"
     },
     {
       "path": "contract.mjs",
@@ -70,8 +70,8 @@
     },
     {
       "path": "entry.ps1",
-      "bytes": 2060,
-      "sha256": "b504602ac230a6de2f1dbbabcc056eb8af159565a1fbb3e5d05ff4ad77e09c8d"
+      "bytes": 2188,
+      "sha256": "ab59c7c17a20e29224d8cd6b7da25fefbd24031b52cc2637ce2bd3856a30fae0"
     },
     {
       "path": "lifecycle.ps1",
@@ -127,8 +127,29 @@
       "path": "transfer.test.py",
       "bytes": 2332,
       "sha256": "ed92a87e0daf0435622f2fc0d9c41e3b668b676f13e7d6387af87ccd397e1beb"
+    },
+    {
+      "path": "webview-elevation.ps1",
+      "bytes": 4072,
+      "sha256": "4674db909db0b61fd2e61a814b13c2e673e2d4be64400da0e93a3cc4cf4157ed"
+    },
+    {
+      "path": "webview-elevation.test.ps1",
+      "bytes": 2072,
+      "sha256": "fc158a01ec00322133ba146480fbd3d3b764e466b19d7c56921a2839c10cbc37"
+    },
+    {
+      "path": "webview-policy.ps1",
+      "bytes": 8293,
+      "sha256": "d758bac87306353f840388e780229666052c5e4f4a19e933fe8bd3f64ddd0880"
+    },
+    {
+      "path": "webview-policy.test.ps1",
+      "bytes": 5039,
+      "sha256": "e01a27061a2bbad11efcad224e43b3276bd151d04852e382a1307dc67f235ab9"
     }
   ],
   "originalManifestSHA256": "65d04ab824644c3be5090214e4136e6aa01d6b0b8220d0cba648a421dd8a8c87",
-  "repairBaseHelperSHA": "23febbd1da9d25d00132f10bf203d0f5c7d64269"
+  "repairBaseHelperSHA": "e4221a75f55d4d0008212a7867e0769a1e11e06e",
+  "proposalBaseManifestSHA256": "675788aec01cd5e8f05a41d96e5891d7159c44790b6c871bed54eaa157d7dd1b"
 }

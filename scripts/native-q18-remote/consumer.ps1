@@ -4,6 +4,7 @@ param([Parameter(Mandatory)][string]$TaskId,
  [Parameter(Mandatory)][string]$DependencyGrantId,
  [Parameter(Mandatory)][string]$NativeSetupGrantId,
  [Parameter(Mandatory)][string]$HelperManifestSHA256,
+ [Parameter(Mandatory)][string]$WebViewPolicyGrantId,
  [Parameter(Mandatory)][ValidateRange(0,1048576)][double]$ReservedGrowthMiB,
  [Parameter(Mandatory)][ValidateRange(0,1048576)][double]$ReservedCommitMiB,
  [switch]$Schedule,
@@ -39,7 +40,7 @@ foreach ($file in $manifest.files) {
  Assert-NoLinks $p
  if ((Get-Item -LiteralPath $p).Length -ne $file.bytes -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.sha256) { throw 'consumer_helper_file_hash' }
 }
-foreach ($required in @('consumer.ps1','driver.mjs','contract.mjs','attest.ps1','commandline.ps1','transfer.py','artifact_dll_checks.py','run-native-supervised.ps1','dependency-launch.ps1','startup-predicate.ps1','cdp-diagnostic.ps1')) {
+foreach ($required in @('consumer.ps1','driver.mjs','contract.mjs','attest.ps1','commandline.ps1','transfer.py','artifact_dll_checks.py','run-native-supervised.ps1','dependency-launch.ps1','startup-predicate.ps1','cdp-diagnostic.ps1','webview-elevation.ps1','webview-policy.ps1')) {
  if (-not $seen.Contains($required)) { throw 'consumer_helper_missing' }
 }
 $head=& git -C $workspace rev-parse HEAD
@@ -68,6 +69,8 @@ $tracked=[Collections.Generic.Dictionary[string,object]]::new()
 . (Join-Path $PSScriptRoot 'dependency-launch.ps1')
 . (Join-Path $PSScriptRoot 'startup-predicate.ps1')
 . (Join-Path $PSScriptRoot 'cdp-diagnostic.ps1')
+. (Join-Path $PSScriptRoot 'webview-elevation.ps1')
+. (Join-Path $PSScriptRoot 'webview-policy.ps1')
 $result=[ordered]@{ taskId=$TaskId; sourceSHA=$source; exeSHA256=$exeSHA; helperManifestSHA256=$HelperManifestSHA256;
  startedUTC=[DateTime]::UtcNow.ToString('o'); runtimeAcceptance='UNRUN'; phases=@(); cleanup=@(); failure=$null }
 function Save-Json([string]$file,[object]$value) {
@@ -123,7 +126,10 @@ function Start-Owned([string]$name,[string]$command,[string[]]$argv,[string]$cwd
   stdout=$p.StandardOutput.ReadToEndAsync();stderr=$p.StandardError.ReadToEndAsync()}
  $script:owned.Add($o)
  if($name -ceq 'jarvis'){
-  Save-Json (Join-Path $runRoot 'cdp-launch-request.json') (Get-CdpLaunchRequestFacts $p.StartInfo.Environment $profile $cdpPort)
+  $request=Get-CdpLaunchRequestFacts $p.StartInfo.Environment $profile $cdpPort
+  $request.launchMode='HKLM64_PER_APP_POLICY';$request.policyReadbackMatches=($q18PolicyLease.state -ceq 'INSTALLED')
+  $request.scope='Policy launch; env overrides omitted; actual adoption requires owned WebView flags/listener/profile'
+  Save-Json (Join-Path $runRoot 'cdp-launch-request.json') $request
  }
  Save-Json (Join-Path $runRoot ("start-$name.json")) ([ordered]@{name=$name;pid=$o.pid;bornMs=$o.bornMs;bornUTC=$o.bornUTC;command=$command;argv=$argv;workingDirectory=$cwd})
  return $o
@@ -191,9 +197,20 @@ $vite=$null
 $webviewOwned=$null
 $startupDiagnostic=$null
 $cdpDiagnostic=$null
+$q18PolicyLease=$null
 try {
  $image=[ordered]@{ImageOS=$env:ImageOS;ImageVersion=$env:ImageVersion;runnerOS=$env:RUNNER_OS;sessionId=(Get-Process -Id $PID).SessionId;cpuCount=[Environment]::ProcessorCount}
  Save-Json (Join-Path $runRoot 'runner-image.json') $image
+ # Measured token + separately approved HKLM path; never infer actual R4 elevation.
+ if(-not $StaticOnly){
+  Assert-RemoteQ18PolicyContext $TaskId $WebViewPolicyGrantId
+  $tokenAdmission=Get-Q18PolicyAdmission (Get-RemoteWebViewElevationAdmission)
+  Save-Json (Join-Path $runRoot 'webview-elevation-admission.json') $tokenAdmission
+  if(-not $tokenAdmission.policyLaunchAdmitted){
+   $result.nativeBlocker=$tokenAdmission.reason
+   throw 'consumer_webview_policy_token_unproven_or_unsupported'
+  }
+ }
  foreach ($operation in @(@('download','build'),@('download','evidence'),@('extract','build'),@('extract','evidence'),@('inspect',''))) {
   Assert-Capacity 512 768 4752036225 $TransferGrantId
   $argv=@('-B',(Join-Path $PSScriptRoot 'transfer.py'),$operation[0],'--staging',$staging,'--grant-id',$TransferGrantId)
@@ -231,6 +248,7 @@ try {
  $nativeData=Join-Path ([Environment]::GetFolderPath('ApplicationData')) $config.identifier
  $nativeLocalData=Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) $config.identifier
  $profile=Join-Path $runRoot 'webview'
+ $browserProfile=Join-Path $profile 'EBWebView'
  if ((Test-Path -LiteralPath $nativeData) -or (Test-Path -LiteralPath $nativeLocalData) -or (Test-Path -LiteralPath $profile)) {throw 'consumer_clean_native_profile_required'}
  $clean=[ordered]@{capturedAtMs=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();nativeDataAbsentBeforeStart=$true;webviewProfileAbsentBeforeStart=$true;ordinaryBlankWorkbenchPreparation=$false}
  Save-Json (Join-Path $runRoot 'clean-before-start.json') ([ordered]@{receipt=$clean;nativeDataPath=$nativeData;nativeLocalDataPath=$nativeLocalData;profile=$profile})
@@ -256,9 +274,10 @@ try {
  $desktop=Get-RemoteDesktopAdmission
  Save-Json (Join-Path $runRoot 'desktop-before-native.json') $desktop
  if(-not $desktop.interactive){throw 'consumer_desktop_not_interactive'}
- $app=Start-Owned 'jarvis' $binary @() (Split-Path $binary) @{
-  WEBVIEW2_USER_DATA_FOLDER=$profile;WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-address=127.0.0.1 --remote-debugging-port=$cdpPort"
- }
+ $policyReceipt=Install-RemoteQ18Policy $TaskId $WebViewPolicyGrantId $runRoot $profile
+ Save-Json (Join-Path $runRoot 'webview-policy-install.json') $policyReceipt
+ # Omit WEBVIEW2 env overrides so supported HKLM app-specific values are considered.
+ $app=Start-Owned 'jarvis' $binary @() (Split-Path $binary)
  $startup=[Diagnostics.Stopwatch]::StartNew()
  $startupDiagnostic=[ordered]@{first=$null;last=$null;lastFingerprint=$null;changedStates=0;
   changes=[Collections.Generic.List[object]]::new();iterations=0;appLaunchRequestedStyle='Normal';startupBudgetMs=90000;nativeAcceptance='UNRUN'}
@@ -274,7 +293,7 @@ try {
   if($startup.ElapsedMilliseconds-$lastCdpDiagnosticProbe -ge 5000 -and $cdpDiagnostic.probes -lt 18){
    $lastCdpDiagnosticProbe=$startup.ElapsedMilliseconds
    try{
-    $facts=Get-RemoteOwnedCdpSnapshot $app $profile $cdpPort
+    $facts=Get-RemoteOwnedCdpSnapshot $app $browserProfile $cdpPort
     Update-CdpDiagnostic $cdpDiagnostic $startup.ElapsedMilliseconds $facts $false
    }catch{Update-CdpDiagnostic $cdpDiagnostic $startup.ElapsedMilliseconds $null $true}
   }
@@ -339,7 +358,7 @@ try {
   sourceSHA=$source;exeSHA256=$exeSHA;workspace=$workspace;runnerTemp=$runnerTemp;artifactRoot=$artifactRoot;frontendRoot=$workspace;
   inputManifestSHA256=(Get-FileHash -LiteralPath $inputPath -Algorithm SHA256).Hash.ToLowerInvariant();
   app=[ordered]@{pid=$app.pid;bornMs=$app.bornMs;exePath=$binary};
-  webview=[ordered]@{pid=[int]$webview.ProcessId;bornMs=$webviewBorn;exePath=$webview.ExecutablePath;profile=$profile};
+  webview=[ordered]@{pid=[int]$webview.ProcessId;bornMs=$webviewBorn;exePath=$webview.ExecutablePath;profile=$browserProfile};
   cdpPort=$cdpPort;mainURL='http://localhost:5173/';windowLabel='main';nativeDataPath=$nativeData;cleanProfileReceipt=$clean;
   phaseMs=60000;totalMs=900000;schedule=[bool]$Schedule}
  $specPath=Join-Path $runRoot 'runtime-spec.json'
@@ -375,6 +394,15 @@ try {
  foreach($row in $tracked.Values) {
   try {$status=Stop-Exact $row.pid $row.bornMs;$result.cleanup+=@([ordered]@{pid=$row.pid;bornMs=$row.bornMs;status=$status})}
   catch {$result.cleanup+=@([ordered]@{pid=$row.pid;bornMs=$row.bornMs;status='CLEANUP_FAILED'})}
+ }
+ # Restore only exact values written by this lease AFTER owned processes are cleaned.
+ if($q18PolicyLease){
+  try{
+   $policyCleanup=Remove-RemoteQ18Policy $TaskId $WebViewPolicyGrantId $q18PolicyLease
+   $result.policyCleanup=$policyCleanup
+   if(-not $policyCleanup.restored -and -not $result.failure){$result.failure='consumer_policy_cleanup_incomplete'}
+   Save-Json (Join-Path $runRoot 'webview-policy-cleanup.json') $policyCleanup
+  }catch{$result.policyCleanupFailed=$true;if(-not $result.failure){$result.failure='consumer_policy_cleanup_failed'}}
  }
  $result.finishedUTC=[DateTime]::UtcNow.ToString('o')
  $result.physicalCAcceptance='UNRUN'
