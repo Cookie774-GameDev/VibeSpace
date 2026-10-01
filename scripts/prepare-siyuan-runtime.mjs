@@ -108,7 +108,9 @@ export async function prepareSiyuanRuntime(options = {}) {
       throw error;
     }
   } finally {
-    if (source.temporary) await safeRemoveOwnedTemporary(source.path, source.allowedParent);
+    if (source.temporary) {
+      await safeRemoveOwnedTemporary(source.cleanupPath ?? source.path, source.allowedParent);
+    }
   }
 
   return { outputDir, reused: false, fingerprint };
@@ -224,11 +226,46 @@ async function resolveSourceDirectory(options) {
 
   const sevenZip = await locateSevenZip(options.sevenZipPath ?? process.env.VIBESPACE_7Z_PATH);
   const extracted = await mkdtemp(path.join(cacheDir, '.siyuan-extract-'));
-  await execFileAsync(sevenZip, ['x', installer, `-o${extracted}`, '-y'], {
-    windowsHide: true,
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  return { path: extracted, temporary: true, allowedParent: cacheDir };
+  try {
+    await execFileAsync(sevenZip, ['x', installer, `-o${extracted}`, '-y'], {
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    // The pinned closure describes app-64.7z, not the surrounding NSIS files.
+    // Use a separate application root so loose envelope assets cannot alter it.
+    const pluginDir = path.join(extracted, '$PLUGINSDIR');
+    const payload = path.join(pluginDir, 'app-64.7z');
+    let pluginInfo;
+    let payloadInfo;
+    try {
+      pluginInfo = await lstat(pluginDir);
+      payloadInfo = await lstat(payload);
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        throw new Error(
+          'SiYuan installer nested application archive is missing: $PLUGINSDIR/app-64.7z',
+        );
+      }
+      throw error;
+    }
+    if (
+      pluginInfo.isSymbolicLink() ||
+      !pluginInfo.isDirectory() ||
+      payloadInfo.isSymbolicLink() ||
+      !payloadInfo.isFile()
+    ) {
+      throw new Error('SiYuan installer nested application archive must be a regular file');
+    }
+    const application = path.join(extracted, 'application');
+    await execFileAsync(sevenZip, ['x', '-t7z', payload, `-o${application}`, '-y'], {
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    return { path: application, temporary: true, cleanupPath: extracted, allowedParent: cacheDir };
+  } catch (error) {
+    await safeRemoveOwnedTemporary(extracted, cacheDir);
+    throw error;
+  }
 }
 
 async function downloadOfficialInstaller(installer, closure) {
@@ -379,7 +416,7 @@ async function exists(target) {
 
 function parseArgs(argv) {
   const options = {};
-  for (let index = 0; index < argv.length; ) {
+  for (let index = 0; index < argv.length;) {
     const key = argv[index];
     if (key === '--if-windows') {
       options.ifWindows = true;

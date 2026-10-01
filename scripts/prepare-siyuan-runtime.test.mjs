@@ -1,15 +1,154 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
   measureTree,
   prepareSiyuanRuntime,
+  sha256File,
   validateExtractedClosure,
   validatePackagedClosure,
 } from './prepare-siyuan-runtime.mjs';
+
+const sevenZip = process.env.VIBESPACE_7Z_PATH ?? 'C:\\Program Files\\7-Zip\\7z.exe';
+
+async function withInstallerFixture(run, fault) {
+  return withFixture(async (fixture) => {
+    const outer = path.join(fixture.root, 'installer-contents');
+    const pluginDir = path.join(outer, '$PLUGINSDIR');
+    const payload = path.join(pluginDir, 'app-64.7z');
+    await mkdir(pluginDir, { recursive: true });
+    const guidePath = path.join('resources', 'guide', 'inside.md');
+    await mkdir(path.dirname(path.join(fixture.extracted, guidePath)), { recursive: true });
+    await writeFile(path.join(fixture.extracted, guidePath), 'pinned inner guide');
+    const component = {
+      id: 'guide',
+      path: 'resources/guide',
+      ...(await measureTree(fixture.extracted, 'resources/guide')),
+    };
+    fixture.closure.closure.components.push(component);
+    fixture.closure.closure.fileCount += component.files;
+    fixture.closure.closure.uncompressedBytes += component.bytes;
+    if (fault === 'corrupt') {
+      await writeFile(payload, 'not a 7z application payload');
+    } else if (fault !== 'missing') {
+      if (fault === 'mutated') {
+        await writeFile(
+          path.join(fixture.extracted, 'resources', 'kernel', 'kernel.exe'),
+          'changed inner kernel',
+        );
+      }
+      execFileSync(sevenZip, ['a', '-t7z', payload, 'resources', 'LICENSE'], {
+        cwd: fixture.extracted,
+        windowsHide: true,
+        stdio: 'pipe',
+        timeout: 10000,
+      });
+    }
+    // Loose NSIS guide videos are outside the pinned app-64.7z closure.
+    const videoPath = path.join('resources', 'guide', 'assets', 'outer-only.mp4');
+    await mkdir(path.dirname(path.join(outer, videoPath)), { recursive: true });
+    await writeFile(path.join(outer, videoPath), 'opaque envelope-only video');
+    const installer = path.join(fixture.root, 'fixture.exe');
+    execFileSync(sevenZip, ['a', '-t7z', installer, '$PLUGINSDIR', 'resources'], {
+      cwd: outer,
+      windowsHide: true,
+      stdio: 'pipe',
+      timeout: 10000,
+    });
+    fixture.closure.source.installerBytes = (await stat(installer)).size;
+    fixture.closure.source.installerSha256 = await sha256File(installer);
+    await writeFile(fixture.closurePath, JSON.stringify(fixture.closure));
+    const cacheDir = path.join(fixture.root, 'owned-cache');
+    await mkdir(cacheDir);
+    const options = {
+      installerPath: installer,
+      sevenZipPath: sevenZip,
+      cacheDir,
+      outputDir: fixture.outputDir,
+      allowedOutputParent: fixture.outputParent,
+      closureManifestPath: fixture.closurePath,
+      runtimeManifestPath: fixture.manifestPath,
+      sourceOfferPath: fixture.sourceOfferPath,
+    };
+    return run({ ...fixture, installer, cacheDir, options });
+  });
+}
+
+test(
+  'verified installer uses the complete inner closure without mixing outer guide assets',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    await withInstallerFixture(async (fixture) => {
+      const result = await prepareSiyuanRuntime(fixture.options);
+      assert.equal(result.reused, false);
+      await validatePackagedClosure(fixture.outputDir, fixture.closure);
+      assert.equal(
+        await readFile(path.join(fixture.outputDir, 'kernel', 'kernel.exe'), 'utf8'),
+        'kernel',
+      );
+      assert.equal(
+        await readFile(path.join(fixture.outputDir, 'guide', 'inside.md'), 'utf8'),
+        'pinned inner guide',
+      );
+      await assert.rejects(
+        stat(path.join(fixture.outputDir, 'guide', 'assets', 'outer-only.mp4')),
+        { code: 'ENOENT' },
+      );
+      assert.deepEqual(await readdir(fixture.cacheDir), []);
+    });
+  },
+);
+
+test(
+  'installer fingerprint mismatch fails before creating an extraction directory',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    await withInstallerFixture(async (fixture) => {
+      fixture.closure.source.installerSha256 = '0'.repeat(64);
+      await writeFile(fixture.closurePath, JSON.stringify(fixture.closure));
+      await assert.rejects(prepareSiyuanRuntime(fixture.options), /installer SHA-256/u);
+      assert.deepEqual(await readdir(fixture.cacheDir), []);
+      await assert.rejects(stat(fixture.outputDir), { code: 'ENOENT' });
+    });
+  },
+);
+
+for (const fault of ['missing', 'corrupt']) {
+  test(
+    `rejects ${fault} nested payload and removes only its own extraction directory`,
+    { skip: process.platform !== 'win32' },
+    async () => {
+      await withInstallerFixture(async (fixture) => {
+        await writeFile(path.join(fixture.cacheDir, 'peer-cache.txt'), 'preserve peer cache');
+        await assert.rejects(
+          prepareSiyuanRuntime(fixture.options),
+          fault === 'missing' ? /nested application archive/u : /Command failed/u,
+        );
+        assert.deepEqual(await readdir(fixture.cacheDir), ['peer-cache.txt']);
+        await assert.rejects(stat(fixture.outputDir), { code: 'ENOENT' });
+      }, fault);
+    },
+  );
+}
+
+test(
+  'verified envelope with mutated inner bytes still fails the pinned component closure',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    await withInstallerFixture(async (fixture) => {
+      await assert.rejects(
+        prepareSiyuanRuntime(fixture.options),
+        /component verification failed: kernel/u,
+      );
+      assert.deepEqual(await readdir(fixture.cacheDir), []);
+      await assert.rejects(stat(fixture.outputDir), { code: 'ENOENT' });
+    }, 'mutated');
+  },
+);
 
 async function withFixture(run) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'vibespace-siyuan-prepare-'));
