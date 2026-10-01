@@ -60,6 +60,7 @@ export type PetPanelOpenReason =
   | 'restore_failed'
   | 'show_failed'
   | 'size_failed'
+  | 'superseded'
   | 'topmost_failed'
   | 'visibility_check_failed'
   | 'visibility_timeout'
@@ -80,10 +81,38 @@ export type PetPanelOpenResult = {
 export const PET_OVERLAY_SHOW_EPOCH_KEY = 'vibespace-pet-overlay-show-epoch';
 export const PET_OVERLAY_SHOW_EVENT = 'vibespace:pet-overlay-show';
 let overlayShowSignalSequence = 0;
+/** A confirmed native reopen must restore the retained panel even without DOM focus. */
+export const PET_PANEL_SHOW_EPOCH_KEY = 'vibespace-pet-panel-show-epoch';
+export const PET_PANEL_SHOW_EVENT = 'vibespace:pet-panel-shown';
+let panelShowSignalSequence = 0;
 const NATIVE_PET_INVOKE_TIMEOUT_MS = 1_500;
 type NativeInvokeOutcome<T> =
   { status: 'ok'; value: T } | { status: 'failed' } | { status: 'timeout' };
 const nativeInvokes = new Map<string, Promise<NativeInvokeOutcome<unknown>>>();
+/** Shared across the main, overlay and panel WebViews, unlike module state. */
+export const PET_PANEL_INTENT_KEY = 'vibespace-pet-panel-intent';
+let panelIntentSequence = 0;
+
+function recordPanelIntent(): () => boolean {
+  const sequence = ++panelIntentSequence;
+  const token = `${Date.now()}:${sequence}:${Math.random()}`;
+  let shared = false;
+  try {
+    localStorage.setItem(PET_PANEL_INTENT_KEY, token);
+    shared = true;
+  } catch {
+    /* Local sequencing still protects this WebView when storage is unavailable. */
+  }
+  return () => {
+    if (sequence !== panelIntentSequence) return false;
+    if (!shared) return true;
+    try {
+      return localStorage.getItem(PET_PANEL_INTENT_KEY) === token;
+    } catch {
+      return true;
+    }
+  };
+}
 
 function signalPetOverlayShown(): void {
   const epoch = `${Date.now()}:${++overlayShowSignalSequence}`;
@@ -99,12 +128,29 @@ function signalPetOverlayShown(): void {
   }
 }
 
+function signalPetPanelShown(): void {
+  const epoch = `${Date.now()}:${++panelShowSignalSequence}:${Math.random()}`;
+  try {
+    localStorage.setItem(PET_PANEL_SHOW_EPOCH_KEY, epoch);
+  } catch {
+    /* same-window event below remains available */
+  }
+  try {
+    window.dispatchEvent(new CustomEvent(PET_PANEL_SHOW_EVENT, { detail: { epoch } }));
+  } catch {
+    /* ignore */
+  }
+}
+
 async function invokeWithStatus<T>(
   cmd: string,
   args?: Record<string, unknown>,
 ): Promise<NativeInvokeOutcome<T>> {
   if (!isTauriRuntime()) return { status: 'failed' };
-  const key = `${cmd}:${JSON.stringify(args ?? null)}`;
+  // A hide/open/hide sequence needs a new native hide, even if the first hide
+  // has not returned. Likewise, do not reuse an older visibility observation.
+  const panelIntent = cmd.includes('panel') ? panelIntentSequence : 0;
+  const key = `${cmd}:${JSON.stringify(args ?? null)}:${panelIntent}`;
   let operation = nativeInvokes.get(key);
   if (!operation) {
     operation = import('@tauri-apps/api/core')
@@ -202,6 +248,7 @@ function isPetPanelOpenResult(value: unknown): value is PetPanelOpenResult {
     result.reason === 'restore_failed' ||
     result.reason === 'show_failed' ||
     result.reason === 'size_failed' ||
+    result.reason === 'superseded' ||
     result.reason === 'topmost_failed' ||
     result.reason === 'visibility_check_failed' ||
     result.reason === 'window_create_failed';
@@ -352,6 +399,7 @@ export type OpenPetMiniPanelResult = {
 };
 
 let openPanelInFlight: Promise<OpenPetMiniPanelResult> | null = null;
+let openPanelIntentIsCurrent: (() => boolean) | null = null;
 
 async function waitMs(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
@@ -360,9 +408,16 @@ async function waitMs(ms: number): Promise<void> {
 /**
  * Poll panel visibility a few times — WebView show can lag past a single 180ms wait.
  */
-async function pollPanelVisible(attempts = 5, gapMs = 100): Promise<boolean> {
+async function pollPanelVisible(
+  attempts = 5,
+  gapMs = 100,
+  isCurrent: () => boolean = () => true,
+): Promise<boolean> {
   for (let i = 0; i < attempts; i += 1) {
-    if (await isPetPanelVisible()) return true;
+    if (!isCurrent()) return false;
+    const visible = await isPetPanelVisible();
+    if (!isCurrent()) return false;
+    if (visible) return true;
     if (i + 1 < attempts) await waitMs(gapMs);
   }
   return false;
@@ -381,9 +436,24 @@ export async function openPetPanelSafely(
   return { panelVisible: result.panelVisible };
 }
 
-async function restoreDetachedOverlay(reason: PetPanelOpenReason): Promise<OpenPetMiniPanelResult> {
+function supersededPanelOpen(): OpenPetMiniPanelResult {
+  return {
+    panelVisible: false,
+    useInlineFallback: false,
+    overlayVisible: false,
+    reason: 'superseded',
+    coalesced: false,
+  };
+}
+
+async function restoreDetachedOverlay(
+  reason: PetPanelOpenReason,
+  isCurrent: () => boolean,
+): Promise<OpenPetMiniPanelResult> {
+  if (!isCurrent() || reason === 'superseded') return supersededPanelOpen();
   setPetPanelOpenFlag(false);
   const overlay = await showPetOverlay();
+  if (!isCurrent()) return supersededPanelOpen();
   return {
     panelVisible: false,
     useInlineFallback: false,
@@ -408,11 +478,13 @@ export async function openOrFocusPetMiniPanel(
   nearY?: number,
   panelMode: PetPanelMode = 'normal',
 ): Promise<OpenPetMiniPanelResult> {
-  if (openPanelInFlight) {
+  if (openPanelInFlight && openPanelIntentIsCurrent?.()) {
     const result = await openPanelInFlight;
     return { ...result, coalesced: true };
   }
 
+  const isCurrent = recordPanelIntent();
+  openPanelIntentIsCurrent = isCurrent;
   openPanelInFlight = (async (): Promise<OpenPetMiniPanelResult> => {
     if (!isTauriRuntime()) {
       // Browser / non-Tauri: in-app panel only.
@@ -427,32 +499,40 @@ export async function openOrFocusPetMiniPanel(
     }
 
     let nativeResult = await openOrFocusPetPanel(nearX, nearY, panelMode);
+    if (!isCurrent()) return supersededPanelOpen();
     // Creation is queued after the first invoke returns. Finish configuring the
     // materialized window rather than leaving its initial native host exposed.
     if (nativeResult.created && nativeResult.reason === 'not_visible') {
       for (let attempt = 0; attempt < 6 && nativeResult.reason === 'not_visible'; attempt += 1) {
         await waitMs(160);
+        if (!isCurrent()) return supersededPanelOpen();
         nativeResult = await openOrFocusPetPanel(nearX, nearY, panelMode);
+        if (!isCurrent()) return supersededPanelOpen();
       }
     }
     if (!nativeResult.visible || !nativeResult.focused) {
-      return restoreDetachedOverlay(nativeResult.reason ?? 'not_visible');
+      return restoreDetachedOverlay(nativeResult.reason ?? 'not_visible', isCurrent);
     }
     // Check immediately; poll only if the native window has not settled yet.
-    let panelVisible = await pollPanelVisible(6, 90);
+    let panelVisible = await pollPanelVisible(6, 90, isCurrent);
+    if (!isCurrent()) return supersededPanelOpen();
 
     if (!panelVisible) {
       // Second attempt: re-invoke show/focus in case the window was racing.
       nativeResult = await openOrFocusPetPanel(nearX, nearY, panelMode);
+      if (!isCurrent()) return supersededPanelOpen();
       if (!nativeResult.visible || !nativeResult.focused) {
-        return restoreDetachedOverlay(nativeResult.reason ?? 'not_visible');
+        return restoreDetachedOverlay(nativeResult.reason ?? 'not_visible', isCurrent);
       }
-      panelVisible = await pollPanelVisible(4, 100);
+      panelVisible = await pollPanelVisible(4, 100, isCurrent);
+      if (!isCurrent()) return supersededPanelOpen();
     }
 
     if (panelVisible) {
       setPetPanelOpenFlag(true);
+      signalPetPanelShown();
       await hidePetOverlay().catch(() => undefined);
+      if (!isCurrent()) return supersededPanelOpen();
       return {
         panelVisible: true,
         useInlineFallback: false,
@@ -462,28 +542,56 @@ export async function openOrFocusPetMiniPanel(
       };
     }
 
-    return restoreDetachedOverlay('visibility_timeout');
+    return restoreDetachedOverlay('visibility_timeout', isCurrent);
   })();
 
+  const operation = openPanelInFlight;
   try {
-    return await openPanelInFlight;
+    return await operation;
   } finally {
-    openPanelInFlight = null;
+    if (openPanelInFlight === operation) {
+      openPanelInFlight = null;
+      openPanelIntentIsCurrent = null;
+    }
   }
 }
 
 /** Test-only: clear single-flight guard between cases. */
 export function __resetPetPanelOpenFlightForTests(): void {
   openPanelInFlight = null;
+  openPanelIntentIsCurrent = null;
 }
 
 export async function minimizePetPanel(): Promise<void> {
+  recordPanelIntent();
+  openPanelInFlight = null;
+  openPanelIntentIsCurrent = null;
   await invoke('pet_minimize_panel');
 }
 
-export async function hidePetPanel(): Promise<boolean> {
+export async function hidePetPanel(
+  beforeHide?: (isCurrent: () => boolean) => Promise<void>,
+): Promise<boolean> {
+  const isCurrent = recordPanelIntent();
+  openPanelInFlight = null;
+  openPanelIntentIsCurrent = null;
+  // Reserve the user intent before asynchronous geometry reads, so a newer
+  // reopen can supersede the entire dismissal rather than only its IPC call.
+  try {
+    await beforeHide?.(isCurrent);
+  } catch {
+    return false;
+  }
+  if (!isCurrent()) return false;
   const outcome = await invokeWithStatus<void>('pet_hide_panel');
-  return outcome.status === 'ok';
+  if (!isCurrent() || outcome.status !== 'ok') return false;
+  setPetPanelOpenFlag(false);
+  // The native command already restores the overlay under its panel intent
+  // lock. Announce that paint; a second show would escape that ordering.
+  const visible = await isPetOverlayVisible();
+  if (!isCurrent()) return false;
+  if (visible) signalPetOverlayShown();
+  return true;
 }
 
 export async function isPetPanelVisible(): Promise<boolean> {

@@ -22,10 +22,11 @@ vi.mock('@tauri-apps/api/window', () => ({
 }));
 
 vi.mock('./PetOverlay', () => ({
-  PetOverlay: ({ onRequestClose }: { onRequestClose: () => void }) => (
+  PetOverlay: ({ onRequestClose, onOpenPanel }: { onRequestClose: () => void; onOpenPanel: () => void }) => (
     <>
       <canvas data-pet-pixi-canvas="true" />
       <button onClick={onRequestClose}>Close Pet</button>
+      <button onClick={onOpenPanel}>Open Panel</button>
     </>
   ),
 }));
@@ -70,6 +71,18 @@ describe('PetOverlayWindow transparency shell', () => {
     vi.clearAllMocks();
     petSettings.enabled = true;
     petSettings.overlayVisible = true;
+  });
+
+  it('leaves the newer surface intent alone when its open was superseded', async () => {
+    const { openOrFocusPetMiniPanel, setPetPanelOpenFlag, showPetOverlay } = await import('./petTauriBridge');
+    vi.mocked(openOrFocusPetMiniPanel).mockResolvedValueOnce({
+      panelVisible: false, useInlineFallback: false, overlayVisible: false,
+      coalesced: false, reason: 'superseded',
+    });
+    render(<PetOverlayWindow />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Open Panel' })); });
+    expect(setPetPanelOpenFlag).not.toHaveBeenCalled();
+    expect(showPetOverlay).not.toHaveBeenCalled();
   });
 
   it('persists an intentional hide when Close is selected in the detached overlay', async () => {

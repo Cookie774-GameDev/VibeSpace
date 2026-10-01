@@ -169,7 +169,8 @@ export function PetOverlayWindow({ runtimeEffectsEnabled = true }: PetOverlayWin
           // Shared Axo+Glitch path: single-flight open, confirm-then-hide overlay.
           // Does NOT hide overlay optimistically before confirm (avoids both-hidden).
           void openOrFocusPetMiniPanel(undefined, undefined, 'follow-pet')
-            .then(({ panelVisible }) => {
+            .then(({ panelVisible, reason }) => {
+              if (reason === 'superseded') return;
               if (!panelVisible) {
                 // Bridge already restored overlay + cleared flag; keep fail-open.
                 setPetPanelOpenFlag(false);

@@ -18,8 +18,13 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => nativeWindow,
 }));
 vi.mock('./petTauriBridge', () => ({
-  hidePetPanel: vi.fn(async () => true), minimizePetPanel: vi.fn(async () => undefined),
+  hidePetPanel: vi.fn(async (beforeHide?: (isCurrent: () => boolean) => Promise<void>) => {
+    await beforeHide?.(() => true);
+    return true;
+  }), minimizePetPanel: vi.fn(async () => undefined),
   setPetOverlayPosition: vi.fn(async () => undefined), setPetPanelOpenFlag: vi.fn(),
+  PET_PANEL_SHOW_EPOCH_KEY: 'vibespace-pet-panel-show-epoch',
+  PET_PANEL_SHOW_EVENT: 'vibespace:pet-panel-shown',
   showPetOverlay: vi.fn(async () => ({ visible: true })),
 }));
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks(); });
@@ -55,17 +60,15 @@ it('closes in one click and immediately restores the pet at the panel position o
     expect(screen.queryByTestId('pet-close-confirm')).toBeNull();
     expect(hidePetPanel).toHaveBeenCalledTimes(attempt + 1);
     expect(setPetOverlayPosition).toHaveBeenLastCalledWith(400, 250);
-    expect(setPetPanelOpenFlag).toHaveBeenLastCalledWith(false);
-    expect(showPetOverlay).toHaveBeenCalledTimes(attempt + 1);
+    expect(showPetOverlay).not.toHaveBeenCalled();
     fireEvent.focus(window);
   }
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Minimize pet panel' })); });
   expect(hidePetPanel).toHaveBeenCalledTimes(3);
   expect(nativeWindow.minimize).not.toHaveBeenCalled();
   expect(nativeWindow.hide).not.toHaveBeenCalled();
-  expect(showPetOverlay).toHaveBeenCalledTimes(3);
-  expect(vi.mocked(setPetOverlayPosition).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(hidePetPanel).mock.invocationCallOrder[0]);
-  expect(vi.mocked(hidePetPanel).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(showPetOverlay).mock.invocationCallOrder[0]);
+  expect(showPetOverlay).not.toHaveBeenCalled();
+  expect(nativeWindow.outerPosition.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(setPetOverlayPosition).mock.invocationCallOrder[0]);
   expect(minimizePetPanel).not.toHaveBeenCalled();
 });
 
@@ -93,6 +96,67 @@ it.each(['Close', 'Minimize'])('keeps native %s open when hide returns a failed 
   expect(screen.getByRole('dialog').getAttribute('data-pet-panel-lifecycle')).toBe('open');
   expect(setPetPanelOpenFlag).not.toHaveBeenCalledWith(false);
   expect(onClose).not.toHaveBeenCalled();
+});
+
+it('coalesces rapid native Close and Minimize clicks until dismissal completes', async () => {
+  vi.useFakeTimers();
+  let finishHide!: (hidden: boolean) => void;
+  vi.mocked(hidePetPanel).mockImplementationOnce(() => new Promise<boolean>((resolve) => { finishHide = resolve; }));
+  const onClose = vi.fn();
+  render(<PetMiniPanel open windowMode onClose={onClose} />);
+  act(() => { vi.advanceTimersByTime(200); });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Close pet panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize pet panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close pet panel' }));
+  });
+  expect(hidePetPanel).toHaveBeenCalledTimes(1);
+  await act(async () => { finishHide(true); });
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(showPetOverlay).not.toHaveBeenCalled();
+});
+
+it('ignores old dismissal completion after a reopen and permits the new dismissal', async () => {
+  vi.useFakeTimers();
+  let finishOldHide!: (hidden: boolean) => void;
+  vi.mocked(hidePetPanel).mockImplementationOnce(() => new Promise<boolean>((resolve) => { finishOldHide = resolve; }));
+  const onClose = vi.fn();
+  render(<PetMiniPanel open windowMode onClose={onClose} />);
+  act(() => { vi.advanceTimersByTime(200); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close pet panel' })); });
+  fireEvent.focus(window); // The native reopen focuses its retained WebView.
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Minimize pet panel' })); });
+  expect(hidePetPanel).toHaveBeenCalledTimes(2);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await act(async () => { finishOldHide(true); });
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it('does not restart the native lifecycle just because its parent acknowledged close', async () => {
+  vi.useFakeTimers();
+  const onClose = vi.fn();
+  const { rerender } = render(<PetMiniPanel open windowMode onClose={onClose} />);
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close pet panel' })); });
+  rerender(<PetMiniPanel open={false} windowMode onClose={onClose} />);
+  act(() => { vi.advanceTimersByTime(200); });
+  expect(screen.getByRole('dialog').getAttribute('data-pet-panel-lifecycle')).toBe('closed');
+  expect(showPetOverlay).not.toHaveBeenCalled(); // Native hide owns its overlay restoration.
+});
+
+it.each(['storage', 'same-window'])('restores a retained native panel on %s show acknowledgement without a focus event', async (signal) => {
+  vi.useFakeTimers();
+  const onClose = vi.fn();
+  render(<PetMiniPanel open windowMode onClose={onClose} />);
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close pet panel' })); });
+  expect(screen.getByRole('dialog').getAttribute('data-pet-panel-lifecycle')).toBe('closed');
+  if (signal === 'storage') {
+    fireEvent(window, new StorageEvent('storage', { key: 'vibespace-pet-panel-show-epoch', newValue: 'new-native-open' }));
+  } else {
+    fireEvent(window, new CustomEvent('vibespace:pet-panel-shown'));
+  }
+  expect(screen.getByRole('dialog').getAttribute('data-pet-panel-lifecycle')).toBe('open');
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close pet panel' })); });
+  expect(onClose).toHaveBeenCalledTimes(2);
 });
 
 it('scales all content together as the panel grows and shrinks without scaling resize handles twice', () => {

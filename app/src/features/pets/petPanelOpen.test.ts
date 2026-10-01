@@ -317,6 +317,23 @@ describe('openOrFocusPetMiniPanel / openPetPanelSafely', () => {
     window.removeEventListener('vibespace:pet-overlay-show', onShow);
   });
 
+  it('announces the acknowledged native panel show to retained WebViews', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'pet_open_or_focus_panel') return nativePanelOpenResult();
+      if (cmd === 'pet_is_panel_visible') return true;
+      return undefined;
+    });
+    const onShow = vi.fn();
+    window.addEventListener('vibespace:pet-panel-shown', onShow);
+    try {
+      const { openOrFocusPetMiniPanel } = await import('./petTauriBridge');
+      const [first, second] = await Promise.all([openOrFocusPetMiniPanel(), openOrFocusPetMiniPanel()]);
+      expect(first.panelVisible && second.panelVisible).toBe(true);
+      expect(onShow).toHaveBeenCalledOnce();
+      expect(localStorage.getItem('vibespace-pet-panel-show-epoch')).toBeTruthy();
+    } finally { window.removeEventListener('vibespace:pet-panel-shown', onShow); }
+  });
+
   it('returns a typed failure and does not announce an overlay that native creation rejected', async () => {
     invokeMock.mockRejectedValueOnce(new Error('synthetic native overlay creation failure'));
     const onShow = vi.fn();
@@ -343,6 +360,134 @@ describe('openOrFocusPetMiniPanel / openPetPanelSafely', () => {
     invokeMock.mockRejectedValueOnce(new Error('synthetic native hide failure'));
     await expect(hidePetPanel()).resolves.toBe(false);
     expect(invokeCount('pet_hide_panel')).toBe(2);
+  });
+
+  it('finishes dismissal setup before native hide and announces only its acknowledged overlay', async () => {
+    let positioned = false;
+    localStorage.setItem('vibespace-pet-panel-open', '1');
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'pet_hide_panel') expect(positioned).toBe(true);
+      if (cmd === 'pet_is_overlay_visible') return true;
+      return undefined;
+    });
+    const onShow = vi.fn();
+    window.addEventListener('vibespace:pet-overlay-show', onShow);
+    try {
+      const { hidePetPanel, readPetPanelOpenFlag } = await import('./petTauriBridge');
+      await expect(hidePetPanel(async () => { positioned = true; })).resolves.toBe(true);
+      expect(readPetPanelOpenFlag()).toBe(false);
+      expect(onShow).toHaveBeenCalledOnce();
+      expect(invoked('pet_show_overlay')).toBe(false);
+    } finally { window.removeEventListener('vibespace:pet-overlay-show', onShow); }
+  });
+
+  it.each(['hide', 'minimize'] as const)(
+    'does not let an unfinished open undo the later %s intent',
+    async (action) => {
+      let finishVisibility!: (visible: boolean) => void;
+      let visibilityStarted!: () => void;
+      const started = new Promise<void>((resolve) => { visibilityStarted = resolve; });
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === 'pet_open_or_focus_panel') return nativePanelOpenResult();
+        if (cmd === 'pet_is_panel_visible') {
+          visibilityStarted();
+          return new Promise<boolean>((resolve) => { finishVisibility = resolve; });
+        }
+        return undefined;
+      });
+      const bridge = await import('./petTauriBridge');
+      const opening = bridge.openOrFocusPetMiniPanel();
+      await started;
+      if (action === 'hide') await bridge.hidePetPanel();
+      else await bridge.minimizePetPanel();
+      finishVisibility(true); // The older visibility check completes after dismissal.
+      await expect(opening).resolves.toMatchObject({ panelVisible: false, reason: 'superseded' });
+      expect(bridge.readPetPanelOpenFlag()).toBe(false);
+      expect(invoked('pet_hide_overlay')).toBe(false);
+      expect(invoked('pet_show_overlay')).toBe(false);
+    },
+  );
+
+  it('preserves a native superseded result without restoring a dismissed surface', async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'pet_open_or_focus_panel') {
+        return nativePanelOpenResult({ visible: false, focused: false, reason: 'superseded' });
+      }
+      if (cmd === 'pet_show_overlay') return nativeOverlayShowResult();
+      return false;
+    });
+    const { openOrFocusPetMiniPanel } = await import('./petTauriBridge');
+    await expect(openOrFocusPetMiniPanel()).resolves.toMatchObject({ reason: 'superseded' });
+    expect(invoked('pet_show_overlay')).toBe(false);
+    expect(invoked('pet_hide_overlay')).toBe(false);
+  });
+
+  it('observes dismissal from another WebView before completing an open', async () => {
+    let finishOpen!: (value: unknown) => void;
+    let started!: () => void;
+    const openingStarted = new Promise<void>((resolve) => { started = resolve; });
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'pet_open_or_focus_panel') {
+        started();
+        return new Promise((resolve) => { finishOpen = resolve; });
+      }
+      if (cmd === 'pet_is_panel_visible') return true;
+      return undefined;
+    });
+    const { openOrFocusPetMiniPanel } = await import('./petTauriBridge');
+    const opening = openOrFocusPetMiniPanel();
+    await openingStarted;
+    // localStorage is shared by the overlay, panel and main WebViews; module state is not.
+    localStorage.setItem('vibespace-pet-panel-intent', 'another-webview-dismissed');
+    finishOpen(nativePanelOpenResult());
+    await expect(opening).resolves.toMatchObject({ panelVisible: false, reason: 'superseded' });
+    expect(invoked('pet_is_panel_visible')).toBe(false);
+    expect(invoked('pet_hide_overlay')).toBe(false);
+  });
+
+  it('cancels delayed dismissal setup when a newer open arrives from another WebView', async () => {
+    let finishSetup!: () => void;
+    const { hidePetPanel } = await import('./petTauriBridge');
+    // Reserve the dismissal intent before reading/positioning native windows.
+    const hiding = hidePetPanel(async () => new Promise<void>((resolve) => { finishSetup = resolve; }));
+    await Promise.resolve();
+    localStorage.setItem('vibespace-pet-panel-intent', 'newer-open-in-another-webview');
+    finishSetup();
+    await expect(hiding).resolves.toBe(false);
+    expect(invoked('pet_hide_panel')).toBe(false);
+  });
+
+  it('does not overwrite the panel flag when an older native hide finishes after reopening', async () => {
+    let finishHide!: () => void;
+    let started!: () => void;
+    const hideStarted = new Promise<void>((resolve) => { started = resolve; });
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'pet_hide_panel') {
+        started();
+        return new Promise<void>((resolve) => { finishHide = resolve; });
+      }
+      return true;
+    });
+    const { hidePetPanel, readPetPanelOpenFlag } = await import('./petTauriBridge');
+    const hiding = hidePetPanel();
+    await hideStarted;
+    localStorage.setItem('vibespace-pet-panel-intent', 'newer-open-in-another-webview');
+    localStorage.setItem('vibespace-pet-panel-open', '1');
+    finishHide();
+    await expect(hiding).resolves.toBe(false);
+    expect(readPetPanelOpenFlag()).toBe(true);
+  });
+
+  it('still opens when storage rejects the shared intent write', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('full'); });
+    try {
+      invokeMock.mockImplementation(async (cmd: string) => {
+        if (cmd === 'pet_open_or_focus_panel') return nativePanelOpenResult();
+        return true;
+      });
+      const { openOrFocusPetMiniPanel } = await import('./petTauriBridge');
+      await expect(openOrFocusPetMiniPanel()).resolves.toMatchObject({ panelVisible: true, reason: null });
+    } finally { setItem.mockRestore(); }
   });
 
   it('bounds a stalled native overlay command and coalesces later recovery attempts', async () => {

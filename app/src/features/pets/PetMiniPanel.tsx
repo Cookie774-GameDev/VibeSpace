@@ -20,7 +20,13 @@ import { PetChatSurface } from './PetChatSurface';
 import { PetTerminalSurface } from './PetTerminalSurface';
 import { PetJarvisButton } from './PetJarvisButton';
 import { usePetPresentationStore } from './petPresentationStore';
-import { hidePetPanel, minimizePetPanel, setPetOverlayPosition, setPetPanelOpenFlag, showPetOverlay } from './petTauriBridge';
+import {
+  PET_PANEL_SHOW_EPOCH_KEY,
+  PET_PANEL_SHOW_EVENT,
+  hidePetPanel,
+  minimizePetPanel,
+  setPetOverlayPosition,
+} from './petTauriBridge';
 import { setLivePanelUiScale } from '@/lib/ui/panelScale';
 import {
   clampPetPanelSize,
@@ -90,6 +96,8 @@ export function PetMiniPanel({
   const clearUnread = usePetPresentationStore((s) => s.clearUnread);
   const setPanelLifecycle = usePetPresentationStore((s) => s.setPanelLifecycle);
   const transitionTimerRef = React.useRef(0);
+  const nativeDismissBusyRef = React.useRef(false);
+  const nativeDismissEpochRef = React.useRef(0);
   const sizeRef = React.useRef(size);
   const posRef = React.useRef(panelPos);
   sizeRef.current = size;
@@ -152,7 +160,8 @@ export function PetMiniPanel({
   );
 
   React.useEffect(() => {
-    if (open || windowMode) {
+    if (windowMode) return;
+    if (open) {
       window.clearTimeout(transitionTimerRef.current);
       updateLifecycle({ type: 'request_open' });
       transitionTimerRef.current = window.setTimeout(
@@ -178,37 +187,54 @@ export function PetMiniPanel({
 
   React.useEffect(() => {
     if (!windowMode) return;
-    const restore = () => {
-      if (lifecycle !== 'closed' && lifecycle !== 'minimized') return;
+    const restore = (confirmedShow = false) => {
+      if (!confirmedShow && !nativeDismissBusyRef.current && lifecycle !== 'closed' && lifecycle !== 'minimized') return;
+      nativeDismissEpochRef.current += 1;
+      nativeDismissBusyRef.current = false;
+      window.clearTimeout(transitionTimerRef.current);
       updateLifecycle({ type: 'request_open' });
       updateLifecycle({ type: 'opened' });
     };
-    window.addEventListener('focus', restore);
-    return () => window.removeEventListener('focus', restore);
+    const onFocus = () => restore();
+    const onShown = () => restore(true);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === PET_PANEL_SHOW_EPOCH_KEY && event.newValue) restore(true);
+    };
+    window.addEventListener('focus', onFocus);
+    window.addEventListener(PET_PANEL_SHOW_EVENT, onShown);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener(PET_PANEL_SHOW_EVENT, onShown);
+      window.removeEventListener('storage', onStorage);
+    };
   }, [windowMode, lifecycle, updateLifecycle]);
 
-  const dismissNativePanel = async () => {
-    const panelWindow = getCurrentWindow();
-    const position = await panelWindow.outerPosition().catch(() => null);
-    // Position the hidden pet first so it never flashes at its old location.
-    if (position) await setPetOverlayPosition(position.x, position.y);
-    // The native command cancels pending opens. A raw window hide cannot do
-    // that. Both companion dismiss actions hide the window and retain sessions.
-    if (!(await hidePetPanel())) throw new Error('pet_panel_hide_failed');
-    setPetPanelOpenFlag(false);
-    await showPetOverlay();
-  };
+  const dismissNativePanel = () => hidePetPanel(async (isCurrent) => {
+    const position = await getCurrentWindow().outerPosition().catch(() => null);
+    // Position the hidden pet first, unless another WebView has reopened it.
+    if (position && isCurrent()) await setPetOverlayPosition(position.x, position.y);
+  });
 
   const handleMinimize = () => {
     if (windowMode) {
+      if (nativeDismissBusyRef.current) return;
+      nativeDismissBusyRef.current = true;
+      const dismissal = ++nativeDismissEpochRef.current;
+      window.clearTimeout(transitionTimerRef.current);
       updateLifecycle({ type: 'request_minimize' });
-      void dismissNativePanel().then(() => {
+      void dismissNativePanel().then((hidden) => {
+        if (dismissal !== nativeDismissEpochRef.current) return;
+        if (!hidden) throw new Error('pet_panel_hide_failed');
         updateLifecycle({ type: 'minimized' });
         onMinimize?.();
         onClose();
       }).catch(() => {
+        if (dismissal !== nativeDismissEpochRef.current) return;
         updateLifecycle({ type: 'request_open' });
         updateLifecycle({ type: 'opened' });
+      }).finally(() => {
+        if (dismissal === nativeDismissEpochRef.current) nativeDismissBusyRef.current = false;
       });
       return;
     }
@@ -230,14 +256,23 @@ export function PetMiniPanel({
 
   const handleCloseRequest = () => {
     if (windowMode) {
+      if (nativeDismissBusyRef.current) return;
+      nativeDismissBusyRef.current = true;
+      const dismissal = ++nativeDismissEpochRef.current;
+      window.clearTimeout(transitionTimerRef.current);
       updateLifecycle({ type: 'request_close' });
       updateLifecycle({ type: 'confirm_close' });
-      void dismissNativePanel().then(() => {
+      void dismissNativePanel().then((hidden) => {
+        if (dismissal !== nativeDismissEpochRef.current) return;
+        if (!hidden) throw new Error('pet_panel_hide_failed');
         updateLifecycle({ type: 'closed' });
         onClose();
       }).catch(() => {
+        if (dismissal !== nativeDismissEpochRef.current) return;
         updateLifecycle({ type: 'request_open' });
         updateLifecycle({ type: 'opened' });
+      }).finally(() => {
+        if (dismissal === nativeDismissEpochRef.current) nativeDismissBusyRef.current = false;
       });
       return;
     }

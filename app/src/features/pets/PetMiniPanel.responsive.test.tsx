@@ -12,7 +12,11 @@ vi.mock('./PetTerminalSurface', () => ({
 }));
 
 const bridge = vi.hoisted(() => ({
-  hidePetPanel: vi.fn(async () => true),
+  hidePetPanel: vi.fn(async (beforeHide?: (isCurrent: () => boolean) => Promise<void>) => {
+    await beforeHide?.(() => true);
+    localStorage.removeItem('vibespace-pet-panel-open');
+    return true;
+  }),
   minimizePetPanel: vi.fn(async () => undefined),
   setPetOverlayPosition: vi.fn(async () => undefined),
   showPetOverlay: vi.fn(async () => undefined),
@@ -30,6 +34,8 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => currentWindow,
 }));
 vi.mock('./petTauriBridge', () => ({
+  PET_PANEL_SHOW_EPOCH_KEY: 'vibespace-pet-panel-show-epoch',
+  PET_PANEL_SHOW_EVENT: 'vibespace:pet-panel-shown',
   hidePetPanel: bridge.hidePetPanel,
   minimizePetPanel: bridge.minimizePetPanel,
   setPetOverlayPosition: bridge.setPetOverlayPosition,
@@ -120,7 +126,7 @@ describe('PetMiniPanel responsive shell', () => {
     expect(currentWindow.minimize).not.toHaveBeenCalled();
     expect(bridge.hidePetPanel).toHaveBeenCalledTimes(1);
     expect(bridge.setPetOverlayPosition).toHaveBeenCalledWith(120, 240);
-    expect(bridge.showPetOverlay).toHaveBeenCalledTimes(1);
+    expect(bridge.showPetOverlay).not.toHaveBeenCalled();
     expect(currentWindow.hide).not.toHaveBeenCalled();
     expect(bridge.minimizePetPanel).not.toHaveBeenCalled();
     expect(localStorage.getItem('vibespace-pet-panel-open')).toBeNull();
@@ -138,7 +144,7 @@ describe('PetMiniPanel responsive shell', () => {
 
     expect(currentWindow.hide).not.toHaveBeenCalled();
     expect(bridge.hidePetPanel).toHaveBeenCalledTimes(1);
-    expect(bridge.showPetOverlay).toHaveBeenCalledTimes(1);
+    expect(bridge.showPetOverlay).not.toHaveBeenCalled();
     expect(localStorage.getItem('vibespace-pet-panel-open')).toBeNull();
   });
 

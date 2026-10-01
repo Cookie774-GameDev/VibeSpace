@@ -326,6 +326,8 @@ export function PetHost({
             coalesced: false,
           };
         });
+        // A newer close/open in another WebView owns the current panel flag.
+        if (result.reason === 'superseded') return;
         if (result.panelVisible) {
           // Dedicated Tauri mini panel confirmed; hide the floating pet.
           setPanelOpen(true);
