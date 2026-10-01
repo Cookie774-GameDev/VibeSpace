@@ -10,6 +10,32 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      nativeWindowsQa:
+        description: Build the frozen Windows debug QA artifact
+        required: false
+        type: boolean
+        default: false
+      source_sha:
+        description: QA source commit (full lowercase SHA; required when opted in)
+        required: false
+        type: string
+        default: ''
+      cargo_lock_sha256:
+        description: QA Cargo lock SHA-256 (required when opted in)
+        required: false
+        type: string
+        default: ''
+      windows_config_sha256:
+        description: QA Windows resource configuration SHA-256 (required when opted in)
+        required: false
+        type: string
+        default: ''
+      connector_source_sha256:
+        description: QA connector source fingerprint (required when opted in)
+        required: false
+        type: string
+        default: ''
 
 concurrency:
   # Cancel previous runs of the same workflow on the same branch/PR so
@@ -108,3 +134,14 @@ jobs:
           path: app/src-tauri/cargo-check.log
           if-no-files-found: error
           retention-days: 7
+
+  native-windows-qa:
+    if: github.event_name == 'workflow_dispatch' && inputs.nativeWindowsQa == true
+    permissions:
+      contents: read
+    uses: ./.github/workflows/native-windows-qa.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      cargo_lock_sha256: ${{ inputs.cargo_lock_sha256 }}
+      windows_config_sha256: ${{ inputs.windows_config_sha256 }}
+      connector_source_sha256: ${{ inputs.connector_source_sha256 }}

@@ -19,6 +19,20 @@ on:
         description: Expected connector source fingerprint from the frozen packet
         required: true
         type: string
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      cargo_lock_sha256:
+        required: true
+        type: string
+      windows_config_sha256:
+        required: true
+        type: string
+      connector_source_sha256:
+        required: true
+        type: string
 
 permissions:
   contents: read

@@ -9,7 +9,111 @@ import test from 'node:test';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-test('manual Windows QA workflow only builds and uploads with read-only repository access', async () => {
+const proofInputs = [
+  'source_sha',
+  'cargo_lock_sha256',
+  'windows_config_sha256',
+  'connector_source_sha256',
+];
+
+function blockAt(source, header) {
+  const lines = source.replaceAll('\r\n', '\n').split('\n');
+  const start = lines.indexOf(header);
+  assert.ok(start >= 0, `Missing YAML block: ${header.trim()}`);
+  const indent = header.length - header.trimStart().length;
+  let end = start + 1;
+  while (
+    end < lines.length &&
+    (!lines[end].trim() || lines[end].startsWith(' '.repeat(indent + 1)))
+  ) {
+    end += 1;
+  }
+  return lines.slice(start, end).join('\n');
+}
+
+test('registered CI opts into the same-commit Windows QA call without requiring ordinary CI inputs', async () => {
+  const ci = await readFile(path.join(root, '.github/workflows/ci.yml'), 'utf8');
+  const dispatch = blockAt(ci, '  workflow_dispatch:');
+  assert.match(
+    blockAt(dispatch, '      nativeWindowsQa:'),
+    /required: false\s+type: boolean\s+default: false/u,
+  );
+  for (const name of proofInputs) {
+    assert.match(
+      blockAt(dispatch, `      ${name}:`),
+      /required: false\s+type: string\s+default: ''/u,
+    );
+  }
+  const call = blockAt(ci, '  native-windows-qa:');
+  assert.match(
+    call,
+    /if: github\.event_name == 'workflow_dispatch' && inputs\.nativeWindowsQa == true/u,
+  );
+  assert.match(call, /uses: \.\/\.github\/workflows\/native-windows-qa\.yml\s*\n/u);
+  assert.match(call, /permissions:\s*\n      contents: read\s*\n/u);
+  assert.doesNotMatch(call, /secrets|runs-on:|steps:|needs:|@/u);
+  for (const name of proofInputs) {
+    assert.ok(call.includes(`      ${name}: $` + `{{ inputs.${name} }}`), `Pass ${name} unchanged`);
+  }
+});
+
+test('reusable Windows QA requires all four string proofs and declares no secrets', async () => {
+  const qa = await readFile(path.join(root, '.github/workflows/native-windows-qa.yml'), 'utf8');
+  const call = blockAt(qa, '  workflow_call:');
+  assert.doesNotMatch(call, /secrets:/u);
+  assert.deepEqual(
+    [...call.matchAll(/^      ([a-z_0-9]+):$/gmu)].map((match) => match[1]),
+    proofInputs,
+  );
+  for (const name of proofInputs) {
+    assert.match(blockAt(call, `      ${name}:`), /required: true\s+type: string/u);
+  }
+});
+
+test('opted-in QA rejects missing or malformed proofs before checkout or resource preparation', async () => {
+  const qa = await readFile(path.join(root, '.github/workflows/native-windows-qa.yml'), 'utf8');
+  const step = blockAt(qa, '      - name: Validate immutable source inputs');
+  assert.ok(qa.indexOf(step.split('\n')[0]) < qa.indexOf('      - uses: actions/checkout@'));
+  // Execute the actual input validator only; do not change this machine's Git settings.
+  const validator = step.slice(step.indexOf('          if ($env:QA_SOURCE_SHA'));
+  assert.ok(validator.startsWith('          if ($env:QA_SOURCE_SHA'));
+  const names = [
+    'QA_SOURCE_SHA',
+    'QA_CARGO_LOCK_SHA256',
+    'QA_WINDOWS_CONFIG_SHA256',
+    'QA_CONNECTOR_SHA256',
+  ];
+  const valid = ['a'.repeat(40), 'b'.repeat(64), 'c'.repeat(64), 'd'.repeat(64)];
+  const cases = [valid];
+  for (let index = 0; index < names.length; index += 1) {
+    for (const invalid of ['', 'A'.repeat(index === 0 ? 40 : 64)]) {
+      cases.push(valid.map((value, position) => (position === index ? invalid : value)));
+    }
+  }
+  const quote = (value) => `'${value.replaceAll("'", "''")}'`;
+  const command = `& {
+    $cases = ConvertFrom-Json ${quote(JSON.stringify(cases))}
+    $names = ConvertFrom-Json ${quote(JSON.stringify(names))}
+    $validator = [scriptblock]::Create(${quote(validator)})
+    $results = foreach ($case in $cases) {
+      for ($index = 0; $index -lt $names.Count; $index++) {
+        [Environment]::SetEnvironmentVariable($names[$index], $case[$index], 'Process')
+      }
+      try { & $validator; $true } catch { $false }
+    }
+    ConvertTo-Json -InputObject @($results)
+  }`;
+  const results = JSON.parse(
+    execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      encoding: 'utf8',
+      timeout: 10000,
+      windowsHide: true,
+    }),
+  );
+  assert.deepEqual(results, [true, ...Array(8).fill(false)]);
+});
+
+test('Windows QA workflow only builds and uploads with read-only repository access', async () => {
   const workflowPath = path.join(root, '.github/workflows/native-windows-qa.yml');
   assert.ok(existsSync(workflowPath), 'A separate build-only Windows workflow is required');
   const workflow = await readFile(workflowPath, 'utf8');
