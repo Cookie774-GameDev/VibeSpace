@@ -140,6 +140,69 @@ describe('Canvas domain <-> Context/Open JSON Canvas bridge adapter', () => {
       expect(Object.isFrozen(bridge.objects[0])).toBe(true);
     });
 
+    it.each([
+      {
+        content: {
+          kind: 'stroke' as const,
+          tool: 'pencil' as const,
+          color: '#112233',
+          width: 2,
+          points: [
+            { x: 10, y: 20 },
+            { x: 30, y: 40 },
+          ],
+        },
+        text: 'pencil stroke',
+      },
+      {
+        content: {
+          kind: 'image' as const,
+          name: 'diagram.png',
+          mimeType: 'image/png' as const,
+          dataUrl: 'data:image/png;base64,aGVsbG8=',
+          width: 80,
+          height: 60,
+          altText: 'Architecture diagram',
+        },
+        text: 'Image: Architecture diagram',
+      },
+      {
+        content: {
+          kind: 'image' as const,
+          name: 'diagram.png',
+          mimeType: 'image/png' as const,
+          dataUrl: 'data:image/png;base64,aGVsbG8=',
+          width: 80,
+          height: 60,
+          altText: '',
+        },
+        text: 'Image: diagram.png',
+      },
+    ])(
+      'projects $content.kind content without changing its canonical payload',
+      ({ content, text }) => {
+        const doc = withBlockAdded(
+          createCanvasDocument({
+            id: 'media-doc',
+            projectId: 'project1',
+            ownerId: 'owner1',
+            now: NOW,
+          }),
+          createCanvasBlock({ id: 'media-block', content, now: NOW }),
+          NOW,
+        );
+        const bridge = projectDomainDocumentToBridge(doc);
+        expect(bridge.objects[0]).toMatchObject({
+          id: 'media-block',
+          type: 'text',
+          label: text,
+          text,
+        });
+        expect(blockById(doc, 'media-block')?.content).toEqual(content);
+        expect(Object.isFrozen(bridge.objects[0])).toBe(true);
+      },
+    );
+
     it('projects structured blocks as lossy text objects without altering canonical content', () => {
       let doc = createCanvasDocument({
         id: 'doc2',

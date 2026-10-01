@@ -96,7 +96,11 @@ export function projectDomainDocumentToBridge(
         ? branchToOutline(block.content.map, block.content.map.rootId)
         : block.content.kind === 'shape'
           ? (block.content.shape.text ?? block.content.shape.kind)
-          : block.content.text;
+          : block.content.kind === 'stroke'
+            ? `${block.content.tool} stroke`
+            : block.content.kind === 'image'
+              ? `Image: ${block.content.altText || block.content.name}`
+              : block.content.text;
     const object: VibeSpaceCanvasObject = Object.freeze({
       id: block.id,
       type: 'text' as const,

@@ -218,7 +218,7 @@ describe('FilesPage workspace flow', () => {
     vi.mocked(listDirectory).mockResolvedValueOnce({
       ok: false,
       path: 'C:\\missing',
-      error: { code: 'NOT_FOUND', message: 'Missing' },
+      error: { code: 'not_found', raw: 'Missing' },
     });
     fireEvent.change(screen.getByLabelText('Project folder path'), {
       target: { value: 'C:\\missing' },
