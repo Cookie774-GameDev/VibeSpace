@@ -158,7 +158,7 @@ describe('VibeSpace slash Doctor', () => {
       };
       const deps = dependencies({
         inspectCodexRuntime: vi.fn().mockResolvedValue({ kind: 'missing' }),
-        repairCodexRuntime: vi.fn(async () => { await repair(); return { kind: 'missing' }; }),
+        repairCodexRuntime: vi.fn(async () => { await repair(); return { kind: 'missing' } as const; }),
         getOpenCodeState: vi.fn().mockReturnValue({ kind: 'missing' }),
         getOpenCodeConnection: vi.fn().mockReturnValue(undefined),
         repairOpenCode: vi.fn(repair),
@@ -249,7 +249,7 @@ describe('VibeSpace slash Doctor', () => {
       }),
       getOpenCodeState: vi.fn(() => {
         signalOpenCodeInspected();
-        return { kind: 'missing' };
+        return { kind: 'missing' } as const;
       }),
       getOpenCodeConnection: vi.fn().mockReturnValue(undefined),
       repairOpenCode,
