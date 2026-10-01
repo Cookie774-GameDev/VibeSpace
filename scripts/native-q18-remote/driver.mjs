@@ -36,12 +36,20 @@ function relativeFile(root, name) {
   requireThat(typeof name==='string' && name.length<=512 && !name.includes('\\') && !name.startsWith('/') && name.split('/').every(p=>p && !['.','..'].includes(p)), 'manifest_relative_path');
   const file=path.join(root,...name.split('/')); inside(root,file); return file;
 }
+// Source snapshot rows are distinct from the <=10,000 ZIP payload-entry budget.
+// Producer snapshots every tracked file; source857 already contains 10,941 blobs.
+// JSON remains bounded to 8 MiB before this validator is called.
+export const INPUT_MANIFEST_MAX_ROWS = 32768;
+export function verifyInputManifest(inputs) {
+  requireThat(inputs && Array.isArray(inputs.files) && inputs.files.length<=INPUT_MANIFEST_MAX_ROWS, 'input_manifest_count');
+  requireThat(createHash('sha256').update(JSON.stringify(inputs.files)).digest('hex')===inputs.sha256, 'input_manifest_content_hash');
+  return inputs;
+}
 async function verifyInputs(s) {
   const inputPath=path.join(s.artifactRoot,'input-manifest.json');
   requireThat(await hash(inputPath)===s.inputManifestSHA256, 'input_manifest_file_hash');
   const inputs=await json(inputPath);
-  requireThat(Array.isArray(inputs.files) && inputs.files.length<=10000, 'input_manifest_count');
-  requireThat(createHash('sha256').update(JSON.stringify(inputs.files)).digest('hex')===inputs.sha256, 'input_manifest_content_hash');
+  verifyInputManifest(inputs);
   const selected=inputs.files.filter(f=>f.path==='package.json'||f.path==='package-lock.json'||(f.path.startsWith('app/')&&!f.path.startsWith('app/src-tauri/')));
   for (const required of ['package.json','package-lock.json','app/package.json','app/src/features/auth/AuthGate.tsx','app/src/features/terminals/TerminalView.tsx','app/src/features/workbench/WorkbenchPanel.tsx']) requireThat(selected.some(f=>f.path===required),'required_frontend_input');
   for (const item of selected) requireThat(await hash(relativeFile(s.frontendRoot,item.path))===item.sha256,'frontend_source_drift');

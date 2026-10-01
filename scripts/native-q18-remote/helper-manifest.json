@@ -65,8 +65,8 @@
     },
     {
       "path": "driver.mjs",
-      "bytes": 24867,
-      "sha256": "88ce8e079d97d2a50fb0f5756ab0af938e41071248f35743eef14a1127f5ada5"
+      "bytes": 25616,
+      "sha256": "04e10a635fddca489286dd48a5f143b4cd2601a090a60c912e342407e4e31149"
     },
     {
       "path": "entry.ps1",
@@ -150,6 +150,6 @@
     }
   ],
   "originalManifestSHA256": "65d04ab824644c3be5090214e4136e6aa01d6b0b8220d0cba648a421dd8a8c87",
-  "repairBaseHelperSHA": "e4221a75f55d4d0008212a7867e0769a1e11e06e",
-  "proposalBaseManifestSHA256": "675788aec01cd5e8f05a41d96e5891d7159c44790b6c871bed54eaa157d7dd1b"
+  "repairBaseHelperSHA": "e032fdcb139ee6da3d9b2f008e24800e86bde26a",
+  "proposalBaseManifestSHA256": "891f310cc3d004baa11b371f49c4d23bf62c862d04b7f302c42b04002ffaeba8"
 }
