@@ -94,6 +94,19 @@ export interface ActionRunContext {
   requestId?: string;
   attemptNumber?: number;
   signal?: AbortSignal;
+  /** Original protected request lifetime check; never supplied by action parameters. */
+  isRequestLive?: () => Promise<boolean>;
+}
+
+export function throwIfActionRequestCancelled(context: Pick<ActionRunContext, 'signal'>): void {
+  if (context.signal?.aborted) throw new DOMException('The action request was cancelled.', 'AbortError');
+}
+
+export async function assertActionRequestLive(context: Pick<ActionRunContext, 'signal' | 'isRequestLive'>): Promise<void> {
+  throwIfActionRequestCancelled(context);
+  if (context.isRequestLive && !(await context.isRequestLive()))
+    throw new DOMException('The action request was cancelled.', 'AbortError');
+  throwIfActionRequestCancelled(context);
 }
 
 export interface RegisteredActionExecutionContext extends ActionRunContext {

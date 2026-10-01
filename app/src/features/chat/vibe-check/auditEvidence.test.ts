@@ -40,4 +40,26 @@ describe('VibeCheck evidence', () => {
     expect(prompt).toContain('Do not edit files');
     expect(prompt).toContain('follow nextOffset');
   });
+
+  it('does not turn invalid line measurements into verified zero or fractional totals', () => {
+    for (const addedLines of [-1, 1.5, Number.POSITIVE_INFINITY]) {
+      expect(
+        collectAuditEvidence(
+          [],
+          [{ id: 'invalid', kind: 'diff', status: 'done', addedLines } as ChatActivityEvent],
+        ).added,
+      ).toBeNull();
+    }
+  });
+
+  it('counts reported agent identities without mistaking unidentified activity events for agents', () => {
+    const evidence = collectAuditEvidence([], [
+      { id: 'one', kind: 'subagent', agentId: 'agent-a' },
+      { id: 'two', kind: 'subagent', agentId: 'agent-a' },
+      { id: 'unknown-one', kind: 'subagent' },
+      { id: 'unknown-two', kind: 'subagent' },
+    ] as ChatActivityEvent[]);
+    expect(evidence).toMatchObject({ subagents: 1, unidentifiedSubagentEvents: 2 });
+    expect(evidence.capturedAt).toBeGreaterThan(0);
+  });
 });

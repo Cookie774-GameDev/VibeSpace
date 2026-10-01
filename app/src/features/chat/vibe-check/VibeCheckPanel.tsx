@@ -43,6 +43,20 @@ export function VibeCheckPanel() {
   const evidence = session.evidence;
   const grades = parseAuditGrades(session.report);
   const report = auditReportText(session.report);
+  const statusLabel = {
+    ready: 'Ready to review',
+    preparing: 'Preparing',
+    waiting: 'Waiting',
+    running: 'Review in progress',
+    complete: 'Report returned',
+    error: 'Needs attention',
+  }[session.status];
+  const snapshotDate =
+    evidence && Number.isFinite(evidence.capturedAt) ? new Date(evidence.capturedAt) : null;
+  const snapshotTime =
+    snapshotDate && Number.isFinite(snapshotDate.getTime())
+      ? snapshotDate.toISOString()
+      : undefined;
   return (
     <section
       style={{ position: 'absolute', zIndex: 55 }}
@@ -57,7 +71,7 @@ export function VibeCheckPanel() {
         </div>
         <div>
           <strong>VibeCheck</strong>
-          <small>Clarity before the next move</small>
+          <small>A second look, with the evidence in view</small>
         </div>
         <button
           aria-label="Minimize VibeCheck"
@@ -79,8 +93,13 @@ export function VibeCheckPanel() {
         <p className="vibe-check-source">
           <MessageSquare size={14} />
           <span>{session.title === 'VibeCheck' ? 'Current chat' : session.title}</span>
-          <span className="vibe-check-badge">READ ONLY</span>
+          <span className="vibe-check-badge">REVIEW REQUEST</span>
         </p>
+        <div className={`vibe-check-state is-${session.status}`} role="status">
+          <span className="vibe-check-state-dot" aria-hidden="true" />
+          <strong>{statusLabel}</strong>
+          <small>{options.auditor === 'new' ? 'Dedicated auditor' : 'Current agent'}</small>
+        </div>
         <fieldset disabled={busy} className="vibe-check-choices">
           <legend>Who should take a look?</legend>
           <button
@@ -122,12 +141,18 @@ export function VibeCheckPanel() {
             </small>
           </span>
         </label>
+        <p className="vibe-check-note">
+          Read-only review is requested.{' '}
+          {options.auditor === 'main'
+            ? 'Your current agent keeps its saved permissions.'
+            : 'The dedicated auditor is assigned read-only access.'}
+        </p>
         <div className="vibe-check-progress" aria-live="polite">
           <span>
             <Activity size={14} />
             {session.stage}
           </span>
-          <strong>{session.progress}%</strong>
+          <strong>{session.status === 'complete' ? 'Returned' : busy ? 'In progress' : '—'}</strong>
         </div>
         <div
           className={`vibe-check-track ${busy ? 'is-active' : ''}`}
@@ -135,21 +160,23 @@ export function VibeCheckPanel() {
           aria-label="Audit workflow steps"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={session.progress}
-          aria-valuetext={`${session.progress}% of workflow steps; ${session.stage}`}
+          aria-valuenow={session.status === 'complete' ? 100 : undefined}
+          aria-valuetext={session.stage}
         >
-          <span style={{ width: `${session.progress}%` }} />
+          <span style={{ width: session.status === 'complete' ? '100%' : busy ? '36%' : '0%' }} />
         </div>
         <p className="vibe-check-note">
-          Progress tracks completed workflow steps, not estimated review time.
+          Stage updates follow the audit workflow. Review time and percent complete are not
+          measured.
         </p>
         <section className="vibe-check-scorecard" aria-label="Audit grades">
           <div className="vibe-check-section-heading">
-            <strong>Work quality, in focus</strong>
-            <span>{Object.keys(grades).length}/6 reviewed</span>
+            <strong>Auditor assessments</strong>
+            <span>{Object.keys(grades).length}/6 reported</span>
           </div>
           <p className="vibe-check-note">
-            Evidence-based grades · 1–100 · appear as the auditor assesses each dimension.
+            Scores are the auditor’s judgments, not verified measurements. Open a dimension to
+            inspect its stated reason and evidence.
           </p>
           <div className="vibe-check-grades">
             {(Object.keys(AUDIT_METRICS) as AuditMetric[]).map((metric) => {
@@ -167,7 +194,7 @@ export function VibeCheckPanel() {
                     </span>
                     <small>
                       {grade
-                        ? `${grade.confidence} confidence · details`
+                        ? `Auditor confidence: ${grade.confidence} · details`
                         : busy
                           ? 'Reviewing evidence'
                           : session.status === 'ready'
@@ -184,14 +211,28 @@ export function VibeCheckPanel() {
         </section>
         {evidence && (
           <>
+            <div className="vibe-check-section-heading vibe-check-evidence-heading">
+              <strong>Recorded evidence</strong>
+              <time dateTime={snapshotTime} title="Snapshot capture time in UTC">
+                {snapshotTime
+                  ? snapshotTime.replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC')
+                  : 'Capture time unavailable'}
+              </time>
+            </div>
             <div className="vibe-check-metrics">
               {[
-                ['Changed files', evidence.files.length || 'Unknown'],
-                ['Commands', evidence.commands],
-                ['Lines added', evidence.added === null ? 'Unknown' : `+${evidence.added}`],
-                ['Lines removed', evidence.removed === null ? 'Unknown' : `−${evidence.removed}`],
-                ['Subagents', evidence.subagents],
-                ['Tool calls', evidence.toolCalls],
+                ['File paths recorded', evidence.files.length],
+                ['Command calls', evidence.commands],
+                [
+                  'Reported lines added',
+                  evidence.added === null ? 'Unknown' : `+${evidence.added}`,
+                ],
+                [
+                  'Reported lines removed',
+                  evidence.removed === null ? 'Unknown' : `−${evidence.removed}`,
+                ],
+                ['Reported agent IDs', evidence.subagents],
+                ['Tool calls recorded', evidence.toolCalls],
               ].map(([label, value]) => (
                 <div key={label}>
                   <strong>{value}</strong>
@@ -199,10 +240,16 @@ export function VibeCheckPanel() {
                 </div>
               ))}
             </div>
+            {evidence.unidentifiedSubagentEvents > 0 && (
+              <p className="vibe-check-note">
+                {evidence.unidentifiedSubagentEvents} subagent events have no agent identity; the
+                agent total is unknown.
+              </p>
+            )}
             <p className="vibe-check-note">{evidence.coverage}</p>
             {evidence.files.length > 0 && (
               <details>
-                <summary>Observed changed files</summary>
+                <summary>Inspect recorded file paths</summary>
                 <ul>
                   {evidence.files.map((file) => (
                     <li key={file}>{file}</li>

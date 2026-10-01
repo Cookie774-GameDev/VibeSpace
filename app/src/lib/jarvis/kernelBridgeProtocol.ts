@@ -88,6 +88,7 @@ export type KernelClientResponseV1 =
       kind: 'approval_decided';
       approvalId: string;
       status: 'approved' | 'denied';
+      continuation?: 'tool_request';
     }>
   | Readonly<{
       version: 1;
@@ -327,8 +328,9 @@ export function isKernelClientResponseV1(value: unknown): value is KernelClientR
       );
     case 'approval_decided':
       return (
-        exactKeys(record, ['version', 'kind', 'approvalId', 'status']) &&
+        exactKeys(record, ['version', 'kind', 'approvalId', 'status', ...(record.continuation === undefined ? [] : ['continuation'])]) &&
         id(record.approvalId) &&
+        (record.continuation === undefined || record.continuation === 'tool_request') &&
         (record.status === 'approved' || record.status === 'denied')
       );
     case 'approval_state':

@@ -19,6 +19,19 @@ const turnRequest: KernelClientRequestV1 = {
 };
 
 describe('kernel bridge protocol', () => {
+  it('accepts only the explicit same-tool-request approval continuation marker', () => {
+    const response = {
+      version: 1,
+      kind: 'approval_decided',
+      approvalId: 'jappr_tool',
+      status: 'approved',
+    };
+    expect(isKernelClientResponseV1({ ...response, continuation: 'tool_request' })).toBe(true);
+    expect(isKernelClientResponseV1({ ...response, continuation: 'new_turn' })).toBe(false);
+    expect(
+      isKernelClientResponseV1({ ...response, continuation: 'tool_request', execute: true }),
+    ).toBe(false);
+  });
   it('accepts only the closed versioned request union', () => {
     expect(KERNEL_BRIDGE_VERSION).toBe(1);
     expect(isKernelClientRequestV1(turnRequest)).toBe(true);

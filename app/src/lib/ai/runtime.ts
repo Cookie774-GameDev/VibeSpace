@@ -306,6 +306,11 @@ import type {
 } from '@/lib/jarvis/approvalEngine';
 import type { RegisteredActionExecutionContext } from '@/lib/actions/types';
 import type { JarvisRegisteredActionDefinition } from '@/lib/jarvis/actions/catalog';
+import { createJarvisActionCatalog, DEFAULT_JARVIS_ACTION_REGISTRATIONS } from '@/lib/jarvis/actions/catalog';
+import { createToolGatewayActionBroker, type ToolGatewayActionRequest } from './toolGatewayActionBroker';
+import type { JarvisCanonicalActionExecutionResult } from '@/lib/jarvis/approvalEngine';
+import { readToolGatewaySessionAuthority, readToolGatewayTurnIdentity } from '@/lib/harness/toolGatewayAuthority';
+import { createTaskApprovalCallId } from '@/features/jarvis-runs/approvalBridge';
 import type {
   KernelClientRequestV1,
   KernelClientResponseV1,
@@ -633,6 +638,7 @@ type InstalledJarvisKernelRuntimeHost = Readonly<{
     input: JarvisRegisteredActionDispatchInput,
   ): Promise<JarvisRegisteredActionDispatchOutcome>;
   handleClientRequest(request: KernelClientRequestV1): Promise<KernelClientResponseV1>;
+  runToolGatewayAction(input: ToolGatewayActionRequest): Promise<JarvisCanonicalActionExecutionResult>;
   runInitialTurn(
     input: Readonly<JarvisKernelTurnInput>,
   ): ReturnType<JarvisKernelRuntime['runInitialTurn']>;
@@ -1488,7 +1494,7 @@ export async function installJarvisKernelRuntimeHost(
   >();
   const activeTurnScopes = new Map<
     string,
-    Readonly<{ accountId: string; runId: string; requestId: string; chatId: string }>
+    Readonly<{ accountId: string; runId: string; requestId: string; chatId: string; attempt: JarvisKernelTurnInput['attempt'] }>
   >();
   const rememberProviderEvidence = (evidence: CanonicalProviderEvidence): void => {
     providerEvidence.set(evidence.resultRef, evidence);
@@ -2618,6 +2624,62 @@ export async function installJarvisKernelRuntimeHost(
     kernel: composition.kernel,
   });
   let disposed = false;
+  const toolActionBroker = createToolGatewayActionBroker({
+    actions: composition.kernel.actions,
+    catalog: input.actionCatalog ?? createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS),
+    now,
+    async loadScope(request) {
+      if (disposed || request.context.signal?.aborted) throw new Error('tool_action_cancelled');
+      const turn = readToolGatewayTurnIdentity(request.context.sessionId, request.context.messageId);
+      const claim = readToolGatewaySessionAuthority(request.context.sessionId);
+      const attempt = turn?.protectedAttempt;
+      const active = attempt ? activeTurnScopes.get(attempt.runId) : undefined;
+      if (!turn || !claim || !attempt || !active || active.accountId !== attempt.accountId ||
+        claim.scope.accountId !== attempt.accountId || active.chatId !== turn.chatId ||
+        active.requestId !== attempt.requestId || active.attempt.requestId !== attempt.requestId ||
+        active.attempt.attemptNumber !== attempt.attemptNumber) throw new Error('tool_action_identity_unavailable');
+      const parentRun = await journal.getRun(attempt.accountId, attempt.runId);
+      const stillBound = readToolGatewayTurnIdentity(request.context.sessionId, request.context.messageId);
+      if (!parentRun || parentRun.id !== attempt.runId || parentRun.accountId !== attempt.accountId ||
+        parentRun.chatId !== turn.chatId || parentRun.workspaceId !== claim.scope.workspaceId ||
+        parentRun.status !== 'running' || activeTurnScopes.get(attempt.runId) !== active ||
+        stillBound?.protectedAttempt !== attempt || request.context.signal?.aborted) throw new Error('tool_action_identity_unavailable');
+      return { parentRun, attempt: active.attempt };
+    },
+    async publishPending(approval, scope, request) {
+      const chatId = scope.parentRun.chatId as ChatId;
+      const messageId = `msg_toolapproval_${approval.id}` as MessageId;
+      await input.db.transaction('rw', input.db.messages, input.db.chats, async () => {
+        if (disposed || request.context.signal?.aborted ||
+          readToolGatewayTurnIdentity(request.context.sessionId, request.context.messageId)?.protectedAttempt?.runId !== scope.parentRun.id) {
+          throw new Error('tool_action_identity_unavailable');
+        }
+        const chat = await input.db.chats.get(chatId);
+        if (!chat || chat.workspace_id !== scope.parentRun.workspaceId) throw new Error('tool_action_chat_unavailable');
+        const stamp = now();
+        await input.db.messages.add({ id: messageId, chat_id: chatId, role: 'assistant',
+          agent_id: scope.parentRun.agentId as AgentId,
+          parts: [{ kind: 'action_proposal', call_id: createTaskApprovalCallId(approval.id),
+            action_id: approval.actionId, params: {}, status: 'pending' }], created_at: stamp, updated_at: stamp });
+      });
+    },
+    async publishOutcome(approval, outcome) {
+      const messageId = `msg_toolapproval_${approval.id}` as MessageId;
+      await input.db.transaction('rw', input.db.messages, async () => {
+        const message = await input.db.messages.get(messageId);
+        if (!message) return;
+        const deniedOrCancelled = outcome instanceof Error && /tool_action_(denied|cancelled|expired)/.test(outcome.message);
+        const status = outcome instanceof Error ? deniedOrCancelled ? 'cancelled' : 'error'
+          : outcome.kind === 'handoff_pending' ? 'queued' : outcome.result.ok ? 'success' : 'error';
+        const parts = message.parts.map(part => part.kind === 'action_proposal' &&
+          part.call_id === createTaskApprovalCallId(approval.id)
+          ? { ...part, status: status as import('@/types/chat').ActionStatus,
+              ...(status === 'error' ? { error: 'The protected tool action did not complete successfully.' } : {}) }
+          : part);
+        await input.db.messages.update(messageId, { parts, updated_at: now() });
+      });
+    },
+  });
   const host: InstalledJarvisKernelRuntimeHost = Object.freeze({
     journal,
     capabilitySnapshots: input.capabilitySnapshots,
@@ -2703,6 +2765,12 @@ export async function installJarvisKernelRuntimeHost(
         };
       }
       if (request.kind === 'approval_decide') {
+        const toolDecision = await toolActionBroker.decide(request.accountId, request.approvalId, request.decision);
+        if (toolDecision) {
+          if (toolDecision.kind !== 'committed') return unavailable();
+          return { version: 1, kind: 'approval_decided', approvalId: request.approvalId,
+            status: toolDecision.value.status === 'approved' ? 'approved' : 'denied', continuation: 'tool_request' };
+        }
         const approval = await repositories.approval.getById(request.accountId, request.approvalId);
         if (!approval) return unavailable();
         const parentRun = await repositories.run.getById(request.accountId, approval.runId);
@@ -2723,6 +2791,7 @@ export async function installJarvisKernelRuntimeHost(
         };
       }
       if (request.kind === 'approval_execute') {
+        if (toolActionBroker.owns(request.accountId, request.approvalId)) return unavailable();
         const approval = await repositories.approval.getById(request.accountId, request.approvalId);
         if (!approval) return unavailable();
         const parentRun = await repositories.run.getById(request.accountId, approval.runId);
@@ -2784,6 +2853,7 @@ export async function installJarvisKernelRuntimeHost(
       }
       return unavailable();
     },
+    runToolGatewayAction: (actionInput) => toolActionBroker.request(actionInput),
     async runInitialTurn(turnInput) {
       if (disposed) throw new Error('jarvis_kernel_host_disposed');
       beginCanonicalTurn(
@@ -2805,12 +2875,14 @@ export async function installJarvisKernelRuntimeHost(
           runId: turnInput.run.id,
           requestId: turnInput.attempt.requestId,
           chatId: turnInput.chatId,
+          attempt: turnInput.attempt,
         }),
       );
       try {
         return await composition.kernel.runInitialTurn(turnInput);
       } finally {
         activeTurnScopes.delete(turnInput.run.id);
+        toolActionBroker.releaseAttempt(turnInput.accountId, turnInput.attempt);
         clearPreview(turnInput.accountId, turnInput.run.id, { terminal: true });
       }
     },
@@ -2835,12 +2907,14 @@ export async function installJarvisKernelRuntimeHost(
           runId: turnInput.run.id,
           requestId: turnInput.attempt.requestId,
           chatId: turnInput.chatId,
+          attempt: turnInput.attempt,
         }),
       );
       try {
         return await composition.kernel.startVoiceTurn(turnInput);
       } finally {
         activeTurnScopes.delete(turnInput.run.id);
+        toolActionBroker.releaseAttempt(turnInput.accountId, turnInput.attempt);
         clearPreview(turnInput.accountId, turnInput.run.id, { terminal: true });
       }
     },
@@ -2878,18 +2952,21 @@ export async function installJarvisKernelRuntimeHost(
           runId: turnInput.run.id,
           requestId: turnInput.attempt.requestId,
           chatId: turnInput.run.chatId ?? '',
+          attempt: turnInput.attempt,
         }),
       );
       try {
         return await composition.kernel.runHiveFinalTurn(turnInput);
       } finally {
         activeTurnScopes.delete(turnInput.run.id);
+        toolActionBroker.releaseAttempt(turnInput.run.accountId, turnInput.attempt);
         clearPreview(turnInput.run.accountId, turnInput.run.id, { terminal: true });
       }
     },
     dispose() {
       if (disposed) return;
       disposed = true;
+      toolActionBroker.dispose();
       const retiredScopes = [...activeTurnScopes.values()];
       activeTurnScopes.clear();
       for (const scope of retiredScopes)
@@ -2935,6 +3012,13 @@ export async function handleInstalledJarvisKernelClientRequest(
     };
   }
   return host.handleClientRequest(request);
+}
+
+/** Tool Gateway entrypoint; canonical run/attempt lookup remains inside the protected host. */
+export function runToolGatewayAction(input: ToolGatewayActionRequest): Promise<JarvisCanonicalActionExecutionResult> {
+  const host = installedJarvisKernelRuntimeHost;
+  if (!host) return Promise.reject(new Error('tool_action_host_unavailable'));
+  return host.runToolGatewayAction(input);
 }
 
 /** @internal Protected voice routing only; returns a runtime-issued opaque handle. */

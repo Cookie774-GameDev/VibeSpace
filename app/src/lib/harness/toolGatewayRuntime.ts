@@ -18,6 +18,8 @@ export interface ToolGatewayExecutionContext {
   worktree?: string;
   mutationApproved: boolean;
   signal?: AbortSignal;
+  /** Protected native host check; never read from provider arguments. */
+  isRequestLive?: () => Promise<boolean>;
 }
 
 type SemanticMethod = (
@@ -586,6 +588,7 @@ function executionContext(
   request: ToolGatewayRequest,
   mutationApproved: boolean,
   signal?: AbortSignal,
+  isRequestLive?: () => Promise<boolean>,
 ): ToolGatewayExecutionContext {
   return {
     requestId: request.requestId,
@@ -595,6 +598,7 @@ function executionContext(
     ...(request.worktree ? { worktree: request.worktree } : {}),
     mutationApproved,
     ...(signal ? { signal } : {}),
+    ...(isRequestLive ? { isRequestLive } : {}),
   };
 }
 
@@ -611,7 +615,7 @@ function requiresMutationApproval(request: ToolGatewayRequest, deps: ToolGateway
 }
 
 export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
-  execute(request: ToolGatewayRequest): Promise<ToolGatewayResponse>;
+  execute(request: ToolGatewayRequest, transportSignal?: AbortSignal, isRequestLive?: () => Promise<boolean>): Promise<ToolGatewayResponse>;
 } {
   const handlers: Partial<Record<ToolGatewayTool, SemanticMethod>> = {
     'terminal.list': deps.terminal.list,
@@ -644,10 +648,24 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
   };
 
   return {
-    async execute(request) {
+    async execute(request, transportSignal, isRequestLive) {
+      const ownerSignal = deps.readRequestSignal?.(request);
+      const signals = [ownerSignal, transportSignal].filter((value): value is AbortSignal => !!value);
+      const combined = signals.length > 1 ? new AbortController() : undefined;
+      const abort = () => combined?.abort();
+      for (const signal of signals) {
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+      }
+      const signal = combined?.signal ?? signals[0];
+      const cancelled = (): ToolGatewayResponse => ({
+        requestId: request.requestId, ok: false, code: 'cancelled',
+        message: 'The VibeSpace request was cancelled.',
+      });
+      let abortHandler: (() => void) | undefined;
       try {
         // Capture the owner's reference before async approval can release its session lease.
-        const signal = deps.readRequestSignal?.(request);
+        if (signal?.aborted) return cancelled();
         if (!(await deps.authorizeRequest(request))) {
           return {
             requestId: request.requestId,
@@ -666,12 +684,7 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
           };
         }
         if (signal?.aborted) {
-          return {
-            requestId: request.requestId,
-            ok: false,
-            code: 'cancelled',
-            message: 'The VibeSpace request was cancelled.',
-          };
+          return cancelled();
         }
         const handler = handlers[request.tool];
         if (!handler) {
@@ -682,10 +695,21 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
             message: 'The requested semantic tool is unavailable.',
           };
         }
-        const data = await handler(
+        if (isRequestLive && !(await isRequestLive())) return cancelled();
+        if (signal?.aborted) return cancelled();
+        const execution = Promise.resolve(handler(
           request.args,
-          executionContext(request, mutation, signal),
-        );
+          executionContext(request, mutation, signal, isRequestLive),
+        ));
+        const data = await (signal ? Promise.race([
+          execution,
+          new Promise<never>((_resolve, reject) => {
+            abortHandler = () => reject(Error('tool_request_cancelled'));
+            signal.addEventListener('abort', abortHandler, { once: true });
+            if (signal.aborted) abortHandler();
+          }),
+        ]) : execution);
+        if (signal?.aborted || (isRequestLive && !(await isRequestLive()))) return cancelled();
         const mcpResult = request.tool === 'mcp.run' ? projectMcpResult(data) : undefined;
         if (mcpResult) {
           return boundToolGatewayResponse({
@@ -706,6 +730,7 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
           ...(data === undefined ? {} : { data }),
         });
       } catch (error) {
+        if (signal?.aborted) return cancelled();
         if (error instanceof ToolGatewaySemanticError) {
           return boundToolGatewayResponse({
             requestId: request.requestId,
@@ -721,6 +746,9 @@ export function createToolGatewayRuntime(deps: ToolGatewayDependencies): {
           code: 'tool_failed',
           message: 'The semantic tool could not be completed.',
         };
+      } finally {
+        if (abortHandler) signal?.removeEventListener('abort', abortHandler);
+        for (const signal of signals) signal.removeEventListener('abort', abort);
       }
     },
   };

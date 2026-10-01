@@ -22,10 +22,12 @@ export function collectAuditEvidence(
   ];
   const diffs = events.filter((e) => e.kind === 'diff' && e.status === 'done');
   const sum = (key: 'addedLines' | 'removedLines') =>
-    diffs.length && diffs.every((e) => Number.isFinite(e[key]))
-      ? diffs.reduce((total, e) => total + Math.max(0, e[key]!), 0)
+    diffs.length && diffs.every((e) => Number.isSafeInteger(e[key]) && e[key]! >= 0)
+      ? diffs.reduce((total, e) => total + e[key]!, 0)
       : null;
+  const subagentEvents = events.filter((e) => e.kind === 'subagent');
   return {
+    capturedAt: Date.now(),
     messages: messages.length,
     toolCalls: calls.size,
     commands: [...calls.values()].filter((tool) =>
@@ -34,11 +36,10 @@ export function collectAuditEvidence(
     files,
     added: sum('addedLines'),
     removed: sum('removedLines'),
-    subagents: new Set(
-      events.filter((e) => e.kind === 'subagent').map((e) => e.agentId ?? e.agentSlug ?? e.id),
-    ).size,
+    subagents: new Set(subagentEvents.map((e) => e.agentId ?? e.agentSlug).filter(Boolean)).size,
+    unidentifiedSubagentEvents: subagentEvents.filter((e) => !e.agentId && !e.agentSlug).length,
     coverage:
-      'Observed chat records only. Activity retains up to 80 events; absent records and line totals are unknown, not zero activity.',
+      'Snapshot of retained chat records, not a live repository measurement. Activity retains up to 80 events. Calls and file paths show recorded activity, not verified success; diff lines sum reported completed diffs and may overlap. Absent records and missing totals are unknown.',
   };
 }
 

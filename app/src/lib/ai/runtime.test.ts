@@ -25,7 +25,7 @@ import {
   clearKernelSmokeBinding,
   KERNEL_SMOKE_RUNTIME_STAGE_EVENT,
 } from '@/lib/ai/providers/kernelSmoke';
-import { toJarvisApprovalRow, toJarvisRunRow } from '@/lib/db/jarvisMappers';
+import { fromJarvisRunRow, toJarvisApprovalRow, toJarvisRunRow } from '@/lib/db/jarvisMappers';
 import type {
   JarvisApprovalV1,
   JarvisCapabilitySnapshot,
@@ -247,6 +247,7 @@ import {
   hasPriorPersistedTurn,
   handleInstalledJarvisKernelClientRequest,
   installJarvisKernelRuntimeHost,
+  runToolGatewayAction,
   assertRuntimeCaoExecutionIdentity,
   liveVariantLookupForChatSelection,
   mayAutoApproveOpenCodeRequest,
@@ -7812,6 +7813,96 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       now: () => 10,
     });
   }
+
+  it.each(['approve', 'deny', 'cancel'] as const)('keeps the canonical tool request in its owning chat through %s', async (choice) => {
+    const selected = agent('agent_jarvis', 'jarvis', 'Protected Jarvis', true);
+    const harness = kernelRuntimeBindings(selected);
+    useAuthStore.setState({ workspaceId: 'workspace-tool-broker' as never, projectId: null, cloudSession: null });
+    const database = createJarvisDb(uniqueTestDbName('runtime-tool-broker'), TEST_INDEXED_DB);
+    await database.open();
+    await database.chats.add({ id: harness.chatId, workspace_id: 'workspace-tool-broker' as never,
+      title: 'Owned tool request', mode: 'chat', active_agent_ids: [selected.id], created_at: 1, updated_at: 1 });
+    mocks.chatGetById.mockResolvedValue(await database.chats.get(harness.chatId));
+    const providerGate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
+    let providerInput!: Parameters<typeof mocks.runAgent>[0];
+    mocks.runAgent.mockImplementationOnce(input => { providerInput = input; return providerGate.promise; });
+    let approval!: JarvisApprovalV1;
+    const execute = vi.fn(async () => ({ kind: 'committed' as const,
+      value: { kind: 'settled' as const, result: { ok: true as const, summary: 'Created', data: { id: 'owned-schedule' } } } }));
+    interceptNextKernelRuntime(kernel => Object.freeze({ ...kernel, actions: {
+      ...kernel.actions,
+      create: async input => {
+        approval = { schemaVersion: 1, id: 'jappr_runtime_tool', runId: input.parentRun.id,
+          requestId: input.attempt.requestId, attemptNumber: input.attempt.attemptNumber,
+          actionId: input.actionId, actionVersion: input.actionVersion, params: input.params,
+          paramsHash: 'params-runtime-tool', status: 'pending', risk: 'confirm', capabilityId: 'schedule.write',
+          capabilitySnapshotHash: 'capabilities-runtime-tool', expectedEffect: 'Create approved schedule', createdAt: 10, expiresAt: input.expiresAt };
+        await database.jarvis_approvals.add(toJarvisApprovalRow(approval));
+        return { kind: 'committed' as const, value: approval };
+      },
+      decide: async input => {
+        approval = { ...approval, status: input.decision === 'approve' ? 'approved' : 'denied' };
+        await database.jarvis_approvals.put(toJarvisApprovalRow(approval));
+        return { kind: 'committed' as const, value: approval };
+      }, execute,
+    } }));
+    const disposeHost = await installKernelTestHost(database, 'runtime-tool-broker-run');
+    const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+    const authority = await vi.importActual<typeof import('@/lib/harness/toolGatewayAuthority')>('@/lib/harness/toolGatewayAuthority');
+    const controller = new AbortController();
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: { chatId: harness.chatId,
+        text: 'Prepare the approved schedule.', cancellationKey: 'msg_kernel_user' } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      const protectedAttempt = providerInput.protectedAttempt!;
+      expect(protectedAttempt).toBeTruthy();
+      await vi.waitFor(async () => {
+        const row = await database.jarvis_runs.get(protectedAttempt.runId);
+        expect(row && fromJarvisRunRow(row)).toMatchObject({ status: 'running', workspaceId: 'workspace-tool-broker', chatId: harness.chatId });
+      });
+      const claim = authority.captureToolGatewayAuthorityClaim()!;
+      expect(authority.bindToolGatewaySessionAuthority('owned-native-session', claim, controller.signal,
+        { requestId: protectedAttempt.requestId, chatId: harness.chatId, protectedAttempt })).toBe(true);
+      const request = { actionId: 'schedule.create', params: { title: 'QA', prompt: 'QA only', startAtMs: 10000 },
+        context: { requestId: 'owned-tool-call', sessionId: 'owned-native-session', messageId: protectedAttempt.requestId,
+          mutationApproved: true, signal: controller.signal } };
+      if (choice === 'approve') {
+        expect(authority.bindToolGatewaySessionAuthority('foreign-chat-session', claim, undefined,
+          { requestId: protectedAttempt.requestId, chatId: 'foreign-chat', protectedAttempt })).toBe(true);
+        await expect(runToolGatewayAction({ ...request, context: { ...request.context, sessionId: 'foreign-chat-session' } }))
+          .rejects.toThrow('tool_action_identity_unavailable');
+      }
+      const toolTask = runToolGatewayAction(request);
+      void toolTask.catch(() => {});
+      const rejection = choice === 'approve' ? null : expect(toolTask).rejects.toThrow(choice === 'deny' ? 'tool_action_denied' : 'tool_action_cancelled');
+      void rejection?.catch(() => {});
+      await vi.waitFor(async () => {
+        const card = await database.messages.get('msg_toolapproval_jappr_runtime_tool' as MessageId);
+        expect(card?.chat_id).toBe(harness.chatId);
+        expect(card?.parts).toMatchObject([{ kind: 'action_proposal', call_id: 'jarvisapproval:jappr_runtime_tool', status: 'pending' }]);
+      });
+      expect(execute).not.toHaveBeenCalled();
+      if (choice === 'cancel') controller.abort();
+      else {
+        expect(await handleInstalledJarvisKernelClientRequest({ version: 1, kind: 'approval_execute',
+          accountId: protectedAttempt.accountId, approvalId: approval.id })).toMatchObject({ kind: 'unavailable' });
+        expect(await handleInstalledJarvisKernelClientRequest({ version: 1, kind: 'approval_decide',
+          accountId: protectedAttempt.accountId, approvalId: approval.id, decision: choice }))
+          .toMatchObject({ kind: 'approval_decided', continuation: 'tool_request', status: choice === 'approve' ? 'approved' : 'denied' });
+      }
+      if (choice === 'approve') {
+        await expect(toolTask).resolves.toMatchObject({ kind: 'settled', result: { ok: true } });
+        expect(execute).toHaveBeenCalledOnce();
+      } else { await rejection; expect(execute).not.toHaveBeenCalled(); }
+      expect(mocks.runAgent).toHaveBeenCalledOnce();
+      const saved = await database.messages.get('msg_toolapproval_jappr_runtime_tool' as MessageId);
+      expect(saved?.parts).toMatchObject([{ status: choice === 'approve' ? 'success' : 'cancelled' }]);
+    } finally {
+      controller.abort(); providerGate.reject(new Error('tool-broker-fixture-finished'));
+      stop(); await stop.whenIdle(); disposeHost(); authority.releaseToolGatewaySessionAuthority('owned-native-session');
+      authority.releaseToolGatewaySessionAuthority('foreign-chat-session'); await database.delete();
+    }
+  });
 
   it.each(['codex', 'opencode'] as const)(
     'sends hidden approval and resume instructions as the current %s turn without a visible user bubble',

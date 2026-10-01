@@ -475,12 +475,27 @@ describe('persistent OpenCode question transport authority', () => {
   });
 
   it('allows a sixteen-second cold health handshake before dispatching exactly once', async () => {
+    const trace = (event: string) => { if (process.env.VS_CI483_TIMING_TRACE) console.log(JSON.stringify({ event, fakeNow: Date.now() })); };
     vi.useFakeTimers();
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    const fingerprint = vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (...args) => {
+      trace('fingerprint_started');
+      const result = await digest(...args);
+      trace('fingerprint_finished');
+      return result;
+    });
     const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    const controller = new AbortController();
+    let timerInstalled!: () => void;
+    const installed = new Promise<void>((resolve) => { timerInstalled = resolve; });
+    let settleDelay = () => {};
     nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
       if (path.startsWith('/global/health')) {
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, 16_000);
+          trace('health_timer_installed');
+          settleDelay = () => { clearTimeout(timer); resolve(); };
+          timerInstalled();
           init?.signal?.addEventListener(
             'abort',
             () => {
@@ -493,7 +508,7 @@ describe('persistent OpenCode question transport authority', () => {
       }
       return original(generation, path, init, timeout);
     });
-    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('cold-health'))[
+    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('cold-health', controller.signal))[
       Symbol.asyncIterator
     ]();
     const outcome = iterator.next().then(
@@ -501,14 +516,23 @@ describe('persistent OpenCode question transport authority', () => {
       (error) => ({ error }),
     );
     try {
+      await installed;
+      trace('clock_advance_started');
       await vi.advanceTimersByTimeAsync(16_001);
+      trace('clock_advance_finished');
       expect(await outcome).toMatchObject({ value: { done: false, value: { type: 'session' } } });
       expect(
         nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/prompt_async')),
       ).toHaveLength(1);
     } finally {
-      await iterator.return?.();
+      controller.abort();
+      settleDelay();
       vi.useRealTimers();
+      await outcome;
+      trace('iterator_return_started');
+      await iterator.return?.();
+      trace('iterator_return_finished');
+      fingerprint.mockRestore();
     }
   });
 
@@ -517,10 +541,16 @@ describe('persistent OpenCode question transport authority', () => {
     async (route) => {
       vi.useFakeTimers();
       const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+      const controller = new AbortController();
+      let timerInstalled!: () => void;
+      const installed = new Promise<void>((resolve) => { timerInstalled = resolve; });
+      let settleDelay = () => {};
       nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
         if (path.split('?')[0] === route) {
           await new Promise<void>((resolve, reject) => {
             const timer = setTimeout(resolve, 16_000);
+            settleDelay = () => { clearTimeout(timer); resolve(); };
+            timerInstalled();
             init?.signal?.addEventListener(
               'abort',
               () => {
@@ -533,7 +563,7 @@ describe('persistent OpenCode question transport authority', () => {
         }
         return original(generation, path, init, timeout);
       });
-      const iterator = openCodePersistentAdapter.send!(questionProviderRequest('cold-catalog'))[
+      const iterator = openCodePersistentAdapter.send!(questionProviderRequest('cold-catalog', controller.signal))[
         Symbol.asyncIterator
       ]();
       const outcome = iterator.next().then(
@@ -541,6 +571,7 @@ describe('persistent OpenCode question transport authority', () => {
         (error) => ({ error }),
       );
       try {
+        await installed;
         await vi.advanceTimersByTimeAsync(16_001);
         expect(await outcome).toMatchObject({
           value: { done: false, value: { type: 'session', sessionId: 'ses_question_exact' } },
@@ -561,8 +592,11 @@ describe('persistent OpenCode question transport authority', () => {
           )?.[3],
         ).toBe(30_000);
       } finally {
-        await iterator.return?.();
+        controller.abort();
+        settleDelay();
         vi.useRealTimers();
+        await outcome;
+        await iterator.return?.();
       }
     },
   );
@@ -1217,6 +1251,7 @@ describe('persistent OpenCode question transport authority', () => {
       ...questionProviderRequest('request-early-gateway'),
       projectId: 'project-question-test',
       tools: { vibespace_context: true },
+      protectedAttempt: { accountId: 'account-question-test', runId: 'run-protected-tool', requestId: 'request-early-gateway', attemptNumber: 1 },
     };
     nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
       if (args[1].includes('/prompt_async')) {
@@ -1232,7 +1267,7 @@ describe('persistent OpenCode question transport authority', () => {
     try {
       await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'session' } });
       expect(authorizedDuringSend).toBe(true);
-      expect(turnIdentityDuringSend).toEqual({ requestId: request.requestId, chatId: request.chatId });
+      expect(turnIdentityDuringSend).toEqual({ requestId: request.requestId, chatId: request.chatId, protectedAttempt: request.protectedAttempt });
     } finally {
       await iterator.return?.();
     }
@@ -3892,18 +3927,25 @@ describe('persistent OpenCode live authority', () => {
       persistedMessagePolls: [[], [failedStep]],
     });
     const observed: ProviderEvent[] = [];
+    const controller = new AbortController();
+    let sessionAdmitted!: () => void;
+    const admitted = new Promise<void>((resolve) => { sessionAdmitted = resolve; });
+    const consume = (async () => {
+      for await (const event of openCodePersistentAdapter.send!(
+        questionProviderRequest('idle-after-failed-terminal-tool', controller.signal),
+      )) {
+        observed.push(event);
+        if (event.type === 'session') sessionAdmitted();
+      }
+    })();
     try {
-      const consume = (async () => {
-        for await (const event of openCodePersistentAdapter.send!(
-          questionProviderRequest('idle-after-failed-terminal-tool'),
-        )) {
-          observed.push(event);
-        }
-      })();
+      await admitted;
       await vi.advanceTimersByTimeAsync(6_000);
       await consume;
     } finally {
+      controller.abort();
       vi.useRealTimers();
+      await consume.catch(() => {});
     }
 
     const usageIndex = observed.findIndex((event) => event.type === 'usage');
@@ -3973,18 +4015,25 @@ describe('persistent OpenCode live authority', () => {
       persistedMessagePolls: [[], [failedStep], [runningStep], [completedStep]],
     });
     const observed: ProviderEvent[] = [];
+    const controller = new AbortController();
+    let sessionAdmitted!: () => void;
+    const admitted = new Promise<void>((resolve) => { sessionAdmitted = resolve; });
+    const consume = (async () => {
+      for await (const event of openCodePersistentAdapter.send!(
+        questionProviderRequest('transient-idle-after-failed-tool', controller.signal),
+      )) {
+        observed.push(event);
+        if (event.type === 'session') sessionAdmitted();
+      }
+    })();
     try {
-      const consume = (async () => {
-        for await (const event of openCodePersistentAdapter.send!(
-          questionProviderRequest('transient-idle-after-failed-tool'),
-        )) {
-          observed.push(event);
-        }
-      })();
+      await admitted;
       await vi.advanceTimersByTimeAsync(2_000);
       await consume;
     } finally {
+      controller.abort();
       vi.useRealTimers();
+      await consume.catch(() => {});
     }
 
     expect(observed).toContainEqual({
@@ -5169,6 +5218,30 @@ describe('persistent OpenCode live authority', () => {
         },
       }),
     ).toBe('openai/gpt-5.6-sol');
+  });
+
+  it('accepts OpenRouter nested model IDs only under the observed matching provider', () => {
+    const requested = {
+      connectionId: 'opencode-cli',
+      providerId: 'openrouter',
+      modelId: 'openrouter/google/gemma-4-31b-it:free',
+    };
+    expect(assertAuthoritativeOpenCodeIdentity({
+      ...requested,
+      observed: { providerId: 'openrouter', modelId: 'google/gemma-4-31b-it:free' },
+    })).toBe('openrouter/google/gemma-4-31b-it:free');
+    expect(assertAuthoritativeOpenCodeIdentity({
+      ...requested,
+      observed: { providerId: 'openrouter', modelId: 'openrouter/google/gemma-4-31b-it:free' },
+    })).toBe('openrouter/google/gemma-4-31b-it:free');
+    expect(() => assertAuthoritativeOpenCodeIdentity({
+      ...requested,
+      observed: { providerId: 'other', modelId: 'google/gemma-4-31b-it:free' },
+    })).toThrow(/MODEL_IDENTITY_MISMATCH/u);
+    expect(() => assertAuthoritativeOpenCodeIdentity({
+      ...requested,
+      observed: { providerId: 'openrouter', modelId: 'google/gemma-4-26b-a4b-it:free' },
+    })).toThrow(/MODEL_IDENTITY_MISMATCH/u);
   });
 
   it('accepts stream EOF only after authoritative identity and non-empty assistant text', () => {

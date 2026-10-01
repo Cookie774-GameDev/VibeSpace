@@ -4,6 +4,7 @@ import type { Message } from '@/types/chat';
 import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
 import { useUIStore } from '@/stores/ui';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { openNativeChildChat } from '@/features/jarvis-interaction/openNativeChildChat';
 
 const mockState = vi.hoisted(() => ({
   messages: [] as Message[],
@@ -151,6 +152,45 @@ describe('ChatThread agent panel attachment', () => {
     expect(screen.getAllByRole('button', { name: /Open chat for/i }).length).toBeGreaterThanOrEqual(
       2,
     );
+  });
+
+  it('consumes only a selected child belonging to the exact parent and releases its listener on unmount', () => {
+    mockState.messagesByChat.chat_child_multitask = [
+      {
+        id: 'child_selected_reply' as Message['id'],
+        chat_id: 'chat_child_multitask' as Message['chat_id'],
+        role: 'assistant',
+        parts: [{ kind: 'text', text: 'Selected child transcript.' }],
+        created_at: 3,
+        updated_at: 3,
+      },
+    ];
+    useJarvisInteractionStore.getState().upsertAgent('chat_parent', baseAgent);
+    const remove = vi.spyOn(window, 'removeEventListener');
+    const view = render(
+      <TooltipProvider>
+        <ChatThread chatId="chat_parent" />
+      </TooltipProvider>,
+    );
+    try {
+      act(() => openNativeChildChat('chat_child_multitask', 'other_parent'));
+      expect(screen.queryByTestId('subagent-child-side-panel')).toBeNull();
+      act(() => openNativeChildChat('unknown_child', 'chat_parent'));
+      expect(screen.queryByTestId('subagent-child-side-panel')).toBeNull();
+      act(() => openNativeChildChat('chat_child_multitask', 'chat_parent'));
+      expect(
+        screen.getByRole('dialog', { name: 'Child chat for Fix Jarvis runtime plans' }),
+      ).toBeTruthy();
+      expect(screen.getByText('Selected child transcript.')).toBeTruthy();
+      expect(useUIStore.getState()).toMatchObject({ activeChatId: 'chat_parent', route: 'chat' });
+      view.unmount();
+      expect(remove.mock.calls.some(([name]) => name === 'vibespace:open-child-chat-panel')).toBe(
+        true,
+      );
+    } finally {
+      view.unmount();
+      remove.mockRestore();
+    }
   });
 
   it('records a live Created sub-agent event and opens that child in the parent side panel', () => {

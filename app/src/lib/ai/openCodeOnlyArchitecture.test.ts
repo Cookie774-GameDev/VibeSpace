@@ -7,8 +7,18 @@ const router = readFileSync(resolve(process.cwd(), 'src/lib/ai/router.ts'), 'utf
 describe('OpenCode-only production routing architecture', () => {
   it('does not load ordinary native provider executors into the production router', () => {
     expect(router).not.toMatch(
-      /from ['"]\.\/providers\/(?:anthropic|openai|google|groq|ollama|compatibleInstances|mock)['"]/u,
+      /from ['"]\.\/providers\/(?:anthropic|openai|google|groq|ollama|mock)['"]/u,
     );
+    expect(router.match(/import\s*\{\s*openrouterProvider\s*\}\s*from ['"]\.\/providers\/compatibleInstances['"]/gu)).toHaveLength(1);
+    expect(router.match(/from ['"]\.\/providers\/compatibleInstances['"]/gu)).toHaveLength(1);
+    const ordinaryDispatch = router.slice(router.indexOf('async function runAgentDispatch'), router.indexOf('export async function runAgent'));
+    expect(ordinaryDispatch).toContain('if (req.imageOutputRequested === true) return dispatchOpenRouterImageOutput(req);');
+    expect(ordinaryDispatch).not.toMatch(/openrouterProvider\.run|provider\.run|adapter\.send/u);
+    const imageDispatch = router.slice(router.indexOf('async function dispatchOpenRouterImageOutput'), router.indexOf('async function runAgentDispatch'));
+    expect(imageDispatch).toContain("if (req.backend !== 'opencode')");
+    expect(imageDispatch).toContain("connectionId !== 'openrouter-api' || req.agent.model.provider !== 'openrouter' || !modelId");
+    expect(imageDispatch).toContain('runProtectedProviderAttempt');
+    expect(imageDispatch).not.toContain('dispatchThroughOpenCode');
     expect(router).not.toMatch(/\bproviders\s*:\s*Record<ProviderId,\s*LLMProvider>/u);
   });
 

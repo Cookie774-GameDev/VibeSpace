@@ -5,9 +5,11 @@ import type { ToolGatewayResponse } from './toolGatewayProtocol';
 const tauri = vi.hoisted(() => ({
   invoke: vi.fn(),
   listener: null as null | ((event: { payload: unknown }) => void),
+  listeners: new Map<string, (event: { payload: unknown }) => void>(),
   unlisten: vi.fn(),
-  listen: vi.fn(async (_event: string, listener: (event: { payload: unknown }) => void) => {
-    tauri.listener = listener;
+  listen: vi.fn(async (event: string, listener: (event: { payload: unknown }) => void) => {
+    tauri.listeners.set(event, listener);
+    if (event === 'vibespace://tool-gateway/request') tauri.listener = listener;
     return tauri.unlisten;
   }),
 }));
@@ -59,6 +61,7 @@ describe('ToolGatewayHost', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     tauri.listener = null;
+    tauri.listeners.clear();
     tauri.invoke.mockResolvedValue(undefined);
   });
 
@@ -86,12 +89,12 @@ describe('ToolGatewayHost', () => {
     await mounted();
     await emit(request('request-a'));
 
-    expect(tauri.listen).toHaveBeenCalledOnce();
+    expect(tauri.listen).toHaveBeenCalledTimes(2);
     expect(tauri.listen).toHaveBeenCalledWith(
       'vibespace://tool-gateway/request',
       expect.any(Function),
     );
-    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ tool: 'app.getState' }));
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ tool: 'app.getState' }), expect.any(AbortSignal), expect.any(Function));
     expect(tauri.invoke).toHaveBeenCalledOnce();
     expect(tauri.invoke).toHaveBeenCalledWith('tool_gateway_respond', { response });
   });
@@ -119,7 +122,7 @@ describe('ToolGatewayHost', () => {
       messageId: 'message-a',
       tool: 'app.getState',
       args: {},
-    });
+    }, expect.any(AbortSignal), expect.any(Function));
     expect(tauri.invoke).toHaveBeenCalledWith('tool_gateway_respond', { response });
   });
 
@@ -243,12 +246,52 @@ describe('ToolGatewayHost', () => {
       await Promise.resolve();
     });
     view.unmount();
-    expect(tauri.unlisten).toHaveBeenCalledOnce();
+    expect(tauri.unlisten).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       release?.({ requestId: 'late', ok: true, code: 'ok', message: 'done' });
       await Promise.resolve();
     });
     expect(tauri.invoke).not.toHaveBeenCalled();
+  });
+
+  it('aborts only the matching native request and releases its queued successor without a late response', async () => {
+    const signals = new Map<string, AbortSignal>();
+    const execute = vi.fn(async (value: { requestId: string }, signal: AbortSignal): Promise<ToolGatewayResponse> => {
+      signals.set(value.requestId, signal);
+      if (value.requestId === 'waiting') await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      return { requestId: value.requestId, ok: true, code: 'ok', message: 'done' };
+    });
+    render(<ToolGatewayHost runtime={{ execute }} />);
+    await mounted();
+    await emit(request('waiting'));
+    await emit(request('next'));
+    const cancel = tauri.listeners.get('vibespace://tool-gateway/cancel');
+    await act(async () => cancel?.({ payload: { requestId: 'waiting', sessionId: 'foreign', messageId: 'message-a' } }));
+    expect(signals.get('waiting')?.aborted).toBe(false);
+    await act(async () => cancel?.({ payload: { requestId: 'waiting', sessionId: 'session-a', messageId: 'message-a' } }));
+    expect(signals.get('waiting')?.aborted).toBe(true);
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(tauri.invoke).toHaveBeenCalledOnce());
+    expect(tauri.invoke).toHaveBeenCalledWith('tool_gateway_respond', { response: expect.objectContaining({ requestId: 'next' }) });
+  });
+
+  it('checks the exact native request before a protected execution and aborts when it is unavailable', async () => {
+    let isLive!: () => Promise<boolean>;
+    let signal!: AbortSignal;
+    const execute = vi.fn(async (_value, lifetimeSignal, check) => {
+      signal = lifetimeSignal;
+      isLive = check;
+      return { requestId: 'probe', ok: true, code: 'ok', message: 'done' };
+    });
+    render(<ToolGatewayHost runtime={{ execute }} />);
+    await mounted();
+    await emit(request('probe'));
+    tauri.invoke.mockResolvedValueOnce(false);
+    expect(await isLive()).toBe(false);
+    expect(signal.aborted).toBe(true);
+    expect(tauri.invoke).toHaveBeenLastCalledWith('tool_gateway_respond', {
+      probe: { requestId: 'probe', sessionId: 'session-a', messageId: 'message-a' },
+    });
   });
 });

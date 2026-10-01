@@ -15,10 +15,13 @@ const MAX_ID_BYTES: usize = 200;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_ACTIVE_CONNECTIONS: usize = 16;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+// Five minutes for owner approval, then the ordinary bounded execution/response budget.
+const APPROVAL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(330);
 const CONTEXT_INVESTIGATION_TIMEOUT: Duration = Duration::from_secs(120);
 const RESPONSE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_MCP_CALL_IDS: usize = 4096;
 pub const TOOL_REQUEST_EVENT: &str = "vibespace://tool-gateway/request";
+pub const TOOL_CANCEL_EVENT: &str = "vibespace://tool-gateway/cancel";
 
 const TOOL_CATALOG: &[&str] = &[
     "terminal.list",
@@ -67,7 +70,10 @@ pub struct ToolGatewayRequest {
 }
 
 fn response_timeout(request: &ToolGatewayRequest) -> Duration {
-    if request.tool == "vibespace_context"
+    // This is the native semantic tool routed through the canonical approval broker.
+    if request.tool == "schedule.create" {
+        APPROVAL_RESPONSE_TIMEOUT
+    } else if request.tool == "vibespace_context"
         && matches!(
             request.args.get("operation").and_then(Value::as_str),
             Some("query" | "investigate")
@@ -186,9 +192,41 @@ pub fn parse_tool_request(body: &[u8]) -> Result<ToolGatewayRequest, ToolGateway
     Ok(request)
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolGatewayRequestIdentity {
+    request_id: String,
+    session_id: String,
+    message_id: String,
+}
+
+impl From<&ToolGatewayRequest> for ToolGatewayRequestIdentity {
+    fn from(request: &ToolGatewayRequest) -> Self {
+        Self {
+            request_id: request.request_id.clone(),
+            session_id: request.session_id.clone(),
+            message_id: request.message_id.clone(),
+        }
+    }
+}
+
+struct NativeRequestLifetime {
+    identity: ToolGatewayRequestIdentity,
+    deadline: Instant,
+    connection: TcpStream,
+}
+
+struct PendingRequest {
+    sender: mpsc::SyncSender<ToolGatewayResponse>,
+    lifetime: Option<NativeRequestLifetime>,
+}
+
+type ToolCancelEmitter = Arc<dyn Fn(ToolGatewayRequestIdentity) + Send + Sync>;
+
 #[derive(Default)]
 pub struct PendingRequests {
-    inner: Mutex<HashMap<String, mpsc::SyncSender<ToolGatewayResponse>>>,
+    inner: Mutex<HashMap<String, PendingRequest>>,
+    cancel_emitter: Mutex<Option<ToolCancelEmitter>>,
 }
 
 impl PendingRequests {
@@ -207,8 +245,73 @@ impl PendingRequests {
         if pending.contains_key(request_id) {
             return Err(error("conflict", "The tool request ID is already active."));
         }
-        pending.insert(request_id.to_string(), sender);
+        pending.insert(
+            request_id.to_string(),
+            PendingRequest {
+                sender,
+                lifetime: None,
+            },
+        );
         Ok(receiver)
+    }
+
+    fn install_cancel_emitter(&self, app: AppHandle) {
+        if let Ok(mut emitter) = self.cancel_emitter.lock() {
+            *emitter = Some(Arc::new(move |identity| {
+                let _ = app.emit(TOOL_CANCEL_EVENT, identity);
+            }));
+        }
+    }
+
+    fn reserve_native(
+        &self,
+        request: &ToolGatewayRequest,
+        stream: &TcpStream,
+        timeout: Duration,
+    ) -> Result<mpsc::Receiver<ToolGatewayResponse>, ToolGatewayError> {
+        let connection = stream
+            .try_clone()
+            .map_err(|_| error("connection_closed", "The tool connection closed."))?;
+        connection
+            .set_read_timeout(Some(Duration::from_millis(1)))
+            .map_err(|_| error("connection_closed", "The tool connection closed."))?;
+        let receiver = self.reserve(&request.request_id)?;
+        let mut entries = self
+            .inner
+            .lock()
+            .map_err(|_| error("internal_error", "The tool gateway is unavailable."))?;
+        let entry = entries
+            .get_mut(&request.request_id)
+            .ok_or_else(|| error("request_not_found", "The tool request is no longer active."))?;
+        entry.lifetime = Some(NativeRequestLifetime {
+            identity: request.into(),
+            deadline: Instant::now() + timeout,
+            connection,
+        });
+        Ok(receiver)
+    }
+
+    fn is_live(&self, identity: &ToolGatewayRequestIdentity) -> bool {
+        if !safe_id(&identity.request_id)
+            || !safe_id(&identity.session_id)
+            || !safe_id(&identity.message_id)
+        {
+            return false;
+        }
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|entries| {
+                entries
+                    .get(&identity.request_id)
+                    .and_then(|entry| entry.lifetime.as_ref())
+                    .map(|lifetime| {
+                        lifetime.identity == *identity
+                            && Instant::now() < lifetime.deadline
+                            && connection_is_live(&lifetime.connection)
+                    })
+            })
+            .unwrap_or(false)
     }
 
     pub fn respond(&self, response: ToolGatewayResponse) -> Result<(), ToolGatewayError> {
@@ -219,13 +322,68 @@ impl PendingRequests {
             .remove(&response.request_id)
             .ok_or_else(|| error("request_not_found", "The tool request is no longer active."))?;
         sender
+            .sender
             .send(response)
             .map_err(|_| error("request_not_found", "The tool request is no longer active."))
     }
 
     fn cancel(&self, request_id: &str) {
-        if let Ok(mut pending) = self.inner.lock() {
-            pending.remove(request_id);
+        let removed = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.remove(request_id));
+        if let Some(lifetime) = removed.and_then(|entry| entry.lifetime) {
+            let emitter = self
+                .cancel_emitter
+                .lock()
+                .ok()
+                .and_then(|value| value.clone());
+            if let Some(emit) = emitter {
+                emit(lifetime.identity);
+            }
+        }
+    }
+}
+
+fn connection_is_live(stream: &TcpStream) -> bool {
+    let mut byte = [0_u8; 1];
+    match stream.peek(&mut byte) {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(failure) => matches!(
+            failure.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ),
+    }
+}
+
+fn wait_for_native_response(
+    receiver: &mpsc::Receiver<ToolGatewayResponse>,
+    deadline: Instant,
+    is_live: impl Fn() -> bool,
+    now: impl Fn() -> Instant,
+) -> Result<ToolGatewayResponse, ToolGatewayError> {
+    loop {
+        if !is_live() {
+            return Err(error("connection_closed", "The tool connection closed."));
+        }
+        let current = now();
+        if current >= deadline {
+            return Err(error(
+                "request_timeout",
+                "VibeSpace did not complete the tool request in time.",
+            ));
+        }
+        match receiver.recv_timeout(RESPONSE_POLL_INTERVAL.min(deadline.duration_since(current))) {
+            Ok(response) => return Ok(response),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(error(
+                    "request_not_found",
+                    "The tool request is no longer active.",
+                ))
+            }
         }
     }
 }
@@ -856,7 +1014,7 @@ fn handle_codex_mcp_connection(
                         worktree: directory.map(str::to_string),
                     };
                     let timeout = response_timeout(&request);
-                    let receiver = pending.reserve(&request_id)?;
+                    let receiver = pending.reserve_native(&request, &stream, timeout)?;
                     if !authority.dispatch(request, emit_request) {
                         pending.cancel(&request_id);
                         if authority.is_revoked() {
@@ -867,6 +1025,16 @@ fn handle_codex_mcp_connection(
                     } else {
                         let deadline = Instant::now() + timeout;
                         let tool_response = loop {
+                            if !connection_is_live(&stream) {
+                                pending.cancel(&request_id);
+                                break ToolGatewayResponse {
+                                    request_id: request_id.clone(),
+                                    ok: false,
+                                    code: "connection_closed".into(),
+                                    message: "The Context Map connection closed.".into(),
+                                    data: None,
+                                };
+                            }
                             if authority.is_revoked() {
                                 pending.cancel(&request_id);
                                 break revoked_tool_response(request_id.clone());
@@ -1036,6 +1204,7 @@ pub fn create_codex_context_lease(
     session_id: &str,
     directory: Option<&str>,
 ) -> Result<CodexContextLease, String> {
+    state.pending.install_cancel_emitter(app.clone());
     if !safe_id(session_id) {
         return Err("The Codex Context Map session ID is invalid.".into());
     }
@@ -1219,7 +1388,8 @@ fn handle_connection(
             return Ok(());
         }
     };
-    let receiver = pending.reserve(&request.request_id)?;
+    let timeout = response_timeout(&request);
+    let receiver = pending.reserve_native(&request, &stream, timeout)?;
     if app.emit(TOOL_REQUEST_EVENT, request.clone()).is_err() {
         pending.cancel(&request.request_id);
         let response = http_response(
@@ -1235,15 +1405,20 @@ fn handle_connection(
         let _ = stream.write_all(&response);
         return Ok(());
     }
-    let response = match receiver.recv_timeout(response_timeout(&request)) {
+    let response = match wait_for_native_response(
+        &receiver,
+        Instant::now() + timeout,
+        || connection_is_live(&stream),
+        Instant::now,
+    ) {
         Ok(response) => response,
-        Err(_) => {
+        Err(failure) => {
             pending.cancel(&request.request_id);
             ToolGatewayResponse {
                 request_id: request.request_id,
                 ok: false,
-                code: "request_timeout".into(),
-                message: "VibeSpace did not complete the tool request in time.".into(),
+                code: failure.code.into(),
+                message: failure.message.into(),
                 data: None,
             }
         }
@@ -1258,6 +1433,7 @@ pub fn start_tool_gateway_server(
     app: &AppHandle,
     state: &ToolGatewayState,
 ) -> Result<ToolGatewayEndpoint, String> {
+    state.pending.install_cancel_emitter(app.clone());
     let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .map_err(|_| "The VibeSpace tool gateway could not bind to loopback.".to_string())?;
     let address = listener
@@ -1310,12 +1486,18 @@ pub fn start_tool_gateway_server(
 #[tauri::command]
 pub fn tool_gateway_respond(
     state: State<'_, ToolGatewayState>,
-    response: ToolGatewayResponse,
-) -> Result<(), String> {
-    state
-        .pending
-        .respond(response)
-        .map_err(|failure| failure.message.to_string())
+    response: Option<ToolGatewayResponse>,
+    probe: Option<ToolGatewayRequestIdentity>,
+) -> Result<bool, String> {
+    match (response, probe) {
+        (Some(response), None) => state
+            .pending
+            .respond(response)
+            .map(|_| true)
+            .map_err(|failure| failure.message.to_string()),
+        (None, Some(identity)) => Ok(state.pending.is_live(&identity)),
+        _ => Err("Exactly one response or lifetime probe is required.".into()),
+    }
 }
 
 #[cfg(test)]
@@ -1363,6 +1545,136 @@ mod tests {
         item.tool = "terminal.list".into();
         item.args = json!({ "operation": "investigate" });
         assert_eq!(super::response_timeout(&item), Duration::from_secs(30));
+        for tool in [
+            "terminal.write",
+            "tasks.create",
+            "plugins.run",
+            "mcp.run",
+            "app.navigate",
+        ] {
+            item.tool = tool.into();
+            assert_eq!(super::response_timeout(&item), Duration::from_secs(30));
+        }
+    }
+
+    fn native_connection_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (server, client)
+    }
+
+    #[test]
+    fn canonical_schedule_keeps_the_original_response_wait_past_thirty_seconds() {
+        let item = parse_tool_request(&request("schedule.create")).unwrap();
+        assert_eq!(super::response_timeout(&item), Duration::from_secs(330));
+        let (server, _client) = native_connection_pair();
+        let pending = PendingRequests::default();
+        let receiver = pending
+            .reserve_native(&item, &server, super::response_timeout(&item))
+            .unwrap();
+        let started = Instant::now();
+        pending
+            .respond(ToolGatewayResponse {
+                request_id: item.request_id.clone(),
+                ok: true,
+                code: "ok".into(),
+                message: "Approved and settled".into(),
+                data: None,
+            })
+            .unwrap();
+        // Clock injection covers a decision after the former 30s transport boundary,
+        // without sleeping for 31s or claiming native end-to-end execution.
+        let result = super::wait_for_native_response(
+            &receiver,
+            started + super::response_timeout(&item),
+            || super::connection_is_live(&server),
+            || started + Duration::from_secs(31),
+        )
+        .unwrap();
+        assert_eq!(result.request_id, item.request_id);
+        assert!(result.ok);
+    }
+
+    #[test]
+    fn native_timeout_cancels_the_exact_request_and_refuses_any_late_response() {
+        let item = parse_tool_request(&request("schedule.create")).unwrap();
+        let (server, _client) = native_connection_pair();
+        let pending = PendingRequests::default();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        *pending.cancel_emitter.lock().unwrap() = Some(Arc::new(move |identity| {
+            captured.lock().unwrap().push(identity)
+        }));
+        let receiver = pending
+            .reserve_native(&item, &server, super::response_timeout(&item))
+            .unwrap();
+        let started = Instant::now();
+        let failure = super::wait_for_native_response(
+            &receiver,
+            started + super::response_timeout(&item),
+            || super::connection_is_live(&server),
+            || started + Duration::from_secs(331),
+        )
+        .unwrap_err();
+        assert_eq!(failure.code, "request_timeout");
+        pending.cancel(&item.request_id);
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![super::ToolGatewayRequestIdentity::from(&item)]
+        );
+        assert!(!pending.is_live(&(&item).into()));
+        assert_eq!(
+            pending
+                .respond(ToolGatewayResponse {
+                    request_id: item.request_id,
+                    ok: true,
+                    code: "ok".into(),
+                    message: "late".into(),
+                    data: None
+                })
+                .unwrap_err()
+                .code,
+            "request_not_found"
+        );
+    }
+
+    #[test]
+    fn native_disconnect_cancels_the_original_wait_and_lifetime_probe_fails_closed() {
+        let item = parse_tool_request(&request("schedule.create")).unwrap();
+        let (server, client) = native_connection_pair();
+        let pending = PendingRequests::default();
+        let receiver = pending
+            .reserve_native(&item, &server, super::response_timeout(&item))
+            .unwrap();
+        assert!(pending.is_live(&(&item).into()));
+        let mut foreign = super::ToolGatewayRequestIdentity::from(&item);
+        foreign.session_id = "foreign-session".into();
+        assert!(!pending.is_live(&foreign));
+        drop(client);
+        let failure = super::wait_for_native_response(
+            &receiver,
+            Instant::now() + super::response_timeout(&item),
+            || super::connection_is_live(&server),
+            Instant::now,
+        )
+        .unwrap_err();
+        assert_eq!(failure.code, "connection_closed");
+        assert!(!pending.is_live(&(&item).into()));
+        pending.cancel(&item.request_id);
+        assert!(pending.inner.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn native_probe_rejects_a_request_whose_transport_deadline_has_expired() {
+        let item = parse_tool_request(&request("schedule.create")).unwrap();
+        let (server, _client) = native_connection_pair();
+        let pending = PendingRequests::default();
+        let _receiver = pending
+            .reserve_native(&item, &server, Duration::ZERO)
+            .unwrap();
+        assert!(!pending.is_live(&(&item).into()));
+        pending.cancel(&item.request_id);
     }
 
     fn codex_context_call(

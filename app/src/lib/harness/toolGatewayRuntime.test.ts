@@ -100,6 +100,30 @@ function request(tool: ToolGatewayTool) {
 }
 
 describe('tool gateway semantic runtime', () => {
+  it('does not dispatch a tool whose individual native request already ended', async () => {
+    const { call, deps } = dependencies();
+    const transport = new AbortController();
+    transport.abort();
+    expect(await createToolGatewayRuntime(deps).execute(request('schedule.create'), transport.signal))
+      .toMatchObject({ ok: false, code: 'cancelled' });
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it.each(['transport', 'owner'])('propagates %s cancellation into the same waiting handler', async (ended) => {
+    const { call, deps } = dependencies();
+    const owner = new AbortController();
+    const transport = new AbortController();
+    deps.readRequestSignal = () => owner.signal;
+    call.mockImplementation(async (_args, context) => new Promise((resolve) => {
+      context.signal.addEventListener('abort', () => resolve({ cancelled: true }), { once: true });
+    }));
+    const task = createToolGatewayRuntime(deps).execute(request('schedule.create'), transport.signal);
+    await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+    const signal = call.mock.calls[0][1].signal as AbortSignal;
+    (ended === 'transport' ? transport : owner).abort();
+    expect(signal.aborted).toBe(true);
+    expect(await task).toMatchObject({ ok: false, code: 'cancelled' });
+  });
   it('runs a trusted read-only plugin operation without granting mutations', async () => {
     const { call, deps } = dependencies(false);
     deps.plugins.isReadOnly = () => true;

@@ -114,9 +114,21 @@ for (const command of [...COMMANDS, ...DIRECT_COMMANDS]) {
   for (const alias of command.aliases) EXACT_ALIAS_INDEX.set(normalize(alias), command);
 }
 
+const TYPO_CACHE = new Map();
 function typoCandidate(token) {
+  if (TYPO_CACHE.has(token)) return TYPO_CACHE.get(token);
+  const result = uncachedTypoCandidate(token);
+  if (token.length <= 64) {
+    if (TYPO_CACHE.size >= 2048) TYPO_CACHE.clear();
+    TYPO_CACHE.set(token, result);
+  }
+  return result;
+}
+
+function uncachedTypoCandidate(token) {
   if (LEXICON.has(token)) return { value: token, distance: 0, corrected: false };
-  if (token.length <= 4 || /^\d+$/u.test(token)) {
+  // These are different intents, not spelling variants of local actions.
+  if (['clone', 'clothe', 'shop', 'plane', 'prose'].includes(token) || /^\d+$/u.test(token)) {
     return { value: token, distance: 0, corrected: false };
   }
   const transposed = [];
@@ -124,9 +136,26 @@ function typoCandidate(token) {
     const swapped = token.slice(0, i) + token[i + 1] + token[i] + token.slice(i + 2);
     if (LEXICON.has(swapped)) transposed.push(swapped);
   }
-  if (transposed.length) {
+  if (transposed.length === 1) {
     transposed.sort((a, b) => (LEXICON.get(b) ?? 0) - (LEXICON.get(a) ?? 0));
     return { value: transposed[0], distance: 1, corrected: true };
+  }
+  if (transposed.length > 1 || token.length <= 4) {
+    return { value: token, distance: 0, corrected: false };
+  }
+  if (token.length <= 16) {
+    const twoTranspositions = new Set();
+    for (let i = 0; i < token.length - 1; i += 1) {
+      const first = token.slice(0, i) + token[i + 1] + token[i] + token.slice(i + 2);
+      for (let j = 0; j < first.length - 1; j += 1) {
+        const second = first.slice(0, j) + first[j + 1] + first[j] + first.slice(j + 2);
+        if (LEXICON.has(second)) twoTranspositions.add(second);
+      }
+    }
+    if (twoTranspositions.size === 1) {
+      return { value: [...twoTranspositions][0], distance: 2, corrected: true };
+    }
+    if (twoTranspositions.size > 1) return { value: token, distance: 0, corrected: false };
   }
 
   const candidates = new Set();
@@ -417,7 +446,8 @@ function splitConnectors(span) {
   while ((colonMatch = colonRe.exec(raw))) {
     if (inQuote(colonMatch.index)) continue;
     const left = raw.slice(0, colonMatch.index);
-    if (/(?:^|\b(?:and|also|then|plus)\s+)(?:please\s+)?(?:tell|message)\b/iu.test(normalize(left))) continue;
+    if (/(?:^|\b(?:and|also|then|plus)\s+)(?:please\s+)?(?:tell|message)\b/iu.test(normalize(left)))
+      continue;
     const right = raw.slice(colonRe.lastIndex);
     if (!colonPrefixBlocksSplit(left) && likelyCommandStart(right)) {
       boundaries.push({ start: colonMatch.index, next: colonRe.lastIndex });
@@ -482,7 +512,10 @@ function quoteRanges(text) {
   let start = -1;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
-    if (ch === '\\') { i += 1; continue; }
+    if (ch === '\\') {
+      i += 1;
+      continue;
+    }
     if (!open && (ch === '"' || ch.charCodeAt(0) === 96 || ch === '\u201c')) {
       open = ch === '\u201c' ? '\u201d' : ch;
       start = i;
@@ -684,7 +717,8 @@ function directCommandFromFrame(span, speech) {
 
 function targetedPayload(raw) {
   let payload = raw.trim();
-  const marker = /^(?:exactly(?:\s+(?:this|the)\s+(?:message|prompt|text))?|verbatim)\s*:?\s+/iu.exec(payload);
+  const marker =
+    /^(?:exactly(?:\s+(?:this|the)\s+(?:message|prompt|text))?|verbatim)\s*:?\s+/iu.exec(payload);
   if (marker) payload = payload.slice(marker[0].length);
   const first = payload[0];
   const close = first === '\u201c' ? '\u201d' : first;
@@ -692,8 +726,14 @@ function targetedPayload(raw) {
   if (quoted) {
     let end = -1;
     for (let i = 1; i < payload.length; i += 1) {
-      if (payload[i] === '\\') { i += 1; continue; }
-      if (payload[i] === close) { end = i; break; }
+      if (payload[i] === '\\') {
+        i += 1;
+        continue;
+      }
+      if (payload[i] === close) {
+        end = i;
+        break;
+      }
     }
     if (end <= 0 || !/^[.!?;]?$/u.test(payload.slice(end + 1).trim())) return null;
     payload = payload.slice(1, end);
@@ -702,26 +742,36 @@ function targetedPayload(raw) {
   }
   if (!payload.trim() || payload.length > 32_768) return null;
   // Context-dependent work needs model composition, not a guessed literal relay.
-  const needsComposition = /\b(?:rlm|context map|project context|skills?|environment|relevant|downloads|audit|draft|compose|rewrite|research|design|planning)\b/u.test(normalize(payload));
+  const needsComposition =
+    /\b(?:rlm|context map|project context|skills?|environment|relevant|downloads|audit|draft|compose|rewrite|research|design|planning)\b/u.test(
+      normalize(payload),
+    );
   return { payload, needsComposition: !marker && !quoted && needsComposition };
 }
 
 function explicitTargetedMessageFromFrame(span, speech) {
   if (!/^(?:tell|message)\b/u.test(speech.normalized)) return null;
   // Recognition is normalized, but delivery bytes are taken from original text.
-  const action = tokenize(span.text, 0, false).find((t) => t.value === 'tell' || t.value === 'message');
+  const action = tokenize(span.text, 0, false).find(
+    (t) => t.value === 'tell' || t.value === 'message',
+  );
   if (!action) return null;
   const raw = span.text.slice(action.start);
   const finish = (id, target, source) => {
     const parsed = targetedPayload(source);
     if (!parsed) return { status: 'ambiguous', reason: 'message-payload' };
-    if (parsed.needsComposition) return { status: 'ambiguous', reason: 'message-needs-model-context' };
+    if (parsed.needsComposition)
+      return { status: 'ambiguous', reason: 'message-needs-model-context' };
     return { status: 'command', id, confidence: 0.99, slots: { target, payload: parsed.payload } };
   };
-  let match = /^(?:tell|message)\s+terminal\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:to\s+)?([\s\S]+)$/iu.exec(raw);
+  let match =
+    /^(?:tell|message)\s+terminal\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:to\s+)?([\s\S]+)$/iu.exec(
+      raw,
+    );
   if (match) {
     const ordinal = NUMBER_WORDS[match[1].toLowerCase()] ?? Number(match[1]);
-    if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 10) return { status: 'ambiguous', reason: 'message-target' };
+    if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 10)
+      return { status: 'ambiguous', reason: 'message-target' };
     return finish('terminal.message', { ordinal, scope: 'one' }, match[2]);
   }
   match = /^tell\s+all\s+terminals?\s+(?:to\s+)?([\s\S]+)$/iu.exec(raw);
@@ -829,6 +879,23 @@ function commandFromFrame(span, speech) {
   const exactAlias = EXACT_ALIAS_INDEX.has(stripLeadingWrappers(speech.normalized));
   if (!exactAlias && hasContentMediator(family, speech.normalized)) {
     return { status: 'ambiguous', reason: 'content-mediator' };
+  }
+
+  // No-payload actions cannot consume an unrecognized subject or qualifier.
+  // Preserve such text for clarification rather than interpreting a noun
+  // phrase (for example "terminal illness") as an application control.
+  if (
+    ['terminal', 'panel', 'music'].includes(family) &&
+    tokens.some(
+      (token) =>
+        !LEXICON.has(token.value) &&
+        !FILLER_WORDS.has(token.value) &&
+        !/^(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|to|in|on|my|with|app|application|agents|could|can|would|will|you|u|up|instead|actually|again|both|it)$/u.test(
+          token.raw,
+        ),
+    )
+  ) {
+    return { status: 'ambiguous', reason: 'unresolved-subject' };
   }
 
   if (family === 'terminal') {

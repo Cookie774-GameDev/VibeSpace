@@ -69,6 +69,49 @@ describe('tool gateway session authority', () => {
     clearToolGatewayAuthorityForTests();
   });
 
+  it('retains an immutable exact protected attempt for a bound tool request', () => {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    const protectedAttempt = { accountId: 'account-a', runId: 'run-a', requestId: 'provider-a', attemptNumber: 2 };
+    expect(bindToolGatewaySessionAuthority('protected-session', claim, undefined, {
+      requestId: 'provider-a', chatId: 'chat-a', protectedAttempt,
+    })).toBe(true);
+    protectedAttempt.runId = 'changed-after-binding';
+    expect(readToolGatewayTurnIdentity('protected-session', 'provider-a')).toEqual({
+      requestId: 'provider-a', chatId: 'chat-a', protectedAttempt: {
+        accountId: 'account-a', runId: 'run-a', requestId: 'provider-a', attemptNumber: 2,
+      },
+    });
+    expect(readToolGatewayTurnIdentity('protected-session', 'wrong-request')).toBeNull();
+  });
+
+  it.each([
+    { accountId: 'foreign', runId: 'run-a', requestId: 'provider-a', attemptNumber: 1 },
+    { accountId: 'account-a', runId: 'run-a', requestId: 'foreign-request', attemptNumber: 1 },
+    { accountId: 'account-a', runId: '', requestId: 'provider-a', attemptNumber: 1 },
+    { accountId: 'account-a', runId: 'run-a', requestId: 'provider-a', attemptNumber: 0 },
+    { accountId: 'account-a', runId: 'run-a', requestId: 'provider-a', attemptNumber: 1.5 },
+  ])('rejects a mismatched or malformed protected attempt: %j', (protectedAttempt) => {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    expect(bindToolGatewaySessionAuthority('invalid-protected', claim, undefined, {
+      requestId: 'provider-a', chatId: 'chat-a', protectedAttempt,
+    })).toBe(false);
+    expect(readToolGatewayTurnIdentity('invalid-protected', 'provider-a')).toBeNull();
+  });
+
+  it('does not replace an already-bound protected attempt and revokes it on cancellation', () => {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    const controller = new AbortController();
+    const turn = { requestId: 'provider-a', chatId: 'chat-a', protectedAttempt: {
+      accountId: 'account-a', runId: 'run-a', requestId: 'provider-a', attemptNumber: 1,
+    } };
+    expect(bindToolGatewaySessionAuthority('protected-session', claim, controller.signal, turn)).toBe(true);
+    expect(bindToolGatewaySessionAuthority('protected-session', claim, controller.signal, {
+      ...turn, protectedAttempt: { ...turn.protectedAttempt, runId: 'run-b' },
+    })).toBe(false);
+    controller.abort();
+    expect(readToolGatewayTurnIdentity('protected-session', 'provider-a')).toBeNull();
+  });
+
   it('rejects a session that was not bound when OpenCode created it', () => {
     expect(authorizeToolGatewayRequest(readRequest('unseen-session'))).toBe(false);
   });

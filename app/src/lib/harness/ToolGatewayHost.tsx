@@ -19,11 +19,16 @@ import {
 import { createToolGatewayRuntime } from './toolGatewayRuntime';
 
 const REQUEST_EVENT = 'vibespace://tool-gateway/request';
+const CANCEL_EVENT = 'vibespace://tool-gateway/cancel';
 const RESPONSE_COMMAND = 'tool_gateway_respond';
 const SAFE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/u;
 
 export type ToolGatewayRuntimePort = Readonly<{
-  execute(request: ToolGatewayRequest): Promise<ToolGatewayResponse>;
+  execute(
+    request: ToolGatewayRequest,
+    signal?: AbortSignal,
+    isRequestLive?: () => Promise<boolean>,
+  ): Promise<ToolGatewayResponse>;
 }>;
 
 export type ToolGatewayHostProps = Readonly<{
@@ -63,8 +68,12 @@ export function ToolGatewayHost({ runtime: suppliedRuntime }: ToolGatewayHostPro
 
   React.useEffect(() => {
     let disposed = false;
-    let unlisten: (() => void) | undefined;
+    let unlisten: (() => void)[] = [];
     const queues = new Map<string, Promise<void>>();
+    const requests = new Map<
+      string,
+      { request: ToolGatewayRequest; controller: AbortController }
+    >();
     const uninstallRlmContext = installToolGatewayRlmContextPort(productionRlmContextTool);
     const relayClient =
       typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -77,14 +86,63 @@ export function ToolGatewayHost({ runtime: suppliedRuntime }: ToolGatewayHostPro
         : null;
     relayClient?.start();
 
-    const dispatch = async (request: ToolGatewayRequest): Promise<void> => {
-      const response = await appActivityLog.trace('semantic-tool', request, () =>
-        runtime.execute(request),
-      );
-      if (!disposed) await respond(response);
+    const dispatch = async (entry: {
+      request: ToolGatewayRequest;
+      controller: AbortController;
+    }): Promise<void> => {
+      const { request, controller } = entry;
+      const isRequestLive = async () => {
+        if (disposed || controller.signal.aborted) return false;
+        try {
+          const live = await invoke<boolean>(RESPONSE_COMMAND, {
+            probe: {
+              requestId: request.requestId,
+              sessionId: request.sessionId,
+              messageId: request.messageId,
+            },
+          });
+          if (live !== true) controller.abort();
+          return live === true && !disposed && !controller.signal.aborted;
+        } catch {
+          controller.abort();
+          return false;
+        }
+      };
+      try {
+        if (disposed || controller.signal.aborted) return;
+        const response = await appActivityLog.trace('semantic-tool', request, () =>
+          runtime.execute(request, controller.signal, isRequestLive),
+        );
+        if (!disposed && !controller.signal.aborted) await respond(response);
+      } finally {
+        if (requests.get(request.requestId) === entry) requests.delete(request.requestId);
+      }
     };
 
-    void listen<unknown>(REQUEST_EVENT, ({ payload }) => {
+    const cancelListener = listen<unknown>(CANCEL_EVENT, ({ payload }) => {
+      if (disposed || !payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+      if (Object.getPrototypeOf(payload) !== Object.prototype) return;
+      const fields = Object.getOwnPropertyDescriptors(payload);
+      if (Object.keys(fields).sort().join(',') !== 'messageId,requestId,sessionId') return;
+      for (const field of Object.values(fields)) {
+        if (
+          !('value' in field) ||
+          typeof field.value !== 'string' ||
+          !SAFE_REQUEST_ID.test(field.value)
+        )
+          return;
+      }
+      const entry = requests.get(fields.requestId.value);
+      if (
+        !entry ||
+        entry.request.sessionId !== fields.sessionId.value ||
+        entry.request.messageId !== fields.messageId.value
+      )
+        return;
+      entry.controller.abort();
+      requests.delete(entry.request.requestId);
+    });
+    const requestListener = listen<unknown>(REQUEST_EVENT, ({ payload }) => {
       if (disposed) return;
       let request: ToolGatewayRequest;
       try {
@@ -94,30 +152,41 @@ export function ToolGatewayHost({ runtime: suppliedRuntime }: ToolGatewayHostPro
         if (requestId) void respond(invalidResponse(requestId)).catch(() => undefined);
         return;
       }
+      // Native reservations are unique. A duplicate event cannot replace a live controller.
+      if (requests.has(request.requestId)) return;
+      const entry = { request, controller: new AbortController() };
+      requests.set(request.requestId, entry);
       appActivityLog.record('semantic-tool', 'received', request);
       if (request.tool === 'vibespace_context') {
-        void dispatch(request).catch(() => undefined);
+        void dispatch(entry).catch(() => undefined);
         return;
       }
       const previous = queues.get(request.sessionId) ?? Promise.resolve();
       const next = previous
         .catch(() => undefined)
-        .then(() => dispatch(request))
+        .then(() => dispatch(entry))
         .catch(() => undefined)
         .finally(() => {
           if (queues.get(request.sessionId) === next) queues.delete(request.sessionId);
         });
       queues.set(request.sessionId, next);
-    })
-      .then((stop) => {
-        if (disposed) stop();
-        else unlisten = stop;
-      })
-      .catch(() => undefined);
+    });
+    void Promise.allSettled([cancelListener, requestListener]).then((results) => {
+      const stops = results.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value] : [],
+      );
+      if (disposed || results.some((result) => result.status === 'rejected')) {
+        for (const entry of requests.values()) entry.controller.abort();
+        requests.clear();
+        for (const stop of stops) stop();
+      } else unlisten = stops;
+    });
 
     return () => {
       disposed = true;
-      unlisten?.();
+      for (const stop of unlisten) stop();
+      for (const entry of requests.values()) entry.controller.abort();
+      requests.clear();
       uninstallRlmContext();
       void relayClient?.stop();
       queues.clear();

@@ -355,6 +355,24 @@ export function ActionApprovalCard({
           approvalId,
           decision: choice,
         });
+        if (
+          decision.kind === 'approval_decided' &&
+          decision.approvalId === approvalId &&
+          decision.status === (choice === 'approve' ? 'approved' : 'denied') &&
+          decision.continuation === 'tool_request'
+        ) {
+          // The host resumes and settles the existing provider tool request.
+          // A separate execute/continuation here would race that same action.
+          setDisplayStatus((current) =>
+            current === 'pending' || current === 'running'
+              ? choice === 'approve'
+                ? 'running'
+                : 'cancelled'
+              : current,
+          );
+          setDecisionState('submitted');
+          return;
+        }
         if (choice === 'deny') {
           const denialAlreadyVerified =
             decision.kind === 'approval_decided' &&

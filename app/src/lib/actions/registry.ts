@@ -71,6 +71,7 @@ import {
   type ClockSound,
 } from '@/features/clock/clockStore';
 import type { ActionDef, ActionResult } from './types';
+import { assertActionRequestLive, throwIfActionRequestCancelled } from './types';
 import type { CustomToolStep } from '@/features/tools/toolStore';
 import { getExplicitTerminalBlock } from '@/lib/ai/context';
 import { formatUserTime } from '@/lib/timeFormat';
@@ -1403,7 +1404,7 @@ const SCHEDULE_ACTIONS: ActionDef[] = [
         help: 'Real agent id to use. Omit to use Jarvis/default chat agent.',
       },
     ],
-    run: async (params) => {
+    run: async (params, context) => {
       const auth = useAuthStore.getState();
       if (!auth.workspaceId) return fail('No workspace is active.');
       const title = typeof params.title === 'string' ? params.title.trim() : '';
@@ -1420,6 +1421,8 @@ const SCHEDULE_ACTIONS: ActionDef[] = [
         auth.chatModelSelection,
         modelSelectionContextFromAuth(auth),
       );
+      await assertActionRequestLive(context);
+      throwIfActionRequestCancelled(context);
       const event = await eventRepo.create(
         buildJarvisScheduleEventInput({
           workspaceId: auth.workspaceId,

@@ -1,4 +1,9 @@
 import Dexie from 'dexie';
+import {
+  assertActionRequestLive,
+  throwIfActionRequestCancelled,
+  type ActionRunContext,
+} from '@/lib/actions/types';
 
 import { resolveAccountIdentity, type AccountIdentity } from '@/lib/accountIdentity';
 import {
@@ -1650,6 +1655,13 @@ export function createJarvisKernelRuntime(
     attemptNumber: number;
   }>;
 
+  // Only recordProviderStarted can issue this process-local live attempt.
+  // A persisted start event alone never authorizes an in-flight tool approval.
+  const activeProviderActionScopes = new Map<string, () => boolean>();
+  const providerActionScopeKey = (
+    scope: Readonly<{ accountId: string; runId: string; requestId: string; attemptNumber: number }>,
+  ) => JSON.stringify([scope.accountId, scope.runId, scope.requestId, scope.attemptNumber]);
+
   const loadCanonicalActionScope = async (
     suppliedParent: JarvisRun,
     suppliedAttempt?: Readonly<{ runId: string; requestId: string; attemptNumber: number }>,
@@ -1714,6 +1726,33 @@ export function createJarvisKernelRuntime(
       throw new Error('kernel_action_scope_mismatch');
     }
     if (responseBackedApprovalId) {
+      const liveKey = providerActionScopeKey({
+        accountId: canonicalParent.accountId,
+        runId: canonicalParent.id,
+        requestId: providerScope.requestId,
+        attemptNumber: providerScope.attemptNumber,
+      });
+      if (canonicalParent.status === 'running' && activeProviderActionScopes.get(liveKey)?.()) {
+        const approval = await repositories.approval.getById(
+          canonicalParent.accountId,
+          responseBackedApprovalId,
+        );
+        if (
+          !approval ||
+          !['pending', 'approved'].includes(approval.status) ||
+          approval.runId !== canonicalParent.id ||
+          approval.requestId !== providerScope.requestId ||
+          approval.attemptNumber !== providerScope.attemptNumber ||
+          approval.expiresAt <= input.now() ||
+          !activeProviderActionScopes.get(liveKey)?.()
+        )
+          throw new Error('kernel_action_scope_mismatch');
+        return Object.freeze({
+          parentRun: canonicalParent,
+          requestId: providerScope.requestId,
+          attemptNumber: providerScope.attemptNumber,
+        });
+      }
       if (canonicalParent.status !== 'awaiting_approval') {
         throw new Error('kernel_action_scope_mismatch');
       }
@@ -1973,6 +2012,7 @@ export function createJarvisKernelRuntime(
     const issueActionExecution = async (
       claimed: ClaimedApprovalMutation,
       finalizeResponseOnResult: boolean,
+      requestLifetime: Pick<ActionRunContext, 'signal' | 'isRequestLive'>,
     ): Promise<JarvisAuthorityBoundResult<JarvisIssuedActionExecution>> => {
       const startSource = claimed.startEvent.producerSourceEvidence;
       const startExecution = claimed.startEvent.executionEvidence;
@@ -2432,9 +2472,27 @@ export function createJarvisKernelRuntime(
           begin: (signal: AbortSignal) => Readonly<{ completion: Promise<T> }>,
         ) {
           if (!childCurrent()) return { kind: 'account_authority_revoked' as const };
+          throwIfActionRequestCancelled(requestLifetime);
           if (effectStarted) throw new Error('kernel_action_effect_already_started');
           effectStarted = true;
-          return { kind: 'committed' as const, value: begin(binding.revocationSignal) };
+          const effectSignal =
+            requestLifetime.signal && requestLifetime.signal !== binding.revocationSignal
+              ? AbortSignal.any([binding.revocationSignal, requestLifetime.signal])
+              : binding.revocationSignal;
+          if (requestLifetime.isRequestLive) {
+            return {
+              kind: 'committed' as const,
+              value: {
+                completion: (async () => {
+                  await assertActionRequestLive(requestLifetime);
+                  if (!childCurrent()) throw new Error('kernel_action_authority_revoked');
+                  throwIfActionRequestCancelled({ signal: effectSignal });
+                  return await begin(effectSignal).completion;
+                })(),
+              },
+            };
+          }
+          return { kind: 'committed' as const, value: begin(effectSignal) };
         },
         transferTerminalOwnership(
           transfer: Parameters<JarvisIssuedActionExecution['transferTerminalOwnership']>[0],
@@ -2486,11 +2544,18 @@ export function createJarvisKernelRuntime(
         | Parameters<JarvisIssuedApprovalLifecycle['claimApprovedExecution']>[0]
         | Parameters<JarvisIssuedApprovalLifecycle['claimAutoApprovedExecution']>[0],
     ): Promise<JarvisAuthorityBoundResult<JarvisIssuedActionExecution>> => {
+      const requestLifetime = Object.freeze({
+        signal: claim.requestLifetime?.signal,
+        isRequestLive: claim.requestLifetime?.isRequestLive,
+      });
+      await assertActionRequestLive(requestLifetime);
       const expectedEventTailSeq = await captureEventTailSeq();
+      await assertActionRequestLive(requestLifetime);
       const mutation =
         'approvalId' in claim
-          ? await approvalWrite((context) =>
-              claimApprovedExecutionInContext(context, {
+          ? await approvalWrite((context) => {
+              throwIfActionRequestCancelled(requestLifetime);
+              return claimApprovedExecutionInContext(context, {
                 accountId: scope.parentRun.accountId,
                 runId: scope.parentRun.id,
                 requestId: scope.requestId,
@@ -2501,10 +2566,11 @@ export function createJarvisKernelRuntime(
                 evidenceRef: claim.evidenceRef,
                 startedAt: claim.startedAt,
                 expectedEventTailSeq,
-              }),
-            )
-          : await approvalWrite((context) =>
-              claimSafeAutoExecutionInContext(context, {
+              });
+            })
+          : await approvalWrite((context) => {
+              throwIfActionRequestCancelled(requestLifetime);
+              return claimSafeAutoExecutionInContext(context, {
                 accountId: scope.parentRun.accountId,
                 approval: approvalFromPrepared(claim.approval),
                 producerKind: claim.producerKind,
@@ -2512,12 +2578,26 @@ export function createJarvisKernelRuntime(
                 evidenceRef: claim.evidenceRef,
                 startedAt: claim.startedAt,
                 expectedEventTailSeq,
-              }),
-            );
+              });
+            });
       if (mutation.kind !== 'committed') return mutation;
+      await assertActionRequestLive(requestLifetime);
       const finalizeResponseOnResult =
         'approvalId' in claim && (await hasActionResponseCheckpoint(scope, claim.approvalId));
-      return issueActionExecution(mutation.value, finalizeResponseOnResult);
+      await assertActionRequestLive(requestLifetime);
+      const issued = await issueActionExecution(
+        mutation.value,
+        finalizeResponseOnResult,
+        requestLifetime,
+      );
+      if (issued.kind !== 'committed') return issued;
+      try {
+        await assertActionRequestLive(requestLifetime);
+        return issued;
+      } catch (error) {
+        issued.value.dispose();
+        throw error;
+      }
     };
 
     lifecycle = Object.freeze({
@@ -2644,6 +2724,8 @@ export function createJarvisKernelRuntime(
     const frozenScope = Object.freeze({ ...scope });
     let providerRegistration: JarvisLiveEvidenceRegistration<'provider'> | undefined;
     let providerReceipt: JarvisProviderStartedReceipt | undefined;
+    let providerCancelled = false;
+    const actionScopeKey = providerActionScopeKey(frozenScope);
 
     const current = (): boolean => {
       try {
@@ -2821,11 +2903,19 @@ export function createJarvisKernelRuntime(
             operations: receipt.operations,
           });
           const registration = providerRegistration;
+          let providerActive = true;
+          const active = () => providerActive && !providerCancelled && current();
+          activeProviderActionScopes.set(actionScopeKey, active);
           return {
             kind: 'committed' as const,
             value: Object.freeze({
               initialProof: registration.initialProof,
-              dispose: () => registration.dispose(),
+              dispose: () => {
+                providerActive = false;
+                if (activeProviderActionScopes.get(actionScopeKey) === active)
+                  activeProviderActionScopes.delete(actionScopeKey);
+                registration.dispose();
+              },
             }),
           };
         } catch (error) {
@@ -2836,6 +2926,7 @@ export function createJarvisKernelRuntime(
       async recordProviderResult(
         observation: Parameters<JarvisBoundKernelLifecycle['recordProviderResult']>[0],
       ): ReturnType<JarvisBoundKernelLifecycle['recordProviderResult']> {
+        activeProviderActionScopes.delete(actionScopeKey);
         if (!current()) return { kind: 'account_authority_revoked' as const };
         if (!providerRegistration || !providerReceipt) {
           throw new Error('kernel_provider_registration_missing');
@@ -2896,7 +2987,13 @@ export function createJarvisKernelRuntime(
           runId: frozenScope.runId,
           registrationId: registration.registrationId,
           kind: registration.kind,
-          abort: registration.abort,
+          abort: () => {
+            if (registration.kind === 'provider_stream') {
+              providerCancelled = true;
+              activeProviderActionScopes.delete(actionScopeKey);
+            }
+            return registration.abort();
+          },
         });
       },
     });

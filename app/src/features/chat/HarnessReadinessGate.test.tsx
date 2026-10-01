@@ -3,6 +3,7 @@ import path from 'node:path';
 import { useState } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import ts from 'typescript';
 import type { HarnessRuntimeManager, HarnessRuntimeState } from '@/lib/harness';
 import { HarnessReadinessGate, useHarnessRuntimeState } from './HarnessReadinessGate';
 
@@ -115,9 +116,24 @@ describe('HarnessReadinessGate', () => {
     expect(source).toContain('<HarnessReadinessGate />');
     expect(source).not.toContain('disabled={backendRuntimeBlocked}');
 
-    const slashDispatch = source.indexOf(
-      "const slashResult = await handleSlashCommand(afterInline, draftText);",
-    );
+    const parsed = ts.createSourceFile('Composer.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let slashDeclaration: ts.VariableDeclaration | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && node.name.getText(parsed) === 'slashResult') slashDeclaration = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(parsed);
+    expect(slashDeclaration).toBeDefined();
+    const calls: ts.CallExpression[] = [];
+    const findCalls = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && node.expression.getText(parsed) === 'handleSlashCommand') calls.push(node);
+      ts.forEachChild(node, findCalls);
+    };
+    findCalls(slashDeclaration!);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.arguments.map((argument) => argument.getText(parsed))).toEqual(['afterInline', 'draftText']);
+    expect(ts.isAwaitExpression(calls[0]!.parent)).toBe(true);
+    const slashDispatch = slashDeclaration!.getStart(parsed);
     const providerReadinessGate = source.indexOf('if (backendRuntimeBlocked) return false;');
     expect(slashDispatch).toBeGreaterThan(-1);
     expect(providerReadinessGate).toBeGreaterThan(slashDispatch);

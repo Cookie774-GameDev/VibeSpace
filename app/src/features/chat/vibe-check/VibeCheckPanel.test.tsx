@@ -13,6 +13,7 @@ vi.mock('@/stores/ui', () => ({ useUIStore: { getState: () => ({ setActiveChat: 
 import { VibeCheckPanel } from './VibeCheckPanel';
 import { closeVibeCheck, openVibeCheck, patchAudit, useVibeCheckStore } from './vibeCheckStore';
 import { classifySlashCommand } from '../slashCommandRouting';
+import { collectAuditEvidence } from './auditEvidence';
 beforeEach(() => openVibeCheck('source'));
 afterEach(() => {
   cleanup();
@@ -37,7 +38,7 @@ describe('VibeCheck panel', () => {
     expect(screen.getByLabelText('Quality score').textContent).toBe('—');
     act(() => patchAudit(id, { report: 'Early finding\n' + record }));
     expect(screen.getByLabelText('Quality score').textContent).toBe('82/100');
-    expect(screen.getByText('1/6 reviewed')).toBeTruthy();
+    expect(screen.getByText('1/6 reported')).toBeTruthy();
     expect(screen.getByLabelText('Audit report').textContent).toBe('Early finding');
     expect(screen.getByText('src/main.ts:12')).toBeTruthy();
   });
@@ -75,5 +76,25 @@ describe('VibeCheck panel', () => {
     expect(useVibeCheckStore.getState().session).toBeNull();
     act(() => openVibeCheck('source'));
     expect(useVibeCheckStore.getState().session?.status).toBe('ready');
+  });
+
+  it('distinguishes model judgments and retained evidence from live verified measurements', () => {
+    const id = useVibeCheckStore.getState().session!.id;
+    patchAudit(id, { evidence: collectAuditEvidence([], []), progress: 75, status: 'running' });
+    render(<VibeCheckPanel />);
+    expect(screen.getByText(/Scores are the auditor’s judgments/)).toBeTruthy();
+    expect(screen.getByText(/Snapshot of retained chat records/)).toBeTruthy();
+    expect(screen.queryByText('75%')).toBeNull();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBeNull();
+    expect(screen.getByText('Recorded evidence')).toBeTruthy();
+  });
+
+  it('shows unknown freshness for an older in-memory snapshot instead of crashing', () => {
+    const id = useVibeCheckStore.getState().session!.id;
+    patchAudit(id, {
+      evidence: { ...collectAuditEvidence([], []), capturedAt: undefined } as never,
+    });
+    render(<VibeCheckPanel />);
+    expect(screen.getByText('Capture time unavailable')).toBeTruthy();
   });
 });

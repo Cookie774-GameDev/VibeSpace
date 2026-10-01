@@ -257,6 +257,174 @@ function expectApprovalError(error: unknown, code: string): boolean {
   return true;
 }
 
+async function approvedRequestFixture() {
+  const setup = fixture();
+  const approval: JarvisApprovalV1 = {
+    id: 'jappr_1',
+    runId: setup.run.id,
+    actionId: 'notes.create',
+    actionVersion: 1,
+    params: { title: 'hello' },
+    paramsHash: 'hash:{"title":"hello"}',
+    targetSnapshot: { kind: 'app_resource', namespace: 'notes', resourceId: 'hello' },
+    status: 'approved',
+    risk: 'confirm',
+    createdAt: now - 100,
+    decidedAt: now - 50,
+    schemaVersion: 1,
+    requestId: 'request-1',
+    attemptNumber: 1,
+    capabilityId: 'capability.notes.write',
+    capabilitySnapshotHash: '',
+    expectedEffect: expectedNoteEffect,
+    expiresAt: now + 1000,
+  };
+  setup.approvals.set(approval.id, approval);
+  await setup.engine
+    .bindIssuedLifecycle(
+      lifecycle({
+        putPreparedApproval: vi.fn(async (prepared) => {
+          approval.capabilitySnapshotHash = String(prepared.capabilitySnapshotHash);
+          return { kind: 'committed' as const, value: approval };
+        }),
+      }),
+    )
+    .create({
+      parentRun: setup.run,
+      attempt: requestAttempt(),
+      actionId: 'notes.create',
+      actionVersion: 1,
+      params: approval.params as Record<string, unknown>,
+      expiresAt: approval.expiresAt,
+    });
+  const execution: JarvisIssuedActionExecution = {
+    approval,
+    producerKind: 'action',
+    ownerId: 'approval:jappr_1',
+    startEvent: {} as never,
+    initialLiveProof: {} as never,
+    [jarvisIssuedActionExecutionBrand]: true,
+    beginExternalEffect: vi.fn(),
+    transferTerminalOwnership: vi.fn(),
+    recordResult: vi.fn(async () => ({ kind: 'committed' as const, value: {} as never })),
+    recordCancellationVerified: vi.fn(),
+    requestCancellation: vi.fn(),
+    dispose: vi.fn(),
+  };
+  const claim = vi.fn(async () => ({ kind: 'committed' as const, value: execution }));
+  const issued = lifecycle({ claimApprovedExecution: claim });
+  return {
+    ...setup,
+    approval,
+    execution,
+    claim,
+    issued,
+    capability: setup.engine.bindIssuedLifecycle(issued),
+  };
+}
+
+describe('canonical individual request cancellation', () => {
+  it.each(['parent', 'approval', 'validation', 'claim'] as const)(
+    'releases an aborted actual engine wait during %s and cannot dispatch its late continuation',
+    async (stage) => {
+      const setup = await approvedRequestFixture();
+      const request = new AbortController();
+      let enter!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      const paused = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const pause = async <T>(value: T): Promise<T> => {
+        enter();
+        await paused;
+        return value;
+      };
+      if (stage === 'parent') setup.runs.getById = vi.fn(async () => pause(setup.run));
+      if (stage === 'approval')
+        setup.approvalRepository.getById = vi.fn(async () => pause(setup.approval));
+      if (stage === 'validation')
+        setup.capabilitySnapshots.getForAccount.mockImplementationOnce(async () =>
+          pause(capabilitySnapshot()),
+        );
+      if (stage === 'claim')
+        setup.claim.mockImplementationOnce(async () =>
+          pause({ kind: 'committed' as const, value: setup.execution }),
+        );
+      const task = setup.capability.execute({
+        parentRun: setup.run,
+        approvalId: setup.approval.id,
+        context: { source: 'ai', signal: request.signal },
+      });
+      void task.catch(() => {});
+      try {
+        await entered;
+        request.abort();
+        const outcome = await Promise.race([
+          task.then(
+            () => 'success',
+            (error: Error) => error.name,
+          ),
+          new Promise<string>((resolve) => setTimeout(() => resolve('still_waiting'), 100)),
+        ]);
+        expect(outcome).toBe('AbortError');
+        expect(setup.issued.revocationSignal.aborted).toBe(false);
+        expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
+      } finally {
+        release();
+        await task.catch(() => {});
+      }
+      await vi.waitFor(() => expect(setup.executeRegisteredAction).not.toHaveBeenCalled());
+      if (stage === 'claim')
+        await vi.waitFor(() => expect(setup.execution.dispose).toHaveBeenCalledOnce());
+    },
+  );
+
+  it('preserves the original request signal and protected liveness check for canonical dispatch', async () => {
+    const setup = await approvedRequestFixture();
+    const request = new AbortController();
+    const isRequestLive = vi.fn(async () => true);
+    await setup.capability.execute({
+      parentRun: setup.run,
+      approvalId: setup.approval.id,
+      context: { source: 'ai', signal: request.signal, isRequestLive },
+    });
+    expect(setup.executeRegisteredAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ signal: request.signal, isRequestLive }),
+      }),
+    );
+    expect(setup.claim).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestLifetime: expect.objectContaining({ signal: request.signal, isRequestLive }),
+      }),
+    );
+  });
+
+  it('disposes a claim when the native request ends without an abort event', async () => {
+    const setup = await approvedRequestFixture();
+    const request = new AbortController();
+    let live = true;
+    setup.claim.mockImplementationOnce(async () => {
+      live = false;
+      return { kind: 'committed' as const, value: setup.execution };
+    });
+    await expect(
+      setup.capability.execute({
+        parentRun: setup.run,
+        approvalId: setup.approval.id,
+        context: { source: 'ai', signal: request.signal, isRequestLive: async () => live },
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(request.signal.aborted).toBe(false);
+    expect(setup.issued.revocationSignal.aborted).toBe(false);
+    expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
+    expect(setup.execution.dispose).toHaveBeenCalledOnce();
+  });
+});
+
 describe('createJarvisApprovalBindingSelectors', () => {
   it('uses only the registered version and account-scoped providers', async () => {
     const catalog = createJarvisActionCatalog([registration()]);
@@ -692,7 +860,7 @@ describe('createJarvisApprovalEngine', () => {
       dispose: vi.fn(() => sequence.push('dispose')),
     };
     setup.executeRegisteredAction.mockImplementation(async ({ context }) => {
-      expect(context).not.toHaveProperty('signal');
+      expect(context.signal).toBeInstanceOf(AbortSignal);
       sequence.push('dispatch');
       return { kind: 'executor_returned', result: { ok: true, summary: 'created' } };
     });

@@ -2,6 +2,7 @@ import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
 import type { PerformanceProfile } from '@/features/chat/runtime/performanceProfile';
 import type { ExecutionIdentity } from '@/features/context/gateway/contextGatewayContracts';
+import type { ProviderRequest } from '@/lib/ai/adapters/types';
 import {
   MUTATING_TOOL_GATEWAY_TOOLS,
   type ToolGatewayRequest,
@@ -21,7 +22,11 @@ export type ToolGatewayAuthorityClaim = Readonly<{
 
 const sessionAuthorities = new Map<string, ToolGatewayAuthorityClaim>();
 const sessionSignals = new Map<string, AbortSignal>();
-export type ToolGatewayTurnIdentity = Readonly<{ requestId: string; chatId: string }>;
+export type ToolGatewayTurnIdentity = Readonly<{
+  requestId: string;
+  chatId: string;
+  protectedAttempt?: ProviderRequest['protectedAttempt'];
+}>;
 export type ToolGatewayTurnBinding = ToolGatewayTurnIdentity & Readonly<{ nativeToolMessageIds?: true }>;
 const sessionTurnIdentities = new Map<string, ToolGatewayTurnBinding>();
 const sessionTurnAbortHandlers = new Map<
@@ -162,12 +167,22 @@ function safeOpenCodeMessageId(value: string): boolean {
 }
 
 function immutableTurnIdentity(value: ToolGatewayTurnBinding): ToolGatewayTurnBinding | null {
+  const attempt = value.protectedAttempt;
+  if (attempt !== undefined && (
+    !attempt || !safeTurnIdentityPart(attempt.accountId) || !safeTurnIdentityPart(attempt.runId) ||
+    attempt.requestId !== value.requestId || !Number.isSafeInteger(attempt.attemptNumber) ||
+    attempt.attemptNumber < 1
+  )) return null;
   return safeTurnIdentityPart(value.requestId) &&
     safeTurnIdentityPart(value.chatId) &&
     (value.nativeToolMessageIds === undefined || value.nativeToolMessageIds === true)
     ? Object.freeze({
         requestId: value.requestId,
         chatId: value.chatId,
+        ...(attempt ? { protectedAttempt: Object.freeze({
+          accountId: attempt.accountId, runId: attempt.runId,
+          requestId: attempt.requestId, attemptNumber: attempt.attemptNumber,
+        }) } : {}),
         ...(value.nativeToolMessageIds ? { nativeToolMessageIds: true as const } : {}),
       })
     : null;
@@ -179,6 +194,10 @@ function sameTurnIdentity(
 ): boolean {
   return left?.requestId === right?.requestId &&
     left?.chatId === right?.chatId &&
+    left?.protectedAttempt?.accountId === right?.protectedAttempt?.accountId &&
+    left?.protectedAttempt?.runId === right?.protectedAttempt?.runId &&
+    left?.protectedAttempt?.requestId === right?.protectedAttempt?.requestId &&
+    left?.protectedAttempt?.attemptNumber === right?.protectedAttempt?.attemptNumber &&
     left?.nativeToolMessageIds === right?.nativeToolMessageIds;
 }
 
@@ -289,6 +308,7 @@ export function bindToolGatewaySessionAuthority(
     !current ||
     !capturedAuthorityClaims.has(expected) ||
     !sameStableAuthority(expected, current) ||
+    (boundTurn?.protectedAttempt !== undefined && boundTurn.protectedAttempt.accountId !== expected.scope.accountId) ||
     signal?.aborted
   ) {
     return false;
@@ -339,7 +359,9 @@ export function readToolGatewayTurnIdentity(
     turn &&
     (exactRequest || optedInOpenCodeMessage) &&
     sameStableAuthority(current, bound)
-    ? Object.freeze({ requestId: turn.requestId, chatId: turn.chatId })
+    ? Object.freeze({ requestId: turn.requestId, chatId: turn.chatId,
+        ...(turn.protectedAttempt ? { protectedAttempt: turn.protectedAttempt } : {}),
+      })
     : null;
 }
 

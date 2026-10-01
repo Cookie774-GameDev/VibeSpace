@@ -33,6 +33,16 @@ const request = {
 const identity = { modelProvider: 'openai', model: 'opencode-go/deepseek-v4-flash-vision-exp', effort: null, serviceTier: null, cwd: 'C:\\project' };
 beforeEach(() => { state.enabled = true; state.authorized = true; state.capture.mockReset(); state.capture.mockReturnValue({ scope: { accountId: 'account', workspaceId: 'workspace', projectId: 'project' }, generation: 1 }); vi.clearAllMocks(); });
 
+it('binds the exact protected provider attempt without substituting the tool call ID', async () => {
+  const protectedAttempt = { accountId: 'account', runId: 'run', requestId: 'request', attemptNumber: 3 };
+  const bridge = (await createCodexContextTool({ ...request, protectedAttempt }))!;
+  bridge.bind('protected-thread', identity, 'native-generation');
+  expect(state.bind).toHaveBeenCalledWith('protected-thread', expect.anything(), undefined, {
+    requestId: 'request', chatId: 'chat', protectedAttempt,
+  });
+  bridge.dispose();
+});
+
 it('uses the existing validated gateway envelope and releases its exact session', async () => {
   // The native adapter may resolve the working directory after tool preparation.
   const bridge = (await createCodexContextTool({ ...request, workingDirectory: undefined }))!;

@@ -2,7 +2,6 @@ import { openQueuedSideChat, registerQueueSideSender } from './queueSideChat';
 import { useComposerQueueSession } from './composerQueueSession';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { AxoMotion } from '@/components/ui/AxoMotion';
 import './composer-frame.css';
 import { useChatBackendAffinity } from './useChatBackendAffinity';
 import { NotesPicker, type NotesPickerHandle } from '../notes/NotesPicker';
@@ -124,6 +123,8 @@ import { formatComposerSendFailure } from './composerSendFailures';
 import { HarnessReadinessGate, useHarnessRuntimeState } from './HarnessReadinessGate';
 import { CodexReadinessGate, useCodexRuntimeState } from './CodexReadinessGate';
 import { runVibeSpaceDoctor } from '@/features/doctor/vibeSpaceDoctor';
+import { runSlashCommandWithProgress, type SlashCommandProgress } from './slashCommandProgress';
+import { Loader2 } from 'lucide-react';
 import { harnessRuntimeManager } from '@/lib/harness/runtimeManager';
 import { useOpenCodeCommandCatalog } from './openCodeCommandCatalog';
 import { codexPersistentAdapter } from '@/lib/ai/adapters/codexPersistent';
@@ -273,6 +274,7 @@ import {
 } from './themeSlashPicker';
 import {
   ModelPickerTypeahead,
+  ModelEffortIcon,
   HIVE_OPTION_ID,
   type ModelPickerTypeaheadRef,
 } from './ModelPickerTypeahead';
@@ -297,7 +299,6 @@ import {
   parseRlmSlashArgument,
   resolveRlmEnabled,
   RLM_SLASH_OPTIONS,
-  setChatRlmEnabled,
 } from '@/features/context/rlmPreferenceStore';
 import {
   clearRedoStack,
@@ -345,7 +346,7 @@ import {
   mediaTargetFromAttachment,
   type MediaPreviewTarget,
 } from './MediaPreviewPanel';
-import { getStoredProjectRoot } from '@/features/files/projectFiles';
+import { chooseProjectFolder, getStoredProjectRoot, setStoredProjectRoot } from '@/features/files/projectFiles';
 import {
   MARKDOWN_DOCUMENT_OPTIONS,
   buildMarkdownCreationInstruction,
@@ -1421,7 +1422,8 @@ export function Composer({
   useEffect(() => {
     if (caoRequested) { setCaoPanelOpen(true); useUIStore.getState().setChatMode('chat'); }
   }, [caoRequested]);
-  const [text, setText] = useState(() => readNotesComposerDraft(noteScope, String(chatId)).text);
+  const [text, setComposerText] = useState(() => readNotesComposerDraft(noteScope, String(chatId)).text);
+  const setText = setComposerText;
   const [chatAnnotations, setChatAnnotations] = useState<ChatAnnotation[]>([]);
   const [annotationEditor, setAnnotationEditor] = useState<{
     id: string;
@@ -1470,7 +1472,7 @@ export function Composer({
     setNotesCtx(null);
     dismissedNotesRef.current = null;
     setNotesDraftStateKey(notesDraftKey);
-    if (saved.references.length || attachedNotes.length) setText(saved.text);
+    setText(saved.text);
   }, [notesDraftKey]);
   useEffect(() => {
     if (notesDraftStateKey === notesDraftKey)
@@ -1736,6 +1738,9 @@ export function Composer({
   const queuedHandoffsRef = queueSession.handoffs;
   const sendingRef = useRef(sending);
   const instantCommandInFlightRef = useRef(false);
+  const localSlashInFlightRef = useRef(false);
+  const slashOutcomeRef = useRef<Pick<SlashCommandProgress, 'phase' | 'detail'> | undefined>();
+  const [slashProgress, setSlashProgress] = useState<(SlashCommandProgress & { chatId: string }) | null>(null);
   sendingRef.current = sending;
   const activeCancellationKeyRef = useRef<string | null>(null);
   const queuedDispatchInFlightRef = queueSession.dispatchInFlight;
@@ -2019,9 +2024,23 @@ export function Composer({
   const plan = useAuthStore((s) => s.plan);
   const workspaceId = useAuthStore((s) => s.workspaceId);
   const nativeSkillAccountId = useAuthStore((s) => resolveAccountIdentity(s)?.accountId ?? '');
-  const nativeSkillWorkingDirectory = chatBackendAffinity && projectId
-    ? getStoredProjectRoot(projectId)
-    : null;
+  const subscribeNativeSkillProjectRoot = useCallback((onChange: () => void) => {
+    const handleRootChanged = (event: Event) => {
+      if ((event as CustomEvent<{ projectId: string | null }>).detail?.projectId === projectId) onChange();
+    };
+    window.addEventListener('jarvis:files:root-changed', handleRootChanged);
+    return () => window.removeEventListener('jarvis:files:root-changed', handleRootChanged);
+  }, [projectId]);
+  const readNativeSkillProjectRoot = useCallback(() => getStoredProjectRoot(projectId), [projectId]);
+  const nativeSkillProjectRoot = useSyncExternalStore(subscribeNativeSkillProjectRoot, readNativeSkillProjectRoot, () => '');
+  const nativeSkillWorkingDirectory = chatBackendAffinity ? nativeSkillProjectRoot || null : null;
+  const chooseNativeSkillProjectFolder = useCallback(async () => {
+    const selected = await chooseProjectFolder({
+      title: 'Choose project folder for native skills',
+      initialPath: getStoredProjectRoot(projectId) || undefined,
+    });
+    if (selected) setStoredProjectRoot(projectId, selected);
+  }, [projectId]);
   const nativeSkillCatalogAuthorityKey = useMemo(() => JSON.stringify([
     nativeSkillAccountId, workspaceId, projectId, String(chatId),
     chatBackendAffinity?.backend, nativeSkillWorkingDirectory,
@@ -2107,10 +2126,12 @@ export function Composer({
     nativeSkillCatalogAuthorityRef.current = null;
     setCodexSkillCatalog(null);
     setSelectedCodexSkills([]);
-    setNativeSkillCtx(null);
     setNativeSkillLoading(false);
     setNativeSkillError(null);
   }, [chatId, chatBackendAffinity?.backend, nativeSkillWorkingDirectory, nativeSkillAccountId, workspaceId, projectId]);
+  useEffect(() => {
+    setNativeSkillCtx(null);
+  }, [chatId, chatBackendAffinity?.backend, nativeSkillAccountId, workspaceId, projectId]);
   useEffect(() => {
     if (nativeSelection.entries.length > 0 && !codexSkillCatalog) void refreshNativeSkillCatalog();
   }, [nativeSelection.entries.length, codexSkillCatalog, refreshNativeSkillCatalog]);
@@ -3164,6 +3185,12 @@ export function Composer({
   };
 
   const selectOption = (option: SlashCommandOption) => {
+    // The slash token was already removed when the picker opened. Applying a
+    // choice must not erase the surrounding prompt or text typed in the meantime.
+    const setText: typeof setComposerText = (next) => {
+      if (next === '' && textRef.current !== '') return;
+      setComposerText(next);
+    };
     if (!optionPickerCtx) return;
     const cmd = optionPickerCtx.cmd;
     const canonical = normalizeSlashCmd(cmd.cmd);
@@ -3249,7 +3276,12 @@ export function Composer({
     if (canonical === 'rlm') {
       const action = parseRlmSlashArgument(option.id);
       if (action === 'on' || action === 'off') {
-        const resolved = setChatRlmEnabled(String(chatId), action === 'on');
+        const next = writeChatRuntimePolicyState(String(chatId), {
+          ...runtimePolicy,
+          settings: { ...runtimePolicy.settings, rlmEnabled: action === 'on' },
+        });
+        setRuntimePolicy(next);
+        const resolved = resolveRlmEnabled({ chatId: String(chatId), workspaceId: workspaceId ?? undefined });
         void messageRepo.create({
           chat_id: chatId as ChatId,
           role: 'system',
@@ -3474,10 +3506,16 @@ export function Composer({
     });
   };
 
-  const handleSlashCommand = async (
+  const executeSlashCommand = async (
     trimmed: string,
     originalUserText = trimmed,
   ): Promise<boolean | string> => {
+    // Local commands may be selected inside an existing draft, or settle after
+    // the user has already started another one. Clear only the submitted text.
+    const setText: typeof setComposerText = (next) => {
+      if (next === '' && textRef.current !== originalUserText) return;
+      setComposerText(next);
+    };
     const selectedHarnessCommand = selectedHarnessCommandRef.current;
     selectedHarnessCommandRef.current = null;
     if (chatBackendAffinity?.backend === 'codex' && /^\/mcp(?:\s*)$/iu.test(trimmed) &&
@@ -3697,7 +3735,7 @@ export function Composer({
         );
       } else if (result.kind === 'picker') {
         await addSystem(
-          `Use /${cmd} ${cmd === 'fast' ? 'on | off | status' : cmd === 'performance' ? 'responsive | balanced | quality | status' : 'on | off | status | refresh | trace'}.`,
+          `Use /${cmd} ${cmd === 'fast' ? 'on | off | status' : cmd === 'performance' ? 'responsive | balanced | quality | status. Controls context lookup depth for broad questions while keeping your model and effort' : 'on | off | status | refresh | trace'}.`,
         );
       } else {
         await addSystem(result.message);
@@ -4011,8 +4049,13 @@ export function Composer({
         return true;
       }
       await addSystem('VibeSpace Doctor is checking supported systems…');
-      const report = await runVibeSpaceDoctor();
+      const report = await runVibeSpaceDoctor((progress) => {
+        setSlashProgress({ command: 'doctor', chatId: String(chatId), phase: 'running', detail: `${progress.completed}/${progress.total} stages checked · ${progress.label}` });
+      });
       await addSystem(report.text);
+      slashOutcomeRef.current = report.ok
+        ? { phase: 'succeeded', detail: 'Checks completed. See the diagnostic report.' }
+        : { phase: 'failed', detail: 'Attention needed. See the diagnostic report.' };
       return true;
     }
     if (cmd === 'mcp') {
@@ -4382,6 +4425,24 @@ export function Composer({
     commands: confirmedCommands,
     agents: confirmedAgentMentions,
     catalog: confirmedCatalogReferences,
+  };
+  const handleSlashCommand = async (input: string, originalUserText = input) => {
+    const classification = classifySlashCommand(input);
+    if (classification?.execution !== 'local') return executeSlashCommand(input, originalUserText);
+    if (localSlashInFlightRef.current) return true;
+    localSlashInFlightRef.current = true;
+    slashOutcomeRef.current = undefined;
+    const commandChatId = String(chatId);
+    try {
+      return await runSlashCommandWithProgress(
+        classification.command,
+        () => executeSlashCommand(input, originalUserText),
+        (state) => setSlashProgress(state ? { ...state, chatId: commandChatId } : null),
+        () => slashOutcomeRef.current,
+      );
+    } finally {
+      localSlashInFlightRef.current = false;
+    }
   };
   const currentComposerNotes = attachedNotes;
   const handleSend = async (
@@ -6898,6 +6959,18 @@ export function Composer({
       data-tour="chat-composer"
       data-composer-frame={compact ? undefined : 'layered'}
     >
+      {slashProgress?.chatId === String(chatId) && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-slash-command-state={slashProgress.phase}
+          className="flex items-center gap-2 border-b border-border px-3 py-2 text-metadata text-muted-foreground"
+        >
+          {slashProgress.phase === 'running' && <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+          <span>/{slashProgress.command} · {slashProgress.phase === 'running' ? 'Running' : slashProgress.phase === 'succeeded' ? 'Completed' : slashProgress.phase === 'cancelled' ? 'Cancelled' : 'Needs attention'} — {slashProgress.detail}</span>
+        </div>
+      )}
       {pendingQuestion && (
         <div ref={questionInlineRef}>
           <InlineQuestionBlockCard
@@ -7957,6 +8030,8 @@ export function Composer({
                 onHoverKey={setSelectedNativeSkillKey}
                 onSelect={insertNativeSkill}
                 onRefresh={() => void refreshNativeSkillCatalog(true)}
+                needsProjectFolder={!nativeSkillWorkingDirectory}
+                onChooseProjectFolder={() => void chooseNativeSkillProjectFolder()}
               />
             ) : slashCtx !== null ? (
               <SlashCommandTypeahead
@@ -8016,7 +8091,6 @@ function ModelPicker({
   groups,
   flatOptions,
 }: ModelPickerProps) {
-  const [axoFocusToken, setAxoFocusToken] = useState(0);
   const automaticRoutingEnabled = useAuthStore((s) => s.automaticModelRoutingEnabled);
   const setAutomaticModelRoutingEnabled = useAuthStore((s) => s.setAutomaticModelRoutingEnabled);
   const hiveEnabled = isHiveProductEnabled();
@@ -8097,11 +8171,6 @@ function ModelPicker({
     effort: EffortLabel = 'auto',
   ) => {
     onSelect(selectionFromOption(nextProvider, nextModel, connection), effort);
-    if (['high', 'xhigh', 'max', 'ultra'].includes(effort)) {
-      setAxoFocusToken((token) => token + 1);
-    } else {
-      setAxoFocusToken(0);
-    }
     onOpenChange(false);
   };
 
@@ -8148,8 +8217,8 @@ function ModelPicker({
               initialEffort === 'ultra' && 'vibespace-composer-effort-ultra',
             )}
           >
-            <span className="[&>svg]:size-5">
-              <AxoMotion focusToken={axoFocusToken} />
+            <span className="inline-flex size-5 items-center justify-center">
+              <ModelEffortIcon effort={initialEffort} />
             </span>
             {effortLabel}
           </span>

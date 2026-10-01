@@ -3,6 +3,7 @@ import type {
   ActionRunContext,
   RegisteredActionExecutionContext,
 } from '@/lib/actions/types';
+import { assertActionRequestLive, throwIfActionRequestCancelled } from '@/lib/actions/types';
 import type {
   JarvisApprovalRepository,
   JarvisArtifactRepository,
@@ -256,6 +257,7 @@ export interface JarvisIssuedApprovalLifecycle {
     ownerId: string;
     evidenceRef: string;
     startedAt: number;
+    requestLifetime?: Pick<ActionRunContext, 'signal' | 'isRequestLive'>;
   }): Promise<JarvisAuthorityBoundResult<JarvisIssuedActionExecution>>;
   claimAutoApprovedExecution(input: {
     approval: CreateJarvisApprovalEngineInput;
@@ -263,6 +265,7 @@ export interface JarvisIssuedApprovalLifecycle {
     ownerId: string;
     evidenceRef: string;
     startedAt: number;
+    requestLifetime?: Pick<ActionRunContext, 'signal' | 'isRequestLive'>;
   }): Promise<JarvisAuthorityBoundResult<JarvisIssuedActionExecution>>;
   dispose(): void;
 }
@@ -639,6 +642,7 @@ function assertContextBinding(
     'requestId',
     'attemptNumber',
     'signal',
+    'isRequestLive',
   ]);
   const expected = {
     accountId: lifecycle.accountId,
@@ -659,11 +663,15 @@ function assertContextBinding(
   ) {
     approvalError('run_scope_mismatch');
   }
+  if (context.isRequestLive !== undefined && typeof context.isRequestLive !== 'function')
+    approvalError('run_scope_mismatch');
   return Object.freeze({
     source: context.source,
     ...(context.chatId === undefined ? {} : { chatId: context.chatId }),
     ...(context.messageId === undefined ? {} : { messageId: context.messageId }),
     ...(context.callId === undefined ? {} : { callId: context.callId }),
+    ...(context.signal === undefined ? {} : { signal: context.signal }),
+    ...(context.isRequestLive === undefined ? {} : { isRequestLive: context.isRequestLive }),
     ...expected,
   });
 }
@@ -1456,6 +1464,68 @@ export function createJarvisApprovalEngine(
     if (state.revocationSignal.aborted) throw new JarvisApprovalAuthorityRevokedError();
   }
 
+  async function awaitRequest<T>(
+    state: { revocationSignal: AbortSignal },
+    context: RegisteredActionExecutionContext,
+    start: () => Promise<T>,
+    disposeLate?: (value: T) => void,
+  ): Promise<T> {
+    assertLive(state);
+    throwIfActionRequestCancelled(context);
+    let cancelled = false;
+    let hasValue = false;
+    let value!: T;
+    let disposed = false;
+    const dispose = () => {
+      if (hasValue && !disposed && disposeLate) {
+        disposed = true;
+        disposeLate(value);
+      }
+    };
+    let rejectCancellation!: (error: Error) => void;
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      rejectCancellation = reject;
+    });
+    const abort = () => {
+      cancelled = true;
+      rejectCancellation(
+        context.signal?.aborted
+          ? new DOMException('The action request was cancelled.', 'AbortError')
+          : new JarvisApprovalAuthorityRevokedError(),
+      );
+      dispose();
+    };
+    context.signal?.addEventListener('abort', abort, { once: true });
+    state.revocationSignal.addEventListener('abort', abort, { once: true });
+    if (context.signal?.aborted || state.revocationSignal.aborted) abort();
+    const work = Promise.resolve().then(async () => {
+      await assertActionRequestLive(context);
+      assertLive(state);
+      throwIfActionRequestCancelled(context);
+      value = await start();
+      hasValue = true;
+      try {
+        if (cancelled) {
+          dispose();
+          throw new DOMException('The action request was cancelled.', 'AbortError');
+        }
+        await assertActionRequestLive(context);
+        assertLive(state);
+        throwIfActionRequestCancelled(context);
+        return value;
+      } catch (error) {
+        dispose();
+        throw error;
+      }
+    });
+    try {
+      return await Promise.race([work, cancellation]);
+    } finally {
+      context.signal?.removeEventListener('abort', abort);
+      state.revocationSignal.removeEventListener('abort', abort);
+    }
+  }
+
   async function loadCanonicalParent(
     lifecycle: JarvisIssuedApprovalLifecycle,
     supplied: JarvisRun,
@@ -1653,6 +1723,12 @@ export function createJarvisApprovalEngine(
     execution: JarvisIssuedActionExecution;
   }): Promise<JarvisCanonicalActionExecutionResult> {
     assertLive(inputValue.state);
+    try {
+      await awaitRequest(inputValue.state, inputValue.context, async () => undefined);
+    } catch (error) {
+      inputValue.execution.dispose();
+      throw error;
+    }
     let outcome: JarvisRegisteredActionDispatchOutcome;
     try {
       outcome = await input.executeRegisteredAction({
@@ -1720,24 +1796,42 @@ export function createJarvisApprovalEngine(
     assertExactOwnKeys(executeInput, ['parentRun', 'approvalId', 'context']);
     const context = assertContextBinding(executeInput.context, lifecycle, executeInput.approvalId);
     assertLive(state);
-    await loadCanonicalParent(lifecycle, executeInput.parentRun);
+    await awaitRequest(state, context, () =>
+      loadCanonicalParent(lifecycle, executeInput.parentRun),
+    );
     assertLive(state);
-    const approval = await input.approvals.getById(lifecycle.accountId, executeInput.approvalId);
+    const approval = await awaitRequest(state, context, () =>
+      input.approvals.getById(lifecycle.accountId, executeInput.approvalId),
+    );
     if (!approval) approvalError('not_approved');
     if (approval.status === 'consumed') approvalError('already_consumed');
     if (approval.status !== 'approved') approvalError('not_approved');
-    const validated = await validateStoredApproval(lifecycle, approval);
+    const validated = await awaitRequest(state, context, () =>
+      validateStoredApproval(lifecycle, approval),
+    );
     assertLive(state);
     const producerKind = jarvisProducerKindForActionRegistration(validated.registration);
     const ownerId = `approval:${approval.id}`;
     const claimed = committed(
-      await lifecycle.claimApprovedExecution({
-        approvalId: approval.id,
-        producerKind,
-        ownerId,
-        evidenceRef: `approval:${approval.id}:${approval.requestId}:${approval.attemptNumber}`,
-        startedAt: input.now(),
-      }),
+      await awaitRequest(
+        state,
+        context,
+        () =>
+          lifecycle.claimApprovedExecution({
+            approvalId: approval.id,
+            producerKind,
+            ownerId,
+            evidenceRef: `approval:${approval.id}:${approval.requestId}:${approval.attemptNumber}`,
+            startedAt: input.now(),
+            requestLifetime: Object.freeze({
+              signal: context.signal,
+              isRequestLive: context.isRequestLive,
+            }),
+          }),
+        (result) => {
+          if (result.kind === 'committed') result.value.dispose();
+        },
+      ),
     );
     assertLive(state);
     if (
@@ -1947,7 +2041,9 @@ export function createJarvisApprovalEngine(
             'context',
           ]);
           const context = assertContextBinding(autoInput.context, lifecycle, 'pending');
-          const prepared = await prepare(lifecycle, state, createInputOnly(autoInput));
+          const prepared = await awaitRequest(state, context, () =>
+            prepare(lifecycle, state, createInputOnly(autoInput)),
+          );
           const registration = resolveRegistration(prepared.actionId, prepared.actionVersion);
           if (registration.risk !== 'read-only' || registration.approval !== 'never') {
             approvalError('not_approved');
@@ -1957,13 +2053,25 @@ export function createJarvisApprovalEngine(
           const boundContext = Object.freeze({ ...context, approvalId: prepared.approvalId });
           assertLive(state);
           const execution = committed(
-            await lifecycle.claimAutoApprovedExecution({
-              approval: prepared,
-              producerKind,
-              ownerId,
-              evidenceRef: `approval:${prepared.approvalId}:${lifecycle.requestId}:${lifecycle.attemptNumber}`,
-              startedAt: input.now(),
-            }),
+            await awaitRequest(
+              state,
+              boundContext,
+              () =>
+                lifecycle.claimAutoApprovedExecution({
+                  approval: prepared,
+                  producerKind,
+                  ownerId,
+                  evidenceRef: `approval:${prepared.approvalId}:${lifecycle.requestId}:${lifecycle.attemptNumber}`,
+                  startedAt: input.now(),
+                  requestLifetime: Object.freeze({
+                    signal: context.signal,
+                    isRequestLive: context.isRequestLive,
+                  }),
+                }),
+              (result) => {
+                if (result.kind === 'committed') result.value.dispose();
+              },
+            ),
           );
           assertLive(state);
           return dispatchClaimed({

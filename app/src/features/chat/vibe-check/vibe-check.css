@@ -3,12 +3,12 @@
   right: 20px;
   bottom: 20px;
   z-index: 55;
-  width: min(490px, calc(100% - 24px));
+  width: min(530px, calc(100% - 24px));
   max-height: calc(100% - 32px);
   display: flex;
   flex-direction: column;
   border: 1px solid hsl(var(--border));
-  border-radius: 20px;
+  border-radius: 16px;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   box-shadow: 0 20px 75px #0004;
@@ -21,7 +21,48 @@
   gap: 11px;
   padding: 18px;
   border-bottom: 1px solid hsl(var(--border));
-  background: linear-gradient(125deg, #729d881c, transparent);
+  background: linear-gradient(125deg, hsl(var(--panel)), hsl(var(--background)));
+}
+.vibe-check-state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 13px;
+  margin: -4px 0 18px;
+  border: 1px solid hsl(var(--border));
+  border-left: 3px solid #729d88;
+  border-radius: 8px;
+  background: #729d880a;
+}
+.vibe-check-state strong {
+  flex: 1;
+  font-size: 12px;
+}
+.vibe-check-state small {
+  opacity: 0.65;
+  font-size: 10px;
+}
+.vibe-check-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #729d88;
+}
+.vibe-check-state.is-error {
+  border-left-color: #ce8d71;
+}
+.vibe-check-state.is-error .vibe-check-state-dot {
+  background: #ce8d71;
+}
+.vibe-check-evidence-heading {
+  margin: 22px 0 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.vibe-check-evidence-heading time {
+  font-size: 10px;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
 }
 .vibe-check-header > div:nth-child(2) {
   flex: 1;

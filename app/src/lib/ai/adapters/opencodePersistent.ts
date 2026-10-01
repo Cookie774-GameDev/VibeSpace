@@ -1619,9 +1619,18 @@ export function assertAuthoritativeOpenCodeIdentity(input: {
   if (!input.observed?.modelId) {
     throw new Error('OpenCode completed without authoritative observed model identity.');
   }
-  const observedModelId = input.observed.modelId.includes('/')
+  const observedProviderId = input.observed.providerId ?? input.providerId;
+  const alreadyQualified = input.observed.providerId
+    ? input.observed.modelId.toLocaleLowerCase('en-US').startsWith(
+        `${observedProviderId.toLocaleLowerCase('en-US')}/`,
+      )
+    : input.observed.modelId.includes('/');
+  // OpenRouter can report a nested model such as `google/gemma...` while its
+  // authoritative provider is `openrouter`. Preserve that provider prefix in
+  // the comparison; a slash within the model is not itself provider authority.
+  const observedModelId = alreadyQualified
     ? input.observed.modelId
-    : `${input.observed.providerId ?? input.providerId}/${input.observed.modelId}`;
+    : `${observedProviderId}/${input.observed.modelId}`;
   assertObservedModelMatches({
     requested: {
       connectionId: input.connectionId,
@@ -2213,6 +2222,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
         requestId: request.requestId,
         chatId: request.chatId,
         nativeToolMessageIds: true as const,
+        ...(request.protectedAttempt ? { protectedAttempt: request.protectedAttempt } : {}),
       }
     : undefined;
   const chatId = request.chatId?.trim() || request.sessionId?.trim() || request.requestId;

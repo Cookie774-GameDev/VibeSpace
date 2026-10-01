@@ -3,6 +3,8 @@ import {
   type ChatRuntimeSettings,
 } from './chatRuntimeCommandController';
 import type { AccessLevel } from '@/lib/permissions/OpenCodePermissionProfile';
+import { resolveRlmEnabled, setChatRlmEnabled } from '@/features/context/rlmPreferenceStore';
+import { useAuthStore } from '@/stores/auth';
 
 const STORAGE_KEY = 'vibespace.chat-runtime-settings.v1';
 const MAX_CHAT_ENTRIES = 2_000;
@@ -56,19 +58,25 @@ export function sanitizeChatRuntimePolicyState(value: unknown): ChatRuntimePolic
     };
   }
   const raw = value as Record<string, unknown>;
-  const settingsRaw = raw.settings && typeof raw.settings === 'object' && !Array.isArray(raw.settings)
-    ? raw.settings as Record<string, unknown>
-    : raw;
+  const settingsRaw =
+    raw.settings && typeof raw.settings === 'object' && !Array.isArray(raw.settings)
+      ? (raw.settings as Record<string, unknown>)
+      : raw;
   return {
     settings: {
-      effort: isEffort(settingsRaw.effort) ? settingsRaw.effort : DEFAULT_CHAT_RUNTIME_SETTINGS.effort,
-      fastMode: isFastMode(settingsRaw.fastMode) ? settingsRaw.fastMode : DEFAULT_CHAT_RUNTIME_SETTINGS.fastMode,
+      effort: isEffort(settingsRaw.effort)
+        ? settingsRaw.effort
+        : DEFAULT_CHAT_RUNTIME_SETTINGS.effort,
+      fastMode: isFastMode(settingsRaw.fastMode)
+        ? settingsRaw.fastMode
+        : DEFAULT_CHAT_RUNTIME_SETTINGS.fastMode,
       performance: isPerformance(settingsRaw.performance)
         ? settingsRaw.performance
         : DEFAULT_CHAT_RUNTIME_SETTINGS.performance,
-      rlmEnabled: typeof settingsRaw.rlmEnabled === 'boolean'
-        ? settingsRaw.rlmEnabled
-        : DEFAULT_CHAT_RUNTIME_SETTINGS.rlmEnabled,
+      rlmEnabled:
+        typeof settingsRaw.rlmEnabled === 'boolean'
+          ? settingsRaw.rlmEnabled
+          : DEFAULT_CHAT_RUNTIME_SETTINGS.rlmEnabled,
     },
     access: isAccess(raw.access) ? raw.access : DEFAULT_CHAT_RUNTIME_POLICY_STATE.access,
     approveAllForRun: raw.approveAllForRun === true,
@@ -87,7 +95,9 @@ function readAll(): StoredRuntimePolicyState {
       return { schemaVersion: 1, chats: {} };
     }
     const chats: Record<string, ChatRuntimePolicyState> = {};
-    for (const [chatId, state] of Object.entries(rawChats as Record<string, unknown>).slice(-MAX_CHAT_ENTRIES)) {
+    for (const [chatId, state] of Object.entries(rawChats as Record<string, unknown>).slice(
+      -MAX_CHAT_ENTRIES,
+    )) {
       if (validChatId(chatId)) chats[chatId] = sanitizeChatRuntimePolicyState(state);
     }
     return { schemaVersion: 1, chats };
@@ -108,7 +118,18 @@ function writeAll(state: StoredRuntimePolicyState): void {
 export function readChatRuntimePolicyState(chatId: string): ChatRuntimePolicyState {
   const clean = chatId.trim();
   if (!validChatId(clean)) return sanitizeChatRuntimePolicyState(null);
-  return sanitizeChatRuntimePolicyState(readAll().chats[clean]);
+  const state = sanitizeChatRuntimePolicyState(readAll().chats[clean]);
+  const context = resolveRlmEnabled({
+    chatId: clean,
+    workspaceId: useAuthStore.getState().workspaceId ?? undefined,
+  });
+  // Older controls wrote either store independently. Keep any explicit OFF
+  // until the user turns it ON through the shared write path.
+  if (!state.settings.rlmEnabled && context.enabled) setChatRlmEnabled(clean, false);
+  return {
+    ...state,
+    settings: { ...state.settings, rlmEnabled: state.settings.rlmEnabled && context.enabled },
+  };
 }
 
 export function writeChatRuntimePolicyState(
@@ -122,6 +143,7 @@ export function writeChatRuntimePolicyState(
   const entries = Object.entries({ ...current.chats, [clean]: sanitized });
   const chats = Object.fromEntries(entries.slice(-MAX_CHAT_ENTRIES));
   writeAll({ schemaVersion: 1, chats });
+  setChatRlmEnabled(clean, sanitized.settings.rlmEnabled);
   return sanitized;
 }
 

@@ -5,11 +5,14 @@ import {
   fromJarvisApprovalRow,
   fromJarvisRunRow,
   toJarvisEventRow,
+  toJarvisApprovalRow,
   toJarvisRunRow,
 } from '@/lib/db/jarvisMappers';
 import { createJarvisRepositories } from '@/lib/db/jarvisRepositories';
 import { TEST_INDEXED_DB, uniqueTestDbName } from '@/test/indexedDb';
 import { useAuthStore } from '@/stores/auth';
+import { getBuiltinAction } from '@/lib/actions/registry';
+import { eventRepo } from '@/lib/db/repositories';
 import type { Agent, ChatId, WorkspaceId } from '@/types';
 import { createJarvisHiveLiveEvidenceVerifier } from '@/lib/ai/stacks/hiveWorkerExecutor';
 import {
@@ -22,6 +25,7 @@ import type {
   JarvisHiveStackPlanV1,
   JarvisResponseEnvelope,
   JarvisRun,
+  JarvisApprovalV1,
 } from './contracts';
 import {
   createJarvisActionLiveEvidenceVerifiers,
@@ -222,6 +226,54 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
       now: () => NOW,
     });
   }
+
+  it('allows a live tool approval only while its issued provider attempt remains active', async () => {
+    const turn = kernelTurn();
+    await db.jarvis_runs.add(toJarvisRunRow(turn.run));
+    await db.chats.add({ id: turn.chatId as ChatId, workspace_id: turn.workspaceId as WorkspaceId,
+      title: 'Live tool approval', mode: 'chat', active_agent_ids: [turn.agent.id], created_at: NOW, updated_at: NOW });
+    const approval: JarvisApprovalV1 = { schemaVersion: 1, id: 'jappr_live_tool',
+      runId: turn.run.id, requestId: turn.attempt.requestId, attemptNumber: 1,
+      actionId: 'schedule.create', actionVersion: 1, params: { title: 'QA' }, paramsHash: 'params-live',
+      status: 'pending', risk: 'confirm', capabilityId: 'schedule.write', capabilitySnapshotHash: 'capabilities-live',
+      expectedEffect: 'Create approved schedule', createdAt: NOW, expiresAt: NOW + 60_000 };
+    await db.jarvis_approvals.add(toJarvisApprovalRow(approval));
+    const decide = vi.fn(async () => ({ ...approval, status: 'approved' as const }));
+    const response = new Promise<never>(() => {});
+    const responseWait = vi.spyOn(response, 'then');
+    let abortOwner: (() => unknown) | undefined;
+    const composition = createJarvisKernelRuntime({ db, artifactEvidenceAuthorities: artifactAuthorities() as never,
+      journal: createJarvisExecutionJournal(createJarvisRepositories(db), { now: () => NOW }),
+      cancellationDeliveryAuthority: {} as never,
+      abortRegistrationAuthority: { registerIssuedOwner: (owner) => { abortOwner = owner.abort; return () => {}; } },
+      bindKernelActions: () => ({ create: vi.fn(), decide, execute: vi.fn(), executeAutoApprovedSafe: vi.fn() }),
+      liveEvidenceVerifiers: { ...unavailableVerifiers(), provider: { state: 'ready', producerKind: 'provider',
+        verifier: { verify: vi.fn(async (value: unknown) => value) } } } as never,
+      prepareProvider: async () => ({ resolveConfiguration: async () => ({ start: () => ({
+        receipt: { providerId: turn.model.providerId, modelId: turn.model.modelId, modelSnapshotRef: 'live-tool-model',
+          operations: ['generate'], startedAt: NOW }, response, abortAfterStart: () => {},
+      }), dispose: () => {} }), dispose: () => {} }),
+      processResponse: vi.fn(), takeProviderArtifactDrafts: () => [], randomUUID: () => 'live-tool-uuid', now: () => NOW,
+    });
+    const task = composition.kernel.runInitialTurn(turn);
+    void task.catch(() => {});
+    try {
+      await vi.waitFor(async () => expect((await db.jarvis_events.toArray()).some(row =>
+        row.producer_source_evidence?.producerKind === 'provider' && row.producer_source_evidence.phase === 'start')).toBe(true));
+      // The early rejection observer uses the first then(); the response wait starts
+      // only after recordProviderStarted has finished issuing the live registration.
+      await vi.waitFor(() => expect(responseWait).toHaveBeenCalledTimes(2));
+      const liveRun = fromJarvisRunRow((await db.jarvis_runs.get(turn.run.id))!);
+      await expect(composition.kernel.actions.decide({ parentRun: liveRun, approvalId: approval.id, decision: 'approve' }))
+        .resolves.toMatchObject({ kind: 'committed', value: { status: 'approved' } });
+      expect(decide).toHaveBeenCalledOnce();
+      await abortOwner?.();
+      await expect(task).rejects.toMatchObject({ name: 'AbortError' });
+      await expect(composition.kernel.actions.decide({ parentRun: liveRun, approvalId: approval.id, decision: 'approve' }))
+        .rejects.toThrow('kernel_action_decide_scope_failed');
+      expect(decide).toHaveBeenCalledOnce();
+    } finally { await abortOwner?.(); await task.catch(() => {}); composition.liveEvidenceHost.dispose(); }
+  });
 
   async function seedActionResponseCheckpoint(input: {
     parentRun: JarvisRun;
@@ -1783,7 +1835,8 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
     });
   });
 
-  it('claims and settles an approved action with durable start, result, and live evidence', async () => {
+  it.each(['settle', 'before-effect', 'during-probe', 'merged-request-abort', 'schedule-microtask-request', 'schedule-microtask-account'] as const)(
+    'uses the actual issued action handle for %s with durable evidence and request cancellation', async (mode) => {
     const parentRun: JarvisRun = {
       ...kernelRun(),
       source: 'schedule',
@@ -1806,6 +1859,48 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
     await db.jarvis_runs.add(toJarvisRunRow(parentRun));
     const approvalId = 'jappr_runtime_action_result';
     let effectSignal: AbortSignal | undefined;
+    const request = new AbortController();
+    const scheduleVariant = mode === 'schedule-microtask-request' || mode === 'schedule-microtask-account';
+    const originalAuth = useAuthStore.getState();
+    const scheduleParams = { title: 'QA only', prompt: 'QA only', startAtMs: Date.now() + 86400000, recurrence: 'once' };
+    let admittedScheduleWrites = 0;
+    const scheduleWrite = scheduleVariant ? vi.spyOn(eventRepo, 'create').mockImplementation(async () => {
+      admittedScheduleWrites += 1;
+      throw Error('write_was_admitted_after_abort');
+    }) : undefined;
+    let finalScheduleProbe = false;
+    const effect = vi.fn((signal: AbortSignal): { completion: Promise<unknown> } => {
+      effectSignal = signal;
+      if (scheduleVariant) {
+        finalScheduleProbe = true;
+        return { completion: getBuiltinAction('schedule.create')!.run(scheduleParams, { ...executeContext, signal }) };
+      }
+      if (mode === 'merged-request-abort') {
+        expect(signal.aborted).toBe(false);
+        request.abort();
+        expect(signal.aborted).toBe(true);
+      }
+      return { completion: Promise.resolve('created') };
+    });
+    let pauseProbe = false;
+    let enterProbe!: () => void;
+    let releaseProbe!: () => void;
+    const probeEntered = new Promise<void>((resolve) => { enterProbe = resolve; });
+    const probePaused = new Promise<void>((resolve) => { releaseProbe = resolve; });
+    const isRequestLive = () => {
+      if (finalScheduleProbe) {
+        const probe = Promise.resolve(true);
+        void probe.then(() => queueMicrotask(() => {
+          if (mode === 'schedule-microtask-account') useAuthStore.setState({ localUserId: 'account-revoked' });
+          else request.abort();
+        }));
+        return probe;
+      }
+      if (pauseProbe) return (async () => { enterProbe(); await probePaused; return true; })();
+      return Promise.resolve(true);
+    };
+    const executeContext = { source: 'ai' as const, signal: request.signal, isRequestLive };
+    if (scheduleVariant) useAuthStore.setState({ workspaceId: 'workspace-schedule-admission' as WorkspaceId });
     const bindKernelActions: JarvisApprovalActionBinder = (lifecycle) => ({
       async create(createInput) {
         const result = await lifecycle.putPreparedApproval({
@@ -1815,11 +1910,11 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
           paramsHash: 'params-hash-runtime-action-result',
           targetSnapshot: {
             kind: 'app_resource',
-            namespace: 'notes',
+            namespace: scheduleVariant ? 'schedule' : 'notes',
             resourceId: 'runtime-action-result',
           },
           risk: 'confirm',
-          capabilityId: 'capability.notes.write',
+          capabilityId: scheduleVariant ? 'capability.schedule.write' : 'capability.notes.write',
           capabilitySnapshotHash: 'capability-hash-runtime-action-result',
           expectedEffect: 'Create the runtime action result note.',
           createdAt: NOW,
@@ -1842,14 +1937,42 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
           ownerId: `approval:${executeInput.approvalId}`,
           evidenceRef: `approval:${executeInput.approvalId}:claim`,
           startedAt: NOW + 1,
+          requestLifetime: executeInput.context,
         });
         if (claim.kind !== 'committed') throw new Error('unexpected_authority_revocation');
         const execution = claim.value;
-        const started = execution.beginExternalEffect((signal) => {
-          effectSignal = signal;
-          return { completion: Promise.resolve('created') };
-        });
+        if (mode === 'before-effect') {
+          request.abort();
+          expect(() => execution.beginExternalEffect(effect)).toThrow(expect.objectContaining({ name: 'AbortError' }));
+          expect(lifecycle.revocationSignal.aborted).toBe(false);
+          execution.dispose();
+          return { kind: 'settled' as const, result: { ok: true as const, summary: 'cancelled_before_effect' } };
+        }
+        pauseProbe = mode === 'during-probe';
+        const started = execution.beginExternalEffect(effect);
         if (started.kind !== 'committed') throw new Error('unexpected_authority_revocation');
+        if (scheduleVariant) {
+          try {
+            await expect(started.value.completion).rejects.toMatchObject({ name: 'AbortError' });
+            expect(scheduleWrite).not.toHaveBeenCalled();
+            expect(effectSignal!.aborted).toBe(true);
+            expect(request.signal.aborted).toBe(mode === 'schedule-microtask-request');
+          } finally {
+            execution.dispose();
+            scheduleWrite!.mockRestore();
+          }
+          return { kind: 'settled' as const, result: { ok: true as const, summary: 'cancelled_before_effect' } };
+        }
+        if (mode === 'during-probe') {
+          const rejection = expect(started.value.completion).rejects.toMatchObject({ name: 'AbortError' });
+          await probeEntered;
+          request.abort();
+          releaseProbe();
+          await rejection;
+          expect(lifecycle.revocationSignal.aborted).toBe(false);
+          execution.dispose();
+          return { kind: 'settled' as const, result: { ok: true as const, summary: 'cancelled_before_effect' } };
+        }
         await started.value.completion;
         const settled = await execution.recordResult({
           state: 'completed',
@@ -1884,9 +2007,9 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
         runId: parentRun.id,
         attemptNumber: 1,
       },
-      actionId: 'notes.create',
+      actionId: scheduleVariant ? 'schedule.create' : 'notes.create',
       actionVersion: 1,
-      params: { title: 'Runtime action result' },
+      params: scheduleVariant ? scheduleParams : { title: 'Runtime action result' },
       expiresAt: NOW + 60_000,
     };
     await runtime.kernel.actions.create(createInput);
@@ -1896,13 +2019,29 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
       runtime.kernel.actions.execute({
         parentRun,
         approvalId,
-        context: { source: 'ai' },
+        context: executeContext,
       }),
-    ).resolves.toEqual({
+    ).resolves.toEqual(mode === 'schedule-microtask-account' ? { kind: 'account_authority_revoked' } : {
       kind: 'committed',
-      value: { kind: 'settled', result: { ok: true, summary: 'created' } },
+      value: { kind: 'settled', result: { ok: true, summary:
+        mode === 'before-effect' || mode === 'during-probe' || scheduleVariant ? 'cancelled_before_effect' : 'created' } },
+    }).finally(() => {
+      if (scheduleVariant) {
+        useAuthStore.setState(originalAuth);
+        scheduleWrite?.mockRestore();
+      }
     });
 
+    if (mode === 'before-effect' || mode === 'during-probe' || scheduleVariant) {
+      if (scheduleVariant) {
+        expect(admittedScheduleWrites).toBe(0);
+        expect(effectSignal!.aborted).toBe(true);
+        expect(request.signal.aborted).toBe(mode === 'schedule-microtask-request');
+      }
+      if (!scheduleVariant) expect(effect).not.toHaveBeenCalled();
+      expect((await db.jarvis_events.toArray()).some((event) => event.status === 'completed')).toBe(false);
+      return;
+    }
     expect(effectSignal).toBeDefined();
     expect(effectSignal!.aborted).toBe(true);
     expect(fromJarvisApprovalRow((await db.jarvis_approvals.get(approvalId))!)).toMatchObject({

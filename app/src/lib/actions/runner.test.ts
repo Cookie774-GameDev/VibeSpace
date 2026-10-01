@@ -354,6 +354,38 @@ describe('runAction', () => {
     );
   });
 
+  it('does not admit a builtin effect when its original request has already ended', async () => {
+    const request = new AbortController();
+    request.abort();
+    const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve('file.search')!;
+    const run = vi.spyOn(resolveAction('file.search')!, 'run').mockResolvedValue({ ok: true, summary: 'unexpected' });
+    const beginExternalEffect = vi.fn((begin) => ({ kind: 'committed', value: begin(new AbortController().signal) }));
+    try {
+      const outcome = await createJarvisRegisteredBuiltinDispatcher()({ registration, params: { query: 'QA' },
+        context: { source: 'ai', accountId: 'account', runId: 'run', approvalId: 'approval', requestId: 'request', attemptNumber: 1, signal: request.signal },
+        execution: { beginExternalEffect } as never });
+      expect(outcome).toMatchObject({ kind: 'executor_returned', result: { ok: false } });
+      expect(beginExternalEffect).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+    } finally { run.mockRestore(); }
+  });
+
+  it.each(['request', 'account'])('retains %s abort in the builtin effect signal', async (ended) => {
+    const request = new AbortController();
+    const account = new AbortController();
+    const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve('file.search')!;
+    const run = vi.spyOn(resolveAction('file.search')!, 'run').mockResolvedValue({ ok: true, summary: 'QA' });
+    const beginExternalEffect = vi.fn((begin) => ({ kind: 'committed', value: begin(account.signal) }));
+    try {
+      await createJarvisRegisteredBuiltinDispatcher()({ registration, params: { query: 'QA' },
+        context: { source: 'ai', accountId: 'account', runId: 'run', approvalId: 'approval', requestId: 'request', attemptNumber: 1, signal: request.signal },
+        execution: { beginExternalEffect } as never });
+      const effectSignal = run.mock.calls[0][1].signal!;
+      (ended === 'request' ? request : account).abort();
+      expect(effectSignal.aborted).toBe(true);
+    } finally { run.mockRestore(); }
+  });
+
   it('does not emit file-writing activity for retired file actions', async () => {
     expect(createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve('files.edit')).toBeUndefined();
     expect(resolveAction('files.edit')).toBeUndefined();

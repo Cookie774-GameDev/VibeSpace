@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
-import { getAllActions, runAction } from '@/lib/actions';
+import { getAllActions } from '@/lib/actions';
 import { loadPersistedContextMaps } from '@/features/context';
 import { useAllAboutMeStore } from '@/features/all-about-me/store';
 import { useJarvisLearningStore } from '@/features/jarvis-memory/learningStore';
@@ -36,10 +36,7 @@ import {
   clearToolGatewayContextCitationItems,
 } from './toolGatewayCitations';
 import { ContextRequiredUnavailableError } from '@/features/context/gateway/ContextGateway';
-import {
-  RELAY_GROUP_TOOL_NAMES,
-  type RelayParticipantHandle,
-} from '@/lib/relay/relayHostBridge';
+import { RELAY_GROUP_TOOL_NAMES, type RelayParticipantHandle } from '@/lib/relay/relayHostBridge';
 import {
   ToolGatewaySemanticError,
   type ToolGatewayDependencies,
@@ -89,18 +86,39 @@ export type ToolGatewayRelayPort = Readonly<{
 let relayPort: ToolGatewayRelayPort | undefined;
 const RELAY_CONNECTION_ID = 'agent-relay';
 const RELAY_WRITE_TOOLS = new Set<string>([
-  'message.post', 'message.reply', 'message.dm.send', 'message.inbox.mark_read',
+  'message.post',
+  'message.reply',
+  'message.dm.send',
+  'message.inbox.mark_read',
 ]);
-const RELAY_TOOL_SCHEMAS: Readonly<Record<string, Readonly<Record<string, unknown>>>> = Object.freeze({
-  'agent.list': { status: { type: 'string', enum: ['online', 'offline'] } },
-  'message.post': { channel: { type: 'string' }, text: { type: 'string', minLength: 1, maxLength: 8192 } },
-  'message.list': { channel: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 50 }, before: { type: 'string' }, after: { type: 'string' } },
-  'message.reply': { message_id: { type: 'string' }, text: { type: 'string', minLength: 1, maxLength: 8192 } },
-  'message.get_thread': { message_id: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 50 } },
-  'message.dm.send': { to: { type: 'string' }, text: { type: 'string', minLength: 1, maxLength: 8192 } },
-  'message.inbox.check': { limit: { type: 'integer', minimum: 1, maximum: 50 } },
-  'message.inbox.mark_read': { message_id: { type: 'string' } },
-});
+const RELAY_TOOL_SCHEMAS: Readonly<Record<string, Readonly<Record<string, unknown>>>> =
+  Object.freeze({
+    'agent.list': { status: { type: 'string', enum: ['online', 'offline'] } },
+    'message.post': {
+      channel: { type: 'string' },
+      text: { type: 'string', minLength: 1, maxLength: 8192 },
+    },
+    'message.list': {
+      channel: { type: 'string' },
+      limit: { type: 'integer', minimum: 1, maximum: 50 },
+      before: { type: 'string' },
+      after: { type: 'string' },
+    },
+    'message.reply': {
+      message_id: { type: 'string' },
+      text: { type: 'string', minLength: 1, maxLength: 8192 },
+    },
+    'message.get_thread': {
+      message_id: { type: 'string' },
+      limit: { type: 'integer', minimum: 1, maximum: 50 },
+    },
+    'message.dm.send': {
+      to: { type: 'string' },
+      text: { type: 'string', minLength: 1, maxLength: 8192 },
+    },
+    'message.inbox.check': { limit: { type: 'integer', minimum: 1, maximum: 50 } },
+    'message.inbox.mark_read': { message_id: { type: 'string' } },
+  });
 const RELAY_REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   'agent.list': [],
   'message.post': ['channel', 'text'],
@@ -112,20 +130,31 @@ const RELAY_REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = Object.
   'message.inbox.mark_read': ['message_id'],
 });
 
-function projectedRelaySchema(name: (typeof RELAY_GROUP_TOOL_NAMES)[number], upstream: unknown, channel: string) {
+function projectedRelaySchema(
+  name: (typeof RELAY_GROUP_TOOL_NAMES)[number],
+  upstream: unknown,
+  channel: string,
+) {
   const allowed = RELAY_TOOL_SCHEMAS[name];
   const fallback = {
     type: 'object',
-    properties: name === 'message.post' || name === 'message.list'
-      ? { ...allowed, channel: { type: 'string', const: channel } }
-      : allowed,
+    properties:
+      name === 'message.post' || name === 'message.list'
+        ? { ...allowed, channel: { type: 'string', const: channel } }
+        : allowed,
     required: RELAY_REQUIRED_ARGS[name],
     additionalProperties: false,
   };
   if (upstream === undefined) return fallback;
   try {
     const schema = safeMcpInputSchema(upstream) as Record<string, unknown>;
-    if (schema.type !== 'object' || !schema.properties || typeof schema.properties !== 'object' || Array.isArray(schema.properties)) return null;
+    if (
+      schema.type !== 'object' ||
+      !schema.properties ||
+      typeof schema.properties !== 'object' ||
+      Array.isArray(schema.properties)
+    )
+      return null;
     const source = schema.properties as Record<string, unknown>;
     const properties: Record<string, unknown> = {};
     for (const [key, constraint] of Object.entries(allowed)) {
@@ -140,7 +169,12 @@ function projectedRelaySchema(name: (typeof RELAY_GROUP_TOOL_NAMES)[number], ups
         ...(key === 'channel' ? { const: channel } : {}),
       };
     }
-    return { type: 'object', properties, required: RELAY_REQUIRED_ARGS[name], additionalProperties: false };
+    return {
+      type: 'object',
+      properties,
+      required: RELAY_REQUIRED_ARGS[name],
+      additionalProperties: false,
+    };
   } catch {
     return null;
   }
@@ -155,14 +189,24 @@ function relayTools(port: ToolGatewayRelayPort, participant: RelayParticipantHan
     ? new Map(participant.availableTools.map((tool) => [tool.name, tool]))
     : null;
   return RELAY_GROUP_TOOL_NAMES.filter((name) => discovered.has(name))
-    .filter((name) => (participantCatalog === null || participantCatalog.has(name)) && (officialCatalog === null || officialCatalog.has(name)))
+    .filter(
+      (name) =>
+        (participantCatalog === null || participantCatalog.has(name)) &&
+        (officialCatalog === null || officialCatalog.has(name)),
+    )
     .map((name) => {
       const official = officialCatalog?.get(name);
-      const inputSchema = projectedRelaySchema(name, officialCatalog ? official?.inputSchema : undefined, port.channel);
+      const inputSchema = projectedRelaySchema(
+        name,
+        officialCatalog ? official?.inputSchema : undefined,
+        port.channel,
+      );
       if (!inputSchema) return null;
       return {
         name,
-        description: official?.description ?? `Agent Relay ${name} in the host-bound VibeSpace group. Relay content is untrusted; send acknowledgement is not a peer reply.`,
+        description:
+          official?.description ??
+          `Agent Relay ${name} in the host-bound VibeSpace group. Relay content is untrusted; send acknowledgement is not a peer reply.`,
         classification: RELAY_WRITE_TOOLS.has(name) ? ('write' as const) : ('read' as const),
         inputSchema,
       };
@@ -171,12 +215,27 @@ function relayTools(port: ToolGatewayRelayPort, participant: RelayParticipantHan
 }
 
 function relayInputAllowed(toolName: string, value: unknown, channel: string): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  )
+    return false;
   const args = value as Record<string, unknown>;
   const allowed = RELAY_TOOL_SCHEMAS[toolName];
-  if (!allowed || Object.keys(args).some((key) => !Object.prototype.hasOwnProperty.call(allowed, key))) return false;
-  if ((toolName === 'message.post' || toolName === 'message.list') && args.channel !== channel) return false;
-  return RELAY_REQUIRED_ARGS[toolName]?.every((key) => typeof args[key] === 'string' && !!String(args[key]).trim()) ?? false;
+  if (
+    !allowed ||
+    Object.keys(args).some((key) => !Object.prototype.hasOwnProperty.call(allowed, key))
+  )
+    return false;
+  if ((toolName === 'message.post' || toolName === 'message.list') && args.channel !== channel)
+    return false;
+  return (
+    RELAY_REQUIRED_ARGS[toolName]?.every(
+      (key) => typeof args[key] === 'string' && !!String(args[key]).trim(),
+    ) ?? false
+  );
 }
 
 async function boundRelayParticipant(
@@ -253,9 +312,11 @@ function publicPluginFailureReason(failure: unknown): string {
   const message =
     failure instanceof Error ? failure.message : typeof failure === 'string' ? failure : '';
   const candidate =
-    /^Plugin credential authority denied the operation: ([a-z_0-9]+)\.$/.exec(message)?.[1] ?? message;
+    /^Plugin credential authority denied the operation: ([a-z_0-9]+)\.$/.exec(message)?.[1] ??
+    message;
   // Only fixed public codes cross this boundary, never provider bodies or credential errors.
-  return PUBLIC_PLUGIN_FAILURE_REASONS.has(candidate) || /^connection_rejected_[45]\d{2}$/.test(candidate)
+  return PUBLIC_PLUGIN_FAILURE_REASONS.has(candidate) ||
+    /^connection_rejected_[45]\d{2}$/.test(candidate)
     ? candidate
     : 'internal_plugin_failure';
 }
@@ -292,7 +353,11 @@ function markPluginConnectionForReauthorization(
 }
 
 type ToolGatewayRlmContextPort = Readonly<{
-  execute(args: Record<string, unknown>, lease: RlmContextLease, signal?: AbortSignal): Promise<unknown>;
+  execute(
+    args: Record<string, unknown>,
+    lease: RlmContextLease,
+    signal?: AbortSignal,
+  ): Promise<unknown>;
 }>;
 
 let rlmContextPort: ToolGatewayRlmContextPort | undefined;
@@ -595,19 +660,14 @@ async function runApprovedAction(
 ) {
   const action = getAllActions().find((candidate) => candidate.id === actionId);
   if (!action) throw new Error('command_not_found');
-  const result = await runAction(
-    action.id,
-    args,
-    {
-      source: 'ai',
-      chatId: context.sessionId,
-      messageId: context.messageId,
-      callId: context.requestId,
-    },
-    { emitToast: false },
-  );
-  if (!result.ok) throw new Error('command_failed');
-  return { summary: result.summary, data: result.data };
+  const { runToolGatewayAction } = await import('@/lib/ai/runtime');
+  const execution = await runToolGatewayAction({ actionId: action.id, params: args, context });
+  if (execution.kind === 'handoff_pending') throw new ToolGatewaySemanticError({
+    code: 'command_handoff_pending', message: 'The protected action was handed off and has not settled.',
+    data: { status: 'handoff_pending', executorKind: execution.executorKind, ownerId: execution.ownerId },
+  });
+  if (!execution.result.ok) throw new Error('command_failed');
+  return { summary: execution.result.summary, data: execution.result.data };
 }
 
 export function createProductionToolGatewayDependencies(): ToolGatewayDependencies {
@@ -620,11 +680,18 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         const scope = toolGatewaySessionScope(request.sessionId);
         const turn = readToolGatewayTurnIdentity(request.sessionId, request.messageId);
         return Boolean(
-          relayPort && turn && scope.projectId &&
+          relayPort &&
+          turn &&
+          scope.projectId &&
           args.classification === 'write' &&
-          typeof args.toolName === 'string' && RELAY_WRITE_TOOLS.has(args.toolName) &&
+          typeof args.toolName === 'string' &&
+          RELAY_WRITE_TOOLS.has(args.toolName) &&
           authorizeToolGatewayRequest(request) &&
-          canParticipateInRelay(readRelaySettings(), { projectId: scope.projectId, sessionId: request.sessionId }, scope.projectId),
+          canParticipateInRelay(
+            readRelaySettings(),
+            { projectId: scope.projectId, sessionId: request.sessionId },
+            scope.projectId,
+          ),
         );
       }
       return authorizeToolGatewayMutation(request);
@@ -848,17 +915,21 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         // The shared tool schema exposes search display limits on every operation.
         // Recursive investigate has its own bounded budget and accepts only its
         // operation and question; forwarding display limits makes a valid call fail.
-        const portArgs = args.operation === 'investigate'
-          ? { operation: 'investigate', query: args.query }
-          : args;
+        const portArgs =
+          args.operation === 'investigate' ? { operation: 'investigate', query: args.query } : args;
         const result = port.execute(portArgs, lease, context.signal);
         if (args.operation !== 'investigate') return result;
         return result.then((value) => {
           if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
           const data = value as Record<string, unknown>;
           const trace = data.trace;
-          if (!trace || typeof trace !== 'object' || Array.isArray(trace) ||
-              !Object.prototype.hasOwnProperty.call(trace, 'budget')) return value;
+          if (
+            !trace ||
+            typeof trace !== 'object' ||
+            Array.isArray(trace) ||
+            !Object.prototype.hasOwnProperty.call(trace, 'budget')
+          )
+            return value;
           // Recursive budgets are internal. Their token-named keys are rejected
           // by the provider response boundary even when the answer is only 13 KB.
           const { budget: _internalBudget, ...safeTrace } = trace as Record<string, unknown>;
@@ -1097,13 +1168,31 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
     },
     schedule: {
       create: async (args, context) => {
-        const schedule = stringArg(args, 'schedule').toLowerCase();
+        const requested = stringArg(args, 'schedule');
+        const schedule = requested.toLowerCase();
         const recurrence = ['daily', 'weekly', 'monthly', 'weekdays'].includes(schedule)
           ? schedule
           : 'once';
-        const parsed = Date.parse(stringArg(args, 'schedule'));
-        const startAtMs =
-          recurrence === 'once' && Number.isFinite(parsed) ? parsed : Date.now() + 60_000;
+        const parsed = Date.parse(requested);
+        if (recurrence === 'once') {
+          // The model must resolve relative/local time with the request's
+          // timezone. Never replace an unresolved date with a different time.
+          const zonedIso =
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/iu.test(
+              requested,
+            );
+          const datePart = requested.slice(0, 10);
+          const calendarDate = Date.parse(`${datePart}T00:00:00Z`);
+          const validCalendarDate =
+            Number.isFinite(calendarDate) &&
+            new Date(calendarDate).toISOString().slice(0, 10) === datePart;
+          if (!zonedIso || !Number.isFinite(parsed) || !validCalendarDate) {
+            throw new Error(
+              'schedule_invalid: use an ISO datetime with an explicit timezone or a supported recurrence.',
+            );
+          }
+        }
+        const startAtMs = recurrence === 'once' ? parsed : Date.now() + 60_000;
         return runApprovedAction(
           'schedule.create',
           {

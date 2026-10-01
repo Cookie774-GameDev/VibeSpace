@@ -31,7 +31,7 @@ import type {
   ActionRunContext,
   RegisteredActionExecutionContext,
 } from './types';
-import { hasJarvisApprovalCorrelation } from './types';
+import { hasJarvisApprovalCorrelation, assertActionRequestLive } from './types';
 import type {
   CanonicalFileActionEvidence,
   CanonicalFileActionEvidenceAuthority,
@@ -465,6 +465,7 @@ async function runActionOnce(
 
   const liveFileActivityId = beginLiveFileActionActivity(def, ctx);
   try {
+    await assertActionRequestLive(ctx);
     const result = await def.run(validation.params, ctx);
     finishLiveFileActionActivity(def, ctx, liveFileActivityId, result);
     if (emitToast) {
@@ -558,11 +559,13 @@ export function createJarvisRegisteredBuiltinDispatcher() {
       };
     }
     try {
+      await assertActionRequestLive(input.context);
       const started = input.execution.beginExternalEffect((signal) => ({
         completion: runActionOnce(
           definition.id,
           structuredClone(input.params),
-          Object.freeze({ ...input.context, signal }),
+          Object.freeze({ ...input.context, signal: input.context.signal && input.context.signal !== signal
+            ? AbortSignal.any([signal, input.context.signal]) : signal }),
           { emitToast: false },
           true,
         ),

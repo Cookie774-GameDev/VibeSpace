@@ -197,7 +197,10 @@ async function createCodexGatewayTool(
         threadId,
         claim,
         request.signal,
-        request.chatId ? { requestId: request.requestId, chatId: request.chatId } : undefined,
+        request.chatId ? {
+          requestId: request.requestId, chatId: request.chatId,
+          ...(request.protectedAttempt ? { protectedAttempt: request.protectedAttempt } : {}),
+        } : undefined,
       )) throw new Error('Codex Tool Gateway authority changed.');
       sessionId = threadId;
       directory = identity.cwd;

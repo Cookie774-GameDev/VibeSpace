@@ -71,6 +71,97 @@ describe('ActionApprovalCard canonical adapter', () => {
     messageRepository.update.mockResolvedValue(undefined);
   });
 
+  it('returns an approved live tool decision to its waiting call without executing again or sending another turn', async () => {
+    kernelClient.decideApproval.mockResolvedValueOnce({
+      kind: 'approval_decided',
+      approvalId: 'jappr_1',
+      status: 'approved',
+      continuation: 'tool_request',
+    });
+    const send = vi.fn();
+    window.addEventListener('jarvis:send', send);
+    try {
+      const { container } = renderCard(part('jarvisapproval:jappr_1'), {
+        actionId: 'schedule.create',
+        expectedEffect: 'Create one fixed schedule.',
+        risk: 'confirm',
+        parameters: [],
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Approve fixed action' }));
+      await waitFor(() => expect(kernelClient.dispose).toHaveBeenCalledOnce());
+      expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      expect(container.firstElementChild?.getAttribute('data-status')).toBe('running');
+    } finally {
+      window.removeEventListener('jarvis:send', send);
+    }
+  });
+
+  it('denies only a waiting tool action without declaring the whole parent chat cancelled', async () => {
+    kernelClient.decideApproval.mockResolvedValueOnce({
+      kind: 'approval_decided',
+      approvalId: 'jappr_1',
+      status: 'denied',
+      continuation: 'tool_request',
+    });
+    const state = vi.fn();
+    window.addEventListener('jarvis:run-state', state);
+    try {
+      const { container } = renderCard(part('jarvisapproval:jappr_1'), {
+        actionId: 'schedule.create',
+        expectedEffect: 'Create one fixed schedule.',
+        risk: 'confirm',
+        parameters: [],
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Deny action' }));
+      await waitFor(() => expect(kernelClient.dispose).toHaveBeenCalledOnce());
+      expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+      expect(state).not.toHaveBeenCalled();
+      expect(container.firstElementChild?.getAttribute('data-status')).toBe('cancelled');
+    } finally {
+      window.removeEventListener('jarvis:run-state', state);
+    }
+  });
+
+  it('retains a settled tool projection that arrives before its decision response', async () => {
+    let answer!: (value: unknown) => void;
+    kernelClient.decideApproval.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const presentation = {
+      actionId: 'schedule.create',
+      expectedEffect: 'Create fixed schedule.',
+      risk: 'confirm' as const,
+      parameters: [],
+    };
+    const actionPart = part('jarvisapproval:jappr_1');
+    const view = renderCard(actionPart, presentation);
+    fireEvent.click(screen.getByRole('button', { name: 'Approve fixed action' }));
+    view.rerender(
+      <ActionApprovalCard
+        part={{ ...actionPart, status: 'success' }}
+        allParts={[actionPart]}
+        messageId={'message_1' as never}
+        chatId="chat_1"
+        presentation={presentation}
+      />,
+    );
+    await waitFor(() =>
+      expect(view.container.firstElementChild?.getAttribute('data-status')).toBe('success'),
+    );
+    answer({
+      kind: 'approval_decided',
+      approvalId: 'jappr_1',
+      status: 'approved',
+      continuation: 'tool_request',
+    });
+    await waitFor(() => expect(kernelClient.dispose).toHaveBeenCalledOnce());
+    expect(view.container.firstElementChild?.getAttribute('data-status')).toBe('success');
+    expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+  });
+
   it('renders historical cards as view-only without raw params or execution controls', () => {
     const { container } = renderCard(part('jarvisrun:legacy:step'));
 
