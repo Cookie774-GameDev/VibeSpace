@@ -120,7 +120,10 @@ function projectRoom(
       replyCount: typeof item.replyCount === 'number' ? item.replyCount : 0,
     }];
   });
-  return { connection: 'connected', scope: scopeLabel(settings), participants, messages };
+  return { connection: 'connected', scope: scopeLabel(settings), participants, messages,
+    roomId: JSON.stringify([binding.context.accountId, binding.context.workspaceId,
+      binding.context.projectId, binding.context.chatId, settings.scope]),
+  };
 }
 
 /** One main-window human binding for the selected native chat; no credentials enter the UI. */

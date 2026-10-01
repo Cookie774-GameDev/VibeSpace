@@ -4,6 +4,7 @@ import { ArrowDownLeft, Hand, MessageCircleMore, RefreshCw, Reply, Send, ShieldC
 import { Button } from '@/components/ui/button';
 import { RelayFlowerBackdrop } from './RelayFlowerBackdrop';
 import './RelayGroupChat.css';
+import { RelayAvatar, RelayAvatarProvider } from './RelayAvatar';
 
 export interface RelayRoomParticipant {
   id: string;
@@ -29,6 +30,8 @@ export interface RelayRoomMessage {
 }
 
 export interface RelayRoomView {
+  /** Stable room context, independent of polling snapshots and reconnect bindings. */
+  roomId?: string;
   connection: 'connected' | 'connecting' | 'offline';
   scope: 'Project' | 'Entire app';
   participants: readonly RelayRoomParticipant[];
@@ -46,21 +49,14 @@ export interface RelayGroupChatProps {
   onRefresh?: () => Promise<void> | void;
 }
 
-function avatarVariant(id: string): number {
-  let hash = 2166136261;
-  for (const char of id) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
-  return (hash >>> 0) % 4;
-}
-
-function AgentAvatar({ participant, size = 34 }: { participant: RelayRoomParticipant; size?: number }) {
-  const variant = participant.kind === 'human' ? 4 : avatarVariant(participant.id);
-  return <span className={`relay-avatar relay-avatar--${variant}`} style={{ width: size, height: size }} aria-hidden="true">
+function AgentAvatar({ participant, size = 32 }: { participant: RelayRoomParticipant; size?: number }) {
+  if (participant.kind === 'agent') return <RelayAvatar participant={participant} size={size} />;
+  return <span className="relay-avatar relay-avatar--4" style={{ width: size, height: size }} aria-hidden="true">
     <svg viewBox="0 0 48 48" fill="none" focusable="false">
-      {variant === 0 && <><path d="M8 17 12 5l10 8h4L36 5l4 12v11c0 9-7 15-16 15S8 37 8 28V17Z" fill="#EF9C65" stroke="#704337" strokeWidth="2" /><path d="m10 22 7 3 7 1 7-1 7-3c-1 11-6 18-14 18S11 33 10 22Z" fill="#FFF3D9" /><path d="M18 26v1m12-1v1" stroke="#533D39" strokeWidth="3.5" strokeLinecap="round" /><path d="m21 32 3 2 3-2" stroke="#533D39" strokeWidth="2" strokeLinecap="round" /></>}
-      {variant === 1 && <><path d="M9 20 12 8l9 5 3-3 3 3 9-5 3 12v9c0 9-6 14-15 14S9 38 9 29v-9Z" fill="#A389CA" stroke="#594C79" strokeWidth="2" /><ellipse cx="17" cy="25" rx="7" ry="8" fill="#F6ECFF" /><ellipse cx="31" cy="25" rx="7" ry="8" fill="#F6ECFF" /><circle cx="18" cy="26" r="2.2" fill="#51445E" /><circle cx="30" cy="26" r="2.2" fill="#51445E" /><path d="m24 29-3 3 3 3 3-3-3-3Z" fill="#E6AA62" /></>}
-      {variant === 2 && <><path d="M17 10 13 5M31 10l4-5" stroke="#456780" strokeWidth="3" strokeLinecap="round" /><rect x="8" y="10" width="32" height="32" rx="13" fill="#75B9CA" stroke="#456780" strokeWidth="2" /><rect x="12" y="18" width="24" height="15" rx="7" fill="#ECFCFB" /><circle cx="19" cy="25" r="2.2" fill="#344D62" /><circle cx="29" cy="25" r="2.2" fill="#344D62" /><path d="M20 34c2 2 6 2 8 0" stroke="#456780" strokeWidth="2" strokeLinecap="round" /></>}
-      {variant === 3 && <><path d="M10 19 14 6l10 7 10-7 4 13v10c0 8-6 14-14 14S10 37 10 29V19Z" fill="#E9B1AE" stroke="#86585A" strokeWidth="2" /><path d="M16 26h4m8 0h4" stroke="#5D4748" strokeWidth="2.5" strokeLinecap="round" /><path d="m22 31 2 2 2-2M16 33l-5 1m21-1 5 1" stroke="#5D4748" strokeWidth="2" strokeLinecap="round" /></>}
-      {variant === 4 && <><circle cx="24" cy="24" r="20" fill="#EAC58C" stroke="#8B6649" strokeWidth="2" /><path d="m15 13 3 4 6-7 6 7 3-4" fill="#FFEFCA" stroke="#8B6649" strokeWidth="1.7" strokeLinejoin="round" /><path d="M17 25v1m14-1v1" stroke="#6E5040" strokeWidth="3" strokeLinecap="round" /><path d="M19 32c3 3 7 3 10 0" stroke="#6E5040" strokeWidth="2" strokeLinecap="round" /></>}
+      <circle cx="24" cy="24" r="20" fill="#EAC58C" stroke="#8B6649" strokeWidth="2" />
+      <path d="m15 13 3 4 6-7 6 7 3-4" fill="#FFEFCA" stroke="#8B6649" strokeWidth="1.7" strokeLinejoin="round" />
+      <path d="M17 25v1m14-1v1" stroke="#6E5040" strokeWidth="3" strokeLinecap="round" />
+      <path d="M19 32c3 3 7 3 10 0" stroke="#6E5040" strokeWidth="2" strokeLinecap="round" />
     </svg>
   </span>;
 }
@@ -69,7 +65,11 @@ function ProfileField({ label, value }: { label: string; value?: string }) {
   return <div className="relay-profile-field"><dt>{label}</dt><dd>{value?.trim() || 'Not shared'}</dd></div>;
 }
 
-export function RelayGroupChat({ open, presentation = 'drawer', room, humanAuthorized, onClose, onSend, onStopAll, onRefresh }: RelayGroupChatProps) {
+export function RelayGroupChat(props: RelayGroupChatProps) {
+  return <RelayAvatarProvider room={props.room} active={props.open}><RelayGroupChatContent {...props} /></RelayAvatarProvider>;
+}
+
+function RelayGroupChatContent({ open, presentation = 'drawer', room, humanAuthorized, onClose, onSend, onStopAll, onRefresh }: RelayGroupChatProps) {
   const [draft, setDraft] = React.useState('');
   const [replyToId, setReplyToId] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -164,7 +164,7 @@ export function RelayGroupChat({ open, presentation = 'drawer', room, humanAutho
           })}
         </div>
         <AnimatePresence>{selected && <motion.aside className="relay-group-profile" aria-label={`${selected.name} profile`} initial={reduceMotion ? false : { x: 18, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={reduceMotion ? undefined : { x: 18, opacity: 0 }} transition={{ duration: .18 }}>
-          <div className="relay-profile-top"><AgentAvatar participant={selected} size={54} /><Button type="button" size="icon-sm" variant="ghost" aria-label="Close agent profile" onClick={() => setSelectedId(null)}><X size={16} /></Button></div>
+          <div className="relay-profile-top"><AgentAvatar participant={selected} size={96} /><Button type="button" size="icon-sm" variant="ghost" aria-label="Close agent profile" onClick={() => setSelectedId(null)}><X size={16} /></Button></div>
           <h3>{selected.name}</h3><p className="relay-profile-status">{selected.kind === 'human' ? 'Room owner' : selected.status} · {selected.kind === 'human' ? 'Human' : 'Agent'}</p>
           <dl><ProfileField label="Harness" value={selected.harness} /><ProfileField label="Model" value={selected.model} /><ProfileField label="Working on" value={selected.task ?? selected.persona} /><ProfileField label="Files" value={selected.files?.join(', ')} /><ProfileField label="Latest prompt" value={selected.latestPrompt} /></dl>
           <p className="relay-profile-note">Details appear when an agent shares them with this room.</p>

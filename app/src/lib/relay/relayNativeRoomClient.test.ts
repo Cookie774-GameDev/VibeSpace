@@ -172,3 +172,15 @@ describe('native Relay human room', () => {
     f.client.dispose();
   });
 });
+
+
+it('exposes a stable room identity that survives polling and generation reconnects', async () => {
+  const f = fixture();
+  await f.client.refresh();
+  const identity = f.client.getSnapshot().room.roomId;
+  expect(identity).toBe(JSON.stringify(['account-1', 'workspace-1', 'project-1', 'chat-1', 'project']));
+  f.setGeneration(3);
+  await f.client.refresh();
+  expect(f.client.getSnapshot().room.roomId).toBe(identity);
+  f.client.dispose();
+});
