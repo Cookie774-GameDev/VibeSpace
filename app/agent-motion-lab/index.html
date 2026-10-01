@@ -1,0 +1,68 @@
+<!-- VibeSpaceOS – Living Creative OS -->
+<!doctype html>
+<html lang='en'>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width,initial-scale=1'>
+  <meta name='color-scheme' content='dark'>
+  <meta name='theme-color' content='#0c0a08'>
+  <title>VibeSpaceOS — Agent Motion Lab</title>
+  <link rel='stylesheet' href='./styles.css'>
+</head>
+<body>
+  <main class='shell'>
+    <header class='hero'>
+      <div>
+        <div class='eyebrow'><span class='eyebrow-mark' aria-hidden='true'></span>VibeSpaceOS · Motion Study 05</div>
+        <h1>Agent motion,<br>without the noise.</h1>
+        <p>Twenty-four quiet, endlessly looping work indicators for planning, reading, editing, testing, and tool handoffs. Built to remain interesting without turning the chat into a loading screen.</p>
+      </div>
+      <div class='hero-stat' aria-label='Twenty-four motion systems'><strong>24</strong><span>looping systems</span><small>CSS + tiny JS</small></div>
+    </header>
+
+    <div class='toolbar-wrap'>
+      <nav class='toolbar' aria-label='Animation preview controls'>
+        <div class='tool-group'>
+          <button class='control pause-control' id='pauseAll' type='button' aria-pressed='false'><span class='pause-icon' aria-hidden='true'></span><span id='pauseLabel'>Pause</span></button>
+        </div>
+        <div class='tool-group'>
+          <span class='tool-label'>Speed</span>
+          <input class='range' id='speedRange' type='range' min='50' max='180' value='100' step='5' aria-label='Animation speed'>
+          <output class='speed-readout' id='speedReadout' for='speedRange'>1.0×</output>
+        </div>
+        <div class='tool-group' aria-label='Preview size'>
+          <span class='tool-label'>Size</span>
+          <button class='control size-control' type='button' data-scale='.82' aria-pressed='false'>S</button>
+          <button class='control size-control' type='button' data-scale='1' aria-pressed='true'>M</button>
+          <button class='control size-control' type='button' data-scale='1.18' aria-pressed='false'>L</button>
+        </div>
+        <div class='tool-group' aria-label='Accent color'>
+          <span class='tool-label'>Accent</span>
+          <button class='accent-swatch' style='--swatch:#d68a4e' type='button' data-accent='#d68a4e' data-rgb='214 138 78' aria-label='Copper' aria-pressed='true'></button>
+          <button class='accent-swatch' style='--swatch:#8fb87e' type='button' data-accent='#8fb87e' data-rgb='143 184 126' aria-label='Sage' aria-pressed='false'></button>
+          <button class='accent-swatch' style='--swatch:#34d6e6' type='button' data-accent='#34d6e6' data-rgb='52 214 230' aria-label='Cyan' aria-pressed='false'></button>
+          <button class='accent-swatch' style='--swatch:#a472f0' type='button' data-accent='#a472f0' data-rgb='164 114 240' aria-label='Plum' aria-pressed='false'></button>
+        </div>
+        <div class='filters' aria-label='Animation category'>
+          <button class='filter-chip' type='button' data-filter='all' aria-pressed='true'>All</button>
+          <button class='filter-chip' type='button' data-filter='glyph'>Glyph</button>
+          <button class='filter-chip' type='button' data-filter='dots'>Dots</button>
+          <button class='filter-chip' type='button' data-filter='path'>Path</button>
+          <button class='filter-chip' type='button' data-filter='signal'>Signal</button>
+          <button class='filter-chip' type='button' data-filter='form'>Form</button>
+        </div>
+      </nav>
+    </div>
+
+    <div class='section-meta'><span id='visibleCount'>24 concepts</span><span>Space toggles pause</span></div>
+    <section class='motion-grid' id='motionGrid' aria-label='Agent working animation concepts'></section>
+    <div class='empty-state' id='emptyState'>No concepts in this category.</div>
+
+    <footer class='page-foot'>
+      <span><strong>Motion rule:</strong> transform, opacity, clip-path, and SVG stroke movement only—no layout-shifting animation.</span>
+      <span><strong>Accessibility:</strong> reduced-motion support and keyboard-reachable controls.</span>
+    </footer>
+  </main>
+  <script src='./app.js'></script>
+</body>
+</html>
