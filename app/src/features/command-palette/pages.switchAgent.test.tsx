@@ -7,8 +7,24 @@ import { toast } from '@/components/ui/toast';
 import { useAgentStore } from '@/stores/agents';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
-import type { Agent, Chat } from '@/types';
+import type { Agent, AgentId, Chat } from '@/types';
 import { PageContent } from './pages';
+
+function coderFixture(): Agent {
+  return {
+    id: 'agt_coder' as AgentId,
+    slug: 'coder',
+    name: 'Coder',
+    description: 'Coding agent',
+    system_prompt: 'Help with coding.',
+    model: { provider: 'openai', model: 'gpt-6-luna' },
+    tools_allowed: [],
+    memory_scope: 'project',
+    capabilities: ['code'],
+    created_at: 1,
+    updated_at: 1,
+  };
+}
 
 describe('command palette agent switcher', () => {
   beforeEach(() => {
@@ -52,13 +68,7 @@ describe('command palette agent switcher', () => {
   });
 
   it('persists the selected agent to the current chat before closing', async () => {
-    const coder = {
-      id: 'agt_coder',
-      slug: 'coder',
-      name: 'Coder',
-      description: 'Coding agent',
-      model: { provider: 'opencode', model: 'openai/gpt-6-luna' },
-    } as Agent;
+    const coder = coderFixture();
     useAgentStore.setState({ agents: { [coder.id]: coder } });
     useUIStore.setState({ route: 'chat', activeChatId: 'chat-a' });
     useAuthStore.setState({ workspaceId: 'workspace-a' as never, projectId: 'project-a' as never });
@@ -88,13 +98,7 @@ describe('command palette agent switcher', () => {
   });
 
   it('does not change the old chat if selection changes while it loads', async () => {
-    const coder = {
-      id: 'agt_coder',
-      slug: 'coder',
-      name: 'Coder',
-      description: 'Coding agent',
-      model: { provider: 'opencode', model: 'openai/gpt-6-luna' },
-    } as Agent;
+    const coder = coderFixture();
     useAgentStore.setState({ agents: { [coder.id]: coder } });
     useUIStore.setState({ route: 'chat', activeChatId: 'chat-a' });
     useAuthStore.setState({ workspaceId: 'workspace-a' as never, projectId: 'project-a' as never });
