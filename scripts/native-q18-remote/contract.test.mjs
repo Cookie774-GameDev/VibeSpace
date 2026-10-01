@@ -7,9 +7,9 @@ const spec = () => ({ schema: 1, taskId: 'FRESH2_NS01', grantId: 'ROOT-REMOTE-SM
   sourceSHA: '8579072d21e6a994b3c95f44997922997679324a',
   exeSHA256: '23974fdf89067d4f2399b0f367c54ce64e9350f82e4cdca38b11652aee61956e',
   workspace: 'D:\\a\\VibeSpace\\VibeSpace', runnerTemp: 'D:\\a\\_temp',
-  artifactRoot: 'D:\\a\\VibeSpace\\VibeSpace\\work\\native-windows-qa\\artifact',
+  artifactRoot: 'D:\\a\\_temp\\FRESH2_NS01\\staging\\build',
   frontendRoot: 'D:\\a\\VibeSpace\\VibeSpace', inputManifestSHA256: 'a'.repeat(64),
-  app: { pid: 100, bornMs: 100, exePath: 'D:\\a\\VibeSpace\\VibeSpace\\work\\native-windows-qa\\artifact\\binary\\jarvis.exe' },
+  app: { pid: 100, bornMs: 100, exePath: 'D:\\a\\_temp\\FRESH2_NS01\\staging\\build\\binary\\jarvis.exe' },
   webview: { pid: 200, bornMs: 200, exePath: 'C:\\Program Files\\Microsoft\\EdgeWebView\\Application\\1\\msedgewebview2.exe', profile: 'D:\\a\\_temp\\FRESH2_NS01\\webview' },
   cdpPort: 9228, mainURL: 'http://localhost:5173/', windowLabel: 'main',
   nativeDataPath: 'C:\\Users\\runner\\AppData\\Roaming\\com.jarvis.app',
@@ -28,6 +28,12 @@ test('accepts exact approved CI488 identity only', () => {
   assert.equal(validateSpec(spec(), 1100).sourceSHA, spec().sourceSHA);
   for (const patch of [{ sourceSHA: '0'.repeat(40) }, { exeSHA256: '0'.repeat(64) }, { expiresAtMs: 1099 }, { phaseMs: 60001 }, { totalMs: 900001 }])
     assert.throws(() => validateSpec({ ...spec(), ...patch }, 1100));
+});
+test('binds actual artifact staging to the granted task under runner temp', () => {
+  assert.equal(validateSpec(spec(), 1100).artifactRoot, spec().artifactRoot);
+  for (const root of ['D:\\a\\_temp\\PEER_TASK\\staging\\build', 'D:\\a\\workspace\\artifact', 'D:\\a\\_temp\\FRESH2_NS01\\staging\\foreign']) {
+    assert.throws(() => validateSpec({ ...spec(), artifactRoot: root }, 1100), /smoke_artifact_task_scope/);
+  }
 });
 test('rejects unknown credential fields and cloud/browser URLs', () => {
   for (const patch of [{ token: 'private' }, { mainURL: 'https://example.com/' }, { mainURL: 'http://localhost:5173/?smoke=1' }])

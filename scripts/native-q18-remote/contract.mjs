@@ -23,7 +23,7 @@ export function validateSpec(s, now = Date.now()) {
   requireThat(integer(s.issuedAtMs) && integer(s.expiresAtMs) && s.issuedAtMs <= now && now < s.expiresAtMs && s.expiresAtMs - s.issuedAtMs <= 900000, 'expired_authority');
   requireThat(integer(s.phaseMs) && s.phaseMs <= 60000 && integer(s.totalMs) && s.totalMs <= 900000 && typeof s.schedule === 'boolean', 'deadline_budget');
   windowsPath(s.workspace); windowsPath(s.runnerTemp); windowsPath(s.nativeDataPath);
-  inside(s.workspace, s.artifactRoot);
+  requireThat(windowsPath(s.artifactRoot) === windowsPath(path.win32.join(s.runnerTemp, s.taskId, 'staging', 'build')), 'artifact_task_scope');
   requireThat(windowsPath(s.frontendRoot) === windowsPath(s.workspace), 'frontend_workspace');
   exact(s.app, ['pid','bornMs','exePath']); exact(s.webview, ['pid','bornMs','exePath','profile']);
   for (const p of [s.app, s.webview]) requireThat(integer(p.pid) && integer(p.bornMs) && text(p.exePath), 'process_identity');

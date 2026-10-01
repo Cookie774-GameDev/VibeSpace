@@ -39,7 +39,7 @@ foreach ($file in $manifest.files) {
  Assert-NoLinks $p
  if ((Get-Item -LiteralPath $p).Length -ne $file.bytes -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.sha256) { throw 'consumer_helper_file_hash' }
 }
-foreach ($required in @('consumer.ps1','driver.mjs','contract.mjs','attest.ps1','commandline.ps1','transfer.py','artifact_dll_checks.py','run-native-supervised.ps1','dependency-launch.ps1')) {
+foreach ($required in @('consumer.ps1','driver.mjs','contract.mjs','attest.ps1','commandline.ps1','transfer.py','artifact_dll_checks.py','run-native-supervised.ps1','dependency-launch.ps1','startup-predicate.ps1')) {
  if (-not $seen.Contains($required)) { throw 'consumer_helper_missing' }
 }
 $head=& git -C $workspace rev-parse HEAD
@@ -66,6 +66,7 @@ $tracked=[Collections.Generic.Dictionary[string,object]]::new()
 . (Join-Path $PSScriptRoot 'lifecycle.ps1')
 . (Join-Path $PSScriptRoot 'desktop-guard.ps1')
 . (Join-Path $PSScriptRoot 'dependency-launch.ps1')
+. (Join-Path $PSScriptRoot 'startup-predicate.ps1')
 $result=[ordered]@{ taskId=$TaskId; sourceSHA=$source; exeSHA256=$exeSHA; helperManifestSHA256=$HelperManifestSHA256;
  startedUTC=[DateTime]::UtcNow.ToString('o'); runtimeAcceptance='UNRUN'; phases=@(); cleanup=@(); failure=$null }
 function Save-Json([string]$file,[object]$value) {
@@ -114,6 +115,7 @@ function Child-Info([string]$command,[string[]]$argv,[string]$cwd,[hashtable]$ex
 function Start-Owned([string]$name,[string]$command,[string[]]$argv,[string]$cwd,[hashtable]$extra=@{}) {
  $p=[Diagnostics.Process]::new()
  $p.StartInfo=Child-Info $command $argv $cwd $extra
+ $p.StartInfo.WindowStyle=Get-StartupWindowStyle $name
  if (-not $p.Start()) {throw 'consumer_owned_child_start_failed'}
  $birth=$p.StartTime.ToUniversalTime()
  $o=[ordered]@{name=$name;process=$p;pid=$p.Id;bornMs=([DateTimeOffset]$birth).ToUnixTimeMilliseconds();bornUTC=$birth.ToString('o');
@@ -183,6 +185,7 @@ function Run-Phase([string]$name,[string]$command,[string[]]$argv,[string]$cwd,[
 $app=$null
 $vite=$null
 $webviewOwned=$null
+$startupDiagnostic=$null
 try {
  $image=[ordered]@{ImageOS=$env:ImageOS;ImageVersion=$env:ImageVersion;runnerOS=$env:RUNNER_OS;sessionId=(Get-Process -Id $PID).SessionId;cpuCount=[Environment]::ProcessorCount}
  Save-Json (Join-Path $runRoot 'runner-image.json') $image
@@ -252,28 +255,63 @@ try {
   WEBVIEW2_USER_DATA_FOLDER=$profile;WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-address=127.0.0.1 --remote-debugging-port=$cdpPort"
  }
  $startup=[Diagnostics.Stopwatch]::StartNew()
+ $startupDiagnostic=[ordered]@{first=$null;last=$null;lastFingerprint=$null;changedStates=0;
+  changes=[Collections.Generic.List[object]]::new();iterations=0;appLaunchRequestedStyle='Normal';startupBudgetMs=90000;nativeAcceptance='UNRUN'}
+ $viteHTTPResponded=$null;$lastViteHTTPProbe=-5000
  $webview=$null
  $ready=$false
  while ($startup.ElapsedMilliseconds -lt 90000) {
   Capture-Owned
-  if ($app.process.HasExited -or $vite.process.HasExited) {throw 'consumer_owned_startup_child_exited'}
+  $startupDiagnostic.iterations++
+  $snapshot=[ordered]@{elapsedMs=[long]$startup.ElapsedMilliseconds;appAlive=(-not $app.process.HasExited);viteAlive=(-not $vite.process.HasExited)}
+  $viteListeners=@(Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue|Where-Object{$_.LocalAddress -in @('127.0.0.1','::1')})
+  $snapshot.viteListenerOwnerMatches=(@($viteListeners|Where-Object{$_.OwningProcess -eq $vite.pid}).Count -eq 1)
+  if($snapshot.viteListenerOwnerMatches -and $startup.ElapsedMilliseconds-$lastViteHTTPProbe -ge 5000){
+   $lastViteHTTPProbe=$startup.ElapsedMilliseconds
+   try{$head=Invoke-WebRequest -Method Head -Uri 'http://127.0.0.1:5173/' -TimeoutSec 2;$viteHTTPResponded=($head.StatusCode -eq 200)}
+   catch{$viteHTTPResponded=$false}
+  }
+  $snapshot.viteHTTPResponded=$viteHTTPResponded
+  if ($app.process.HasExited -or $vite.process.HasExited) {Add-StartupSnapshot $startupDiagnostic $snapshot;throw 'consumer_owned_startup_child_exited'}
+  $webview=$null
   $listeners=@(Get-NetTCPConnection -LocalPort $cdpPort -State Listen -ErrorAction SilentlyContinue | Where-Object {$_.LocalAddress -in @('127.0.0.1','::1')})
+  $snapshot.cdpListenerCount=[int]$listeners.Count
   if ($listeners.Count -eq 1) {
    $all=@(Get-CimInstance Win32_Process)
    $cursor=@($all | Where-Object {$_.ProcessId -eq $listeners[0].OwningProcess})[0]
    $candidate=$cursor
+   $snapshot.ancestryMatches=$false
    for($depth=0;$depth -lt 32 -and $cursor;$depth++) {
-    if ($cursor.ParentProcessId -eq $app.pid) {$webview=$candidate;break}
+    if ($cursor.ParentProcessId -eq $app.pid) {$webview=$candidate;$snapshot.ancestryMatches=$true;break}
     $cursor=@($all | Where-Object {$_.ProcessId -eq $cursor.ParentProcessId})[0]
    }
+   $snapshot.webviewNameMatches=($null -ne $webview -and $webview.Name -ieq 'msedgewebview2.exe')
+   if($webview){$snapshot.runtimePathMatches=(@($runtimePaths|Where-Object{$_.path -ieq $webview.ExecutablePath}).Count -eq 1)}
    if ($webview -and $webview.Name -ieq 'msedgewebview2.exe') {
+    $queryStage='REST'
     try {
-     $targets=@(Invoke-RestMethod -Uri "http://127.0.0.1:$cdpPort/json/list" -TimeoutSec 2)
+     $response=Invoke-RestMethod -Uri "http://127.0.0.1:$cdpPort/json/list" -TimeoutSec 2
+     $snapshot.cdpQuerySucceeded=$true
+     $queryStage='TARGETS'
+     $targetFacts=Get-StartupTargetFacts $response
+     $snapshot.targetCount=[int]$targetFacts.targetCount;$snapshot.mainTargetCount=[int]$targetFacts.mainTargetCount
+     $snapshot.malformedTargetRows=[int]$targetFacts.malformedRows;$snapshot.oneOfficialURL=$targetFacts.oneOfficialURL
+     $queryStage='WINDOW'
      $app.process.Refresh()
-     if (@($targets | Where-Object {$_.type -eq 'page' -and $_.url -eq 'http://localhost:5173/'}).Count -eq 1 -and $app.process.SessionId -eq (Get-Process -Id $PID).SessionId -and $app.process.MainWindowHandle -ne [IntPtr]::Zero -and [Q18DesktopProbe]::IsWindowVisible($app.process.MainWindowHandle)) {$ready=$true;break}
-    } catch {$webview=$null}
+     $snapshot.sessionMatches=($app.process.SessionId -eq (Get-Process -Id $PID).SessionId)
+     $snapshot.hasWindowHandle=($app.process.MainWindowHandle -ne [IntPtr]::Zero)
+     $snapshot.windowVisible=[Q18DesktopProbe]::IsWindowVisible($app.process.MainWindowHandle)
+     Add-StartupSnapshot $startupDiagnostic $snapshot
+     if ($targetFacts.oneOfficialURL -and $snapshot.sessionMatches -and $snapshot.hasWindowHandle -and $snapshot.windowVisible) {$ready=$true;break}
+    } catch {
+     if($queryStage -ceq 'REST'){$snapshot.cdpQuerySucceeded=$false}
+     if($queryStage -ceq 'TARGETS'){$snapshot.targetProcessingFailed=$true}
+     if($queryStage -ceq 'WINDOW'){$snapshot.windowProbeFailed=$true}
+     $webview=$null
+    }
    }
   }
+  Add-StartupSnapshot $startupDiagnostic $snapshot
   Start-Sleep -Milliseconds 100
  }
  if (-not $ready -or -not $webview -or @($runtimePaths|Where-Object{$_.path -ieq $webview.ExecutablePath}).Count -ne 1) {throw 'consumer_official_webview_startup_deadline'}
@@ -300,6 +338,13 @@ try {
  $result.failure=if($message -cmatch '^(consumer|smoke)_[a-z0-9_]+$'){$message}else{'consumer_unexpected_failure'}
 } finally {
  $authority=$null
+ if($startupDiagnostic){
+  $export=[ordered]@{first=$startupDiagnostic.first;last=$startupDiagnostic.last;changedStates=$startupDiagnostic.changedStates;
+   changes=$startupDiagnostic.changes.ToArray();iterations=$startupDiagnostic.iterations;appLaunchRequestedStyle=$startupDiagnostic.appLaunchRequestedStyle;
+   startupBudgetMs=90000;nativeAcceptance='UNRUN';scope='Typed predicate booleans/counts only; no URL/title/commandline/log/exception/credential'};
+  try{Save-Json (Join-Path $runRoot 'startup-diagnostic.json') $export}
+  catch{$result.startupDiagnosticWriteFailed=$true;if(-not $result.failure){$result.failure='consumer_startup_diagnostic_write_failed'}}
+ }
  # Stop tracked WebView independently even if jarvis exited and children became orphaned.
  foreach ($o in @($webviewOwned,$app,$vite) | Where-Object {$null -ne $_}) {
   try {Stop-OwnedTree $o} catch {$result.cleanup+=@([ordered]@{pid=$o.pid;bornMs=$o.bornMs;status='CLEANUP_FAILED'})}
@@ -317,4 +362,5 @@ try {
  Save-Json (Join-Path $runRoot 'consumer-terminal.json') $result
 }
 if ($result.failure -or @($result.cleanup | Where-Object {$_.status -in @('CLEANUP_FAILED','PID_REUSED_UNTOUCHED')}).Count) {throw 'consumer_terminal_failed'}
+
 

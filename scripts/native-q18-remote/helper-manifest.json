@@ -25,18 +25,18 @@
     },
     {
       "path": "consumer.ps1",
-      "bytes": 21326,
-      "sha256": "4e92d7f5b9d8e7950613b639d80e4ef85453da69723b5de51966c4b20c899012"
+      "bytes": 24515,
+      "sha256": "1bf9743cd266eabf372be726f94d8841f80315cfb6c24282c14acbecff3f6903"
     },
     {
       "path": "contract.mjs",
-      "bytes": 7109,
-      "sha256": "91a7716d48eb2a38a3bccee4d3d40346edac7bb98df189dd43dfc4e5ebcf302f"
+      "bytes": 7214,
+      "sha256": "d639cd51fffc3075ea0f7ebe87446c52d84d316602a2a5642cd86be592fab39d"
     },
     {
       "path": "contract.test.mjs",
-      "bytes": 6322,
-      "sha256": "f548a34675fbf4ffb5e68148ae5c0d56d1de4206acddad7071dca6e8177ad257"
+      "bytes": 6704,
+      "sha256": "3db876e5cf50b2693b3690ca14c30fef5da24ae106db780417810784e1d3372a"
     },
     {
       "path": "dependency-launch.ps1",
@@ -99,6 +99,16 @@
       "sha256": "98d7b136cd68246a49edf9a4ac9fb8185fac0e0255e9f5dca5af1671894d8ce4"
     },
     {
+      "path": "startup-predicate.ps1",
+      "bytes": 2033,
+      "sha256": "c95090efdf481aff995d32acccc5239d4904e74707d55c0c645900302937e6e2"
+    },
+    {
+      "path": "startup-predicate.test.ps1",
+      "bytes": 2564,
+      "sha256": "0c255f835e1c9b5ca3d91b8d49fbdbbd06b1f86c98f38f3011d4efc2abf28346"
+    },
+    {
       "path": "transfer.py",
       "bytes": 18087,
       "sha256": "32e560b8795d95719fdc0b59cd38c7671ad88c1c61df88bcb17934cadcdd66f3"
@@ -110,5 +120,5 @@
     }
   ],
   "originalManifestSHA256": "65d04ab824644c3be5090214e4136e6aa01d6b0b8220d0cba648a421dd8a8c87",
-  "repairBaseHelperSHA": "b32ccacd47459ba9e6b1c0203ce275272111e5b4"
+  "repairBaseHelperSHA": "3a9eaff51394a499db552e1b2eca31b4b64805af"
 }
