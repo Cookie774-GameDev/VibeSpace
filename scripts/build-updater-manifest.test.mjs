@@ -1315,7 +1315,7 @@ test('preserves an attacker-replaced temporary path instead of deleting it durin
           await writeFile(temporary, attackerBytes);
         },
       }),
-      /temporary manifest identity or metadata changed|outfile parent path chain identity changed/iu,
+      /temporary manifest identity or metadata changed|outfile parent (?:path chain identity changed|identity or metadata changed)/iu,
     );
     assert.equal(await readFile(outfile, 'utf8'), previous);
     assert.equal(await readFile(temporary, 'utf8'), attackerBytes);

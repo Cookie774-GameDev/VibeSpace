@@ -1283,11 +1283,13 @@ async function writeManifestAtomically(outfile, contents, context, hooks) {
       [outfile.parent.path, outfile.parent],
     ]);
     const postTemporarySnapshots = new Map();
+    const postTemporaryEntries = new Map();
     for (const [directoryPath] of directoryBindings) {
       postTemporarySnapshots.set(
         directoryPath,
         metadataSnapshot(await lstat(directoryPath, { bigint: true })),
       );
+      postTemporaryEntries.set(directoryPath, (await readdir(directoryPath)).sort());
     }
 
     await hooks.beforePublish?.({
@@ -1300,6 +1302,14 @@ async function writeManifestAtomically(outfile, contents, context, hooks) {
     for (const binding of context.bindings) await revalidateFileBinding(binding);
     for (const [directoryPath, binding] of directoryBindings) {
       await revalidateDirectory(binding, postTemporarySnapshots.get(directoryPath));
+      const expectedEntries = postTemporaryEntries.get(directoryPath);
+      const currentEntries = (await readdir(directoryPath)).sort();
+      if (
+        currentEntries.length !== expectedEntries.length ||
+        currentEntries.some((entry, index) => entry !== expectedEntries[index])
+      ) {
+        throw new Error(`${binding.label} identity or metadata changed during manifest generation`);
+      }
     }
     await revalidateOutfileTarget(outfile);
     await revalidateFileBinding(temporaryBinding);
