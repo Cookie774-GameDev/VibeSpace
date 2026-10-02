@@ -191,6 +191,6 @@ describe('pending cancellation before kernel dispatch', () => {
     expect((await getRun(turn.accountId, turn.run.id))?.status).toBe('cancelled');
     const events = await db.jarvis_events.toArray();
     expect(events.some(event => event.status === 'cancelled')).toBe(true);
-    expect(events.some(event => event.type === 'provider_attempt' && event.status === 'started')).toBe(false);
+    expect(events.some(event => event.type === 'model' && event.status === 'started')).toBe(false);
   });
 });
