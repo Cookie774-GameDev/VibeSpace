@@ -626,7 +626,15 @@ export function prependOpenCodePublicTimeline(
     );
   });
   const preservedEnvelopeParts = envelope.parts.filter(
-    (part) => !isSupersededOpenCodeEnvelopePart(part),
+    (part) => {
+      if (isSupersededOpenCodeEnvelopePart(part)) return false;
+      if (part.kind !== 'action_proposal') return true;
+      // Only the response pipeline's validated proposals survive the native
+      // timeline. Inferred operations are superseded by actual tool receipts.
+      const prefix = `jarvis_action_${envelope.requestId}_`;
+      return part.call_id.startsWith(prefix) &&
+        /^(0|[1-9][0-9]*)$/.test(part.call_id.slice(prefix.length));
+    },
   );
   return Object.freeze({
     ...envelope,
@@ -3668,6 +3676,7 @@ export function openCodeToolsForInteractionMode(
   const requestsSemanticMcp = requestsMcpList || requestsMcpRun;
   const requestsContextMapTool =
     !requestsSemanticMcp && userText.length > 0 && requestsReadOnlyContextTool(userText);
+  const contextEnabled = resolveRlmEnabled(scope).enabled;
   const coordinationIntent = requestsContextMapTool ? contextTerminalCoordinationIntent(userText) : undefined;
   const ordinaryDirectAsk =
     mode !== 'agent' &&
@@ -3692,9 +3701,10 @@ export function openCodeToolsForInteractionMode(
                 ? coordinationIntent
                   ? COORDINATION_READ_TOOLS.has(tool) || (mode === 'agent' &&
                     (tool === 'skills.load' || (coordinationIntent === 'deliver' && tool === 'terminal.write')))
-                  : tool === 'vibespace_context'
+                  : tool === 'vibespace_context' || tool.startsWith('vibespace_context_')
                 : mode === 'agent' || !mutating;
-        return [tool, modeAllows && accessAllowsTool(access, tool, mutating)];
+        const isContextTool = tool === 'vibespace_context' || tool.startsWith('vibespace_context_');
+        return [tool, modeAllows && (!isContextTool || contextEnabled) && accessAllowsTool(access, tool, mutating)];
       }),
     ),
   );
@@ -3762,6 +3772,12 @@ export function prepareOpenCodeMessagesForInteractionMode(
   if (latestUserIndex < 0) return messages;
   const latest = messages[latestUserIndex]!;
   const userText = llmContentToText(latest.content);
+  // Dedicated tools already carry their operation in the registered name.
+  // Preserve the caller's exact arguments instead of replacing them with a
+  // legacy investigation, including explicit trace and address requests.
+  if (/\bvibespace_context_(?:search|open|expand|address|trace)\b/iu.test(userText)) {
+    return messages;
+  }
   // Semantic MCP requests have their own dynamic-tool contract. Do not append
   // the Context convenience wrapper, which can turn a source/result clause in
   // the MCP request into an unrelated vibespace_context instruction.

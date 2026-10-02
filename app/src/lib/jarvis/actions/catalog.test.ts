@@ -138,6 +138,8 @@ describe('Jarvis action catalog', () => {
       { id: 'creator.start', risk: 'safe-write', approval: 'always' },
       { id: 'milestone.create', risk: 'safe-write', approval: 'always' },
       { id: 'schedule.create', risk: 'safe-write', approval: 'always' },
+      { id: 'schedule.pause', risk: 'destructive', approval: 'always' },
+      { id: 'chat.rename', risk: 'safe-write', approval: 'always' },
       { id: 'agent.run', risk: 'external-side-effect', approval: 'always' },
       { id: 'terminal.create', risk: 'safe-write', approval: 'always' },
       { id: 'terminal.start_cli', risk: 'external-side-effect', approval: 'always' },

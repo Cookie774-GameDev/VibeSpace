@@ -216,3 +216,191 @@ it('does not create a terminal bridge for a foreign project or a missing early a
   expect(await createCodexToolGateway({ ...request, tools, projectId: 'foreign' })).toBeNull();
   expect(await createCodexToolGateway({ ...request, tools, toolGatewayAuthority: null })).toBeNull();
 });
+
+it('advertises paged command discovery when requested with RLM off',async()=>{state.enabled=false;const bridge=(await createCodexToolGateway({...request,tools:{vibespace_context:false,'command.list':true}}))!;expect(bridge).not.toBeNull();expect(bridge.dynamicTools?.map(t=>t.name)).toEqual(['command_list']);bridge.bind('discovery-thread',identity,'native-generation');await bridge.executeTool!('command_list',{query:'chat.rename',offset:0,limit:5,details:true},'discovery-call');expect(state.execute).toHaveBeenCalledWith(expect.objectContaining({tool:'command.list',args:{query:'chat.rename',offset:0,limit:5,details:true}}));bridge.dispose();});
+it('does not add command discovery when not enabled',async()=>{state.enabled=false;expect(await createCodexToolGateway({...request,tools:{vibespace_context:false}})).toBeNull();});
+
+// Typed regression cases for the actual advertised advanced names.
+type EnabledCodexGatewayName = Parameters<
+  NonNullable<import('./codexContextTool').CodexContextToolBridge['executeTool']>
+>[0];
+const advancedPointer = {
+  id: 'pointer-1',
+  recordId: 'record-1',
+  sourceVersion: 'version-1',
+  contentHash: 'a'.repeat(64),
+  lineStart: 1,
+  lineEnd: 2,
+};
+const advancedCalls = [
+  ['vibespace_context_search', { query: 'retention', limit: 5 }, 'search'],
+  ['vibespace_context_open', { pointer: advancedPointer, maxBytes: 1024 }, 'open'],
+  [
+    'vibespace_context_expand',
+    { pointer: advancedPointer, beforeBytes: 64, afterBytes: 64 },
+    'expand',
+  ],
+  ['vibespace_context_address', { corpusId: 'corpus-1', position: '0' }, 'address'],
+  ['vibespace_context_trace', { runId: 'rlm-run-1' }, 'trace'],
+] as const satisfies readonly (readonly [
+  EnabledCodexGatewayName,
+  Readonly<Record<string, unknown>>,
+  string,
+])[];
+
+it.each(advancedCalls)(
+  'routes actual advanced Codex name %s through the validated scope',
+  async (name, args, operation) => {
+    const bridge = (await createCodexToolGateway(request))!;
+    expect(bridge.dynamicTools?.map((tool) => tool.name)).toContain(name);
+    expect(bridge.toolNames).toContain(name);
+    bridge.bind('advanced-thread', identity, 'advanced-generation');
+    await expect(bridge.executeTool!(name, args, 'advanced-call')).resolves.toMatchObject({
+      success: true,
+    });
+    expect(state.execute).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tool: name,
+        sessionId: 'advanced-thread',
+        messageId: request.requestId,
+        requestId: 'advanced-call',
+        args: { ...args, operation },
+      }),
+    );
+    expect(state.grantMutation).not.toHaveBeenCalled();
+    bridge.dispose();
+  },
+);
+
+it('advertises all five strict advanced schemas with the compatible facade', async () => {
+  const bridge = (await createCodexToolGateway(request))!;
+  for (const [name] of advancedCalls) {
+    const tool = bridge.dynamicTools?.find((tool) => tool.name === name);
+    expect(tool?.inputSchema).toMatchObject({ type: 'object', additionalProperties: false });
+  }
+  expect(bridge.toolNames).toContain('vibespace_context');
+  expect(new Set(bridge.toolNames).size).toBe(bridge.toolNames!.length);
+  bridge.dispose();
+});
+
+it.each(advancedCalls)('does not advertise or dispatch %s with RLM Off', async (name, args) => {
+  state.enabled = false;
+  const bridge = (await createCodexToolGateway({ ...request, tools: { 'mcp.list': true } }))!;
+  expect(bridge.dynamicTools?.map((tool) => tool.name)).toEqual(['mcp_list']);
+  await expect(bridge.executeTool!(name, args, 'off-call')).rejects.toThrow('not enabled');
+  expect(state.execute).not.toHaveBeenCalled();
+  bridge.dispose();
+});
+
+it.each([
+  [
+    'plain provider model',
+    {
+      modelProvider: 'openai',
+      model: 'gpt-6',
+      effort: 'medium',
+      serviceTier: 'fast',
+      cwd: 'C:\\project',
+    },
+    'openai',
+    'gpt-6',
+    'openai/gpt-6',
+    'priority',
+  ],
+  [
+    'already qualified model',
+    { ...identity, effort: 'low', serviceTier: 'priority' },
+    'opencode-go',
+    'deepseek-v4-flash-vision-exp',
+    'opencode-go/deepseek-v4-flash-vision-exp',
+    'priority',
+  ],
+] as const)(
+  'binds %s to canonical observed identity and priority without double qualification',
+  async (
+    _label,
+    resolvedIdentity,
+    upstreamProviderId,
+    upstreamModelId,
+    providerQualifiedModelId,
+    fastVariant,
+  ) => {
+    const bridge = (await createCodexToolGateway(request))!;
+    bridge.bind('identity-thread', resolvedIdentity, 'identity-generation');
+    expect(state.observed).toHaveBeenLastCalledWith(
+      'identity-thread',
+      expect.anything(),
+      expect.objectContaining({
+        executionIdentity: expect.objectContaining({
+          upstreamProviderId,
+          upstreamModelId,
+          providerQualifiedModelId,
+          observedProviderIdentity: providerQualifiedModelId,
+          fastVariant,
+          effort: resolvedIdentity.effort,
+          catalogRevision: 'identity-generation',
+        }),
+      }),
+    );
+    bridge.dispose();
+  },
+);
+
+it.each(advancedCalls)(
+  'rejects cross-operation fields for %s before dispatch',
+  async (name, args) => {
+    const bridge = (await createCodexToolGateway(request))!;
+    bridge.bind('strict-thread', identity, 'strict-generation');
+    await expect(
+      bridge.executeTool!(name, { ...args, unexpected: true }, 'strict-call'),
+    ).rejects.toThrow();
+    expect(state.execute).not.toHaveBeenCalled();
+    bridge.dispose();
+  },
+);
+
+it('advertises bounded filtered command discovery and rejects malformed values before dispatch', async () => {
+  state.enabled = false;
+  const bridge = (await createCodexToolGateway({
+    ...request,
+    tools: { vibespace_context: false, 'command.list': true },
+  }))!;
+  expect(bridge.dynamicTools?.map((tool) => tool.name)).toEqual(['command_list']);
+  expect(bridge.dynamicTools?.[0].inputSchema).toMatchObject({
+    additionalProperties: false,
+    properties: {
+      query: { type: 'string', maxLength: 512 },
+      limit: { type: 'integer', maximum: 100 },
+      offset: { type: 'integer', maximum: 100000 },
+      details: { type: 'boolean' },
+    },
+  });
+  bridge.bind('discovery-thread', identity, 'discovery-generation');
+  for (const invalid of [
+    { limit: NaN },
+    { limit: Infinity },
+    { offset: 1.5 },
+    { offset: -1 },
+    { query: '' },
+    { query: 'x'.repeat(513) },
+    { details: 'true' },
+    { unknown: true },
+  ]) {
+    await expect(
+      bridge.executeTool!('command_list', invalid, 'invalid-discovery-call'),
+    ).rejects.toThrow();
+  }
+  expect(state.execute).not.toHaveBeenCalled();
+  await bridge.executeTool!(
+    'command_list',
+    { query: 'terminal.create', offset: 0, limit: 1, details: true },
+    'late-command-call',
+  );
+  expect(state.execute).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      tool: 'command.list',
+      args: { query: 'terminal.create', offset: 0, limit: 1, details: true },
+    }),
+  );
+  bridge.dispose();
+});

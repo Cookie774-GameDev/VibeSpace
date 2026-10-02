@@ -15,6 +15,11 @@ export const TOOL_GATEWAY_CATALOG = [
   'context.read',
   'context.attach',
   'vibespace_context',
+  'vibespace_context_search',
+  'vibespace_context_open',
+  'vibespace_context_expand',
+  'vibespace_context_address',
+  'vibespace_context_trace',
   'skills.list',
   'skills.load',
   'plugins.list',
@@ -254,8 +259,28 @@ function safeResponseJson(value: unknown, depth = 0): boolean {
 function validateArgs(tool: ToolGatewayTool, input: unknown): Record<string, unknown> {
   let args: Record<string, unknown>;
   switch (tool) {
-    case 'terminal.list':
+    case 'vibespace_context_search':
+    case 'vibespace_context_open':
+    case 'vibespace_context_expand':
+    case 'vibespace_context_address':
+    case 'vibespace_context_trace': {
+      const operation = tool.slice('vibespace_context_'.length);
+      const fields: Record<string, readonly string[]> = {
+        search: ['query', 'limit', 'continuation'], open: ['pointer', 'maxBytes', 'continuation'],
+        expand: ['pointer', 'beforeBytes', 'afterBytes'], address: ['corpusId', 'position'], trace: ['runId'],
+      };
+      const supplied = exactKeys(input, [], fields[operation]);
+      return validateArgs('vibespace_context', { ...supplied, operation });
+    }
     case 'command.list':
+      args = exactKeys(input, [], ['limit', 'query', 'offset', 'details']);
+      optionalInteger(args.limit, 'limit', 100);
+      optionalInteger(args.offset, 'offset', 100_000);
+      optionalString(args.query, 'query', 512);
+      if (args.query !== undefined && !(args.query as string).trim()) invalid('query is invalid.');
+      if (args.details !== undefined && typeof args.details !== 'boolean') invalid('details is invalid.');
+      return args;
+    case 'terminal.list':
     case 'memory.learning.read':
     case 'skills.list':
     case 'plugins.list':
@@ -339,10 +364,15 @@ function validateArgs(tool: ToolGatewayTool, input: unknown): Record<string, unk
           'corpusId',
           'position',
           'required',
+          'runId',
         ],
       );
       const operation = stringField(envelope.operation, 'operation', 32);
       switch (operation) {
+        case 'trace':
+          args = exactKeys(selectSemanticFields(envelope, ['operation', 'runId']), ['operation', 'runId']);
+          stringField(args.runId, 'runId', 128, { id: true });
+          return args;
         case 'describe':
         case 'checkpoint':
           return { operation };

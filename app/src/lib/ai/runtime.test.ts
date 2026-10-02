@@ -2673,7 +2673,7 @@ describe('startRuntimeListener agent routing', () => {
     expect(contextTools.vibespace_context).toBe(true);
     expect(
       Object.entries(contextTools)
-        .filter(([tool]) => tool !== 'vibespace_context')
+        .filter(([tool]) => tool !== 'vibespace_context' && !tool.startsWith('vibespace_context_'))
         .every(([, enabled]) => enabled === false),
     ).toBe(true);
   });

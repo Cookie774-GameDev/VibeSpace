@@ -1,3 +1,4 @@
+import { queryCommandCatalog } from './commandCatalogQuery';
 import { RlmRuntimeError } from '@/features/context/rlmRuntime';
 import { invoke } from '@tauri-apps/api/core';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
@@ -35,6 +36,8 @@ import {
   contextCitationItem,
   replaceToolGatewayContextCitationItems,
   clearToolGatewayContextCitationItems,
+  registerToolGatewayFallbackCitations,
+  canonicalContextUri,
 } from './toolGatewayCitations';
 import { ContextRequiredUnavailableError } from '@/features/context/gateway/ContextGateway';
 import { RELAY_GROUP_TOOL_NAMES, type RelayParticipantHandle } from '@/lib/relay/relayHostBridge';
@@ -758,21 +761,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
       },
     },
     command: {
-      list: (args) =>
-        getAllActions()
-          .slice(0, (args.limit as number | undefined) ?? 100)
-          .map(({ id, label, description, category, destructive, params }) => ({
-            id,
-            label,
-            description,
-            category,
-            destructive: Boolean(destructive),
-            params: params.map(({ key, type, required }) => ({
-              key,
-              type,
-              required: Boolean(required),
-            })),
-          })),
+      list: (args) => queryCommandCatalog(getAllActions(), args),
       run: (args, context) => {
         const input = args.input ? JSON.parse(stringArg(args, 'input')) : {};
         if (!input || typeof input !== 'object' || Array.isArray(input))
@@ -837,10 +826,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
       rlm: (args, context) => {
         const auth = useAuthStore.getState();
         if (!auth.localUserId) throw new Error('rlm_context_authority_unavailable');
-        const observed =
-          args.operation === 'query' || args.operation === 'investigate'
-            ? readToolGatewayObservedExecutionAuthority(context.sessionId)
-            : null;
+        const observed = readToolGatewayObservedExecutionAuthority(context.sessionId);
         if ((args.operation === 'query' || args.operation === 'investigate') && !observed) {
           throw new Error('gateway_execution_identity_unavailable');
         }
@@ -855,6 +841,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         const baseLease = {
           sessionId: context.sessionId,
           accountId: auth.localUserId,
+          ...(observed ? { contextRevision: observed.scopeRevision } : {}),
           ...(boundTurn ? { chatId: boundTurn.chatId } : {}),
           workspaceId: boundScope.workspaceId,
           ...(boundScope.projectId ? { projectId: boundScope.projectId } : {}),
@@ -934,6 +921,23 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         return result.then((value) => {
           if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
           const data = value as Record<string, unknown>;
+          let safeResult = data;
+          const citations = data.citations;
+          if (typeof data.answer === 'string' && lease.projectId && Array.isArray(citations) && citations.length > 0 && citations.length <= 32) {
+            const safeCitations = citations.map((citation: unknown) => {
+              if (!citation || typeof citation !== 'object' || Array.isArray(citation)) return null;
+              const c = citation as Record<string, unknown>;
+              return [c.id, c.recordId, c.sourceVersion, c.contentHash].every(field => typeof field === 'string' && SAFE_CITATION_TEXT.test(field))
+                && typeof c.contentHash === 'string' && /^[a-f0-9]{64}$/u.test(c.contentHash)
+                ? { pointerId: c.id as string, recordId: c.recordId as string,
+                    sourceRevision: c.sourceVersion as string, contentHash: c.contentHash } : null;
+            });
+            if (safeCitations.every(citation => citation !== null)) {
+              registerToolGatewayFallbackCitations(context.sessionId, safeCitations, { accountId: lease.accountId, projectId: lease.projectId });
+              const links = [...new Set(safeCitations.map(c => canonicalContextUri('evidence', c.pointerId)))];
+              safeResult = { ...data, answer: `${data.answer}\n\nVerified evidence:\n${links.map(uri => `[Context evidence](${uri})`).join('\n')}` };
+            }
+          }
           const trace = data.trace;
           if (
             !trace ||
@@ -941,11 +945,11 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
             Array.isArray(trace) ||
             !Object.prototype.hasOwnProperty.call(trace, 'budget')
           )
-            return value;
+            return safeResult;
           // Recursive budgets are internal. Their token-named keys are rejected
           // by the provider response boundary even when the answer is only 13 KB.
           const { budget: _internalBudget, ...safeTrace } = trace as Record<string, unknown>;
-          return { ...data, trace: safeTrace };
+          return { ...safeResult, trace: safeTrace };
         }).catch((error: unknown) => {
           if (!(error instanceof RlmRuntimeError)) throw error;
           throw new ToolGatewaySemanticError({

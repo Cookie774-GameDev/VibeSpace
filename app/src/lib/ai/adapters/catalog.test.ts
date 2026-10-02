@@ -200,6 +200,7 @@ describe('provider capability catalog', () => {
     };
     expect(getProviderConnectionDescriptor('openai-codex').capabilities).toEqual({
       ...external,
+      files: true,
       tools: true,
     });
     expect(getProviderConnectionDescriptor('openai-codex').toolAllowlist).toEqual([

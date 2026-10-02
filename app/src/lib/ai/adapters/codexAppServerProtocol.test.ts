@@ -26,6 +26,7 @@ import {
   validateCodexTurnSteerResponse,
   type CodexBackendIdentity,
   type CodexDiscoveredSkill,
+  type CodexExecutionMode,
 } from './codexAppServerProtocol';
 
 const IDENTITY: CodexBackendIdentity = {
@@ -37,6 +38,65 @@ const IDENTITY: CodexBackendIdentity = {
 };
 
 describe('Codex app-server request protocol', () => {
+  const nativeAppPolicy = { apps: false, remote_plugin: false };
+  const policyModes: CodexExecutionMode[] = [
+    { kind: 'ask' },
+    { kind: 'plan' },
+    { kind: 'agent', approvalPolicy: 'on-request', sandbox: {
+      kind: 'workspace-write', writableRoots: [IDENTITY.cwd], networkAccess: false,
+    } },
+    { kind: 'agent', approvalPolicy: 'never', sandbox: { kind: 'danger-full-access' } },
+  ];
+  for (const mode of policyModes) {
+    for (const resume of [false, true]) {
+      it(`denies inherited native apps for ${mode.kind}/${mode.kind === 'agent' ? mode.sandbox.kind : 'read-only'} ${resume ? 'resume' : 'start'} while preserving scope`, () => {
+        const input = { requestId: 'policy', identity: IDENTITY, mode };
+        const request = resume
+          ? buildCodexThreadResumeRequest({ ...input, threadId: 'policy-thread' })
+          : buildCodexThreadStartRequest(input);
+        expect(request.params.config?.features).toEqual(nativeAppPolicy);
+        expect(request.params).toMatchObject({
+          model: IDENTITY.model, modelProvider: IDENTITY.modelProvider,
+          cwd: IDENTITY.cwd, serviceTier: 'priority', approvalsReviewer: 'user',
+          approvalPolicy: mode.kind === 'agent' ? mode.approvalPolicy : 'never',
+          sandbox: mode.kind === 'agent' ? mode.sandbox.kind : 'read-only',
+          config: { model_reasoning_effort: IDENTITY.effort },
+        });
+        if (mode.kind === 'agent' && mode.sandbox.kind === 'workspace-write') {
+          expect(request.params.config?.sandbox_workspace_write).toMatchObject({
+            writable_roots: [IDENTITY.cwd], network_access: false,
+          });
+        }
+      });
+    }
+  }
+
+  it('preserves the exact authorized VibeSpace dynamic tool manifest', () => {
+    const dynamicTools = ['vibespace_context', 'command_list', 'mcp_list', 'mcp_run'].map(name => ({
+      type: 'function' as const, name, description: 'Scoped fixture',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    }));
+    const request = buildCodexThreadStartRequest({
+      requestId: 'manifest', identity: IDENTITY, mode: { kind: 'ask' }, dynamicTools,
+    });
+    expect(request.params.dynamicTools).toEqual(dynamicTools);
+    expect(request.params.config?.features).toEqual(nativeAppPolicy);
+  });
+
+  it('forwards native app denial with provider-default effort on start and resume', () => {
+    const input = { requestId: 'default-effort', identity: { ...IDENTITY, effort: null }, mode: { kind: 'ask' as const } };
+    expect(buildCodexThreadStartRequest(input).params.config).toEqual({ features: nativeAppPolicy });
+    expect(buildCodexThreadResumeRequest({ ...input, threadId: 'thread' }).params.config).toEqual({ features: nativeAppPolicy });
+  });
+
+  it('does not add credential or provider overrides to the native app policy', () => {
+    const request = buildCodexThreadStartRequest({
+      requestId: 'credential-policy', identity: { ...IDENTITY, effort: null }, mode: { kind: 'ask' },
+    });
+    expect(Object.keys(request.params.config ?? {})).toEqual(['features']);
+    expect(request.params.modelProvider).toBe(IDENTITY.modelProvider);
+  });
+
   it('accepts Codex implicit cwd write access and default tier without accepting extra roots', () => {
     const identity = { ...IDENTITY, serviceTier: null };
     const mode = {
@@ -229,7 +289,7 @@ describe('Codex app-server request protocol', () => {
         approvalPolicy: 'never',
         approvalsReviewer: 'user',
         sandbox: 'read-only',
-        config: { model_reasoning_effort: 'high' },
+        config: { features: { apps: false, remote_plugin: false }, model_reasoning_effort: 'high' },
         ephemeral: false,
         threadSource: 'vibespace',
       },
@@ -342,7 +402,7 @@ describe('Codex app-server request protocol', () => {
         approvalPolicy: 'never',
         approvalsReviewer: 'user',
         sandbox: 'read-only',
-        config: { model_reasoning_effort: 'high' },
+        config: { features: { apps: false, remote_plugin: false }, model_reasoning_effort: 'high' },
         excludeTurns: true,
       },
     });

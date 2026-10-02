@@ -20,6 +20,7 @@ export const RLM_CONTEXT_OPERATIONS = [
   'sources',
   'checkpoint',
   'investigate',
+  'trace',
 ] as const;
 
 export type RlmContextOperation = (typeof RLM_CONTEXT_OPERATIONS)[number];
@@ -92,6 +93,8 @@ export interface RlmContextLease {
   sessionId: string;
   /** Captured originating chat, never a model-supplied argument. */
   chatId?: string;
+  /** Captured Context revision, never a provider-supplied scope override. */
+  contextRevision?: string;
   accountId: string;
   workspaceId?: string;
   projectId?: string;
@@ -125,7 +128,7 @@ interface QueryPort {
 }
 
 interface RlmPort {
-  investigate(input: unknown): Promise<unknown>;
+  investigate(input: unknown, lease?: Readonly<RlmContextLease>): Promise<unknown>;
 }
 
 const DEFAULT_RLM_BUDGET: Readonly<RlmBudget> = Object.freeze({
@@ -270,6 +273,7 @@ async function executeRouted<T>(
 export function createRlmOpenCodeTool(dependencies: {
   queryService: QueryPort;
   rlmRuntime: RlmPort;
+  traceLookup?(runId: string, lease: Readonly<RlmContextLease>, signal?: AbortSignal): Promise<unknown | undefined>;
   now?: () => number;
   maxOpenBytes?: number;
   rlmBudget?: RlmBudget;
@@ -284,6 +288,9 @@ export function createRlmOpenCodeTool(dependencies: {
     signal?: AbortSignal,
   ): Promise<unknown> => {
     const scope = leaseScope(lease, now());
+    const capturedLease = Object.freeze({ ...lease,
+      ...(lease.executionIdentity ? { executionIdentity: Object.freeze({ ...lease.executionIdentity }) } : {}),
+    });
     signal?.throwIfAborted();
     const base = exactKeys(
       rawInput,
@@ -299,6 +306,7 @@ export function createRlmOpenCodeTool(dependencies: {
         'recordId',
         'corpusId',
         'position',
+        'runId',
       ],
     );
     if (
@@ -310,6 +318,12 @@ export function createRlmOpenCodeTool(dependencies: {
     const operation = base.operation as RlmContextOperation;
 
     switch (operation) {
+      case 'trace': {
+        const args = exactKeys(rawInput, ['operation', 'runId']);
+        const result = await dependencies.traceLookup?.(text(args.runId, 512), capturedLease, signal);
+        signal?.throwIfAborted();
+        return result === undefined ? { found: false } : { found: true, receipt: result };
+      }
       case 'query': {
         const args = exactKeys(rawInput, ['operation', 'query'], ['limit']);
         const question = text(args.query);
@@ -324,7 +338,7 @@ export function createRlmOpenCodeTool(dependencies: {
               budget: rlmBudget,
               signal,
               decision,
-            }),
+            }, capturedLease),
           );
         }
         if (decision.mode === 'direct') {
@@ -461,7 +475,7 @@ export function createRlmOpenCodeTool(dependencies: {
             executionIdentity: leaseExecutionIdentity(lease),
             budget: rlmBudget,
             signal,
-          }),
+          }, capturedLease),
         );
       }
     }

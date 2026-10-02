@@ -318,7 +318,9 @@ function configFor(
   identity: Readonly<CodexBackendIdentity>,
   sandbox: SandboxPolicy,
 ): Record<string, unknown> | undefined {
-  const config: Record<string, unknown> = {};
+  // Installed native app connectors have no VibeSpace approval or scope authority.
+  // Authorized VibeSpace tools remain in the explicit dynamicTools manifest.
+  const config: Record<string, unknown> = { features: { apps: false, remote_plugin: false } };
   if (identity.effort !== null) config.model_reasoning_effort = identity.effort;
   if (sandbox.type === 'workspaceWrite') {
     config.sandbox_workspace_write = {

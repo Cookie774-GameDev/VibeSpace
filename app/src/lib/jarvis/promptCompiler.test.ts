@@ -546,7 +546,7 @@ describe('compileJarvisPrompt', () => {
     const contextLayer = compiled.layers[5]?.content ?? '';
 
     expect(capabilityLayer).toContain('vibespace_context');
-    expect(capabilityLayer).toContain('only provider tool enabled for this turn');
+    expect(capabilityLayer).toContain('Only the registered read-only Context functions admitted for this turn');
     expect(capabilityLayer).toContain('this explicit low-level request');
     expect(capabilityLayer).toContain('with `operation="search"`');
     expect(capabilityLayer).toContain('Do not substitute `query`');

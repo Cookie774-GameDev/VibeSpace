@@ -323,6 +323,7 @@ describe('OpenCode RLM context tool adapter', () => {
         question: 'Investigate the entire project history for the leak',
         executionIdentity,
       }),
+      expect.objectContaining(lease),
     );
   });
 
@@ -345,6 +346,7 @@ describe('OpenCode RLM context tool adapter', () => {
           maxWallTimeMs: 60_000,
         }),
       }),
+      expect.objectContaining(lease),
     );
     expect(result).toMatchObject({ answer: 'investigated:cross-source root cause' });
   });

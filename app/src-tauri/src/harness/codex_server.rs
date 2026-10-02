@@ -425,6 +425,9 @@ struct ActiveStream {
 
 pub struct RunningCodexServer {
     executable_id: String,
+    rlm_executable_sha256: String,
+    rlm_profile_generation: String,
+    rlm_observation: Arc<Mutex<RlmParentObservation>>,
     model_id: String,
     caller_label: String,
     owner_id: String,
@@ -453,6 +456,9 @@ impl RunningCodexServer {
     ) -> Self {
         Self {
             executable_id: executable_id.to_string(),
+            rlm_executable_sha256: String::new(),
+            rlm_profile_generation: rlm_profile_generation(),
+            rlm_observation: Arc::new(Mutex::new(RlmParentObservation::default())),
             model_id: "opencode-go/deepseek-v4-flash-vision-exp".to_string(),
             caller_label: caller_label.to_string(),
             owner_id: owner_id.to_string(),
@@ -835,8 +841,13 @@ fn launch_server(
             (Some(process), Some(runtime))
         })
         .unwrap_or((None, None));
+    use sha2::{Digest, Sha256};
+    let rlm_executable_sha256 = format!("{:x}",Sha256::digest(std::fs::read(&launch.executable).map_err(|_|"Codex runtime identity unavailable")?));
     Ok(RunningCodexServer {
         executable_id,
+        rlm_executable_sha256,
+        rlm_profile_generation: rlm_profile_generation(),
+        rlm_observation: Arc::new(Mutex::new(RlmParentObservation::default())),
         model_id,
         caller_label,
         owner_id,
@@ -1276,9 +1287,11 @@ fn stream_internal(
     let buffered_frames = std::mem::take(&mut running.buffered_frames);
     let cancelled = Arc::new(AtomicBool::new(false));
     let task_cancelled = cancelled.clone();
+    let rlm_observation = running.rlm_observation.clone();
     let task = thread::spawn(move || {
         let mut sequence = 0_u64;
         let mut timed_frame = |frame| {
+            if let Ok(mut observation)=rlm_observation.lock(){observation.inbound(&frame);}
             sequence += 1;
             CodexAppServerStreamMessage::Frame {
                 frame,
@@ -1387,6 +1400,7 @@ fn write_internal(
     if active.caller_label != caller || active.stream_id.is_empty() {
         return Err("Codex app-server stream owner is unavailable.".to_string());
     }
+    running.rlm_observation.lock().map_err(|_|"Codex parent observation unavailable")?.outbound(&message);
     let stdin = running
         .stdin
         .as_ref()
@@ -2120,5 +2134,104 @@ mod tests {
             "codex-generation-01",
             Box::new(RecordingProcess { terminated }),
         )
+    }
+}
+
+// STAGING: inserted into harness/codex_server.rs, not a second protocol reader.
+#[derive(Default)]
+struct RlmParentObservation {
+    account_requests: std::collections::HashSet<String>,
+    policy_requests: std::collections::HashMap<String,(String,String,bool)>,
+    account_hash: Option<String>,
+    thread_policy: Option<(String,String,bool)>,
+}
+impl RlmParentObservation {
+    fn outbound(&mut self, frame:&Value) {
+        let Some(id)=frame.get("id").and_then(Value::as_str) else {return;};
+        if frame.get("method").and_then(Value::as_str)==Some("account/read") {
+            self.account_hash=None;
+            if frame.pointer("/params/refreshToken").and_then(Value::as_bool)==Some(false)&&self.account_requests.len()<16 {
+                self.account_requests.insert(id.to_string());
+            }
+        }
+        if matches!(frame.get("method").and_then(Value::as_str),Some("thread/start"|"thread/resume")) {
+            self.thread_policy=None;
+            let denied=frame.pointer("/params/config/features/apps").and_then(Value::as_bool)==Some(false)
+                &&frame.pointer("/params/config/features/remote_plugin").and_then(Value::as_bool)==Some(false);
+            if !denied||self.policy_requests.len()>=16 {return;}
+            let Some(model)=frame.pointer("/params/model").and_then(Value::as_str) else{return;};
+            let Some(effort)=frame.pointer("/params/config/model_reasoning_effort").and_then(Value::as_str) else{return;};
+            let tier=frame.pointer("/params/serviceTier").and_then(Value::as_str);
+            if tier.is_some()&&tier!=Some("priority") {return;}
+            self.policy_requests.insert(id.to_string(),(model.to_string(),effort.to_string(),tier==Some("priority")));
+        }
+    }
+    fn inbound(&mut self, frame:&Value) {
+        if matches!(frame.get("method").and_then(Value::as_str),Some("account/updated"|"account/login/completed")) {self.account_hash=None;}
+        let Some(id)=frame.get("id").and_then(Value::as_str) else{return;};
+        if self.account_requests.remove(id) {
+            self.account_hash=frame.get("result").and_then(|r|crate::cli_bridge::codex_rlm_account_hash(r).ok());
+        }
+        if let Some((model,effort,fast))=self.policy_requests.remove(id) {
+            let result=frame.get("result");
+            let result_model=result.and_then(|r|r.get("model")).and_then(Value::as_str);
+            let result_effort=result.and_then(|r|r.get("reasoningEffort")).and_then(Value::as_str);
+            let tier=result.and_then(|r|r.get("serviceTier")).and_then(Value::as_str);
+            if result_model==Some(model.as_str())&&result_effort==Some(effort.as_str())
+                &&(if fast {tier==Some("priority")} else {tier.is_none()||tier==Some("default")||tier==Some("standard")}) {
+                self.thread_policy=Some((model,effort,fast));
+            }
+        }
+    }
+}
+fn rlm_profile_generation()->String {
+    use sha2::{Digest,Sha256};
+    let mut hash=Sha256::new();hash.update(b"S61-native-inherited-profile-v1\0");
+    for name in ["CODEX_HOME","USERPROFILE","HOME","APPDATA","LOCALAPPDATA"] {
+        hash.update(name.as_bytes());hash.update([0]);
+        if let Some(value)=std::env::var_os(name) {hash.update(value.to_string_lossy().as_bytes());}
+        hash.update([0]);
+    }
+    format!("{:x}",hash.finalize())
+}
+pub(crate) fn rlm_parent_binding(app:&AppHandle,caller:&str,owner:&str,generation:&str)->Result<crate::cli_bridge::CodexRlmParentBinding,String> {
+    if !caller_allowed(caller)||!valid_identifier(owner,256)||!valid_identifier(generation,256) {return Err("Codex child caller invalid".into());}
+    let state=app.state::<CodexAppServerState>();
+    let mut inner=state.inner.lock().map_err(|_|"Codex parent state unavailable")?;
+    let parent=inner.running.as_mut().ok_or("Codex parent unavailable")?;
+    if parent.caller_label!=caller||parent.owner_id!=owner||parent.generation!=generation
+        ||parent.route_identity!="official:openai-codex"||parent.has_exited_or_lost_integrity()?
+        ||parent.rlm_profile_generation!=rlm_profile_generation() {return Err("Codex parent binding invalid".into());}
+    let observed=parent.rlm_observation.lock().map_err(|_|"Codex parent observation unavailable")?;
+    let account_hash=observed.account_hash.clone().ok_or("Codex unique parent account unverified")?;
+    let (model,effort,fast)=observed.thread_policy.clone().ok_or("Codex parent policy unverified")?;
+    if model!=parent.model_id {return Err("Codex parent model changed".into());}
+    Ok(crate::cli_bridge::CodexRlmParentBinding {caller:caller.into(),owner:owner.into(),generation:generation.into(),executable_id:parent.executable_id.clone(),executable_sha256:parent.rlm_executable_sha256.clone(),model,effort,fast,profile_generation:parent.rlm_profile_generation.clone(),account_hash})
+}
+
+#[cfg(test)]
+mod rlm_parent_tests {
+    use super::*;
+    #[test] fn uncorrelated_account_cannot_issue_binding() {
+        let mut o=RlmParentObservation::default();
+        o.inbound(&serde_json::json!({"id":"unrelated","result":{"requiresOpenaiAuth":true,"account":{"type":"chatgpt","email":"fixture@example.invalid"}}}));
+        assert!(o.account_hash.is_none());
+    }
+    #[test] fn refresh_token_request_cannot_certify_readonly_account() {
+        let mut o=RlmParentObservation::default();o.outbound(&serde_json::json!({"id":"account","method":"account/read","params":{"refreshToken":true}}));
+        assert!(o.account_requests.is_empty());
+    }
+    #[test] fn native_app_policy_is_required_before_identity_capture() {
+        let mut o=RlmParentObservation::default();o.outbound(&serde_json::json!({"id":"start","method":"thread/start","params":{"model":"gpt-6-luna","config":{"model_reasoning_effort":"low"}}}));
+        assert!(o.policy_requests.is_empty());
+    }
+    #[test] fn exact_policy_response_binds_low_and_priority() {
+        let mut o=RlmParentObservation::default();o.outbound(&serde_json::json!({"id":"start","method":"thread/start","params":{"model":"gpt-6-luna","serviceTier":"priority","config":{"model_reasoning_effort":"low","features":{"apps":false,"remote_plugin":false}}}}));
+        o.inbound(&serde_json::json!({"id":"start","result":{"model":"gpt-6-luna","reasoningEffort":"low","serviceTier":"priority"}}));
+        assert_eq!(o.thread_policy,Some(("gpt-6-luna".into(),"low".into(),true)));
+    }
+    #[test] fn wrong_effort_response_cannot_bind() {
+        let mut o=RlmParentObservation::default();o.outbound(&serde_json::json!({"id":"start","method":"thread/start","params":{"model":"gpt-6-luna","config":{"model_reasoning_effort":"low","features":{"apps":false,"remote_plugin":false}}}}));
+        o.inbound(&serde_json::json!({"id":"start","result":{"model":"gpt-6-luna","reasoningEffort":"high"}}));assert!(o.thread_policy.is_none());
     }
 }

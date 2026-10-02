@@ -5,6 +5,8 @@ import {
   type FsReadResult,
 } from '@/lib/fs';
 import { openCodeHarness } from '@/lib/harness/openCodeHarness';
+import { createRegisteredCodexRlmChild } from '@/lib/ai/adapters/codexRlmBoundChild';
+import { currentRlmSourceRevision } from './contextRlmSourceRevision';
 import { HarnessError } from '@/lib/harness/errors';
 import type { HarnessEvent, VibeSpaceHarness } from '@/lib/harness/types';
 import { classifyJarvisSource } from '@/lib/jarvis/sourcePolicy';
@@ -29,7 +31,8 @@ import {
   type ContextRecord,
   type ContextSourceKind,
 } from './losslessContext';
-import { createRlmOpenCodeTool } from './rlmOpenCodeTool';
+import { createRlmOpenCodeTool, type RlmContextLease } from './rlmOpenCodeTool';
+import { createRlmTraceStore, createRlmTraceSink, rlmTraceScopeFromLease } from './contextRlmTraceStore';
 import { createRecursiveContextPlanner } from './recursiveContextPlanner';
 import { createRecursiveContextQueryAdapter } from './recursiveContextQueryAdapter';
 import {
@@ -185,6 +188,7 @@ interface LargeAddressDescriptor {
 }
 
 interface ContextMapAddressRepository extends ContextQueryRepository {
+  currentSourceRevision(scope: ContextScope, signal?: AbortSignal): Promise<string | undefined>;
   address(
     scope: ContextScope,
     corpusId: string,
@@ -542,8 +546,11 @@ function lexicalQueriesForPlan(plan: ReturnType<typeof buildMeaningfulQueryPlan>
 function meaningfulQueryMatches(
   content: string,
   plan: ReturnType<typeof buildMeaningfulQueryPlan>,
-): { offset: number; score: number } | undefined {
+): { offset: number; score: number; factualAttributeMatched: boolean } | undefined {
   const folded = content.toLocaleLowerCase('en-US');
+  const factualAttribute = plan.terms.find((term) => /^(?:owner|owns|owned|depot)$/u.test(term));
+  const factualAttributeMatched = factualAttribute !== undefined &&
+    (factualAttribute === 'depot' ? /\bdepot\b/iu : /\b(?:owner|owns|owned)\b/iu).test(content);
   const matches = plan.terms.flatMap((term) => {
     const first = folded.indexOf(term);
     if (first < 0) return [];
@@ -767,6 +774,7 @@ function meaningfulQueryMatches(
     .filter((match) => RESPONSE_ANCHOR_TERMS.has(match.term))
     .sort((left, right) => right.offset - left.offset)[0]?.offset;
   return {
+    factualAttributeMatched,
     offset:
       strongestProperName?.contextStart ??
       responseAnchorOffset ??
@@ -1768,6 +1776,18 @@ export function createContextMapRlmRepository(
 
   return {
     address,
+    async currentSourceRevision(scope, signal) {
+      const normalizedScope = validateContextScope(scope);
+      const maps = await dependencies.loadMaps(normalizedScope.projectId ?? null);
+      signal?.throwIfAborted();
+      const { candidates } = enumerateSearchCandidates(normalizedScope, maps, maps.length);
+      return currentRlmSourceRevision(candidates.map(candidate => ({
+        mapId: candidate.map.id, nodeId: candidate.node.id, sourceKind: candidate.sourceKind,
+        rootDir: candidate.map.rootDir, path: candidate.path,
+        ...(candidate.map.github?.resolvedCommitSha ? { gitCommit: candidate.map.github.resolvedCommitSha } : {}),
+        ...(candidate.inlineContent !== undefined ? { inlineContent: candidate.inlineContent } : {}),
+      })), dependencies.stat, signal);
+    },
     async describeSummary(scope, signal) {
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
       const normalizedScope = validateContextScope(scope);
@@ -2043,6 +2063,7 @@ export function createContextMapRlmRepository(
         hit: ContextMapSearchHit;
         authority: RecordAuthority;
         order: number;
+        factualAttributeMatched: boolean;
       }> = [];
       for (const resolved of validated) {
         if (!resolved || resolved.source.contentHash !== resolved.authority.record.contentHash) {
@@ -2106,6 +2127,7 @@ export function createContextMapRlmRepository(
         hitAuthorities.push({
           authority,
           order: candidate.order,
+          factualAttributeMatched: exactOffset >= 0 || meaningful?.factualAttributeMatched === true,
           hit: {
             recordId: authority.record.id,
             pointer: createContextPointer({
@@ -2129,7 +2151,15 @@ export function createContextMapRlmRepository(
           },
         });
       }
-      const sorted = hitAuthorities.sort(
+      // Keep explicit source selection and missing-attribute fallback intact.
+      // When factual evidence exists, subject-only matches must not consume
+      // the bounded result page or expand unrelated history.
+      const precisionHits = namedCandidates.length === 0 &&
+        meaningfulPlan.terms.some((term) => /^(?:owner|owns|owned|depot)$/u.test(term)) &&
+        hitAuthorities.some((entry) => entry.factualAttributeMatched)
+        ? hitAuthorities.filter((entry) => entry.factualAttributeMatched)
+        : hitAuthorities;
+      const sorted = precisionHits.sort(
         (left, right) =>
           right.hit.score - left.hit.score ||
           left.order - right.order ||
@@ -2541,6 +2571,23 @@ export function createProductionFederatedRlmRepository(
   };
 }
 
+function usesRegisteredCodexChild(identity: RlmChildRequest['executionIdentity']): boolean {
+  return identity?.transportConnectionId === 'openai-codex' &&
+    identity.upstreamProviderId === 'openai' &&
+    ['codex-cli', 'codex-app-server'].includes(identity.transportAdapterId);
+}
+
+export function createProductionRlmChildRunner(
+  harness: Pick<VibeSpaceHarness, 'createSession' | 'send' | 'deleteSession' | 'listModels'>,
+  codexChildRunner: (request: RlmChildRequest) => Promise<RlmChildAnalysis> = createRegisteredCodexRlmChild(),
+) {
+  const openCodeChildRunner = createOpenCodeRlmChildRunner(harness);
+  return (request: RlmChildRequest): Promise<RlmChildAnalysis> =>
+    usesRegisteredCodexChild(request.executionIdentity)
+      ? codexChildRunner(request)
+      : openCodeChildRunner(request);
+}
+
 export function createProductionRlmContextTool() {
   const indexPort = createTauriContextSearchIndexPort();
   const contextMapRepository = createContextMapRlmRepository({
@@ -2572,12 +2619,44 @@ export function createProductionRlmContextTool() {
     repository: contextMapRepository,
     limits: queryLimits,
   });
-  const rlmRuntime = createRlmRuntime({
-    contextTools: mappedSourceQueryService,
-    childRunner: createOpenCodeRlmChildRunner(openCodeHarness),
-    synthesize: synthesizeEvidencePack,
-    partitionSize: 2,
-  });
+  const traceStore = createRlmTraceStore();
+  const childRunner = createProductionRlmChildRunner(openCodeHarness);
+  const currentTraceLease = async (lease: Readonly<RlmContextLease>, signal?: AbortSignal) => {
+    if (!rlmTraceScopeFromLease(lease)) return undefined;
+    try {
+      const revision = await contextMapRepository.currentSourceRevision({
+        accountId: lease.accountId, workspaceId: lease.workspaceId,
+        projectId: lease.projectId, worktreeId: lease.worktreeId,
+      }, signal);
+      return revision ? Object.freeze({ ...lease,
+        contextRevision: 'sha256:' + await sha256Text(JSON.stringify([lease.contextRevision, revision])) }) : undefined;
+    } catch {
+      signal?.throwIfAborted();
+      return undefined; // Unavailable source authority cannot expose an old receipt.
+    }
+  };
+  const rlmRuntime = {
+    async investigate(input: unknown, lease?: Readonly<RlmContextLease>) {
+      const request = input as Parameters<ReturnType<typeof createRlmRuntime>['investigate']>[0];
+      const traceLease = lease ? await currentTraceLease(lease, request.signal) : undefined;
+      // One closure per actual investigation; concurrent chats never share
+      // a mutable current lease or trace authority.
+      const runtime = createRlmRuntime({
+        contextTools: mappedSourceQueryService,
+        childRunner,
+        synthesize: synthesizeEvidencePack,
+        partitionSize: 2,
+        onTerminalReceipt: traceLease ? createRlmTraceSink(traceStore, traceLease) : undefined,
+      });
+
+      // The native Codex authority admits one child at a time. Reduce only this
+      // trusted route's concurrency; retain invalid budgets for runtime validation.
+      return runtime.investigate(usesRegisteredCodexChild(request.executionIdentity)
+        ? { ...request, budget: { ...request.budget,
+            maxConcurrentSubcalls: Math.min(1, request.budget.maxConcurrentSubcalls) } }
+        : request);
+    },
+  };
   return createRlmOpenCodeTool({
     queryService: Object.freeze({
       ...queryService,
@@ -2596,6 +2675,13 @@ export function createProductionRlmContextTool() {
       },
     }),
     rlmRuntime,
+    async traceLookup(runId, lease, signal) {
+      signal?.throwIfAborted();
+      const currentLease = await currentTraceLease(lease, signal);
+      const scope = currentLease ? rlmTraceScopeFromLease(currentLease) : undefined;
+      signal?.throwIfAborted();
+      return scope ? traceStore.lookup(scope, runId) : undefined;
+    },
     maxOpenBytes: 64 * 1024,
     rlmBudget: {
       maxDepth: 1,

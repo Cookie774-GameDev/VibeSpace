@@ -2819,3 +2819,141 @@ describe('createJarvisActionLiveEvidenceVerifiers', () => {
     ).resolves.toEqual(evidence);
   });
 });
+
+describe('local actions without billing entitlements', () => {
+  const unavailable: JarvisEntitlementSnapshot = { source: 'unavailable', capabilities: [] };
+  async function createLocal(setup: ReturnType<typeof fixture>) {
+    const put = vi.fn(
+      async (_prepared: Parameters<JarvisIssuedApprovalLifecycle['putPreparedApproval']>[0]) => ({
+        kind: 'committed' as const,
+        value: { id: 'jappr_1', status: 'pending' } as JarvisApprovalV1,
+      }),
+    );
+    const result = await setup.engine
+      .bindIssuedLifecycle(lifecycle({ putPreparedApproval: put }))
+      .create({
+        parentRun: setup.run,
+        attempt: requestAttempt(),
+        actionId: 'notes.create',
+        actionVersion: 1,
+        params: { title: 'hello' },
+        expiresAt: now + 1000,
+      });
+    expect(result.status).toBe('pending');
+    expect(put).toHaveBeenCalledOnce();
+    expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
+    return put.mock.calls[0]![0];
+  }
+  it.each([unavailable, { source: 'server', capabilities: [], verifiedAt: 1, expiresAt: 2 }])(
+    'creates pending approval without billing grant: %j',
+    async (snapshot) => {
+      const setup = fixture(registration({ requiredEntitlements: [] }));
+      setup.entitlementSnapshots.getForAccount.mockResolvedValue(
+        snapshot as JarvisEntitlementSnapshot,
+      );
+      await createLocal(setup);
+    },
+  );
+  it('ignores unrelated plan refresh in local authorization hash', async () => {
+    const setup = fixture(registration({ requiredEntitlements: [] }));
+    setup.entitlementSnapshots.getForAccount.mockResolvedValue(unavailable);
+    const a = await createLocal(setup);
+    setup.entitlementSnapshots.getForAccount.mockResolvedValue(entitlementSnapshot());
+    const b = await createLocal(setup);
+    expect(a.capabilitySnapshotHash).toBe(b.capabilitySnapshotHash);
+  });
+  it.each([
+    unavailable,
+    { source: 'server', capabilities: ['entitlement.notes'], verifiedAt: 1, expiresAt: 2 },
+    { source: 'server', capabilities: [], verifiedAt: 9000, expiresAt: 20000 },
+  ])('keeps paid entitlement fail-closed: %j', async (snapshot) => {
+    const setup = fixture();
+    setup.entitlementSnapshots.getForAccount.mockResolvedValue(
+      snapshot as JarvisEntitlementSnapshot,
+    );
+    await expect(createLocal(setup)).rejects.toSatisfy((e: unknown) =>
+      expectApprovalError(e, 'entitlement_changed'),
+    );
+    expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
+  });
+  it('rejects removed capability', async () => {
+    const setup = fixture(registration({ requiredEntitlements: [] }));
+    setup.entitlementSnapshots.getForAccount.mockResolvedValue(unavailable);
+    setup.capabilitySnapshots.getForAccount.mockResolvedValue({
+      ...capabilitySnapshot(),
+      tools: [],
+    });
+    await expect(createLocal(setup)).rejects.toSatisfy((e: unknown) =>
+      expectApprovalError(e, 'capability_changed'),
+    );
+  });
+  it('rejects account switch during entitlement lookup using real scoped provider', async () => {
+    const { createJarvisCapabilitySnapshotProvider } =
+      await import('@/lib/jarvis/capabilitySnapshot');
+    let active = 'account-a';
+    const real = createJarvisCapabilitySnapshotProvider({
+      getActiveAccountId: () => active,
+      resolveInputForActiveAccount: async () => capabilitySnapshot(),
+    });
+    const setup = fixture(registration({ requiredEntitlements: [] }));
+    setup.capabilitySnapshots.getForAccount.mockImplementation((id) => real.getForAccount(id));
+    setup.entitlementSnapshots.getForAccount.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      active = 'account-b';
+      return unavailable;
+    });
+    await expect(createLocal(setup)).rejects.toThrow();
+    expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
+  });
+});
+
+it('creates only a pending approval for the actual registered local schedule with unavailable billing entitlements', async () => {
+  const { DEFAULT_JARVIS_ACTION_REGISTRATIONS } = await import('@/lib/jarvis/actions/catalog');
+  const action = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+    'schedule.create',
+  )!;
+  expect(action.requiredEntitlements).toEqual([]);
+  expect(action.approval).toBe('always');
+  const setup = fixture(action);
+  const unavailable: JarvisEntitlementSnapshot = { source: 'unavailable', capabilities: [] };
+  setup.entitlementSnapshots.getForAccount.mockResolvedValue(unavailable);
+  setup.capabilitySnapshots.getForAccount.mockResolvedValue({
+    ...capabilitySnapshot(),
+    entitlements: unavailable,
+    tools: [{ id: 'schedule.write', state: 'available', operations: ['execute'] }],
+  });
+  const put = vi.fn(
+    async (_prepared: Parameters<JarvisIssuedApprovalLifecycle['putPreparedApproval']>[0]) => ({
+      kind: 'committed' as const,
+      value: { id: 'jappr_1', status: 'pending' } as JarvisApprovalV1,
+    }),
+  );
+  await expect(
+    setup.engine
+      .bindIssuedLifecycle(lifecycle({ putPreparedApproval: put }))
+      .create({
+        parentRun: setup.run,
+        attempt: requestAttempt(),
+        actionId: action.id,
+        actionVersion: action.version,
+        params: {
+          title: 'Native regression',
+          prompt: 'Return local readiness.',
+          startAtMs: 1786626000000,
+          recurrence: 'once',
+        },
+        expiresAt: now + 1000,
+      }),
+  ).resolves.toMatchObject({ status: 'pending' });
+  expect(put).toHaveBeenCalledOnce();
+  expect(put.mock.calls[0]![0]).toMatchObject({
+    actionId: 'schedule.create',
+    capabilityId: 'schedule.write',
+    targetSnapshot: {
+      kind: 'app_resource',
+      namespace: 'schedule',
+      resourceId: 'Native regression',
+    },
+  });
+  expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
+});

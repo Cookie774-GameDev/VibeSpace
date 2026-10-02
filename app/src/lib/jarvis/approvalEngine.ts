@@ -487,11 +487,13 @@ function authorizationSlice(input: {
   });
 
   const entitlement = input.entitlementSnapshot;
+  const requiresEntitlements = input.registration.requiredEntitlements.length > 0;
   if (
-    entitlement.source === 'unavailable' ||
-    !Number.isFinite(entitlement.verifiedAt) ||
-    !Number.isFinite(entitlement.expiresAt) ||
-    entitlement.expiresAt! <= input.now
+    requiresEntitlements &&
+    (entitlement.source === 'unavailable' ||
+      !Number.isFinite(entitlement.verifiedAt) ||
+      !Number.isFinite(entitlement.expiresAt) ||
+      entitlement.expiresAt! <= input.now)
   ) {
     approvalError('entitlement_changed');
   }
@@ -504,13 +506,15 @@ function authorizationSlice(input: {
     primaryCapability: input.registration.requiredCapabilities[0],
     capabilities,
     target: input.target,
-    entitlements: {
-      source: entitlement.source,
-      ...(entitlement.planId === undefined ? {} : { planId: entitlement.planId }),
-      capabilities: [...entitlement.capabilities].sort(),
-      verifiedAt: entitlement.verifiedAt,
-      expiresAt: entitlement.expiresAt,
-    },
+    entitlements: requiresEntitlements
+      ? {
+          source: entitlement.source,
+          ...(entitlement.planId === undefined ? {} : { planId: entitlement.planId }),
+          capabilities: [...entitlement.capabilities].sort(),
+          verifiedAt: entitlement.verifiedAt,
+          expiresAt: entitlement.expiresAt,
+        }
+      : { required: [] },
   };
 }
 
@@ -1582,9 +1586,14 @@ export function createJarvisApprovalEngine(
       input.bindingSelectors.loadCapabilitySnapshot(inputValue.accountId),
       input.bindingSelectors.loadEntitlementSnapshot(inputValue.accountId),
     ]);
+    // Entitlement unavailability is valid for local actions, so account authority
+    // must be rechecked after all asynchronous entitlement/target lookups settle.
+    const currentCapabilities = inputValue.registration.requiredEntitlements.length === 0
+      ? await input.bindingSelectors.loadCapabilitySnapshot(inputValue.accountId)
+      : capabilitySnapshot;
     const slice = authorizationSlice({
       registration: inputValue.registration,
-      capabilitySnapshot,
+      capabilitySnapshot: currentCapabilities,
       entitlementSnapshot,
       target,
       now: input.now(),

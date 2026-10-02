@@ -97,6 +97,16 @@ export interface RlmRuntimeResult extends RlmSynthesis {
   }>;
 }
 
+/** Metadata from an actual terminal execution; never prompt or evidence bodies. */
+export interface RlmTerminalReceipt {
+  readonly runId: string;
+  readonly startedAt: number;
+  readonly endedAt: number;
+  readonly status: 'completed' | 'failed' | 'cancelled' | 'timed_out';
+  readonly errorCode?: RlmRuntimeErrorCode;
+  readonly trace: RlmRuntimeResult['trace'];
+}
+
 export type RlmRuntimeErrorCode =
   | 'cancelled'
   | 'abort_unconfirmed'
@@ -381,6 +391,7 @@ export function createRlmRuntime(dependencies: {
   childRunner(request: RlmChildRequest): Promise<RlmChildAnalysis>;
   synthesize(request: RlmSynthesisRequest): Promise<RlmSynthesis>;
   partitionSize?: number;
+  onTerminalReceipt?(receipt: Readonly<RlmTerminalReceipt>): void;
 }) {
   const partitionSize = Math.max(1, Math.floor(dependencies.partitionSize ?? 2));
 
@@ -445,6 +456,8 @@ export function createRlmRuntime(dependencies: {
     let budgetExhausted = false;
     let abortUnconfirmedError: RlmRuntimeError | undefined;
     let workerPromises: Promise<void>[] = [];
+    let terminalStatus: RlmTerminalReceipt['status'] = 'failed';
+    let terminalErrorCode: RlmRuntimeErrorCode | undefined;
     const event = (type: RlmTraceEventType, depth: number, detail?: string) => {
       events.push({ type, at: Date.now(), depth, ...(detail ? { detail } : {}) });
     };
@@ -652,6 +665,7 @@ export function createRlmRuntime(dependencies: {
         usage.openBytes >= budget.maxOpenBytes ||
         usage.toolCalls >= budget.maxToolCalls ||
         work.length > usage.subcalls;
+      terminalStatus = 'completed';
       return {
         ...synthesis,
         trace: Object.freeze({
@@ -679,19 +693,45 @@ export function createRlmRuntime(dependencies: {
           ?? (error instanceof RlmRuntimeError && error.code === 'abort_unconfirmed' ? error : undefined)
           ?? (unconfirmedWorker?.status === 'rejected' ? unconfirmedWorker.reason as RlmRuntimeError : undefined);
         if (unconfirmed) {
+          terminalErrorCode = 'abort_unconfirmed';
           unconfirmed.toolInvocations = invocationSnapshot();
           throw unconfirmed;
         }
         event(timedOut ? 'wall_time_exceeded' : 'cancelled', 0);
         const failure = abortError(signal, timedOut);
+        terminalStatus = timedOut ? 'timed_out' : 'cancelled';
+        terminalErrorCode = failure.code;
         failure.toolInvocations = invocationSnapshot();
         throw failure;
       }
-      if (error instanceof RlmRuntimeError) error.toolInvocations = invocationSnapshot();
+      if (error instanceof RlmRuntimeError) {
+        terminalErrorCode = error.code;
+        error.toolInvocations = invocationSnapshot();
+      }
       throw error;
     } finally {
       clearTimeout(timer);
       input.signal?.removeEventListener('abort', onOwnerAbort);
+      if (dependencies.onTerminalReceipt) {
+        const endedAt = Date.now();
+        const receipt = Object.freeze({
+          runId, startedAt, endedAt, status: terminalStatus,
+          ...(terminalErrorCode ? { errorCode: terminalErrorCode } : {}),
+          trace: Object.freeze({
+            mode: 'rlm' as const, runId, wallTimeMs: Math.max(0, endedAt - startedAt),
+            // Event details contain search text and source identifiers. The
+            // terminal hook intentionally projects only timing and structure.
+            events: Object.freeze(events.map(({ type, at, depth }) => Object.freeze({ type, at, depth }))),
+            toolInvocations: invocationSnapshot(), usage: Object.freeze({ ...usage }),
+            budget, budgetExhausted,
+          }),
+        });
+        try {
+          dependencies.onTerminalReceipt(receipt);
+        } catch {
+          // A diagnostic receipt sink must not replace the execution outcome.
+        }
+      }
     }
   };
 

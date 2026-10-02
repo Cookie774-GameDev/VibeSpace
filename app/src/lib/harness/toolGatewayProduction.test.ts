@@ -764,11 +764,51 @@ describe('production tool gateway dependencies', () => {
         messageId: 'message-1', directory: 'C:\\work\\project', mutationApproved: false },
     );
 
-    expect(result).toMatchObject({ answer: 'Grounded answer', citations: [citation],
+    expect(result).toMatchObject({ answer: expect.stringContaining('Grounded answer'), citations: [citation],
       trace: { mode: 'rlm', usage: { subcalls: 1 }, events: [{ type: 'child_completed' }] } });
     expect((result as { trace: Record<string, unknown> }).trace).not.toHaveProperty('budget');
+    expect((result as { answer: string }).answer).toContain(
+      'vibespace:context/evidence/ptr%3Arlm%3Arecord%3A0%3A12',
+    );
+    const registered = consumeToolGatewayContextCitationItems('session-1');
+    expect(registered).toEqual([expect.objectContaining({ source: expect.objectContaining({
+      id: citation.id, accountId: 'account-a', projectId: 'project-a',
+      uri: 'vibespace:context/evidence/ptr%3Arlm%3Arecord%3A0%3A12',
+      trust: 'app_verified', origin: 'app_observed',
+    }) })]);
+    const original = await execute.mock.results[0]!.value;
+    expect(original.answer).toBe('Grounded answer');
+    expect(original.trace).toHaveProperty('budget');
     dispose();
   });
+
+  it.each(['invalid-hash', 'unsafe-id', 'too-many'] as const)(
+    'does not register or invent canonical evidence for %s citations', async (scenario) => {
+      const authority = captureToolGatewayAuthorityClaim()!;
+      expect(bindToolGatewayObservedExecutionAuthority('session-1', authority, {
+        executionIdentity: observedIdentity, performance: 'quality',
+      })).toBe(true);
+      consumeToolGatewayContextCitationItems('session-1');
+      const citation = {
+        id: scenario === 'unsafe-id' ? 'pointer\u0000unsafe' : 'pointer-safe',
+        recordId: 'record', sourceVersion: 'revision',
+        contentHash: scenario === 'invalid-hash' ? 'invented-hash' : 'a'.repeat(64),
+      };
+      const input = Object.freeze({ answer: 'Grounded answer',
+        citations: Object.freeze(scenario === 'too-many' ? Array(33).fill(citation) : [citation]),
+      });
+      const dispose = installToolGatewayRlmContextPort({ execute: vi.fn(async () => input) });
+      try {
+        const result = await createProductionToolGatewayDependencies().context.rlm(
+          { operation: 'investigate', query: 'Trace mapped source.' },
+          { requestId: 'invalid-citation', sessionId: 'session-1', messageId: 'message-1',
+            directory: 'C:\\work\\project', mutationApproved: false },
+        );
+        expect(result).toBe(input);
+        expect(consumeToolGatewayContextCitationItems('session-1')).toEqual([]);
+      } finally { dispose(); }
+    },
+  );
 
   it.each(['execution_route_unavailable', 'cancelled'] as const)(
     'preserves safe actual tool receipts on recursive %s errors', async (code) => {

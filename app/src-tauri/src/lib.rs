@@ -814,6 +814,9 @@ fn run_ordinary(
             cli_bridge::cli_bridge_codex_account_snapshot,
             cli_bridge::cli_bridge_probe,
             cli_bridge::cli_bridge_start,
+            cli_bridge::codex_rlm_native::codex_rlm_prepare,
+            cli_bridge::codex_rlm_native::codex_rlm_start,
+            cli_bridge::codex_rlm_native::codex_rlm_revoke,
             cli_bridge::cli_bridge_cancel,
             harness::runtime::opencode_runtime_detect,
             harness::download::opencode_runtime_install,
@@ -953,6 +956,7 @@ fn run_ordinary(
             model_foundry_training::model_foundry_cancel_training_model_download,
             model_foundry_training::model_foundry_remove_training_model,
             model_foundry_training::model_foundry_install_training_worker,
+            model_foundry_training::model_foundry_cancel_training_worker_setup,
             model_foundry_download::model_foundry_download_model,
             model_foundry_download::model_foundry_cancel_download,
             model_foundry_download::model_foundry_cleanup_partial_download,
@@ -1183,6 +1187,9 @@ cli_bridge::cli_bridge_scan
 cli_bridge::cli_bridge_codex_account_snapshot
 cli_bridge::cli_bridge_probe
 cli_bridge::cli_bridge_start
+cli_bridge::codex_rlm_native::codex_rlm_prepare
+cli_bridge::codex_rlm_native::codex_rlm_start
+cli_bridge::codex_rlm_native::codex_rlm_revoke
 cli_bridge::cli_bridge_cancel
 harness::runtime::opencode_runtime_detect
 harness::download::opencode_runtime_install
@@ -1320,6 +1327,7 @@ model_foundry_training::model_foundry_repair_training_model
 model_foundry_training::model_foundry_cancel_training_model_download
 model_foundry_training::model_foundry_remove_training_model
 model_foundry_training::model_foundry_install_training_worker
+model_foundry_training::model_foundry_cancel_training_worker_setup
 model_foundry_download::model_foundry_download_model
 model_foundry_download::model_foundry_cancel_download
 model_foundry_download::model_foundry_cleanup_partial_download

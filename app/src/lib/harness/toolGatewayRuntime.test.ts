@@ -68,6 +68,11 @@ const argumentsByTool: Record<ToolGatewayTool, Record<string, unknown>> = {
   'context.read': { contextId: 'c-1' },
   'context.attach': { contextId: 'c-1' },
   vibespace_context: { operation: 'describe' },
+  vibespace_context_search: { query: 'source' },
+  vibespace_context_open: { pointer: { id: 'pointer', recordId: 'record', sourceVersion: 'rev', contentHash: 'a'.repeat(64), byteStart: 0, byteEnd: 8 } },
+  vibespace_context_expand: { pointer: { id: 'pointer', recordId: 'record', sourceVersion: 'rev', contentHash: 'a'.repeat(64), byteStart: 0, byteEnd: 8 } },
+  vibespace_context_address: { corpusId: 'mapped-source', position: '0' },
+  vibespace_context_trace: { runId: 'rlm-executed' },
   'skills.list': {},
   'skills.load': { skillId: 's-1' },
   'plugins.list': {},
@@ -178,7 +183,7 @@ describe('tool gateway semantic runtime', () => {
       expect(response).toMatchObject({ requestId: request(tool).requestId, ok: true, code: 'ok' });
       expect(call).toHaveBeenCalledOnce();
       expect(call).toHaveBeenCalledWith(
-        argumentsByTool[tool],
+        request(tool).args,
         expect.objectContaining({
           sessionId: 'session-1',
           directory: 'C:\\work\\project',

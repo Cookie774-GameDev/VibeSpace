@@ -28,6 +28,55 @@ const CALIBRATION_WARMUP_STEPS: u16 = 3;
 const CALIBRATION_MEASURED_STEPS: u16 = 10;
 const CALIBRATION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const WORKER_PROBE_TIMEOUT: Duration = Duration::from_secs(240);
+const DEPENDENCY_REPAIR_DEFAULT_SECONDS: u64 = 180;
+const DEPENDENCY_REPAIR_MAX_SECONDS: u64 = 900;
+static ACTIVE_RUNTIME_SETUP: Mutex<Option<RuntimeSetupControl>> = Mutex::new(None);
+
+#[derive(Clone)]
+struct RuntimeSetupControl {
+    setup_id: String,
+    cancelled: Arc<AtomicBool>,
+}
+
+struct RuntimeSetupControlGuard(RuntimeSetupControl);
+impl Drop for RuntimeSetupControlGuard {
+    fn drop(&mut self) {
+        if let Ok(mut active) = ACTIVE_RUNTIME_SETUP.lock() {
+            if active.as_ref().is_some_and(|entry| Arc::ptr_eq(&entry.cancelled, &self.0.cancelled)) {
+                *active = None;
+            }
+        }
+    }
+}
+
+fn dependency_repair_timeout(seconds: Option<u64>) -> Result<Duration, String> {
+    let seconds = seconds.unwrap_or(DEPENDENCY_REPAIR_DEFAULT_SECONDS);
+    if seconds == 0 || seconds > DEPENDENCY_REPAIR_MAX_SECONDS {
+        return Err("Dependency repair timeout must be between 1 and 900 seconds.".into());
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
+fn runtime_setup_id(value: Option<String>) -> Result<String, String> {
+    let id = value.unwrap_or_else(|| nanoid::nanoid!(24));
+    if id.len() < 16 || id.len() > 80 || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) {
+        return Err("Runtime setup requires an opaque 16-80 character identifier.".into());
+    }
+    Ok(id)
+}
+
+fn cancel_runtime_setup(registry: &Mutex<Option<RuntimeSetupControl>>, setup_id: &str) -> Result<bool, String> {
+    let active = registry.lock().map_err(|_| "Runtime setup registry unavailable.".to_string())?;
+    let Some(control) = active.as_ref().filter(|control| control.setup_id == setup_id) else { return Ok(false); };
+    control.cancelled.store(true, Ordering::Relaxed);
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn model_foundry_cancel_training_worker_setup(setup_id: String) -> Result<bool, String> {
+    let setup_id = runtime_setup_id(Some(setup_id))?;
+    cancel_runtime_setup(&ACTIVE_RUNTIME_SETUP, &setup_id)
+}
 const WORKER_PROBE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_PROCESS_CAPTURE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_ARTIFACT_FILES: usize = 4_096;
@@ -1007,11 +1056,24 @@ fn process_capture_root(root: &Path) -> PathBuf {
 }
 
 fn bounded_process_output(
-    mut command: Command,
+    command: Command,
     capture_parent: &Path,
     timeout: Duration,
     operation: &str,
 ) -> Result<Output, String> {
+    bounded_process_output_with_cancel(command, capture_parent, timeout, operation, None)
+}
+
+fn bounded_process_output_with_cancel(
+    mut command: Command,
+    capture_parent: &Path,
+    timeout: Duration,
+    operation: &str,
+    cancelled: Option<&AtomicBool>,
+) -> Result<Output, String> {
+    if cancelled.is_some_and(|value| value.load(Ordering::Relaxed)) {
+        return Err(format!("{operation} cancelled."));
+    }
     fs::create_dir_all(capture_parent)
         .map_err(|error| format!("Could not prepare {operation} capture: {error}"))?;
     let capture_root =
@@ -1047,6 +1109,12 @@ fn bounded_process_output(
         }
     };
     loop {
+        if cancelled.is_some_and(|value| value.load(Ordering::Relaxed)) {
+            terminate_child_tree(&mut child);
+            let _ = child.wait();
+            let _ = fs::remove_dir_all(&capture_root);
+            return Err(format!("{operation} cancelled."));
+        }
         let capture_limit_exceeded =
             captured_output_exceeded(&stdout_path).and_then(|stdout_exceeded| {
                 if stdout_exceeded {
@@ -1194,6 +1262,8 @@ fn install_private_training_packages(
     python: &Path,
     root: &Path,
     include_qlora: bool,
+    timeout: Duration,
+    cancelled: &AtomicBool,
 ) -> Result<(), String> {
     let program = python.to_string_lossy();
     let requirements_path = root.join(if include_qlora {
@@ -1226,10 +1296,15 @@ fn install_private_training_packages(
         ])
         .arg(&requirements_path);
     configure_foundry_worker_environment(&mut command, root)?;
-    let install_status = command.status().map_err(|error| {
-        format!("Could not install the pinned private Model Foundry runtime: {error}")
-    })?;
-    if !install_status.success() {
+    command.stdin(Stdio::null());
+    let output = bounded_process_output_with_cancel(
+        command,
+        &process_capture_root(root),
+        timeout,
+        "pinned private dependency repair",
+        Some(cancelled),
+    )?;
+    if !output.status.success() {
         return Err("The pinned private Model Foundry runtime installation failed.".into());
     }
     Ok(())
@@ -2145,8 +2220,14 @@ fn claim_training_runtime_setup() -> Result<std::sync::MutexGuard<'static, ()>, 
 fn install_training_runtime(
     app: &tauri::AppHandle,
     include_qlora: bool,
+    allow_dependency_repair: bool,
+    dependency_timeout: Duration,
+    setup_id: String,
 ) -> Result<TrainingWorkerStatus, String> {
     let _setup_guard = claim_training_runtime_setup()?;
+    let control = RuntimeSetupControl { setup_id, cancelled: Arc::new(AtomicBool::new(false)) };
+    *ACTIVE_RUNTIME_SETUP.lock().map_err(|_| "Runtime setup registry unavailable.".to_string())? = Some(control.clone());
+    let _control_guard = RuntimeSetupControlGuard(control.clone());
     let root = training_root(app)?;
     fs::create_dir_all(&root)
         .map_err(|error| format!("Could not create the private training directory: {error}"))?;
@@ -2165,12 +2246,21 @@ fn install_training_runtime(
     let needs_packages = probe_worker(&root, &python_text, &path, &expected)
         .map(|probe| !probe.ready || !training_runtime_ready(&probe.methods, include_qlora))
         .unwrap_or(true);
+    if control.cancelled.load(Ordering::Relaxed) {
+        return Err("Runtime setup cancelled.".into());
+    }
     if needs_packages {
-        install_private_training_packages(&python, &root, include_qlora)?;
+        if !allow_dependency_repair {
+            return Err("Verified worker restored; dependency repair requires explicit resource admission.".into());
+        }
+        install_private_training_packages(&python, &root, include_qlora, dependency_timeout, &control.cancelled)?;
         clear_worker_probe_cache();
     }
 
     let status = inspect_worker(&root);
+    if control.cancelled.load(Ordering::Relaxed) {
+        return Err("Runtime setup cancelled.".into());
+    }
     if !status.attested || !training_runtime_ready(&status.methods, include_qlora) {
         return Err(status
             .reason
@@ -2184,12 +2274,17 @@ pub async fn model_foundry_install_training_worker(
     app: tauri::AppHandle,
     include_qlora: Option<bool>,
     storage_root: Option<String>,
+    allow_dependency_repair: Option<bool>,
+    dependency_timeout_seconds: Option<u64>,
+    setup_id: Option<String>,
 ) -> Result<TrainingWorkerStatus, String> {
+    let dependency_timeout = dependency_repair_timeout(dependency_timeout_seconds)?;
+    let setup_id = runtime_setup_id(setup_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(storage_root) = storage_root.as_deref() {
             crate::model_foundry::configure_foundry_storage(&app, storage_root)?;
         }
-        install_training_runtime(&app, include_qlora.unwrap_or(false))
+        install_training_runtime(&app, include_qlora.unwrap_or(false), allow_dependency_repair.unwrap_or(true), dependency_timeout, setup_id)
     })
     .await
     .map_err(|error| format!("Model Foundry setup worker failed: {error}"))?
@@ -3656,5 +3751,41 @@ torch.utils.checkpoint: use_reentrant should be passed explicitly.
         remove_training_model_directory(&root, &model).unwrap();
 
         let _ = fs::remove_dir_all(root);
+    }
+}
+
+
+#[cfg(test)]
+mod runtime_setup_bounds_tests {
+    use super::*;
+    #[test]
+    fn repair_timeout_is_bounded_and_validated() {
+        assert_eq!(dependency_repair_timeout(None).unwrap(), Duration::from_secs(180));
+        assert_eq!(dependency_repair_timeout(Some(900)).unwrap(), Duration::from_secs(900));
+        assert!(dependency_repair_timeout(Some(0)).is_err());
+        assert!(dependency_repair_timeout(Some(901)).is_err());
+    }
+    #[test]
+    fn setup_identifiers_are_opaque_and_strict() {
+        assert_eq!(runtime_setup_id(None).unwrap().len(), 24);
+        assert!(runtime_setup_id(Some("short".into())).is_err());
+        assert!(runtime_setup_id(Some("../foreign/worker.py".into())).is_err());
+    }
+    #[test]
+    fn cancellation_only_targets_the_matching_setup_generation() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let registry = Mutex::new(Some(RuntimeSetupControl { setup_id: "own-generation-1234".into(), cancelled: cancelled.clone() }));
+        assert!(!cancel_runtime_setup(&registry, "foreign-generation").unwrap());
+        assert!(!cancelled.load(Ordering::Relaxed));
+        assert!(cancel_runtime_setup(&registry, "own-generation-1234").unwrap());
+        assert!(cancelled.load(Ordering::Relaxed));
+        *registry.lock().unwrap() = None;
+        assert!(!cancel_runtime_setup(&registry, "own-generation-1234").unwrap());
+    }
+    #[test]
+    fn pre_cancelled_dependency_command_does_not_spawn() {
+        let cancelled = AtomicBool::new(true);
+        let result = bounded_process_output_with_cancel(hidden_command("nonexistent-no-spawn"), Path::new("unused-no-files"), Duration::from_secs(1), "dependency repair", Some(&cancelled));
+        assert!(result.unwrap_err().contains("cancelled"));
     }
 }

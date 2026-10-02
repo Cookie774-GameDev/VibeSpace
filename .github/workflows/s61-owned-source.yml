@@ -34,16 +34,113 @@ jobs:
       - name: Build (Vite)
         run: npm run build
 
+      - name: Verify owned integration regressions before the broad suite
+        run: >-
+          npm --prefix app run test --
+          src/lib/ai/runtime.test.ts
+          src/lib/ai/runtime.contextAdvanced.test.ts
+          src/lib/ai/runtime.nativeAppAction.test.ts
+          src/lib/ai/adapters/codexPersistent.contextTool.test.ts
+          src/lib/ai/adapters/catalog.codexFiles.test.ts
+          src/lib/ai/adapters/codexContextTool.test.ts
+          src/lib/ai/adapters/codexRlmParentBinding.test.ts
+          src/lib/ai/adapters/codexRlmExecChild.test.ts
+          src/lib/ai/adapters/codexRlmNativeFactory.test.ts
+          src/features/context/contextRlmProduction.codexChild.test.ts
+          src/features/context/contextRlmTraceStore.test.ts
+          src/features/context/contextRlmSourceRevision.test.ts
+          src/features/context/rlmOpenCodeTool.trace.test.ts
+          src/features/context/rlmRuntime.terminal.test.ts
+          src/lib/jarvis/promptCompiler.advancedContext.test.ts
+          src/lib/harness/commandCatalogQuery.test.ts
+          src/lib/harness/toolGatewayProduction.test.ts
+
       - name: Test (vitest)
         run: npm --prefix app run test
 
       - name: Test release manifest
         run: npm run test:release-manifest
 
+  composer-regression:
+    name: Owned Composer red and green regression
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      - name: Preserve the actual failing original regression
+        shell: bash
+        run: |
+          set +e
+          node work/sol61-mission-20261001-S61/worker1/composer-staging/run-packet.cjs red
+          status=$?
+          set -e
+          test "$status" -eq 1
+          node -e 'const fs=require("fs"),r=JSON.parse(fs.readFileSync("work/sol61-mission-20261001-S61/worker1/composer-staging/red-report.json")); const failed=r.testResults.flatMap(x=>x.assertionResults).filter(x=>x.status==="failed"); if(failed.length!==1 || !failed[0].title.includes("removes only the submitted undo command"))throw Error("Original regression did not fail exactly as expected");'
+      - name: Verify the minimal candidate and all draft neighbors
+        run: node work/sol61-mission-20261001-S61/worker1/composer-staging/run-packet.cjs green
+      - name: Upload exact regression receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: s61-composer-red-green-${{ github.sha }}
+          path: |
+            work/sol61-mission-20261001-S61/worker1/composer-staging/*-report.json
+            work/sol61-mission-20261001-S61/worker1/composer-staging/*-receipt.json
+            work/sol61-mission-20261001-S61/worker1/composer-staging/red.log
+            work/sol61-mission-20261001-S61/worker1/composer-staging/green.log
+          if-no-files-found: error
+          retention-days: 3
+
+  windows-inputs:
+    name: Freeze native Windows build inputs
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      cargo_lock: ${{ steps.inputs.outputs.cargo_lock }}
+      windows_config: ${{ steps.inputs.outputs.windows_config }}
+      connector_source: ${{ steps.inputs.outputs.connector_source }}
+    steps:
+      - name: Preserve published blob bytes
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+      - name: Compute exact immutable input fingerprints
+        id: inputs
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -cne '${{ github.sha }}') { throw 'Published source mismatch.' }
+          node --input-type=module -e 'import fs from "node:fs"; import crypto from "node:crypto"; import {fingerprint} from "./scripts/prepare-desktop-connector.mjs"; const h=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex"); fs.appendFileSync(process.env.GITHUB_OUTPUT,"cargo_lock="+h(".github/native-windows-qa/Cargo.lock")+"\nwindows_config="+h("app/src-tauri/tauri.windows.conf.json")+"\nconnector_source="+await fingerprint()+"\n");'
+
+  native-windows:
+    name: Matching native Windows debug build
+    needs: windows-inputs
+    permissions:
+      contents: read
+    uses: ./.github/workflows/native-windows-qa.yml
+    with:
+      source_sha: ${{ github.sha }}
+      cargo_lock_sha256: ${{ needs.windows-inputs.outputs.cargo_lock }}
+      windows_config_sha256: ${{ needs.windows-inputs.outputs.windows_config }}
+      connector_source_sha256: ${{ needs.windows-inputs.outputs.connector_source }}
+
   rust:
     name: Rust (cargo check)
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: '1'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -90,6 +187,14 @@ jobs:
             tail -n 40 cargo-check.log
           fi
           exit "$status"
+
+      - name: Verify native Codex authority and scoped installer cancellation
+        working-directory: app/src-tauri
+        shell: bash
+        run: |
+          cargo test --release --lib codex_rlm -- --test-threads=1
+          cargo test --release --lib rlm_parent_tests -- --test-threads=1
+          cargo test --release --lib runtime_setup_bounds_tests -- --test-threads=1
 
       - name: Upload Rust failure log
         if: failure() && steps.cargo-check.outcome == 'failure'

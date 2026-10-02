@@ -1,3 +1,4 @@
+import { assertRegisteredResourceScope } from './registryActionScope';
 /**
  * Built-in action registry.
  *
@@ -1424,6 +1425,8 @@ const SCHEDULE_ACTIONS: ActionDef[] = [
       );
       await assertActionRequestLive(context);
       throwIfActionRequestCancelled(context);
+      const recheckScope = await assertRegisteredResourceScope(context, 'project', String(auth.projectId ?? ''));
+      await recheckScope();
       const event = await eventRepo.create(
         buildJarvisScheduleEventInput({
           workspaceId: auth.workspaceId,
@@ -1478,9 +1481,11 @@ const SCHEDULE_ACTIONS: ActionDef[] = [
     icon: CalendarClock,
     destructive: true,
     params: [{ key: 'eventId', label: 'Schedule id', type: 'string', required: true }],
-    run: async (params) => {
+    run: async (params, context) => {
       const eventId = typeof params.eventId === 'string' ? params.eventId.trim() : '';
       if (!eventId) return fail('eventId is required.');
+      const recheckScope = await assertRegisteredResourceScope(context, 'schedule', eventId);
+      await recheckScope();
       const event = await eventRepo.update(eventId as never, { status: 'cancelled' });
       return ok(scheduleActionSummary('paused', event), { eventId });
     },
