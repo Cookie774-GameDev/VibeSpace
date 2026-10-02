@@ -1,0 +1,102 @@
+# Task-owned matching-source QA; does not alter the shared CI workflow.
+name: S61 owned-source verification
+on:
+  push:
+    branches: [codex/s61-chat-context-20261002-0411]
+concurrency:
+  group: s61-owned-source-verification
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  frontend:
+    name: Frontend (typecheck + build + test)
+    runs-on: ubuntu-22.04
+    # Full app vitest is ~11k tests and exceeds the old 15-minute job cap
+    # (GitHub cancelled the step at 15m15s / 15m18s on 5301ff91).
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (Vite)
+        run: npm run build
+
+      - name: Test (vitest)
+        run: npm --prefix app run test
+
+      - name: Test release manifest
+        run: npm run test:release-manifest
+
+  rust:
+    name: Rust (cargo check)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Verify clean-checkout connector preparation
+        run: node --test scripts/prepare-desktop-connector.ci.test.mjs
+
+      # Direct Cargo checks bypass Tauri's npm hooks. Linux still needs the
+      # preparer's explicit unsupported-platform manifest for the resource glob.
+      - name: Prepare verified Desktop Connector resource
+        run: npm run prepare:desktop-connector
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: cargo check
+        id: cargo-check
+        working-directory: app/src-tauri
+        shell: bash
+        run: |
+          set +e
+          cargo check --release > cargo-check.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "Rust cargo check failed. The complete compiler log is attached as the rust-cargo-check-log artifact."
+            grep -n -E '(^error(\[E[0-9]+\])?:|could not compile|failed to)' cargo-check.log | tail -n 120 || true
+          else
+            tail -n 40 cargo-check.log
+          fi
+          exit "$status"
+
+      - name: Upload Rust failure log
+        if: failure() && steps.cargo-check.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cargo-check-log
+          path: app/src-tauri/cargo-check.log
+          if-no-files-found: error
+          retention-days: 7
+
