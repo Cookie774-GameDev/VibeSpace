@@ -183,8 +183,16 @@ impl EmbeddedWindow {
             unsafe { GetWindowPlacement(frame, &mut frame_placement) }
                 .map_err(|e| e.to_string())?;
         }
-        let window_visible = unsafe { IsWindowVisible(window) }.as_bool();
-        let frame_visible = unsafe { IsWindowVisible(frame) }.as_bool();
+        let style = unsafe { GetWindowLongPtrW(window, GWL_STYLE) };
+        // IsWindowVisible includes ancestor visibility. A shown content child of
+        // a hidden frame must retain its own WS_VISIBLE bit when it is returned.
+        let window_visible = style & WS_VISIBLE.0 as isize != 0;
+        let frame_style = if frame == window {
+            style
+        } else {
+            unsafe { GetWindowLongPtrW(frame, GWL_STYLE) }
+        };
+        let frame_visible = frame_style & WS_VISIBLE.0 as isize != 0;
         let lease = Self {
             hwnd,
             frame: frame.0 as isize,
@@ -193,7 +201,7 @@ impl EmbeddedWindow {
             placement,
             frame_placement,
             window_visible,
-            style: unsafe { GetWindowLongPtrW(window, GWL_STYLE) },
+            style,
             ex_style: unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) },
             original_parent,
             frame_visible,
@@ -570,6 +578,17 @@ mod tests {
             .unwrap(),
         );
         let original_style = unsafe { GetWindowLongPtrW(handle(hwnd), GWL_STYLE) };
+        let original_frame_style = unsafe { GetWindowLongPtrW(handle(frame), GWL_STYLE) };
+        assert_eq!(
+            unsafe { IsWindowVisible(handle(hwnd)) }.as_bool(),
+            initially_visible
+        );
+        if content && !initially_visible {
+            // The child is locally shown, but its hidden parent makes its
+            // effective visibility false. Restoration must preserve both facts.
+            assert_ne!(original_style & WS_VISIBLE.0 as isize, 0);
+            assert_eq!(original_frame_style & WS_VISIBLE.0 as isize, 0);
+        }
         let mut original_rect = RECT::default();
         unsafe { GetWindowRect(handle(hwnd), &mut original_rect) }.unwrap();
         {
@@ -615,6 +634,14 @@ mod tests {
         assert_eq!(
             unsafe { GetWindowLongPtrW(handle(hwnd), GWL_STYLE) },
             original_style
+        );
+        assert_eq!(
+            unsafe { GetWindowLongPtrW(handle(frame), GWL_STYLE) },
+            original_frame_style
+        );
+        assert_eq!(
+            unsafe { IsWindowVisible(handle(hwnd)) }.as_bool(),
+            initially_visible
         );
         let mut restored_rect = RECT::default();
         unsafe { GetWindowRect(handle(hwnd), &mut restored_rect) }.unwrap();

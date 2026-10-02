@@ -5,6 +5,30 @@ const request = { version: 1 as const, kind: 'context_source_revision' as const,
 const binding = { runId: 'run', requestId: 'request', attemptNumber: 1 };
 const response = { ...request, workspaceId: 'workspace', projectId: 'project', worktreeHash: 'sha256:' + 'a'.repeat(64), authorityEpoch: 1, sourceRevision: 'sha256:' + 'b'.repeat(64) };
 describe('protected source-revision DTO', () => {
+  it('matches reader ASCII 200-character boundaries for source scope and bindings', () => {
+    for (const field of ['accountId', 'chatId', 'mapId']) {
+      expect(isKernelClientRequestV1({ ...request, [field]: 'a'.repeat(200) })).toBe(true);
+      for (const invalid of ['a'.repeat(201), 'é'.repeat(100), ' account', '_account', 'a b', 'a\nb']) {
+        expect(isKernelClientRequestV1({ ...request, [field]: invalid })).toBe(false);
+      }
+    }
+    for (const field of ['runId', 'requestId']) {
+      expect(isKernelClientRequestV1({ ...request, binding: { ...binding, [field]: 'a'.repeat(200) } })).toBe(true);
+      for (const invalid of ['a'.repeat(201), 'é'.repeat(100), '_request', 'a b', 'a\nb']) {
+        expect(isKernelClientRequestV1({ ...request, binding: { ...binding, [field]: invalid } })).toBe(false);
+      }
+    }
+    for (const field of ['accountId', 'workspaceId', 'projectId', 'chatId', 'mapId']) {
+      expect(isKernelClientResponseV1({ ...response, [field]: 'a'.repeat(200) })).toBe(true);
+      for (const invalid of ['a'.repeat(201), 'é'.repeat(100), '_scope', 'a b', 'a\nb']) {
+        expect(isKernelClientResponseV1({ ...response, [field]: invalid })).toBe(false);
+      }
+    }
+  });
+  it('preserves the legacy 512-character identifier contract on other methods', () => {
+    expect(isKernelClientRequestV1({ version: 1, kind: 'command_center_snapshot', accountId: 'a'.repeat(512) })).toBe(true);
+    expect(isKernelClientRequestV1({ version: 1, kind: 'command_center_snapshot', accountId: 'a'.repeat(513) })).toBe(false);
+  });
   it('allows pre-send scoped read without inventing run binding', () => {
     expect(isKernelClientRequestV1(request)).toBe(true);
     expect(isKernelClientResponseV1(response)).toBe(true);

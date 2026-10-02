@@ -181,13 +181,18 @@ function id(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= 512;
 }
 
+// Source reads share the installed reader's ASCII-only 200-character policy.
+function sourceRevisionId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/.test(value);
+}
+
 function epoch(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 function sourceRevisionBinding(value: unknown): boolean {
   if (value === undefined) return true;
   const record = dataRecord(value);
-  return !!record && exactKeys(record, ['runId', 'requestId', 'attemptNumber']) && id(record.runId) && id(record.requestId) && Number.isSafeInteger(record.attemptNumber) && Number(record.attemptNumber) > 0 && Number(record.attemptNumber) <= 4_294_967_295;
+  return !!record && exactKeys(record, ['runId', 'requestId', 'attemptNumber']) && sourceRevisionId(record.runId) && sourceRevisionId(record.requestId) && Number.isSafeInteger(record.attemptNumber) && Number(record.attemptNumber) > 0 && Number(record.attemptNumber) <= 4_294_967_295;
 }
 
 export function isKernelClientRequestV1(value: unknown): value is KernelClientRequestV1 {
@@ -249,7 +254,7 @@ export function isKernelClientRequestV1(value: unknown): value is KernelClientRe
         id(record.attemptId)
       );
     case 'context_source_revision':
-      return exactKeys(record, ['version', 'kind', 'accountId', 'chatId', 'mapId', ...(record.binding === undefined ? [] : ['binding'])]) && id(record.accountId) && id(record.chatId) && id(record.mapId) && sourceRevisionBinding(record.binding);
+      return exactKeys(record, ['version', 'kind', 'accountId', 'chatId', 'mapId', ...(record.binding === undefined ? [] : ['binding'])]) && sourceRevisionId(record.accountId) && sourceRevisionId(record.chatId) && sourceRevisionId(record.mapId) && sourceRevisionBinding(record.binding);
     case 'command_center_snapshot':
       return exactKeys(record, ['version', 'kind', 'accountId']) && id(record.accountId);
     default:
@@ -345,7 +350,7 @@ export function isKernelClientResponseV1(value: unknown): value is KernelClientR
         (record.status === 'approved' || record.status === 'denied')
       );
     case 'context_source_revision':
-      return exactKeys(record, ['version', 'kind', 'accountId', 'workspaceId', 'projectId', 'worktreeHash', 'chatId', 'mapId', 'authorityEpoch', 'sourceRevision', ...(record.binding === undefined ? [] : ['binding'])]) && id(record.accountId) && id(record.workspaceId) && id(record.projectId) && id(record.chatId) && id(record.mapId) && epoch(record.authorityEpoch) && typeof record.worktreeHash === 'string' && /^sha256:[a-f0-9]{64}$/u.test(record.worktreeHash) && typeof record.sourceRevision === 'string' && /^sha256:[a-f0-9]{64}$/u.test(record.sourceRevision) && sourceRevisionBinding(record.binding);
+      return exactKeys(record, ['version', 'kind', 'accountId', 'workspaceId', 'projectId', 'worktreeHash', 'chatId', 'mapId', 'authorityEpoch', 'sourceRevision', ...(record.binding === undefined ? [] : ['binding'])]) && sourceRevisionId(record.accountId) && sourceRevisionId(record.workspaceId) && sourceRevisionId(record.projectId) && sourceRevisionId(record.chatId) && sourceRevisionId(record.mapId) && epoch(record.authorityEpoch) && typeof record.worktreeHash === 'string' && /^sha256:[a-f0-9]{64}$/u.test(record.worktreeHash) && typeof record.sourceRevision === 'string' && /^sha256:[a-f0-9]{64}$/u.test(record.sourceRevision) && sourceRevisionBinding(record.binding);
     case 'approval_state':
       return (
         exactKeys(record, ['version', 'kind', 'accountId', 'approvalId', 'status']) &&

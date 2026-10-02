@@ -117,7 +117,7 @@ impl KernelClientRequestV1 {
     fn validate(&self) -> Result<(), &'static str> {
         let valid = match self {
             Self::ContextSourceRevision { version, account_id, chat_id, map_id, binding } =>
-                *version == 1 && bounded_id(account_id) && bounded_id(chat_id) && bounded_id(map_id) && binding.as_ref().is_none_or(KernelSourceBinding::valid),
+                *version == 1 && source_revision_id(account_id) && source_revision_id(chat_id) && source_revision_id(map_id) && binding.as_ref().is_none_or(KernelSourceBinding::valid),
             Self::TurnDispatch {
                 version,
                 account_id,
@@ -267,13 +267,20 @@ pub(crate) struct KernelSourceBinding {
     run_id: String, request_id: String, attempt_number: u32,
 }
 impl KernelSourceBinding {
-    fn valid(&self) -> bool { bounded_id(&self.run_id) && bounded_id(&self.request_id) && self.attempt_number > 0 }
+    fn valid(&self) -> bool { source_revision_id(&self.run_id) && source_revision_id(&self.request_id) && self.attempt_number > 0 }
 }
 fn deserialize_source_binding<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<KernelSourceBinding>, D::Error> {
     KernelSourceBinding::deserialize(deserializer).map(Some)
 }
 fn source_revision_hash(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+// Match the context source reader's ASCII identifier grammar and 200-byte cap.
+// Other kernel request kinds retain their existing shared bounded_id contract.
+fn source_revision_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty() && bytes.len() <= 200 && bytes[0].is_ascii_alphanumeric()
+        && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || b"._:/@-".contains(byte))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,7 +383,7 @@ impl KernelClientResponseV1 {
     fn validate(&self) -> Result<(), &'static str> {
         let valid = match self {
             Self::ContextSourceRevision { version, account_id, workspace_id, project_id, worktree_hash, chat_id, map_id, authority_epoch, source_revision, binding } =>
-                *version == 1 && [account_id, workspace_id, project_id, chat_id, map_id].iter().all(|id| bounded_id(id)) && *authority_epoch > 0 && *authority_epoch <= 9_007_199_254_740_991 && source_revision_hash(worktree_hash) && source_revision_hash(source_revision) && binding.as_ref().is_none_or(KernelSourceBinding::valid),
+                *version == 1 && [account_id, workspace_id, project_id, chat_id, map_id].iter().all(|id| source_revision_id(id)) && *authority_epoch > 0 && *authority_epoch <= 9_007_199_254_740_991 && source_revision_hash(worktree_hash) && source_revision_hash(source_revision) && binding.as_ref().is_none_or(KernelSourceBinding::valid),
             Self::TurnAccepted { version, run_id }
             | Self::CancellationState {
                 version, run_id, ..
@@ -1489,6 +1496,32 @@ mod tests {
         assert!(serde_json::from_value::<KernelClientRequestV1>(value).unwrap().validate().is_err());
         let mut value = source_revision_request_json(); value["binding"]["attemptNumber"] = 4_294_967_296_u64.into();
         assert!(serde_json::from_value::<KernelClientRequestV1>(value).is_err());
+        for field in ["accountId", "chatId", "mapId"] {
+            let mut valid = source_revision_request_json(); valid[field] = "a".repeat(200).into();
+            assert!(serde_json::from_value::<KernelClientRequestV1>(valid.clone()).unwrap().validate().is_ok());
+            for invalid in ["a".repeat(201), "é".repeat(100), " account".to_string(), "_account".to_string(), "a b".to_string(), "a\nb".to_string()] {
+                valid[field] = invalid.into();
+                assert!(serde_json::from_value::<KernelClientRequestV1>(valid.clone()).unwrap().validate().is_err());
+            }
+        }
+        for field in ["runId", "requestId"] {
+            let mut value = source_revision_request_json(); value["binding"][field] = "a".repeat(200).into();
+            assert!(serde_json::from_value::<KernelClientRequestV1>(value.clone()).unwrap().validate().is_ok());
+            for invalid in ["a".repeat(201), "é".repeat(100), "_request".to_string(), "a b".to_string(), "a\nb".to_string()] {
+                value["binding"][field] = invalid.into();
+                assert!(serde_json::from_value::<KernelClientRequestV1>(value.clone()).unwrap().validate().is_err());
+            }
+        }
+        for field in ["accountId", "workspaceId", "projectId", "chatId", "mapId"] {
+            let mut value = source_revision_response_json(); value[field] = "a".repeat(200).into();
+            assert!(serde_json::from_value::<KernelClientResponseV1>(value.clone()).unwrap().validate().is_ok());
+            for invalid in ["a".repeat(201), "é".repeat(100), "_scope".to_string(), "a b".to_string(), "a\nb".to_string()] {
+                value[field] = invalid.into();
+                assert!(serde_json::from_value::<KernelClientResponseV1>(value.clone()).unwrap().validate().is_err());
+            }
+        }
+        assert!(bounded_id(&"a".repeat(512)));
+        assert!(!bounded_id(&"a".repeat(513)));
     }
     #[test]
     fn source_revision_response_rejects_epoch_and_hash_boundaries() {
