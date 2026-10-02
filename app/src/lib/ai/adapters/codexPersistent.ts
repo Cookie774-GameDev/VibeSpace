@@ -1,3 +1,4 @@
+import { recordCodexProviderAccountProof, recordCodexProviderAccountInvalidation } from './codexProviderAccountProof';
 import { recordCodexSchemaReceipt, toolReceiptBinding } from './providerToolSchemaReceipt';
 import { decodeCodexThreadCache, encodeCodexThreadCache } from './codexThreadCache';
 import { createCodexControlBridge } from './codexControlBridge';
@@ -1143,6 +1144,7 @@ async function* sendCodexRequest(
     (message) => dependencies.write(generation, message),
     mode,
   );
+  let providerAccountEpoch = 1;
   const pendingControlResponses = new Map<
     string,
     {
@@ -1249,6 +1251,10 @@ async function* sendCodexRequest(
       activeIterator,
       firstFrame,
       (frame) => {
+        if (frame.method === 'account/updated' || frame.method === 'account/login/completed') {
+          providerAccountEpoch += 1;
+          recordCodexProviderAccountInvalidation(generation, providerAccountEpoch, frame);
+        }
         const id = typeof frame.id === 'string' ? frame.id : '';
         if (!id || !controlRequestIds.delete(id)) return false;
         const pending = pendingControlResponses.get(id);
@@ -1415,6 +1421,13 @@ async function* sendCodexRequest(
           const qualified = exactIdentity.model.includes('/') ? exactIdentity.model : exactIdentity.modelProvider + '/' + exactIdentity.model;
           const separator = qualified.indexOf('/');
           let accountSequence = 0;
+          const accountReadId = requestId(request.requestId, 'provider_account_proof');
+          await recordCodexProviderAccountProof(
+            schemaBinding, threadId, accountReadId,
+            () => sendControlRequest({ id: accountReadId, method: 'account/read', params: { refreshToken: false } }),
+            () => !terminal && !streamAbort.signal.aborted && !request.signal?.aborted && Boolean(threadId),
+            undefined, () => providerAccountEpoch,
+          );
           releaseRlmParent = registerLiveCodexRlmParent({
             caller, owner: ownerId, generation, signal: request.signal,
             identity: {
