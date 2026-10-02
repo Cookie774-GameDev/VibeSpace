@@ -134,10 +134,90 @@ jobs:
 
       - name: Admit and test focused Workbench Rust regressions on the warm target
         run: |
+          $ErrorActionPreference = 'Stop'
+          $global:LASTEXITCODE = 0
           ./scripts/native-windows-qa-preflight.ps1 -Phase before-cargo -EvidenceDirectory work/native-windows-qa/workbench-tests-admission
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./scripts/s61-workbench-rust-tests.ps1 -RepositoryRoot $env:GITHUB_WORKSPACE -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE 'work/native-windows-qa/workbench-tests') -IncludeRestorationRegression
+          $rustManifest = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/Cargo.toml'
+          $rustOutput = Join-Path $env:GITHUB_WORKSPACE 'work/native-windows-qa/workbench-tests'
+          $rustInputPaths = [ordered]@{
+            testScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/s61-workbench-rust-tests.ps1'
+            cargoManifest = $rustManifest
+            cargoLock = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/Cargo.lock'
+          }
+          $rustInputHashes = [ordered]@{}
+          foreach ($key in $rustInputPaths.Keys) {
+            $rustInputHashes[$key] = (Get-FileHash -LiteralPath $rustInputPaths[$key] -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          if ($rustInputHashes.cargoLock -cne $env:QA_CARGO_LOCK_SHA256) { throw 'Rust test lock does not match the frozen QA lock.' }
+          $rustHead = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $rustHead -cne $env:QA_SOURCE_SHA) { throw 'Rust test source commit mismatch.' }
+          $rustPublishedScript = git rev-parse 'HEAD:scripts/s61-workbench-rust-tests.ps1'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot prove published Rust test script.' }
+          $rustWorkingScript = git hash-object -- scripts/s61-workbench-rust-tests.ps1
+          if ($LASTEXITCODE -ne 0 -or $rustWorkingScript -cne $rustPublishedScript) { throw 'Rust test script differs from the frozen published source.' }
+          $rustTarget = [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+          ./scripts/s61-workbench-rust-tests.ps1 -RepositoryRoot $env:GITHUB_WORKSPACE -OutputDirectory $rustOutput -IncludeRestorationRegression
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $rustReceiptPath = Join-Path $rustOutput 'receipt.json'
+          $rustReceipt = Get-Content -LiteralPath $rustReceiptPath -Raw | ConvertFrom-Json
+          $rustExpected = @(
+            'native_app_surface::embedding::tests::packaged_content_requires_its_ready_shell_frame'
+            'native_app_surface::tests::attachment_waits_for_two_matching_ready_observations'
+            'native_app_surface::tests::changed_or_missing_content_resets_attachment_readiness'
+            'native_app_surface::tests::crash_containment_is_scoped_to_the_observed_packaged_notepad'
+            'native_app_surface::tests::contained_notepad_is_fallback_without_embedding_or_process_ownership'
+            'kernel_host::tests::source_revision_closed_dto_rejects_null_partial_and_unknown_binding'
+            'kernel_host::tests::source_revision_dto_rejects_oversized_ids_and_invalid_attempts'
+            'kernel_host::tests::source_revision_response_rejects_epoch_and_hash_boundaries'
+            'kernel_host::tests::source_revision_response_requires_exact_scope_and_binding_correlation'
+            'kernel_host::tests::source_revision_main_reads_use_broker_epoch_without_action_admission'
+            'native_app_surface::embedding::tests::hosts_resizes_hides_and_restores_a_disposable_external_window'
+            'native_app_surface::embedding::tests::restores_content_to_its_original_frame_after_hosting'
+            'native_app_surface::embedding::tests::restores_a_hidden_content_frame_after_hosting'
+            'native_app_surface::embedding::tests::restores_the_original_hidden_state_of_a_hosted_window'
+          )
+          $rustRows = @($rustReceipt.actualResultRows.PSObject.Properties)
+          if ($rustReceipt.status -cne 'PASS_FOCUSED_RUST_CODE_ONLY' -or $rustReceipt.cargoExitCode -ne 0 -or
+              $rustReceipt.expectedCount -ne 14 -or $rustRows.Count -ne 14 -or
+              $rustReceipt.oneCargoInvocation -ne $true -or $rustReceipt.compilationIncluded -ne $true -or
+              $rustReceipt.nativeAppAcceptance -ne $false -or @($rustReceipt.missing).Count -ne 0 -or
+              @($rustReceipt.failed).Count -ne 0 -or @($rustReceipt.unexpected).Count -ne 0) {
+            throw 'Actual Windows Rust test receipt is absent, incomplete, or failed.'
+          }
+          foreach ($row in $rustRows) {
+            if ($rustExpected -cnotcontains $row.Name -or $row.Value -cne 'ok') { throw 'Windows Rust test name or result does not match the exact fourteen-case contract.' }
+          }
+          $rustExpectedArgs = @('test', '--locked', '--manifest-path', $rustManifest, '--lib', '--', '--exact', '--test-threads=1', '--color=never') + $rustExpected
+          if (@($rustReceipt.arguments).Count -ne $rustExpectedArgs.Count) { throw 'Rust test invocation differs from the reviewed warm-target command.' }
+          for ($index = 0; $index -lt $rustExpectedArgs.Count; $index++) {
+            if ($rustReceipt.arguments[$index] -cne $rustExpectedArgs[$index]) { throw 'Rust test invocation differs from the reviewed warm-target command.' }
+          }
+          foreach ($key in $rustInputPaths.Keys) {
+            if ((Get-FileHash -LiteralPath $rustInputPaths[$key] -Algorithm SHA256).Hash.ToLowerInvariant() -cne $rustInputHashes[$key]) {
+              throw 'Frozen Rust test inputs changed during the test invocation.'
+            }
+          }
+          $rustHeadAfter = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $rustHeadAfter -cne $rustHead -or [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) -cne $rustTarget) {
+            throw 'Rust test source or warm target changed during the test invocation.'
+          }
+          $rustBinding = [ordered]@{
+            schemaVersion = 1
+            sourceSHA = $rustHead
+            testScriptGitBlob = $rustPublishedScript
+            inputSHA256 = $rustInputHashes
+            targetDirectory = $rustTarget
+            receiptSHA256 = (Get-FileHash -LiteralPath $rustReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            expectedCount = 14
+            actualPassedCount = $rustRows.Count
+            nativeAppAcceptance = $false
+          }
+          $rustBindingPath = Join-Path $rustOutput 'source-binding.json'
+          $rustBindingBytes = [Text.UTF8Encoding]::new($false).GetBytes(($rustBinding | ConvertTo-Json -Depth 5))
+          $rustBindingFile = [IO.File]::Open($rustBindingPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+          try { $rustBindingFile.Write($rustBindingBytes, 0, $rustBindingBytes.Length) } finally { $rustBindingFile.Dispose() }
+          Write-Output 'PASS: fourteen actual Windows Rust test rows and frozen warm-target source binding.'
 
       - name: Inspect executable and DLL dependencies
         run: |

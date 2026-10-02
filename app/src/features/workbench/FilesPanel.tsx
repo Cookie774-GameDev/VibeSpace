@@ -101,7 +101,10 @@ function TreeNode({
  * writing cwd back into panel settings.
  */
 export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
-  const projectId = useAuthStore((state) => state.projectId);
+  const activeProjectId = useAuthStore((state) => state.projectId);
+  const independent = panel.settings.filesRootScope === 'panel';
+  const projectId = independent ? null : activeProjectId;
+  const scopeKey = `${independent ? 'panel' : 'project'}:${projectId ?? ''}`;
   const openFileInEditor = useWorkbenchStore((state) => state.openFileInEditor);
   const [rootDir, setRootDir] = React.useState(() => getStoredProjectRoot(projectId));
   const [pathDraft, setPathDraft] = React.useState(() => getStoredProjectRoot(projectId));
@@ -110,8 +113,9 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
   const [error, setError] = React.useState<string | null>(null);
   const onUpdateRef = React.useRef(onUpdate);
   const rootRequestRef = React.useRef(0);
-  const projectRef = React.useRef(projectId);
-  projectRef.current = projectId;
+  const scopeRef = React.useRef(scopeKey);
+  scopeRef.current = scopeKey;
+  const loadedProjectRef = React.useRef(projectId);
   const statusRef = React.useRef(panel.status);
   const cwdRef = React.useRef(panel.settings.cwd);
   onUpdateRef.current = onUpdate;
@@ -134,7 +138,7 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
   const loadRoot = React.useCallback(
     async (path: string) => {
       const request = ++rootRequestRef.current;
-      const current = () => request === rootRequestRef.current && projectRef.current === projectId;
+      const current = () => request === rootRequestRef.current && scopeRef.current === scopeKey;
       if (!path.trim()) {
         setEntries([]);
         setError(null);
@@ -157,7 +161,7 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
         setEntries(result.entries.slice(0, MAX_CHILDREN));
         // The root-changed event is also observed by this panel. Do not emit
         // it again for an unchanged root after every directory listing.
-        if (getStoredProjectRoot(projectId) !== result.path) {
+        if (!independent && getStoredProjectRoot(projectId) !== result.path) {
           setStoredProjectRoot(projectId, result.path);
         }
         publishStatus('ready', result.path);
@@ -170,11 +174,14 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
         if (current()) setLoading(false);
       }
     },
-    [projectId, publishStatus],
+    [projectId, independent, scopeKey, publishStatus],
   );
 
   React.useEffect(() => {
-    const next = panel.settings.cwd || getStoredProjectRoot(projectId);
+    const switchedProject = !independent && loadedProjectRef.current !== projectId;
+    const next = switchedProject ? getStoredProjectRoot(projectId) :
+      panel.settings.cwd || getStoredProjectRoot(projectId);
+    loadedProjectRef.current = projectId;
     setRootDir(next);
     setPathDraft(next);
     setEntries([]);
@@ -187,6 +194,7 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
   }, [loadRoot, projectId]);
 
   React.useEffect(() => {
+    if (independent) return;
     const onRootChanged = (event: Event) => {
       const detail = (event as CustomEvent<{ projectId?: string | null; path?: string }>).detail;
       if ((detail?.projectId ?? null) !== (projectId ?? null)) return;
@@ -198,7 +206,7 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
     window.addEventListener('jarvis:files:root-changed', onRootChanged as EventListener);
     return () =>
       window.removeEventListener('jarvis:files:root-changed', onRootChanged as EventListener);
-  }, [loadRoot, projectId]);
+  }, [loadRoot, projectId, independent]);
 
   const onOpenFile = (path: string) => {
     if (!isPopularTextFile(path)) {
@@ -208,7 +216,7 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
       );
       return;
     }
-    const id = openFileInEditor(path);
+    const id = openFileInEditor(path, rootDir);
     if (id) {
       publishStatus('ready');
       toast.success('Opened in editor', basename(path));
@@ -217,7 +225,7 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
 
   const chooseRoot = async () => {
     const picked = await chooseProjectFolder();
-    if (projectRef.current !== projectId) return;
+    if (scopeRef.current !== scopeKey) return;
     if (!picked) {
       toast.info(
         'Desktop app required',
@@ -250,6 +258,22 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
         </Button>
         <Button type="button" size="sm" variant="outline" onClick={() => void chooseRoot()}>
           Choose folder
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-pressed={independent}
+          title="Keep this panel's folder separate from the project folder"
+          onClick={() => onUpdateRef.current({
+            settings: {
+              ...panel.settings,
+              filesRootScope: independent ? 'project' : 'panel',
+              cwd: independent ? getStoredProjectRoot(activeProjectId) : rootDir,
+            },
+          })}
+        >
+          Independent folder
         </Button>
       </div>
       <form

@@ -15,6 +15,7 @@ import {
   type WorkspaceFlushResult,
 } from '@/lib/persistence/workspaceFlush';
 import type { Chat, Message } from '@/types/chat';
+import type { Task } from '@/types/task';
 
 export const WORKSPACE_BACKUP_FORMAT = 'vibespace-workspace-backup';
 export const WORKSPACE_BACKUP_VERSION = 1;
@@ -52,6 +53,7 @@ export interface WorkspaceBackupCounts {
   readonly chats: number;
   readonly messages: number;
   readonly canvasDocuments: number;
+  readonly tasks?: number;
 }
 
 export interface WorkspaceBackupResult {
@@ -86,6 +88,7 @@ interface WorkspaceBackupSnapshot {
   readonly projects: Project[];
   readonly chats: Chat[];
   readonly messages: Message[];
+  readonly tasks: Task[];
   readonly canvasDocuments: CanvasDocumentRow[];
   readonly canvasPages: CanvasPageRow[];
   readonly canvasObjects: CanvasObjectRow[];
@@ -286,6 +289,7 @@ async function readAccountSnapshot(
       database.projects,
       database.chats,
       database.messages,
+      database.tasks,
       database.canvas_documents,
       database.canvas_pages,
       database.canvas_objects,
@@ -303,6 +307,12 @@ async function readAccountSnapshot(
         workspaceIds.length === 0
           ? []
           : await database.chats.where('workspace_id').anyOf(workspaceIds).toArray();
+      const projectWorkspaces = new Map(projects.map((project) => [project.id, project.workspace_id]));
+      const tasks = workspaceIds.length === 0
+        ? []
+        : await database.tasks.where('workspace_id').anyOf(workspaceIds)
+          .filter((task) => !task.project_id || projectWorkspaces.get(task.project_id) === task.workspace_id)
+          .toArray();
       const chatIds = chats.map((chat) => chat.id);
       const messages =
         chatIds.length === 0
@@ -343,6 +353,7 @@ async function readAccountSnapshot(
         projects: projects.sort(byId),
         chats: chats.sort(byId),
         messages: messages.sort(byMessageOrder),
+        tasks: tasks.sort(byId),
         canvasDocuments: canvasDocuments.sort(byId),
         canvasPages: canvasPages.sort(byCanvasPageOrder),
         canvasObjects: canvasObjects.sort(byId),
@@ -410,6 +421,7 @@ function exportPayload(
         updated_at: message.updated_at,
         usage: message.usage ?? null,
       })),
+      tasks: snapshot.tasks,
       canvas: {
         documents: snapshot.canvasDocuments,
         pages: snapshot.canvasPages,
@@ -560,6 +572,7 @@ export function createWorkspaceBackup(options: CreateWorkspaceBackupOptions = {}
         chats: snapshot.chats.length,
         messages: snapshot.messages.length,
         canvasDocuments: snapshot.canvasDocuments.length,
+        ...(snapshot.tasks.length > 0 ? { tasks: snapshot.tasks.length } : {}),
       },
     };
   };

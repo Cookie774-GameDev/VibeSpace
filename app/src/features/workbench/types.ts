@@ -29,6 +29,8 @@ export interface WorkbenchPanelSettings {
   creative?: import('./creative').CreativeStyle;
   url?: string;
   cwd?: string;
+  /** A panel folder stays independent of the active project's shared folder. */
+  filesRootScope?: 'project' | 'panel';
   command?: string;
   route?: string;
   resourceId?: string;

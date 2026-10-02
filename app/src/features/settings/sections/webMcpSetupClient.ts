@@ -106,6 +106,7 @@ export async function saveWebMcpDraft(draft: SetupDraft, apiKey: string): Promis
       confirmed.displayName !== pluginName(draft.displayName) ||
       confirmed.tunnelId !== draft.tunnelId.trim() ||
       confirmed.guideTab !== draft.guideTab ||
+      confirmed.step !== draft.step ||
       (apiKey && !confirmed.hasKey)
     )
       throw new Error('Setup readback mismatch');
