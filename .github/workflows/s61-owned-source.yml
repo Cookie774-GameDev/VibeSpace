@@ -9,8 +9,67 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  native-artifact-repack:
+    name: Compress verified R5 native artifact for connector download
+    if: github.event.head_commit.message == 'Verify native ABI and package existing R5 artifact'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check packaging capacity
+        shell: bash
+        run: |
+          python3 -c 'import os,shutil; free=os.sysconf("SC_AVPHYS_PAGES")*os.sysconf("SC_PAGE_SIZE"); assert free>=1024**2*(1024+640), "Insufficient RAM reserve"; assert shutil.disk_usage(".").free>=3*1024**3, "Insufficient packaging disk"; print("Packaging RAM and disk admission PASS")'
+      - name: Download immutable successful R5 build without rebuilding
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: native-windows-debug-60cbcbfb5e44baf541c378aa309e297907ce1e01-36982451812-1
+          path: verified-native
+          github-token: ${{ github.token }}
+          repository: Cookie774-GameDev/VibeSpace
+          run-id: 36982451812
+      - name: Verify every preserved payload and evidence byte
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,pathlib
+          root=pathlib.Path('verified-native').resolve()
+          manifest=json.loads((root/'artifact-manifest.json').read_text())
+          provenance=json.loads((root/'provenance.json').read_text())
+          assert provenance['sourceCommitSHA']=='60cbcbfb5e44baf541c378aa309e297907ce1e01'
+          assert provenance['sourceTreeSHA']=='93a60c59a8a6550bbaf34d91ac2fe6aed24d8efc'
+          expected={f['path']:f for f in manifest['files']+manifest['evidenceFiles']}
+          assert len(expected)==len(manifest['files'])+len(manifest['evidenceFiles'])
+          expected['artifact-manifest.json']=None
+          actual={str(f.relative_to(root)).replace('\\','/') for f in root.rglob('*') if f.is_file()}
+          assert actual==set(expected), 'Unexpected or missing artifact files'
+          for name,item in expected.items():
+              parts=pathlib.PurePosixPath(name).parts
+              assert parts and '..' not in parts and not name.startswith('/')
+              file=root.joinpath(*parts)
+              assert file.is_file() and not file.is_symlink()
+              if item is None: continue
+              assert file.stat().st_size==item['bytes']
+              with file.open('rb') as stream: digest=hashlib.file_digest(stream,'sha256').hexdigest()
+              assert digest==item['sha256'], name
+          print('Exact R5 executable, DLLs, resources and provenance preserved:',len(expected),'files')
+          PY
+      - name: Upload same verified files with bounded transfer compression
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: s61-native-r5-compressed-${{ github.sha }}
+          path: verified-native/
+          compression-level: 6
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
   frontend:
     name: Frontend (typecheck + build + test)
+    needs: windows-inputs
+    if: needs.windows-inputs.outputs.frontend_changed == 'true'
     runs-on: ubuntu-22.04
     # Full app vitest is ~11k tests and exceeds the old 15-minute job cap
     # (GitHub cancelled the step at 15m15s / 15m18s on 5301ff91).
@@ -109,6 +168,8 @@ jobs:
       connector_source: ${{ steps.inputs.outputs.connector_source }}
       native_changed: ${{ steps.inputs.outputs.native_changed }}
       composer_original: ${{ steps.inputs.outputs.composer_original }}
+      frontend_changed: ${{ steps.inputs.outputs.frontend_changed }}
+      rust_changed: ${{ steps.inputs.outputs.rust_changed }}
     steps:
       - name: Preserve published blob bytes
         shell: pwsh
@@ -131,6 +192,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $previous = '${{ github.event.before }}'
           $nativeChanged = $true
+          $frontendChanged = $true
+          $rustChanged = $true
           if ($previous -cmatch '^[a-f0-9]{40}$' -and $previous -cne ('0' * 40)) {
             $changed = @(git diff --name-only $previous '${{ github.sha }}')
             if ($LASTEXITCODE -ne 0) { throw 'Cannot prove changed build inputs.' }
@@ -139,8 +202,17 @@ jobs:
               $_ -cne '.github/workflows/s61-owned-source.yml' -and
               $_ -notmatch '^work/sol61-mission-20261001-S61/'
             }).Count -gt 0
+            $frontendChanged = @($changed | Where-Object {
+              $_ -notmatch '^app/src-tauri/' -and
+              $_ -notmatch '^\.github/' -and
+              $_ -notmatch '^scripts/native-windows-qa' -and
+              $_ -notmatch '^work/sol61-mission-20261001-S61/'
+            }).Count -gt 0
+            $rustChanged = $nativeChanged -or ($changed -ccontains '.github/workflows/s61-owned-source.yml')
           }
           "native_changed=$($nativeChanged.ToString().ToLowerInvariant())" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+          "frontend_changed=$($frontendChanged.ToString().ToLowerInvariant())" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+          "rust_changed=$($rustChanged.ToString().ToLowerInvariant())" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
           node --input-type=module -e 'import fs from "node:fs"; import crypto from "node:crypto"; const canonical=fs.readFileSync("app/src/features/chat/Composer.tsx","utf8").replace(/\r\n/g,"\n"); const original=crypto.createHash("sha256").update(canonical).digest("hex")==="87eac381c47994d1f1a2bf328e1ffcecaf1d64c5ca8b2a68055e6a070946d2ba"; fs.appendFileSync(process.env.GITHUB_OUTPUT,"composer_original="+original+"\n");'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -160,8 +232,8 @@ jobs:
   rust:
     name: Rust (cargo check)
     needs: windows-inputs
-    if: needs.windows-inputs.outputs.native_changed == 'true'
-    runs-on: ubuntu-22.04
+    if: needs.windows-inputs.outputs.rust_changed == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       CARGO_BUILD_JOBS: '1'
@@ -216,6 +288,10 @@ jobs:
         working-directory: app/src-tauri
         shell: bash
         run: |
+          # The prebuilt ONNX Runtime uses these GLIBC_2.38 symbols. Check the
+          # real runner ABI before linking; do not replace the library or shim it.
+          ldd --version | head -n 1
+          python3 -c 'import ctypes; libc=ctypes.CDLL(None); [getattr(libc,name) for name in ("__isoc23_strtol","__isoc23_strtoll","__isoc23_strtoull")]; print("Required native library ABI symbols available")'
           cargo test --release --lib codex_rlm -- --test-threads=1
           cargo test --release --lib rlm_parent_tests -- --test-threads=1
           cargo test --release --lib runtime_setup_bounds_tests -- --test-threads=1
