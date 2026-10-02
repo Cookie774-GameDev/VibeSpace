@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import { resetTurnStoreForTests } from '@/features/chat/runtime/turn/turnStore';
 import { createJarvisDb } from '@/lib/db';
 import { TEST_INDEXED_DB, uniqueTestDbName } from '@/test/indexedDb';
 import type { Agent, Message, Part } from '@/types';
@@ -2259,6 +2260,7 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   beforeEach(() => {
+    resetTurnStoreForTests();
     mocks.listOpenCodeModels.mockReset();
     vi.clearAllMocks();
     resetDiscoveredConnectionModelsForTests();
@@ -8231,6 +8233,29 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         backend_affinity: { version: 1, backend: 'codex', locked: true, selectedAt: 1, lockedAt: 2 },
         created_at: 1, updated_at: 1,
       });
+      // Composer persists each submitted user before dispatch. Use the same real
+      // database for chronological history and assistant writes; the static
+      // kernelRuntimeBindings history cannot represent a later incoming turn.
+      let messageSequence = 0;
+      let lastMessageAt = 0;
+      const nextMessageAt = () => (lastMessageAt = Math.max(Date.now(), lastMessageAt + 1));
+      const persistedBindings: RuntimeBindings = {
+        ...harness.bindings,
+        getMessages: async () => database.messages.where('chat_id').equals(harness.chatId).sortBy('created_at'),
+        appendMessage: async (message) => {
+          const stamp = nextMessageAt();
+          const row: Message = { ...message, id: `msg_expiry_fixture_${++messageSequence}` as MessageId,
+            created_at: stamp, updated_at: stamp };
+          await database.messages.add(row);
+          return row;
+        },
+        updateMessage: async (id, patch) => { await database.messages.update(id, patch); },
+      };
+      const persistUser = async (id: string, text: string) => {
+        const stamp = nextMessageAt();
+        await database.messages.add({ id: id as MessageId, chat_id: harness.chatId,
+          role: 'user', parts: [{ kind: 'text', text }], created_at: stamp, updated_at: stamp });
+      };
       let clock = 100;
       let uuid = 0;
       const now = () => clock;
@@ -8267,8 +8292,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         }), '```'].join('\n'),
         usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 }, provider: 'openai', model: 'gpt-5.6-terra',
       });
-      const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+      const stop = trackListener(startRuntimeListener(persistedBindings, { jarvisInterlocks: runtimeInterlocks() }));
       try {
+        await persistUser('msg_expiry_original', 'Rename this chat and request approval.');
         window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
           accountId: 'runtime-test-account', chatId: harness.chatId, cancellationKey: 'msg_expiry_original',
           text: 'Rename this chat and request approval.', interactionMode: 'agent', agentApprovalMode: 'review',
@@ -8287,6 +8313,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         if (scenario === 'settled-old-reread') {
           const pendingTurnBefore = getLatestTurnByChatId(harness.chatId)!;
           const pendingCompatibilityBefore = getChatRunState(harness.chatId);
+          await persistUser('msg_expiry_blocked', 'Explain a queue without taking actions.');
           window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
             accountId: 'runtime-test-account', chatId: harness.chatId, cancellationKey: 'msg_expiry_blocked',
             text: 'Explain a queue without taking actions.', interactionMode: 'ask', modelSelectionOverride: selection,
@@ -8321,11 +8348,27 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           // The old approval is now genuinely settled; only then admit a fresh turn.
           expect(latestAfter.status).toBe('cancelled');
           mocks.runAgent.mockImplementationOnce(input => { newerInput = input; return newerGate.promise; });
+          await persistUser('msg_expiry_newer', 'Explain a queue after the old approval expired.');
           window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
             accountId: 'runtime-test-account', chatId: harness.chatId, cancellationKey: 'msg_expiry_newer',
             text: 'Explain a queue after the old approval expired.', interactionMode: 'ask', modelSelectionOverride: selection,
           } }));
-          await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
+          try {
+            await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
+          } catch (error) {
+            // Preserve the real admission failure in CI instead of attributing
+            // a missing provider call to a pending controller without evidence.
+            const failures = mocks.devLog.mock.calls.map(([entry]) => entry)
+              .filter((entry) => entry.level === 'error');
+            const runs = (await database.jarvis_runs.toArray()).map(({ id, status }) => ({ id, status }));
+            throw new Error(`Fresh persisted expiry turn was not dispatched: ${JSON.stringify({ failures, runs })}`, { cause: error });
+          }
+          expect(await database.messages.where('chat_id').equals(harness.chatId).filter(message => message.role === 'user').sortBy('created_at'))
+            .toEqual(expect.arrayContaining([
+              expect.objectContaining({ id: 'msg_expiry_original' }),
+              expect.objectContaining({ id: 'msg_expiry_blocked' }),
+              expect.objectContaining({ id: 'msg_expiry_newer' }),
+            ]));
           newerInput!.onChunk?.({ delta: 'The newer turn is still explaining queues.', first: true });
           const newerBefore = getLatestTurnByChatId(harness.chatId)!;
           const compatibilityBefore = getChatRunState(harness.chatId);

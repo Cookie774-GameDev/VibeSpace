@@ -235,13 +235,27 @@ jobs:
           # Store a reusable stricter admission gate; the cold-tree estimates are projections.
           @'
           $ErrorActionPreference = 'Stop'
-          $os = Get-CimInstance Win32_OperatingSystem
-          $ram = [math]::Floor($os.FreePhysicalMemory / 1024)
-          $commit = [math]::Floor($os.FreeVirtualMemory / 1024)
+          $phase = $args[0]
           $volumes = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:CARGO_TARGET_DIR, $env:ORT_CACHE_DIR) | ForEach-Object { [IO.Path]::GetPathRoot($_) } | Sort-Object -Unique
-          $disks = @($volumes | ForEach-Object { $id = $_.TrimEnd('\'); $d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$id'"; if (-not $d) { throw 'Output/cache volume unavailable.' }; @{ volume=$id; freeBytes=[long]$d.FreeSpace } })
-          @{ phase=$args[0]; freeRamMiB=$ram; freeCommitMiB=$commit; disks=$disks; estimatedPeakRamMiB=8192; estimatedPeakCommitMiB=12288; estimatedDiskBytes=21474836480; estimatesMeasured=$false; measuredAtUTC=[DateTime]::UtcNow.ToString('o') } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $env:NSIS_PROOF_DIR ("capacity-"+$args[0]+'.json'))
-          if ($ram -lt 11264 -or $commit -lt 16384 -or @($disks | Where-Object freeBytes -lt 21474836480).Count) { throw 'NSIS capacity denied: need 11GiB free RAM, 16GiB commit and 20GiB on each output/cache volume.' }
+          $timer = [Diagnostics.Stopwatch]::StartNew()
+          $samples = [Collections.Generic.List[object]]::new()
+          while ($true) {
+            $os = Get-CimInstance Win32_OperatingSystem -OperationTimeoutSec 5
+            try { $ram = [math]::Floor($os.FreePhysicalMemory / 1024); $commit = [math]::Floor($os.FreeVirtualMemory / 1024) } finally { $os.Dispose() }
+            $disks = @($volumes | ForEach-Object {
+              $id = $_.TrimEnd('\'); $d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$id'" -OperationTimeoutSec 5
+              if (-not $d) { throw 'Output/cache volume unavailable.' }
+              try { @{ volume=$id; freeBytes=[long]$d.FreeSpace } } finally { $d.Dispose() }
+            })
+            $admitted = $ram -ge 11264 -and $commit -ge 16384 -and @($disks | Where-Object freeBytes -lt 21474836480).Count -eq 0
+            $samples.Add(@{ freeRamMiB=$ram; freeCommitMiB=$commit; disks=$disks; admitted=$admitted; measuredAtUTC=[DateTime]::UtcNow.ToString('o') })
+            @{ phase=$phase; freeRamMiB=$ram; freeCommitMiB=$commit; disks=$disks; estimatedPeakRamMiB=8192; estimatedPeakCommitMiB=12288; estimatedDiskBytes=21474836480; estimatesMeasured=$false; admitted=$admitted; measuredAtUTC=$samples[$samples.Count-1].measuredAtUTC; maxCapacityWaitSeconds=90; elapsedSeconds=$timer.Elapsed.TotalSeconds; samples=$samples.ToArray() } | ConvertTo-Json -Depth 7 | Set-Content (Join-Path $env:NSIS_PROOF_DIR ("capacity-"+$phase+'.json'))
+            if ($admitted) { return }
+            $remaining = 90 - $timer.Elapsed.TotalSeconds
+            if ($remaining -le 0) { throw "NSIS capacity denied after bounded wait: RAM $ram/11264MiB, commit $commit/16384MiB; each output/cache volume requires20GiB. See capacity-$phase.json." }
+            Write-Host "Waiting for changed runner capacity: RAM $ram/11264MiB; commit $commit/16384MiB. No build launched."
+            Start-Sleep -Milliseconds ([int][math]::Min(10000, [math]::Ceiling($remaining*1000)))
+          }
           '@ | Set-Content (Join-Path $proof 'admit.ps1') -Encoding utf8NoBOM
       - name: Admit cold resource preparation
         run: '& (Join-Path $env:NSIS_PROOF_DIR ''admit.ps1'') before-prepare'

@@ -85,6 +85,7 @@ import {
   failCanonicalTurn,
 } from '@/features/chat/runtime/turn/turnController';
 import { getLatestTurnByChatId, publishTurnEvent } from '@/features/chat/runtime/turn/turnStore';
+import { isTerminalTurnStatus } from '@/features/chat/runtime/turn/turnTypes';
 import {
   MANDATORY_CONTEXT_EVIDENCE_DIRECTIVE_MARKER,
   parseDirectContextEvidenceContinuation,
@@ -6034,8 +6035,7 @@ export function startRuntimeListener(
       if (priorTurn && !ownedCanonicalRunId &&
         priorTurn.identity.runId === previousCanonicalRunId &&
         priorTurn.cancellationKey !== cancellationKey &&
-        priorTurn.status !== 'completed' && priorTurn.status !== 'failed' &&
-        priorTurn.status !== 'cancelled') return;
+        !isTerminalTurnStatus(priorTurn.status)) return;
       if (status === 'cancelled' && cancellationKey) {
         const accountId = resolveAccountIdentity(authState)?.accountId;
         const currentAccountId = resolveAccountIdentity(useAuthStore.getState())?.accountId;

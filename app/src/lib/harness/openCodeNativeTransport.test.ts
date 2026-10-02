@@ -16,7 +16,7 @@ describe('native OpenCode transport', () => {
     const response = await nativeOpenCodeRequest('generation-tool-schema', '/experimental/tool?provider=openrouter&model=google%2Fmodel%3Afree&directory=C%3A%5Cproject', {}, 5000, bridge);
     await expect(response.json()).resolves.toEqual([{ id: 'vibespace_context_search', parameters: { type: 'object' } }]);
     expect(invoke).toHaveBeenCalledWith('opencode_server_request', { request: expect.objectContaining({
-      generation: 'generation-tool-schema', route: { kind: 'tool_list', providerId: 'openrouter', modelId: 'google/model:free' }, directory: 'C:\project',
+      generation: 'generation-tool-schema', route: { kind: 'tool_list', providerId: 'openrouter', modelId: 'google/model:free' }, directory: 'C:\\project',
     }) });
   });
 
