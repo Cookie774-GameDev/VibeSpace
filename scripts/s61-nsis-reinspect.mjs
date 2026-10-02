@@ -91,7 +91,7 @@ async function extract(tool,archive,destination,output,label,bounds){
   const free=await statfs(path.dirname(destination));assert(Number(free.bavail)*Number(free.bsize)>=Math.max(MIN_DISK,summary.expandedBytes+1024**3),'Insufficient output disk');
   await mkdir(destination);capture(tool,['x','-y','-o'+destination,archive]);
   const files=await walk(destination),seen=new Set();for(const f of files){const rel=validateRelativePath(path.relative(destination,f));assert(!seen.has(rel.toLowerCase()),'Extracted case collision');seen.add(rel.toLowerCase());}
-  return {files,summary};
+  return {files,summary,entries};
 }
 export async function findMarkerOffsets(file,token=NSS,maxCandidates=64){
   const offsets=[];let carry=Buffer.alloc(0),processed=0;
@@ -125,15 +125,17 @@ export async function recoverReference(extracted,output,expectedRestoredSHA=EXPE
   const written=await streamTokenReplacement(extracted,matches[0].markerOffset,NSS,UNK,{output});
   assert.equal(written.sha256,expectedRestoredSHA,'Reconstructed reference hash changed');assert.equal(await sha256(output),expectedRestoredSHA,'Written reference bytes differ');return {...written,candidateCount:offsets.length,attempts,referenceRecovery:'reconstructed_from_packaged_bytes_against_independent_build_log_hash'};
 }
-export function isProductInput(name){
+export function isProductInput(name,nativeQaIsProduct=false){
   const test=/(?:^|\/)(?:__tests__|__snapshots__)(?:\/|$)|\.(?:test|spec)\.[^/]+$/u.test(name);
   return !test&&(name.startsWith('app/')||name.startsWith('packages/')||name.startsWith('vendor/')||name.startsWith('resources/')||name.startsWith('docs/oss/')||name.startsWith('install/')||
-    (name.startsWith('scripts/')&&!['scripts/native-windows-qa.mjs','scripts/s61-nsis-reinspect.mjs'].includes(name))||
+    (name.startsWith('scripts/')&&name!=='scripts/s61-nsis-reinspect.mjs'&&(nativeQaIsProduct||name!=='scripts/native-windows-qa.mjs'))||
     ['package.json','package-lock.json','.gitmodules','.npmrc','.github/native-windows-qa/Cargo.lock'].includes(name));
 }
 function gitInputs(root){
   const raw=execFileSync('git',['-C',root,'ls-tree','-rz','--full-tree','HEAD'],{encoding:'utf8',maxBuffer:MAX_CAPTURE});
-  return raw.split('\0').filter(Boolean).map(row=>{const tab=row.indexOf('\t');assert(tab>0);const [mode,type,sha]=row.slice(0,tab).split(' '),name=row.slice(tab+1);return {path:name,mode,type,sha};}).filter(x=>isProductInput(x.path)).sort((a,b)=>a.path.localeCompare(b.path));
+  const all=raw.split('\0').filter(Boolean).map(row=>{const tab=row.indexOf('\t');assert(tab>0);const [mode,type,sha]=row.slice(0,tab).split(' '),name=row.slice(tab+1);return {path:name,mode,type,sha};});
+  const nativeQaIsProduct=all.some(row=>row.path==='scripts/prepare-windows-runtime-dlls.mjs');
+  return all.filter(x=>isProductInput(x.path,nativeQaIsProduct)).sort((a,b)=>a.path.localeCompare(b.path));
 }
 export function assertMatchingProductInputs(original,verification){
   assert.equal(JSON.stringify(original),JSON.stringify(verification),'R15→verification product/native inputs changed; package reuse forbidden');
@@ -173,21 +175,76 @@ export async function verifyRecordedFiles(files,base,rows){
     actual.push({path:rel,bytes,sha256:digest});
   }return actual;
 }
-async function verifyResources(root,appDir,output){
-  const base=path.join(root,'app/src-tauri'),config=await smallJson(path.join(base,'tauri.windows.conf.json'));
-  assert(Array.isArray(config.bundle.resources),'Windows resource array required');
-  const candidates=[...await walk(path.join(base,'resources')),...await walk(path.join(root,'docs/oss'))],expected=new Map();
-  for(const pattern of config.bundle.resources){
-    assert(typeof pattern==='string','Reaudit resource schema');
+export function assertConnectorManifest(manifest,runtimes){
+  assert.deepEqual(Object.keys(manifest).sort(),['platform','runtimes','sha256','sourceHash','version'],'Connector manifest schema changed');
+  assert.equal(manifest.version,1);assert.equal(manifest.platform,'win32-x64');assert.equal(manifest.sourceHash,EXPECTED.connectorSHA256);
+  assert.match(manifest.sha256,/^[a-f0-9]{64}$/u,'Connector archive SHA required');assert.deepEqual(manifest.runtimes,runtimes,'Pinned connector runtime inputs changed');
+  return manifest;
+}
+export function assertConnectorEntryEquivalence(original,fresh){
+  validatePackageIndex(original);validatePackageIndex(fresh);
+  assert.deepEqual(original,fresh,'Connector payload entries differ in path/length/full SHA');
+}
+async function connectorFileInventory(files,base){
+  const result=[];
+  for(const file of files)result.push({path:validateRelativePath(path.relative(base,file)),bytes:(await regular(file)).size,sha256:await sha256(file)});
+  return result.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+}
+async function proveConnectorResources(root,appDir,output,tool,preparation){
+  const fresh=path.join(root,'app/src-tauri/resources/desktop-connector'),packaged=path.join(appDir,'resources/desktop-connector');
+  const freshManifest=await smallJson(path.join(fresh,'manifest.json')),packagedManifest=await smallJson(path.join(packaged,'manifest.json'));
+  await save(output,'connector-fresh-manifest.json',freshManifest);await save(output,'connector-packaged-manifest.json',packagedManifest);
+  assertConnectorManifest(freshManifest,preparation.runtimes);assertConnectorManifest(packagedManifest,preparation.runtimes);
+  const freshZip=path.join(fresh,'runtime.zip'),packagedZip=path.join(packaged,'runtime.zip');await regular(freshZip);await regular(packagedZip);
+  const freshZipSHA=await sha256(freshZip),packagedZipSHA=await sha256(packagedZip);
+  await save(output,'connector-container-binding.json',{sourceHash:EXPECTED.connectorSHA256,freshManifestSHA256:await sha256(path.join(fresh,'manifest.json')),packagedManifestSHA256:await sha256(path.join(packaged,'manifest.json')),freshZipSHA256:freshZipSHA,packagedZipSHA256:packagedZipSHA,pinnedRuntimeInputs:preparation.runtimes});
+  assert.equal(freshZipSHA,freshManifest.sha256,'Fresh connector archive digest mismatch');assert.equal(packagedZipSHA,packagedManifest.sha256,'Packaged connector archive digest mismatch');
+  const packagedRoot=path.join(output,'connector-packaged-payload'),freshRoot=path.join(output,'connector-fresh-payload');
+  const packagedPayload=await extract(tool,packagedZip,packagedRoot,output,'connector-packaged');
+  const freshPayload=await extract(tool,freshZip,freshRoot,output,'connector-fresh');
+  const canonicalPaths=entries=>entries.map(entry=>({path:validateRelativePath(entry.Path),directory:entry.Folder==='+'||/^D(?:\s|$)/u.test(entry.Attributes??'')})).sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+  assert.deepEqual(canonicalPaths(packagedPayload.entries),canonicalPaths(freshPayload.entries),'Connector inner archive paths/types differ');
+  const originalEntries=await connectorFileInventory(packagedPayload.files,packagedRoot),freshEntries=await connectorFileInventory(freshPayload.files,freshRoot);
+  await save(output,'connector-packaged-files.json',originalEntries);await save(output,'connector-fresh-files.json',freshEntries);
+  assertConnectorEntryEquivalence(originalEntries,freshEntries);
+  for(const relative of ['runtime/node.exe','runtime/python/python.exe','runtime/tunnel-client.exe','runtime/cloudflared.exe','gateway.mjs','supervisor.mjs','startup.mjs','startup.ps1','startup.vbs','setup/index.html']){
+    const file=path.join(packagedRoot,...relative.split('/'));assert((await regular(file)).size>0,'Required connector runtime/source file empty');
+  }
+  await preparation.validatePlugin3Tree(path.join(packagedRoot,'plugin3'));await preparation.validatePlugin3Tree(path.join(freshRoot,'plugin3'));
+  const proof={sourceHash:EXPECTED.connectorSHA256,pinnedRuntimeInputs:preparation.runtimes,manifestVersion:1,platform:'win32-x64',freshZipSHA256:freshZipSHA,packagedZipSHA256:packagedZipSHA,files:originalEntries.length,exactInnerPathLengthSHA256Equivalence:true,originalOuterPackageBindingRetained:true,containerBytesRewritten:false,archivedCodeExecuted:false,nativeRuntimeAcceptance:'UNVERIFIED'};
+  await save(output,'connector-resource-equivalence.json',proof);return proof;
+}
+export function resolveResourceTargets(resources,candidates,base){
+  assert(resources&&typeof resources==='object','Windows resources array or destination map required');
+  const mapped=!Array.isArray(resources),declarations=mapped?Object.entries(resources):resources.map(pattern=>[pattern,null]),expected=new Map();
+  assert(declarations.length>0,'Nonempty resource contract required');
+  for(const [pattern,destination]of declarations){
+    assert(typeof pattern==='string'&&pattern.length>0,'Resource source pattern required');
+    if(mapped){assert(typeof destination==='string','Resource destination required');if(destination)validateRelativePath(destination);}
+    const directory=mapped&&pattern.endsWith('/'),glob=pattern.includes('*');
     const re=new RegExp('^'+pattern.split(/(\*\*\/|\*\*|\*)/u).map(x=>x==='**/'?'(?:.*/)?':x==='**'?'.*':x==='*'?'[^/]*':x.replace(/[.+?^$\x7b\x7d()|[\]\\]/gu,'\\$&')).join('')+'$');
-    const matched=candidates.filter(file=>re.test(path.relative(base,file).replaceAll('\\','/')));assert(matched.length,'Resource pattern matched nothing: '+pattern);
-    for(const file of matched){const target=path.relative(base,file).replaceAll('\\','/').split('/').map(x=>x==='..'?'_up_':x).join('/');
-      assert(!expected.has(target.toLowerCase()),'Resource target collision');expected.set(target.toLowerCase(),{file,target});
+    const matched=candidates.filter(file=>{const rel=path.relative(base,file).replaceAll('\\','/');return directory?rel.startsWith(pattern):re.test(rel);});
+    assert(matched.length,'Resource pattern matched nothing: '+pattern);
+    for(const file of matched){const rel=path.relative(base,file).replaceAll('\\','/');let target;
+      if(!mapped)target=rel.split('/').map(x=>x==='..'?'_up_':x).join('/');
+      else if(directory)target=path.posix.join(destination,rel.slice(pattern.length));
+      else if(glob||destination.endsWith('/')||destination==='')target=path.posix.join(destination,path.posix.basename(rel));
+      else target=destination;
+      target=validateRelativePath(target);assert(!expected.has(target.toLowerCase()),'Resource target collision');expected.set(target.toLowerCase(),{file,target});
     }
   }
+  return expected;
+}
+export async function verifyResources(root,appDir,output,tool,preparation){
+  const base=path.join(root,'app/src-tauri'),config=await smallJson(path.join(base,'tauri.windows.conf.json'));
+  const candidates=[...await walk(path.join(base,'resources')),...await walk(path.join(root,'docs/oss'))];
+  const expected=resolveResourceTargets(config.bundle.resources,candidates,base);
+  const connectorProof=await proveConnectorResources(root,appDir,output,tool,preparation);
+  const connectorPaths=new Set(['resources/desktop-connector/manifest.json','resources/desktop-connector/runtime.zip']);
   const rows=[];for(const {file,target}of expected.values()){
-    const packaged=path.join(appDir,...target.split('/'));const digest=await sha256(file);assert.equal(await sha256(packaged),digest,'Missing/changed packaged resource: '+target);
-    rows.push({path:target,bytes:(await regular(packaged)).size,sha256:digest});
+    const packaged=path.join(appDir,...target.split('/'));const sourceDigest=await sha256(file),digest=await sha256(packaged);
+    if(!connectorPaths.has(target))assert.equal(digest,sourceDigest,'Missing/changed packaged resource: '+target);
+    rows.push({path:target,bytes:(await regular(packaged)).size,sha256:digest,...(connectorPaths.has(target)?{sourceSHA256:sourceDigest,equivalenceProof:'connector-resource-equivalence.json',exactInnerPathLengthSHA256Equivalence:connectorProof.exactInnerPathLengthSHA256Equivalence}:{})});
   }
   const connector=await smallJson(path.join(appDir,'resources/desktop-connector/manifest.json'));
   assert.equal(connector.platform,'win32-x64');assert.equal(await sha256(path.join(appDir,'resources/desktop-connector/runtime.zip')),connector.sha256);
@@ -247,7 +304,7 @@ export async function runReinspection(config){
     await saveHere('dll-inventory.json',inventory);let reports='';
     for(const file of [exe,...dlls.map(n=>path.join(appDir,n))]){reports+=capture(config.dumpbin,['/DEPENDENTS',file])+'\n';assert(reports.length<=MAX_CAPTURE,'DLL report bound');}
     await writeFile(path.join(output,'dll-dependencies.txt'),reports,{flag:'wx'});
-    const resources=await verifyResources(source,appDir,output),closure=qa.verifyDllImports(qa.parseDllReports(reports),inventory);await saveHere('dll-closure.json',closure);
+    const resources=await verifyResources(source,appDir,output,config.sevenZipExecutable,connectorPreparation),closure=qa.verifyDllImports(qa.parseDllReports(reports),inventory);await saveHere('dll-closure.json',closure);
     const qaConfig=path.join(output,'s61-unsigned-nsis.generated.json');await writeFile(qaConfig,'{"bundle":{"createUpdaterArtifacts":false}}\r\n',{flag:'wx'});
     if(config.qaConfig)assert.deepEqual(await smallJson(config.qaConfig),{bundle:{createUpdaterArtifacts:false}},'Recreated QA configuration differs');
     const proof={artifact:descriptor,installer:{file:path.basename(installer),bytes:(await regular(installer)).size,sha256:await sha256(installer)},sourceSHA:head,sourceTree:tree,verificationSHA:verificationHead,helperSHA256:EXPECTED.helperSHA256,referenceRecovery:recovery.referenceRecovery,executable:binding,resources:resources.length,dlls:dlls.length,cargoLockSHA256:EXPECTED.cargoLockSHA256,windowsConfigSHA256:EXPECTED.windowsConfigSHA256,qaConfigSHA256:await sha256(qaConfig),qaConfigRecreated:true,staticPackageProof:'PASS',installerExecuted:false,compiled:false,nativeAcceptance:'UNVERIFIED',cleanWindowsVM:'UNVERIFIED'};
