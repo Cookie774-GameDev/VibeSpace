@@ -238,6 +238,7 @@ export function BuildYourOwnAIHub({
     if (!open) return;
     let cancelled = false;
     let refreshing = false;
+    let previousJobs = jobs;
     void import('@/lib/ai/models').then(({ syncFoundryModelOptions }) => {
       if (!cancelled) syncFoundryModelOptions(foundryModelOptions(jobs));
     });
@@ -248,11 +249,11 @@ export function BuildYourOwnAIHub({
         const { invoke } = await import('@tauri-apps/api/core');
         const nativeJobs = await invoke<FoundryJob[]>('model_foundry_list_jobs');
         if (!cancelled) {
-          const completedJobId = newlyCompletedJobId(jobs, nativeJobs);
+          const completedJobId = newlyCompletedJobId(previousJobs, nativeJobs);
           if (completedJobId) {
             setRevealJobId(completedJobId);
-            setStep(5);
           }
+          previousJobs = nativeJobs;
           setJobs(nativeJobs);
           saveJobs(window.localStorage, nativeJobs);
           const { syncFoundryModelOptions } = await import('@/lib/ai/models');

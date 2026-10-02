@@ -1,3 +1,4 @@
+import { RlmRuntimeError } from '@/features/context/rlmRuntime';
 import { invoke } from '@tauri-apps/api/core';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { getAllActions } from '@/lib/actions';
@@ -945,6 +946,13 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           // by the provider response boundary even when the answer is only 13 KB.
           const { budget: _internalBudget, ...safeTrace } = trace as Record<string, unknown>;
           return { ...data, trace: safeTrace };
+        }).catch((error: unknown) => {
+          if (!(error instanceof RlmRuntimeError)) throw error;
+          throw new ToolGatewaySemanticError({
+            code: `rlm_${error.code}`,
+            message: 'The bounded context investigation could not complete.',
+            data: { code: error.code, toolInvocations: error.toolInvocations ?? [] },
+          });
         });
       },
     },

@@ -1,3 +1,4 @@
+import { settleUndispatchedCancellation } from '@/lib/ai/undispatchedCancellation';
 /**
  * Runtime listener that bridges the chat composer (subagent A3) to the
  * provider router. The composer dispatches a `jarvis:send` CustomEvent on
@@ -552,12 +553,35 @@ export function createCanonicalProviderEvidenceAuthority(
   });
 }
 
+export function hasExplicitNativeAppAction(
+  text: string,
+  request: Readonly<JarvisRequestEnvelope>,
+  catalog: JarvisActionCatalog,
+): boolean {
+  if (request.interactionMode !== 'agent' || !request.outputContract.allowActionBlocks) return false;
+  const parsed = parseActionBlocks(text);
+  const actions = parsed.segments.filter((segment) => segment.kind === 'action');
+  if (actions.length !== 1) return false;
+  const action = actions[0];
+  if (action.kind !== 'action' || !action.ok) return false;
+  if (REMOVED_VIBESPACE_CLI_ACTION_IDS.has(action.proposal.action_id)) return false;
+  const definition = catalog.resolve(action.proposal.action_id);
+  if (!definition?.exposeToAI || !request.capabilities.actionSchemas?.some(
+    (schema) => schema.id === definition.id && schema.version === definition.version,
+  )) return false;
+  try {
+    definition.validateParameters(action.proposal.params);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isSupersededOpenCodeEnvelopePart(part: Part): boolean {
   return (
     part.kind === 'reasoning' ||
     part.kind === 'tool_call' ||
-    part.kind === 'tool_result' ||
-    part.kind === 'action_proposal'
+    part.kind === 'tool_result'
   );
 }
 
@@ -2458,7 +2482,12 @@ export async function installJarvisKernelRuntimeHost(
       const citedRequest = appendToolGatewayContextCitations(request, contextCitations);
       // Native tool/approval events own actions. Inferring legacy cards here
       // changes a refusal into approval narration whose card is then discarded.
-      const responseRequest = hasNativeTimeline
+      const explicitAppAction = hasNativeTimeline && hasExplicitNativeAppAction(
+        raw.text,
+        citedRequest,
+        input.actionCatalog ?? createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS),
+      );
+      const responseRequest = hasNativeTimeline && !explicitAppAction
         ? {
             ...citedRequest,
             outputContract: { ...citedRequest.outputContract, allowActionBlocks: false },
@@ -7235,10 +7264,7 @@ export function startRuntimeListener(
         host.requestCancellation({ accountId: turn.accountId, runId: turn.run.id });
       canonicalCancellationOwners.set(controller, requestCancellation);
       if (cancellationKey) canonicalCancellations.set(cancellationKey, requestCancellation);
-      if (controller.signal.aborted) {
-        await requestCancellation();
-        throw new DOMException('Canonical run cancelled before dispatch', 'AbortError');
-      }
+      await settleUndispatchedCancellation(host, turn, controller.signal);
     };
     // Hoisted so the catch / finally blocks can include it in their
     // DevConsole entries — defining it inside the try would put it
@@ -7812,12 +7838,12 @@ export function startRuntimeListener(
               capturedAt,
             });
             const boundPlan = await host.bindHiveStackPlan({ plan });
-            controller.signal.throwIfAborted();
+            await settleUndispatchedCancellation(host, turn, controller.signal);
             if (boundPlan.kind === 'account_authority_revoked') {
               throw new Error('kernel_account_authority_revoked');
             }
             await persistRouteDisclosureBeforeProviderUse();
-            controller.signal.throwIfAborted();
+            await settleUndispatchedCancellation(host, turn, controller.signal);
             dispatchKernelSmokeRuntimeStage('hive_workers');
             const releaseLiveRun = bindLiveAgentActivityRun(turn.run.id, chatId, agentActivityId);
             let stackOutcome: Awaited<ReturnType<typeof runStack>>;
@@ -7964,7 +7990,7 @@ export function startRuntimeListener(
             }
             await bindCanonicalCancellation(host, turn);
             await persistRouteDisclosureBeforeProviderUse();
-            controller.signal.throwIfAborted();
+            await settleUndispatchedCancellation(host, turn, controller.signal);
             let response: import('@/lib/jarvis/contracts').JarvisResponseEnvelope;
             const releaseLiveRun = bindLiveAgentActivityRun(turn.run.id, chatId, agentActivityId);
             const projectedQuestionBlockIds = new Set<string>();

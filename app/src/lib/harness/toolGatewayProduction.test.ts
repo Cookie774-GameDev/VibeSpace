@@ -1,3 +1,4 @@
+import { RlmRuntimeError } from '@/features/context/rlmRuntime';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTerminalTranscriptStore } from '@/features/terminals/transcriptStore';
 import { useAuthStore } from '@/stores/auth';
@@ -768,6 +769,30 @@ describe('production tool gateway dependencies', () => {
     expect((result as { trace: Record<string, unknown> }).trace).not.toHaveProperty('budget');
     dispose();
   });
+
+  it.each(['execution_route_unavailable', 'cancelled'] as const)(
+    'preserves safe actual tool receipts on recursive %s errors', async (code) => {
+      const authority = captureToolGatewayAuthorityClaim()!;
+      expect(bindToolGatewayObservedExecutionAuthority('session-1', authority, {
+        executionIdentity: observedIdentity, performance: 'quality',
+      })).toBe(true);
+      const error = new RlmRuntimeError(code, 'private provider payload must not escape');
+      const invocation = Object.freeze({ id: 'run-trace:tool-1', runId: 'run-trace',
+        operation: 'search' as const, depth: 0, startedAt: 10, finishedAt: 12,
+        status: 'completed' as const });
+      error.toolInvocations = Object.freeze([invocation]);
+      const dispose = installToolGatewayRlmContextPort({ execute: vi.fn(async () => { throw error; }) });
+      try {
+        await expect(createProductionToolGatewayDependencies().context.rlm(
+          { operation: 'investigate', query: 'Find mapped source.' },
+          { requestId: 'request-failed-trace', sessionId: 'session-1', messageId: 'message-1',
+            directory: 'C:\\work\\project', mutationApproved: false },
+        )).rejects.toMatchObject({ code: `rlm_${code}`,
+          message: 'The bounded context investigation could not complete.',
+          data: { code, toolInvocations: [invocation] } });
+      } finally { dispose(); }
+    },
+  );
 
   it('preserves the exact empty-first failure receipt as a continuable semantic boundary', async () => {
     const authority = captureToolGatewayAuthorityClaim()!;

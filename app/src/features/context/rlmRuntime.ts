@@ -69,12 +69,23 @@ export interface RlmTraceEvent {
   detail?: string;
 }
 
+export interface RlmToolInvocation {
+  id: string;
+  runId: string;
+  operation: 'search' | 'open' | 'expand';
+  depth: number;
+  startedAt: number;
+  finishedAt?: number;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+}
+
 export interface RlmRuntimeResult extends RlmSynthesis {
   trace: Readonly<{
     mode: 'rlm';
     runId: string;
     wallTimeMs: number;
     events: readonly RlmTraceEvent[];
+    toolInvocations?: readonly Readonly<RlmToolInvocation>[];
     usage: Readonly<{
       subcalls: number;
       toolCalls: number;
@@ -96,6 +107,7 @@ export type RlmRuntimeErrorCode =
   | 'no_evidence';
 
 export class RlmRuntimeError extends Error {
+  toolInvocations?: readonly Readonly<RlmToolInvocation>[];
   constructor(
     readonly code: RlmRuntimeErrorCode,
     message: string = code,
@@ -270,6 +282,20 @@ function retrievalQuery(question: string): string {
     if (/\bcallback\b/iu.test(firstSentence) && !subject.some((word) => /^callback$/iu.test(word))) {
       subject.push('callback');
     }
+    // A proper-name anchor alone loses the requested fact when it precedes
+    // the acronym (for example, "Who owns ...?"). Keep the source attribute
+    // and normalize its verb to the noun used by ordinary records.
+    const factualAttribute = /\b(?:owns|owned|owner)\b/iu.test(firstSentence)
+      ? 'owner'
+      : /\bdepot\b/iu.test(firstSentence) ? 'depot' : undefined;
+    if (factualAttribute) {
+      const focusedSubject = subject.filter((word) =>
+        !/^(?:source|sources|record|records|project|notes)$/iu.test(word));
+      if (!focusedSubject.some((word) => word.toLocaleLowerCase('en-US') === factualAttribute)) {
+        focusedSubject.push(factualAttribute);
+      }
+      return focusedSubject.join(' ');
+    }
     return subject.join(' ');
   }
   const subject = firstSentence.match(/\b(?:in|with)\s+(?:an?\s+)?([A-Za-z-]{5,})[\s\S]*?\bactive\s+([A-Za-z-]{5,})\b/iu);
@@ -382,6 +408,39 @@ export function createRlmRuntime(dependencies: {
     }, budget.maxWallTimeMs);
     const signal = controller.signal;
     const events: RlmTraceEvent[] = [];
+    const toolInvocations: RlmToolInvocation[] = [];
+    const invocationSnapshot = () => Object.freeze(
+      toolInvocations.map((invocation) => Object.freeze({ ...invocation })),
+    );
+    const invokeTool = async <T>(
+      operation: RlmToolInvocation['operation'],
+      invoke: () => Promise<T>,
+    ): Promise<T> => {
+      // Called only by the abortable factory when the real dependency starts.
+      if (signal.aborted) throw abortError(signal, timedOut);
+      const invocation: RlmToolInvocation = {
+        id: `${runId}:tool-${toolInvocations.length + 1}`,
+        runId, operation, depth: 0, startedAt: Date.now(), status: 'running',
+      };
+      toolInvocations.push(invocation);
+      const settle = (status: RlmToolInvocation['status']) => {
+        if (invocation.status !== 'running') return;
+        invocation.status = status;
+        invocation.finishedAt = Date.now();
+      };
+      const onAbort = () => settle('cancelled');
+      signal.addEventListener('abort', onAbort, { once: true });
+      try {
+        const result = await invoke();
+        settle('completed');
+        return result;
+      } catch (error) {
+        settle(signal.aborted ? 'cancelled' : 'failed');
+        throw error;
+      } finally {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
     const usage = { subcalls: 0, toolCalls: 0, openBytes: 0, maxDepthReached: 0 };
     let budgetExhausted = false;
     let abortUnconfirmedError: RlmRuntimeError | undefined;
@@ -403,12 +462,12 @@ export function createRlmRuntime(dependencies: {
       event('root_started', 0, `run=${runId}`);
       usage.toolCalls += 1;
       const found = await abortable(
-        () => dependencies.contextTools.search({
+        () => invokeTool('search', () => dependencies.contextTools.search({
           scope: input.scope,
           query: searchQuery,
           limit: initialSearchLimit,
           signal,
-        }),
+        })),
         signal,
         () => timedOut,
       );
@@ -445,12 +504,12 @@ export function createRlmRuntime(dependencies: {
         // following cleanup, without granting a new path or exceeding the budget.
         const opened = await abortable(
           () => dependencies.contextTools.expand && hasByteBounds && expansionSpace > 0
-            ? dependencies.contextTools.expand({
+            ? invokeTool('expand', () => dependencies.contextTools.expand!({
                 scope: input.scope, pointer: item.pointer, beforeBytes, afterBytes, signal,
-              })
-            : dependencies.contextTools.open({
+              }))
+            : invokeTool('open', () => dependencies.contextTools.open({
                 scope: input.scope, pointer: item.pointer, maxBytes: remaining, signal,
-              }),
+              })),
           signal,
           () => timedOut,
         );
@@ -600,6 +659,7 @@ export function createRlmRuntime(dependencies: {
           runId,
           wallTimeMs: Math.max(0, Date.now() - startedAt),
           events: Object.freeze([...events]),
+          toolInvocations: invocationSnapshot(),
           usage: Object.freeze({ ...usage }),
           budget,
           budgetExhausted,
@@ -618,10 +678,16 @@ export function createRlmRuntime(dependencies: {
         const unconfirmed = abortUnconfirmedError
           ?? (error instanceof RlmRuntimeError && error.code === 'abort_unconfirmed' ? error : undefined)
           ?? (unconfirmedWorker?.status === 'rejected' ? unconfirmedWorker.reason as RlmRuntimeError : undefined);
-        if (unconfirmed) throw unconfirmed;
+        if (unconfirmed) {
+          unconfirmed.toolInvocations = invocationSnapshot();
+          throw unconfirmed;
+        }
         event(timedOut ? 'wall_time_exceeded' : 'cancelled', 0);
-        throw abortError(signal, timedOut);
+        const failure = abortError(signal, timedOut);
+        failure.toolInvocations = invocationSnapshot();
+        throw failure;
       }
+      if (error instanceof RlmRuntimeError) error.toolInvocations = invocationSnapshot();
       throw error;
     } finally {
       clearTimeout(timer);
