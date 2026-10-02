@@ -22,8 +22,6 @@ jobs:
     env:
       PRODUCT_SOURCE_SHA: 4008ea032e7625db77b9fb3c250b2b50c2fe4788
       PRODUCT_SOURCE_TREE: af57b11f40cd13e87e14e393f7bea2b8d90ce344
-      VIBESPACE_CONNECTOR_BUILD_DIR: ${{ runner.temp }}/s61-reinspect-connector
-      VIBESPACE_SIYUAN_CACHE_DIR: ${{ runner.temp }}/s61-reinspect-siyuan
     steps:
       - name: Preserve published bytes
         run: |
@@ -48,6 +46,8 @@ jobs:
           if (Test-Path -LiteralPath $root) { throw 'Fresh output directory required.' }
           New-Item -ItemType Directory -Path $root | Out-Null
           "REINSPECT_ROOT=$root" | Add-Content -LiteralPath $env:GITHUB_ENV
+          "VIBESPACE_CONNECTOR_BUILD_DIR=$(Join-Path $env:RUNNER_TEMP 's61-reinspect-connector')" | Add-Content -LiteralPath $env:GITHUB_ENV
+          "VIBESPACE_SIYUAN_CACHE_DIR=$(Join-Path $env:RUNNER_TEMP 's61-reinspect-siyuan')" | Add-Content -LiteralPath $env:GITHUB_ENV
           $os = Get-CimInstance Win32_OperatingSystem -OperationTimeoutSec 5
           try { $ram = [math]::Floor($os.FreePhysicalMemory / 1024); $commit = [math]::Floor($os.FreeVirtualMemory / 1024) } finally { $os.Dispose() }
           $volumes = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP) | ForEach-Object { [IO.Path]::GetPathRoot($_) } | Sort-Object -Unique
