@@ -30,3 +30,43 @@ it('keeps detailed=false compatible with array callers and exact query ahead of 
 it('does not accept additional or wrong-schema discovery controls', () => {
   for (const args of [{ cursor: 'opaque' }, { page: 1 }, { maxResults: 10 }, { query: 'chat.rename', offset: '0' }]) expect(() => request(args)).toThrow();
 });
+
+it.each(['chat rename', 'rename chat', 'CHAT RENAME', ' chat-rename ', 'chat / rename'])('discovers real registered chat.rename for natural query %s', query => {
+ const result = queryCommandCatalog(actions, { query, details: true });
+ if (Array.isArray(result)) throw new Error('Expected detailed projection');
+ expect(result.items.map(row => row.id)).toContain('chat.rename');
+});
+it('preserves exact-ID priority and the legacy projection', () => {
+ expect(queryCommandCatalog(actions, { query: 'chat.rename' })).toEqual([expect.objectContaining({ id: 'chat.rename' })]);
+});
+it.each(['chat impossible', 'chat schedule', '---'])('does not match merely one token or empty punctuation %s', query => {
+ const result = queryCommandCatalog(actions, { query, details: true });
+ if (Array.isArray(result)) throw new Error('Expected detailed projection');
+ expect(result.items.map(row => row.id)).not.toContain('chat.rename');
+});
+it('preserves pagination metadata after token filtering', () => {
+ const result = queryCommandCatalog(actions, { query: 'chat rename', limit: 0, details: true });
+ if (Array.isArray(result)) throw new Error('Expected detailed projection');
+ expect(result.items).toEqual([]); expect(result.total).toBeGreaterThan(0); expect(result.nextOffset).toBeNull(); expect(result.truncated).toBe(true);
+});
+
+it.each([['rename existing', 'chat.rename'], ['chat existing', 'chat.rename'], ['schedule pause', 'schedule.pause']])('finds all noncontiguous/reordered query tokens %s without guessing an action', (query, id) => {
+ const result = queryCommandCatalog(actions, { query, details: true });
+ if (Array.isArray(result)) throw new Error('Expected detailed projection');
+ expect(result.items.map(row => row.id)).toContain(id);
+});
+it.each(['chat ren', 'ch rename', 'sch pause'])('does not match partial tokens %s', query => {
+ const result = queryCommandCatalog(actions, { query, details: true });
+ if (Array.isArray(result)) throw new Error('Expected detailed projection');
+ expect(result.items.map(row => row.id)).not.toContain(query.startsWith('sch') ? 'schedule.pause' : 'chat.rename');
+});
+it('projects explicit real registered schema metadata without exposing implementation or authority', () => {
+ expect(queryCommandCatalog(actions, { query: 'chat.rename' })).toEqual([{
+  id: 'chat.rename', label: 'Rename chat', description: 'Rename an existing chat by id.', category: 'chat', destructive: false,
+  params: [{ key: 'chatId', type: 'string', required: false }, { key: 'title', type: 'string', required: true }],
+ }]);
+ expect(queryCommandCatalog(actions, { query: 'schedule.pause' })).toEqual([{
+  id: 'schedule.pause', label: 'Pause schedule', description: 'Pause a schedule by marking it cancelled without deleting history.', category: 'schedule', destructive: true,
+  params: [{ key: 'eventId', type: 'string', required: true }],
+ }]);
+});

@@ -9,7 +9,13 @@ export function queryCommandCatalog(actions: readonly ActionDef[], args: Command
   if (args.details !== undefined && typeof args.details !== 'boolean') throw new Error('command_list_details_invalid');
   const query = args.query?.trim().toLocaleLowerCase('en-US');
   const exact = query ? actions.find(action => action.id.toLocaleLowerCase('en-US') === query) : undefined;
-  const filtered = exact ? [exact] : query ? actions.filter(action => [action.id, action.label, action.description].some(value => value?.toLocaleLowerCase('en-US').includes(query))) : actions;
+  const queryTokens = query?.split(/[\s._:/-]+/u).filter(Boolean) ?? [];
+  const filtered = exact ? [exact] : query ? actions.filter(action => {
+    const fields = [action.id, action.label, action.description].map(value => value?.toLocaleLowerCase('en-US') ?? '');
+    if (fields.some(value => value.includes(query))) return true;
+    const words = fields.join(' ').split(/[\s._:/-]+/u);
+    return queryTokens.length > 0 && queryTokens.every(token => words.includes(token));
+  }) : actions;
   const items = filtered.slice(offset, offset + limit).map(({id,label,description,category,destructive,params}) => ({ id,label,description,category,destructive:Boolean(destructive),params:params.map(({key,type,required})=>({key,type,required:Boolean(required)})) }));
   if (args.details !== true) return items;
   const consumed = Math.min(offset + items.length, filtered.length);
