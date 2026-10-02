@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Part } from '@/types/chat';
 import { useAuthStore } from '@/stores/auth';
@@ -13,6 +13,9 @@ vi.mock('@/lib/actions', () => ({
   resolveAction: vi.fn(() => ({ id: 'terminal.run', label: 'Run command' })),
 }));
 vi.mock('@/lib/jarvis/smoke/config', () => ({ isKernelSmokeEnabled: () => true }));
+const expiryRuntime = vi.hoisted(() => ({ expireInstalledJarvisApproval: vi.fn() }));
+vi.mock('@/lib/ai/runtime', () => expiryRuntime);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 const kernelClient = vi.hoisted(() => ({
   getApprovalPresentation: vi.fn(),
   getApprovalStatus: vi.fn(),
@@ -63,6 +66,9 @@ function renderCard(
 describe('ActionApprovalCard canonical adapter', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    expiryRuntime.expireInstalledJarvisApproval.mockImplementation(async ({ approvalId }) => ({
+      approvalId, status: 'pending', expiresAt: Date.now() + 600_000,
+    }));
     useAuthStore.setState({ localUserId: 'account-smoke', cloudSession: null });
     messageRepository.getById.mockResolvedValue({
       id: 'message_1',
@@ -769,5 +775,79 @@ describe('ActionApprovalCard canonical adapter', () => {
     expect(outcomes).toHaveLength(1);
     expect(decide).toHaveBeenCalledOnce();
     expect(execute).toHaveBeenCalledOnce();
+  });
+});
+
+describe('canonical approval absolute expiry recovery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAuthStore.setState({ localUserId: 'account-smoke', cloudSession: null });
+  });
+  const presentation = { actionId: 'schedule.create', expectedEffect: 'Create one schedule.', risk: 'confirm' as const, parameters: [] };
+  it('reopens an already expired approval with verified truthful terminal copy and no action dispatch', async () => {
+    expiryRuntime.expireInstalledJarvisApproval.mockResolvedValue({ approvalId: 'jappr_1', status: 'expired', expiresAt: Date.now() - 1 });
+    renderCard(part('jarvisapproval:jappr_1'), presentation);
+    await screen.findByText(/Approval expired. The action was not run/);
+    expect(screen.queryByRole('button', { name: 'Approve fixed action' })).toBeNull();
+    expect(kernelClient.decideApproval).not.toHaveBeenCalled();
+    expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+    expect(messageRepository.update).not.toHaveBeenCalled();
+  });
+  it('arms the actual absolute deadline and settles only after protected expiry readback', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-02T09:00:00Z'));
+    const expiresAt = Date.now() + 600_000;
+    expiryRuntime.expireInstalledJarvisApproval.mockResolvedValueOnce({ approvalId: 'jappr_1', status: 'pending', expiresAt })
+      .mockResolvedValueOnce({ approvalId: 'jappr_1', status: 'expired', expiresAt });
+    await act(async () => { renderCard(part('jarvisapproval:jappr_1'), presentation); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(599_999); });
+    expect(expiryRuntime.expireInstalledJarvisApproval).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Approve fixed action' })).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(expiryRuntime.expireInstalledJarvisApproval).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/Approval expired. The action was not run/)).toBeTruthy();
+    expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+    expect(kernelClient.decideApproval).not.toHaveBeenCalled();
+  });
+  it('retains fail-closed pending presentation when expiry and protected status cannot be verified', async () => {
+    expiryRuntime.expireInstalledJarvisApproval.mockRejectedValue(new Error('uncertain commit'));
+    kernelClient.getApprovalStatus.mockResolvedValue({ kind: 'unavailable', requestKind: 'approval_status', reason: 'host_unavailable' });
+    renderCard(part('jarvisapproval:jappr_1'), presentation);
+    await screen.findByText(/Approval decision could not be verified/);
+    expect(screen.queryByText(/Approval expired. The action was not run/)).toBeNull();
+    expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+    expect(messageRepository.update).not.toHaveBeenCalled();
+  });
+  it('reconciles a raced denial only from protected status and never submits a replacement decision', async () => {
+    expiryRuntime.expireInstalledJarvisApproval.mockRejectedValue(new Error('raced'));
+    kernelClient.getApprovalStatus.mockResolvedValue({ kind: 'approval_state', accountId: 'account-smoke', approvalId: 'jappr_1', status: 'denied' });
+    renderCard(part('jarvisapproval:jappr_1'), presentation);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve fixed action' })).toBeNull());
+    expect(screen.queryByText(/Approval expired. The action was not run/)).toBeNull();
+    expect(kernelClient.decideApproval).not.toHaveBeenCalled();
+    expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+  });
+  it('disarms the absolute expiry timer when the card is unmounted', async () => {
+    vi.useFakeTimers();
+    const expiresAt = Date.now() + 600_000;
+    expiryRuntime.expireInstalledJarvisApproval.mockResolvedValue({ approvalId: 'jappr_1', status: 'pending', expiresAt });
+    let view!: ReturnType<typeof renderCard>;
+    await act(async () => { view = renderCard(part('jarvisapproval:jappr_1'), presentation); });
+    expect(expiryRuntime.expireInstalledJarvisApproval).toHaveBeenCalledTimes(1);
+    view.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(600_000); });
+    expect(expiryRuntime.expireInstalledJarvisApproval).toHaveBeenCalledTimes(1);
+    expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+  });
+  it('ignores a resolved expiry receipt after the active account changes', async () => {
+    let resolve!: (value: unknown) => void;
+    expiryRuntime.expireInstalledJarvisApproval.mockImplementation(() => new Promise(done => { resolve = done; }));
+    renderCard(part('jarvisapproval:jappr_1'), presentation);
+    await waitFor(() => expect(expiryRuntime.expireInstalledJarvisApproval).toHaveBeenCalledOnce());
+    useAuthStore.setState({ localUserId: 'different-account', cloudSession: null });
+    await act(async () => { resolve({ approvalId: 'jappr_1', status: 'expired', expiresAt: Date.now() - 1 }); });
+    expect(screen.queryByText(/Approval expired. The action was not run/)).toBeNull();
+    expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+    expect(messageRepository.update).not.toHaveBeenCalled();
   });
 });

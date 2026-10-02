@@ -7880,6 +7880,11 @@ export function Composer({
                         <Pause />
                       </Button>
                     </Hint>
+                  ) : stoppedRequest && !hasDraft && chatBackendAffinity?.backend === 'codex' ? (
+                    <span role="status" className="text-xs text-muted-foreground">
+                      Exact resume is unavailable. Use Retry in composer to review a new request;
+                      requests with attachments need manual review.
+                    </span>
                   ) : stoppedRequest && !hasDraft ? (
                     <Hint label="Resume current request">
                       <Button

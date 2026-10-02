@@ -1,3 +1,4 @@
+import { createJarvisActionCatalog, type JarvisRegisteredActionDefinition } from './actions/catalog';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createJarvisDb, type JarvisDexie } from '@/lib/db';
@@ -29,6 +30,8 @@ import type {
 } from './contracts';
 import {
   createJarvisActionLiveEvidenceVerifiers,
+  createJarvisApprovalEngine,
+  createJarvisApprovalBindingSelectors,
   jarvisTerminalHandoffReceiptBrand,
 } from './approvalEngine';
 import type {
@@ -193,6 +196,47 @@ function kernelTurn(): JarvisKernelTurnInput {
     },
   };
 }
+
+function expiryRegistration(
+  overrides: Partial<JarvisRegisteredActionDefinition> = {},
+): JarvisRegisteredActionDefinition {
+  return {
+    id: 'notes.create',
+    version: 1,
+    title: 'Create note',
+    description: 'Creates one note.',
+    inputSchema: {
+      type: 'object',
+      properties: { title: { type: 'string' } },
+      required: ['title'],
+      additionalProperties: false,
+    },
+    outputSchema: { type: 'object', additionalProperties: true },
+    requiredCapabilities: ['capability.notes.write'],
+    requiredEntitlements: ['entitlement.notes'],
+    risk: 'safe-write',
+    approval: 'always',
+    expectedEffect: 'Create one note at the registered target.',
+    exposeToAI: true,
+    executor: { kind: 'builtin', registryActionId: 'notes.create' },
+    credentialBindings: [],
+    validateParameters(input) {
+      if (
+        Object.keys(input).length !== 1 ||
+        typeof input.title !== 'string' ||
+        !input.title.trim()
+      ) {
+        throw new Error('invalid');
+      }
+      return { title: input.title.trim() };
+    },
+    deriveTarget({ params }) {
+      return { kind: 'app_resource', namespace: 'notes', resourceId: String(params.title) };
+    },
+    ...overrides,
+  };
+}
+
 
 describe('createJarvisKernelRuntime primary-host lifecycle', () => {
   let db: JarvisDexie;
@@ -1525,6 +1569,186 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
       status: 'awaiting_approval',
     });
     expect(await db.jarvis_events.count()).toBe(3);
+  });
+
+
+  async function realExpiryFixture(throughResponse = false) {
+    const turn = kernelTurn();
+    const requestId = throughResponse ? turn.attempt.requestId : 'request-real-expiry';
+    const approvalId = 'jappr_real_expiry';
+    let now = NOW;
+    const parentRun: JarvisRun = throughResponse ? turn.run : { ...kernelRun(), status: 'running', updatedAt: NOW - 5 };
+    await db.jarvis_runs.add(toJarvisRunRow(parentRun));
+    if (!throughResponse) {
+    await db.jarvis_events.add(
+      toJarvisEventRow({
+        runId: parentRun.id,
+        seq: 1,
+        idempotencyKey: `provider-start:${requestId}`,
+        type: 'model',
+        status: 'started',
+        title: 'Provider started',
+        safeSummary: 'The protected provider request started.',
+        sourceRefs: [],
+        artifactIds: [],
+        createdAt: NOW - 5,
+        producerSourceEvidence: {
+          schemaVersion: 1,
+          accountId: parentRun.accountId,
+          runId: parentRun.id,
+          requestId,
+          attemptNumber: 1,
+          producerKind: 'provider',
+          producerIdentity: {
+            producerKind: 'provider',
+            providerId: parentRun.model.providerId,
+            modelId: parentRun.model.modelId,
+            modelSnapshotRef: `${parentRun.model.providerId}:${parentRun.model.modelId}`,
+          },
+          resultRef: `jprovider_start:${requestId}`,
+          observedAt: NOW - 5,
+          phase: 'start',
+          state: 'started',
+        },
+      }),
+    );
+
+    } else {
+      await db.chats.add({ id: turn.chatId as ChatId, workspace_id: turn.workspaceId as WorkspaceId,
+        title: 'Expiry timer real response', mode: 'chat', active_agent_ids: [turn.agent.id], created_at: NOW - 20, updated_at: NOW - 20 });
+    }
+    const repositories = createJarvisRepositories(db);
+    const catalog = createJarvisActionCatalog([expiryRegistration({ requiredEntitlements: [] })]);
+    const snapshots = () => ({ capturedAt: NOW - 5,
+      tools: [{ id: 'capability.notes.write', state: 'available' as const, operations: ['execute' as const], evidenceRef: 'expiry-proof', lastVerifiedAt: NOW - 5 }],
+      plugins: [], mcps: [], terminals: [], agents: [],
+      entitlements: { source: 'server' as const, capabilities: [], verifiedAt: NOW - 5, expiresAt: NOW + 1_000_000 } });
+    const execute = vi.fn(async () => ({ kind: 'executor_returned' as const, result: { ok: true as const, summary: 'must not execute' } }));
+    const engine = createJarvisApprovalEngine({ runs: repositories.run, approvals: repositories.approval, catalog,
+      bindingSelectors: createJarvisApprovalBindingSelectors({ catalog,
+        capabilitySnapshots: { getForAccount: async () => snapshots() },
+        entitlementSnapshots: { getForAccount: async () => snapshots().entitlements } }),
+      secretHandles: { validate: vi.fn(async () => ({ valid: true as const })), resolveOnce: vi.fn(async () => 'not used') },
+      executeRegisteredAction: execute, newApprovalId: () => approvalId, now: () => now,
+      canonicalizeJson: JSON.stringify, hashCanonicalJson: async value => 'hash:' + JSON.stringify(value) });
+    let interruptBeforeFinalization = false;
+    let disposeExpiry: (() => void) | undefined;
+    const processed: JarvisResponseEnvelope = { schemaVersion: 1, requestId, runId: parentRun.id,
+      mode: 'direct_answer', displayText: 'Review one note creation.', spokenText: 'Review one note creation.',
+      parts: [{ kind: 'action_proposal', call_id: 'natural-note-create', action_id: 'notes.create', params: { title: 'hello' }, status: 'pending' }],
+      artifactIds: [], sourceRefs: [], provider: turn.model,
+      executionState: { status: 'completed', verifiedBy: 'journal', lastEventSeq: 4 },
+      enforcement: { linted: true, violations: [], repairAttempted: false, repairSucceeded: false, fallbackUsed: false }, completedAt: NOW + 10 };
+    const start = vi.fn(() => ({ receipt: { providerId: turn.model.providerId, modelId: turn.model.modelId,
+      modelSnapshotRef: `${turn.model.providerId}:${turn.model.modelId}`, operations: ['generate'] as const, startedAt: NOW + 5 },
+      response: Promise.resolve({ text: processed.displayText, provider: turn.model, completedAt: NOW + 10,
+        verifiedFacts: { executionState: processed.executionState, modelState: 'authenticated' as const, plugins: [], mcps: [] } }), abortAfterStart: vi.fn() }));
+    const runtime = createJarvisKernelRuntime({ db,
+      artifactEvidenceAuthorities: artifactAuthorities() as never,
+      journal: { allocateRun: vi.fn(), getRun: vi.fn(async () => parentRun) } as never,
+      cancellationDeliveryAuthority: {} as never, abortRegistrationAuthority: { registerIssuedOwner: vi.fn(() => vi.fn()) },
+      actionCatalog: catalog,
+      bindKernelActions: lifecycle => {
+        const capability = engine.bindIssuedLifecycle(lifecycle);
+        return { ...capability, async expire(input) {
+          const approval = await capability.expire!(input);
+          if (interruptBeforeFinalization) throw new Error('fixture interruption after committed expiry');
+          return approval;
+        } };
+      },
+      liveEvidenceVerifiers: { ...unavailableVerifiers(), provider: { state: 'ready', producerKind: 'provider', verifier: { verify: vi.fn(async (value: unknown) => value) } } } as never,
+      prepareProvider: vi.fn(async () => ({ resolveConfiguration: vi.fn(async () => ({ start, dispose: vi.fn() })), dispose: vi.fn() })),
+      processResponse: vi.fn(async () => processed), takeProviderArtifactDrafts: vi.fn(() => []),
+      randomUUID: () => 'real-expiry-runtime', now: () => now,
+      registerApprovalExpiryDisposal: dispose => { disposeExpiry = dispose; } });
+    if (throughResponse) {
+      await runtime.kernel.runInitialTurn({ ...turn, interactionMode: 'agent' });
+    } else {
+    await runtime.kernel.actions.create({ parentRun,
+      attempt: { kind: 'initial', requestId, runId: parentRun.id, attemptNumber: 1 },
+      actionId: 'notes.create', actionVersion: 1, params: { title: 'hello' }, expiresAt: NOW + 60_000 });
+    }
+    const awaiting = fromJarvisRunRow((await db.jarvis_runs.get(parentRun.id))!);
+    if (!throughResponse) {
+    await seedActionResponseCheckpoint({ parentRun: awaiting, requestId, approvalId,
+      actionId: 'notes.create', actionParams: { title: 'hello' }, providerResultState: 'completed' });
+    }
+    return { runtime, engine, execute, parentRun, awaiting, requestId, approvalId,
+      setNow: (value: number) => { now = value; },
+      setInterruption: (value: boolean) => { interruptBeforeFinalization = value; },
+      disposeExpiry: () => disposeExpiry?.(), repositories };
+  }
+
+  it('expires a real response-backed pending approval into a cancelled run without action execution', async () => {
+    const s = await realExpiryFixture(); s.setNow(NOW + 60_000);
+    await expect(s.runtime.kernel.actions.expire!({ parentRun: s.awaiting, approvalId: s.approvalId })).resolves.toMatchObject({ kind: 'committed', value: { status: 'expired' } });
+    expect(fromJarvisApprovalRow((await db.jarvis_approvals.get(s.approvalId))!).status).toBe('expired');
+    expect(fromJarvisRunRow((await db.jarvis_runs.get(s.parentRun.id))!).status).toBe('cancelled');
+    expect((await db.messages.get(`msg_${s.requestId}` as never))?.parts).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'action_proposal', status: 'cancelled' })]));
+    expect(s.execute).not.toHaveBeenCalled();
+  });
+  it('rejects real canonical expiry before the deadline without changing rows or event count', async () => {
+    const s = await realExpiryFixture(); s.setNow(NOW + 59_999);
+    const approval = await db.jarvis_approvals.get(s.approvalId); const run = await db.jarvis_runs.get(s.parentRun.id); const count = await db.jarvis_events.count();
+    await expect(s.runtime.kernel.actions.expire!({ parentRun: s.awaiting, approvalId: s.approvalId })).rejects.toThrow();
+    expect(await db.jarvis_approvals.get(s.approvalId)).toEqual(approval);
+    expect(await db.jarvis_runs.get(s.parentRun.id)).toEqual(run);
+    expect(await db.jarvis_events.count()).toBe(count); expect(s.execute).not.toHaveBeenCalled();
+  });
+  it('rejects tampered stored parameters at expiry without executing or settling the run', async () => {
+    const s = await realExpiryFixture(); s.setNow(NOW + 60_001);
+    await db.jarvis_approvals.update(s.approvalId, { params: { title: 'tampered' } });
+    const count = await db.jarvis_events.count();
+    await expect(s.runtime.kernel.actions.expire!({ parentRun: s.awaiting, approvalId: s.approvalId })).rejects.toThrow();
+    expect(fromJarvisApprovalRow((await db.jarvis_approvals.get(s.approvalId))!).status).toBe('pending');
+    expect(fromJarvisRunRow((await db.jarvis_runs.get(s.parentRun.id))!).status).toBe('awaiting_approval');
+    expect(await db.jarvis_events.count()).toBe(count); expect(s.execute).not.toHaveBeenCalled();
+  });
+  it('rejects a substituted current parent account before any expiry write', async () => {
+    const s = await realExpiryFixture(); s.setNow(NOW + 60_001); const count = await db.jarvis_events.count();
+    await expect(s.runtime.kernel.actions.expire!({ parentRun: { ...s.awaiting, accountId: 'foreign-account' }, approvalId: s.approvalId })).rejects.toThrow();
+    expect(fromJarvisApprovalRow((await db.jarvis_approvals.get(s.approvalId))!).status).toBe('pending');
+    expect(await db.jarvis_events.count()).toBe(count); expect(s.execute).not.toHaveBeenCalled();
+  });
+  it('recovers an interrupted real expiry finalization without a second expiry event', async () => {
+    const s = await realExpiryFixture(); s.setNow(NOW + 60_001);
+    // The real issued capability commits expiry; interrupt before the canonical finalizer.
+    s.setInterruption(true);
+    await expect(s.runtime.kernel.actions.expire!({ parentRun: s.awaiting, approvalId: s.approvalId })).rejects.toThrow();
+    const running = fromJarvisRunRow((await db.jarvis_runs.get(s.parentRun.id))!);
+    expect(running.status).toBe('running');
+    expect(fromJarvisApprovalRow((await db.jarvis_approvals.get(s.approvalId))!).status).toBe('expired');
+    s.setInterruption(false);
+    await expect(s.runtime.kernel.actions.expire!({ parentRun: running, approvalId: s.approvalId })).resolves.toMatchObject({ kind: 'committed', value: { status: 'expired' } });
+    expect(fromJarvisRunRow((await db.jarvis_runs.get(s.parentRun.id))!).status).toBe('cancelled');
+    const events = await db.jarvis_events.where('run_id').equals(s.parentRun.id).toArray();
+    expect(events.filter(event => event.type === 'approval' && event.status === 'expired')).toHaveLength(1);
+    expect(s.execute).not.toHaveBeenCalled();
+  });
+  it('arms the actual response-ready timer and expires only at its absolute deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const s = await realExpiryFixture(true);
+      expect(s.awaiting.status).toBe('awaiting_approval');
+      const deadline = fromJarvisApprovalRow((await db.jarvis_approvals.get(s.approvalId))!).expiresAt;
+      s.setNow(deadline - 1); await vi.advanceTimersByTimeAsync(deadline - NOW - 1);
+      expect(fromJarvisApprovalRow((await db.jarvis_approvals.get(s.approvalId))!).status).toBe('pending');
+      s.setNow(deadline); await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(async () => expect(fromJarvisRunRow((await db.jarvis_runs.get(s.parentRun.id))!).status).toBe('cancelled'));
+      expect(fromJarvisApprovalRow((await db.jarvis_approvals.get(s.approvalId))!).status).toBe('expired');
+      expect(s.execute).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+  it('disposes the armed response-ready expiry timer without deciding or executing the pending action', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const s = await realExpiryFixture(true); const count = await db.jarvis_events.count();
+      const deadline = fromJarvisApprovalRow((await db.jarvis_approvals.get(s.approvalId))!).expiresAt;
+      s.disposeExpiry(); s.setNow(deadline + 1); await vi.advanceTimersByTimeAsync(deadline - NOW + 1);
+      expect(fromJarvisApprovalRow((await db.jarvis_approvals.get(s.approvalId))!).status).toBe('pending');
+      expect(fromJarvisRunRow((await db.jarvis_runs.get(s.parentRun.id))!).status).toBe('awaiting_approval');
+      expect(await db.jarvis_events.count()).toBe(count); expect(s.execute).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 
   it('denies an expired typed-chat approval backed by completed provider response evidence', async () => {

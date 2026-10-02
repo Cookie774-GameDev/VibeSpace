@@ -114,6 +114,10 @@ jobs:
           src/lib/jarvis/promptCompiler.advancedContext.test.ts
           src/lib/harness/commandCatalogQuery.test.ts
           src/lib/harness/toolGatewayProduction.test.ts
+          src/lib/jarvis/approvalEngine.test.ts
+          src/lib/jarvis/kernelRuntime.test.ts
+          src/features/chat/ActionApprovalCard.test.tsx
+          src/features/chat/Composer.resumeReview.test.tsx
 
       - name: Test (vitest)
         run: npm --prefix app run test

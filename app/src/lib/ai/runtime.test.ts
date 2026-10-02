@@ -7828,6 +7828,70 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     });
   }
 
+  it.each([
+    ['chat Off despite automatic On', 'chat-off'],
+    ['automatic On admits all five real tools', 'auto-on'],
+    ['workspace Off without a chat override', 'workspace-off'],
+    ['chat On takes precedence over workspace Off', 'chat-on'],
+  ] as const)('uses trusted installed-kernel provider scope: %s', async (_label, preference) => {
+    const workspaceId = 'workspace-kernel-rlm-admission';
+    const selected = agent('agent_jarvis', 'jarvis', 'Protected Jarvis', true);
+    const harness = kernelRuntimeBindings(selected);
+    const userText = 'Who owns BLUE KITE? Cite the mapped project records.';
+    harness.bindings.getMessages = vi.fn(async () => [{
+      id: 'msg_kernel_user' as MessageId, chat_id: harness.chatId, role: 'user' as const,
+      parts: [{ kind: 'text' as const, text: userText }], created_at: 1, updated_at: 1,
+    }]);
+    const connection = PROVIDER_CONNECTIONS.find(item => item.id === 'opencode-cli')!;
+    mocks.listOpenCodeModels.mockResolvedValue([{ id: 'opencode-go/deepseek-v4-flash-vision-exp', label: 'DeepSeek fixture', variants: ['medium'] }]);
+    rememberLiveOpenCodeProviders([{ id: 'opencode-go', name: 'OpenCode Go', connected: true,
+      models: [{ id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek fixture', variants: ['medium'] }] }]);
+    useAuthStore.setState({ workspaceId: workspaceId as never,
+      chatModelSelection: selectionFromOption(connection.providerId as ProviderId, 'opencode-go/deepseek-v4-flash-vision-exp', connection) });
+    const preferenceStore = await import('@/features/context/rlmPreferenceStore');
+    const scopedOff = preference === 'workspace-off' || preference === 'chat-on';
+    // Only test-local production preference storage; no mocked policy/manifest.
+    localStorage.setItem('vibespace.rlm-preference.v1', JSON.stringify({
+      version: 1, userDefault: true, chats: {},
+      workspaces: scopedOff ? { [workspaceId]: { enabled: false, updatedAt: 1 } } : {},
+      lastRefreshAt: null, lastRoute: null, lastRunStatus: null,
+    }));
+    if (preference === 'chat-off') preferenceStore.setChatRlmEnabled(harness.chatId, false);
+    if (preference === 'chat-on') preferenceStore.setChatRlmEnabled(harness.chatId, true);
+    const database = createJarvisDb(uniqueTestDbName('runtime-kernel-rlm-admission'), TEST_INDEXED_DB);
+    await database.open();
+    await database.chats.add({ id: harness.chatId, workspace_id: workspaceId as never,
+      title: 'Kernel RLM admission', mode: 'chat', active_agent_ids: [selected.id], created_at: 1, updated_at: 1 });
+    mocks.chatGetById.mockResolvedValue(await database.chats.get(harness.chatId));
+    mocks.runAgent.mockImplementation(async input => ({ text: 'Fixture provider response.',
+      usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 }, provider: input.agent.model.provider, model: input.agent.model.model }));
+    const disposeHost = await installKernelTestHost(database, 'kernel-rlm-admission');
+    const stop = startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() });
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId: harness.chatId, text: userText, interactionMode: 'agent',
+        reasoningPreference: { mode: 'normal', effortOverride: 'medium' },
+        runtimeSettings: { effort: 'medium', performance: 'quality' },
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce(), { timeout: 5_000 });
+      const request = mocks.runAgent.mock.calls[0]![0];
+      // Genuine dispatch produced by the installed host's protected provider factory.
+      expect(request).toMatchObject({ chatId: harness.chatId, workspaceId,
+        connectionId: 'opencode-cli', protectedAttempt: { accountId: 'runtime-test-account' } });
+      const enabled = preference === 'auto-on' || preference === 'chat-on';
+      const names = ['search', 'open', 'expand', 'address', 'trace'].map(op => `vibespace_context_${op}`);
+      expect(names.filter(name => request.tools?.[name] === true)).toHaveLength(enabled ? 5 : 0);
+      expect(request.tools?.vibespace_context).toBe(enabled);
+      await vi.waitFor(async () => {
+        const run = await database.jarvis_runs.where('chat_id').equals(harness.chatId).first();
+        expect(run?.status).toBe('completed');
+      }, { timeout: 5_000 });
+    } finally {
+      stop(); await stop.whenIdle(); disposeHost();
+      localStorage.removeItem('vibespace.rlm-preference.v1');
+      database.close(); await database.delete();
+    }
+  }, 15_000);
   it.each(['approve', 'deny', 'cancel'] as const)('keeps the canonical tool request in its owning chat through %s', async (choice) => {
     const selected = agent('agent_jarvis', 'jarvis', 'Protected Jarvis', true);
     const harness = kernelRuntimeBindings(selected);

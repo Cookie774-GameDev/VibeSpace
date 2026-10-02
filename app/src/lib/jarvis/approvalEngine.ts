@@ -134,6 +134,7 @@ export type JarvisApprovalErrorCode =
   | 'capability_changed'
   | 'entitlement_changed'
   | 'expired'
+  | 'not_expired'
   | 'not_pending'
   | 'not_approved'
   | 'already_consumed'
@@ -202,6 +203,8 @@ export type ExecuteJarvisApprovalInput = {
 };
 
 export interface JarvisApprovalActionCapability {
+  /** @internal Deadline settlement; never a public approve/deny decision. */
+  expire?(input: { parentRun: JarvisRun; approvalId: string }): Promise<JarvisApprovalV1>;
   create(input: CreateJarvisApprovalInput): Promise<JarvisApprovalV1>;
   decide(input: {
     parentRun: JarvisRun;
@@ -216,6 +219,8 @@ export interface JarvisApprovalActionCapability {
 
 /** Narrow feature-facing contract. Task 16B supplies the sole production implementation. */
 export interface JarvisKernelActionPort {
+  /** @internal Deadline settlement; never a public approve/deny decision. */
+  expire?(input: { parentRun: JarvisRun; approvalId: string }): Promise<JarvisAuthorityBoundResult<JarvisApprovalV1>>;
   create(
     input: Readonly<CreateJarvisApprovalInput>,
   ): Promise<JarvisAuthorityBoundResult<JarvisApprovalV1>>;
@@ -249,7 +254,7 @@ export interface JarvisIssuedApprovalLifecycle {
   ): Promise<JarvisAuthorityBoundResult<JarvisApprovalV1>>;
   decidePreparedApproval(input: {
     approvalId: string;
-    decision: 'approve' | 'deny';
+    decision: 'approve' | 'deny' | 'expire';
   }): Promise<JarvisAuthorityBoundResult<JarvisApprovalV1>>;
   claimApprovedExecution(input: {
     approvalId: string;
@@ -2031,6 +2036,21 @@ export function createJarvisApprovalEngine(
               decision: decideInput.decision,
             }),
           );
+        },
+        async expire(expireInput: { parentRun: JarvisRun; approvalId: string }): Promise<JarvisApprovalV1> {
+          assertExactOwnKeys(expireInput, ['parentRun', 'approvalId']);
+          assertLive(state);
+          await loadCanonicalParent(lifecycle, expireInput.parentRun);
+          const approval = await input.approvals.getById(lifecycle.accountId, expireInput.approvalId);
+          if (!approval || (approval.status !== 'pending' && approval.status !== 'expired')) approvalError('not_pending');
+          await validateStoredApproval(lifecycle, approval, { allowExpired: true });
+          if (input.now() < approval.expiresAt) approvalError('not_expired');
+          assertLive(state);
+          if (approval.status === 'expired') return approval;
+          return committed(await lifecycle.decidePreparedApproval({
+            approvalId: approval.id,
+            decision: 'expire',
+          }));
         },
         execute(
           executeInput: ExecuteJarvisApprovalInput,

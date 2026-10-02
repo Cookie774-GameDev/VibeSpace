@@ -130,6 +130,8 @@ default = ["jarvis-voice"]
 jarvis-voice = ["dep:piper-rs"]
 
 [patch.crates-io]
+# Backport upstream missing-listener guard using a tracked, checksum-verified crate.
+tauri = { path = "vendor/tauri-2.11.5" }
 espeak-rs-sys = { path = "vendor/espeak-rs-sys-0.2.0" }
 dirs = { path = "vendor/dirs-local-6.0.0" }
 # Backport upstream #1215 without changing Tao's public API or other platforms.

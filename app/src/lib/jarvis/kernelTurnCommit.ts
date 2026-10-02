@@ -165,7 +165,7 @@ export type FinalizeActionResponseInput = Readonly<{
   approvalId: string;
   messageId: string;
   accountBinding: JarvisKernelAccountBinding;
-  outcome: 'completed' | 'degraded' | 'denied' | 'handoff';
+  outcome: 'completed' | 'degraded' | 'denied' | 'expired' | 'handoff';
   resultRef: string;
   result?: ActionResult;
   artifacts?: readonly JarvisArtifactV1[];
@@ -321,7 +321,7 @@ function assertFinalizeActionResponseInput(input: FinalizeActionResponseInput): 
     !Number.isSafeInteger(input.attemptNumber) ||
     input.attemptNumber < 1 ||
     !Number.isFinite(input.completedAt) ||
-    !['completed', 'degraded', 'denied', 'handoff'].includes(input.outcome) ||
+    !['completed', 'degraded', 'denied', 'expired', 'handoff'].includes(input.outcome) ||
     (input.result !== undefined && input.outcome !== 'completed')
   ) {
     throw new TypeError('action_response_finalize_input_invalid');
@@ -759,7 +759,7 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
           const partStatus =
             input.outcome === 'completed'
               ? ('success' as const)
-              : input.outcome === 'denied'
+              : (input.outcome === 'denied' || input.outcome === 'expired')
                 ? ('cancelled' as const)
                 : input.outcome === 'handoff'
                   ? ('queued' as const)
@@ -874,7 +874,7 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
             ? ('awaiting_approval' as const)
             : input.outcome === 'completed'
               ? ('completed' as const)
-              : input.outcome === 'denied'
+              : (input.outcome === 'denied' || input.outcome === 'expired')
                 ? ('cancelled' as const)
                 : input.outcome === 'handoff'
                   ? ('running' as const)
@@ -915,7 +915,7 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
                 : terminalStatus === 'completed'
                   ? 'Action completed'
                   : terminalStatus === 'cancelled'
-                    ? 'Action denied'
+                    ? (input.outcome === 'expired' ? 'Action approval expired' : 'Action denied')
                     : terminalStatus === 'awaiting_approval'
                       ? 'Batch action completed'
                       : 'Action ended with degraded state',
@@ -925,7 +925,9 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
                 : terminalStatus === 'completed'
                   ? 'The approved protected action completed.'
                   : terminalStatus === 'cancelled'
-                    ? 'The protected action was denied and did not execute.'
+                    ? (input.outcome === 'expired'
+                        ? 'The approval deadline passed; the protected action did not execute.'
+                        : 'The protected action was denied and did not execute.')
                     : terminalStatus === 'awaiting_approval'
                       ? 'The approved file action completed; remaining batch approvals are still pending.'
                       : 'The approved protected action did not fully complete.',

@@ -1,3 +1,4 @@
+import type { JarvisApprovalV1 } from '@/lib/jarvis/contracts';
 import { settleUndispatchedCancellation } from '@/lib/ai/undispatchedCancellation';
 /**
  * Runtime listener that bridges the chat composer (subagent A3) to the
@@ -656,6 +657,10 @@ export type JarvisKernelRuntimeHostInstallInput = Readonly<{
   now?: () => number;
 }>;
 
+type InstalledApprovalExpiryState = Readonly<{
+  approvalId: string; status: JarvisApprovalV1['status']; expiresAt: number;
+}>;
+
 type InstalledJarvisKernelRuntimeHost = Readonly<{
   journal: Pick<JarvisExecutionJournal, 'allocateRun' | 'getRun'>;
   capabilitySnapshots: JarvisCapabilitySnapshotProvider;
@@ -670,6 +675,7 @@ type InstalledJarvisKernelRuntimeHost = Readonly<{
     input: JarvisRegisteredActionDispatchInput,
   ): Promise<JarvisRegisteredActionDispatchOutcome>;
   handleClientRequest(request: KernelClientRequestV1): Promise<KernelClientResponseV1>;
+  expireApproval(input: { accountId: string; approvalId: string }): Promise<InstalledApprovalExpiryState>;
   runToolGatewayAction(input: ToolGatewayActionRequest): Promise<JarvisCanonicalActionExecutionResult>;
   runInitialTurn(
     input: Readonly<JarvisKernelTurnInput>,
@@ -1693,6 +1699,7 @@ export async function installJarvisKernelRuntimeHost(
     hive: Object.freeze({ state: 'ready' as const, verifier: hiveVerifier }),
   });
 
+  let disposeCanonicalApprovalExpiry: (() => void) | undefined;
   const composition: JarvisKernelRuntimeComposition = kernelModule.createJarvisKernelRuntime({
     db: input.db,
     ...(input.actionCatalog === undefined ? {} : { actionCatalog: input.actionCatalog }),
@@ -1701,6 +1708,7 @@ export async function installJarvisKernelRuntimeHost(
     cancellationDeliveryAuthority: abortRegistry.cancellationDeliveryAuthority,
     abortRegistrationAuthority: abortRegistry.registrationAuthority,
     bindKernelActions: input.bindKernelActions,
+    registerApprovalExpiryDisposal: (dispose) => { disposeCanonicalApprovalExpiry = dispose; },
     ...(input.pluginArtifacts === undefined
       ? {}
       : { pluginArtifactResults: input.pluginArtifacts }),
@@ -2053,6 +2061,8 @@ export async function installJarvisKernelRuntimeHost(
                     providerInput.interactionMode,
                     providerInput.messages,
                     {
+                      chatId: providerChatId,
+                      workspaceId: providerInput.workspaceId,
                       explicitReadRoot: Boolean(explicitReadRoot),
                     },
                   ),
@@ -2770,6 +2780,23 @@ export async function installJarvisKernelRuntimeHost(
         result: { ok: false, error: 'Registered action dispatch is unavailable.' },
       };
     },
+    async expireApproval(request) {
+      if (disposed) throw new Error('jarvis_kernel_host_disposed');
+      const approval = await repositories.approval.getById(request.accountId, request.approvalId);
+      if (!approval || approval.id !== request.approvalId) throw new Error('approval_expiry_scope_unavailable');
+      const parentRun = await repositories.run.getById(request.accountId, approval.runId);
+      if (!parentRun) throw new Error('approval_expiry_scope_unavailable');
+      if ((approval.status === 'pending' && approval.expiresAt <= now()) ||
+          (approval.status === 'expired' && parentRun.status === 'running')) {
+        if (toolActionBroker.owns(request.accountId, approval.id) || !composition.kernel.actions.expire)
+          throw new Error('approval_expiry_capability_unavailable');
+        const expired = await composition.kernel.actions.expire({ parentRun, approvalId: approval.id });
+        if (expired.kind !== 'committed' || expired.value.status !== 'expired')
+          throw new Error('approval_expiry_settlement_unavailable');
+        return { approvalId: approval.id, status: expired.value.status, expiresAt: approval.expiresAt };
+      }
+      return { approvalId: approval.id, status: approval.status, expiresAt: approval.expiresAt };
+    },
     async handleClientRequest(request) {
       if (disposed) throw new Error('jarvis_kernel_host_disposed');
       const unavailable = (): KernelClientResponseV1 => ({
@@ -3004,6 +3031,7 @@ export async function installJarvisKernelRuntimeHost(
       if (disposed) return;
       disposed = true;
       toolActionBroker.dispose();
+      disposeCanonicalApprovalExpiry?.();
       const retiredScopes = [...activeTurnScopes.values()];
       activeTurnScopes.clear();
       for (const scope of retiredScopes)
@@ -3049,6 +3077,15 @@ export async function handleInstalledJarvisKernelClientRequest(
     };
   }
   return host.handleClientRequest(request);
+}
+
+/** @internal Absolute expiry and reload recovery remain in the protected issued kernel. */
+export function expireInstalledJarvisApproval(input: {
+  accountId: string; approvalId: string;
+}): Promise<InstalledApprovalExpiryState> {
+  const host = installedJarvisKernelRuntimeHost;
+  if (!host) throw new Error('jarvis_kernel_host_not_installed');
+  return host.expireApproval(input);
 }
 
 /** Tool Gateway entrypoint; canonical run/attempt lookup remains inside the protected host. */

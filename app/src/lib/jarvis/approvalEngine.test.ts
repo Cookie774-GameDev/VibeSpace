@@ -2972,3 +2972,72 @@ it('creates only a pending approval for the actual registered local schedule wit
   });
   expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
 });
+
+describe('issued approval expiry capability', () => {
+  async function pendingExpiry(expiresAt = now) {
+    const setup = await approvedRequestFixture();
+    const approval = { ...setup.approval, status: 'pending' as const, decidedAt: undefined, expiresAt };
+    setup.approvals.set(approval.id, approval);
+    const decidePreparedApproval = vi.fn(async (_input: { decision: 'approve' | 'deny' | 'expire' }) => ({
+      kind: 'committed' as const, value: { ...approval, status: 'expired' as const, decidedAt: now },
+    }));
+    const issued = lifecycle({ decidePreparedApproval });
+    return { ...setup, approval, decidePreparedApproval, issued,
+      capability: setup.engine.bindIssuedLifecycle(issued) };
+  }
+  it('commits exact expiry at the absolute deadline without any executor or secret resolution', async () => {
+    const s = await pendingExpiry();
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).resolves.toMatchObject({ status: 'expired' });
+    expect(s.decidePreparedApproval).toHaveBeenCalledExactlyOnceWith({ approvalId: s.approval.id, decision: 'expire' });
+    expect(s.executeRegisteredAction).not.toHaveBeenCalled();
+    expect(s.secretHandles.resolveOnce).not.toHaveBeenCalled();
+  });
+  it('rejects a premature expiry without lifecycle mutation', async () => {
+    const s = await pendingExpiry(now + 1);
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'not_expired'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('preserves parameter integrity checks after the deadline', async () => {
+    const s = await pendingExpiry();
+    s.approvals.set(s.approval.id, { ...s.approval, params: { title: 'tampered' } });
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'params_changed'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('rejects another request binding without lifecycle mutation', async () => {
+    const s = await pendingExpiry();
+    s.approvals.set(s.approval.id, { ...s.approval, requestId: 'foreign-request' });
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'run_scope_mismatch'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('cannot expire an approval already consumed by the decision race', async () => {
+    const s = await pendingExpiry();
+    s.approvals.set(s.approval.id, { ...s.approval, status: 'consumed', decidedAt: now, consumedAt: now });
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'not_pending'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('keeps late public Approve rejected and never reinterprets it as expiry or denial', async () => {
+    const s = await pendingExpiry();
+    await expect(s.capability.decide({ parentRun: s.run, approvalId: s.approval.id, decision: 'approve' })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'expired'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('recovers the same already-expired approval without writing another expiry decision', async () => {
+    const s = await pendingExpiry();
+    s.approvals.set(s.approval.id, { ...s.approval, status: 'expired', decidedAt: now });
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).resolves.toMatchObject({ id: s.approval.id, status: 'expired' });
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+    expect(s.executeRegisteredAction).not.toHaveBeenCalled();
+  });
+  it('does not recover an expired approval whose parameters changed', async () => {
+    const s = await pendingExpiry();
+    s.approvals.set(s.approval.id, { ...s.approval, status: 'expired', decidedAt: now, params: { title: 'changed' } });
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'params_changed'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('rejects revoked lifecycle authority before expiry settlement', async () => {
+    const s = await pendingExpiry();
+    s.issued.dispose();
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toBeDefined();
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+    expect(s.executeRegisteredAction).not.toHaveBeenCalled();
+  });
+});
