@@ -216,4 +216,26 @@ mod tests {
     #[test] fn same_version_different_binary_certificate_rejected() {assert!(verify_binary_certificate(&"a".repeat(64),&certificate_args(false),false).is_err());}
     #[test] fn changed_feature_or_route_argv_rejected() {let mut args=certificate_args(false);args.push("features.apps=true".into());assert!(verify_binary_certificate(policy::PINNED_RUNTIME_SHA,&args,false).is_err());}
     #[test] fn changed_receipt_certificate_rejected() {assert!(verify_binary_certificate_bytes(policy::PINNED_RUNTIME_SHA,&certificate_args(false),false,b"{}").is_err());}
+    #[test] fn rejected_legacy_openai_override_cannot_reenter_certified_argv() {
+        for fast in [false,true] {
+            let mut args=certificate_args(fast);
+            let sentinel=args.pop().expect("stdin sentinel");
+            args.extend(["-c".into(),"model_providers.openai.request_max_retries=0".into(),
+                "-c".into(),"model_providers.openai.stream_max_retries=0".into(),sentinel]);
+            assert!(verify_binary_certificate(policy::PINNED_RUNTIME_SHA,&args,fast).is_err());
+        }
+    }
+    #[test] fn revised_argv_retains_original_tool_proof_and_pending_native_scope() {
+        let certificate:Value=serde_json::from_slice(include_bytes!("codex_rlm_certificate.json")).unwrap();
+        assert_eq!(certificate["policyRevision"],"reserved-openai-override-removal");
+        assert_eq!(certificate["currentPolicyStartupVerified"],false);
+        assert_eq!(certificate["authenticatedModelControlsVerified"],false);
+        assert_eq!(certificate["controls"].as_array().unwrap().len(),9);
+        for fast in [false,true] {
+            let args=certificate_args(fast);
+            for value in certificate["commonToolPolicy"].as_array().unwrap() {
+                assert!(args.iter().any(|arg|Some(arg.as_str())==value.as_str()));
+            }
+        }
+    }
 }

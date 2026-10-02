@@ -4,9 +4,9 @@
 use std::path::{Path, PathBuf};
 // CERTIFICATE_PINS_BEGIN
 pub const PINNED_RUNTIME_SHA:&str="fcd5eafefb4ff4a607f244e099e0974f66e17966b6ffda6948de2ef3a7a79530";
-pub const BINARY_CONFIG_CERTIFICATE_SHA:&str="77fab9f37813598bf35805e66730dccae940413312f9dfce9752f197b468b3f9";
-pub const STANDARD_ARGV_SHA:&str="e79a80e474b4fd0e35c0b5860738d13254a5da9deb324101176ce1f8a91e1501";
-pub const PRIORITY_ARGV_SHA:&str="cb6891db8f3c6a804236730bcbbabd21c24bc28cec978e13d3827bfae0ba3bc4";
+pub const BINARY_CONFIG_CERTIFICATE_SHA:&str="679dcd5829f8f1b0a14a1c0a3bae5661c0eceece8e0945a40ba7ac15c1724b71";
+pub const STANDARD_ARGV_SHA:&str="e4d0f6dd2020de2cad1a9a72f67669c0198e585360171875a0609cce62c2b1da";
+pub const PRIORITY_ARGV_SHA:&str="03754b95a73782a5a31f8fc83376a1fb616e016076cf80e96244fd6c8f4a0560";
 // CERTIFICATE_PINS_END
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,7 +80,8 @@ pub fn authorize(parent: &Authority, child_proof: &Authority, request: &ChildReq
         "model_provider=\"openai\"", "forced_login_method=\"chatgpt\"",
         "approval_policy=\"never\"", "model_reasoning_effort=\"low\"",
         "web_search=\"disabled\"", "project_doc_max_bytes=0", "mcp_servers={}",
-        "model_providers.openai.request_max_retries=0", "model_providers.openai.stream_max_retries=0",
+        // Codex 0.159.2 rejects reserved built-in IDs in model_providers.
+        // Keep the built-in subscription route; retries inherit its defaults.
     ] { args.extend(["-c".into(), config.into()]); }
     if request.fast { args.extend(["-c".into(), "service_tier=\"priority\"".into()]); }
     for feature in [
@@ -125,6 +126,36 @@ mod tests {
     #[test] fn fast_priority() { let p=authority(); let mut r=request(); r.fast=true;
         assert!(authorize(&p,&p,&r).unwrap().contains(&"service_tier=\"priority\"".into())); }
     #[test] fn no_standard_tier_override() { let p=authority(); assert!(!authorize(&p,&p,&request()).unwrap().iter().any(|a| a.starts_with("service_tier"))); }
+    #[test] fn first_party_subscription_config_has_no_reserved_provider_entries() {
+        let p=authority();
+        for fast in [false,true] {
+            let mut r=request();r.fast=fast;
+            let args=authorize(&p,&p,&r).unwrap();
+            let config:Vec<_>=args.windows(2).filter(|pair|pair[0]=="-c").map(|pair|pair[1].as_str()).collect();
+            assert!(config.contains(&"model_provider=\"openai\""));
+            assert!(config.contains(&"forced_login_method=\"chatgpt\""));
+            assert!(config.contains(&"model_reasoning_effort=\"low\""));
+            assert!(config.contains(&"mcp_servers={}"));
+            // The actual pinned ConfigToml deserializer rejects any built-in
+            // openai table before provider catalog merging or prompt reading.
+            assert!(!config.iter().any(|value|value.starts_with("model_providers.")));
+            assert_eq!(config.iter().filter(|value|value.starts_with("service_tier=")).count(),usize::from(fast));
+            assert!(args.windows(2).any(|pair|pair==["--model","gpt-6-luna"]));
+            assert!(args.windows(2).any(|pair|pair==["--sandbox","read-only"]));
+        }
+    }
+    #[test] fn revised_config_keeps_every_tool_disable_and_stdin_sentinel() {
+        let p=authority();let args=authorize(&p,&p,&request()).unwrap();
+        assert_eq!(args.last().map(String::as_str),Some("-"));
+        assert_eq!(args.iter().filter(|value|value.starts_with("features.")).count(),15);
+        for value in args.iter().filter(|value|value.starts_with("features.")) {
+            assert!(value.ends_with("=false"));
+            assert!(args.windows(2).any(|pair|pair[0]=="-c"&&pair[1]==*value));
+        }
+        for flag in ["--ignore-user-config","--ephemeral","--json","--skip-git-repo-check"] {
+            assert!(args.iter().any(|value|value==flag));
+        }
+    }
     #[test] fn binary_controls_not_auth_authority() { let mut p=authority();p.authenticated_profile_verified=false;assert!(authorize(&p,&p,&request()).is_err()); }
     #[test] fn same_unique_account_required() { let p=authority();let mut c=p.clone();c.account_hash="c".repeat(64);assert!(authorize(&p,&c,&request()).is_err()); }
     #[test] fn missing_unique_account_rejected() { let mut p=authority();p.account_hash.clear();assert!(authorize(&p,&p,&request()).is_err()); }

@@ -156,7 +156,7 @@ jobs:
           path: work/native-windows-qa/artifact/
           if-no-files-found: error
           retention-days: 3
-          compression-level: 0
+          compression-level: 6
           # Only the explicitly staged verified payload is included; preserve its closure.
           include-hidden-files: true
 

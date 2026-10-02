@@ -31,14 +31,21 @@
     "features.default_mode_request_user_input=false"
   ],
   "policyArgvHashes": {
-    "standard": "e79a80e474b4fd0e35c0b5860738d13254a5da9deb324101176ce1f8a91e1501",
-    "priority": "cb6891db8f3c6a804236730bcbbabd21c24bc28cec978e13d3827bfae0ba3bc4"
+    "standard": "e4d0f6dd2020de2cad1a9a72f67669c0198e585360171875a0609cce62c2b1da",
+    "priority": "03754b95a73782a5a31f8fc83376a1fb616e016076cf80e96244fd6c8f4a0560"
   },
   "environmentMode": "clear-allowlist-native-os-and-same-auth-home",
   "productionAuthRoute": "forced ChatGPT; checked separately by actual account/read equality",
   "positiveControlScope": "Synthetic readonly MCP enabled only for fixture to prove actual host handler; production MCP disabled",
   "authenticatedModelControlsVerified": false,
   "nativeModelAcceptance": "pending",
+  "policyRevision": "reserved-openai-override-removal",
+  "previousCertificateSha256": "77fab9f37813598bf35805e66730dccae940413312f9dfce9752f197b468b3f9",
+  "policyChange": "Remove only the two rejected model_providers.openai retry overrides; common tool policy unchanged",
+  "startupRejectionReceiptSha256": "62696933c176373ea918285110322bf6edeb721422dab02da5ab49563df5c89c",
+  "currentPolicyStartupVerified": false,
+  "networkRetryPolicy": "Inherited built-in OpenAI defaults; native timeout and containment bound the process. Zero first-party retries are not certified",
+  "requiredNativeVerification": "Updated binary/certificate + same-account binding; no-turn must reach empty-prompt exit, then authenticated nonce and negative controls",
   "controls": [
     {
       "name": "positive-mcp-plain",
