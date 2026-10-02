@@ -4,8 +4,8 @@ on:
   push:
     branches: [codex/s61-chat-context-20261002-0411]
 concurrency:
-  group: s61-owned-source-verification
-  cancel-in-progress: true
+  group: s61-owned-source-verification-${{ github.sha }}
+  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
@@ -38,6 +38,7 @@ jobs:
         run: >-
           npm --prefix app run test --
           src/lib/ai/runtime.test.ts
+          src/features/chat/Composer.undoDraft.test.tsx
           src/lib/ai/runtime.contextAdvanced.test.ts
           src/lib/ai/runtime.nativeAppAction.test.ts
           src/lib/ai/adapters/codexPersistent.contextTool.test.ts
@@ -63,6 +64,8 @@ jobs:
 
   composer-regression:
     name: Owned Composer red and green regression
+    needs: windows-inputs
+    if: needs.windows-inputs.outputs.composer_original == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -104,6 +107,8 @@ jobs:
       cargo_lock: ${{ steps.inputs.outputs.cargo_lock }}
       windows_config: ${{ steps.inputs.outputs.windows_config }}
       connector_source: ${{ steps.inputs.outputs.connector_source }}
+      native_changed: ${{ steps.inputs.outputs.native_changed }}
+      composer_original: ${{ steps.inputs.outputs.composer_original }}
     steps:
       - name: Preserve published blob bytes
         shell: pwsh
@@ -113,6 +118,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 22
@@ -122,10 +128,26 @@ jobs:
         run: |
           if ((git rev-parse HEAD) -cne '${{ github.sha }}') { throw 'Published source mismatch.' }
           node --input-type=module -e 'import fs from "node:fs"; import crypto from "node:crypto"; import {fingerprint} from "./scripts/prepare-desktop-connector.mjs"; const h=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex"); fs.appendFileSync(process.env.GITHUB_OUTPUT,"cargo_lock="+h(".github/native-windows-qa/Cargo.lock")+"\nwindows_config="+h("app/src-tauri/tauri.windows.conf.json")+"\nconnector_source="+await fingerprint()+"\n");'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $previous = '${{ github.event.before }}'
+          $nativeChanged = $true
+          if ($previous -cmatch '^[a-f0-9]{40}$' -and $previous -cne ('0' * 40)) {
+            $changed = @(git diff --name-only $previous '${{ github.sha }}')
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot prove changed build inputs.' }
+            $nativeChanged = @($changed | Where-Object {
+              $_ -notmatch '^app/src/' -and
+              $_ -cne '.github/workflows/s61-owned-source.yml' -and
+              $_ -notmatch '^work/sol61-mission-20261001-S61/'
+            }).Count -gt 0
+          }
+          "native_changed=$($nativeChanged.ToString().ToLowerInvariant())" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+          node --input-type=module -e 'import fs from "node:fs"; import crypto from "node:crypto"; const canonical=fs.readFileSync("app/src/features/chat/Composer.tsx","utf8").replace(/\r\n/g,"\n"); const original=crypto.createHash("sha256").update(canonical).digest("hex")==="87eac381c47994d1f1a2bf328e1ffcecaf1d64c5ca8b2a68055e6a070946d2ba"; fs.appendFileSync(process.env.GITHUB_OUTPUT,"composer_original="+original+"\n");'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   native-windows:
     name: Matching native Windows debug build
     needs: windows-inputs
+    if: needs.windows-inputs.outputs.native_changed == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/native-windows-qa.yml
@@ -137,6 +159,8 @@ jobs:
 
   rust:
     name: Rust (cargo check)
+    needs: windows-inputs
+    if: needs.windows-inputs.outputs.native_changed == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     env:

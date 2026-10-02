@@ -205,7 +205,7 @@ function fixture(actionRegistration: JarvisRegisteredActionDefinition = registra
     }),
     listByRun: vi.fn(async () => [...approvals.values()].map((value) => structuredClone(value))),
   };
-  const capabilitySnapshots = { getForAccount: vi.fn(async () => capabilitySnapshot()) };
+  const capabilitySnapshots = { getForAccount: vi.fn(async (_accountId: string) => capabilitySnapshot()) };
   const entitlementSnapshots = { getForAccount: vi.fn(async () => entitlementSnapshot()) };
   const bindingSelectors = createJarvisApprovalBindingSelectors({
     catalog,
@@ -2842,7 +2842,11 @@ describe('local actions without billing entitlements', () => {
     expect(result.status).toBe('pending');
     expect(put).toHaveBeenCalledOnce();
     expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
-    return put.mock.calls[0]![0];
+    const prepared = put.mock.calls[0]![0];
+    if (!('capabilitySnapshotHash' in prepared) || typeof prepared.capabilitySnapshotHash !== 'string') {
+      throw new Error('Canonical prepared approval did not bind its authorization hash');
+    }
+    return { capabilitySnapshotHash: prepared.capabilitySnapshotHash };
   }
   it.each([unavailable, { source: 'server', capabilities: [], verifiedAt: 1, expiresAt: 2 }])(
     'creates pending approval without billing grant: %j',
@@ -2893,7 +2897,18 @@ describe('local actions without billing entitlements', () => {
     let active = 'account-a';
     const real = createJarvisCapabilitySnapshotProvider({
       getActiveAccountId: () => active,
-      resolveInputForActiveAccount: async () => capabilitySnapshot(),
+      resolveInputForActiveAccount: async () => {
+        const snapshot = capabilitySnapshot();
+        return {
+          capturedAt: 9000,
+          tools: snapshot.tools,
+          plugins: snapshot.plugins,
+          mcps: snapshot.mcps,
+          terminals: snapshot.terminals,
+          agents: snapshot.agents,
+          entitlements: snapshot.entitlements,
+        };
+      },
     });
     const setup = fixture(registration({ requiredEntitlements: [] }));
     setup.capabilitySnapshots.getForAccount.mockImplementation((id) => real.getForAccount(id));

@@ -606,9 +606,7 @@ fn scoped_provider_config(
         "server".to_string(),
         json!({ "hostname": LOOPBACK_HOST, "mdns": false }),
     );
-    root.insert(
-        "permission".to_string(),
-        json!({
+    let mut default_permission = json!({
             "*": "ask",
             "read": "allow",
             "glob": "allow",
@@ -629,9 +627,6 @@ fn scoped_provider_config(
             "context_list": "allow",
             "context_read": "allow",
             "vibespace_context": "allow",
-            "vibespace_context_search": "allow", "vibespace_context_open": "allow",
-            "vibespace_context_expand": "allow", "vibespace_context_address": "allow",
-            "vibespace_context_trace": "allow",
             "skills_list": "allow",
             "plugins_list": "allow",
             "mcp_list": "allow",
@@ -652,8 +647,17 @@ fn scoped_provider_config(
             "tasks_update": "ask",
             "schedule_create": "ask",
             "app_navigate": "ask"
-        }),
-    );
+        });
+    for name in [
+        "vibespace_context_search",
+        "vibespace_context_open",
+        "vibespace_context_expand",
+        "vibespace_context_address",
+        "vibespace_context_trace",
+    ] {
+        default_permission[name] = Value::String("allow".to_string());
+    }
+    root.insert("permission".to_string(), default_permission);
     let readonly_bash = |default_action: &str| {
         json!({
             "*": default_action,

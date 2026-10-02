@@ -4318,7 +4318,9 @@ export function Composer({
         role: 'system',
         parts: [{ kind: 'text', text: `${UNDO_STATUS_TEXT} ${summarizeUndoTurn(turn)}` }],
       });
-      setText('');
+      if (textRef.current === originalUserText) {
+        setText(originalUserText.replace(/^\/undo(?:[ \t]*\r?\n|[ \t]+|$)/iu, ''));
+      }
       return true;
     }
     if (cmd === 'redo') {
