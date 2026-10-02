@@ -8233,6 +8233,22 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         backend_affinity: { version: 1, backend: 'codex', locked: true, selectedAt: 1, lockedAt: 2 },
         created_at: 1, updated_at: 1,
       });
+      // The shared selection helper configures only one backend-lock result.
+      // Every incoming turn must instead read the same persisted Codex affinity.
+      const backendPersistence = await vi.importActual<typeof import('./backend/chatBackendPersistence')>(
+        './backend/chatBackendPersistence',
+      );
+      const backendPort: import('./backend/chatBackendPersistence').ChatBackendPersistencePort = {
+        transaction: (run) => database.transaction('rw', database.chats, database.messages, run),
+        getChat: (chatId) => database.chats.get(chatId as ChatId),
+        hasCommittedUserMessage: async (chatId) => Boolean(await database.messages
+          .where('chat_id').equals(chatId).filter(message => message.role === 'user').first()),
+        updateChat: (chatId, patch) => database.chats.update(chatId as ChatId, patch),
+      };
+      mocks.lockChatBackendForDispatch.mockReset();
+      mocks.lockChatBackendForDispatch.mockImplementation((_storage, chatId, committedAt) =>
+        backendPersistence.lockChatBackendForDispatch(backendPort, chatId, committedAt));
+      mocks.chatGetById.mockImplementation((chatId) => database.chats.get(chatId as ChatId));
       // Composer persists each submitted user before dispatch. Use the same real
       // database for chronological history and assistant writes; the static
       // kernelRuntimeBindings history cannot represent a later incoming turn.
@@ -8314,12 +8330,27 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           const pendingTurnBefore = getLatestTurnByChatId(harness.chatId)!;
           const pendingCompatibilityBefore = getChatRunState(harness.chatId);
           await persistUser('msg_expiry_blocked', 'Explain a queue without taking actions.');
+          // A genuinely rejected new preparation has no authority over the old
+          // pending turn. This does not invent a blanket pending-Send policy.
+          harness.bindings.getAgentForChat.mockRejectedValueOnce(new Error('Fixture agent lookup unavailable'));
           window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
             accountId: 'runtime-test-account', chatId: harness.chatId, cancellationKey: 'msg_expiry_blocked',
             text: 'Explain a queue without taking actions.', interactionMode: 'ask', modelSelectionOverride: selection,
           } }));
           await stop.whenIdle();
-          expect(mocks.runAgent).toHaveBeenCalledOnce();
+          expect((await database.chats.get(harness.chatId))?.backend_affinity?.backend).toBe('codex');
+          expect(mocks.devLog).not.toHaveBeenCalledWith(expect.objectContaining({
+            detail: expect.objectContaining({ providerError: expect.objectContaining({ code: 'chat_backend_connection_mismatch' }) }),
+          }));
+          expect(mocks.devLog).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'error', message: 'AI setup failed before dispatch',
+            detail: { stage: 'agent', error: 'Fixture agent lookup unavailable' },
+          }));
+          // failEarlySetup classifies this as kernel_runtime_setup_agent. Its
+          // compatibility event must not overwrite the older pending turn.
+          const rejectedPreparationErrors = mocks.devLog.mock.calls.map(([entry]) => entry)
+            .filter((entry) => entry.level === 'error');
+          expect(mocks.runAgent, `Rejected preparation evidence: ${JSON.stringify(rejectedPreparationErrors)}`).toHaveBeenCalledOnce();
           expect((await database.jarvis_approvals.get(approval.id))?.status).toBe('pending');
           expect(getLatestTurnByChatId(harness.chatId)?.identity.runId).toBe(originalRun.id);
           expect(getLatestTurnByChatId(harness.chatId)?.status).toBe(pendingTurnBefore.status);
@@ -8373,6 +8404,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           const newerBefore = getLatestTurnByChatId(harness.chatId)!;
           const compatibilityBefore = getChatRunState(harness.chatId);
           expect(newerBefore.identity.runId).not.toBe(originalRun.id);
+          expect(newerInput!.backend).toBe('codex');
+          expect(newerBefore.cancellationKey).toBe('msg_expiry_newer');
+          expect((await database.chats.get(harness.chatId))?.backend_affinity?.backend).toBe('codex');
           const oldTerminal = fromJarvisRunRow((await database.jarvis_runs.get(originalRun.id))!);
           // A terminal old run cannot reopen its issued response capability. This
           // tests the reachable late historical notification, not a fabricated callback.
