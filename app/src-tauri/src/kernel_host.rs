@@ -16,6 +16,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum KernelRequestKind {
+    ContextSourceRevision,
     TurnDispatch,
     ApprovalCreate,
     ApprovalPresent,
@@ -42,6 +43,11 @@ pub(crate) enum ApprovalDecision {
     deny_unknown_fields
 )]
 pub(crate) enum KernelClientRequestV1 {
+    ContextSourceRevision {
+        version: u8, account_id: String, chat_id: String, map_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_source_binding")]
+        binding: Option<KernelSourceBinding>,
+    },
     TurnDispatch {
         version: u8,
         account_id: String,
@@ -95,6 +101,7 @@ pub(crate) enum KernelClientRequestV1 {
 impl KernelClientRequestV1 {
     fn kind(&self) -> KernelRequestKind {
         match self {
+            Self::ContextSourceRevision { .. } => KernelRequestKind::ContextSourceRevision,
             Self::TurnDispatch { .. } => KernelRequestKind::TurnDispatch,
             Self::ApprovalCreate { .. } => KernelRequestKind::ApprovalCreate,
             Self::ApprovalPresent { .. } => KernelRequestKind::ApprovalPresent,
@@ -109,6 +116,8 @@ impl KernelClientRequestV1 {
 
     fn validate(&self) -> Result<(), &'static str> {
         let valid = match self {
+            Self::ContextSourceRevision { version, account_id, chat_id, map_id, binding } =>
+                *version == 1 && bounded_id(account_id) && bounded_id(chat_id) && bounded_id(map_id) && binding.as_ref().is_none_or(KernelSourceBinding::valid),
             Self::TurnDispatch {
                 version,
                 account_id,
@@ -252,6 +261,21 @@ pub(crate) struct KernelRunSummary {
     has_active_evidence: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct KernelSourceBinding {
+    run_id: String, request_id: String, attempt_number: u32,
+}
+impl KernelSourceBinding {
+    fn valid(&self) -> bool { bounded_id(&self.run_id) && bounded_id(&self.request_id) && self.attempt_number > 0 }
+}
+fn deserialize_source_binding<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<KernelSourceBinding>, D::Error> {
+    KernelSourceBinding::deserialize(deserializer).map(Some)
+}
+fn source_revision_hash(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum KernelUnavailableReason {
@@ -271,6 +295,12 @@ pub(crate) enum KernelUnavailableReason {
     deny_unknown_fields
 )]
 pub(crate) enum KernelClientResponseV1 {
+    ContextSourceRevision {
+        version: u8, account_id: String, workspace_id: String, project_id: String,
+        worktree_hash: String, chat_id: String, map_id: String, authority_epoch: u64, source_revision: String,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_source_binding")]
+        binding: Option<KernelSourceBinding>,
+    },
     TurnAccepted {
         version: u8,
         run_id: String,
@@ -329,6 +359,7 @@ pub(crate) enum KernelClientResponseV1 {
 impl KernelClientResponseV1 {
     fn kind(&self) -> Option<KernelRequestKind> {
         match self {
+            Self::ContextSourceRevision { .. } => Some(KernelRequestKind::ContextSourceRevision),
             Self::TurnAccepted { .. } => Some(KernelRequestKind::TurnDispatch),
             Self::ApprovalCreated { .. } => Some(KernelRequestKind::ApprovalCreate),
             Self::ApprovalPresentation { .. } => Some(KernelRequestKind::ApprovalPresent),
@@ -344,6 +375,8 @@ impl KernelClientResponseV1 {
 
     fn validate(&self) -> Result<(), &'static str> {
         let valid = match self {
+            Self::ContextSourceRevision { version, account_id, workspace_id, project_id, worktree_hash, chat_id, map_id, authority_epoch, source_revision, binding } =>
+                *version == 1 && [account_id, workspace_id, project_id, chat_id, map_id].iter().all(|id| bounded_id(id)) && *authority_epoch > 0 && *authority_epoch <= 9_007_199_254_740_991 && source_revision_hash(worktree_hash) && source_revision_hash(source_revision) && binding.as_ref().is_none_or(KernelSourceBinding::valid),
             Self::TurnAccepted { version, run_id }
             | Self::CancellationState {
                 version, run_id, ..
@@ -413,6 +446,7 @@ impl KernelClientResponseV1 {
             return false;
         }
         match (request, self) {
+            (KernelClientRequestV1::ContextSourceRevision { account_id, chat_id, map_id, binding, .. }, Self::ContextSourceRevision { account_id: response_account_id, chat_id: response_chat_id, map_id: response_map_id, binding: response_binding, .. }) => account_id == response_account_id && chat_id == response_chat_id && map_id == response_map_id && binding == response_binding,
             (
                 KernelClientRequestV1::ApprovalPresent { approval_id, .. },
                 Self::ApprovalPresentation {
@@ -649,7 +683,7 @@ impl KernelHostBroker {
         timeout_ms: u64,
     ) -> Result<HostDispatch, &'static str> {
         request.validate()?;
-        if !eligible_client_label(requester_label) {
+        if !eligible_client_label(requester_label) && !(requester_label == HOST_LABEL && request.kind() == KernelRequestKind::ContextSourceRevision) {
             return Err("kernel_client_window_rejected");
         }
         let owner = self.owner.as_ref().ok_or("kernel_host_unavailable")?;
@@ -1428,5 +1462,77 @@ mod tests {
             oversized_safe_value.validate(),
             Err("kernel_response_invalid")
         );
+    }
+    fn source_revision_request_json() -> serde_json::Value {
+        serde_json::json!({"kind":"context_source_revision","version":1,"accountId":"account","chatId":"chat","mapId":"map","binding":{"runId":"run","requestId":"request","attemptNumber":1}})
+    }
+    fn source_revision_response_json() -> serde_json::Value {
+        serde_json::json!({"kind":"context_source_revision","version":1,"accountId":"account","workspaceId":"workspace","projectId":"project","worktreeHash":format!("sha256:{}", "a".repeat(64)),"chatId":"chat","mapId":"map","authorityEpoch":1,"sourceRevision":format!("sha256:{}", "b".repeat(64)),"binding":{"runId":"run","requestId":"request","attemptNumber":1}})
+    }
+    #[test]
+    fn source_revision_closed_dto_rejects_null_partial_and_unknown_binding() {
+        let valid = source_revision_request_json();
+        let parsed: KernelClientRequestV1 = serde_json::from_value(valid.clone()).unwrap();
+        assert!(parsed.validate().is_ok());
+        for binding in [serde_json::Value::Null, serde_json::json!({"runId":"run","requestId":"request"}), serde_json::json!({"runId":"run","requestId":"request","attemptNumber":1,"authority":true})] {
+            let mut value = valid.clone(); value["binding"] = binding;
+            assert!(serde_json::from_value::<KernelClientRequestV1>(value).is_err());
+        }
+        let mut value = valid; value["projectId"] = "caller-project".into();
+        assert!(serde_json::from_value::<KernelClientRequestV1>(value).is_err());
+    }
+    #[test]
+    fn source_revision_dto_rejects_oversized_ids_and_invalid_attempts() {
+        let mut value = source_revision_request_json(); value["accountId"] = "x".repeat(201).into();
+        assert!(serde_json::from_value::<KernelClientRequestV1>(value).unwrap().validate().is_err());
+        let mut value = source_revision_request_json(); value["binding"]["attemptNumber"] = 0.into();
+        assert!(serde_json::from_value::<KernelClientRequestV1>(value).unwrap().validate().is_err());
+        let mut value = source_revision_request_json(); value["binding"]["attemptNumber"] = 4_294_967_296_u64.into();
+        assert!(serde_json::from_value::<KernelClientRequestV1>(value).is_err());
+    }
+    #[test]
+    fn source_revision_response_rejects_epoch_and_hash_boundaries() {
+        let valid = source_revision_response_json();
+        assert!(serde_json::from_value::<KernelClientResponseV1>(valid.clone()).unwrap().validate().is_ok());
+        for epoch in [0_u64, 9_007_199_254_740_992] {
+            let mut value = valid.clone(); value["authorityEpoch"] = epoch.into();
+            assert!(serde_json::from_value::<KernelClientResponseV1>(value).unwrap().validate().is_err());
+        }
+        for field in ["sourceRevision", "worktreeHash"] {
+            let mut value = valid.clone(); value[field] = format!("sha256:{}", "A".repeat(64)).into();
+            assert!(serde_json::from_value::<KernelClientResponseV1>(value).unwrap().validate().is_err());
+        }
+    }
+    #[test]
+    fn source_revision_response_requires_exact_scope_and_binding_correlation() {
+        let request: KernelClientRequestV1 = serde_json::from_value(source_revision_request_json()).unwrap();
+        let valid = source_revision_response_json();
+        assert!(serde_json::from_value::<KernelClientResponseV1>(valid.clone()).unwrap().matches_request(&request));
+        for field in ["accountId", "chatId", "mapId"] {
+            let mut value = valid.clone(); value[field] = "other".into();
+            assert!(!serde_json::from_value::<KernelClientResponseV1>(value).unwrap().matches_request(&request));
+        }
+        for field in ["runId", "requestId"] {
+            let mut value = valid.clone(); value["binding"][field] = "other".into();
+            assert!(!serde_json::from_value::<KernelClientResponseV1>(value).unwrap().matches_request(&request));
+        }
+        let mut value = valid.clone(); value["binding"]["attemptNumber"] = 2.into();
+        assert!(!serde_json::from_value::<KernelClientResponseV1>(value).unwrap().matches_request(&request));
+        let mut value = valid; value.as_object_mut().unwrap().remove("binding");
+        assert!(!serde_json::from_value::<KernelClientResponseV1>(value).unwrap().matches_request(&request));
+    }
+    #[test]
+    fn source_revision_main_reads_use_broker_epoch_without_action_admission() {
+        let mut broker = KernelHostBroker::default();
+        let owner = broker.register("main", "token".into()).unwrap();
+        let request: KernelClientRequestV1 = serde_json::from_value(source_revision_request_json()).unwrap();
+        let dispatch = broker.request("main", request.clone(), 100, 1000).unwrap();
+        assert_eq!(dispatch.registration.epoch, owner.registration.epoch);
+        assert!(broker.request("main", cancel_request(), 100, 1000).is_err());
+        assert!(broker.request("pet-overlay", request, 100, 1000).is_err());
+        let replacement = broker.register_reloaded_main("main", "new-token".into()).unwrap();
+        assert!(replacement.claim.registration.epoch > dispatch.registration.epoch);
+        let response: KernelClientResponseV1 = serde_json::from_value(source_revision_response_json()).unwrap();
+        assert!(broker.respond("main", owner.registration.epoch, "token", &dispatch.registration.request_id, response, 101).is_err());
     }
 }

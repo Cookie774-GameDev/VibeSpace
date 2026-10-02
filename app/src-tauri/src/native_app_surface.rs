@@ -346,19 +346,68 @@ fn stable_app_id(identity: &str) -> String {
     format!("app_{}", &digest[..20])
 }
 
+fn window_matches(hwnd: isize, candidate: &Path, path: &Path, shell_id: Option<&str>) -> bool {
+    if let Some(id) = shell_id.filter(|id| id.contains('!')) {
+        // Shared host paths must never select a different packaged app.
+        platform::app_id(hwnd).as_deref() == Some(id)
+    } else {
+        (!path.as_os_str().is_empty() && same_path(path, candidate))
+            || shell_id.is_some_and(|id| platform::app_id(hwnd).as_deref() == Some(id))
+    }
+}
+
 fn find_window(path: &Path, shell_id: Option<&str>) -> Option<isize> {
-    platform::windows()
-        .into_iter()
-        .find_map(|(hwnd, candidate)| {
-            (if let Some(id) = shell_id.filter(|id| id.contains('!')) {
-                // Shared host paths must never select a different packaged app.
-                platform::app_id(hwnd).as_deref() == Some(id)
-            } else {
-                (!path.as_os_str().is_empty() && same_path(path, &candidate))
-                    || shell_id.is_some_and(|id| platform::app_id(hwnd).as_deref() == Some(id))
-            })
-            .then_some(hwnd)
-        })
+    platform::windows().into_iter().find_map(|(hwnd, candidate)| {
+        window_matches(hwnd, &candidate, path, shell_id).then_some(hwnd)
+    })
+}
+
+#[cfg(any(windows, test))]
+fn observe_stable_window<T: Copy + Eq>(previous: &mut Option<T>, current: Option<T>) -> bool {
+    let stable = current.is_some() && *previous == current;
+    *previous = current;
+    stable
+}
+
+#[cfg(any(windows, test))]
+fn packaged_notepad_requires_fallback(shell_id: Option<&str>) -> bool {
+    // This packaged app crashed in CoreMessagingXP immediately after R7 reparenting.
+    // Leave it under user control; this containment is not embedding support.
+    shell_id.is_some_and(|id| {
+        id.eq_ignore_ascii_case("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App")
+    })
+}
+
+#[cfg(windows)]
+fn wait_for_attachment_candidate(
+    path: &Path,
+    shell_id: Option<&str>,
+    panel_id: &str,
+    operation_id: &str,
+) -> Result<(Option<isize>, Option<embedding::AttachmentCandidate>), String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut previous = None;
+    let mut latest = None;
+    while std::time::Instant::now() < deadline {
+        if !request_current(panel_id, operation_id) {
+            return Err("workbench_native_app_operation_stale".into());
+        }
+        let windows = platform::windows();
+        latest = windows.iter().find_map(|(hwnd, candidate)| {
+            window_matches(*hwnd, candidate, path, shell_id).then_some(*hwnd)
+        });
+        // A matching transient CoreWindow or owned popup must not mask a ready frame.
+        let candidate = windows.into_iter().find_map(|(hwnd, candidate)| {
+            window_matches(hwnd, &candidate, path, shell_id)
+                .then(|| embedding::candidate_for_attach(hwnd))
+                .flatten()
+        });
+        if observe_stable_window(&mut previous, candidate) {
+            return Ok((candidate.map(|window| window.frame_handle()), candidate));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok((latest, None))
 }
 
 fn catalog() -> Result<Vec<NativeAppDescriptor>, String> {
@@ -591,7 +640,7 @@ pub async fn workbench_native_app_surface_open(
             visible: true,
             embedding_error: None,
         };
-        let mut hwnd = find_window(&record.path, record.shell_id.as_deref());
+        let hwnd = find_window(&record.path, record.shell_id.as_deref());
         #[cfg(windows)]
         if RECORDS
             .lock()
@@ -612,6 +661,22 @@ pub async fn workbench_native_app_surface_open(
         }
         if hwnd.is_none() && launch == Some(true) {
             launch_app(&record)?;
+        }
+        #[cfg(windows)]
+        let (hwnd, candidate) = if hwnd.is_none() && launch != Some(true) {
+            (None, None)
+        } else {
+            wait_for_attachment_candidate(
+                &record.path,
+                record.shell_id.as_deref(),
+                &panel_id,
+                &record.operation_id,
+            )?
+        };
+        #[cfg(not(windows))]
+        let mut hwnd = hwnd;
+        #[cfg(not(windows))]
+        if hwnd.is_none() && launch == Some(true) {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
             while std::time::Instant::now() < deadline {
                 if !request_current(&panel_id, &record.operation_id) {
@@ -634,14 +699,22 @@ pub async fn workbench_native_app_surface_open(
         // Retire our previous lease before attempting to attach a replacement window.
         records.remove(&panel_id);
         #[cfg(windows)]
-        if let Some(hwnd) = hwnd {
-            match embedding::EmbeddedWindow::attach(hwnd, parent).and_then(|host| {
+        let actual_shell_id = hwnd.and_then(platform::app_id);
+        #[cfg(windows)]
+        if packaged_notepad_requires_fallback(record.shell_id.as_deref())
+            || packaged_notepad_requires_fallback(actual_shell_id.as_deref())
+        {
+            record.embedding_error = Some("This packaged Notepad app cannot currently be embedded safely. It remains in a separate window.".into());
+        } else if let Some(candidate) = candidate {
+            match embedding::EmbeddedWindow::attach_candidate(candidate, parent).and_then(|host| {
                 host.resize(&bounds, scale)?;
                 Ok(host)
             }) {
                 Ok(host) => record.embedded = Some(host),
                 Err(error) => record.embedding_error = Some(error),
             }
+        } else if hwnd.is_some() {
+            record.embedding_error = Some("The app window is still changing while it opens. It remains in a separate window. Retry after it finishes opening.".into());
         }
         if hwnd.is_none() && launch == Some(true) {
             record.embedding_error = Some("The app started, but Windows has not exposed a compatible window for Workbench. Retry after it finishes opening.".into());
@@ -800,6 +873,75 @@ pub fn workbench_native_app_surface_detach(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn attachment_waits_for_two_matching_ready_observations() {
+        let mut previous = None;
+        assert!(!observe_stable_window(
+            &mut previous,
+            None::<(isize, u32, isize, u32)>
+        ));
+        let ready = (2099686, 30264, 31981676, 8364);
+        assert!(!observe_stable_window(&mut previous, Some(ready)));
+        assert!(observe_stable_window(&mut previous, Some(ready)));
+    }
+
+    #[test]
+    fn changed_or_missing_content_resets_attachment_readiness() {
+        let mut previous = Some((2099686, 30264, 31981676, 8364));
+        let replacement = (2099686, 30264, 31981678, 8364);
+        assert!(!observe_stable_window(&mut previous, Some(replacement)));
+        assert!(observe_stable_window(&mut previous, Some(replacement)));
+        assert!(!observe_stable_window(&mut previous, None));
+        assert!(!observe_stable_window(&mut previous, Some(replacement)));
+        assert!(!observe_stable_window(
+            &mut previous,
+            Some((2099686, 30264, 31981678, 9000))
+        ));
+        assert!(!observe_stable_window(
+            &mut previous,
+            Some((2099686, 30266, 31981678, 9000))
+        ));
+    }
+
+    #[test]
+    fn crash_containment_is_scoped_to_the_observed_packaged_notepad() {
+        assert!(packaged_notepad_requires_fallback(Some(
+            "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
+        )));
+        assert!(packaged_notepad_requires_fallback(Some(
+            "microsoft.windowsnotepad_8wekyb3d8bbwe!app"
+        )));
+        for id in [
+            None,
+            Some(""),
+            Some("Notepad.exe"),
+            Some("Microsoft.WindowsNotepad_other!App"),
+            Some("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"),
+        ] {
+            assert!(!packaged_notepad_requires_fallback(id));
+        }
+    }
+
+    #[test]
+    fn contained_notepad_is_fallback_without_embedding_or_process_ownership() {
+        let record = Record {
+            operation_id: "test-operation".into(),
+            app_id: "test-packaged-notepad".into(),
+            name: "Notepad".into(),
+            path: PathBuf::from("missing-test-notepad.exe"),
+            shell_id: Some("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App".into()),
+            #[cfg(windows)]
+            embedded: None,
+            z: 0,
+            visible: true,
+            embedding_error: Some("This packaged Notepad app cannot currently be embedded safely. It remains in a separate window.".into()),
+        };
+        let observed = status("test-panel", &record);
+        assert!(!observed.embedded);
+        assert!(!observed.owned);
+        assert!(observed.fallback);
+        assert_eq!(observed.embedding_error, record.embedding_error);
+    }
     #[test]
     fn stale_hide_cannot_hide_a_restored_panel_and_current_hide_preserves_its_lease() {
         let mut records = HashMap::new();

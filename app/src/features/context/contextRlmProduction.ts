@@ -188,7 +188,7 @@ interface LargeAddressDescriptor {
 }
 
 interface ContextMapAddressRepository extends ContextQueryRepository {
-  currentSourceRevision(scope: ContextScope, signal?: AbortSignal): Promise<string | undefined>;
+  currentSourceRevision(scope: ContextScope, signal?: AbortSignal, mapId?: string): Promise<string | undefined>;
   address(
     scope: ContextScope,
     corpusId: string,
@@ -1776,11 +1776,14 @@ export function createContextMapRlmRepository(
 
   return {
     address,
-    async currentSourceRevision(scope, signal) {
+    async currentSourceRevision(scope, signal, mapId) {
       const normalizedScope = validateContextScope(scope);
       const maps = await dependencies.loadMaps(normalizedScope.projectId ?? null);
       signal?.throwIfAborted();
-      const { candidates } = enumerateSearchCandidates(normalizedScope, maps, maps.length);
+      const selected = mapId === undefined ? maps : maps.filter(map => map.id === mapId && map.status === 'active' && map.projectId === normalizedScope.projectId);
+      if (mapId !== undefined && selected.length !== 1) return undefined;
+      const { candidates } = enumerateSearchCandidates(normalizedScope, selected, selected.length);
+      if (mapId !== undefined && candidates.length === 0) return undefined;
       return currentRlmSourceRevision(candidates.map(candidate => ({
         mapId: candidate.map.id, nodeId: candidate.node.id, sourceKind: candidate.sourceKind,
         rootDir: candidate.map.rootDir, path: candidate.path,
@@ -2575,6 +2578,16 @@ function usesRegisteredCodexChild(identity: RlmChildRequest['executionIdentity']
   return identity?.transportConnectionId === 'openai-codex' &&
     identity.upstreamProviderId === 'openai' &&
     ['codex-cli', 'codex-app-server'].includes(identity.transportAdapterId);
+}
+
+/** Host-installed read-only port; caller/model arguments never select authority or physical paths. */
+export function createProductionContextSourceRevisionPort() {
+  const repository = createContextMapRlmRepository({
+    loadMaps: projectId => loadPersistedContextMaps(projectId) as unknown as Promise<readonly ProductionContextMap[]>,
+    stat: statProjectPath, read: readTextFileSample,
+    lexicalSearch: createTauriContextLexicalSearchExecutor(),
+  });
+  return (scope: ContextScope, mapId: string, signal?: AbortSignal) => repository.currentSourceRevision(scope, signal, mapId);
 }
 
 export function createProductionRlmChildRunner(

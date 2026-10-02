@@ -109,8 +109,12 @@ jobs:
           src/features/context/contextRlmProduction.codexChild.test.ts
           src/features/context/contextRlmTraceStore.test.ts
           src/features/context/contextRlmSourceRevision.test.ts
+          src/features/context/contextSourceRevisionReader.test.ts
+          src/lib/jarvis/kernelBridgeProtocol.sourceRevision.test.ts
           src/features/context/rlmOpenCodeTool.trace.test.ts
           src/features/context/rlmRuntime.terminal.test.ts
+          src/lib/jarvis/kernelClient.sourceRevision.test.ts
+          src/lib/jarvis/kernelClient.test.ts
           src/lib/jarvis/promptCompiler.advancedContext.test.ts
           src/lib/harness/commandCatalogQuery.test.ts
           src/lib/harness/toolGatewayProduction.test.ts

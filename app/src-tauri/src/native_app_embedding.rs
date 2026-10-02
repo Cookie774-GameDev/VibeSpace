@@ -60,6 +60,56 @@ fn packaged_content(frame: HWND) -> Option<HWND> {
     result.filter(|child| unsafe { GetParent(*child) }.is_ok_and(|parent| parent == frame))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttachmentCandidate {
+    frame: isize,
+    frame_pid: u32,
+    content: isize,
+    content_pid: u32,
+}
+
+impl AttachmentCandidate {
+    pub fn frame_handle(self) -> isize {
+        self.frame
+    }
+}
+
+fn attachment_content(class: &str, frame: isize, packaged: Option<isize>) -> Option<isize> {
+    match class {
+        // A newly launched packaged app can expose this before its shell frame owns it.
+        "Windows.UI.Core.CoreWindow" | "" => None,
+        "ApplicationFrameWindow" => packaged,
+        _ => Some(frame),
+    }
+}
+
+pub fn candidate_for_attach(hwnd: isize) -> Option<AttachmentCandidate> {
+    let frame = handle(hwnd);
+    if !unsafe { IsWindow(Some(frame)) }.as_bool() || unsafe { GetParent(frame) }.is_ok() {
+        return None;
+    }
+    let content = attachment_content(
+        &class_name(frame),
+        hwnd,
+        packaged_content(frame).map(|window| window.0 as isize),
+    )?;
+    let mut frame_pid = 0;
+    let mut content_pid = 0;
+    unsafe {
+        GetWindowThreadProcessId(frame, Some(&mut frame_pid));
+        GetWindowThreadProcessId(handle(content), Some(&mut content_pid));
+    }
+    if frame_pid == 0 || content_pid == 0 || content_pid == std::process::id() {
+        return None;
+    }
+    Some(AttachmentCandidate {
+        frame: hwnd,
+        frame_pid,
+        content,
+        content_pid,
+    })
+}
+
 fn handle(value: isize) -> HWND {
     HWND(value as *mut std::ffi::c_void)
 }
@@ -90,15 +140,16 @@ fn placement_for_restore(placement: &WINDOWPLACEMENT, visible: bool) -> WINDOWPL
 
 impl EmbeddedWindow {
     pub fn attach(hwnd: isize, parent: isize) -> Result<Self, String> {
-        let frame = handle(hwnd);
-        if hwnd == parent
-            || !unsafe { IsWindow(Some(frame)) }.as_bool()
-            || unsafe { GetParent(frame) }.is_ok()
-        {
-            return Err("This app window cannot be hosted in Workbench.".into());
+        let candidate = candidate_for_attach(hwnd)
+            .ok_or("This app has not exposed a compatible window for Workbench.")?;
+        Self::attach_candidate(candidate, parent)
+    }
+
+    pub fn attach_candidate(candidate: AttachmentCandidate, parent: isize) -> Result<Self, String> {
+        if candidate.frame == parent || candidate_for_attach(candidate.frame) != Some(candidate) {
+            return Err("This app window changed while opening. Retry after it finishes opening.".into());
         }
-        let window = packaged_content(frame).unwrap_or(frame);
-        Self::attach_content(frame, window, parent)
+        Self::attach_content(handle(candidate.frame), handle(candidate.content), parent)
     }
 
     fn attach_content(frame: HWND, window: HWND, parent: isize) -> Result<Self, String> {
@@ -107,6 +158,9 @@ impl EmbeddedWindow {
         }
         let hwnd = window.0 as isize;
         let original_parent = unsafe { GetParent(window) }.map_or(0, |parent| parent.0 as isize);
+        if frame != window && original_parent != frame.0 as isize {
+            return Err("This app changed its content window while opening. Retry after it finishes opening.".into());
+        }
         let mut pid = 0;
         unsafe {
             GetWindowThreadProcessId(window, Some(&mut pid));
@@ -373,6 +427,24 @@ impl Drop for EmbeddedWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn packaged_content_requires_its_ready_shell_frame() {
+        // The R7 Calculator transient HWND must never be treated as a desktop frame.
+        assert_eq!(
+            attachment_content("Windows.UI.Core.CoreWindow", 31981676, None),
+            None
+        );
+        assert_eq!(
+            attachment_content("ApplicationFrameWindow", 2099686, None),
+            None
+        );
+        assert_eq!(
+            attachment_content("ApplicationFrameWindow", 2099686, Some(31981676)),
+            Some(31981676)
+        );
+        assert_eq!(attachment_content("Notepad", 68106, None), Some(68106));
+        assert_eq!(attachment_content("", 68106, None), None);
+    }
     #[test]
     fn hosts_resizes_hides_and_restores_a_disposable_external_window() {
         check_external_window(false);

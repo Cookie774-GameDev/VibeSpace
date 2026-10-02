@@ -2701,6 +2701,56 @@ export async function installJarvisKernelRuntimeHost(
     kernel: composition.kernel,
   });
   let disposed = false;
+  const [{ createContextSourceRevisionReader, sourceProofMatchesCurrentTransport }, { createProductionContextSourceRevisionPort }, sourceEvidenceValidators] = await Promise.all([
+    import('@/features/context/contextSourceRevisionReader'),
+    import('@/features/context/contextRlmProduction'),
+    import('@/lib/jarvis/contracts/validators'),
+  ]);
+  let sourceAuthorityKey = '';
+  let sourceAuthorityEpoch = 0;
+  const currentSourceAuthority = () => {
+    if (disposed) return undefined;
+    const auth = useAuthStore.getState();
+    const accountId = resolveAccountIdentity(auth)?.accountId;
+    const workspaceId = String(auth.workspaceId ?? '');
+    const projectId = String(auth.projectId ?? '');
+    const worktreeId = projectId ? getStoredProjectRoot(projectId).trim() : '';
+    const key = JSON.stringify([accountId, workspaceId, projectId, worktreeId]);
+    if (key !== sourceAuthorityKey) { sourceAuthorityKey = key; sourceAuthorityEpoch += 1; }
+    return accountId && workspaceId && projectId && worktreeId
+      ? Object.freeze({ accountId, workspaceId, projectId, worktreeId, epoch: sourceAuthorityEpoch }) : undefined;
+  };
+  // Observe transitions even when scope changes away and back during a native hash.
+  currentSourceAuthority();
+  const stopSourceAuthoritySubscription = useAuthStore.subscribe(() => { currentSourceAuthority(); });
+  const observeSourceRootChange = () => { sourceAuthorityEpoch += 1; currentSourceAuthority(); };
+  if (typeof window !== 'undefined') window.addEventListener('jarvis:files:root-changed', observeSourceRootChange);
+  const readSourceRevision = createContextSourceRevisionReader({
+    currentAuthority: currentSourceAuthority,
+    async authorizeChat(authority, chatId) {
+      const chat = await input.db.chats.get(chatId as ChatId);
+      return !!chat && String(chat.workspace_id) === authority.workspaceId && String(chat.project_id ?? '') === authority.projectId;
+    },
+    currentMapRevision: createProductionContextSourceRevisionPort(),
+    async readRunIdentity(authority, runId) {
+      const run = await repositories.run.getById(authority.accountId, runId);
+      if (!run || run.workspaceId !== authority.workspaceId || run.projectId !== authority.projectId || !run.chatId) return undefined;
+      const events = await repositories.event.listByRun(authority.accountId, runId, { limit: 128 });
+      const proofs = events.flatMap(event => [
+        sourceEvidenceValidators.validateJarvisCanonicalResultEvidence(event.canonicalResultEvidence),
+        sourceEvidenceValidators.validateJarvisDurableLiveEvidence(event.liveEvidence),
+        sourceEvidenceValidators.validateJarvisProducerSourceEvidence(event.producerSourceEvidence),
+      ].flatMap(parsed => parsed.ok && parsed.value.accountId === authority.accountId && parsed.value.runId === runId
+        ? [{ accountId: parsed.value.accountId, runId: parsed.value.runId, requestId: parsed.value.requestId, attemptNumber: parsed.value.attemptNumber }] : []));
+      const latestAttempt = Math.max(0, ...proofs.map(proof => proof.attemptNumber));
+      const latest = proofs.filter(proof => proof.attemptNumber === latestAttempt);
+      const requestIds = new Set(latest.map(proof => proof.requestId));
+      if (requestIds.size !== 1 || !latest[0]) return undefined;
+      if (!sourceProofMatchesCurrentTransport(latest[0], run.transportAttempts?.at(-1))) return undefined;
+      return { accountId: authority.accountId, chatId: run.chatId, runId,
+        requestId: latest[0].requestId, attemptNumber: latestAttempt };
+    },
+  });
   const toolActionBroker = createToolGatewayActionBroker({
     actions: composition.kernel.actions,
     catalog: input.actionCatalog ?? createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS),
@@ -2835,6 +2885,15 @@ export async function installJarvisKernelRuntimeHost(
         requestKind: request.kind,
         reason: 'kernel_not_activated',
       });
+      if (request.kind === 'context_source_revision') {
+        const observation = await readSourceRevision({ accountId: request.accountId, chatId: request.chatId,
+          mapId: request.mapId, ...(request.binding ?? {}) });
+        if (!observation) return unavailable();
+        return { version: 1, kind: 'context_source_revision', accountId: observation.accountId,
+          workspaceId: observation.workspaceId, projectId: observation.projectId, worktreeHash: observation.worktreeHash,
+          chatId: observation.chatId, mapId: observation.mapId, authorityEpoch: observation.authorityEpoch,
+          sourceRevision: observation.sourceRevision, ...(request.binding ? { binding: request.binding } : {}) };
+      }
       if (request.kind === 'approval_present') {
         const approval = await repositories.approval.getById(request.accountId, request.approvalId);
         if (!approval || approval.id !== request.approvalId) return unavailable();
@@ -3060,6 +3119,8 @@ export async function installJarvisKernelRuntimeHost(
     dispose() {
       if (disposed) return;
       disposed = true;
+      stopSourceAuthoritySubscription();
+      if (typeof window !== 'undefined') window.removeEventListener('jarvis:files:root-changed', observeSourceRootChange);
       toolActionBroker.dispose();
       disposeCanonicalApprovalExpiry?.();
       const retiredScopes = [...activeTurnScopes.values()];

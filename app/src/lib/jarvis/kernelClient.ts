@@ -21,7 +21,7 @@ type RequestInput<K extends KernelClientRequestV1['kind']> = Omit<
   'version' | 'kind'
 >;
 
-type ResponseFor<K extends KernelClientRequestV1['kind']> = Extract<
+type WireResponseFor<K extends KernelClientRequestV1['kind']> = Extract<
   KernelClientResponseV1,
   | { kind: 'unavailable' }
   | {
@@ -41,11 +41,16 @@ type ResponseFor<K extends KernelClientRequestV1['kind']> = Extract<
                     ? 'cancellation_state'
                     : K extends 'scheduled_retry'
                       ? 'retry_state'
-                      : 'command_center_snapshot';
+                      : K extends 'context_source_revision' ? 'context_source_revision' : 'command_center_snapshot';
     }
 >;
 
+/** nativeHostEpoch is client metadata from the validated broker envelope, never a DTO input. */
+type ResponseFor<K extends KernelClientRequestV1['kind']> = K extends 'context_source_revision'
+  ? Extract<KernelClientResponseV1, { kind: 'unavailable' }> | (Extract<KernelClientResponseV1, { kind: 'context_source_revision' }> & Readonly<{ nativeHostEpoch: number }>)
+  : WireResponseFor<K>;
 export interface JarvisKernelClient {
+  getContextSourceRevision(input: RequestInput<'context_source_revision'>): Promise<ResponseFor<'context_source_revision'>>;
   dispatchTurn(input: RequestInput<'turn_dispatch'>): Promise<ResponseFor<'turn_dispatch'>>;
   createApproval(input: RequestInput<'approval_create'>): Promise<ResponseFor<'approval_create'>>;
   getApprovalPresentation(
@@ -119,7 +124,7 @@ export function createJarvisKernelClient(options?: { timeoutMs?: number }): Jarv
     if (disposed) {
       return unavailableKernelResponse(request, 'client_disposed') as ResponseFor<K>;
     }
-    const localResponse = requestLocalJarvisKernelHost(request);
+    const localResponse = request.kind === 'context_source_revision' ? null : requestLocalJarvisKernelHost(request);
     if (localResponse) {
       return localResponse
         .then((response) =>
@@ -159,11 +164,17 @@ export function createJarvisKernelClient(options?: { timeoutMs?: number }): Jarv
         }
         pending.delete(pendingRequest);
       };
-      const finish = (response: KernelClientResponseV1) => {
+      const finish = (response: KernelClientResponseV1, nativeHostEpoch?: number) => {
         if (settled) return;
         settled = true;
         cleanup();
-        resolve(response as ResponseFor<K>);
+        if (response.kind === 'context_source_revision') {
+          if (!Number.isSafeInteger(nativeHostEpoch) || nativeHostEpoch! <= 0) {
+            resolve(unavailableKernelResponse(request, 'invalid_response') as ResponseFor<K>);
+          } else {
+            resolve(Object.freeze({ ...response, nativeHostEpoch: nativeHostEpoch! }) as ResponseFor<K>);
+          }
+        } else resolve(response as ResponseFor<K>);
       };
       const pendingRequest: PendingRequest = { request, finish };
       pending.add(pendingRequest);
@@ -184,7 +195,7 @@ export function createJarvisKernelClient(options?: { timeoutMs?: number }): Jarv
           finish(unavailableKernelResponse(request, 'invalid_response'));
           return;
         }
-        finish(candidate.response);
+        finish(candidate.response, registration.epoch);
       };
 
       void listen<KernelClientResponseEvent>(KERNEL_CLIENT_RESPONSE_EVENT, (event) => {
@@ -242,6 +253,8 @@ export function createJarvisKernelClient(options?: { timeoutMs?: number }): Jarv
       send(buildRequest('scheduled_retry', input)),
     getCommandCenterSnapshot: (input: RequestInput<'command_center_snapshot'>) =>
       send(buildRequest('command_center_snapshot', input)),
+    getContextSourceRevision: (input: RequestInput<'context_source_revision'>) =>
+      send(buildRequest('context_source_revision', input)),
     dispose: () => {
       if (disposed) return;
       disposed = true;

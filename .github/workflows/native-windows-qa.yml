@@ -113,7 +113,7 @@ jobs:
 
       - name: Verify focused source contracts
         run: |
-          node --test scripts/native-windows-qa.test.mjs scripts/tauri-windows-resource-contract.test.mjs
+          node --test scripts/native-windows-qa.test.mjs scripts/tauri-windows-resource-contract.test.mjs scripts/windows-runtime-dlls.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Admit resource preparation
@@ -131,6 +131,13 @@ jobs:
 
       - name: Admit and build debug executable
         run: node scripts/native-windows-qa.mjs build
+
+      - name: Admit and test focused Workbench Rust regressions on the warm target
+        run: |
+          ./scripts/native-windows-qa-preflight.ps1 -Phase before-cargo -EvidenceDirectory work/native-windows-qa/workbench-tests-admission
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/s61-workbench-rust-tests.ps1 -RepositoryRoot $env:GITHUB_WORKSPACE -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE 'work/native-windows-qa/workbench-tests') -IncludeRestorationRegression
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Inspect executable and DLL dependencies
         run: |
@@ -182,6 +189,8 @@ jobs:
             work/native-windows-qa/*.json
             work/native-windows-qa/*.txt
             work/native-windows-qa/*.log
+            work/native-windows-qa/workbench-tests/**
+            work/native-windows-qa/workbench-tests-admission/**
           if-no-files-found: warn
           retention-days: 3
 
@@ -277,6 +286,8 @@ jobs:
           import {pathToFileURL} from 'node:url';
           const root=process.env.GITHUB_WORKSPACE, evidence=process.env.NSIS_PROOF_DIR;
           const {inspectPeImage,sha256,parseDllReports,verifyDllImports,inspectTauriNsisExecutableBinding}=await import(pathToFileURL(path.join(root,'scripts/native-windows-qa.mjs')));
+          const {verifyResources}=await import(pathToFileURL(path.join(root,'scripts/s61-nsis-reinspect.mjs')));
+          const connectorPreparation=await import(pathToFileURL(path.join(root,'scripts/prepare-desktop-connector.mjs')));
           const save=async(name,value)=>writeFile(path.join(evidence,name),JSON.stringify(value,null,2)+'\n');
           async function walk(dir,base=dir) {
             const files=[];
@@ -326,32 +337,7 @@ jobs:
             const modules=parseDllReports(reports);
 
             const base=path.join(root,'app/src-tauri');
-            const config=JSON.parse(await readFile(path.join(base,'tauri.windows.conf.json'),'utf8'));
-            assert(Array.isArray(config.bundle.resources),'Windows resource array required');
-            const candidates=[...await walk(path.join(base,'resources')),...await walk(path.join(root,'docs/oss'))];
-            const expected=new Map();
-            for(const pattern of config.bundle.resources) {
-              assert(typeof pattern==='string','Reaudit changed resource schema');
-              const re=new RegExp('^'+pattern.split(/(\*\*\/|\*\*|\*)/u).map(x=>x==='**/'?'(?:.*/)?':x==='**'?'.*':x==='*'?'[^/]*':x.replace(/[.+?^${}()|[\]\\]/gu,'\\$&')).join('')+'$');
-              const matches=candidates.filter(file=>re.test(path.relative(base,file).replaceAll('\\','/'))); assert(matches.length,'Resource pattern matched nothing: '+pattern);
-              for(const file of matches) {
-                const rel=path.relative(base,file).replaceAll('\\','/');
-                const target=rel.split('/').map(x=>x==='..'?'_up_':x).join('/');
-                assert(!expected.has(target.toLowerCase()),'Resource target collision'); expected.set(target.toLowerCase(),{file,target});
-              }
-            }
-            await save('expected-resources.json',[...expected.values()].map(({target})=>({path:target})));
-            await save('exe-pe-manifest.json',{...pe,sha256:await sha256(exe),sourceSHA:process.env.QA_SOURCE_SHA});
-            const resources=[];
-            for(const {file,target} of expected.values()) {
-              const packaged=path.join(appDir,...target.split('/'));
-              assert.equal(await sha256(packaged),await sha256(file),'Missing/changed packaged resource: '+target);
-              resources.push({path:target,bytes:(await lstat(packaged)).size,sha256:await sha256(packaged)});
-            }
-            const connector=JSON.parse(await readFile(path.join(appDir,'resources/desktop-connector/manifest.json'),'utf8'));
-            assert.equal(connector.platform,'win32-x64'); assert.equal(await sha256(path.join(appDir,'resources/desktop-connector/runtime.zip')),connector.sha256);
-            assert((await lstat(path.join(appDir,'resources/siyuan-runtime/VIBESPACE_SIYUAN_READY.json'))).isFile());
-            await save('resource-manifest.json',resources);
+            const resources=await verifyResources(root,appDir,evidence,process.env.NSIS_SEVEN_ZIP,connectorPreparation);
             const closure=verifyDllImports(modules,inventory);
             await save('dll-closure.json',closure);
             await save('package-proof.json',{sourceSHA:process.env.QA_SOURCE_SHA,sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}'],{encoding:'utf8'}).trim(),workflowSHA:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,installer:{file:path.basename(installer),bytes:(await lstat(installer)).size,sha256:await sha256(installer)},executable:{...pe,sha256:await sha256(exe)},cargoLockSHA256:await sha256(path.join(base,'Cargo.lock')),windowsConfigSHA256:await sha256(path.join(base,'tauri.windows.conf.json')),qaConfigSHA256:await sha256(process.env.NSIS_QA_CONFIG),verifierSHA256:await sha256(path.join(root,'scripts/native-windows-qa.mjs')),resources:resources.length,dlls:dlls.length,staticPackageProof:'PASS',installerExecuted:false,nativeAcceptance:'UNVERIFIED',cleanWindowsVM:'UNVERIFIED'});
@@ -396,6 +382,8 @@ jobs:
           "NSIS_SEVEN_ZIP=$seven" | Add-Content -LiteralPath $env:GITHUB_ENV
       - name: Prepare verified resource inputs
         run: |
+          node --test scripts/tauri-windows-resource-contract.test.mjs scripts/windows-runtime-dlls.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run prepare:desktop-connector
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run prepare:siyuan-runtime

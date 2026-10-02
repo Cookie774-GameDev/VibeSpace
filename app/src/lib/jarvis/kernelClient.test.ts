@@ -63,6 +63,7 @@ describe('typed kernel client', () => {
       'getApprovalPresentation',
       'getApprovalStatus',
       'getCommandCenterSnapshot',
+      'getContextSourceRevision',
       'retryScheduled',
     ]);
     expect('request' in client).toBe(false);

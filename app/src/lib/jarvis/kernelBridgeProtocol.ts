@@ -1,8 +1,10 @@
 export const KERNEL_BRIDGE_VERSION = 1 as const;
 export const KERNEL_HOST_REQUEST_EVENT = 'jarvis:kernel-host-request-v1';
 export const KERNEL_CLIENT_RESPONSE_EVENT = 'jarvis:kernel-client-response-v1';
+export type KernelSourceRevisionBinding = Readonly<{ runId: string; requestId: string; attemptNumber: number }>;
 
 export type KernelClientRequestV1 =
+  | Readonly<{ version: 1; kind: 'context_source_revision'; accountId: string; chatId: string; mapId: string; binding?: KernelSourceRevisionBinding }>
   | Readonly<{
       version: 1;
       kind: 'turn_dispatch';
@@ -72,6 +74,7 @@ export type KernelUnavailableReason =
   | 'kernel_not_activated';
 
 export type KernelClientResponseV1 =
+  | Readonly<{ version: 1; kind: 'context_source_revision'; accountId: string; workspaceId: string; projectId: string; worktreeHash: string; chatId: string; mapId: string; authorityEpoch: number; sourceRevision: string; binding?: KernelSourceRevisionBinding }>
   | Readonly<{ version: 1; kind: 'turn_accepted'; runId: string }>
   | Readonly<{ version: 1; kind: 'approval_created'; approvalId: string }>
   | Readonly<{
@@ -181,6 +184,11 @@ function id(value: unknown): value is string {
 function epoch(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
+function sourceRevisionBinding(value: unknown): boolean {
+  if (value === undefined) return true;
+  const record = dataRecord(value);
+  return !!record && exactKeys(record, ['runId', 'requestId', 'attemptNumber']) && id(record.runId) && id(record.requestId) && Number.isSafeInteger(record.attemptNumber) && Number(record.attemptNumber) > 0 && Number(record.attemptNumber) <= 4_294_967_295;
+}
 
 export function isKernelClientRequestV1(value: unknown): value is KernelClientRequestV1 {
   const record = dataRecord(value);
@@ -240,6 +248,8 @@ export function isKernelClientRequestV1(value: unknown): value is KernelClientRe
         id(record.runId) &&
         id(record.attemptId)
       );
+    case 'context_source_revision':
+      return exactKeys(record, ['version', 'kind', 'accountId', 'chatId', 'mapId', ...(record.binding === undefined ? [] : ['binding'])]) && id(record.accountId) && id(record.chatId) && id(record.mapId) && sourceRevisionBinding(record.binding);
     case 'command_center_snapshot':
       return exactKeys(record, ['version', 'kind', 'accountId']) && id(record.accountId);
     default:
@@ -248,6 +258,7 @@ export function isKernelClientRequestV1(value: unknown): value is KernelClientRe
 }
 
 const REQUEST_KINDS = new Set<KernelClientRequestKind>([
+  'context_source_revision',
   'turn_dispatch',
   'approval_create',
   'approval_present',
@@ -333,6 +344,8 @@ export function isKernelClientResponseV1(value: unknown): value is KernelClientR
         (record.continuation === undefined || record.continuation === 'tool_request') &&
         (record.status === 'approved' || record.status === 'denied')
       );
+    case 'context_source_revision':
+      return exactKeys(record, ['version', 'kind', 'accountId', 'workspaceId', 'projectId', 'worktreeHash', 'chatId', 'mapId', 'authorityEpoch', 'sourceRevision', ...(record.binding === undefined ? [] : ['binding'])]) && id(record.accountId) && id(record.workspaceId) && id(record.projectId) && id(record.chatId) && id(record.mapId) && epoch(record.authorityEpoch) && typeof record.worktreeHash === 'string' && /^sha256:[a-f0-9]{64}$/u.test(record.worktreeHash) && typeof record.sourceRevision === 'string' && /^sha256:[a-f0-9]{64}$/u.test(record.sourceRevision) && sourceRevisionBinding(record.binding);
     case 'approval_state':
       return (
         exactKeys(record, ['version', 'kind', 'accountId', 'approvalId', 'status']) &&
@@ -404,6 +417,7 @@ export function unavailableKernelResponse(
 const RESPONSE_FOR_REQUEST: Readonly<
   Record<KernelClientRequestKind, KernelClientResponseV1['kind']>
 > = Object.freeze({
+  context_source_revision: 'context_source_revision',
   turn_dispatch: 'turn_accepted',
   approval_create: 'approval_created',
   approval_present: 'approval_presentation',
@@ -422,6 +436,8 @@ export function responseMatchesKernelRequest(
   if (response.kind === 'unavailable') return response.requestKind === request.kind;
   if (RESPONSE_FOR_REQUEST[request.kind] !== response.kind) return false;
   switch (request.kind) {
+    case 'context_source_revision':
+      return response.kind === 'context_source_revision' && response.accountId === request.accountId && response.chatId === request.chatId && response.mapId === request.mapId && response.binding?.runId === request.binding?.runId && response.binding?.requestId === request.binding?.requestId && response.binding?.attemptNumber === request.binding?.attemptNumber;
     case 'approval_present':
       return (
         response.kind === 'approval_presentation' && response.approvalId === request.approvalId
