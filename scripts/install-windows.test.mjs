@@ -24,7 +24,7 @@ function Case([string]$CaseName,[scriptblock]$Body){
  try { & $Body; $results.Add([pscustomobject]@{name=$CaseName;pass=$true}) }
  catch { $results.Add([pscustomobject]@{name=$CaseName;pass=$false;error=$_.Exception.Message}) }
 }
-function Equal($Actual,$Expected){if($Actual -cne $Expected){throw 'Unexpected result'}}
+function Equal($Actual,$Expected){if($Actual -cne $Expected){throw ('Unexpected result; actual=['+[string]$Actual+']; expected=['+[string]$Expected+']')}}
 function Reject([scriptblock]$Body,[string]$Pattern){
  try{& $Body | Out-Null}catch{if($_.Exception.Message -match $Pattern){return};throw}
  throw 'Expected refusal'
@@ -53,7 +53,7 @@ $script:launches=0;$script:launchArguments=$null
 function Start-Process {param($FilePath,$Wait,$PassThru,$ArgumentList) $script:launches++;$script:launchArguments=$PSBoundParameters;[pscustomobject]@{ExitCode=0}}
 Case 'dry-run verifies bytes without executing installer' {$result=Invoke-VibeSpaceVerifiedInstaller $payload $payloadHash -DryRun;Equal $result.Status 'Verified';Equal $result.Installed $false;Equal $script:launches 0}
 Case 'hash mismatch never invokes installer' {Reject {Invoke-VibeSpaceVerifiedInstaller $payload ('b'*64)} 'checksum mismatch';Equal $script:launches 0}
-Case 'silent launch keeps path separate from arguments' {$result=Invoke-VibeSpaceVerifiedInstaller $payload $payloadHash -Silent;Equal $result.Installed $true;Equal $script:launchArguments.FilePath $payload;Equal $script:launchArguments.ArgumentList[0] '/S';Equal $script:launches 1}
+Case 'silent launch keeps path separate from arguments' {$launchPath=$Fixture+[IO.Path]::DirectorySeparatorChar+'.'+[IO.Path]::DirectorySeparatorChar+'installer with spaces & symbols.exe';$result=Invoke-VibeSpaceVerifiedInstaller $launchPath $payloadHash -Silent;Equal $result.Installed $true;Equal $script:launchArguments.FilePath ([IO.Path]::GetFullPath($payload));Equal @($script:launchArguments.ArgumentList).Count 1;Equal $script:launchArguments.ArgumentList[0] '/S';Equal $script:launchArguments.ContainsKey('Verb') $false;Equal $script:launches 1}
 Case 'interactive launch contains no silent or elevated argument' {$null=Invoke-VibeSpaceVerifiedInstaller $payload $payloadHash;Equal $script:launchArguments.ContainsKey('ArgumentList') $false;Equal $script:launchArguments.ContainsKey('Verb') $false}
 Case 'failed installer preserves file and reports recovery' {function Start-Process {param($FilePath,$Wait,$PassThru,$ArgumentList) [pscustomobject]@{ExitCode=1603}};Reject {Invoke-VibeSpaceVerifiedInstaller $payload $payloadHash} 'exit code 1603';Equal (Test-Path -LiteralPath $payload) $true}
 Case 'verified file is bound against modification during launch' {function Start-Process {param($FilePath,$Wait,$PassThru,$ArgumentList) Reject {[IO.File]::WriteAllText($FilePath,'replacement')} 'another process|used by|access';[pscustomobject]@{ExitCode=0}};$null=Invoke-VibeSpaceVerifiedInstaller $payload $payloadHash;Equal (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash.ToLowerInvariant() $payloadHash}

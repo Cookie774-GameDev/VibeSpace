@@ -3849,7 +3849,7 @@ mod tests {
                 assert!(transport_route_parts(&route).is_err());
             }
         }
-        assert!(encoded_tool_selection(&"x".repeat(513)).is_err());
+        assert!(super::encoded_tool_selection(&"x".repeat(513)).is_err());
         for route in [serde_json::json!({ "kind": "tool_list", "providerId": "openai" }),
             serde_json::json!({ "kind": "tool_list", "modelId": "model" })] {
             assert!(serde_json::from_value::<OpenCodeTransportRoute>(route).is_err());
