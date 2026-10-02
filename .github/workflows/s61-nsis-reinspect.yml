@@ -1,0 +1,179 @@
+name: S61 existing unsigned NSIS reinspection
+
+on:
+  push:
+    branches: [codex/s61-nsis-reinspect-20261002]
+    paths:
+      - .github/workflows/s61-nsis-reinspect.yml
+      - scripts/s61-nsis-reinspect.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  inspect-existing-package:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PRODUCT_SOURCE_SHA: 4008ea032e7625db77b9fb3c250b2b50c2fe4788
+      PRODUCT_SOURCE_TREE: af57b11f40cd13e87e14e393f7bea2b8d90ce344
+      VIBESPACE_CONNECTOR_BUILD_DIR: ${{ runner.temp }}/s61-reinspect-connector
+      VIBESPACE_SIYUAN_CACHE_DIR: ${{ runner.temp }}/s61-reinspect-siyuan
+    steps:
+      - name: Preserve published bytes
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: verifier
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 4008ea032e7625db77b9fb3c250b2b50c2fe4788
+          path: product
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+      - name: Admit static extraction and resource preparation
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 's61-existing-nsis-reinspection'
+          if (Test-Path -LiteralPath $root) { throw 'Fresh output directory required.' }
+          New-Item -ItemType Directory -Path $root | Out-Null
+          "REINSPECT_ROOT=$root" | Add-Content -LiteralPath $env:GITHUB_ENV
+          $os = Get-CimInstance Win32_OperatingSystem -OperationTimeoutSec 5
+          try { $ram = [math]::Floor($os.FreePhysicalMemory / 1024); $commit = [math]::Floor($os.FreeVirtualMemory / 1024) } finally { $os.Dispose() }
+          $volumes = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP) | ForEach-Object { [IO.Path]::GetPathRoot($_) } | Sort-Object -Unique
+          $disks = @($volumes | ForEach-Object {
+            $volume = $_.TrimEnd('\')
+            $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$volume'" -OperationTimeoutSec 5
+            if (-not $disk) { throw 'Output volume unavailable.' }
+            try { @{volume=$volume; freeBytes=[long]$disk.FreeSpace} } finally { $disk.Dispose() }
+          })
+          $admitted = $ram -ge 6144 -and $commit -ge 8704 -and @($disks | Where-Object freeBytes -lt 21474836480).Count -eq 0
+          @{phase='static-extraction-and-resource-preparation'; peakRamMiB=4096; peakCommitMiB=6144; estimatesMeasured=$false; reserveMiB=1024; estimateMultiplier=1.25; requiredRamMiB=6144; requiredCommitMiB=8704; freeRamMiB=$ram; freeCommitMiB=$commit; disks=$disks; admitted=$admitted; measuredAtUTC=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $root 'capacity.json')
+          if (-not $admitted) { throw 'Static reinspection capacity denied; no download/extraction/preparation launched.' }
+          if ((git -C product rev-parse HEAD) -cne $env:PRODUCT_SOURCE_SHA -or (git -C product rev-parse 'HEAD^{tree}') -cne $env:PRODUCT_SOURCE_TREE) { throw 'Frozen product source mismatch.' }
+          if ((Get-FileHash product/.github/native-windows-qa/Cargo.lock).Hash.ToLowerInvariant() -cne 'a9b5c74ccc80b3deae6954d19b1ce6dcc9e2d980a194a465542d477bb80a1551') { throw 'Frozen Cargo lock mismatch.' }
+          if ((Get-FileHash product/app/src-tauri/tauri.windows.conf.json).Hash.ToLowerInvariant() -cne '2c6209c5daefe31f25eb23b40c45601d896accb2066dd338efae1f8a624d6790') { throw 'Windows configuration mismatch.' }
+          Copy-Item -LiteralPath product/.github/native-windows-qa/Cargo.lock -Destination product/app/src-tauri/Cargo.lock
+      - name: Prove tracked production inputs match the verifier checkout
+        run: |
+          @'
+          import assert from 'node:assert/strict';
+          import {execFileSync} from 'node:child_process';
+          import {writeFile} from 'node:fs/promises';
+          import {createHash} from 'node:crypto';
+          import path from 'node:path';
+          const root=process.env.GITHUB_WORKSPACE;
+          const inventory=dir=>{
+            const bytes=execFileSync('git',['-C',dir,'ls-tree','-r','-z','HEAD'],{maxBuffer:16777216});
+            const entries=bytes.toString('utf8').split('\0').filter(Boolean).map(row=>{
+              const at=row.indexOf('\t'); assert(at>0);
+              const [mode,type,sha]=row.slice(0,at).split(' ');
+              assert.equal(type,'blob'); return {path:row.slice(at+1),mode,sha};
+            });
+            return {entries,sha256:createHash('sha256').update(bytes).digest('hex')};
+          };
+          const source=inventory(path.join(root,'product')), verifier=inventory(path.join(root,'verifier'));
+          const a=new Map(source.entries.map(x=>[x.path,x])),b=new Map(verifier.entries.map(x=>[x.path,x]));
+          const differences=[...new Set([...a.keys(),...b.keys()])].sort().flatMap(name=>JSON.stringify(a.get(name))===JSON.stringify(b.get(name))?[]:[{path:name,before:a.get(name)??null,after:b.get(name)??null}]);
+          const allowed=new Set(['app/src/lib/ai/runtime.test.ts','app/src/features/settings/sections/DesktopConnectorSetup.test.tsx','scripts/native-windows-qa.mjs','.github/workflows/native-windows-qa.yml','scripts/s61-nsis-reinspect.mjs','.github/workflows/s61-nsis-reinspect.yml']);
+          assert.equal(differences.length,6,'Exactly reviewed test and verification changes required');
+          for(const difference of differences){assert(allowed.has(difference.path),'Unreviewed product change: '+difference.path);assert.equal(difference.after?.mode,'100644');}
+          await writeFile(path.join(process.env.REINSPECT_ROOT,'tracked-source-comparison.json'),JSON.stringify({productSource:process.env.PRODUCT_SOURCE_SHA,productTree:process.env.PRODUCT_SOURCE_TREE,verifierSource:execFileSync('git',['-C',path.join(root,'verifier'),'rev-parse','HEAD'],{encoding:'utf8'}).trim(),source,verifier,differences,productionInputsMatch:true},null,2),{flag:'wx'});
+          console.log('All tracked production inputs match; only six reviewed test and QA paths differ.');
+          '@ | Set-Content -LiteralPath (Join-Path $env:REINSPECT_ROOT 'compare.mjs') -Encoding utf8NoBOM
+          node (Join-Path $env:REINSPECT_ROOT 'compare.mjs')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Download exact existing artifact and original failure log
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          import assert from 'node:assert/strict';
+          import {execFileSync,spawn} from 'node:child_process';
+          import {createWriteStream,createReadStream} from 'node:fs';
+          import {writeFile,stat} from 'node:fs/promises';
+          import {pipeline} from 'node:stream/promises';
+          import {createHash} from 'node:crypto';
+          import path from 'node:path';
+          const dir=process.env.REINSPECT_ROOT, api='/repos/Cookie774-GameDev/VibeSpace/actions/artifacts/11233764188';
+          const metadata=JSON.parse(execFileSync('gh',['api',api],{encoding:'utf8',maxBuffer:1048576}));
+          assert.equal(metadata.id,11233764188); assert.equal(metadata.size_in_bytes,411344590);
+          assert.equal(metadata.digest,'sha256:59fe079dd0f15f61501b4526d5d6eaa1a9fe9be1a04fe75254a2713833314a8c');
+          assert.equal(metadata.expired,false); assert.equal(metadata.name,'unsigned-nsis-diagnostics-37017376631-1');
+          assert.equal(metadata.workflow_run.id,37017376631); assert.equal(metadata.workflow_run.head_sha,'4008ea032e7625db77b9fb3c250b2b50c2fe4788');
+          assert.equal(metadata.workflow_run.repository_id,1256753917);
+          await writeFile(path.join(dir,'artifact-metadata.json'),JSON.stringify(metadata,null,2),{flag:'wx'});
+          const child=spawn('gh',['api',api+'/zip'],{stdio:['ignore','pipe','ignore'],windowsHide:true});
+          const closed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',code=>code===0?resolve():reject(Error('Artifact download failed with exit '+code)));});
+          const zip=path.join(dir,'original-artifact.zip');
+          await Promise.all([closed,pipeline(child.stdout,createWriteStream(zip,{flags:'wx'}))]);
+          assert.equal((await stat(zip)).size,411344590);
+          const hash=createHash('sha256'); for await(const chunk of createReadStream(zip))hash.update(chunk);
+          assert.equal(hash.digest('hex'),'59fe079dd0f15f61501b4526d5d6eaa1a9fe9be1a04fe75254a2713833314a8c');
+          const log=execFileSync('gh',['api','/repos/Cookie774-GameDev/VibeSpace/actions/jobs/110871795273/logs'],{maxBuffer:16777216});
+          await writeFile(path.join(dir,'original-job.log'),log,{flag:'wx'});
+          console.log('Original artifact byte size, full SHA-256, descriptor, and job log preserved.');
+          '@ | Set-Content -LiteralPath (Join-Path $env:REINSPECT_ROOT 'download.mjs') -Encoding utf8NoBOM
+          node (Join-Path $env:REINSPECT_ROOT 'download.mjs')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Provision frozen full 7-Zip without running its installer
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:REINSPECT_ROOT 'tools'
+          New-Item -ItemType Directory -Path $tools | Out-Null
+          $archive = Join-Path $tools '7z2603-x64.exe'
+          Invoke-WebRequest 'https://github.com/ip7z/7zip/releases/download/26.03/7z2603-x64.exe' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant() -cne '0859c524b8a63551848f0c246abddcb1d0b7b656b0fbfe879f8d85e61a9e6edd') { throw 'Pinned official tool archive mismatch.' }
+          $bootstrap = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
+          if (-not (Test-Path -LiteralPath $bootstrap)) { throw 'Runner bootstrap unavailable.' }
+          $full = Join-Path $tools 'full-7zip'
+          & $bootstrap x -y "-o$full" $archive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare matching resources through existing verified hooks
+        working-directory: product
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:desktop-connector
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:siyuan-runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --input-type=module -e "import assert from 'node:assert/strict'; import {fingerprint} from './scripts/prepare-desktop-connector.mjs'; assert.equal(await fingerprint(),'3ef1b27c5fab49c1fcfda65cac522d4061b7557a884f5c811dfaee76ebbfe9af');"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Inspect actual preserved installer binding and complete package closure
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'MSVC inspection tools unavailable.' }
+          $dumpbin = Get-ChildItem -Path (Join-Path $vs 'VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe') -File | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin unavailable.' }
+          $config = @{artifactZip=(Join-Path $env:REINSPECT_ROOT 'original-artifact.zip');artifactMetadata=(Join-Path $env:REINSPECT_ROOT 'artifact-metadata.json');originalJobLog=(Join-Path $env:REINSPECT_ROOT 'original-job.log');sourceRoot=(Join-Path $env:GITHUB_WORKSPACE 'product');verifierRoot=(Join-Path $env:GITHUB_WORKSPACE 'verifier');dumpbin=$dumpbin.FullName;sevenZipArchive=(Join-Path $env:REINSPECT_ROOT 'tools/7z2603-x64.exe');sevenZipExecutable=(Join-Path $env:REINSPECT_ROOT 'tools/full-7zip/7z.exe');outputDir=(Join-Path $env:REINSPECT_ROOT 'proof')}
+          $config | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $env:REINSPECT_ROOT 'trusted-config.json') -Encoding utf8NoBOM
+          node verifier/scripts/s61-nsis-reinspect.mjs --config (Join-Path $env:REINSPECT_ROOT 'trusted-config.json')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain reinspection evidence and first failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: s61-existing-nsis-reinspection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/s61-existing-nsis-reinspection/capacity.json
+            ${{ runner.temp }}/s61-existing-nsis-reinspection/artifact-metadata.json
+            ${{ runner.temp }}/s61-existing-nsis-reinspection/trusted-config.json
+            ${{ runner.temp }}/s61-existing-nsis-reinspection/tracked-source-comparison.json
+            ${{ runner.temp }}/s61-existing-nsis-reinspection/proof/**/*.json
+            ${{ runner.temp }}/s61-existing-nsis-reinspection/proof/**/*.txt
+          if-no-files-found: error
+          retention-days: 3
