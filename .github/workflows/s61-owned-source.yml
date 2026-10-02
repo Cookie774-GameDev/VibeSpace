@@ -223,8 +223,6 @@ jobs:
             $changed = @(git diff --name-only $previous '${{ github.sha }}')
             if ($LASTEXITCODE -ne 0) { throw 'Cannot prove changed build inputs.' }
             $nativeChanged = @($changed | Where-Object {
-              $_ -notmatch '^app/src/' -and
-              $_ -cne '.github/workflows/s61-owned-source.yml' -and
               $_ -notmatch '^work/sol61-mission-20261001-S61/'
             }).Count -gt 0
             $frontendChanged = @($changed | Where-Object {
