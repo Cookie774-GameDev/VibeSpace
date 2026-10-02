@@ -79,6 +79,55 @@ describe('pollEventReminders', () => {
     mocks.notifyDone.mockResolvedValue({ channel: 'none', permission: 'denied' });
   });
 
+  it.each([
+    ['none', { channel: 'none', permission: 'denied', message: 'OS denied' }],
+    ['unavailable', { channel: 'none', permission: 'unavailable', message: 'No adapter dispatch' }],
+  ])('S61B2 retains desktop-only %s delivery for recovery', async (_label, result) => {
+    const read = persist(event({
+      title: 'S61B2 desktop-only recovery',
+      reminders: [{ offset_min: 0, channels: ['desktop'] }],
+    }));
+    mocks.notifyDone.mockResolvedValueOnce(result);
+    await expect(pollEventReminders(ANCHOR, () => 'S61B2-denied')).resolves.toBe(0);
+    expect(read().reminders[0]?.last_fired_start_at).toBeUndefined();
+    expect(read().reminders[0]?.delivery_claim).toBeUndefined();
+    expect(mocks.toastInfo).not.toHaveBeenCalled();
+
+    mocks.notifyDone.mockResolvedValueOnce({
+      channel: 'native', permission: 'granted', message: 'Native accepted',
+    });
+    await expect(pollEventReminders(ANCHOR + 30_000, () => 'S61B2-recovered')).resolves.toBe(1);
+    expect(read().reminders[0]?.last_fired_start_at).toBe(ANCHOR);
+    await expect(pollEventReminders(ANCHOR + 60_000, () => 'S61B2-duplicate')).resolves.toBe(0);
+    expect(mocks.notifyDone).toHaveBeenCalledTimes(2);
+  });
+
+  it('S61B2 preserves an intentional master-muted desktop reminder policy', async () => {
+    const read = persist(event({ reminders: [{ offset_min: 0, channels: ['desktop'] }] }));
+    mocks.getUiState.mockReturnValue({ notificationMaster: false, doneNotifications: { reminders: true } });
+    await expect(pollEventReminders(ANCHOR, () => 'S61B2-muted')).resolves.toBe(1);
+    expect(read().reminders[0]?.last_fired_start_at).toBe(ANCHOR);
+    expect(mocks.notifyDone).not.toHaveBeenCalled();
+  });
+
+  it('S61B2 keeps in-app delivery when desktop delivery is unavailable', async () => {
+    const read = persist(event({ reminders: [{ offset_min: 0, channels: ['desktop', 'in_app'] }] }));
+    await expect(pollEventReminders(ANCHOR, () => 'S61B2-in-app')).resolves.toBe(1);
+    expect(read().reminders[0]?.last_fired_start_at).toBe(ANCHOR);
+    expect(mocks.toastInfo).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ['uncertain native', { channel: 'none', permission: 'granted', message: 'Unconfirmed' }],
+    ['already handled identity', null],
+  ])('S61B2 retires %s without automatic duplicate OS dispatch', async (_label, result) => {
+    const read = persist(event({ reminders: [{ offset_min: 0, channels: ['desktop'] }] }));
+    mocks.notifyDone.mockResolvedValueOnce(result);
+    await expect(pollEventReminders(ANCHOR, () => 'S61B2-uncertain')).resolves.toBe(1);
+    await expect(pollEventReminders(ANCHOR + 30_000, () => 'S61B2-replay')).resolves.toBe(0);
+    expect(read().reminders[0]?.last_fired_start_at).toBe(ANCHOR);
+    expect(mocks.notifyDone).toHaveBeenCalledOnce();
+    // Processed/retired marker is not proof that Windows displayed a banner.
+  });
   it('delivers 15-minute and at-time event reminders once despite denied OS permission', async () => {
     const read = persist(event());
     await expect(pollEventReminders(ANCHOR - 15 * 60 * 1000, () => 'claim_before')).resolves.toBe(

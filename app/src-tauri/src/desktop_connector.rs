@@ -2,8 +2,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::Read,
-    path::PathBuf,
+    io::{Read, Seek},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Mutex,
     time::{Duration, Instant},
@@ -226,46 +226,118 @@ fn unpack(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|_| "Connector storage unavailable.")?
         .join("desktop-connector")
         .join(expected);
-    if root.join(".installed").is_file() {
-        return Ok(root);
+    unpack_verified_bundle(&resources.join("runtime.zip"), expected, &root)
+}
+
+const REQUIRED_CONNECTOR_FILES: &[&str] = &[
+    "runtime/node.exe", "runtime/tunnel-client.exe", "runtime/cloudflared.exe",
+    "gateway.mjs", "supervisor.mjs", "startup.mjs", "startup.ps1",
+    "startup.vbs", "setup/index.html",
+];
+
+// Refuse both symbolic links and Windows junction/reparse destinations before repair.
+fn connector_path_is_unlinked(path: &Path) -> Result<(), String> {
+    for ancestor in path.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                let mut linked = metadata.file_type().is_symlink();
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    linked |= metadata.file_attributes() & 0x400 != 0;
+                }
+                if linked {
+                    return Err("Connector linked storage is not supported.".into());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("Cannot inspect connector storage.".into()),
+        }
     }
-    let archive_path = resources.join("runtime.zip");
-    let mut input = fs::File::open(&archive_path)
+    Ok(())
+}
+
+fn connector_required_files_match(
+    archive: &mut zip::ZipArchive<fs::File>, root: &Path,
+) -> Result<bool, String> {
+    for required in REQUIRED_CONNECTOR_FILES {
+        let path = root.join(required);
+        connector_path_is_unlinked(&path)?;
+        let mut entry = archive.by_name(required)
+            .map_err(|_| "Connector package is incomplete.")?;
+        if entry.is_dir() || entry.size() == 0 {
+            return Err("Connector package is incomplete.".into());
+        }
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => return Err("Cannot inspect connector storage.".into()),
+        };
+        if !metadata.is_file() || metadata.len() != entry.size() { return Ok(false); }
+        let mut installed = fs::File::open(path).map_err(|_| "Cannot inspect connector file.")?;
+        let mut packaged_bytes = [0; 65536];
+        let mut installed_bytes = [0; 65536];
+        loop {
+            let n = entry.read(&mut packaged_bytes).map_err(|_| "Invalid connector entry.")?;
+            if n == 0 { break; }
+            installed.read_exact(&mut installed_bytes[..n])
+                .map_err(|_| "Cannot inspect connector file.")?;
+            if packaged_bytes[..n] != installed_bytes[..n] { return Ok(false); }
+        }
+    }
+    Ok(true)
+}
+
+fn unpack_verified_bundle(archive_path: &Path, expected: &str, root: &Path) -> Result<PathBuf, String> {
+    let mut input = fs::File::open(archive_path)
         .map_err(|_| "Connector package missing. Reinstall VibeSpace.")?;
     let mut hasher = Sha256::new();
     let mut buffer = [0; 65536];
     loop {
-        let n = input
-            .read(&mut buffer)
-            .map_err(|_| "Cannot verify connector package.")?;
-        if n == 0 {
-            break;
-        }
+        let n = input.read(&mut buffer).map_err(|_| "Cannot verify connector package.")?;
+        if n == 0 { break; }
         hasher.update(&buffer[..n]);
     }
     if format!("{:x}", hasher.finalize()) != expected {
         return Err("Connector package verification failed. Reinstall VibeSpace.".into());
     }
-    let mut archive = zip::ZipArchive::new(
-        fs::File::open(archive_path).map_err(|_| "Connector package unavailable.")?,
-    )
-    .map_err(|_| "Invalid connector archive.")?;
-    fs::create_dir_all(&root).map_err(|_| "Cannot prepare connector storage.")?;
+    input.rewind().map_err(|_| "Connector package unavailable.")?;
+    let mut archive = zip::ZipArchive::new(input).map_err(|_| "Invalid connector archive.")?;
+    let marker = root.join(".installed");
+    connector_path_is_unlinked(&marker)?;
+    // Validate every archive destination before changing any installed bytes.
     for i in 0..archive.len() {
-        let mut entry = archive
-            .by_index(i)
-            .map_err(|_| "Invalid connector entry.")?;
-        let relative = entry
-            .enclosed_name()
-            .ok_or("Unsafe connector entry.")?
-            .to_owned();
-        if entry
-            .unix_mode()
-            .is_some_and(|mode| mode & 0o170000 == 0o120000)
-        {
-            return Err("Connector symbolic links are not supported.".into());
+        let entry = archive.by_index(i).map_err(|_| "Invalid connector entry.")?;
+        let relative = entry.enclosed_name().ok_or("Unsafe connector entry.")?;
+        if relative == Path::new(".installed") || entry.unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000) {
+            return Err("Unsafe connector entry.".into());
         }
+        connector_path_is_unlinked(&root.join(relative))?;
+    }
+    // Validate the required archive closure even when installation is missing.
+    for required in REQUIRED_CONNECTOR_FILES {
+        let entry = archive.by_name(required).map_err(|_| "Connector package is incomplete.")?;
+        if entry.is_dir() || entry.size() == 0 { return Err("Connector package is incomplete.".into()); }
+    }
+    let stamped = match fs::symlink_metadata(&marker) {
+        Ok(metadata) if metadata.is_file() && metadata.len() == expected.len() as u64 =>
+            fs::read(&marker).map_err(|_| "Cannot inspect connector installation.")? == expected.as_bytes(),
+        Ok(metadata) if !metadata.is_file() => return Err("Invalid connector installation marker.".into()),
+        Ok(_) => false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => return Err("Cannot inspect connector installation.".into()),
+    };
+    if stamped && connector_required_files_match(&mut archive, root)? { return Ok(root.to_owned()); }
+    fs::create_dir_all(root).map_err(|_| "Cannot prepare connector storage.")?;
+    if marker.exists() {
+        fs::remove_file(&marker).map_err(|_| "Cannot invalidate connector installation.")?;
+    }
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|_| "Invalid connector entry.")?;
+        let relative = entry.enclosed_name().ok_or("Unsafe connector entry.")?;
         let dest = root.join(relative);
+        connector_path_is_unlinked(&dest)?;
         if entry.is_dir() {
             fs::create_dir_all(dest).map_err(|_| "Cannot prepare connector folder.")?;
         } else {
@@ -276,25 +348,13 @@ fn unpack(app: &AppHandle) -> Result<PathBuf, String> {
             std::io::copy(&mut entry, &mut output).map_err(|_| "Cannot unpack connector.")?;
         }
     }
-    for required in [
-        "runtime/node.exe",
-        "runtime/tunnel-client.exe",
-        "runtime/cloudflared.exe",
-        "gateway.mjs",
-        "supervisor.mjs",
-        "startup.mjs",
-        "startup.ps1",
-        "startup.vbs",
-        "setup/index.html",
-    ] {
-        if !root.join(required).is_file() {
-            return Err("Connector package is incomplete.".into());
-        }
+    if !connector_required_files_match(&mut archive, root)? {
+        return Err("Connector package is incomplete.".into());
     }
-    fs::write(root.join(".installed"), expected)
-        .map_err(|_| "Cannot finalize connector installation.")?;
-    Ok(root)
+    fs::write(marker, expected).map_err(|_| "Cannot finalize connector installation.")?;
+    Ok(root.to_owned())
 }
+
 fn start_connector(app: &AppHandle, open_setup: bool) -> Result<(), String> {
     let state = app.state::<DesktopConnectorState>();
     let _guard = state.0.lock().map_err(|_| "Connector setup is busy.")?;
@@ -594,4 +654,113 @@ mod tests {
             );
         }
     }
+    struct BundleFixture { temp: PathBuf, archive: PathBuf, root: PathBuf, expected: String }
+    impl BundleFixture {
+        fn new(omit: Option<&str>) -> Self {
+            use std::io::Write;
+            let temp = std::env::temp_dir().join(format!("vibespace-connector-repair-{}-{}",
+                std::process::id(), std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            fs::create_dir_all(&temp).unwrap();
+            let archive = temp.join("runtime.zip");
+            let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+            for required in REQUIRED_CONNECTOR_FILES {
+                if omit == Some(*required) { continue; }
+                zip.start_file(*required, zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored)).unwrap();
+                zip.write_all(format!("synthetic-bundle:{required}").as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+            let expected = format!("{:x}", Sha256::digest(fs::read(&archive).unwrap()));
+            let root = temp.join("desktop-connector").join(&expected);
+            Self { temp, archive, root, expected }
+        }
+        fn install(&self) -> Result<PathBuf, String> {
+            unpack_verified_bundle(&self.archive, &self.expected, &self.root)
+        }
+    }
+    impl Drop for BundleFixture {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.temp); }
+    }
+
+    #[test]
+    fn connector_retry_repairs_missing_node_without_changing_saved_state() {
+        let fixture = BundleFixture::new(None);
+        fixture.install().unwrap();
+        let state = fixture.root.parent().unwrap().join("state");
+        fs::create_dir_all(&state).unwrap();
+        fs::write(state.join("setup.json"), b"synthetic-saved-setup").unwrap();
+        fs::remove_file(fixture.root.join("runtime/node.exe")).unwrap();
+        assert_eq!(fixture.install().unwrap(), fixture.root);
+        assert_eq!(fs::read(fixture.root.join("runtime/node.exe")).unwrap(),
+            b"synthetic-bundle:runtime/node.exe");
+        assert_eq!(fs::read(state.join("setup.json")).unwrap(), b"synthetic-saved-setup");
+    }
+
+    #[test]
+    fn connector_repairs_nonempty_required_file_tamper_and_invalid_stamp() {
+        let fixture = BundleFixture::new(None);
+        fixture.install().unwrap();
+        // Same length defeats a size-only installation check.
+        let node = fixture.root.join("runtime/node.exe");
+        fs::write(&node, vec![b'x'; fs::metadata(&node).unwrap().len() as usize]).unwrap();
+        fixture.install().unwrap();
+        assert_eq!(fs::read(&node).unwrap(), b"synthetic-bundle:runtime/node.exe");
+        fs::write(fixture.root.join(".installed"), "f".repeat(64)).unwrap();
+        fixture.install().unwrap();
+        assert_eq!(fs::read(fixture.root.join(".installed")).unwrap(), fixture.expected.as_bytes());
+    }
+
+    #[test]
+    fn connector_verified_warm_retry_does_not_rewrite_or_remove_unknown_files() {
+        let fixture = BundleFixture::new(None);
+        fixture.install().unwrap();
+        let node = fixture.root.join("runtime/node.exe");
+        let before = fs::metadata(&node).unwrap().modified().unwrap();
+        fs::write(fixture.root.join("user-note.txt"), b"preserve").unwrap();
+        fixture.install().unwrap();
+        assert_eq!(fs::metadata(node).unwrap().modified().unwrap(), before);
+        assert_eq!(fs::read(fixture.root.join("user-note.txt")).unwrap(), b"preserve");
+    }
+
+    #[test]
+    fn connector_rejects_tampered_archive_before_any_installed_write() {
+        let fixture = BundleFixture::new(None);
+        fixture.install().unwrap();
+        let marker = fs::read(fixture.root.join(".installed")).unwrap();
+        fs::write(&fixture.archive, b"not-the-pinned-archive").unwrap();
+        assert!(fixture.install().unwrap_err().contains("verification failed"));
+        assert_eq!(fs::read(fixture.root.join(".installed")).unwrap(), marker);
+        assert_eq!(fs::read(fixture.root.join("runtime/node.exe")).unwrap(),
+            b"synthetic-bundle:runtime/node.exe");
+    }
+
+    #[test]
+    fn connector_incomplete_bundle_never_stamps_success_even_with_existing_sentinel() {
+        let fixture = BundleFixture::new(Some("runtime/node.exe"));
+        fs::create_dir_all(&fixture.root).unwrap();
+        fs::write(fixture.root.join(".installed"), &fixture.expected).unwrap();
+        assert!(fixture.install().unwrap_err().contains("incomplete"));
+        assert!(!fixture.root.join("gateway.mjs").exists());
+        // A verified corrected package has a different content-addressed root.
+        let corrected = BundleFixture::new(None);
+        corrected.install().unwrap();
+        corrected.install().unwrap();
+        assert!(corrected.root.join("runtime/node.exe").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connector_refuses_linked_runtime_before_overwriting_external_target() {
+        let fixture = BundleFixture::new(None);
+        fs::create_dir_all(&fixture.root).unwrap();
+        let outside = fixture.temp.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("node.exe"), b"outside-owned-file").unwrap();
+        std::os::unix::fs::symlink(&outside, fixture.root.join("runtime")).unwrap();
+        assert!(fixture.install().unwrap_err().contains("linked storage"));
+        assert_eq!(fs::read(outside.join("node.exe")).unwrap(), b"outside-owned-file");
+        assert!(!fixture.root.join(".installed").exists());
+    }
+
 }

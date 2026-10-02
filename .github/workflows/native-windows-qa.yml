@@ -94,6 +94,12 @@ jobs:
         with:
           node-version: 22
 
+      - name: Verify Windows first-install contracts
+        if: ${{ hashFiles('install/install.ps1', 'scripts/install-windows.test.mjs') != '' }}
+        run: |
+          node --test scripts/install-windows.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.96.0
@@ -178,3 +184,251 @@ jobs:
             work/native-windows-qa/*.log
           if-no-files-found: warn
           retention-days: 3
+
+  nsis-proof:
+    # Build-only static package proof; executable/VM acceptance is a separate gate.
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      QA_SOURCE_SHA: ${{ inputs.source_sha }}
+      QA_CARGO_LOCK_SHA256: ${{ inputs.cargo_lock_sha256 }}
+      QA_WINDOWS_CONFIG_SHA256: ${{ inputs.windows_config_sha256 }}
+      QA_CONNECTOR_SHA256: ${{ inputs.connector_source_sha256 }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/work/s61-unsigned-nsis-target
+      ORT_CACHE_DIR: ${{ github.workspace }}/work/s61-unsigned-nsis-target/ort-cache
+      CARGO_BUILD_JOBS: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.96.0
+          targets: x86_64-pc-windows-msvc
+      - name: Initialize source-bound unsigned package proof
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:QA_SOURCE_SHA -cnotmatch '^[a-f0-9]{40}$' -or (git rev-parse HEAD) -cne $env:QA_SOURCE_SHA) { throw 'Source identity mismatch.' }
+          foreach ($value in @($env:QA_CARGO_LOCK_SHA256, $env:QA_WINDOWS_CONFIG_SHA256, $env:QA_CONNECTOR_SHA256)) {
+            if ($value -cnotmatch '^[a-f0-9]{64}$') { throw 'Full lowercase SHA-256 required.' }
+          }
+          # Checkout blob bytes rather than relying on runner line-ending defaults.
+          git -c core.autocrlf=false -c core.eol=lf checkout -- .
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen checkout failed.' }
+          if ((Get-FileHash '.github/native-windows-qa/Cargo.lock').Hash.ToLowerInvariant() -cne $env:QA_CARGO_LOCK_SHA256) { throw 'Frozen lock mismatch.' }
+          if ((Get-FileHash 'app/src-tauri/tauri.windows.conf.json').Hash.ToLowerInvariant() -cne $env:QA_WINDOWS_CONFIG_SHA256) { throw 'Windows configuration mismatch.' }
+          Copy-Item '.github/native-windows-qa/Cargo.lock' 'app/src-tauri/Cargo.lock'
+          $proof = Join-Path $env:GITHUB_WORKSPACE 'work/s61-nsis-proof'
+          if (Test-Path -LiteralPath $proof) { throw 'Proof output already exists.' }
+          New-Item -ItemType Directory -Path $proof | Out-Null
+          $qaConfig = Join-Path $env:RUNNER_TEMP 's61-unsigned-nsis.generated.json'
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -LiteralPath $qaConfig -Encoding utf8NoBOM
+          @("NSIS_PROOF_DIR=$proof", "NSIS_QA_CONFIG=$qaConfig", "VIBESPACE_CONNECTOR_BUILD_DIR=$(Join-Path $env:RUNNER_TEMP 's61-nsis-connector')", "VIBESPACE_SIYUAN_CACHE_DIR=$(Join-Path $env:RUNNER_TEMP 's61-nsis-siyuan')") | Add-Content -LiteralPath $env:GITHUB_ENV
+          # Store a reusable stricter admission gate; the cold-tree estimates are projections.
+          @'
+          $ErrorActionPreference = 'Stop'
+          $os = Get-CimInstance Win32_OperatingSystem
+          $ram = [math]::Floor($os.FreePhysicalMemory / 1024)
+          $commit = [math]::Floor($os.FreeVirtualMemory / 1024)
+          $volumes = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:CARGO_TARGET_DIR, $env:ORT_CACHE_DIR) | ForEach-Object { [IO.Path]::GetPathRoot($_) } | Sort-Object -Unique
+          $disks = @($volumes | ForEach-Object { $id = $_.TrimEnd('\'); $d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$id'"; if (-not $d) { throw 'Output/cache volume unavailable.' }; @{ volume=$id; freeBytes=[long]$d.FreeSpace } })
+          @{ phase=$args[0]; freeRamMiB=$ram; freeCommitMiB=$commit; disks=$disks; estimatedPeakRamMiB=8192; estimatedPeakCommitMiB=12288; estimatedDiskBytes=21474836480; estimatesMeasured=$false; measuredAtUTC=[DateTime]::UtcNow.ToString('o') } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $env:NSIS_PROOF_DIR ("capacity-"+$args[0]+'.json'))
+          if ($ram -lt 11264 -or $commit -lt 16384 -or @($disks | Where-Object freeBytes -lt 21474836480).Count) { throw 'NSIS capacity denied: need 11GiB free RAM, 16GiB commit and 20GiB on each output/cache volume.' }
+          '@ | Set-Content (Join-Path $proof 'admit.ps1') -Encoding utf8NoBOM
+      - name: Admit cold resource preparation
+        run: '& (Join-Path $env:NSIS_PROOF_DIR ''admit.ps1'') before-prepare'
+      - name: Install locked build tools and verify installer contracts
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test scripts/install-windows.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $cli = Get-Content node_modules/@tauri-apps/cli/package.json -Raw | ConvertFrom-Json
+          if ($cli.version -cne '2.11.2') { throw 'Reaudit NSIS/tool pins for changed Tauri CLI.' }
+      - name: Stage safe archive and actual package verifier
+        run: |
+          @'
+          import assert from 'node:assert/strict';
+          import {execFileSync} from 'node:child_process';
+          import {lstat,readdir,readFile,writeFile,mkdir,realpath} from 'node:fs/promises';
+          import path from 'node:path';
+          import {pathToFileURL} from 'node:url';
+          const root=process.env.GITHUB_WORKSPACE, evidence=process.env.NSIS_PROOF_DIR;
+          const {inspectPeImage,sha256,parseDllReports,verifyDllImports}=await import(pathToFileURL(path.join(root,'scripts/native-windows-qa.mjs')));
+          const save=async(name,value)=>writeFile(path.join(evidence,name),JSON.stringify(value,null,2)+'\n');
+          async function walk(dir,base=dir) {
+            const files=[];
+            for(const entry of await readdir(dir,{withFileTypes:true})) {
+              const file=path.join(dir,entry.name), st=await lstat(file);
+              assert(!st.isSymbolicLink() && (st.isDirectory()||st.isFile()),'Linked/special extracted entry');
+              const rel=path.relative(await realpath(base),await realpath(file));
+              assert(rel && !rel.startsWith('..') && !path.isAbsolute(rel),'Extracted path escape');
+              if(st.isDirectory()) files.push(...await walk(file,base)); else files.push(file);
+            }
+            return files;
+          }
+          if(process.argv[2]==='extract') {
+            const [tool,archive,out]=process.argv.slice(3);
+            assert(!(await lstat(out).catch(()=>null)),'Extraction target must be new');
+            const listing=execFileSync(tool,['l','-slt','-ba',archive],{encoding:'utf8',maxBuffer:64*1024*1024});
+            const entries=listing.trim().split(/\r?\n\s*\r?\n/u).map(block=>Object.fromEntries(block.split(/\r?\n/u).map(line=>{ const i=line.indexOf(' = '); return i<0?[line,'']:[line.slice(0,i),line.slice(i+3)]; })));
+            const seen=new Set();
+            for(const entry of entries) {
+              const name=entry.Path?.replaceAll('\\','/');
+              assert(name && !name.startsWith('/') && !name.includes(':') && !name.split('/').some(x=>x==='..'||x==='.'||x===''),'Unsafe archive path');
+              assert(!seen.has(name.toLowerCase()),'Archive case collision'); seen.add(name.toLowerCase());
+              assert(!entry['Symbolic Link'] && !entry['Hard Link'] && !/L/u.test(entry.Attributes||''),'Archive link rejected');
+            }
+            await save(path.basename(out)+'-entries.json',entries);
+            await mkdir(out);
+            execFileSync(tool,['x','-y','-o'+out,archive],{encoding:'utf8',maxBuffer:64*1024*1024});
+            const files=await walk(out), paths=new Set();
+            for(const file of files) { const rel=path.relative(out,file).toLowerCase(); assert(!paths.has(rel),'Extracted case collision'); paths.add(rel); }
+          } else if(process.argv[2]==='prove') {
+            const [extracted,built,installer,dumpbin]=process.argv.slice(3);
+            const files=await walk(extracted);
+            const exes=files.filter(x=>path.basename(x).toLowerCase()==='jarvis.exe'); assert.equal(exes.length,1,'Exactly one installed jarvis.exe required');
+            const exe=exes[0], appDir=path.dirname(exe);
+            await save('package-files.json',await Promise.all(files.map(async file=>({path:path.relative(extracted,file).replaceAll('\\','/'),bytes:(await lstat(file)).size,sha256:await sha256(file)}))));
+            assert.equal(await sha256(exe),await sha256(built),'Extracted executable differs from built release');
+            const pe=await inspectPeImage(exe);
+            await save('source-manifest.json',{sourceSHA:process.env.QA_SOURCE_SHA,sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}'],{encoding:'utf8'}).trim(),workflowSHA:process.env.GITHUB_SHA,cargoLockSHA256:await sha256(path.join(root,'app/src-tauri/Cargo.lock')),windowsConfigSHA256:await sha256(path.join(root,'app/src-tauri/tauri.windows.conf.json')),qaConfigSHA256:await sha256(process.env.NSIS_QA_CONFIG),verifierSHA256:await sha256(path.join(root,'scripts/native-windows-qa.mjs')),installerSHA256:await sha256(installer)});
+            const dlls=(await readdir(appDir)).filter(x=>x.toLowerCase().endsWith('.dll'));
+            const inventory={sourceSHA:process.env.QA_SOURCE_SHA,executableSHA256:await sha256(exe),files:await Promise.all(dlls.map(async name=>({name,...await inspectPeImage(path.join(appDir,name),true),sha256:await sha256(path.join(appDir,name))})))};
+            await save('dll-inventory.json',inventory);
+            const reports=[exe,...dlls.map(x=>path.join(appDir,x))].map(file=>execFileSync(dumpbin,['/DEPENDENTS',file],{encoding:'utf8',maxBuffer:16*1024*1024})).join('\n');
+            await writeFile(path.join(evidence,'dll-dependencies.txt'),reports);
+            // An empty app-local closure fails the existing verifier explicitly; no host-DLL fallback.
+            const modules=parseDllReports(reports);
+
+            const base=path.join(root,'app/src-tauri');
+            const config=JSON.parse(await readFile(path.join(base,'tauri.windows.conf.json'),'utf8'));
+            assert(Array.isArray(config.bundle.resources),'Windows resource array required');
+            const candidates=[...await walk(path.join(base,'resources')),...await walk(path.join(root,'docs/oss'))];
+            const expected=new Map();
+            for(const pattern of config.bundle.resources) {
+              assert(typeof pattern==='string','Reaudit changed resource schema');
+              const re=new RegExp('^'+pattern.split(/(\*\*\/|\*\*|\*)/u).map(x=>x==='**/'?'(?:.*/)?':x==='**'?'.*':x==='*'?'[^/]*':x.replace(/[.+?^${}()|[\]\\]/gu,'\\$&')).join('')+'$');
+              const matches=candidates.filter(file=>re.test(path.relative(base,file).replaceAll('\\','/'))); assert(matches.length,'Resource pattern matched nothing: '+pattern);
+              for(const file of matches) {
+                const rel=path.relative(base,file).replaceAll('\\','/');
+                const target=rel.split('/').map(x=>x==='..'?'_up_':x).join('/');
+                assert(!expected.has(target.toLowerCase()),'Resource target collision'); expected.set(target.toLowerCase(),{file,target});
+              }
+            }
+            await save('expected-resources.json',[...expected.values()].map(({target})=>({path:target})));
+            await save('exe-pe-manifest.json',{...pe,sha256:await sha256(exe),sourceSHA:process.env.QA_SOURCE_SHA});
+            const resources=[];
+            for(const {file,target} of expected.values()) {
+              const packaged=path.join(appDir,...target.split('/'));
+              assert.equal(await sha256(packaged),await sha256(file),'Missing/changed packaged resource: '+target);
+              resources.push({path:target,bytes:(await lstat(packaged)).size,sha256:await sha256(packaged)});
+            }
+            const connector=JSON.parse(await readFile(path.join(appDir,'resources/desktop-connector/manifest.json'),'utf8'));
+            assert.equal(connector.platform,'win32-x64'); assert.equal(await sha256(path.join(appDir,'resources/desktop-connector/runtime.zip')),connector.sha256);
+            assert((await lstat(path.join(appDir,'resources/siyuan-runtime/VIBESPACE_SIYUAN_READY.json'))).isFile());
+            await save('resource-manifest.json',resources);
+            const closure=verifyDllImports(modules,inventory);
+            await save('dll-closure.json',closure);
+            await save('package-proof.json',{sourceSHA:process.env.QA_SOURCE_SHA,sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}'],{encoding:'utf8'}).trim(),workflowSHA:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,installer:{file:path.basename(installer),bytes:(await lstat(installer)).size,sha256:await sha256(installer)},executable:{...pe,sha256:await sha256(exe)},cargoLockSHA256:await sha256(path.join(base,'Cargo.lock')),windowsConfigSHA256:await sha256(path.join(base,'tauri.windows.conf.json')),qaConfigSHA256:await sha256(process.env.NSIS_QA_CONFIG),verifierSHA256:await sha256(path.join(root,'scripts/native-windows-qa.mjs')),resources:resources.length,dlls:dlls.length,staticPackageProof:'PASS',installerExecuted:false,nativeAcceptance:'UNVERIFIED',cleanWindowsVM:'UNVERIFIED'});
+          } else throw Error('Expected extract or prove');
+          '@ | Set-Content (Join-Path $env:NSIS_PROOF_DIR 'inspect.mjs') -Encoding utf8NoBOM
+      - name: Provision integrity-pinned NSIS and full extraction tooling
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 's61-nsis-tools'
+          if (Test-Path $tools) { throw 'Fresh tool directory required.' }
+          New-Item -ItemType Directory $tools | Out-Null
+          $archive = Join-Path $tools '7z2603-x64.exe'
+          Invoke-WebRequest 'https://github.com/ip7z/7zip/releases/download/26.03/7z2603-x64.exe' -OutFile $archive
+          if ((Get-FileHash $archive).Hash.ToLowerInvariant() -cne '0859c524b8a63551848f0c246abddcb1d0b7b656b0fbfe879f8d85e61a9e6edd') { throw 'Official 7-Zip 26.03 archive digest mismatch.' }
+          $bootstrap = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
+          if (-not (Test-Path $bootstrap)) { throw 'Runner image 7-Zip unavailable; no installer fallback.' }
+          $full = Join-Path $tools 'full-7zip'
+          node (Join-Path $env:NSIS_PROOF_DIR 'inspect.mjs') extract $bootstrap $archive $full
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $seven = Join-Path $full '7z.exe'
+          if (-not (Test-Path $seven) -or -not (Test-Path (Join-Path $full '7z.dll'))) { throw 'Full NSIS-capable 7-Zip tools missing.' }
+          $sevenVersion = & $seven i
+          if ($LASTEXITCODE -ne 0 -or ($sevenVersion -join "`n") -notmatch '7-Zip 26\.03') { throw '7-Zip version mismatch.' }
+          $zip = Join-Path $tools 'nsis-3.11.zip'
+          Invoke-WebRequest 'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip' -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA1).Hash -cne 'EF7FF767E5CBD9EDD22ADD3A32C9B8F4500BB10D') { throw 'Tauri-pinned NSIS archive mismatch.' }
+          $cache = Join-Path $env:LOCALAPPDATA 'tauri'
+          $nsis = Join-Path $cache 'NSIS'
+          if (Test-Path $nsis) { throw 'Refusing unverified existing NSIS cache.' }
+          $unpacked = Join-Path $tools 'nsis-extracted'
+          node (Join-Path $env:NSIS_PROOF_DIR 'inspect.mjs') extract $seven $zip $unpacked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path $cache -Force | Out-Null
+          Move-Item -LiteralPath (Join-Path $unpacked 'nsis-3.11') -Destination $nsis
+          $plugin = Join-Path $nsis 'Plugins/x86-unicode/additional/nsis_tauri_utils.dll'
+          New-Item -ItemType Directory -Path (Split-Path $plugin) -Force | Out-Null
+          Invoke-WebRequest 'https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll' -OutFile $plugin
+          if ((Get-FileHash $plugin -Algorithm SHA1).Hash -cne '75197FEE3C6A814FE035788D1C34EAD39349B860') { throw 'Tauri NSIS plugin mismatch.' }
+          $compilerVersion = & (Join-Path $nsis 'makensis.exe') /VERSION
+          if ($LASTEXITCODE -ne 0 -or $compilerVersion -notmatch '3\.11') { throw 'NSIS compiler version mismatch.' }
+          @{ cli='2.11.2'; sevenZip='26.03'; sevenZipArchiveSHA256=(Get-FileHash $archive).Hash; sevenZipExeSHA256=(Get-FileHash $seven).Hash; sevenZipDllSHA256=(Get-FileHash (Join-Path $full '7z.dll')).Hash; runnerBootstrapSHA256=(Get-FileHash $bootstrap).Hash; runnerImage=$env:ImageVersion; nsisVersion=$compilerVersion; nsisArchiveSHA1=(Get-FileHash $zip -Algorithm SHA1).Hash; nsisCompilerSHA256=(Get-FileHash (Join-Path $nsis 'makensis.exe')).Hash; nsisPluginSHA1=(Get-FileHash $plugin -Algorithm SHA1).Hash } | ConvertTo-Json | Set-Content (Join-Path $env:NSIS_PROOF_DIR 'tool-manifest.json')
+          "NSIS_SEVEN_ZIP=$seven" | Add-Content -LiteralPath $env:GITHUB_ENV
+      - name: Prepare verified resource inputs
+        run: |
+          npm run prepare:desktop-connector
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:siyuan-runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --input-type=module -e "import assert from 'node:assert/strict'; import {fingerprint} from './scripts/prepare-desktop-connector.mjs'; assert.equal(await fingerprint(),process.env.QA_CONNECTOR_SHA256);"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Admit and build unsigned NSIS release package
+        run: |
+          & (Join-Path $env:NSIS_PROOF_DIR 'admit.ps1') before-build
+          if (Test-Path -LiteralPath $env:CARGO_TARGET_DIR) { throw 'Fresh isolated Cargo target required.' }
+          npm --prefix app run tauri:build -- --bundles nsis --no-sign --ci --config $env:NSIS_QA_CONFIG -- --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash 'app/src-tauri/Cargo.lock').Hash.ToLowerInvariant() -cne $env:QA_CARGO_LOCK_SHA256) { throw 'Build changed frozen Cargo lock.' }
+      - name: Inspect actual extracted NSIS DLL and resource closure
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packages = @(Get-ChildItem -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release/bundle/nsis') -Filter '*.exe' -File)
+          if ($packages.Count -ne 1) { throw 'Exactly one unsigned NSIS artifact required.' }
+          $package = $packages[0].FullName
+          $extracted = Join-Path $env:RUNNER_TEMP 's61-nsis-extracted'
+          node (Join-Path $env:NSIS_PROOF_DIR 'inspect.mjs') extract $env:NSIS_SEVEN_ZIP $package $extracted
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'MSVC inspection tools unavailable.' }
+          $dumpbin = Get-ChildItem -Path (Join-Path $vs 'VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe') -File | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin unavailable.' }
+          Copy-Item -LiteralPath $package -Destination $env:NSIS_PROOF_DIR
+          node (Join-Path $env:NSIS_PROOF_DIR 'inspect.mjs') prove $extracted (Join-Path $env:CARGO_TARGET_DIR 'release/jarvis.exe') $package $dumpbin.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -LiteralPath $env:NSIS_QA_CONFIG -Destination $env:NSIS_PROOF_DIR
+      - name: Upload unsigned package and static proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-nsis-proof-${{ inputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work/s61-nsis-proof/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 6
+      - name: Upload package diagnostics even on a failed proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-nsis-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            work/s61-nsis-proof/*.json
+            work/s61-nsis-proof/*.txt
+            work/s61-nsis-proof/*.ps1
+            work/s61-nsis-proof/*.mjs
+            work/s61-nsis-proof/*.exe
+          if-no-files-found: warn
+          retention-days: 3
+          compression-level: 6

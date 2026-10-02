@@ -1,3 +1,4 @@
+import { recordCodexSchemaReceipt, toolReceiptBinding } from './providerToolSchemaReceipt';
 import { decodeCodexThreadCache, encodeCodexThreadCache } from './codexThreadCache';
 import { createCodexControlBridge } from './codexControlBridge';
 import {
@@ -1333,7 +1334,15 @@ async function* sendCodexRequest(
             ? { dynamicTools: contextTool.dynamicTools ?? [CODEX_CONTEXT_TOOL] }
             : {}),
         });
-    await dependencies.write(generation, threadRequest);
+    let observedThreadRequest = threadRequest;
+    const schemaBinding = {
+      ...await toolReceiptBinding(request, generation).catch(() => ({})),
+      providerId: exactIdentity.modelProvider, upstreamModelId: exactIdentity.model,
+      effort: exactIdentity.effort ?? 'provider-default',
+      fastVariant: exactIdentity.serviceTier === 'fast' ? 'priority' : 'standard',
+    };
+    await dependencies.write(generation, observedThreadRequest);
+    await recordCodexSchemaReceipt(schemaBinding, observedThreadRequest, 'sent');
     let threadResponse = await prepare(request, request.sessionId ? 'resume' : 'thread', () =>
       responseFrame(reader, threadRequestId),
     );
@@ -1351,9 +1360,7 @@ async function* sendCodexRequest(
       // Isolated provider profiles may not contain an implicitly cached thread.
       // No turn was sent: start once and restore the supplied chat context.
       threadRequestId = requestId(request.requestId, 'thread');
-      await dependencies.write(
-        generation,
-        buildCodexThreadStartRequest({
+      observedThreadRequest = buildCodexThreadStartRequest({
           requestId: threadRequestId,
           identity: exactIdentity,
           mode,
@@ -1361,8 +1368,9 @@ async function* sendCodexRequest(
           ...(contextTool
             ? { dynamicTools: contextTool.dynamicTools ?? [CODEX_CONTEXT_TOOL] }
             : {}),
-        }),
-      );
+        });
+      await dependencies.write(generation, observedThreadRequest);
+      await recordCodexSchemaReceipt(schemaBinding, observedThreadRequest, 'sent');
       threadResponse = await responseFrame(reader, threadRequestId);
       resumed = false;
     }
@@ -1397,6 +1405,7 @@ async function* sendCodexRequest(
       );
       if (!validated.ok)
         throw new Error('Codex Context thread identity mismatch: ' + validated.field + '.');
+      await recordCodexSchemaReceipt(schemaBinding, observedThreadRequest, 'rpc-accepted', threadId);
       contextTool.bind(threadId, exactIdentity, generation);
       if (startRoute.kind === 'official-codex') {
         const caller = await dependencies.resolveCallerLabel?.();

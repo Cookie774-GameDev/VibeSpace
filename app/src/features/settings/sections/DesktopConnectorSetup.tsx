@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { WebMcpSetupPanel } from './WebMcpSetupPanel';
-import type { WebMcpStatus } from './webMcpSetupClient';
+import { webMcpConnectionReady, type WebMcpStatus } from './webMcpSetupClient';
 
 type Status = WebMcpStatus;
 export function DesktopConnectorSetup({
@@ -12,6 +12,7 @@ export function DesktopConnectorSetup({
   onConnectionReady?: (file: string) => void;
 }) {
   const [status, setStatus] = useState<Status>();
+  const [statusAvailable, setStatusAvailable] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -26,11 +27,13 @@ export function DesktopConnectorSetup({
       const requested = revision.current;
       void invoke<Status>('desktop_connector_status')
         .then((value) => {
-          if (active && requested === revision.current) setStatus(value);
+          if (active && requested === revision.current) {
+            setStatus(value);
+            setStatusAvailable(true);
+          }
         })
         .catch(() => {
-          if (active && requested === revision.current)
-            setError('Connection status is available in the installed Windows app.');
+          if (active && requested === revision.current) setStatusAvailable(false);
         })
         .finally(() => {
           pending = false;
@@ -56,6 +59,7 @@ export function DesktopConnectorSetup({
       else await invoke('desktop_connector_setup', { action });
       const confirmed = await invoke<Status>('desktop_connector_status');
       setStatus(confirmed);
+      setStatusAvailable(true);
       if (
         (action === 'disconnect' && confirmed.enabled !== false) ||
         (action === 'connect' && confirmed.enabled !== true) ||
@@ -64,6 +68,7 @@ export function DesktopConnectorSetup({
       )
         setError('The change could not be confirmed. Check the connection and retry.');
     } catch {
+      setStatusAvailable(false);
       setError(
         action.startsWith('startup-')
           ? 'Windows could not apply the startup setting. Check Windows startup permissions. Your tunnel connection is separate.'
@@ -77,9 +82,9 @@ export function DesktopConnectorSetup({
   const complete =
     status?.setupComplete === true || (status?.status === 'ready' && status.toolCount > 0);
   useEffect(() => {
-    if (complete && status?.connectionDetected && status.connectionFile)
+    if (statusAvailable && complete && status?.connectionDetected && status.connectionFile)
       onConnectionReady?.(status.connectionFile);
-  }, [complete, status?.connectionDetected, status?.connectionFile, onConnectionReady]);
+  }, [complete, statusAvailable, status?.connectionDetected, status?.connectionFile, onConnectionReady]);
   return (
     <div
       className="my-4 rounded-xl border border-border bg-background p-4"
@@ -109,9 +114,11 @@ export function DesktopConnectorSetup({
           ? 'Checking connection…'
           : !status.packaged
             ? 'Connector package is not included in this build.'
-            : status.enabled === false
+            : !statusAvailable
+              ? 'Connection status unavailable · checking again'
+              : status.enabled === false
               ? 'MCP is off · automatic recovery paused'
-              : status.status === 'ready'
+              : webMcpConnectionReady(status, statusAvailable)
                 ? `Tunnel ready · ${status.toolCount} tools detected`
                 : status.status === 'connecting'
                   ? 'Connecting tunnel…'
@@ -155,7 +162,7 @@ export function DesktopConnectorSetup({
       {setupOpen && (
         <WebMcpSetupPanel
           initialStatus={status}
-          onStatus={setStatus}
+          onStatus={(value) => { setStatus(value); setStatusAvailable(true); }}
           onClose={() => setSetupOpen(false)}
         />
       )}

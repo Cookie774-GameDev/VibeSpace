@@ -851,3 +851,46 @@ describe('canonical approval absolute expiry recovery', () => {
     expect(messageRepository.update).not.toHaveBeenCalled();
   });
 });
+
+describe('canonical terminal approval history readback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAuthStore.setState({ localUserId: 'account-smoke', cloudSession: null });
+  });
+  const presentation = { actionId: 'schedule.create', expectedEffect: 'Create one schedule.', risk: 'confirm' as const, parameters: [] };
+  const cancelled = () => ({ ...part('jarvisapproval:jappr_1'), status: 'cancelled' as const });
+  it('reloads the actual cancelled expiry projection and displays verified expiry without approval controls', async () => {
+    expiryRuntime.expireInstalledJarvisApproval.mockResolvedValue({ approvalId: 'jappr_1', status: 'expired', expiresAt: Date.now() - 1 });
+    const view = renderCard(cancelled(), presentation);
+    await screen.findByText(/Approval expired. The action was not run/);
+    expect(view.container.firstElementChild?.getAttribute('data-status')).toBe('cancelled');
+    expect(screen.queryByRole('button', { name: 'Approve fixed action' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Deny action' })).toBeNull();
+    expect(kernelClient.decideApproval).not.toHaveBeenCalled();
+    expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+    expect(messageRepository.update).not.toHaveBeenCalled();
+  });
+  it('keeps a released canonical proposal terminal when the host still reports pending', async () => {
+    vi.useFakeTimers();
+    expiryRuntime.expireInstalledJarvisApproval.mockResolvedValue({ approvalId: 'jappr_1', status: 'pending', expiresAt: Date.now() + 600_000 });
+    await act(async () => { renderCard(cancelled(), presentation); });
+    expect(expiryRuntime.expireInstalledJarvisApproval).toHaveBeenCalledOnce();
+    await act(async () => { await vi.advanceTimersByTimeAsync(600_000); });
+    expect(expiryRuntime.expireInstalledJarvisApproval).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('button', { name: 'Approve fixed action' })).toBeNull();
+    expect(screen.queryByText(/Approval expired. The action was not run/)).toBeNull();
+    expect(kernelClient.decideApproval).not.toHaveBeenCalled();
+    expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+  });
+  it('does not invent expiry or reopen controls for an unavailable protected host on terminal reload', async () => {
+    expiryRuntime.expireInstalledJarvisApproval.mockRejectedValue(new Error('host released'));
+    kernelClient.getApprovalStatus.mockResolvedValue({ kind: 'unavailable', requestKind: 'approval_status', reason: 'host_unavailable' });
+    const view = renderCard(cancelled(), presentation);
+    await waitFor(() => expect(kernelClient.getApprovalStatus).toHaveBeenCalledWith({ accountId: 'account-smoke', approvalId: 'jappr_1' }));
+    expect(view.container.firstElementChild?.getAttribute('data-status')).toBe('cancelled');
+    expect(screen.queryByRole('button', { name: 'Approve fixed action' })).toBeNull();
+    expect(screen.queryByText(/Approval expired. The action was not run/)).toBeNull();
+    expect(kernelClient.decideApproval).not.toHaveBeenCalled();
+    expect(kernelClient.executeApproval).not.toHaveBeenCalled();
+  });
+});

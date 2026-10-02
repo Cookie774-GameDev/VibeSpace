@@ -488,7 +488,9 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       get().selectPanel(existing.id);
       return existing.id;
     }
-    let editor = state.panels.find((panel) => panel.kind === 'editor' && !panel.settings.filePath);
+    let editor = state.panels.find(
+      (panel) => panel.kind === 'editor' && !panel.settings.filePath && !panel.settings.note,
+    );
     if (!editor) {
       const id = get().addPanel('editor');
       if (!id) return null;

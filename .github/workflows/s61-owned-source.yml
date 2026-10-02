@@ -118,6 +118,19 @@ jobs:
           src/lib/jarvis/kernelRuntime.test.ts
           src/features/chat/ActionApprovalCard.test.tsx
           src/features/chat/Composer.resumeReview.test.tsx
+          src/features/canvas/persistence.durability.test.ts
+          src/features/chat/MessageBubble.test.tsx
+          src/features/settings/SubscriptionCliBridge.bootstrap.test.tsx
+          src/features/settings/sections/WebMcpHealthFreshness.test.tsx
+          src/features/tasks/EventReminderEngine.deliveryRecovery.test.ts
+          src/features/tasks/EventReminderEngine.test.ts
+          src/features/workbench/FilesPanel.race.test.tsx
+          src/features/workbench/store.draftSafety.test.ts
+          src/lib/ai/adapters/providerToolSchemaReceipt.test.ts
+          src/lib/db/nonChatDurability.migration.test.ts
+          src/lib/harness/openCodeNativeTransport.test.ts
+          src/lib/notifications.test.ts
+          src/lib/persistence/nonChatSettings.durability.test.ts
           src/lib/actions/registryJarvisCore.test.ts
           src/features/terminals/terminalExecutionStore.test.ts
           src/features/terminals/TileGrid.refit.test.tsx
@@ -303,6 +316,8 @@ jobs:
           cargo test --release --lib codex_rlm -- --test-threads=1
           cargo test --release --lib rlm_parent_tests -- --test-threads=1
           cargo test --release --lib runtime_setup_bounds_tests -- --test-threads=1
+          cargo test --release --lib managed_transport_tool_list -- --test-threads=1
+          cargo test --release --lib connector_ -- --test-threads=1
 
       - name: Upload Rust failure log
         if: failure() && steps.cargo-check.outcome == 'failure'

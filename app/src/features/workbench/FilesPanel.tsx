@@ -109,6 +109,9 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const onUpdateRef = React.useRef(onUpdate);
+  const rootRequestRef = React.useRef(0);
+  const projectRef = React.useRef(projectId);
+  projectRef.current = projectId;
   const statusRef = React.useRef(panel.status);
   const cwdRef = React.useRef(panel.settings.cwd);
   onUpdateRef.current = onUpdate;
@@ -130,6 +133,8 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
 
   const loadRoot = React.useCallback(
     async (path: string) => {
+      const request = ++rootRequestRef.current;
+      const current = () => request === rootRequestRef.current && projectRef.current === projectId;
       if (!path.trim()) {
         setEntries([]);
         setError(null);
@@ -140,6 +145,7 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
       setError(null);
       try {
         const result = await listDirectory(path.trim(), { root: path.trim() });
+        if (!current()) return;
         if (!result.ok) {
           setEntries([]);
           setError(describeFsError(result.error));
@@ -149,14 +155,19 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
         setRootDir(result.path);
         setPathDraft(result.path);
         setEntries(result.entries.slice(0, MAX_CHILDREN));
-        setStoredProjectRoot(projectId, result.path);
+        // The root-changed event is also observed by this panel. Do not emit
+        // it again for an unchanged root after every directory listing.
+        if (getStoredProjectRoot(projectId) !== result.path) {
+          setStoredProjectRoot(projectId, result.path);
+        }
         publishStatus('ready', result.path);
       } catch (cause) {
+        if (!current()) return;
         setEntries([]);
         setError(cause instanceof Error ? cause.message : 'Could not list directory.');
         publishStatus('error');
       } finally {
-        setLoading(false);
+        if (current()) setLoading(false);
       }
     },
     [projectId, publishStatus],
@@ -167,7 +178,10 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
     setRootDir(next);
     setPathDraft(next);
     setEntries([]);
-    if (next) void loadRoot(next);
+    void loadRoot(next);
+    return () => {
+      rootRequestRef.current += 1;
+    };
     // Only re-bind when project changes; cwd in settings is optional seed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadRoot, projectId]);
@@ -178,7 +192,8 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
       if ((detail?.projectId ?? null) !== (projectId ?? null)) return;
       const next = detail?.path ?? getStoredProjectRoot(projectId);
       setRootDir(next);
-      if (next) void loadRoot(next);
+      setPathDraft(next);
+      void loadRoot(next);
     };
     window.addEventListener('jarvis:files:root-changed', onRootChanged as EventListener);
     return () =>
@@ -202,6 +217,7 @@ export function FilesPanel({ panel, onUpdate }: FilesPanelProps) {
 
   const chooseRoot = async () => {
     const picked = await chooseProjectFolder();
+    if (projectRef.current !== projectId) return;
     if (!picked) {
       toast.info(
         'Desktop app required',

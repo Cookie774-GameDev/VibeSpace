@@ -10,6 +10,7 @@ import { parseActiveChatCommandMessage } from './chatActiveCommands';
 import { ResponseDetails } from './ResponseDetails';
 import { AssistantActivityLedger } from './activity-ledger/AssistantActivityLedger';
 import { resolvePluginActionEvidence } from './PluginUsageCard';
+import { parseTaskApprovalCallId } from '@/features/jarvis-runs/approvalBridge';
 import type { Message } from '@/types';
 import type { JarvisCreatorKind } from '@/features/jarvis-creator/contracts';
 
@@ -73,6 +74,7 @@ export function MessageBubble({
           if (
             part.kind === 'action_proposal' &&
             (part.status === 'success' || part.status === 'error' || part.status === 'cancelled') &&
+            !parseTaskApprovalCallId(part.call_id) &&
             !resolvePluginActionEvidence(part, message.parts)
           ) {
             return false;

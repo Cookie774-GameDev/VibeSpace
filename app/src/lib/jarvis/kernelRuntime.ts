@@ -452,6 +452,10 @@ type KernelRuntimeInput = Readonly<{
   abortRegistrationAuthority: JarvisAbortRegistrationAuthority;
   bindKernelActions: JarvisApprovalActionBinder;
   registerApprovalExpiryDisposal?(dispose: () => void): void;
+  onActionResponseExpired?(input: Readonly<{
+    accountId: string; runId: string; requestId: string; attemptNumber: number;
+    chatId?: string; completedAt: number;
+  }>): void;
   actionCatalog?: JarvisActionCatalog;
   pluginArtifactResults?: Readonly<{
     consumeCanonicalResult(input: {
@@ -3975,6 +3979,17 @@ export function createJarvisKernelRuntime(
         });
         if (!finalized.committed) throw new Error('kernel_action_expire_finalize_failed');
         disarmApprovalExpiry(approval.id);
+        binding.assertCurrent();
+        const settled = await repositories.run.getById(parentRun.accountId, parentRun.id);
+        binding.assertCurrent();
+        if (!settled || settled.status !== 'cancelled') throw new Error('kernel_action_expire_finalize_failed');
+        try {
+          input.onActionResponseExpired?.({
+            accountId: parentRun.accountId, runId: parentRun.id, requestId: scope.requestId,
+            attemptNumber: scope.attemptNumber, ...(settled.chatId ? { chatId: settled.chatId } : {}),
+            completedAt: settled.updatedAt,
+          });
+        } catch { console.warn('Canonical approval expiry projection failed closed.'); }
         return approval;
       });
     },

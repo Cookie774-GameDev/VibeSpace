@@ -288,7 +288,8 @@ function ApprovalRequestCard({
 
   React.useEffect(() => setDisplayStatus(part.status), [part.status]);
   React.useEffect(() => {
-    if (!approvalId || displayStatus !== 'pending') return;
+    // Terminal canonical proposals still need protected status readback on reload.
+    if (!approvalId || (part.status !== 'pending' && part.status !== 'cancelled')) return;
     const identity = getActiveAccountIdentity();
     if (!identity) return;
     let disposed = false;
@@ -312,7 +313,7 @@ function ApprovalRequestCard({
           throw new Error('kernel_expiry_state_unverified');
         }
         reflect(state.status);
-        if (state.status === 'pending') {
+        if (state.status === 'pending' && part.status === 'pending') {
           const remaining = state.expiresAt - Date.now();
           if (remaining <= 0) throw new Error('kernel_expiry_not_settled');
           timer = setTimeout(() => void refresh(), Math.min(remaining, 2_147_483_647));
@@ -342,7 +343,7 @@ function ApprovalRequestCard({
     };
     void refresh();
     return () => { disposed = true; if (timer !== undefined) clearTimeout(timer); };
-  }, [approvalId, displayStatus]);
+  }, [approvalId, part.status]);
 
 
   React.useEffect(() => {

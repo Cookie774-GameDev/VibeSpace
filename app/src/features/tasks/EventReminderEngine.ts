@@ -212,9 +212,14 @@ async function deliver(
   if (channels.has('desktop')) {
     const ui = useUIStore.getState();
     if (ui.notificationMaster && ui.doneNotifications.reminders) {
-      await notifyDone('reminders', event.title, body, {
+      const result = await notifyDone('reminders', event.title, body, {
         completionIdentity: `event-reminder:${event.id}:${due.occurrenceStartAt}:${due.index}`,
       });
+      // A desktop-only attempt with no delivery must remain retryable.
+      // Combined reminders may still complete through their in-app channel.
+      if (result?.channel === 'none' && result.permission !== 'granted' && !channels.has('in_app')) {
+        throw new Error('event_reminder_delivery_unavailable');
+      }
     }
   }
   if (channels.has('in_app')) {

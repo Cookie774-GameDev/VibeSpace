@@ -1633,6 +1633,7 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
       canonicalizeJson: JSON.stringify, hashCanonicalJson: async value => 'hash:' + JSON.stringify(value) });
     let interruptBeforeFinalization = false;
     let disposeExpiry: (() => void) | undefined;
+    const projectExpiry = vi.fn();
     const processed: JarvisResponseEnvelope = { schemaVersion: 1, requestId, runId: parentRun.id,
       mode: 'direct_answer', displayText: 'Review one note creation.', spokenText: 'Review one note creation.',
       parts: [{ kind: 'action_proposal', call_id: 'natural-note-create', action_id: 'notes.create', params: { title: 'hello' }, status: 'pending' }],
@@ -1660,7 +1661,8 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
       prepareProvider: vi.fn(async () => ({ resolveConfiguration: vi.fn(async () => ({ start, dispose: vi.fn() })), dispose: vi.fn() })),
       processResponse: vi.fn(async () => processed), takeProviderArtifactDrafts: vi.fn(() => []),
       randomUUID: () => 'real-expiry-runtime', now: () => now,
-      registerApprovalExpiryDisposal: dispose => { disposeExpiry = dispose; } });
+      registerApprovalExpiryDisposal: dispose => { disposeExpiry = dispose; },
+      onActionResponseExpired: projectExpiry });
     if (throughResponse) {
       await runtime.kernel.runInitialTurn({ ...turn, interactionMode: 'agent' });
     } else {
@@ -1676,7 +1678,7 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
     return { runtime, engine, execute, parentRun, awaiting, requestId, approvalId,
       setNow: (value: number) => { now = value; },
       setInterruption: (value: boolean) => { interruptBeforeFinalization = value; },
-      disposeExpiry: () => disposeExpiry?.(), repositories };
+      disposeExpiry: () => disposeExpiry?.(), repositories, projectExpiry };
   }
 
   it('expires a real response-backed pending approval into a cancelled run without action execution', async () => {
@@ -1686,6 +1688,11 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
     expect(fromJarvisRunRow((await db.jarvis_runs.get(s.parentRun.id))!).status).toBe('cancelled');
     expect((await db.messages.get(`msg_${s.requestId}` as never))?.parts).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'action_proposal', status: 'cancelled' })]));
     expect(s.execute).not.toHaveBeenCalled();
+    expect(s.projectExpiry).toHaveBeenCalledOnce();
+    expect(s.projectExpiry).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: s.parentRun.accountId, runId: s.parentRun.id,
+      requestId: s.requestId, attemptNumber: 1,
+    }));
   });
   it('rejects real canonical expiry before the deadline without changing rows or event count', async () => {
     const s = await realExpiryFixture(); s.setNow(NOW + 59_999);
@@ -1694,6 +1701,7 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
     expect(await db.jarvis_approvals.get(s.approvalId)).toEqual(approval);
     expect(await db.jarvis_runs.get(s.parentRun.id)).toEqual(run);
     expect(await db.jarvis_events.count()).toBe(count); expect(s.execute).not.toHaveBeenCalled();
+    expect(s.projectExpiry).not.toHaveBeenCalled();
   });
   it('rejects tampered stored parameters at expiry without executing or settling the run', async () => {
     const s = await realExpiryFixture(); s.setNow(NOW + 60_001);
@@ -1718,12 +1726,14 @@ describe('createJarvisKernelRuntime primary-host lifecycle', () => {
     const running = fromJarvisRunRow((await db.jarvis_runs.get(s.parentRun.id))!);
     expect(running.status).toBe('running');
     expect(fromJarvisApprovalRow((await db.jarvis_approvals.get(s.approvalId))!).status).toBe('expired');
+    expect(s.projectExpiry).not.toHaveBeenCalled();
     s.setInterruption(false);
     await expect(s.runtime.kernel.actions.expire!({ parentRun: running, approvalId: s.approvalId })).resolves.toMatchObject({ kind: 'committed', value: { status: 'expired' } });
     expect(fromJarvisRunRow((await db.jarvis_runs.get(s.parentRun.id))!).status).toBe('cancelled');
     const events = await db.jarvis_events.where('run_id').equals(s.parentRun.id).toArray();
     expect(events.filter(event => event.type === 'approval' && event.status === 'expired')).toHaveLength(1);
     expect(s.execute).not.toHaveBeenCalled();
+    expect(s.projectExpiry).toHaveBeenCalledOnce();
   });
   it('arms the actual response-ready timer and expires only at its absolute deadline', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });

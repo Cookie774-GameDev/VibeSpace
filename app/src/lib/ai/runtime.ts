@@ -84,7 +84,7 @@ import {
   bindCanonicalTurnProvider,
   failCanonicalTurn,
 } from '@/features/chat/runtime/turn/turnController';
-import { getLatestTurnByChatId } from '@/features/chat/runtime/turn/turnStore';
+import { getLatestTurnByChatId, publishTurnEvent } from '@/features/chat/runtime/turn/turnStore';
 import {
   MANDATORY_CONTEXT_EVIDENCE_DIRECTIVE_MARKER,
   parseDirectContextEvidenceContinuation,
@@ -1716,6 +1716,19 @@ export async function installJarvisKernelRuntimeHost(
     abortRegistrationAuthority: abortRegistry.registrationAuthority,
     bindKernelActions: input.bindKernelActions,
     registerApprovalExpiryDisposal: (dispose) => { disposeCanonicalApprovalExpiry = dispose; },
+    onActionResponseExpired: (expired) => {
+      if (disposed || !expired.chatId ||
+          resolveAccountIdentity(useAuthStore.getState())?.accountId !== expired.accountId) return;
+      const current = getLatestTurnByChatId(expired.chatId);
+      if (!current || current.identity.accountId !== expired.accountId ||
+          current.identity.runId !== expired.runId || current.identity.requestId !== expired.requestId ||
+          current.identity.attempt !== expired.attemptNumber) return;
+      publishTurnEvent({ accountId: expired.accountId, runId: expired.runId },
+        { type: 'turn.cancelled', at: expired.completedAt });
+      clearPreview(expired.accountId, expired.runId, { terminal: true });
+      publishChatRunState({ chatId: expired.chatId, status: 'cancelled',
+        ...(current.cancellationKey ? { cancellationKey: current.cancellationKey } : {}) });
+    },
     ...(input.pluginArtifacts === undefined
       ? {}
       : { pluginArtifactResults: input.pluginArtifacts }),
@@ -2433,7 +2446,16 @@ export async function installJarvisKernelRuntimeHost(
                   finishThinking('done');
                   return raw;
                 })
-                .catch((error: unknown) => {
+                .catch(async (error: unknown) => {
+                  // Native Stop waits for the matching transport terminal instead
+                  // of aborting its signal on acknowledgement. Once Codex confirms
+                  // interruption, settle through the same protected cancellation
+                  // authority before any provider-error projection can win.
+                  if (providerBackend === 'codex' && isAbortError(error) && !signal.aborted) {
+                    await composition.kernel.requestCancellation({
+                      accountId: providerInput.accountId, runId: providerInput.runId,
+                    });
+                  }
                   const status = signal.aborted ? 'cancelled' : 'error';
                   finishThinking(status);
                   settlePendingToolActivities(status);
@@ -6005,6 +6027,15 @@ export function startRuntimeListener(
       status: 'running' | 'done' | 'error' | 'cancelled',
       errorCode?: string,
     ): void => {
+      const priorTurn = getLatestTurnByChatId(String(chatId));
+      // A rejected new request has no authority over the previous live turn.
+      // Its preparation and failure must not replace a pending approval's
+      // cancellation key or publish a terminal outcome onto that turn.
+      if (priorTurn && !ownedCanonicalRunId &&
+        priorTurn.identity.runId === previousCanonicalRunId &&
+        priorTurn.cancellationKey !== cancellationKey &&
+        priorTurn.status !== 'completed' && priorTurn.status !== 'failed' &&
+        priorTurn.status !== 'cancelled') return;
       if (status === 'cancelled' && cancellationKey) {
         const accountId = resolveAccountIdentity(authState)?.accountId;
         const currentAccountId = resolveAccountIdentity(useAuthStore.getState())?.accountId;
