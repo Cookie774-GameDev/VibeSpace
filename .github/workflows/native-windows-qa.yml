@@ -276,7 +276,7 @@ jobs:
           import path from 'node:path';
           import {pathToFileURL} from 'node:url';
           const root=process.env.GITHUB_WORKSPACE, evidence=process.env.NSIS_PROOF_DIR;
-          const {inspectPeImage,sha256,parseDllReports,verifyDllImports}=await import(pathToFileURL(path.join(root,'scripts/native-windows-qa.mjs')));
+          const {inspectPeImage,sha256,parseDllReports,verifyDllImports,inspectTauriNsisExecutableBinding}=await import(pathToFileURL(path.join(root,'scripts/native-windows-qa.mjs')));
           const save=async(name,value)=>writeFile(path.join(evidence,name),JSON.stringify(value,null,2)+'\n');
           async function walk(dir,base=dir) {
             const files=[];
@@ -312,7 +312,9 @@ jobs:
             const exes=files.filter(x=>path.basename(x).toLowerCase()==='jarvis.exe'); assert.equal(exes.length,1,'Exactly one installed jarvis.exe required');
             const exe=exes[0], appDir=path.dirname(exe);
             await save('package-files.json',await Promise.all(files.map(async file=>({path:path.relative(extracted,file).replaceAll('\\','/'),bytes:(await lstat(file)).size,sha256:await sha256(file)}))));
-            assert.equal(await sha256(exe),await sha256(built),'Extracted executable differs from built release');
+            const executableBinding=await inspectTauriNsisExecutableBinding(built,exe,{tauriCliVersion:'2.11.2',tauriBundlerSourceBlob:'ab0a45032f931af32b03c08ec5404c5cfe5c4891',bundleKind:'nsis'});
+          await save('executable-binding.json',executableBinding);
+          assert.equal(executableBinding.extractedExecutableSHA256,executableBinding.expectedNsisExecutableSHA256,'Extracted executable differs from exact pinned NSIS transformation');
             const pe=await inspectPeImage(exe);
             await save('source-manifest.json',{sourceSHA:process.env.QA_SOURCE_SHA,sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}'],{encoding:'utf8'}).trim(),workflowSHA:process.env.GITHUB_SHA,cargoLockSHA256:await sha256(path.join(root,'app/src-tauri/Cargo.lock')),windowsConfigSHA256:await sha256(path.join(root,'app/src-tauri/tauri.windows.conf.json')),qaConfigSHA256:await sha256(process.env.NSIS_QA_CONFIG),verifierSHA256:await sha256(path.join(root,'scripts/native-windows-qa.mjs')),installerSHA256:await sha256(installer)});
             const dlls=(await readdir(appDir)).filter(x=>x.toLowerCase().endsWith('.dll'));

@@ -77,6 +77,7 @@ it('does not describe a Windows startup failure as a tunnel setup failure', asyn
     if (command === 'desktop_connector_setup') throw new Error('fixture Windows registry denial');
     return {
       packaged: true,
+      connectionDetected: true,
       setupComplete: true,
       status: 'ready',
       toolCount: 54,
@@ -86,11 +87,14 @@ it('does not describe a Windows startup failure as a tunnel setup failure', asyn
     };
   });
   render(<DesktopConnectorSetup />);
+  await screen.findByText('Tunnel ready · 54 tools detected');
   fireEvent.click(await screen.findByRole('switch', { name: 'Start with computer' }));
   const message = await screen.findByRole('alert');
   expect(message.textContent).toMatch(/Windows.+startup.+permissions/i);
   expect(
     screen.getByRole('switch', { name: 'Start with computer' }).getAttribute('aria-checked'),
   ).toBe('false');
-  expect(screen.getByText('Tunnel ready · 54 tools detected')).toBeTruthy();
+  expect(screen.getByText('Connection status unavailable · checking again')).toBeTruthy();
+  fireEvent.focus(window);
+  expect(await screen.findByText('Tunnel ready · 54 tools detected')).toBeTruthy();
 });
