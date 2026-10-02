@@ -121,7 +121,7 @@ jobs:
           assert.equal((await stat(zip)).size,411344590);
           const hash=createHash('sha256'); for await(const chunk of createReadStream(zip))hash.update(chunk);
           assert.equal(hash.digest('hex'),'59fe079dd0f15f61501b4526d5d6eaa1a9fe9be1a04fe75254a2713833314a8c');
-          const log=execFileSync('gh',['api','/repos/Cookie774-GameDev/VibeSpace/actions/jobs/110871795273/logs'],{maxBuffer:16777216});
+          const log=execFileSync('gh',['api','--allow-escape-sequences','/repos/Cookie774-GameDev/VibeSpace/actions/jobs/110871795273/logs'],{maxBuffer:16777216});
           await writeFile(path.join(dir,'original-job.log'),log,{flag:'wx'});
           console.log('Original artifact byte size, full SHA-256, descriptor, and job log preserved.');
           '@ | Set-Content -LiteralPath (Join-Path $env:REINSPECT_ROOT 'download.mjs') -Encoding utf8NoBOM
