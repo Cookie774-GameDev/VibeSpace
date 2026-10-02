@@ -2766,6 +2766,44 @@ const ALL_DEFAULT_JARVIS_ACTION_REGISTRATIONS: readonly JarvisRegisteredActionDe
     }),
   },
   {
+    id: 'milestone.create',
+    version: 1,
+    title: 'Create milestone',
+    description: 'Create one persistent milestone in the active project with explicit owner approval.',
+    inputSchema: {
+      type: 'object',
+      properties: { title: { type: 'string' }, description: { type: 'string' }, deadlineAt: { type: 'number' } },
+      required: ['title'],
+      additionalProperties: false,
+    },
+    outputSchema: NO_OUTPUT_SCHEMA,
+    requiredCapabilities: ['milestone.write'],
+    requiredEntitlements: [],
+    risk: 'safe-write',
+    approval: 'always',
+    expectedEffect: 'Creates one project-scoped, user-approved persistent milestone.',
+    exposeToAI: true,
+    executor: { kind: 'builtin', registryActionId: 'milestone.create' },
+    credentialBindings: [],
+    validateParameters(input) {
+      const record = plainRecord(input, 'milestone.create parameters');
+      assertExactKeys(record, ['title', 'description', 'deadlineAt'], 'milestone.create parameters');
+      const title = nonblank(record.title, 'milestone.create parameters.title').trim();
+      if (title.length > 240 || /[\u0000-\u001f\u007f]/u.test(title)) catalogError('Milestone title is invalid.');
+      const result: Record<string, unknown> = { title };
+      if (record.description !== undefined) {
+        if (typeof record.description !== 'string' || record.description.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(record.description)) catalogError('Milestone description is invalid.');
+        result.description = record.description.trim();
+      }
+      if (record.deadlineAt !== undefined) {
+        if (typeof record.deadlineAt !== 'number' || !Number.isSafeInteger(record.deadlineAt) || record.deadlineAt <= 0 || record.deadlineAt > 8.64e15) catalogError('Milestone deadline is invalid.');
+        result.deadlineAt = record.deadlineAt;
+      }
+      return result;
+    },
+    deriveTarget: ({ params }) => ({ kind: 'app_resource', namespace: 'milestone', resourceId: String(params.title) }),
+  },
+  {
     id: 'schedule.create',
     version: 1,
     title: 'Create Jarvis schedule',

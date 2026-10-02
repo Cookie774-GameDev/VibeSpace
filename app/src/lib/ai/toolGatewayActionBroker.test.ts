@@ -128,6 +128,35 @@ function fixture() {
 }
 
 describe('protected Tool Gateway action broker', () => {
+  it.each(['expired', 'revoked'] as const)(
+    'settles the waiting native tool request when its owner decision is %s',
+    async (reason) => {
+      const f = fixture();
+      let outcome: unknown;
+      const task = f.broker.request(f.request);
+      void task.catch((error) => {
+        outcome = error;
+      });
+      await vi.waitFor(() => expect(f.publishPending).toHaveBeenCalledOnce());
+      if (reason === 'expired') f.advanceClock(300000);
+      else f.revoke();
+      const expected =
+        reason === 'expired' ? 'tool_action_expired' : 'tool_action_identity_unavailable';
+      await expect(f.broker.decide('account', 'jappr_tool', 'approve')).rejects.toThrow(expected);
+      try {
+        await vi.waitFor(() => expect(outcome).toBeInstanceOf(Error), { timeout: 100 });
+        expect((outcome as Error).message).toBe(expected);
+        expect(f.publishOutcome).toHaveBeenCalledWith(f.approval, expect.any(Error));
+        expect(f.actions.decide).not.toHaveBeenCalled();
+        expect(f.actions.execute).not.toHaveBeenCalled();
+        expect(f.broker.owns('account', 'jappr_tool')).toBe(false);
+      } finally {
+        f.broker.dispose();
+        await task.catch(() => {});
+      }
+    },
+  );
+
   it('prevents replay with the real approval engine that generates a fresh ID on each creation', async () => {
     const f = fixture();
     const catalog = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS);
@@ -329,8 +358,7 @@ describe('protected Tool Gateway action broker', () => {
     await expect(f.broker.decide('account', 'jappr_tool', 'approve')).rejects.toThrow(
       'tool_action_expired',
     );
-    f.controller.abort();
-    await expect(task).rejects.toThrow('tool_action_cancelled');
+    await expect(task).rejects.toThrow('tool_action_expired');
     expect(f.actions.decide).not.toHaveBeenCalled();
     expect(f.actions.execute).not.toHaveBeenCalled();
   });
@@ -489,14 +517,13 @@ describe('protected Tool Gateway action broker', () => {
   it('rejects a stale or mismatched decision and never executes it', async () => {
     const f = fixture();
     const task = f.broker.request(f.request);
-    const rejected = expect(task).rejects.toThrow('tool_action_cancelled');
+    const rejected = expect(task).rejects.toThrow('tool_action_identity_unavailable');
     await vi.waitFor(() => expect(f.publishPending).toHaveBeenCalledOnce());
     expect(await f.broker.decide('foreign', 'jappr_tool', 'approve')).toBeNull();
     f.revoke();
     await expect(f.broker.decide('account', 'jappr_tool', 'approve')).rejects.toThrow(
       'tool_action_identity_unavailable',
     );
-    f.controller.abort();
     await rejected;
     expect(f.actions.execute).not.toHaveBeenCalled();
   });

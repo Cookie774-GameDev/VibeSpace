@@ -662,10 +662,16 @@ async function runApprovedAction(
   if (!action) throw new Error('command_not_found');
   const { runToolGatewayAction } = await import('@/lib/ai/runtime');
   const execution = await runToolGatewayAction({ actionId: action.id, params: args, context });
-  if (execution.kind === 'handoff_pending') throw new ToolGatewaySemanticError({
-    code: 'command_handoff_pending', message: 'The protected action was handed off and has not settled.',
-    data: { status: 'handoff_pending', executorKind: execution.executorKind, ownerId: execution.ownerId },
-  });
+  if (execution.kind === 'handoff_pending')
+    throw new ToolGatewaySemanticError({
+      code: 'command_handoff_pending',
+      message: 'The protected action was handed off and has not settled.',
+      data: {
+        status: 'handoff_pending',
+        executorKind: execution.executorKind,
+        ownerId: execution.ownerId,
+      },
+    });
   if (!execution.result.ok) throw new Error('command_failed');
   return { summary: execution.result.summary, data: execution.result.data };
 }
@@ -840,10 +846,15 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         const authority = readToolGatewaySessionAuthority(context.sessionId);
         if (!authority) throw new Error('rlm_context_authority_unavailable');
         const boundScope = authority.scope;
+        const boundTurn = readToolGatewayTurnIdentity(
+          context.sessionId,
+          context.messageId ?? context.requestId,
+        );
         const worktreeId = context.worktree?.trim() || context.directory?.trim();
         const baseLease = {
           sessionId: context.sessionId,
           accountId: auth.localUserId,
+          ...(boundTurn ? { chatId: boundTurn.chatId } : {}),
           workspaceId: boundScope.workspaceId,
           ...(boundScope.projectId ? { projectId: boundScope.projectId } : {}),
           ...(worktreeId ? { worktreeId } : {}),

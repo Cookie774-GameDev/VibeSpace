@@ -227,6 +227,31 @@ export class LocalCommandPreModelBridge {
     }
 
     const route = this.#dependencies.route(boundInput.text);
+    if (
+      route.classification === 'ambiguous' ||
+      route.ambiguous.some(
+        ({ reason }) => reason === 'typo-intent-conflict' || reason === 'provider-conflict',
+      )
+    ) {
+      return freezeResult({
+        ...baseResult(boundInput, route),
+        holdModel: true,
+        unexecutedCommands: route.commands,
+        receipts: [
+          createInstantCommandReceipt({
+            commandId: 'local.ambiguous',
+            correlationId: boundInput.interactionId,
+            status: 'needs_clarification',
+            acceptedAtMs: this.#dependencies.now(),
+            targetIds: [],
+            followUp: {
+              kind: 'clarification',
+              prompt: 'Specify the exact local action or provider before continuing.',
+            },
+          }),
+        ],
+      });
+    }
     if (route.commands.length === 0) return baseResult(boundInput, route);
 
     const cache = this.#cache.acquire(boundInput);

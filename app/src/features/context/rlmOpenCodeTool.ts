@@ -90,6 +90,8 @@ function registerFallbackCitationFromOpen(lease: RlmContextLease, result: unknow
 
 export interface RlmContextLease {
   sessionId: string;
+  /** Captured originating chat, never a model-supplied argument. */
+  chatId?: string;
   accountId: string;
   workspaceId?: string;
   projectId?: string;
@@ -311,7 +313,7 @@ export function createRlmOpenCodeTool(dependencies: {
       case 'query': {
         const args = exactKeys(rawInput, ['operation', 'query'], ['limit']);
         const question = text(args.query);
-        const rlmEnabled = resolveRlmEnabled({ workspaceId: lease.workspaceId }).enabled;
+        const rlmEnabled = resolveRlmEnabled({ workspaceId: lease.workspaceId, chatId: lease.chatId }).enabled;
         const decision = routeDefaultContextQuery(question, { rlmAvailable: rlmEnabled });
         if (decision.mode === 'rlm') {
           return executeRouted('rlm', () =>
@@ -440,7 +442,7 @@ export function createRlmOpenCodeTool(dependencies: {
       }
       case 'investigate': {
         const args = exactKeys(rawInput, ['operation', 'query']);
-        if (!resolveRlmEnabled({ workspaceId: lease.workspaceId }).enabled) {
+        if (!resolveRlmEnabled({ workspaceId: lease.workspaceId, chatId: lease.chatId }).enabled) {
           return executeRouted('retrieval', async () => {
             const result = await dependencies.queryService.search({
               scope,

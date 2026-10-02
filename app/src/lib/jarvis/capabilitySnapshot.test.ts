@@ -95,6 +95,7 @@ describe('createJarvisCapabilitySnapshot', () => {
       'google-drive.document.read',
       'google-drive.files.search',
       'mcp.invoke',
+      'milestone.create',
       'schedule.create',
       'task.cancel',
       'terminal.create',

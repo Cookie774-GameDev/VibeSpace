@@ -88,6 +88,7 @@ import {
 } from '@/lib/ai/modelSelection';
 import { markTerminalExecution } from '@/features/terminals/terminalExecutionStore';
 import { createJarvisCoreActions } from './registryJarvisCore';
+import { createMilestoneActions } from './registryMilestones';
 import { createModelSelectionActions } from './registryModelSelection';
 import { updateEmpireFreezerConfig } from '@/features/wellness/empireFreezer';
 
@@ -1734,6 +1735,7 @@ export function getBuiltinActions(): ActionDef[] {
     ...VOICE_ACTIONS,
     ...TERMINAL_ACTIONS,
     ...SCHEDULE_ACTIONS,
+    ...createMilestoneActions(),
     ...CHAT_ACTIONS,
     ...EMPIRE_FREEZER_ACTIONS,
     ...createModelSelectionActions(),

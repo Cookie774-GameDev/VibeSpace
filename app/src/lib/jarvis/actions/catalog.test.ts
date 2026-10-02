@@ -136,6 +136,7 @@ describe('Jarvis action catalog', () => {
       { id: 'chat.model.switch', risk: 'external-side-effect', approval: 'always' },
       { id: 'mcp.invoke', risk: 'external-side-effect', approval: 'always' },
       { id: 'creator.start', risk: 'safe-write', approval: 'always' },
+      { id: 'milestone.create', risk: 'safe-write', approval: 'always' },
       { id: 'schedule.create', risk: 'safe-write', approval: 'always' },
       { id: 'agent.run', risk: 'external-side-effect', approval: 'always' },
       { id: 'terminal.create', risk: 'safe-write', approval: 'always' },

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRlmOpenCodeTool } from './rlmOpenCodeTool';
+import { setChatRlmEnabled } from './rlmPreferenceStore';
 import {
   consumeToolGatewayContextCitationItems,
   clearToolGatewayContextCitationItems,
@@ -63,6 +64,26 @@ function dependencies() {
 }
 
 describe('OpenCode RLM context tool adapter', () => {
+  it('honors chat Off for recursive investigation while allowing bounded Context retrieval', async () => {
+    localStorage.clear();
+    try {
+      setChatRlmEnabled('chat-off', false);
+      const deps = dependencies();
+      const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
+      const chatLease = { ...lease, workspaceId: 'workspace-1', chatId: 'chat-off' };
+      await tool.execute({ operation: 'investigate', query: 'Audit the entire project history' }, chatLease);
+      expect(deps.rlmRuntime.investigate).not.toHaveBeenCalled();
+      expect(deps.queryService.search).toHaveBeenCalledOnce();
+      await tool.execute({ operation: 'search', query: 'Find the signed record' }, chatLease);
+      expect(deps.queryService.search).toHaveBeenCalledTimes(2);
+      await tool.execute({ operation: 'investigate', query: 'Audit the entire project history' },
+        { ...chatLease, chatId: 'chat-on' });
+      expect(deps.rlmRuntime.investigate).toHaveBeenCalledOnce();
+    } finally {
+      localStorage.clear();
+    }
+  });
+
   it('records a failed retrieval route when high-level query search rejects', async () => {
     const storage = {
       getItem: vi.fn(() => null),

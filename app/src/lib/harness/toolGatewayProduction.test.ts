@@ -55,6 +55,44 @@ function mutation() {
 }
 
 describe('production tool gateway dependencies', () => {
+  it('captures the exact bound chat identity for RLM preferences instead of model input', async () => {
+    const authority = captureToolGatewayAuthorityClaim()!;
+    const sessionId = 'session-rlm-chat-preference';
+    expect(
+      bindToolGatewaySessionAuthority(sessionId, authority, undefined, {
+        requestId: 'provider-turn-chat',
+        chatId: 'chat-rlm-off',
+      }),
+    ).toBe(true);
+    expect(
+      bindToolGatewayObservedExecutionAuthority(sessionId, authority, {
+        executionIdentity: observedIdentity,
+        performance: 'quality',
+      }),
+    ).toBe(true);
+    const execute = vi.fn(async () => ({ answer: 'Bounded retrieval' }));
+    const dispose = installToolGatewayRlmContextPort({ execute });
+    try {
+      await createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'investigate', query: 'Find the project fixture' },
+        {
+          requestId: 'tool-chat',
+          sessionId,
+          messageId: 'provider-turn-chat',
+          directory: 'C:\\work\\project',
+          mutationApproved: false,
+        },
+      );
+      expect(execute).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ chatId: 'chat-rlm-off' }),
+        undefined,
+      );
+    } finally {
+      dispose();
+    }
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
     clearToolGatewayMutationGrants();

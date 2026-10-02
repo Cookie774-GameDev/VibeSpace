@@ -237,7 +237,17 @@ function continueAfterSettledApproval(input: {
 }
 
 /** Canonical cards load bounded presentation and mutate only through the host bridge. */
-export function ActionApprovalCard({
+export function ActionApprovalCard(props: ActionApprovalCardProps) {
+  // A new protected request must not inherit another request's details or decision.
+  return (
+    <ApprovalRequestCard
+      key={JSON.stringify([props.chatId, props.messageId, props.part.call_id])}
+      {...props}
+    />
+  );
+}
+
+function ApprovalRequestCard({
   part,
   presentation,
   chatId,

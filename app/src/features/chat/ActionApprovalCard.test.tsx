@@ -71,6 +71,67 @@ describe('ActionApprovalCard canonical adapter', () => {
     messageRepository.update.mockResolvedValue(undefined);
   });
 
+  it('loads fresh protected details when a mounted card receives another approval', async () => {
+    kernelClient.getApprovalPresentation.mockResolvedValueOnce({
+      kind: 'approval_presentation',
+      approvalId: 'jappr_2',
+      actionId: 'schedule.create',
+      expectedEffect: 'Create the replacement schedule.',
+      risk: 'confirm',
+      parameters: [],
+    });
+    const view = renderCard(part('jarvisapproval:jappr_1'), {
+      actionId: 'terminal.run',
+      expectedEffect: 'Run the original command.',
+      risk: 'dangerous',
+      parameters: [],
+    });
+    view.rerender(
+      <ActionApprovalCard
+        part={part('jarvisapproval:jappr_2')}
+        allParts={[part('jarvisapproval:jappr_2')]}
+        messageId={'message_2' as never}
+        chatId="chat_1"
+      />,
+    );
+    expect(screen.queryByText('Run the original command.')).toBeNull();
+    await screen.findByText('Create the replacement schedule.');
+    expect(kernelClient.getApprovalPresentation).toHaveBeenCalledWith({
+      accountId: 'account-smoke',
+      approvalId: 'jappr_2',
+    });
+  });
+
+  it('does not carry a submitted decision into a different protected request', async () => {
+    kernelClient.decideApproval.mockResolvedValueOnce({
+      kind: 'approval_decided',
+      approvalId: 'jappr_1',
+      status: 'approved',
+      continuation: 'tool_request',
+    });
+    const presentation = {
+      actionId: 'schedule.create',
+      expectedEffect: 'Create one schedule.',
+      risk: 'confirm' as const,
+      parameters: [],
+    };
+    const view = renderCard(part('jarvisapproval:jappr_1'), presentation);
+    fireEvent.click(screen.getByRole('button', { name: 'Approve fixed action' }));
+    await waitFor(() => expect(kernelClient.dispose).toHaveBeenCalledOnce());
+    view.rerender(
+      <ActionApprovalCard
+        part={part('jarvisapproval:jappr_2')}
+        allParts={[part('jarvisapproval:jappr_2')]}
+        messageId={'message_2' as never}
+        chatId="chat_1"
+        presentation={presentation}
+      />,
+    );
+    expect((screen.getByRole('button', { name: 'Approve fixed action' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'Deny action' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(view.container.firstElementChild?.getAttribute('data-status')).toBe('pending');
+  });
+
   it('returns an approved live tool decision to its waiting call without executing again or sending another turn', async () => {
     kernelClient.decideApproval.mockResolvedValueOnce({
       kind: 'approval_decided',

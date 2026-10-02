@@ -33,7 +33,10 @@ export type MilestoneStatus = 'todo' | 'working' | 'done';
  */
 export type MilestoneKind = 'todo' | 'milestone';
 
+export type MilestoneScope = Readonly<{ accountId: string; workspaceId: string; projectId: string; requestId: string }>;
+
 export type MilestoneItem = {
+  scope?: MilestoneScope;
   id: string;
   title: string;
   description?: string;

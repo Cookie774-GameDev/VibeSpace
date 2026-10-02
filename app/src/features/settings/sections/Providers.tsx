@@ -642,6 +642,7 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const saveRevisionRef = useRef(0);
+  const modelDiscoveryRevisionRef = useRef(0);
   const [models, setModels] = useState<RegistryModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
@@ -654,19 +655,24 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
 
   useEffect(() => {
     let active = true;
+    const revision = ++modelDiscoveryRevisionRef.current;
     if (!value && row.id !== 'ollama') {
       setModels([]);
+      setModelsLoading(false);
+      // Removing a credential also retires pending account discovery.
+      void loadProviderModels(row.id, providerContext);
       return;
     }
     setModelsLoading(true);
     void loadProviderModels(row.id, providerContext).then((options) => {
-      if (active) {
+      if (active && revision === modelDiscoveryRevisionRef.current) {
         setModels(options);
         setModelsLoading(false);
       }
     });
     return () => {
       active = false;
+      modelDiscoveryRevisionRef.current += 1;
     };
   }, [providerContext, row.id, value]);
 
@@ -788,8 +794,10 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
   }
 
   async function handleRefreshModels() {
+    const revision = ++modelDiscoveryRevisionRef.current;
     setModelsLoading(true);
     const next = await refreshProviderModels(row.id, providerContext);
+    if (revision !== modelDiscoveryRevisionRef.current) return;
     setModels(next);
     setModelsLoading(false);
   }
