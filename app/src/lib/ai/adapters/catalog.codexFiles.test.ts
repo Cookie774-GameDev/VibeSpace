@@ -24,7 +24,7 @@ it('allows bounded text-file context through the actual Codex descriptor without
     validateSendModelAccess('Read the attached text file.', selection, context, [], {
       attachments: { hasFiles: true },
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: true, selection });
   expect(connection.capabilities.images).toBe(false);
   expect(
     validateSendModelAccess('Describe the attached image.', selection, context, [], {

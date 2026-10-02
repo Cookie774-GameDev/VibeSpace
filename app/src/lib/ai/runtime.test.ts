@@ -5805,10 +5805,24 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           }),
         }),
       );
+      const expectedContextTools = [
+        'vibespace_context',
+        'vibespace_context_address',
+        'vibespace_context_expand',
+        'vibespace_context_open',
+        'vibespace_context_search',
+        'vibespace_context_trace',
+      ];
       expect(providerInput.tools.vibespace_context).toBe(true);
       expect(
         Object.entries(providerInput.tools)
-          .filter(([tool]) => tool !== 'vibespace_context')
+          .filter(([, enabled]) => enabled === true)
+          .map(([tool]) => tool)
+          .sort(),
+      ).toEqual(expectedContextTools);
+      expect(
+        Object.entries(providerInput.tools)
+          .filter(([tool]) => !expectedContextTools.includes(tool))
           .every(([, enabled]) => enabled === false),
       ).toBe(true);
       expect(providerInput.messages.at(-1)?.content).toContain(
