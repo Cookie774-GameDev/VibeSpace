@@ -24,7 +24,10 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
   const context = { clearRect: painted, beginPath: vi.fn(), arc: vi.fn(), fill: vi.fn(), fillStyle: '' };
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
+  const canvas2d: { getContext(contextId: '2d'): CanvasRenderingContext2D | null } = HTMLCanvasElement.prototype;
+  vi.spyOn(canvas2d, 'getContext').mockImplementation((contextId) =>
+    contextId === '2d' ? context as unknown as CanvasRenderingContext2D : null,
+  );
   vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
     x: 0, y: 0, left: 0, top: 0, right: 640, bottom: 360, width: 640, height: 360, toJSON: () => ({}),
   });

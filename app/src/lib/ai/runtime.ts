@@ -2886,8 +2886,9 @@ export async function installJarvisKernelRuntimeHost(
         reason: 'kernel_not_activated',
       });
       if (request.kind === 'context_source_revision') {
-        const observation = await readSourceRevision({ accountId: request.accountId, chatId: request.chatId,
-          mapId: request.mapId, ...(request.binding ?? {}) });
+        const sourceScope = { accountId: request.accountId, chatId: request.chatId, mapId: request.mapId };
+        const sourceInput = request.binding ? { ...sourceScope, ...request.binding } : sourceScope;
+        const observation = await readSourceRevision(sourceInput);
         if (!observation) return unavailable();
         return { version: 1, kind: 'context_source_revision', accountId: observation.accountId,
           workspaceId: observation.workspaceId, projectId: observation.projectId, worktreeHash: observation.worktreeHash,
