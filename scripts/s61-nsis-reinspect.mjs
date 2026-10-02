@@ -51,16 +51,28 @@ export function validateRelativePath(input){
 export function parseArchiveListing(text){
   return text.trim().split(/\r?\n\s*\r?\n/u).filter(Boolean).map(block=>Object.fromEntries(block.split(/\r?\n/u).map(line=>{const at=line.indexOf(' = ');return at<0?[line,'']:[line.slice(0,at),line.slice(at+3)];})));
 }
-export function validateArchiveEntries(entries,{maxFiles=100000,maxExpandedBytes=16*1024**3}={}){
-  assert(entries.length>0&&entries.length<=maxFiles,'Archive entry count bound');let expandedBytes=0;const seen=new Set();
+export function validatePackageIndex(rows){
+  assert(Array.isArray(rows)&&rows.length>0&&rows.length<=100000,'Recorded package file array required');const seen=new Set();
+  for(const row of rows){const key=validateRelativePath(row.path).toLowerCase();assert(!seen.has(key),'Recorded package collision');seen.add(key);assert(Number.isSafeInteger(row.bytes)&&row.bytes>=0,'Recorded package size invalid');assert(/^[a-f0-9]{64}$/u.test(row.sha256),'Recorded package SHA invalid');}
+  return rows;
+}
+export function validateArchiveEntries(entries,{maxFiles=100000,maxExpandedBytes=16*1024**3,packageIndex}={}){
+  assert(entries.length>0&&entries.length<=maxFiles,'Archive entry count bound');let expandedBytes=0;const seen=new Set(),entrySizeBindings=[];
+  const recorded=packageIndex?new Map(validatePackageIndex(packageIndex).map(row=>[validateRelativePath(row.path).toLowerCase(),row])):null;
+  if(recorded)assert.equal(entries.length,recorded.size,'Archive count differs from authenticated package index');
   for(const e of entries){
     const name=validateRelativePath(e.Path);const key=name.toLowerCase();assert(!seen.has(key),'Archive case collision');seen.add(key);
     assert(!e['Symbolic Link']&&!e['Hard Link']&&!/L/u.test(e.Attributes??''),'Archive link');
     assert(e.Encrypted!=='+'&&e['Alternate Stream']!=='+'&&e['Anti']!=='+','Unsupported encrypted/stream/anti entry');
-    assert(/^\d+$/u.test(e.Size??'0'),'Invalid archive size');const size=Number(e.Size??0);assert(Number.isSafeInteger(size)&&size>=0,'Invalid expanded size');
+    const row=recorded?.get(key);if(recorded)assert(row,'Archive entry missing from authenticated package index');
+    const indexedUninstaller=e.Size===''&&e.Path==='uninstall.exe'&&e.Solid==='+'&&e.Method==='LZMA:23'&&row;
+    assert(indexedUninstaller||/^\d+$/u.test(e.Size??'0'),'Invalid archive size');
+    const listedBytes=indexedUninstaller?null:Number(e.Size??0);assert(listedBytes===null||(Number.isSafeInteger(listedBytes)&&listedBytes>=0),'Invalid expanded size');
+    const size=indexedUninstaller?row.bytes:Math.max(listedBytes,row?.bytes??0);
+    if(row)entrySizeBindings.push({path:name,bytes:row.bytes,listedBytes,expansionBoundBytes:size,sha256:row.sha256,sizeSource:indexedUninstaller?'authenticated-original-index-generated-uninstaller':'maximum-of-7zip-and-authenticated-original-index'});
     expandedBytes+=size;assert(Number.isSafeInteger(expandedBytes)&&expandedBytes<=maxExpandedBytes,'Archive expansion bound');
   }
-  return {entries:entries.length,expandedBytes};
+  return {entries:entries.length,expandedBytes,...(recorded?{authenticatedIndexMatched:true,entrySizeBindings}:{})};
 }
 async function walk(dir,base=dir,files=[]){
   for(const e of await readdir(dir,{withFileTypes:true})){
@@ -75,6 +87,7 @@ async function extract(tool,archive,destination,output,label,bounds){
   assert(!(await lstat(destination).catch(()=>null)),'Extraction directory must be new');
   const listing=capture(tool,['l','-slt','-ba',archive]);await writeFile(path.join(output,label+'-listing.txt'),listing,{flag:'wx'});
   const entries=parseArchiveListing(listing),summary=validateArchiveEntries(entries,bounds);await save(output,label+'-entries.json',entries);
+  if(summary.authenticatedIndexMatched)await save(output,label+'-size-bounds.json',summary);
   const free=await statfs(path.dirname(destination));assert(Number(free.bavail)*Number(free.bsize)>=Math.max(MIN_DISK,summary.expandedBytes+1024**3),'Insufficient output disk');
   await mkdir(destination);capture(tool,['x','-y','-o'+destination,archive]);
   const files=await walk(destination),seen=new Set();for(const f of files){const rel=validateRelativePath(path.relative(destination,f));assert(!seen.has(rel.toLowerCase()),'Extracted case collision');seen.add(rel.toLowerCase());}
@@ -150,11 +163,9 @@ export function assertOriginalCapacity(capacity){
 }
 async function uniqueBasename(files,name){const hits=files.filter(f=>path.basename(f).toLowerCase()===name.toLowerCase());assert.equal(hits.length,1,'Unique archive file required: '+name);return hits[0];}
 async function originalPackageIndex(file){
-  const rows=await smallJson(file);assert(Array.isArray(rows)&&rows.length<=100000);const seen=new Set();
-  for(const row of rows){const key=validateRelativePath(row.path).toLowerCase();assert(!seen.has(key),'Recorded package collision');seen.add(key);assert(Number.isSafeInteger(row.bytes)&&row.bytes>=0);assert(/^[a-f0-9]{64}$/u.test(row.sha256));}
-  return rows;
+  return validatePackageIndex(await smallJson(file));
 }
-async function verifyRecordedFiles(files,base,rows){
+export async function verifyRecordedFiles(files,base,rows){
   assert.equal(files.length,rows.length,'Extracted package file count differs from original');
   const expected=new Map(rows.map(r=>[r.path.toLowerCase(),r])),actual=[];
   for(const file of files){const rel=path.relative(base,file).replaceAll('\\','/'),e=expected.get(rel.toLowerCase());assert(e,'Unrecorded extracted payload');
@@ -223,7 +234,7 @@ export async function runReinspection(config){
     assertOriginalCapacity(capacity);
     await saveHere('original-capacity-before-build.json',capacity);
     const originalRows=await originalPackageIndex(await uniqueBasename(archive.files,'package-files.json'));
-    const payloadRoot=path.join(output,'nsis-payload'),payload=await extract(config.sevenZipExecutable,installer,payloadRoot,output,'nsis');
+    const payloadRoot=path.join(output,'nsis-payload'),payload=await extract(config.sevenZipExecutable,installer,payloadRoot,output,'nsis',{packageIndex:originalRows});
     await saveHere('package-files.json',await verifyRecordedFiles(payload.files,payloadRoot,originalRows));
     const exe=await uniqueBasename(payload.files,'jarvis.exe');assert.equal(await sha256(exe),EXPECTED.extractedSHA256,'Actual archived NSIS exe identity mismatch');
     const reference=path.join(output,'restored-reference.exe'),recovery=await recoverReference(exe,reference,EXPECTED.restoredSHA256,{onCandidates:data=>saveHere('reference-candidates.json',data)});
