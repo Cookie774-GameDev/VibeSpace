@@ -550,6 +550,7 @@ describe('Jarvis canonical core actions', () => {
       }),
     }));
     const dispatcher = createJarvisTerminalRegisteredActionDispatcher({
+      resolveProtectedScope: async () => ({ accountId: 'account-a', workspaceId: 'workspace-a', projectId: 'project-a', isCurrent: () => true }),
       newExecutionId: () => 'jterm_1',
       newCancellationToken: () => 'jcancel_native_1',
       createAcceptor,
@@ -580,6 +581,8 @@ describe('Jarvis canonical core actions', () => {
 
     expect(createAcceptor).toHaveBeenCalledWith({
       accountId: 'account-a',
+      workspaceId: 'workspace-a',
+      projectId: 'project-a',
       runId: 'jrun_1',
       executionId: 'jterm_1',
       cancellationToken: 'jcancel_native_1',
@@ -694,7 +697,7 @@ describe('Jarvis canonical core actions', () => {
     });
   });
 
-  it('publishes no canonical start when protected scope changes before transfer', async () => {
+  it.each(['terminal.create', 'terminal.start_cli'] as const)('publishes no %s when protected scope changes before transfer', async (actionId) => {
     const createAcceptor = vi.fn();
     const transferTerminalOwnership = vi.fn();
     const dispatcher = createJarvisTerminalRegisteredActionDispatcher({
@@ -712,11 +715,11 @@ describe('Jarvis canonical core actions', () => {
     await expect(
       dispatcher({
         registration: {
-          id: 'terminal.start_cli',
+          id: actionId,
           version: 1,
-          executor: { kind: 'builtin', registryActionId: 'terminal.start_cli' },
+          executor: { kind: 'builtin', registryActionId: actionId },
         } as never,
-        params: { cli: 'opencode' },
+        params: actionId === 'terminal.create' ? {} : { cli: 'opencode' },
         context: {
           source: 'ai',
           accountId: 'account-a',

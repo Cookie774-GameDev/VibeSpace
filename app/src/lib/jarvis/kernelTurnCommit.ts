@@ -720,12 +720,13 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
           }
           const expectedCallId = approvalCallId(input.approvalId);
           const fileBatch = fileActionBatchParts(storedMessage.parts);
+          const isActionBatch = storedMessage.parts.filter((part) => part.kind === 'action_proposal').length >= 2;
           const isFileActionBatch =
             fileBatch.length >= 2 && fileBatch.some((part) => part.call_id === expectedCallId);
           if (
             current.status !== 'running' &&
             !(
-              isFileActionBatch &&
+              isActionBatch &&
               current.status === 'awaiting_approval' &&
               input.outcome === 'completed'
             )
@@ -833,16 +834,15 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
               actualStatus: current.status,
             };
           }
-          const remainingBatchPending = isFileActionBatch
+          const remainingBatchPending = isActionBatch
             ? parts.filter(
                 (part) =>
                   part.kind === 'action_proposal' &&
-                  (part.action_id === 'files.read' || part.action_id === 'files.create') &&
                   (part.status === 'pending' || part.status === 'queued'),
               ).length
             : 0;
           const keepAwaitingApproval =
-            isFileActionBatch && remainingBatchPending > 0 && input.outcome === 'completed';
+            isActionBatch && remainingBatchPending > 0 && input.outcome === 'completed';
           let transportAttempts = current.transportAttempts;
           if (
             current.source === 'schedule' &&
@@ -929,7 +929,7 @@ export function createKernelTurnCommit(dependencies: CommitDependencies): Jarvis
                         ? 'The approval deadline passed; the protected action did not execute.'
                         : 'The protected action was denied and did not execute.')
                     : terminalStatus === 'awaiting_approval'
-                      ? 'The approved file action completed; remaining batch approvals are still pending.'
+                      ? 'The approved action completed; remaining batch approvals are still pending.'
                       : 'The approved protected action did not fully complete.',
             sourceRefs: responseReadyEvent.sourceRefs,
             artifactIds: [

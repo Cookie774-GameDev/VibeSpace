@@ -1474,14 +1474,21 @@ export async function installJarvisKernelRuntimeHost(
                 transitionInput.accountId,
                 transitionInput.runId,
               );
-              if (!current || current.status !== transitionInput.expectedStatus) {
+              const unclaimedHandoff = terminalExecutionModule.isUnclaimedCanonicalTerminalHandoff(
+                transitionInput.accountId, transitionInput.runId, request.executionId,
+              );
+              // Whole-run Stop may tombstone several queued owners. A sibling
+              // can already have committed this exact run cancellation.
+              if (current?.status === 'cancelled' && unclaimedHandoff) return { applied: true as const };
+              const runningHandoff = current?.status === 'running' && unclaimedHandoff;
+              if (!current || (current.status !== transitionInput.expectedStatus && !runningHandoff)) {
                 return { applied: false as const, reason: 'status_conflict' as const };
               }
               try {
                 await journal.transitionRun({
                   accountId: transitionInput.accountId,
                   runId: transitionInput.runId,
-                  expectedStatus: transitionInput.expectedStatus,
+                  expectedStatus: current.status,
                   nextStatus: 'cancelled',
                   completedAt: now(),
                   event: {

@@ -9,6 +9,8 @@ import {
   createJarvisTerminalExecutionAcceptor,
   failTerminalExecutionBeforeNativeExit,
   markTerminalExecution,
+  isCompletedTerminalCreation,
+  isUnclaimedCanonicalTerminalHandoff,
   observeTerminalExecutionNativeExit,
   readTerminalProcessIdentity,
   requestTerminalExecutionCancellation,
@@ -304,6 +306,7 @@ describe('terminal execution lifecycle', () => {
 
   function canonicalHarness(
     request: {
+      command?: string;
       timeoutMs?: number;
       accountId?: string;
       runId?: string;
@@ -358,7 +361,7 @@ describe('terminal execution lifecycle', () => {
         runId,
         executionId,
         cancellationToken: request.cancellationToken ?? 'jcancel_native_1',
-        command: 'powershell',
+        command: request.command ?? 'powershell',
         ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
       },
       registrationAuthority,
@@ -380,6 +383,67 @@ describe('terminal execution lifecycle', () => {
       receipt,
     };
   }
+
+  it('completes terminal.create only after an exact native attachment and committed creation result', async () => {
+    const harness = canonicalHarness({ command: '' });
+    expect(isUnclaimedCanonicalTerminalHandoff('account-a', 'jrun_1', 'jterm_1')).toBe(true);
+    expect(isUnclaimedCanonicalTerminalHandoff('account-b', 'jrun_1', 'jterm_1')).toBe(false);
+    expect(harness.recordResult).not.toHaveBeenCalled();
+    expect(await claimTerminalExecution('jterm_1')).toBe(true);
+    expect(isUnclaimedCanonicalTerminalHandoff('account-a', 'jrun_1', 'jterm_1')).toBe(false);
+    expect(await attachTerminalExecution('jterm_1', { ...processAttachment, accountId: 'account-b' })).toBe(false);
+    expect(harness.recordResult).not.toHaveBeenCalled();
+    expect(await attachTerminalExecution('jterm_1', processAttachment)).toBe(true);
+    expect(harness.recordResult).toHaveBeenCalledOnce();
+    expect(harness.recordResult).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'completed', resultRef: 'jterminal_created:jterm_1:pty_1:process-instance-1',
+    }));
+    expect(isCompletedTerminalCreation('jterm_1', 'pty_1')).toBe(true);
+    expect(isCompletedTerminalCreation('jterm_1', 'foreign-pty')).toBe(false);
+    expect(harness.registrations.size).toBe(0);
+    expect(harness.execution.dispose).toHaveBeenCalledOnce();
+    expect(await attachTerminalExecution('jterm_1', processAttachment)).toBe(false);
+    expect(harness.recordResult).toHaveBeenCalledOnce();
+  });
+
+  it('does not acknowledge a create whose cancellation intent precedes native attachment', async () => {
+    const harness = canonicalHarness({ command: '' });
+    expect(await claimTerminalExecution('jterm_1')).toBe(true);
+    await requestTerminalExecutionCancellation('jterm_1');
+    expect(await attachTerminalExecution('jterm_1', processAttachment)).toBe(true);
+    expect(harness.recordResult).not.toHaveBeenCalled();
+    expect(isCompletedTerminalCreation('jterm_1', 'pty_1')).toBe(false);
+    expect(harness.execution.dispose).not.toHaveBeenCalled();
+  });
+
+  it('does not terminalize a run from a queued owner while a sibling terminal is already claimed', async () => {
+    canonicalHarness({ command: '', executionId: 'jterm_1' });
+    canonicalHarness({ command: 'opencode', executionId: 'jterm_2' });
+    expect(isUnclaimedCanonicalTerminalHandoff('account-a', 'jrun_1', 'jterm_1')).toBe(true);
+    expect(await claimTerminalExecution('jterm_2')).toBe(true);
+    expect(isUnclaimedCanonicalTerminalHandoff('account-a', 'jrun_1', 'jterm_1')).toBe(false);
+  });
+
+  it('keeps native ownership when the creation journal commit fails and does not acknowledge the shell', async () => {
+    const harness = canonicalHarness({ command: '' });
+    harness.recordResult.mockRejectedValueOnce(new Error('journal unavailable'));
+    expect(await claimTerminalExecution('jterm_1')).toBe(true);
+    await expect(attachTerminalExecution('jterm_1', processAttachment)).rejects.toThrow('journal unavailable');
+    expect(isCompletedTerminalCreation('jterm_1', 'pty_1')).toBe(false);
+    expect(harness.execution.dispose).not.toHaveBeenCalled();
+    expect(harness.registrations.has('terminal:jterm_1')).toBe(true);
+  });
+
+  it('retains native CLI ownership and refuses a forged creation marker after attachment', async () => {
+    const harness = canonicalHarness({ command: 'opencode' });
+    expect(await claimTerminalExecution('jterm_1')).toBe(true);
+    expect(await attachTerminalExecution('jterm_1', processAttachment)).toBe(true);
+    expect(harness.recordResult).not.toHaveBeenCalled();
+    expect(harness.execution.dispose).not.toHaveBeenCalled();
+    useTerminalExecutionStore.getState().mark('jterm_1', 'complete', { creationAcknowledged: true });
+    expect(isCompletedTerminalCreation('jterm_1', 'pty_1')).toBe(false);
+    expect(isUnclaimedCanonicalTerminalHandoff('account-a', 'jrun_1', 'jterm_1')).toBe(false);
+  });
 
   it('accepts only the exact transferred controller and registers the queue owner before visibility', () => {
     const harness = canonicalHarness();

@@ -102,11 +102,8 @@ export function createJarvisTerminalRegisteredActionDispatcher(
         };
       }
     }
-    const protectedScope =
-      actionId === 'terminal.start_cli'
-        ? await (dependencies.resolveProtectedScope ?? resolveProtectedTerminalScope)(input.context)
-        : null;
-    if (actionId === 'terminal.start_cli' && (!protectedScope || !protectedScope.isCurrent())) {
+    const protectedScope = await (dependencies.resolveProtectedScope ?? resolveProtectedTerminalScope)(input.context);
+    if (!protectedScope || !protectedScope.isCurrent()) {
       return {
         kind: 'executor_returned',
         result: fail('Canonical terminal scope was revoked before handoff.'),

@@ -118,6 +118,10 @@ jobs:
           src/lib/jarvis/kernelRuntime.test.ts
           src/features/chat/ActionApprovalCard.test.tsx
           src/features/chat/Composer.resumeReview.test.tsx
+          src/lib/actions/registryJarvisCore.test.ts
+          src/features/terminals/terminalExecutionStore.test.ts
+          src/features/terminals/TileGrid.refit.test.tsx
+          src/lib/jarvis/kernelTurnCommit.test.ts
 
       - name: Test (vitest)
         run: npm --prefix app run test
