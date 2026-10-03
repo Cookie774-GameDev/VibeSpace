@@ -7,6 +7,7 @@ import {
 import { openCodeHarness } from '@/lib/harness/openCodeHarness';
 import { createRegisteredCodexRlmChild } from '@/lib/ai/adapters/codexRlmBoundChild';
 import { currentRlmSourceRevision } from './contextRlmSourceRevision';
+import { contextEntityIdForTreeNode } from './migration';
 import { HarnessError } from '@/lib/harness/errors';
 import type { HarnessEvent, VibeSpaceHarness } from '@/lib/harness/types';
 import { classifyJarvisSource } from '@/lib/jarvis/sourcePolicy';
@@ -1459,7 +1460,9 @@ export function createContextMapRlmRepository(
 
   const snapshotSearchCandidate = async (
     candidate: SearchAuthorityCandidate,
+    signal?: AbortSignal,
   ): Promise<SearchCandidateSnapshot | undefined> => {
+    signal?.throwIfAborted();
     if (candidate.inlineContent !== undefined) {
       const size = new TextEncoder().encode(candidate.inlineContent).length;
       if (size > MAX_SOURCE_SHARD_BYTES) return undefined;
@@ -1469,10 +1472,18 @@ export function createContextMapRlmRepository(
         hash: await sha256Text(candidate.inlineContent),
       };
     }
+    const preflight = await dependencies.stat(candidate.path, false, {
+      root: candidate.map.rootDir,
+      strictProjectBoundary: true,
+    });
+    signal?.throwIfAborted();
+    if (!preflight.ok || preflight.kind !== 'file' || preflight.size === undefined ||
+        preflight.size < 0 || preflight.size > MAX_SOURCE_SHARD_BYTES) return undefined;
     const stat = await dependencies.stat(candidate.path, true, {
       root: candidate.map.rootDir,
       strictProjectBoundary: true,
     });
+    signal?.throwIfAborted();
     const hash = stat.ok ? rawSha256(stat.sha256) : undefined;
     if (
       !stat.ok ||
@@ -1480,7 +1491,8 @@ export function createContextMapRlmRepository(
       !hash ||
       stat.size === undefined ||
       stat.size < 0 ||
-      stat.size > MAX_SOURCE_SHARD_BYTES
+      stat.size > MAX_SOURCE_SHARD_BYTES || stat.size !== preflight.size ||
+      stat.modifiedMs !== preflight.modifiedMs || stat.createdMs !== preflight.createdMs
     ) {
       return undefined;
     }
@@ -1808,6 +1820,33 @@ export function createContextMapRlmRepository(
     async listRecords(scope, signal) {
       return (await loadAuthorities(scope, signal)).map((authority) => authority.record);
     },
+    async listRecordsPage(scope, limit, signal) {
+      signal?.throwIfAborted();
+      const normalizedScope = validateContextScope(scope);
+      const maps = await dependencies.loadMaps(normalizedScope.projectId ?? null);
+      signal?.throwIfAborted();
+      const { candidates } = enumerateSearchCandidates(normalizedScope, maps, maps.length);
+      const maximum = Math.max(1, Math.min(MAX_CONTEXT_MAP_SEARCH_RESULTS, Math.floor(limit)));
+      // A denied/stale file consumes a slot too. Never scan the corpus to fill a page.
+      const selected = candidates.slice(0, maximum + 1);
+      const built = await mapBoundedInOrder(selected, MAX_CONCURRENT_SOURCE_VALIDATIONS, async candidate => {
+        signal?.throwIfAborted();
+        const snapshot = await snapshotSearchCandidate(candidate, signal);
+        signal?.throwIfAborted(); // Native stat already in flight cannot be recalled.
+        if (!snapshot) return undefined;
+        const authority = await createCandidateAuthority(normalizedScope, candidate, snapshot.hash,
+          snapshot.createdMs, snapshot.modifiedMs);
+        signal?.throwIfAborted();
+        return authority;
+      });
+      signal?.throwIfAborted();
+      const authorities = built.filter((authority): authority is RecordAuthority => authority !== undefined);
+      // This request-local bounded inventory must not revoke another caller's pointers
+      // or abort/reuse the shared full-build work owned by an independent subscriber.
+      for (const authority of authorities.slice(0, maximum)) authorityByRecordId.set(authority.record.id, authority);
+      return { items: authorities.slice(0, maximum).map(authority => authority.record),
+        truncated: candidates.length > selected.length || authorities.length > maximum };
+    },
     async getRecord(recordId) {
       return authorityByRecordId.get(recordId)?.record;
     },
@@ -1952,7 +1991,7 @@ export function createContextMapRlmRepository(
           );
           return matches
             .map(({ match, score, probes }) => ({ match: { ...match, score: probes * 1_000_000 + score },
-              candidate: byNodeId.get(match.documentId) }))
+              candidate: byNodeId.get(match.documentId) ?? byNodeId.get(contextEntityIdForTreeNode(map.id, match.documentId)) }))
             .filter(
               (
                 entry,
@@ -2012,7 +2051,7 @@ export function createContextMapRlmRepository(
       const rawSnapshots = await mapBoundedInOrder(
         selectedCandidates,
         MAX_CONCURRENT_SOURCE_VALIDATIONS,
-        snapshotSearchCandidate,
+        candidate => snapshotSearchCandidate(candidate, signal),
       );
       const snapshots: SearchCandidateSnapshot[] = [];
       let selectedBytes = 0;

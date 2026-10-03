@@ -321,6 +321,44 @@ jobs:
           cargo test --release --lib managed_transport_tool_list -- --test-threads=1
           cargo test --release --lib connector_ -- --test-threads=1
 
+      # SOURCE-ONLY proposal; root applies to published s61-owned-source.yml privately.
+      # Insert in jobs.rust.steps AFTER all existing Verify native Codex authority Cargo tests, before Upload Rust failure log.
+      - name: Verify exact native semantic gateway catalog accepts five dedicated context tools
+        id: tool-gateway-catalog
+        working-directory: app/src-tauri
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git hash-object -- src/harness/tool_gateway.rs)" = "$(git rev-parse HEAD:app/src-tauri/src/harness/tool_gateway.rs)"
+          set +e
+          cargo test --release --locked --lib harness::tool_gateway::tests::accepts_only_the_fixed_semantic_catalog_and_never_generic_native_invoke -- --exact --test-threads=1 --color=never > tool-gateway-catalog.log 2>&1
+          status=$?
+          set -e
+          cat tool-gateway-catalog.log
+          python3 - "$status" <<'PY'
+          import hashlib,json,os,pathlib,re,subprocess,sys
+          name='harness::tool_gateway::tests::accepts_only_the_fixed_semantic_catalog_and_never_generic_native_invoke'
+          log=pathlib.Path('tool-gateway-catalog.log').read_text(encoding='utf-8')
+          rows=re.findall(r'^test (.+) \.\.\. (ok|FAILED|ignored)$',log,re.M)
+          summaries=re.findall(r'^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;',log,re.M)
+          code=int(sys.argv[1])
+          passed=code==0 and rows==[(name,'ok')] and summaries==[('ok','1','0','0')]
+          source=pathlib.Path('src/harness/tool_gateway.rs').read_bytes()
+          receipt={'status':'PASS_COMPILED_RUST_CATALOG' if passed else 'FAIL','cargoExitCode':code,'expectedCount':1,'actualRows':rows,'summary':summaries,'sourceCommit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'toolGatewaySHA256':hashlib.sha256(source).hexdigest(),'nativeAppAcceptance':False,'installerAcceptance':False}
+          pathlib.Path('tool-gateway-catalog-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf-8')
+          if not passed: raise SystemExit('Exact compiled Rust catalog regression did not pass once without ignored tests')
+          PY
+      - name: Upload immutable Rust catalog regression receipt
+        if: always() && steps.tool-gateway-catalog.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: s61-rust-tool-gateway-catalog-${{ github.sha }}
+          path: |
+            app/src-tauri/tool-gateway-catalog.log
+            app/src-tauri/tool-gateway-catalog-receipt.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload Rust failure log
         if: failure() && steps.cargo-check.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -12,7 +12,7 @@ export const CODEX_CONTEXT_TOOL = {
   inputSchema: {
     type: 'object',
     properties: {
-      operation: { type: 'string', enum: ['describe', 'query', 'investigate', 'search', 'open', 'expand', 'sources', 'related', 'timeline', 'address'] },
+      operation: { type: 'string', enum: ['query', 'describe', 'search', 'open', 'expand', 'address', 'related', 'timeline', 'sources', 'checkpoint', 'investigate', 'trace'] },
       query: { type: 'string' },
       limit: { type: 'integer' },
       pointer: { type: 'object' },
@@ -21,8 +21,9 @@ export const CODEX_CONTEXT_TOOL = {
       afterBytes: { type: 'integer' },
       continuation: { type: 'string' },
       recordId: { type: 'string' },
-      corpusId: { type: 'string' },
-      position: { type: 'string' },
+      corpusId: { type: 'string', minLength: 1, maxLength: 200 },
+      position: { type: 'string', pattern: '^(0|[1-9][0-9]{0,16})$' },
+      runId: { type: 'string', minLength: 1, maxLength: 128 },
     },
     required: ['operation'],
     additionalProperties: false,

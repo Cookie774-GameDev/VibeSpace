@@ -620,7 +620,8 @@ function findContextNode(
 ): { id: string; title: string; summary: string; path?: string } | null {
   for (const node of nodes) {
     if (node.id === contextId) {
-      return { id: node.id, title: node.title, summary: node.summary, path: node.path };
+      return { id: node.id, title: node.title, summary: node.summary,
+        ...(node.path === undefined ? {} : { path: node.path }) };
     }
     const nested = node.children
       ? findContextNode(

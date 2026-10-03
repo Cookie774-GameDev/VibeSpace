@@ -335,6 +335,22 @@ export function createFederatedRlmRepository(
     async listRecords(scope, signal) {
       return (await Promise.all(repositories.map((repository) => repository.listRecords(scope, signal)))).flat();
     },
+    async listRecordsPage(scope, limit, signal) {
+      const items: ContextRecord[] = [];
+      for (const repository of repositories) {
+        abortIfNeeded(signal);
+        const remaining = Math.max(1, limit - items.length);
+        // An unpaged backend cannot prove a bounded metadata census. Leave it unread.
+        if (!repository.listRecordsPage) return { items, truncated: true };
+        const page = await repository.listRecordsPage(scope, remaining, signal);
+        abortIfNeeded(signal);
+        items.push(...page.items.slice(0, remaining));
+        if (page.truncated || items.length >= limit) {
+          return { items: items.slice(0, limit), truncated: page.truncated || repositories.indexOf(repository) < repositories.length - 1 };
+        }
+      }
+      return { items, truncated: false };
+    },
     async getRecord(recordId, signal) {
       for (const repository of repositories) {
         const record = await repository.getRecord(recordId, signal);

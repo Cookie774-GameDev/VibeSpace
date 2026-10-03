@@ -40,6 +40,11 @@ const TOOL_CATALOG: &[&str] = &[
     "context.read",
     "context.attach",
     "vibespace_context",
+    "vibespace_context_search",
+    "vibespace_context_open",
+    "vibespace_context_expand",
+    "vibespace_context_address",
+    "vibespace_context_trace",
     "skills.list",
     "skills.load",
     "plugins.list",
@@ -1725,7 +1730,15 @@ mod tests {
                 .tool,
             "vibespace_context"
         );
-        for accepted in ["mcp.list", "mcp.run"] {
+        for accepted in [
+            "mcp.list",
+            "mcp.run",
+            "vibespace_context_search",
+            "vibespace_context_open",
+            "vibespace_context_expand",
+            "vibespace_context_address",
+            "vibespace_context_trace",
+        ] {
             assert_eq!(
                 parse_tool_request(&request(accepted)).unwrap().tool,
                 accepted
@@ -1739,6 +1752,8 @@ mod tests {
             "terminal.list;rm",
             "command.run",
             "context.update",
+            "vibespace_context_delete",
+            "vibespace_context_search;rm",
             "",
         ] {
             assert_eq!(

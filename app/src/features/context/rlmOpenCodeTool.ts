@@ -325,8 +325,17 @@ export function createRlmOpenCodeTool(dependencies: {
         return result === undefined ? { found: false } : { found: true, receipt: result };
       }
       case 'query': {
-        const args = exactKeys(rawInput, ['operation', 'query'], ['limit']);
+        const args = exactKeys(rawInput, ['operation', 'query'], ['limit', 'continuation']);
         const question = text(args.query);
+        if (args.continuation !== undefined) {
+          // An issued search cursor resumes bounded retrieval, never research.
+          // The search operation validates its query/scope/cursor and citations.
+          return executeRouted('retrieval', () => execute({
+            operation: 'search', query: question,
+            ...(args.limit === undefined ? {} : { limit: args.limit }),
+            continuation: args.continuation,
+          }, capturedLease, signal));
+        }
         const rlmEnabled = resolveRlmEnabled({ workspaceId: lease.workspaceId, chatId: lease.chatId }).enabled;
         const decision = routeDefaultContextQuery(question, { rlmAvailable: rlmEnabled });
         if (decision.mode === 'rlm') {
