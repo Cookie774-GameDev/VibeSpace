@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { JarvisCancellationAggregate, JarvisCancellationRequestResult } from '@/lib/jarvis/contracts/execution';
 import { mapKernelCancellationState } from './kernelCancellationState';
 
-function committed(aggregate: JarvisCancellationAggregate): JarvisCancellationRequestResult {
+function committed(aggregate: JarvisCancellationAggregate): Extract<JarvisCancellationRequestResult, { kind: 'intent_committed' }> {
   return {
     kind: 'intent_committed', requestState: 'new', authorityState: 'current',
     cancellationRequestId: 'jcancel_owned', aggregate,
