@@ -400,14 +400,62 @@ test('registered CI opts into the same-commit Windows QA call without requiring 
 
 test('reusable Windows QA requires all four string proofs and declares no secrets', async () => {
   const qa = await readFile(path.join(root, '.github/workflows/native-windows-qa.yml'), 'utf8');
-  const call = blockAt(qa, '  workflow_call:');
-  assert.doesNotMatch(call, /secrets:/u);
-  assert.deepEqual(
-    [...call.matchAll(/^      ([a-z_0-9]+):$/gmu)].map((match) => match[1]),
-    proofInputs,
-  );
-  for (const name of proofInputs) {
-    assert.match(blockAt(call, `      ${name}:`), /required: true\s+type: string/u);
+  const { createHash } = await import('node:crypto');
+  // Only the authenticated historical local workflow may use the four-input schema.
+  const withLifecycle = createHash('sha256').update(qa, 'utf8').digest('hex') !==
+    '3e0542e0f50b1b68f0f2dd797db42118bd0f1de3745e85a8a7282ff3f4a9fa12';
+  const validateInvocation = (source) => {
+    for (const trigger of ['workflow_call', 'workflow_dispatch']) {
+      const inputs = blockAt(source, `  ${trigger}:`);
+      assert.doesNotMatch(inputs, /secrets:/u);
+      assert.deepEqual(
+        [...inputs.matchAll(/^      ([a-z_0-9]+):$/gmu)].map((match) => match[1]),
+        withLifecycle ? [...proofInputs, 'foundry_lifecycle_enabled'] : proofInputs,
+      );
+      for (const name of proofInputs) {
+        assert.match(blockAt(inputs, `      ${name}:`), /required: true\s+type: string/u);
+      }
+      if (withLifecycle) {
+        assert.match(
+          blockAt(inputs, '      foundry_lifecycle_enabled:'),
+          /required: false\s+type: boolean\s+default: false\s*$/u,
+        );
+      }
+    }
+  };
+  validateInvocation(qa);
+  if (withLifecycle) {
+    let bothRemoved = qa;
+    for (const trigger of ['workflow_call', 'workflow_dispatch']) {
+      const inputs = blockAt(bothRemoved, `  ${trigger}:`);
+      const lifecycle = blockAt(inputs, '      foundry_lifecycle_enabled:');
+      bothRemoved = bothRemoved.replace(inputs, inputs.replace(lifecycle, ''));
+    }
+    assert.throws(() => validateInvocation(bothRemoved));
+  }
+  // Execute this same contract against unsafe variants of the actual workflow.
+  for (const trigger of ['workflow_call', 'workflow_dispatch']) {
+    const inputs = blockAt(qa, `  ${trigger}:`);
+    const lifecycle = withLifecycle ? blockAt(inputs, '      foundry_lifecycle_enabled:') : undefined;
+    const unsafeVariants = [
+      inputs + '\n      unreviewed_input:\n        required: false\n        type: boolean\n',
+      inputs + '\n    secrets:\n      unreviewed_secret:\n        required: false\n',
+    ];
+    if (withLifecycle) {
+      unsafeVariants.push(
+      inputs.replace(lifecycle, lifecycle.replace('default: false', 'default: true')),
+      inputs.replace(lifecycle, lifecycle.replace('required: false', 'required: true')),
+      inputs.replace(lifecycle, lifecycle.replace('type: boolean', 'type: string')),
+      inputs.replace(lifecycle, ''),
+      );
+    }
+    for (const proof of proofInputs) {
+      const original = blockAt(inputs, `      ${proof}:`);
+      unsafeVariants.push(inputs.replace(original, original.replace('required: true', 'required: false')));
+    }
+    for (const unsafe of unsafeVariants) {
+      assert.throws(() => validateInvocation(qa.replace(inputs, unsafe)));
+    }
   }
 });
 
