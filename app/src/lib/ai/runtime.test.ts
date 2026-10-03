@@ -7831,6 +7831,77 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
   }
 
   it.each([
+    ['executor_missing', { kind: 'executor_missing' }, 'handoff_pending'],
+    ['delivery_rejected', { kind: 'delivery_rejected', ownerIds: ['owned-terminal'] }, 'handoff_pending'],
+    ['signal_delivered', { kind: 'signal_delivered', ownerIds: ['owned-terminal'] }, 'delivered'],
+  ] as const)('maps composed host cancellation %s without bypassing account authority', async (label, aggregate, expectedState) => {
+    const database = createJarvisDb(uniqueTestDbName('runtime-cancel-host-' + label), TEST_INDEXED_DB);
+    await database.open();
+    const run: JarvisRun = {
+      id: 'jrun_cancel_host_' + label,
+      accountId: 'runtime-test-account',
+      workspaceId: 'workspace-cancel-host',
+      chatId: 'chat-cancel-host',
+      source: 'typed_chat', status: 'running', agentId: 'agent_jarvis',
+      identityVersion: 1, profileRevisionId: 'profile-cancel-host',
+      model: { providerId: 'mock', modelId: 'mock-default', connectionMode: 'local', capabilities: {}, capturedAt: 1 },
+      createdAt: 1, updatedAt: 2,
+    };
+    await database.jarvis_runs.add(toJarvisRunRow(run));
+    const observedCanonicalResults: Awaited<ReturnType<JarvisKernelRuntime['requestCancellation']>>[] = [];
+    const delegatedCancellation = vi.fn<JarvisKernelRuntime['requestCancellation']>();
+    interceptNextKernelRuntime(kernel => {
+      delegatedCancellation.mockImplementation(async input => {
+        // Exercise actual account binding, cancellation intent transaction and registry.
+        // Only a canonical committed result gets this scenario's dependency aggregate.
+        const result = await kernel.requestCancellation(input);
+        observedCanonicalResults.push(result);
+        return result.kind === 'intent_committed' ? { ...result, aggregate } : result;
+      });
+      return Object.freeze({ ...kernel, requestCancellation: delegatedCancellation });
+    });
+    let disposeHost: (() => void) | undefined;
+    try {
+      disposeHost = await installKernelTestHost(database, 'cancel-host-' + label);
+      // Calls the installed host.handleClientRequest, not the standalone mapper.
+      await expect(handleInstalledJarvisKernelClientRequest({
+        version: 1, kind: 'cancel', accountId: run.accountId, runId: run.id,
+      })).resolves.toEqual({ version: 1, kind: 'cancellation_state', runId: run.id, state: expectedState });
+      expect(delegatedCancellation).toHaveBeenCalledWith({ accountId: run.accountId, runId: run.id });
+      expect(observedCanonicalResults[0]).toMatchObject({ kind: 'intent_committed', authorityState: 'current' });
+      const persisted = await database.jarvis_runs.get(run.id);
+      expect(persisted).toEqual(toJarvisRunRow(run));
+      const committedEvents = await database.jarvis_events.toArray();
+      expect(committedEvents).toHaveLength(1);
+      expect(committedEvents[0]).toMatchObject({ run_id: run.id, status: 'cancellation_requested' });
+
+      // Foreign request cannot use the current account's installed host authority.
+      await expect(handleInstalledJarvisKernelClientRequest({
+        version: 1, kind: 'cancel', accountId: 'foreign-account', runId: run.id,
+      })).resolves.toEqual({ version: 1, kind: 'cancellation_state', runId: run.id, state: 'not_found' });
+      expect(observedCanonicalResults.at(-1)).toEqual({ kind: 'authority_revoked_before_intent' });
+      expect(await database.jarvis_events.toArray()).toEqual(committedEvents);
+
+      // A real local account switch also revokes the original request's authority.
+      useAuthStore.setState({ localUserId: 'revoked-current-account' });
+      await expect(handleInstalledJarvisKernelClientRequest({
+        version: 1, kind: 'cancel', accountId: run.accountId, runId: run.id,
+      })).resolves.toEqual({ version: 1, kind: 'cancellation_state', runId: run.id, state: 'not_found' });
+      expect(observedCanonicalResults.at(-1)).toEqual({ kind: 'authority_revoked_before_intent' });
+      expect(await database.jarvis_events.toArray()).toEqual(committedEvents);
+      expect(await database.jarvis_runs.get(run.id)).toEqual(persisted);
+      expect(mocks.runAgent).not.toHaveBeenCalled();
+    } finally {
+      disposeHost?.();
+      mocks.kernelRuntimeInterceptor = null;
+      useAuthStore.setState({ localUserId: 'runtime-test-account' });
+      database.close();
+      await database.delete();
+    }
+  });
+
+
+  it.each([
     ['chat Off despite automatic On', 'chat-off'],
     ['automatic On admits all five real tools', 'auto-on'],
     ['workspace Off without a chat override', 'workspace-off'],

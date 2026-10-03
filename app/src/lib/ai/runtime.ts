@@ -1,3 +1,4 @@
+import { mapKernelCancellationState } from '@/lib/jarvis/kernelCancellationState';
 import type { JarvisApprovalV1 } from '@/lib/jarvis/contracts';
 import { settleUndispatchedCancellation } from '@/lib/ai/undispatchedCancellation';
 /**
@@ -2996,13 +2997,7 @@ export async function installJarvisKernelRuntimeHost(
           accountId: request.accountId,
           runId: request.runId,
         });
-        const state =
-          cancellation.kind === 'intent_committed'
-            ? cancellation.aggregate.kind === 'handoff_pending' ||
-              cancellation.aggregate.kind === 'delivery_pending'
-              ? ('handoff_pending' as const)
-              : ('delivered' as const)
-            : ('not_found' as const);
+        const state = mapKernelCancellationState(cancellation);
         return { version: 1, kind: 'cancellation_state', runId: request.runId, state };
       }
       return unavailable();
