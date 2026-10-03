@@ -45,7 +45,7 @@ vi.mock('@/lib/ai/adapters/opencodePersistent', () => ({
 }));
 vi.mock('@/lib/ai/useAccessibleChatModels', () => ({ requestOpenCodeModelCatalogRefresh: vi.fn() }));
 vi.mock('@/features/terminals/terminalCommandQueue', () => ({ enqueueTerminalCommandBatch: vi.fn() }));
-vi.mock('@/lib/tauri', () => ({ openExternal: vi.fn() }));
+vi.mock('@/lib/tauri', () => ({ isTauri: false, openExternal: vi.fn() }));
 vi.mock('./sections/McpConnections', () => ({ McpConnections: () => null }));
 
 beforeEach(() => {
