@@ -1,3 +1,4 @@
+import { createRunOwnershipDiagnostic, type RunOwnershipDiagnosticPorts } from '@/lib/jarvis/executionJournal/runOwnershipDiagnostic';
 import Dexie from 'dexie';
 import {
   assertActionRequestLive,
@@ -362,6 +363,9 @@ export interface JarvisVoiceRecoveryHandle {
 }
 
 export interface JarvisKernelRuntime {
+  /** @internal No renderer/model/native public dispatcher registration. */
+  inspectRunOwnership(input: Readonly<{ accountId: string; runId: string }>):
+    ReturnType<ReturnType<typeof createRunOwnershipDiagnostic>['inspect']>;
   readonly actions: JarvisKernelActionPort;
   runInitialTurn(
     input: Readonly<JarvisKernelTurnInput>,
@@ -444,6 +448,7 @@ type VerifierSlots = Readonly<{
 }>;
 
 type KernelRuntimeInput = Readonly<{
+  runOwnershipDiagnosticPorts?: RunOwnershipDiagnosticPorts;
   db: JarvisDexie;
   artifactEvidenceAuthorities: CanonicalArtifactEvidenceAuthorities;
   journal: Pick<JarvisExecutionJournal, 'allocateRun' | 'getRun'> &
@@ -4353,6 +4358,15 @@ export function createJarvisKernelRuntime(
       } finally {
         binding.dispose();
       }
+    },
+    async inspectRunOwnership(diagnosticInput: Readonly<{ accountId: string; runId: string }>) {
+      const binding = issueAccountBinding(diagnosticInput.accountId);
+      try {
+        return await createRunOwnershipDiagnostic({
+          repositories, assertIssuedBinding: assertIssuedAccountBinding,
+          ports: input.runOwnershipDiagnosticPorts,
+        }).inspect(binding, diagnosticInput.runId);
+      } finally { binding.dispose(); }
     },
     async requestCancellation(cancelInput: {
       accountId: string;

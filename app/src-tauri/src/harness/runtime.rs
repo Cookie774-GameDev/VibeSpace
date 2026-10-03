@@ -142,6 +142,21 @@ pub(crate) mod version_probe_job {
         pub(crate) fn terminate(&self) {
             let _ = unsafe { TerminateJobObject(self.0 .0, 1) };
         }
+        pub(crate) fn try_terminate(&self) -> Result<(), String> {
+            unsafe { TerminateJobObject(self.0 .0, 1) }
+                .map_err(|error| format!("Owned job termination was not acknowledged: {error}"))
+        }
+
+        pub(crate) fn is_empty(&self) -> Result<bool, String> {
+            use windows::Win32::System::JobObjects::{QueryInformationJobObject, JobObjectBasicAccountingInformation, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION};
+            let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+            unsafe {
+                QueryInformationJobObject(Some(self.0 .0), JobObjectBasicAccountingInformation,
+                    (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast::<c_void>(),
+                    size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32, None)
+            }.map_err(|error| format!("Owned job closure could not be verified: {error}"))?;
+            Ok(info.ActiveProcesses == 0)
+        }
     }
 
     pub(crate) fn configure_suspended(command: &mut Command) {

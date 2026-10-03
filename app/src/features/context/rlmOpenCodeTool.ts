@@ -25,68 +25,14 @@ export const RLM_CONTEXT_OPERATIONS = [
 
 export type RlmContextOperation = (typeof RLM_CONTEXT_OPERATIONS)[number];
 
+/** ROOT-only current protected scope token; never an argument accepted from a provider. */
+export type AssertRlmLeaseCurrent = (lease: Readonly<RlmContextLease>) => string | undefined;
+export type VerifiedRlmFallbackCitation = Readonly<{
+  pointerId: string; recordId: string; sourceRevision: string; contentHash: string;
+}>;
+
 function citationScope(lease: RlmContextLease): { accountId: string; projectId: string } | undefined {
   return lease.projectId ? { accountId: lease.accountId, projectId: lease.projectId } : undefined;
-}
-
-function registerFallbackCitationsFromSearch(
-  lease: RlmContextLease,
-  result: unknown,
-): void {
-  const scope = citationScope(lease);
-  if (!scope || !result || typeof result !== 'object') return;
-  const items = (result as { items?: unknown }).items;
-  if (!Array.isArray(items)) return;
-  registerToolGatewayFallbackCitations(
-    lease.sessionId,
-    items.flatMap((item) => {
-      const record = (item as { record?: { id?: unknown; sourceId?: unknown } }).record;
-      const pointer = (item as { pointer?: { id?: unknown; sourceVersion?: unknown; contentHash?: unknown } })
-        .pointer;
-      return typeof record?.id === 'string' &&
-        typeof pointer?.id === 'string' &&
-        typeof pointer?.sourceVersion === 'string' &&
-        typeof pointer?.contentHash === 'string'
-        ? [
-            {
-              pointerId: pointer.id,
-              recordId: record.id,
-              sourceRevision: pointer.sourceVersion,
-              contentHash: pointer.contentHash,
-            },
-          ]
-        : [];
-    }),
-    scope,
-  );
-}
-
-function registerFallbackCitationFromOpen(lease: RlmContextLease, result: unknown): void {
-  const scope = citationScope(lease);
-  if (!scope || !result || typeof result !== 'object') return;
-  const record = (result as { record?: { id?: unknown } }).record;
-  const pointer = (result as { pointer?: { id?: unknown; sourceVersion?: unknown; contentHash?: unknown } })
-    .pointer;
-  if (
-    typeof record?.id !== 'string' ||
-    typeof pointer?.id !== 'string' ||
-    typeof pointer?.sourceVersion !== 'string' ||
-    typeof pointer?.contentHash !== 'string'
-  ) {
-    return;
-  }
-  registerToolGatewayFallbackCitations(
-    lease.sessionId,
-    [
-      {
-        pointerId: pointer.id,
-        recordId: record.id,
-        sourceRevision: pointer.sourceVersion,
-        contentHash: pointer.contentHash,
-      },
-    ],
-    scope,
-  );
 }
 
 export interface RlmContextLease {
@@ -95,6 +41,10 @@ export interface RlmContextLease {
   chatId?: string;
   /** Captured Context revision, never a provider-supplied scope override. */
   contextRevision?: string;
+  /** Selected authenticated map captured by the protected gateway, never tool arguments. */
+  selectedMapId?: string;
+  /** Actual protected outer attempt. The recursive runtime has a different run ID. */
+  canonicalBinding?: Readonly<{ runId: string; requestId: string; attemptNumber: number }>;
   accountId: string;
   workspaceId?: string;
   projectId?: string;
@@ -103,7 +53,7 @@ export interface RlmContextLease {
   expiresAt: number;
 }
 
-export type RlmOpenCodeToolErrorCode = 'invalid_arguments' | 'lease_expired';
+export type RlmOpenCodeToolErrorCode = 'invalid_arguments' | 'lease_expired' | 'lease_not_current';
 
 export class RlmOpenCodeToolError extends Error {
   constructor(
@@ -274,6 +224,7 @@ export function createRlmOpenCodeTool(dependencies: {
   queryService: QueryPort;
   rlmRuntime: RlmPort;
   traceLookup?(runId: string, lease: Readonly<RlmContextLease>, signal?: AbortSignal): Promise<unknown | undefined>;
+  verifiedFallbackCitations?(result: unknown, lease: Readonly<RlmContextLease>, signal?: AbortSignal): Promise<readonly VerifiedRlmFallbackCitation[]>;
   now?: () => number;
   maxOpenBytes?: number;
   rlmBudget?: RlmBudget;
@@ -286,12 +237,33 @@ export function createRlmOpenCodeTool(dependencies: {
     rawInput: unknown,
     lease: RlmContextLease,
     signal?: AbortSignal,
+    assertLeaseCurrent?: AssertRlmLeaseCurrent,
   ): Promise<unknown> => {
     const scope = leaseScope(lease, now());
     const capturedLease = Object.freeze({ ...lease,
       ...(lease.executionIdentity ? { executionIdentity: Object.freeze({ ...lease.executionIdentity }) } : {}),
+      ...(lease.canonicalBinding ? { canonicalBinding: Object.freeze({ ...lease.canonicalBinding }) } : {}),
     });
     signal?.throwIfAborted();
+    const current = () => {
+      signal?.throwIfAborted();
+      if (capturedLease.expiresAt <= now()) throw new RlmOpenCodeToolError('lease_expired');
+      const token = assertLeaseCurrent?.(capturedLease);
+      if (assertLeaseCurrent && (!token || token !== capturedLease.contextRevision)) {
+        throw new RlmOpenCodeToolError('lease_not_current');
+      }
+      return token && token === capturedLease.contextRevision ? token : undefined;
+    };
+    const registerVerified = async (result: unknown) => {
+      if (assertLeaseCurrent) current();
+      if (!assertLeaseCurrent || !dependencies.verifiedFallbackCitations || !current()) return;
+      const citations = await dependencies.verifiedFallbackCitations(result, capturedLease, signal);
+      const token = current();
+      const scope = citationScope(capturedLease);
+      if (!token || !scope || citations.length === 0) return;
+      registerToolGatewayFallbackCitations(capturedLease.sessionId, [...citations], scope);
+      current();
+    };
     const base = exactKeys(
       rawInput,
       ['operation'],
@@ -322,20 +294,12 @@ export function createRlmOpenCodeTool(dependencies: {
         const args = exactKeys(rawInput, ['operation', 'runId']);
         const result = await dependencies.traceLookup?.(text(args.runId, 512), capturedLease, signal);
         signal?.throwIfAborted();
+        if (!assertLeaseCurrent || !current()) return { found: false };
         return result === undefined ? { found: false } : { found: true, receipt: result };
       }
       case 'query': {
-        const args = exactKeys(rawInput, ['operation', 'query'], ['limit', 'continuation']);
+        const args = exactKeys(rawInput, ['operation', 'query'], ['limit']);
         const question = text(args.query);
-        if (args.continuation !== undefined) {
-          // An issued search cursor resumes bounded retrieval, never research.
-          // The search operation validates its query/scope/cursor and citations.
-          return executeRouted('retrieval', () => execute({
-            operation: 'search', query: question,
-            ...(args.limit === undefined ? {} : { limit: args.limit }),
-            continuation: args.continuation,
-          }, capturedLease, signal));
-        }
         const rlmEnabled = resolveRlmEnabled({ workspaceId: lease.workspaceId, chatId: lease.chatId }).enabled;
         const decision = routeDefaultContextQuery(question, { rlmAvailable: rlmEnabled });
         if (decision.mode === 'rlm') {
@@ -373,7 +337,7 @@ export function createRlmOpenCodeTool(dependencies: {
             signal,
           });
           signal?.throwIfAborted();
-          registerFallbackCitationsFromSearch(lease, result);
+          await registerVerified(result);
           return result;
         });
       }
@@ -395,7 +359,7 @@ export function createRlmOpenCodeTool(dependencies: {
           signal,
         });
         signal?.throwIfAborted();
-        registerFallbackCitationsFromSearch(lease, result);
+        await registerVerified(result);
         return result;
       }
       case 'open': {
@@ -410,7 +374,7 @@ export function createRlmOpenCodeTool(dependencies: {
           signal,
         });
         signal?.throwIfAborted();
-        registerFallbackCitationFromOpen(lease, result);
+        await registerVerified(result);
         return result;
       }
       case 'expand': {
@@ -423,7 +387,7 @@ export function createRlmOpenCodeTool(dependencies: {
           signal,
         });
         signal?.throwIfAborted();
-        registerFallbackCitationFromOpen(lease, result);
+        await registerVerified(result);
         return result;
       }
       case 'address': {
@@ -473,7 +437,7 @@ export function createRlmOpenCodeTool(dependencies: {
               signal,
             });
             signal?.throwIfAborted();
-            registerFallbackCitationsFromSearch(lease, result);
+            await registerVerified(result);
             return result;
           });
         }

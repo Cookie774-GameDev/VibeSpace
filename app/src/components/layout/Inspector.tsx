@@ -57,7 +57,7 @@ import {
   useWorkspaceOpenTasks,
   openTaskCount,
 } from '@/features/inspector';
-import { useMilestonesStore } from '@/features/inspector/milestonesStore';
+import { useScopedMilestones } from '@/features/inspector/useScopedMilestones';
 import { isMilestoneKind } from '@/features/inspector/types';
 import { getBuiltinActions, runAction, type ActionDef } from '@/lib/actions';
 import { useToolStore, type CustomTool } from '@/features/tools';
@@ -1890,8 +1890,7 @@ function TerminalRow({ session }: { session: TerminalSession }) {
 // ----- Kanban — recent milestone transitions -----
 
 function KanbanContextPanel(_props: { workspaceId: WorkspaceId | null }) {
-  const milestoneItems = useMilestonesStore((s) => s.items);
-  const toggleDone = useMilestonesStore((s) => s.toggleDone);
+  const { items: milestoneItems, toggleDone } = useScopedMilestones();
   const todos = React.useMemo(
     () =>
       milestoneItems

@@ -1418,3 +1418,28 @@ export async function settleTerminalExecutionFromNativeExit(
   await record.settlement;
   return true;
 }
+
+/** @internal Metadata from issued records joined to actual native process identity only. */
+export async function readRunTerminalOwnershipDiagnostic(scope: Readonly<{ accountId: string; runId: string }>) {
+  const records = [...canonicalExecutions.values()].filter(record =>
+    record.request.accountId === scope.accountId && record.request.runId === scope.runId &&
+    !record.disposed && !record.settled);
+  if (records.length > 100) throw new Error('diagnostic_terminal_bound');
+  const native = await invoke<readonly Readonly<NativeTerminalProcessBinding & {
+    sessionId: string; projectId: string | null;
+  }>[]>('terminal_list');
+  return records.map(record => {
+    const identity = record.processIdentity;
+    const matched = identity ? native.some(row =>
+      row.sessionId === identity.sessionId && row.projectId === identity.projectId &&
+      row.runtimeGeneration === identity.runtimeGeneration &&
+      row.processInstanceId === identity.processInstanceId && row.pid === identity.pid &&
+      row.processStartedAt === identity.processStartedAt) : false;
+    return Object.freeze({
+      executionId: record.request.executionId, claimed: record.claimed,
+      sessionBound: Boolean(record.sessionId), nativeActive: identity ? matched : null,
+      runtimeGeneration: matched ? identity!.runtimeGeneration : null,
+    });
+  });
+}
+export { readRunTerminalQueueDiagnostic } from './terminalCommandQueue';

@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db, taskRepo } from '@/lib/db';
 import { useAgentStore } from '@/stores/agents';
 import { useToolRunsStore } from './toolRunsStore';
-import { useMilestonesStore } from './milestonesStore';
+import { useScopedMilestones } from './useScopedMilestones';
 import type { VibeSpaceTask, VibeSpaceTaskStatus } from './types';
 import type { WorkspaceId } from '@/types/common';
 import type { TerminalSession } from '@/types/terminal';
@@ -41,14 +41,15 @@ export function useWorkspaceOpenTasks(workspaceId: WorkspaceId | null, projectId
 
   const runStates = useAgentStore((s) => s.runStates);
   const allToolRuns = useToolRunsStore((s) => s.runs);
-  const allMilestones = useMilestonesStore((s) => s.items);
+  const scopedMilestones = useScopedMilestones();
   const toolRuns = useMemo(
     () => allToolRuns.filter((r) => r.status === 'running'),
     [allToolRuns],
   );
   const milestones = useMemo(
-    () => allMilestones.filter((i) => i.status !== 'done'),
-    [allMilestones],
+    () => scopedMilestones.scope?.workspaceId === workspaceId &&
+      scopedMilestones.scope.projectId === projectId ? scopedMilestones.items.filter((i) => i.status !== 'done') : [],
+    [scopedMilestones.items, scopedMilestones.scope, workspaceId, projectId],
   );
 
   return useMemo(() => {

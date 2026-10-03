@@ -352,7 +352,7 @@ import {
   TOOL_GATEWAY_CATALOG,
 } from '@/lib/harness/toolGatewayProtocol';
 import { readOpenCodeApprovalStatus } from '@/lib/harness/openCodeApprovalState';
-import { consumeToolGatewayContextCitationItems } from '@/lib/harness/toolGatewayProduction';
+import { consumeToolGatewayContextCitationItems, readCurrentRlmScopeRevision, prepareCurrentRlmScopeRevision } from '@/lib/harness/toolGatewayProduction';
 import {
   optimizeChatMessages,
   optimizationModePolicy,
@@ -1714,6 +1714,14 @@ export async function installJarvisKernelRuntimeHost(
     ...(input.actionCatalog === undefined ? {} : { actionCatalog: input.actionCatalog }),
     artifactEvidenceAuthorities,
     journal,
+    runOwnershipDiagnosticPorts: {
+      registry: (scope) => abortRegistry.readRunDiagnostic(scope.accountId, scope.runId),
+      terminals: (scope) => terminalExecutionModule.readRunTerminalOwnershipDiagnostic(scope),
+      queue: (scope, executionIds) => {
+        // These IDs are observed from account/run-scoped issued records, never caller payload.
+        return terminalExecutionModule.readRunTerminalQueueDiagnostic(scope, executionIds);
+      },
+    },
     cancellationDeliveryAuthority: abortRegistry.cancellationDeliveryAuthority,
     abortRegistrationAuthority: abortRegistry.registrationAuthority,
     bindKernelActions: input.bindKernelActions,
@@ -2726,8 +2734,23 @@ export async function installJarvisKernelRuntimeHost(
   const stopSourceAuthoritySubscription = useAuthStore.subscribe(() => { currentSourceAuthority(); });
   const observeSourceRootChange = () => { sourceAuthorityEpoch += 1; currentSourceAuthority(); };
   if (typeof window !== 'undefined') window.addEventListener('jarvis:files:root-changed', observeSourceRootChange);
+  const { createRunOwnershipDiagnosticReader } = await import('@/lib/jarvis/executionJournal/runOwnershipDiagnosticReader');
+  const readRunDiagnostic = createRunOwnershipDiagnosticReader({
+    currentAuthority: currentSourceAuthority,
+    inspect: (input) => composition.kernel.inspectRunOwnership(input),
+  });
   const readSourceRevision = createContextSourceRevisionReader({
     currentAuthority: currentSourceAuthority,
+    prepareScope: (authority, sourceInput, signal) => prepareCurrentRlmScopeRevision({
+      accountId: authority.accountId,
+      workspaceId: authority.workspaceId,
+      projectId: authority.projectId,
+    }, sourceInput.mapId, signal),
+    currentScopeRevision: (authority, sourceInput) => readCurrentRlmScopeRevision({
+      accountId: authority.accountId,
+      workspaceId: authority.workspaceId,
+      projectId: authority.projectId,
+    }, sourceInput.mapId),
     async authorizeChat(authority, chatId) {
       const chat = await input.db.chats.get(chatId as ChatId);
       return !!chat && String(chat.workspace_id) === authority.workspaceId && String(chat.project_id ?? '') === authority.projectId;
@@ -2886,6 +2909,11 @@ export async function installJarvisKernelRuntimeHost(
         requestKind: request.kind,
         reason: 'kernel_not_activated',
       });
+      if (request.kind === 'run_ownership_diagnostic') {
+        const observation = await readRunDiagnostic({ runId: request.runId });
+        if (!observation) return unavailable();
+        return { version: 1, kind: 'run_ownership_diagnostic', ...observation };
+      }
       if (request.kind === 'context_source_revision') {
         const sourceScope = { accountId: request.accountId, chatId: request.chatId, mapId: request.mapId };
         const sourceInput = request.binding ? { ...sourceScope, ...request.binding } : sourceScope;
@@ -2894,7 +2922,10 @@ export async function installJarvisKernelRuntimeHost(
         return { version: 1, kind: 'context_source_revision', accountId: observation.accountId,
           workspaceId: observation.workspaceId, projectId: observation.projectId, worktreeHash: observation.worktreeHash,
           chatId: observation.chatId, mapId: observation.mapId, authorityEpoch: observation.authorityEpoch,
-          sourceRevision: observation.sourceRevision, ...(request.binding ? { binding: request.binding } : {}) };
+          sourceRevision: observation.sourceRevision, membershipRevision: observation.membershipRevision,
+          revisionKind: observation.revisionKind, wholeMapDiskFreshness: observation.wholeMapDiskFreshness,
+          sourceCount: observation.sourceCount, verifiedBytes: observation.verifiedBytes,
+          ...(request.binding ? { binding: request.binding } : {}) };
       }
       if (request.kind === 'approval_present') {
         const approval = await repositories.approval.getById(request.accountId, request.approvalId);

@@ -107,7 +107,7 @@ function boundedId(value: string, prefix = 'ctx'): string {
   return `${prefix}_${hashToken(value)}`;
 }
 
-/** The exact durable graph identity used for a tree node within its map. */
+/** Preserve the V2 entity ID used when a search index returns a canonical node. */
 export function contextEntityIdForTreeNode(mapId: string, nodeId: string): string {
   return boundedId(`${mapId}:${nodeId}`, 'ctxent');
 }

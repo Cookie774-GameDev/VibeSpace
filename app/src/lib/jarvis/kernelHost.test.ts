@@ -293,6 +293,9 @@ describe('trusted kernel host', () => {
             state: 'delivered' as const,
           };
         }
+        if (input.kind !== 'command_center_snapshot') {
+          throw new Error(`Unexpected host request: ${input.kind}`);
+        }
         handled.push(input.kind);
         return {
           version: 1 as const,

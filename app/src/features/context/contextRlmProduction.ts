@@ -7,6 +7,7 @@ import {
 import { openCodeHarness } from '@/lib/harness/openCodeHarness';
 import { createRegisteredCodexRlmChild } from '@/lib/ai/adapters/codexRlmBoundChild';
 import { currentRlmSourceRevision } from './contextRlmSourceRevision';
+import { currentMembershipDigest, productionIssuedEvidenceRegistry, type EvidenceRevision } from './contextIssuedEvidenceRegistry';
 import { contextEntityIdForTreeNode } from './migration';
 import { HarnessError } from '@/lib/harness/errors';
 import type { HarnessEvent, VibeSpaceHarness } from '@/lib/harness/types';
@@ -32,8 +33,8 @@ import {
   type ContextRecord,
   type ContextSourceKind,
 } from './losslessContext';
-import { createRlmOpenCodeTool, type RlmContextLease } from './rlmOpenCodeTool';
-import { createRlmTraceStore, createRlmTraceSink, rlmTraceScopeFromLease } from './contextRlmTraceStore';
+import { createRlmOpenCodeTool, RLM_OPENCODE_TOOL_NAME, type RlmContextLease, type AssertRlmLeaseCurrent, type VerifiedRlmFallbackCitation } from './rlmOpenCodeTool';
+import { createRlmTraceStore, rlmTraceScopeFromLease } from './contextRlmTraceStore';
 import { createRecursiveContextPlanner } from './recursiveContextPlanner';
 import { createRecursiveContextQueryAdapter } from './recursiveContextQueryAdapter';
 import {
@@ -42,6 +43,7 @@ import {
   type RlmChildAnalysis,
   type RlmChildRequest,
   type RlmSynthesisRequest,
+  type RlmTerminalReceipt,
 } from './rlmRuntime';
 import {
   createTauriContextLexicalSearchExecutor,
@@ -190,6 +192,13 @@ interface LargeAddressDescriptor {
 
 interface ContextMapAddressRepository extends ContextQueryRepository {
   currentSourceRevision(scope: ContextScope, signal?: AbortSignal, mapId?: string): Promise<string | undefined>;
+  currentMapMembershipRevision(scope: ContextScope, mapId: string, signal?: AbortSignal): Promise<string | undefined>;
+  captureIssuedEvidence(scope: ContextScope, mapId: string, pointers: readonly ContextPointer[], signal?: AbortSignal): Promise<object | undefined>;
+  captureAddressEvidence(result: unknown): object | undefined;
+  currentIssuedEvidenceRevision(scope: ContextScope, mapId: string, captures: readonly object[], signal?: AbortSignal, assertCurrent?: () => boolean): Promise<Readonly<{
+    sourceRevision: string; membershipRevision: string; revisionKind: 'issued-evidence';
+    wholeMapDiskFreshness: false; sourceCount: number; verifiedBytes: number;
+  }> | undefined>;
   address(
     scope: ContextScope,
     corpusId: string,
@@ -1036,6 +1045,14 @@ export function createContextMapRlmRepository(
   dependencies: ContextMapRlmDependencies,
 ): ContextMapAddressRepository {
   const authorityByRecordId = new Map<string, RecordAuthority>();
+  // Authentic handles exist only in this repository's private WeakMap. They
+  // survive normal pointer LRU eviction but cannot be forged by deserializing
+  // a provider argument or a public receipt. Owners must bound retained handles.
+  const evidenceCaptures = new WeakMap<object, Readonly<{
+    scopeKey: string; mapId: string; membershipRevision: string;
+    authorities: readonly RecordAuthority[];
+  }>>();
+  const addressEvidence = new WeakMap<object, object>();
   const inFlightAuthorityBuilds = new Map<string, Promise<RecordAuthority[]>>();
   const latestAuthorityGenerationByScope = new Map<string, number>();
   const authorityInvocationsByScope = new Map<
@@ -1461,11 +1478,12 @@ export function createContextMapRlmRepository(
   const snapshotSearchCandidate = async (
     candidate: SearchAuthorityCandidate,
     signal?: AbortSignal,
+    maximumBytes = MAX_SOURCE_SHARD_BYTES,
   ): Promise<SearchCandidateSnapshot | undefined> => {
     signal?.throwIfAborted();
     if (candidate.inlineContent !== undefined) {
       const size = new TextEncoder().encode(candidate.inlineContent).length;
-      if (size > MAX_SOURCE_SHARD_BYTES) return undefined;
+      if (size > maximumBytes) return undefined;
       return {
         candidate,
         size,
@@ -1478,7 +1496,7 @@ export function createContextMapRlmRepository(
     });
     signal?.throwIfAborted();
     if (!preflight.ok || preflight.kind !== 'file' || preflight.size === undefined ||
-        preflight.size < 0 || preflight.size > MAX_SOURCE_SHARD_BYTES) return undefined;
+        preflight.size < 0 || preflight.size > maximumBytes) return undefined;
     const stat = await dependencies.stat(candidate.path, true, {
       root: candidate.map.rootDir,
       strictProjectBoundary: true,
@@ -1491,7 +1509,7 @@ export function createContextMapRlmRepository(
       !hash ||
       stat.size === undefined ||
       stat.size < 0 ||
-      stat.size > MAX_SOURCE_SHARD_BYTES || stat.size !== preflight.size ||
+      stat.size > maximumBytes || stat.size !== preflight.size ||
       stat.modifiedMs !== preflight.modifiedMs || stat.createdMs !== preflight.createdMs
     ) {
       return undefined;
@@ -1591,6 +1609,31 @@ export function createContextMapRlmRepository(
     return awaitWithSignal(validation, signal);
   };
 
+  // Address reads are request-local: cancellation of this caller cannot leave
+  // new read/hash attempts running, and never aborts an independent shared peer.
+  const readAddressSource = async (authority: RecordAuthority, maximumBytes: number, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    const options = { root: authority.rootDir, strictProjectBoundary: true };
+    const before = await dependencies.stat(authority.record.contentRef, false, options);
+    signal?.throwIfAborted();
+    if (!before.ok || before.kind !== 'file' || before.size === undefined ||
+        before.size < 1 || before.size > maximumBytes) return undefined;
+    const result = await dependencies.read(authority.record.contentRef, maximumBytes, options);
+    signal?.throwIfAborted();
+    if (!result.ok) return undefined;
+    const bytes = new TextEncoder().encode(result.content);
+    const hash = await sha256Text(result.content);
+    signal?.throwIfAborted();
+    if (bytes.length !== before.size || bytes.length > maximumBytes ||
+        hash !== authority.record.contentHash) return undefined;
+    const after = await dependencies.stat(authority.record.contentRef, true, options);
+    signal?.throwIfAborted();
+    if (!after.ok || after.kind !== 'file' || after.size !== before.size ||
+        after.createdMs !== before.createdMs || after.modifiedMs !== before.modifiedMs ||
+        rawSha256(after.sha256) !== hash) return undefined;
+    return { content: result.content, bytes, contentHash: hash, sourceVersion: `sha256:${hash}` };
+  };
+
   const address = async (
     scope: ContextScope,
     corpusId: string,
@@ -1611,7 +1654,32 @@ export function createContextMapRlmRepository(
       largeAddressError();
     }
     const normalizedScope = validateContextScope(scope);
-    const authorities = await loadAuthorities(normalizedScope, signal);
+    // Metadata enumeration never hashes unrelated files in a large map.
+    const addressMaps = await dependencies.loadMaps(normalizedScope.projectId ?? null);
+    const addressMemberships = new Map<string, string>();
+    for (const map of selectContextMapsForScope(normalizedScope, addressMaps)) {
+      const membership = await currentMembershipDigest(normalizedScope, map, signal);
+      signal?.throwIfAborted();
+      if (!membership || addressMemberships.has(map.id)) largeAddressError();
+      addressMemberships.set(map.id, membership);
+    }
+    signal?.throwIfAborted();
+    const { candidates: addressCandidates } = enumerateSearchCandidates(normalizedScope, addressMaps, addressMaps.length);
+    const descriptorCandidates = addressCandidates.filter(candidate =>
+      candidate.inlineContent === undefined && candidate.node.title === LARGE_ADDRESS_DESCRIPTOR &&
+      candidate.path.replaceAll('\\', '/').endsWith('/' + LARGE_ADDRESS_DESCRIPTOR));
+    if (descriptorCandidates.length > MAX_ACTIVE_SEARCH_MAPS) largeAddressError();
+    const addressAuthority = async (candidate: SearchAuthorityCandidate, maximumBytes: number) => {
+      signal?.throwIfAborted();
+      const snapshot = await snapshotSearchCandidate(candidate, signal, maximumBytes);
+      if (!snapshot) largeAddressError();
+      const authority = await createCandidateAuthority(normalizedScope, candidate, snapshot.hash,
+        snapshot.createdMs, snapshot.modifiedMs);
+      signal?.throwIfAborted();
+      return authority;
+    };
+    const authorities = await mapBoundedInOrder(descriptorCandidates, MAX_CONCURRENT_SOURCE_VALIDATIONS,
+      candidate => addressAuthority(candidate, MAX_LARGE_ADDRESS_DESCRIPTOR_BYTES));
     const matchingDescriptors: Array<{
       authority: RecordAuthority;
       descriptor: LargeAddressDescriptor;
@@ -1625,7 +1693,7 @@ export function createContextMapRlmRepository(
       ) {
         continue;
       }
-      const source = await readAuthority(authority, signal);
+      const source = await readAddressSource(authority, MAX_LARGE_ADDRESS_DESCRIPTOR_BYTES, signal);
       if (
         !source ||
         source.bytes.length > MAX_LARGE_ADDRESS_DESCRIPTOR_BYTES ||
@@ -1658,23 +1726,23 @@ export function createContextMapRlmRepository(
     }
     const shard = selectedDescriptor.descriptor.shards[Number(logicalAddress.shard)];
     if (!shard) largeAddressError();
-    const shardAuthorities = selectedDescriptor.descriptor.shards.map((candidateShard) => {
+    const shardAuthorities = await mapBoundedInOrder(selectedDescriptor.descriptor.shards,
+      MAX_CONCURRENT_SOURCE_VALIDATIONS, async candidateShard => {
       const expectedPath = sourcePath(selectedDescriptor.authority.rootDir, candidateShard.file);
       if (!expectedPath) largeAddressError();
       const normalizedExpectedPath = expectedPath.replaceAll('\\', '/').toLocaleLowerCase('en-US');
-      const matches = authorities.filter(
-        (authority) =>
-          authority.mapId === selectedDescriptor.authority.mapId &&
-          authority.rootDir === selectedDescriptor.authority.rootDir &&
-          authority.record.contentRef.replaceAll('\\', '/').toLocaleLowerCase('en-US') ===
-            normalizedExpectedPath &&
-          `sha256:${authority.record.contentHash}` === candidateShard.contentSha256,
-      );
+      const matches = addressCandidates.filter(candidate =>
+        candidate.map.id === selectedDescriptor.authority.mapId &&
+        candidate.map.rootDir === selectedDescriptor.authority.rootDir &&
+        candidate.inlineContent === undefined &&
+        candidate.path.replaceAll('\\', '/').toLocaleLowerCase('en-US') === normalizedExpectedPath);
       if (matches.length !== 1) largeAddressError();
-      return matches[0]!;
+      const authority = await addressAuthority(matches[0]!, MAX_LARGE_ADDRESS_SHARD_BYTES);
+      if (`sha256:${authority.record.contentHash}` !== candidateShard.contentSha256) largeAddressError();
+      return authority;
     });
     const selectedAuthority = shardAuthorities[Number(logicalAddress.shard)]!;
-    const source = await readAuthority(selectedAuthority, signal);
+    const source = await readAddressSource(selectedAuthority, MAX_LARGE_ADDRESS_SHARD_BYTES, signal);
     if (
       !source ||
       source.bytes.length < 1 ||
@@ -1714,7 +1782,7 @@ export function createContextMapRlmRepository(
       },
       async readSource(record) {
         if (record.id !== selectedAuthority.record.id) return undefined;
-        const current = await readAuthority(selectedAuthority, signal);
+        const current = await readAddressSource(selectedAuthority, MAX_LARGE_ADDRESS_SHARD_BYTES, signal);
         if (
           !current ||
           current.contentHash !== selectedAuthority.record.contentHash ||
@@ -1775,7 +1843,7 @@ export function createContextMapRlmRepository(
       },
       signal,
     });
-    return Object.freeze({
+    const addressResult = Object.freeze({
       ...result,
       corpus: serializeCorpusScaleMetadata(result.corpus),
       address: Object.freeze({
@@ -1784,10 +1852,113 @@ export function createContextMapRlmRepository(
         tokenEnd: shard.tokenEnd,
       }),
     });
+    const originalMembership = addressMemberships.get(selectedDescriptor.authority.mapId);
+    const currentMaps = await dependencies.loadMaps(normalizedScope.projectId ?? null);
+    signal?.throwIfAborted();
+    const currentMap = selectContextMapsForScope(normalizedScope, currentMaps).find(map => map.id === selectedDescriptor.authority.mapId);
+    const membership = currentMap ? await currentMembershipDigest(normalizedScope, currentMap, signal) : undefined;
+    if (!membership || membership !== originalMembership) largeAddressError();
+    const capture = Object.freeze({});
+    evidenceCaptures.set(capture, Object.freeze({ scopeKey: JSON.stringify(normalizedScope),
+      mapId: selectedDescriptor.authority.mapId, membershipRevision: membership,
+      authorities: Object.freeze([selectedDescriptor.authority, selectedAuthority].map(authority =>
+        Object.freeze({...authority, record: Object.freeze({...authority.record})}))) }));
+    addressEvidence.set(addressResult, capture);
+    return addressResult;
   };
 
   return {
     address,
+    captureAddressEvidence(result) {
+      return result && typeof result === 'object' ? addressEvidence.get(result) : undefined;
+    },
+    async currentMapMembershipRevision(scope, mapId, signal) {
+      const normalized = validateContextScope(scope);
+      signal?.throwIfAborted();
+      const maps = await dependencies.loadMaps(normalized.projectId ?? null);
+      signal?.throwIfAborted();
+      const selected = selectContextMapsForScope(normalized, maps).filter(map => map.id === mapId);
+      if (selected.length !== 1) return undefined;
+      return currentMembershipDigest(normalized, selected[0]!, signal);
+    },
+    async captureIssuedEvidence(scope, mapId, pointers, signal) {
+      const normalized = validateContextScope(scope);
+      signal?.throwIfAborted();
+      if (pointers.length > MAX_ISSUED_POINTER_CAPABILITIES) return undefined;
+      const membershipRevision = await this.currentMapMembershipRevision(normalized, mapId, signal);
+      if (!membershipRevision) return undefined;
+      const authorities = new Map<string, RecordAuthority>();
+      for (const pointer of pointers) {
+        signal?.throwIfAborted();
+        const authority = authorityByRecordId.get(pointer.recordId);
+        if (!authority || authority.mapId !== mapId || !recordMatchesScope(authority.record, normalized)
+          || !this.authorizePointer || !await this.authorizePointer(pointer, authority.record, normalized, signal)) return undefined;
+        authorities.set(authority.record.id, Object.freeze({ ...authority, record: Object.freeze({ ...authority.record }) }));
+      }
+      if (await this.currentMapMembershipRevision(normalized, mapId, signal) !== membershipRevision) return undefined;
+      const capture = Object.freeze({});
+      evidenceCaptures.set(capture, Object.freeze({ scopeKey: JSON.stringify(normalized), mapId,
+        membershipRevision, authorities: Object.freeze([...authorities.values()]) }));
+      return capture;
+    },
+    async currentIssuedEvidenceRevision(scope, mapId, captures, signal, assertCurrent) {
+      const normalized = validateContextScope(scope);
+      signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+      if (captures.length > MAX_ISSUED_POINTER_CAPABILITIES) return undefined;
+      const membershipRevision = await this.currentMapMembershipRevision(normalized, mapId, signal);
+      if (!membershipRevision) return undefined;
+      const maps = await dependencies.loadMaps(normalized.projectId ?? null);
+      signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+      const selected = selectContextMapsForScope(normalized, maps).filter(map => map.id === mapId);
+      if (selected.length !== 1 || await currentMembershipDigest(normalized, selected[0]!, signal) !== membershipRevision) return undefined;
+      signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+      const { candidates } = enumerateSearchCandidates(normalized, selected, selected.length);
+      const selectedAuthorities = new Map<string, { authority: RecordAuthority; candidate: SearchAuthorityCandidate }>();
+      for (const capture of captures) {
+        signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+        const issued = evidenceCaptures.get(capture);
+        if (!issued || issued.scopeKey !== JSON.stringify(normalized) || issued.mapId !== mapId
+          || issued.membershipRevision !== membershipRevision) return undefined;
+        for (const authority of issued.authorities) {
+          const matching = candidates.filter(candidate => candidate.node.id === authority.nodeId
+            && candidate.map.rootDir === authority.rootDir && candidate.path === authority.record.contentRef);
+          if (matching.length !== 1 || (matching[0]!.sourceKind !== 'file_version' && matching[0]!.sourceKind !== 'git')) return undefined;
+          selectedAuthorities.set(authority.record.id, { authority, candidate: matching[0]! });
+          if (selectedAuthorities.size > MAX_ISSUED_POINTER_CAPABILITIES) return undefined;
+        }
+      }
+      // Preflight the entire used-source budget before starting any SHA IO.
+      const prepared: Array<{ authority: RecordAuthority; candidate: SearchAuthorityCandidate; before: Extract<FsPathStatResult, { ok: true }> }> = [];
+      let verifiedBytes = 0;
+      for (const { authority, candidate } of selectedAuthorities.values()) {
+        signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+        const before = await dependencies.stat(candidate.path, false, { root: candidate.map.rootDir, strictProjectBoundary: true });
+        signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+        if (!before.ok || before.kind !== 'file' || !Number.isSafeInteger(before.size)
+          || before.size! < 0 || before.size! > MAX_SOURCE_SHARD_BYTES) return undefined;
+        verifiedBytes += before.size!;
+        if (verifiedBytes > MAX_SEARCH_SOURCE_BYTES) return undefined;
+        prepared.push({ authority, candidate, before });
+      }
+      const fingerprints: string[] = [];
+      for (const { authority, candidate, before } of prepared) {
+        signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+        const hashed = await dependencies.stat(candidate.path, true, { root: candidate.map.rootDir, strictProjectBoundary: true });
+        signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+        if (!hashed.ok || hashed.kind !== 'file' || hashed.size !== before.size
+          || hashed.createdMs !== before.createdMs || hashed.modifiedMs !== before.modifiedMs
+          || rawSha256(hashed.sha256) !== authority.record.contentHash) return undefined;
+        const after = await dependencies.stat(candidate.path, false, { root: candidate.map.rootDir, strictProjectBoundary: true });
+        signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+        if (!after.ok || after.kind !== 'file' || after.size !== hashed.size
+          || after.createdMs !== hashed.createdMs || after.modifiedMs !== hashed.modifiedMs) return undefined;
+        fingerprints.push(JSON.stringify([authority.record.id, authority.record.contentHash]));
+      }
+      if (await this.currentMapMembershipRevision(normalized, mapId, signal) !== membershipRevision) return undefined;
+      return Object.freeze({ sourceRevision: 'sha256:' + await sha256Text(JSON.stringify([membershipRevision, fingerprints.sort()])),
+        membershipRevision, revisionKind: 'issued-evidence' as const, wholeMapDiskFreshness: false as const,
+        sourceCount: prepared.length, verifiedBytes });
+    },
     async currentSourceRevision(scope, signal, mapId) {
       const normalizedScope = validateContextScope(scope);
       const maps = await dependencies.loadMaps(normalizedScope.projectId ?? null);
@@ -2626,7 +2797,22 @@ export function createProductionContextSourceRevisionPort() {
     stat: statProjectPath, read: readTextFileSample,
     lexicalSearch: createTauriContextLexicalSearchExecutor(),
   });
-  return (scope: ContextScope, mapId: string, signal?: AbortSignal) => repository.currentSourceRevision(scope, signal, mapId);
+  return async (scope: ContextScope, mapId: string, signal?: AbortSignal,
+    run?: Readonly<{ accountId: string; chatId: string; runId: string; requestId: string; attemptNumber: number }>,
+    scopeRevision?: string, currentScopeRevision?: () => string | undefined): Promise<EvidenceRevision | undefined> => {
+    signal?.throwIfAborted();
+    if (!scopeRevision || !currentScopeRevision || currentScopeRevision() !== scopeRevision) return undefined;
+    if (run) {
+      if (run.accountId !== scope.accountId) return undefined;
+      return productionIssuedEvidenceRegistry.read(scope, run.chatId, mapId, run,
+        scopeRevision, currentScopeRevision, signal);
+    }
+    const membershipRevision = await repository.currentMapMembershipRevision(scope, mapId, signal);
+    signal?.throwIfAborted();
+    if (!membershipRevision || currentScopeRevision() !== scopeRevision) return undefined;
+    return Object.freeze({ sourceRevision: membershipRevision, membershipRevision,
+      revisionKind: 'map-membership' as const, wholeMapDiskFreshness: false as const, sourceCount: 0, verifiedBytes: 0 });
+  };
 }
 
 export function createProductionRlmChildRunner(
@@ -2673,79 +2859,167 @@ export function createProductionRlmContextTool() {
   });
   const traceStore = createRlmTraceStore();
   const childRunner = createProductionRlmChildRunner(openCodeHarness);
-  const currentTraceLease = async (lease: Readonly<RlmContextLease>, signal?: AbortSignal) => {
-    if (!rlmTraceScopeFromLease(lease)) return undefined;
-    try {
-      const revision = await contextMapRepository.currentSourceRevision({
-        accountId: lease.accountId, workspaceId: lease.workspaceId,
-        projectId: lease.projectId, worktreeId: lease.worktreeId,
-      }, signal);
-      return revision ? Object.freeze({ ...lease,
-        contextRevision: 'sha256:' + await sha256Text(JSON.stringify([lease.contextRevision, revision])) }) : undefined;
-    } catch {
-      signal?.throwIfAborted();
-      return undefined; // Unavailable source authority cannot expose an old receipt.
-    }
-  };
-  const rlmRuntime = {
-    async investigate(input: unknown, lease?: Readonly<RlmContextLease>) {
-      const request = input as Parameters<ReturnType<typeof createRlmRuntime>['investigate']>[0];
-      const traceLease = lease ? await currentTraceLease(lease, request.signal) : undefined;
-      // One closure per actual investigation; concurrent chats never share
-      // a mutable current lease or trace authority.
-      const runtime = createRlmRuntime({
-        contextTools: mappedSourceQueryService,
-        childRunner,
-        synthesize: synthesizeEvidencePack,
-        partitionSize: 2,
-        onTerminalReceipt: traceLease ? createRlmTraceSink(traceStore, traceLease) : undefined,
+  const traceBindings = new Map<string, { lease: Readonly<RlmContextLease>; captures: readonly object[]; membershipRevision: string; expiresAt: number }>();
+  const scopeOf = (lease: RlmContextLease): ContextScope => ({ accountId: lease.accountId,
+    workspaceId: lease.workspaceId, projectId: lease.projectId, worktreeId: lease.worktreeId });
+  const sameScope = (left: RlmContextLease, right: RlmContextLease) =>
+    JSON.stringify([left.accountId, left.workspaceId, left.projectId, left.worktreeId, left.chatId, left.selectedMapId, left.contextRevision]) ===
+    JSON.stringify([right.accountId, right.workspaceId, right.projectId, right.worktreeId, right.chatId, right.selectedMapId, right.contextRevision]);
+  return Object.freeze({
+    name: RLM_OPENCODE_TOOL_NAME,
+    async execute(rawInput: unknown, lease: RlmContextLease, signal?: AbortSignal, assertLeaseCurrent?: AssertRlmLeaseCurrent) {
+      const capturedLease = Object.freeze({ ...lease,
+        ...(lease.canonicalBinding ? { canonicalBinding: Object.freeze({ ...lease.canonicalBinding }) } : {}),
+        ...(lease.executionIdentity ? { executionIdentity: Object.freeze({ ...lease.executionIdentity }) } : {}),
       });
-
-      // The native Codex authority admits one child at a time. Reduce only this
-      // trusted route's concurrency; retain invalid budgets for runtime validation.
-      return runtime.investigate(usesRegisteredCodexChild(request.executionIdentity)
-        ? { ...request, budget: { ...request.budget,
-            maxConcurrentSubcalls: Math.min(1, request.budget.maxConcurrentSubcalls) } }
-        : request);
-    },
-  };
-  return createRlmOpenCodeTool({
-    queryService: Object.freeze({
-      ...queryService,
-      address(input: {
-        scope: ContextScope;
-        corpusId: string;
-        position: string;
-        signal?: AbortSignal;
-      }) {
-        return contextMapRepository.address(
-          input.scope,
-          input.corpusId,
-          input.position,
-          input.signal,
-        );
-      },
-    }),
-    rlmRuntime,
-    async traceLookup(runId, lease, signal) {
-      signal?.throwIfAborted();
-      const currentLease = await currentTraceLease(lease, signal);
-      const scope = currentLease ? rlmTraceScopeFromLease(currentLease) : undefined;
-      signal?.throwIfAborted();
-      return scope ? traceStore.lookup(scope, runId) : undefined;
-    },
-    maxOpenBytes: 64 * 1024,
-    rlmBudget: {
-      maxDepth: 1,
-      maxSubcalls: 4,
-      maxConcurrentSubcalls: 2,
-      maxInputTokens: 8_192,
-      maxOutputTokens: 2_048,
-      maxWallTimeMs: 90_000,
-      maxToolCalls: 12,
-      maxOpenBytes: 64 * 1024,
+      const current = () => {
+        signal?.throwIfAborted();
+        if (capturedLease.expiresAt <= Date.now()) throw new Error('rlm_lease_expired');
+        const token = assertLeaseCurrent?.(capturedLease);
+        if (assertLeaseCurrent && (!token || token !== capturedLease.contextRevision)) throw new Error('rlm_lease_not_current');
+        return token && token === capturedLease.contextRevision ? token : undefined;
+      };
+      const scope = scopeOf(capturedLease);
+      const captures: object[] = [];
+      const citationResults = new WeakMap<object, readonly VerifiedRlmFallbackCitation[]>();
+      let captureInvalid = false;
+      let terminal: RlmTerminalReceipt | undefined;
+      let membershipRevision: string | undefined;
+      if (capturedLease.selectedMapId && capturedLease.canonicalBinding && capturedLease.chatId && current()) {
+        try {
+          membershipRevision = await contextMapRepository.currentMapMembershipRevision(scope, capturedLease.selectedMapId, signal);
+        } catch (error) {
+          productionIssuedEvidenceRegistry.markUnavailable(capturedLease, current, signal);
+          throw error;
+        }
+        if (!membershipRevision) captureInvalid = true;
+        if (!current()) membershipRevision = undefined;
+      }
+      const captureResult = async (result: unknown) => {
+        if (!membershipRevision || !current() || !result || typeof result !== 'object') return;
+        const shaped = result as { items?: readonly ContextSearchItem[]; pointer?: ContextPointer; record?: ContextRecord };
+        const items = Array.isArray(shaped.items) ? shaped.items : shaped.pointer && shaped.record
+          ? [{ pointer: shaped.pointer, record: shaped.record }] : [];
+        if (!items.length) return;
+        // Evidence originates in the actual service result; record/pointer tuple must join.
+        if (items.some(item => !item?.record || !item?.pointer || item.record.id !== item.pointer.recordId)) {
+          captureInvalid = true; return;
+        }
+        let capture: object | undefined;
+        try {
+          capture = await contextMapRepository.captureIssuedEvidence(scope, capturedLease.selectedMapId!, items.map(item => item.pointer), signal);
+        } catch (error) {captureInvalid = true; throw error;}
+        if (!current()) { captureInvalid = true; return; }
+        if (!capture || captures.length >= 128) { captureInvalid = true; return; }
+        captures.push(capture);
+        citationResults.set(result, Object.freeze(items.map(({pointer, record}) => Object.freeze({
+          pointerId: pointer.id, recordId: record.id, sourceRevision: pointer.sourceVersion, contentHash: pointer.contentHash,
+        }))));
+      };
+      const withCapture = (service: typeof queryService) => Object.freeze({
+        ...service,
+        async search(input: Parameters<typeof service.search>[0]) {
+          const result = await service.search(input);
+          if (assertLeaseCurrent) current();
+          await captureResult(result);
+          if (assertLeaseCurrent) current();
+          return result;
+        },
+        async open(input: Parameters<typeof service.open>[0]) {
+          const result = await service.open(input);
+          if (assertLeaseCurrent) current();
+          await captureResult(result);
+          if (assertLeaseCurrent) current();
+          return result;
+        },
+        async expand(input: Parameters<typeof service.expand>[0]) {
+          const result = await service.expand(input);
+          if (assertLeaseCurrent) current();
+          await captureResult(result);
+          if (assertLeaseCurrent) current();
+          return result;
+        },
+      });
+      const capturedQueryService = withCapture(queryService);
+      const port = createRlmOpenCodeTool({
+        queryService: Object.freeze({ ...capturedQueryService,
+          async address(input: {scope: ContextScope; corpusId: string; position: string; signal?: AbortSignal}) {
+            const result = await contextMapRepository.address(input.scope, input.corpusId, input.position, input.signal);
+            if (assertLeaseCurrent) current();
+            if (membershipRevision && current()) {
+              const capture = contextMapRepository.captureAddressEvidence(result);
+              if (!capture || captures.length >= 128) captureInvalid = true;
+              else captures.push(capture);
+            }
+            return result;
+          },
+        }),
+        async verifiedFallbackCitations(result, currentLease) {
+          if (!sameScope(capturedLease, currentLease) || !current() || captureInvalid || !result || typeof result !== 'object') return [];
+          const tuples = citationResults.get(result);
+          if (!tuples?.length) return [];
+          // Issuance alone does not attest that bytes stayed current while the
+          // service awaited. Verify before the fallback registry can stamp them.
+          const proof = await contextMapRepository.currentIssuedEvidenceRevision(scope, capturedLease.selectedMapId!, captures, signal, () => !!current());
+          if (!current() || !proof || proof.membershipRevision !== membershipRevision) return [];
+          return tuples;
+        },
+        rlmRuntime: {
+          async investigate(input) {
+            const request = input as Parameters<ReturnType<typeof createRlmRuntime>['investigate']>[0];
+            const runtime = createRlmRuntime({ contextTools: withCapture(mappedSourceQueryService), childRunner,
+              synthesize: synthesizeEvidencePack, partitionSize: 2,
+              onTerminalReceipt: receipt => { terminal = receipt; },
+            });
+            return runtime.investigate(usesRegisteredCodexChild(request.executionIdentity)
+              ? { ...request, budget: { ...request.budget, maxConcurrentSubcalls: Math.min(1, request.budget.maxConcurrentSubcalls) } }
+              : request);
+          },
+        },
+        async traceLookup(runId, currentLease) {
+          if (!current() || !sameScope(capturedLease, currentLease)) return undefined;
+          const entry = traceBindings.get(runId);
+          if (!entry || entry.expiresAt <= Date.now() || !sameScope(entry.lease, capturedLease)) return undefined;
+          const proof = await contextMapRepository.currentIssuedEvidenceRevision(scope, capturedLease.selectedMapId!, entry.captures, signal, () => !!current());
+          if (!current() || !proof || proof.membershipRevision !== entry.membershipRevision || traceBindings.get(runId) !== entry) return undefined;
+          const traceScope = rlmTraceScopeFromLease(capturedLease);
+          if (!traceScope) return undefined;
+          const result = traceStore.lookup(traceScope, runId);
+          if (!current()) return undefined;
+          if (result) captures.push(...entry.captures);
+          return result;
+        },
+        maxOpenBytes: 64 * 1024,
+        rlmBudget: {maxDepth: 1, maxSubcalls: 4, maxConcurrentSubcalls: 2, maxInputTokens: 8_192,
+          maxOutputTokens: 2_048, maxWallTimeMs: 90_000, maxToolCalls: 12, maxOpenBytes: 64 * 1024},
+      });
+      try {
+        const result = await port.execute(rawInput, capturedLease, signal, assertLeaseCurrent);
+        if (assertLeaseCurrent) current();
+        return result;
+      } finally {
+        // Authority publication must never mask the original result or failure.
+        // A cancelled/expired caller cannot launch new source IO or publish late.
+        try {
+          if (captureInvalid && current()) {
+            productionIssuedEvidenceRegistry.markUnavailable(capturedLease, current, signal);
+          } else if (membershipRevision && current()) {
+            const published = await productionIssuedEvidenceRegistry.publish(capturedLease, captures, contextMapRepository, current, signal);
+            if (current() && published && terminal) {
+              const traceScope = rlmTraceScopeFromLease(capturedLease);
+              if (traceScope && traceStore.publish(traceScope, terminal)) {
+                const at = Date.now();
+                for (const [id, entry] of traceBindings) if (entry.expiresAt <= at) traceBindings.delete(id);
+                const accountKeys = [...traceBindings].filter(([, entry]) => entry.lease.accountId === capturedLease.accountId).map(([id]) => id);
+                while (accountKeys.length >= 32) traceBindings.delete(accountKeys.shift()!);
+                while (traceBindings.size >= 128) traceBindings.delete(traceBindings.keys().next().value!);
+                traceBindings.set(terminal.runId, {lease: capturedLease, captures: Object.freeze([...captures]), membershipRevision, expiresAt: at + 10 * 60_000});
+              }
+            }
+          }
+        } catch { /* Unavailable proof stays unavailable; no fallback authority. */ }
+      }
     },
   });
 }
-
 export const productionRlmContextTool = createProductionRlmContextTool();

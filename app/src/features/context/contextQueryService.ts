@@ -28,7 +28,7 @@ export interface ContextSourceRead {
 
 export interface ContextQueryRepository {
   listRecords(scope: ContextScope, signal?: AbortSignal): Promise<readonly ContextRecord[]>;
-  /** Bounded verified inventory; the limit bounds candidate attempts, not only successes. */
+  /** Bounded, scope-filtered source inventory for large persisted maps. */
   listRecordsPage?(scope: ContextScope, limit: number, signal?: AbortSignal): Promise<{
     items: readonly ContextRecord[];
     truncated: boolean;
@@ -549,17 +549,16 @@ export function createContextQueryService(dependencies: {
 
   const sources = async (input: { scope: ContextScope; limit?: number; signal?: AbortSignal }) => {
     const maximum = boundedInteger(input.limit, limits.maxSearchResults, limits.maxSearchResults);
-    if (repository.listRecordsPage) {
-      abortIfNeeded(input.signal);
-      const page = await repository.listRecordsPage(input.scope, maximum, input.signal);
-      abortIfNeeded(input.signal);
-      const records = page.items.filter(record => inScope(record, input.scope) && record.deletedAt === undefined);
-      return { items: records.slice(0, maximum), truncated: page.truncated || records.length > maximum };
-    }
-    const records = await scopedRecords(input.scope, input.signal);
+    const page = repository.listRecordsPage
+      ? await repository.listRecordsPage(input.scope, maximum, input.signal)
+      : undefined;
+    abortIfNeeded(input.signal);
+    const records = page
+      ? page.items.filter((record) => inScope(record, input.scope) && record.deletedAt === undefined)
+      : await scopedRecords(input.scope, input.signal);
     return {
       items: records.slice(0, maximum),
-      truncated: records.length > maximum,
+      truncated: Boolean(page?.truncated || records.length > maximum),
     };
   };
 
@@ -596,15 +595,24 @@ export function createContextQueryService(dependencies: {
   };
 
   const checkpoint = async (input: { scope: ContextScope; signal?: AbortSignal }) => {
-    const page = repository.listRecordsPage ? await sources(input) : undefined;
-    const records = page?.items ?? await scopedRecords(input.scope, input.signal);
+    const page = repository.listRecordsPage
+      ? await repository.listRecordsPage(input.scope, limits.maxSearchResults, input.signal)
+      : undefined;
+    abortIfNeeded(input.signal);
+    const records = page
+      ? page.items.filter((record) => inScope(record, input.scope) && record.deletedAt === undefined)
+      : await scopedRecords(input.scope, input.signal);
+    const summary = page && repository.describeSummary
+      ? await repository.describeSummary(input.scope, input.signal)
+      : undefined;
+    abortIfNeeded(input.signal);
     return {
       scope: input.scope,
       createdAt: Date.now(),
-      recordCount: records.length,
+      recordCount: summary?.recordCount ?? records.length,
       recordIds: records.map((record) => record.id),
       contentHashes: records.map((record) => record.contentHash),
-      ...(page ? { truncated: page.truncated, complete: false } : {}),
+      truncated: Boolean(page?.truncated || (summary && summary.recordCount > records.length)),
     };
   };
 

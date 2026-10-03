@@ -7,7 +7,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: transport.listen.mockImplement
 vi.mock('./kernelHost', () => ({ requestLocalJarvisKernelHost: local.request }));
 import { createJarvisKernelClient } from './kernelClient';
 const input = { accountId: 'account', chatId: 'chat', mapId: 'map' };
-const response = { kind: 'context_source_revision' as const, version: 1 as const, ...input, workspaceId: 'workspace', projectId: 'project', worktreeHash: 'sha256:' + 'a'.repeat(64), sourceRevision: 'sha256:' + 'b'.repeat(64), authorityEpoch: 1 };
+const response = { kind: 'context_source_revision' as const, version: 1 as const, ...input, workspaceId: 'workspace', projectId: 'project', worktreeHash: 'sha256:' + 'a'.repeat(64), sourceRevision: 'sha256:' + 'b'.repeat(64), membershipRevision: 'sha256:' + 'b'.repeat(64), revisionKind: 'map-membership' as const, wholeMapDiskFreshness: false as const, sourceCount: 0, verifiedBytes: 0, authorityEpoch: 1 };
 function emit(epoch: number, requestId: string) {
   for (const handler of transport.handlers) handler({ payload: { epoch, requestId, response } });
 }

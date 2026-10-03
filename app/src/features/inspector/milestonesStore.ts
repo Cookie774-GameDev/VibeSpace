@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { milestoneBelongsToScope, type MilestoneOwnerScope } from './milestoneScope';
 import type { MilestoneItem, MilestoneKind, MilestoneStatus, MilestoneScope } from './types';
 
 function newId(): string {
@@ -91,6 +92,8 @@ export const useMilestonesStore = create<MilestonesState>()(
   ),
 );
 
-export function openMilestoneCount(): number {
-  return useMilestonesStore.getState().items.filter((i) => i.status !== 'done').length;
+/** No implicit global count: callers must supply their verified owner scope. */
+export function openMilestoneCount(scope: MilestoneOwnerScope | null = null): number {
+  return useMilestonesStore.getState().items.filter((i) =>
+    milestoneBelongsToScope(i, scope) && i.status !== 'done').length;
 }

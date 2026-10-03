@@ -8,6 +8,8 @@ import {
   STATUS_ANALYTICS_CHANGED_EVENT,
 } from '@/features/account/statusAnalytics';
 import { useMilestonesStore } from './milestonesStore';
+import { milestoneBelongsToScope } from './milestoneScope';
+import { captureMilestoneScopeRead, currentMilestoneOwnerScope, milestoneOwnerScopeKey, verifyMilestoneOwnerScope } from './useScopedMilestones';
 import { useToolRunsStore } from './toolRunsStore';
 import { useAgentStore } from '@/stores/agents';
 import type { AgentRunState } from '@/types/agent';
@@ -46,6 +48,7 @@ export type WorkspaceUsageAnalytics = {
 };
 
 interface AnalyticsState extends WorkspaceUsageAnalytics {
+  completedMilestoneScopeKey: string | null;
   tickForeground: () => void;
   tickBackground: () => void;
   refreshTokenRollup: () => Promise<void>;
@@ -153,6 +156,7 @@ export const useWorkspaceAnalyticsStore = create<AnalyticsState>()(
   persist(
     (set, get) => ({
       ...defaults,
+      completedMilestoneScopeKey: null,
       tickForeground: () => {
         const now = Date.now();
         const delta = now - lastTickAt;
@@ -180,27 +184,36 @@ export const useWorkspaceAnalyticsStore = create<AnalyticsState>()(
       refreshTokenRollup: () => {
         if (rollupInFlight) return rollupInFlight;
         const run = (async () => {
-          const summary = await loadLocalStatusRollup();
-          const byModel: ModelUsageRow[] = (summary?.models ?? []).map((model) => {
-            const separator = model.id.indexOf('::');
-            return {
-              providerName: separator >= 0 ? model.id.slice(0, separator) : 'unknown',
-              modelName: model.label,
-              inputTokens: model.inputTokens,
-              outputTokens: model.outputTokens,
-              totalTokens: model.totalTokens,
-              recordedCostUsd: model.costUsd,
-            };
-          });
-          const usage = projectStatusUsage(summary);
-          set({
-            byModel,
-            ...usage,
-            completedMilestones: useMilestonesStore
-              .getState()
-              .items.filter((i) => i.status === 'done').length,
-            toolRunCount: useToolRunsStore.getState().runs.length,
-          });
+          const milestoneRead = captureMilestoneScopeRead();
+          try {
+            const milestoneScope = milestoneRead.scope;
+            const milestoneScopeKey = milestoneRead.key;
+            const summary = await loadLocalStatusRollup();
+            const milestoneAllowed = await verifyMilestoneOwnerScope(milestoneScope);
+            const sameMilestoneScope = milestoneAllowed && milestoneRead.isCurrent() &&
+              milestoneOwnerScopeKey(currentMilestoneOwnerScope()) === milestoneScopeKey;
+            const byModel: ModelUsageRow[] = (summary?.models ?? []).map((model) => {
+              const separator = model.id.indexOf('::');
+              return {
+                providerName: separator >= 0 ? model.id.slice(0, separator) : 'unknown',
+                modelName: model.label,
+                inputTokens: model.inputTokens,
+                outputTokens: model.outputTokens,
+                totalTokens: model.totalTokens,
+                recordedCostUsd: model.costUsd,
+              };
+            });
+            const usage = projectStatusUsage(summary);
+            set({
+              byModel,
+              ...usage,
+              completedMilestoneScopeKey: sameMilestoneScope ? milestoneScopeKey : null,
+              completedMilestones: sameMilestoneScope ? useMilestonesStore
+                .getState().items.filter((i) => milestoneBelongsToScope(i, milestoneScope) &&
+                  i.status === 'done').length : 0,
+              toolRunCount: useToolRunsStore.getState().runs.length,
+            });
+          } finally { milestoneRead.dispose(); }
         })();
         const tracked = run.finally(() => {
           if (rollupInFlight === tracked) rollupInFlight = null;
@@ -228,7 +241,8 @@ export const useWorkspaceAnalyticsStore = create<AnalyticsState>()(
           byModel: s.byModel,
           foregroundActiveMs: s.foregroundActiveMs,
           backgroundRunningMs: s.backgroundRunningMs,
-          completedMilestones: s.completedMilestones,
+          completedMilestones: s.completedMilestoneScopeKey === milestoneOwnerScopeKey(currentMilestoneOwnerScope())
+            ? s.completedMilestones : 0,
           toolRunCount: s.toolRunCount,
           lastForegroundAt: s.lastForegroundAt,
           sessionStartedAt: s.sessionStartedAt,

@@ -41,15 +41,16 @@ type WireResponseFor<K extends KernelClientRequestV1['kind']> = Extract<
                     ? 'cancellation_state'
                     : K extends 'scheduled_retry'
                       ? 'retry_state'
-                      : K extends 'context_source_revision' ? 'context_source_revision' : 'command_center_snapshot';
+                      : K extends 'run_ownership_diagnostic' ? 'run_ownership_diagnostic' : K extends 'context_source_revision' ? 'context_source_revision' : 'command_center_snapshot';
     }
 >;
 
 /** nativeHostEpoch is client metadata from the validated broker envelope, never a DTO input. */
-type ResponseFor<K extends KernelClientRequestV1['kind']> = K extends 'context_source_revision'
-  ? Extract<KernelClientResponseV1, { kind: 'unavailable' }> | (Extract<KernelClientResponseV1, { kind: 'context_source_revision' }> & Readonly<{ nativeHostEpoch: number }>)
+type ResponseFor<K extends KernelClientRequestV1['kind']> = K extends 'context_source_revision' | 'run_ownership_diagnostic'
+  ? Extract<KernelClientResponseV1, { kind: 'unavailable' }> | (Extract<KernelClientResponseV1, { kind: K }> & Readonly<{ nativeHostEpoch: number }>)
   : WireResponseFor<K>;
 export interface JarvisKernelClient {
+  getRunOwnershipDiagnostic(input: RequestInput<'run_ownership_diagnostic'>): Promise<ResponseFor<'run_ownership_diagnostic'>>;
   getContextSourceRevision(input: RequestInput<'context_source_revision'>): Promise<ResponseFor<'context_source_revision'>>;
   dispatchTurn(input: RequestInput<'turn_dispatch'>): Promise<ResponseFor<'turn_dispatch'>>;
   createApproval(input: RequestInput<'approval_create'>): Promise<ResponseFor<'approval_create'>>;
@@ -124,7 +125,7 @@ export function createJarvisKernelClient(options?: { timeoutMs?: number }): Jarv
     if (disposed) {
       return unavailableKernelResponse(request, 'client_disposed') as ResponseFor<K>;
     }
-    const localResponse = request.kind === 'context_source_revision' ? null : requestLocalJarvisKernelHost(request);
+    const localResponse = (request.kind === 'context_source_revision' || request.kind === 'run_ownership_diagnostic') ? null : requestLocalJarvisKernelHost(request);
     if (localResponse) {
       return localResponse
         .then((response) =>
@@ -168,7 +169,7 @@ export function createJarvisKernelClient(options?: { timeoutMs?: number }): Jarv
         if (settled) return;
         settled = true;
         cleanup();
-        if (response.kind === 'context_source_revision') {
+        if (response.kind === 'context_source_revision' || response.kind === 'run_ownership_diagnostic') {
           if (!Number.isSafeInteger(nativeHostEpoch) || nativeHostEpoch! <= 0) {
             resolve(unavailableKernelResponse(request, 'invalid_response') as ResponseFor<K>);
           } else {
@@ -236,6 +237,7 @@ export function createJarvisKernelClient(options?: { timeoutMs?: number }): Jarv
   }
 
   return Object.freeze({
+    getRunOwnershipDiagnostic: (input: RequestInput<'run_ownership_diagnostic'>) => send(buildRequest('run_ownership_diagnostic', input)),
     dispatchTurn: (input: RequestInput<'turn_dispatch'>) =>
       send(buildRequest('turn_dispatch', input)),
     createApproval: (input: RequestInput<'approval_create'>) =>

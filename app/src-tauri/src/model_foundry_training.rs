@@ -36,17 +36,223 @@ static ACTIVE_RUNTIME_SETUP: Mutex<Option<RuntimeSetupControl>> = Mutex::new(Non
 struct RuntimeSetupControl {
     setup_id: String,
     cancelled: Arc<AtomicBool>,
+    deadline: Option<Instant>,
+    owned_process: Arc<Mutex<Option<Box<dyn SetupProcessOps>>>>,
+    cleanup_pending: Arc<AtomicBool>,
 }
 
 struct RuntimeSetupControlGuard(RuntimeSetupControl);
 impl Drop for RuntimeSetupControlGuard {
     fn drop(&mut self) {
-        if let Ok(mut active) = ACTIVE_RUNTIME_SETUP.lock() {
-            if active.as_ref().is_some_and(|entry| Arc::ptr_eq(&entry.cancelled, &self.0.cancelled)) {
-                *active = None;
+        release_setup_if_closed(&ACTIVE_RUNTIME_SETUP, &self.0);
+    }
+}
+
+// Private setup-only ownership boundary. Test doubles exercise this same boundary.
+trait SetupProcessOps: Send {
+    fn start(&mut self) -> Result<(), String> { Ok(()) }
+    fn terminate_tree(&mut self) -> Result<(), String>;
+    fn poll_root(&mut self) -> Result<Option<std::process::ExitStatus>, String>;
+    fn tree_empty(&mut self) -> Result<bool, String>;
+}
+
+#[cfg(target_os = "windows")]
+struct NativeSetupProcess {
+    child: Child,
+    job: crate::harness::runtime::version_probe_job::ProbeJob,
+}
+
+#[cfg(target_os = "windows")]
+impl SetupProcessOps for NativeSetupProcess {
+    fn start(&mut self) -> Result<(), String> { self.job.assign_and_resume(&self.child) }
+    fn terminate_tree(&mut self) -> Result<(), String> {
+        let tree_result = self.job.try_terminate();
+        // Containment may have failed before resume. Kill only our exact child handle.
+        if self.child.try_wait().map_err(|error| error.to_string())?.is_none() {
+            self.child.kill().map_err(|error| error.to_string())?;
+        }
+        tree_result
+    }
+    fn poll_root(&mut self) -> Result<Option<std::process::ExitStatus>, String> {
+        self.child.try_wait().map_err(|error| error.to_string())
+    }
+    fn tree_empty(&mut self) -> Result<bool, String> { self.job.is_empty() }
+}
+
+fn setup_cleanup_is_confirmed(control: &RuntimeSetupControl) -> bool {
+    control.owned_process.try_lock().map(|owned| {
+        owned.is_none() && !control.cleanup_pending.load(Ordering::Relaxed)
+    }).unwrap_or(false)
+}
+
+fn release_setup_if_closed(
+    registry: &Mutex<Option<RuntimeSetupControl>>,
+    control: &RuntimeSetupControl,
+) -> bool {
+    if !setup_cleanup_is_confirmed(control) { return false; }
+    let Ok(mut active) = registry.lock() else { return false; };
+    if active.as_ref().is_some_and(|entry| Arc::ptr_eq(&entry.cancelled, &control.cancelled)) {
+        *active = None;
+        return true;
+    }
+    false
+}
+
+fn ensure_no_retained_setup(registry: &Mutex<Option<RuntimeSetupControl>>) -> Result<(), String> {
+    let active = registry.lock().map_err(|_| "Runtime setup ownership unavailable.".to_string())?;
+    if active.is_some() {
+        return Err("Runtime setup cleanup is still owned; cancel the original setup before starting another.".into());
+    }
+    Ok(())
+}
+
+fn retry_owned_setup_cleanup(control: &RuntimeSetupControl, budget: Duration) -> Result<(), String> {
+    let mut owned = control.owned_process.try_lock().map_err(|_| {
+        control.cleanup_pending.store(true, Ordering::Relaxed);
+        "Runtime setup owned child cleanup is busy; ownership retained.".to_string()
+    })?;
+    let Some(process) = owned.as_mut() else {
+        control.cleanup_pending.store(false, Ordering::Relaxed);
+        return Ok(());
+    };
+    // A failed terminate request cannot itself acknowledge closure.
+    let termination_error = process.terminate_tree().err();
+    let until = Instant::now() + budget;
+    loop {
+        let closure = process.poll_root().and_then(|root| {
+            process.tree_empty().map(|empty| root.is_some() && empty)
+        });
+        match closure {
+            Ok(true) => {
+                *owned = None; // Drop child/job only after root reap AND job empty.
+                control.cleanup_pending.store(false, Ordering::Relaxed);
+                return Ok(());
+            }
+            Ok(false) if Instant::now() < until => thread::sleep(Duration::from_millis(25)),
+            result => {
+                control.cleanup_pending.store(true, Ordering::Relaxed);
+                let detail = result.err().or(termination_error).unwrap_or_else(|| "closure not confirmed".into());
+                return Err(format!("Runtime setup owned child cleanup pending; ownership retained: {detail}"));
             }
         }
     }
+}
+
+// Shared linearization lock: acknowledgement cannot precede a later spawn/resume.
+fn with_setup_launch_authority<T>(
+    control: &RuntimeSetupControl,
+    timeout: Duration,
+    launch: impl FnOnce(&mut Option<Box<dyn SetupProcessOps>>) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut owned = control.owned_process.lock()
+        .map_err(|_| "Runtime setup launch ownership unavailable.".to_string())?;
+    runtime_setup_remaining(control, timeout)?;
+    if owned.is_some() { return Err("Runtime setup already owns a child.".into()); }
+    launch(&mut owned)
+}
+fn cancel_runtime_setup_and_recover(
+    registry: &Mutex<Option<RuntimeSetupControl>>,
+    setup_id: &str,
+    budget: Duration,
+) -> Result<bool, String> {
+    let control = {
+        let active = registry.lock().map_err(|_| "Runtime setup registry unavailable.".to_string())?;
+        let Some(control) = active.as_ref().filter(|control| control.setup_id == setup_id) else { return Ok(false); };
+        control.clone()
+    };
+    {
+        // Wait for an in-flight spawn/resume to finish before acknowledging cancellation.
+        // Never hold registry while waiting for launch ownership.
+        let _launch = control.owned_process.lock()
+            .map_err(|_| "Runtime setup cancellation ownership unavailable.".to_string())?;
+        let active = registry.lock().map_err(|_| "Runtime setup registry unavailable.".to_string())?;
+        if !active.as_ref().is_some_and(|entry| Arc::ptr_eq(&entry.cancelled, &control.cancelled)) {
+            return Ok(false);
+        }
+        control.cancelled.store(true, Ordering::Relaxed); // Cancellation linearization point.
+    }
+    // Live worker receives the cancellation flag. Only terminal cleanup failure retries here.
+    if control.cleanup_pending.load(Ordering::Relaxed) {
+        retry_owned_setup_cleanup(&control, budget)?;
+        release_setup_if_closed(registry, &control);
+    }
+    Ok(true)
+}
+
+fn setup_probe_needs_packages(
+    result: Result<TrainingWorkerProbe, String>,
+    include_qlora: bool,
+    allow_dependency_repair: bool,
+    control: &RuntimeSetupControl,
+) -> Result<bool, String> {
+    // Cleanup failure must block every recovery branch, including pip.
+    if control.cleanup_pending.load(Ordering::Relaxed) {
+        return Err("Runtime setup owned child cleanup pending; ownership retained.".into());
+    }
+    match result {
+        Ok(probe) => Ok(!probe.ready || !training_runtime_ready(&probe.methods, include_qlora)),
+        Err(error) if !allow_dependency_repair => Err(error),
+        Err(_) => Ok(true), // Existing explicitly admitted dependency repair behavior.
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn bounded_setup_process_output(
+    _command: Command, _capture_parent: &Path, _timeout: Duration,
+    _operation: &str, _control: &RuntimeSetupControl,
+) -> Result<Output, String> {
+    Err("Whole-deadline setup requires verified process-tree containment on this platform.".into())
+}
+
+#[cfg(target_os = "windows")]
+fn bounded_setup_process_output(
+    mut command: Command, capture_parent: &Path, timeout: Duration,
+    operation: &str, control: &RuntimeSetupControl,
+) -> Result<Output, String> {
+    runtime_setup_remaining(control, timeout)?;
+    fs::create_dir_all(capture_parent).map_err(|error| error.to_string())?;
+    let capture_root = capture_parent.join(format!("vibespace-foundry-setup-{}", nanoid::nanoid!()));
+    fs::create_dir(&capture_root).map_err(|error| error.to_string())?;
+    let stdout_path = capture_root.join("stdout.log");
+    let stderr_path = capture_root.join("stderr.log");
+    let stdout = fs::File::create(&stdout_path).map_err(|error| error.to_string())?;
+    let stderr = fs::File::create(&stderr_path).map_err(|error| error.to_string())?;
+    let job = crate::harness::runtime::version_probe_job::ProbeJob::create()?;
+    crate::harness::runtime::version_probe_job::configure_suspended(&mut command);
+    // The same lock serializes spawn/resume with cancellation acknowledgement.
+    let resume_result = with_setup_launch_authority(control, timeout, |owned| {
+        let child = command.stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr)).spawn()
+            .map_err(|error| format!("Could not start {operation}: {error}"))?;
+        *owned = Some(Box::new(NativeSetupProcess { child, job }));
+        // Register suspended child/job BEFORE allowing any child code to execute.
+        runtime_setup_remaining(control, timeout)?;
+        owned.as_mut().expect("just registered owned setup child").start()
+    });
+    let started = Instant::now();
+    let result = (|| {
+        resume_result?;
+        loop {
+            runtime_setup_remaining(control, timeout)?;
+            if captured_output_exceeded(&stdout_path)? || captured_output_exceeded(&stderr_path)? {
+                return Err(format!("{operation} output exceeded the bounded capture limit."));
+            }
+            let status = {
+                let mut owned = control.owned_process.lock().map_err(|_| "Runtime setup ownership unavailable.".to_string())?;
+                owned.as_mut().ok_or_else(|| "Runtime setup child ownership missing.".to_string())?.poll_root()?
+            };
+            if let Some(status) = status {
+                return Ok(Output { status,
+                    stdout: read_bounded_capture(&stdout_path, operation, "stdout")?,
+                    stderr: read_bounded_capture(&stderr_path, operation, "stderr")? });
+            }
+            if started.elapsed() >= timeout { return Err(format!("{operation} timed out.")); }
+            thread::sleep(Duration::from_millis(25));
+        }
+    })();
+    // No cleanup-error path drops the retained process or clears setup ownership.
+    retry_owned_setup_cleanup(control, Duration::from_secs(3))?;
+    let _ = fs::remove_dir_all(&capture_root);
+    result
 }
 
 fn dependency_repair_timeout(seconds: Option<u64>) -> Result<Duration, String> {
@@ -57,6 +263,24 @@ fn dependency_repair_timeout(seconds: Option<u64>) -> Result<Duration, String> {
     Ok(Duration::from_secs(seconds))
 }
 
+fn runtime_setup_remaining(control: &RuntimeSetupControl, cap: Duration) -> Result<Duration, String> {
+    if control.cancelled.load(Ordering::Relaxed) {
+        return Err("Runtime setup cancelled.".into());
+    }
+    match control.deadline {
+        Some(deadline) => {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                control.cancelled.store(true, Ordering::Relaxed);
+                Err("Runtime setup wall-clock deadline expired.".into())
+            } else {
+                Ok(remaining.min(cap))
+            }
+        }
+        None => Ok(cap),
+    }
+}
+
 fn runtime_setup_id(value: Option<String>) -> Result<String, String> {
     let id = value.unwrap_or_else(|| nanoid::nanoid!(24));
     if id.len() < 16 || id.len() > 80 || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) {
@@ -65,6 +289,7 @@ fn runtime_setup_id(value: Option<String>) -> Result<String, String> {
     Ok(id)
 }
 
+#[cfg(test)]
 fn cancel_runtime_setup(registry: &Mutex<Option<RuntimeSetupControl>>, setup_id: &str) -> Result<bool, String> {
     let active = registry.lock().map_err(|_| "Runtime setup registry unavailable.".to_string())?;
     let Some(control) = active.as_ref().filter(|control| control.setup_id == setup_id) else { return Ok(false); };
@@ -73,9 +298,11 @@ fn cancel_runtime_setup(registry: &Mutex<Option<RuntimeSetupControl>>, setup_id:
 }
 
 #[tauri::command]
-pub fn model_foundry_cancel_training_worker_setup(setup_id: String) -> Result<bool, String> {
+pub async fn model_foundry_cancel_training_worker_setup(setup_id: String) -> Result<bool, String> {
     let setup_id = runtime_setup_id(Some(setup_id))?;
-    cancel_runtime_setup(&ACTIVE_RUNTIME_SETUP, &setup_id)
+    tauri::async_runtime::spawn_blocking(move || {
+        cancel_runtime_setup_and_recover(&ACTIVE_RUNTIME_SETUP, &setup_id, Duration::from_secs(3))
+    }).await.map_err(|error| format!("Runtime setup cancellation failed: {error}"))?
 }
 const WORKER_PROBE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_PROCESS_CAPTURE_BYTES: u64 = 4 * 1024 * 1024;
@@ -982,9 +1209,19 @@ fn terminate_child_tree(child: &mut Child) {
     #[cfg(target_os = "windows")]
     {
         let pid = child.id().to_string();
-        let _ = hidden_command("taskkill")
-            .args(["/PID", &pid, "/T", "/F"])
-            .status();
+        if let Ok(mut reaper) = hidden_command("taskkill")
+            .args(["/PID", &pid, "/T", "/F"]).stdin(Stdio::null())
+            .stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+        {
+            let until = Instant::now() + Duration::from_secs(2);
+            loop {
+                match reaper.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if Instant::now() < until => thread::sleep(Duration::from_millis(25)),
+                    _ => { let _ = reaper.kill(); let _ = reaper.try_wait(); break; }
+                }
+            }
+        }
     }
     let _ = child.kill();
 }
@@ -1064,6 +1301,18 @@ fn bounded_process_output(
     bounded_process_output_with_cancel(command, capture_parent, timeout, operation, None)
 }
 
+fn reap_owned_child(child: &mut Child, operation: &str) -> Result<(), String> {
+    let until = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) if Instant::now() < until => thread::sleep(Duration::from_millis(25)),
+            Ok(None) => return Err(format!("{operation} owned child cleanup remains pending.")),
+            Err(error) => return Err(format!("Could not acknowledge {operation} owned child reap: {error}")),
+        }
+    }
+}
+
 fn bounded_process_output_with_cancel(
     mut command: Command,
     capture_parent: &Path,
@@ -1111,7 +1360,7 @@ fn bounded_process_output_with_cancel(
     loop {
         if cancelled.is_some_and(|value| value.load(Ordering::Relaxed)) {
             terminate_child_tree(&mut child);
-            let _ = child.wait();
+            reap_owned_child(&mut child, operation)?;
             let _ = fs::remove_dir_all(&capture_root);
             return Err(format!("{operation} cancelled."));
         }
@@ -1126,13 +1375,13 @@ fn bounded_process_output_with_cancel(
         match capture_limit_exceeded {
             Err(error) => {
                 terminate_child_tree(&mut child);
-                let _ = child.wait();
+                reap_owned_child(&mut child, operation)?;
                 let _ = fs::remove_dir_all(&capture_root);
                 return Err(format!("Could not inspect {operation} output: {error}"));
             }
             Ok(Some(stream)) => {
                 terminate_child_tree(&mut child);
-                let _ = child.wait();
+                reap_owned_child(&mut child, operation)?;
                 let _ = fs::remove_dir_all(&capture_root);
                 return Err(format!(
                     "{operation} {stream} output exceeded the {} byte limit.",
@@ -1145,7 +1394,7 @@ fn bounded_process_output_with_cancel(
             Ok(status) => status,
             Err(error) => {
                 terminate_child_tree(&mut child);
-                let _ = child.wait();
+                reap_owned_child(&mut child, operation)?;
                 let _ = fs::remove_dir_all(&capture_root);
                 return Err(format!("Could not inspect {operation}: {error}"));
             }
@@ -1165,7 +1414,7 @@ fn bounded_process_output_with_cancel(
         }
         if started.elapsed() >= timeout {
             terminate_child_tree(&mut child);
-            let _ = child.wait();
+            reap_owned_child(&mut child, operation)?;
             let _ = fs::remove_dir_all(&capture_root);
             return Err(format!("{operation} timed out."));
         }
@@ -1386,6 +1635,17 @@ fn probe_worker(
     path: &Path,
     source_sha256: &str,
 ) -> Result<TrainingWorkerProbe, String> {
+    probe_worker_with_setup(root, python, path, source_sha256, None)
+}
+
+fn probe_worker_with_setup(
+    root: &Path,
+    python: &str,
+    path: &Path,
+    source_sha256: &str,
+    setup: Option<&RuntimeSetupControl>,
+) -> Result<TrainingWorkerProbe, String> {
+    if let Some(control) = setup { runtime_setup_remaining(control, WORKER_PROBE_TIMEOUT)?; }
     let identity = worker_probe_identity(root, python, path, source_sha256);
     if let Ok(cache) = WORKER_PROBE_CACHE.lock() {
         if let Some(entry) = cache
@@ -1399,12 +1659,15 @@ fn probe_worker(
     command.arg(path).arg("probe").stdin(Stdio::null());
     let result = (|| {
         configure_foundry_worker_environment(&mut command, root)?;
-        let output = bounded_process_output(
-            command,
-            &process_capture_root(root),
-            WORKER_PROBE_TIMEOUT,
-            "worker probe",
-        )?;
+        let timeout = match setup {
+            Some(control) => runtime_setup_remaining(control, WORKER_PROBE_TIMEOUT)?,
+            None => WORKER_PROBE_TIMEOUT,
+        };
+        let output = match setup.filter(|control| control.deadline.is_some()) {
+            Some(control) => bounded_setup_process_output(command, &process_capture_root(root), timeout, "worker probe", control),
+            None => bounded_process_output_with_cancel(command, &process_capture_root(root), timeout, "worker probe", setup.map(|control| control.cancelled.as_ref())),
+        }?;
+        if let Some(control) = setup { runtime_setup_remaining(control, WORKER_PROBE_TIMEOUT)?; }
         if !output.status.success() {
             return Err(
                 "The verified local training worker could not inspect its libraries.".into(),
@@ -1687,6 +1950,10 @@ fn run_training_calibration(
 }
 
 fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
+    inspect_worker_with_setup(root, None)
+}
+
+fn inspect_worker_with_setup(root: &Path, setup: Option<&RuntimeSetupControl>) -> TrainingWorkerStatus {
     let expected = expected_source_sha256();
     let path = worker_path(root);
     let private = private_python(root);
@@ -1754,7 +2021,7 @@ fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
             calibration: None,
         };
     };
-    match probe_worker(root, &python, &path, &expected) {
+    match probe_worker_with_setup(root, &python, &path, &expected, setup) {
         Ok(probe) if probe.ready => TrainingWorkerStatus {
             installed: true,
             attested: true,
@@ -2212,9 +2479,11 @@ pub fn model_foundry_remove_training_model(
 }
 
 fn claim_training_runtime_setup() -> Result<std::sync::MutexGuard<'static, ()>, String> {
-    TRAINING_RUNTIME_SETUP.try_lock().map_err(|_| {
+    let guard = TRAINING_RUNTIME_SETUP.try_lock().map_err(|_| {
         "Training runtime setup is already running. Wait for it to finish before starting setup again.".to_string()
-    })
+    })?;
+    ensure_no_retained_setup(&ACTIVE_RUNTIME_SETUP)?;
+    Ok(guard)
 }
 
 fn install_training_runtime(
@@ -2223,11 +2492,17 @@ fn install_training_runtime(
     allow_dependency_repair: bool,
     dependency_timeout: Duration,
     setup_id: String,
+    whole_deadline: Option<Instant>,
 ) -> Result<TrainingWorkerStatus, String> {
     let _setup_guard = claim_training_runtime_setup()?;
-    let control = RuntimeSetupControl { setup_id, cancelled: Arc::new(AtomicBool::new(false)) };
+    // For admitted no-pip repair the caller's timeout bounds the whole setup,
+    // not only a dependency command that will never run.
+    let control = RuntimeSetupControl {
+        setup_id, cancelled: Arc::new(AtomicBool::new(false)),
+        deadline: whole_deadline, owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
     *ACTIVE_RUNTIME_SETUP.lock().map_err(|_| "Runtime setup registry unavailable.".to_string())? = Some(control.clone());
     let _control_guard = RuntimeSetupControlGuard(control.clone());
+    runtime_setup_remaining(&control, dependency_timeout)?;
     let root = training_root(app)?;
     fs::create_dir_all(&root)
         .map_err(|error| format!("Could not create the private training directory: {error}"))?;
@@ -2240,12 +2515,22 @@ fn install_training_runtime(
     })?;
     clear_worker_probe_cache();
 
-    let python = create_private_python(&root)?;
+    runtime_setup_remaining(&control, dependency_timeout)?;
+    let python = if allow_dependency_repair {
+        create_private_python(&root)?
+    } else {
+        let existing = private_python(&root);
+        if !existing.is_file() {
+            return Err("No-dependency repair requires an existing private Python runtime; no provisioning was started.".into());
+        }
+        existing
+    };
+    runtime_setup_remaining(&control, dependency_timeout)?;
     let python_text = python.to_string_lossy().into_owned();
     let expected = expected_source_sha256();
-    let needs_packages = probe_worker(&root, &python_text, &path, &expected)
-        .map(|probe| !probe.ready || !training_runtime_ready(&probe.methods, include_qlora))
-        .unwrap_or(true);
+    let probe_result = probe_worker_with_setup(&root, &python_text, &path, &expected, Some(&control));
+    let needs_packages = setup_probe_needs_packages(probe_result, include_qlora, allow_dependency_repair, &control)?;
+    runtime_setup_remaining(&control, dependency_timeout)?;
     if control.cancelled.load(Ordering::Relaxed) {
         return Err("Runtime setup cancelled.".into());
     }
@@ -2257,7 +2542,9 @@ fn install_training_runtime(
         clear_worker_probe_cache();
     }
 
-    let status = inspect_worker(&root);
+    runtime_setup_remaining(&control, dependency_timeout)?;
+    let status = inspect_worker_with_setup(&root, Some(&control));
+    runtime_setup_remaining(&control, dependency_timeout)?;
     if control.cancelled.load(Ordering::Relaxed) {
         return Err("Runtime setup cancelled.".into());
     }
@@ -2280,11 +2567,18 @@ pub async fn model_foundry_install_training_worker(
 ) -> Result<TrainingWorkerStatus, String> {
     let dependency_timeout = dependency_repair_timeout(dependency_timeout_seconds)?;
     let setup_id = runtime_setup_id(setup_id)?;
+    let allow_dependency_repair = allow_dependency_repair.unwrap_or(true);
+    // Capture before spawn_blocking: queued work cannot gain a fresh wall budget.
+    let whole_deadline = (!allow_dependency_repair).then(|| Instant::now() + dependency_timeout);
     tauri::async_runtime::spawn_blocking(move || {
+        ensure_no_retained_setup(&ACTIVE_RUNTIME_SETUP)?;
+        if whole_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err("Runtime setup wall-clock deadline expired.".into());
+        }
         if let Some(storage_root) = storage_root.as_deref() {
             crate::model_foundry::configure_foundry_storage(&app, storage_root)?;
         }
-        install_training_runtime(&app, include_qlora.unwrap_or(false), allow_dependency_repair.unwrap_or(true), dependency_timeout, setup_id)
+        install_training_runtime(&app, include_qlora.unwrap_or(false), allow_dependency_repair, dependency_timeout, setup_id, whole_deadline)
     })
     .await
     .map_err(|error| format!("Model Foundry setup worker failed: {error}"))?
@@ -3765,6 +4059,260 @@ mod runtime_setup_bounds_tests {
         assert!(dependency_repair_timeout(Some(0)).is_err());
         assert!(dependency_repair_timeout(Some(901)).is_err());
     }
+    #[derive(Clone, Copy)]
+    enum InjectedRoot { Running, Reaped, WaitError }
+    struct InjectedClosure { root: InjectedRoot, tree_empty: Result<bool, String>, kill_error: bool, kills: usize }
+    struct InjectedSetupProcess(Arc<Mutex<InjectedClosure>>);
+    impl SetupProcessOps for InjectedSetupProcess {
+        fn terminate_tree(&mut self) -> Result<(), String> {
+            let mut state = self.0.lock().unwrap();
+            state.kills += 1;
+            if state.kill_error { Err("injected terminate failure".into()) } else { Ok(()) }
+        }
+        fn poll_root(&mut self) -> Result<Option<std::process::ExitStatus>, String> {
+            match self.0.lock().unwrap().root {
+                InjectedRoot::Running => Ok(None),
+                InjectedRoot::WaitError => Err("injected try_wait failure".into()),
+                InjectedRoot::Reaped => {
+                    #[cfg(target_os = "windows")]
+                    use std::os::windows::process::ExitStatusExt;
+                    #[cfg(unix)]
+                    use std::os::unix::process::ExitStatusExt;
+                    Ok(Some(std::process::ExitStatus::from_raw(0)))
+                }
+            }
+        }
+        fn tree_empty(&mut self) -> Result<bool, String> { self.0.lock().unwrap().tree_empty.clone() }
+    }
+    fn injected_setup(root: InjectedRoot, tree_empty: Result<bool, String>, kill_error: bool)
+        -> (RuntimeSetupControl, Arc<Mutex<InjectedClosure>>)
+    {
+        let state = Arc::new(Mutex::new(InjectedClosure { root, tree_empty, kill_error, kills: 0 }));
+        let control = RuntimeSetupControl {
+            setup_id: "injected-own-setup-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: None,
+            owned_process: Arc::new(Mutex::new(Some(Box::new(InjectedSetupProcess(state.clone()))))),
+            cleanup_pending: Arc::new(AtomicBool::new(false)),
+        };
+        (control, state)
+    }
+    fn assert_retained_and_denied(control: &RuntimeSetupControl) {
+        let registry = Mutex::new(Some(control.clone()));
+        assert!(retry_owned_setup_cleanup(control, Duration::ZERO).is_err());
+        assert!(control.owned_process.lock().unwrap().is_some());
+        assert!(control.cleanup_pending.load(Ordering::Relaxed));
+        assert!(!release_setup_if_closed(&registry, control));
+        assert!(ensure_no_retained_setup(&registry).is_err());
+        assert!(registry.lock().unwrap().is_some());
+    }
+    #[test]
+    fn setup_ownership_kill_failure_retains_and_denies_next_setup() {
+        let (control, _) = injected_setup(InjectedRoot::Running, Ok(false), true);
+        assert_retained_and_denied(&control);
+    }
+    #[test]
+    fn setup_ownership_wait_failure_retains_and_denies_next_setup() {
+        let (control, _) = injected_setup(InjectedRoot::WaitError, Ok(false), false);
+        assert_retained_and_denied(&control);
+    }
+    #[test]
+    fn setup_ownership_root_reaped_does_not_release_live_descendants() {
+        let (control, _) = injected_setup(InjectedRoot::Reaped, Ok(false), false);
+        assert_retained_and_denied(&control);
+    }
+    #[test]
+    fn setup_ownership_unknown_tree_query_never_releases() {
+        let (control, _) = injected_setup(InjectedRoot::Reaped, Err("injected job query failure".into()), false);
+        assert_retained_and_denied(&control);
+    }
+    #[test]
+    fn setup_ownership_foreign_token_cannot_retry_or_clear() {
+        let (control, state) = injected_setup(InjectedRoot::Running, Ok(false), true);
+        assert_retained_and_denied(&control);
+        let registry = Mutex::new(Some(control.clone()));
+        let before = state.lock().unwrap().kills;
+        assert!(!cancel_runtime_setup_and_recover(&registry, "foreign-setup-1234", Duration::ZERO).unwrap());
+        assert_eq!(state.lock().unwrap().kills, before);
+        assert!(!control.cancelled.load(Ordering::Relaxed));
+        assert!(registry.lock().unwrap().is_some());
+    }
+    #[test]
+    fn setup_ownership_same_token_retry_releases_only_after_confirmed_closure() {
+        let (control, state) = injected_setup(InjectedRoot::Running, Ok(false), true);
+        assert_retained_and_denied(&control);
+        let registry = Mutex::new(Some(control.clone()));
+        assert!(cancel_runtime_setup_and_recover(&registry, &control.setup_id, Duration::ZERO).is_err());
+        assert!(ensure_no_retained_setup(&registry).is_err());
+        { let mut state = state.lock().unwrap(); state.root = InjectedRoot::Reaped; state.tree_empty = Ok(true); state.kill_error = false; }
+        assert!(cancel_runtime_setup_and_recover(&registry, &control.setup_id, Duration::ZERO).unwrap());
+        assert!(registry.lock().unwrap().is_none());
+        assert!(control.owned_process.lock().unwrap().is_none());
+        assert!(ensure_no_retained_setup(&registry).is_ok());
+        assert!(!cancel_runtime_setup_and_recover(&registry, &control.setup_id, Duration::ZERO).unwrap());
+    }
+    #[test]
+    fn setup_ownership_old_generation_cannot_clear_new_setup() {
+        let (old, _) = injected_setup(InjectedRoot::Reaped, Ok(true), false);
+        retry_owned_setup_cleanup(&old, Duration::ZERO).unwrap();
+        let (new, _) = injected_setup(InjectedRoot::Running, Ok(false), false);
+        let registry = Mutex::new(Some(new.clone()));
+        assert!(!release_setup_if_closed(&registry, &old));
+        assert!(Arc::ptr_eq(&registry.lock().unwrap().as_ref().unwrap().cancelled, &new.cancelled));
+    }
+    #[test]
+    fn setup_probe_errors_survive_no_pip_mapping_and_cleanup_blocks_every_branch() {
+        let (control, _) = injected_setup(InjectedRoot::Reaped, Ok(true), false);
+        retry_owned_setup_cleanup(&control, Duration::ZERO).unwrap();
+        for error in ["worker probe timed out", "Runtime setup cancelled", "owned child cleanup pending"] {
+            assert_eq!(setup_probe_needs_packages(Err(error.into()), false, false, &control).unwrap_err(), error);
+        }
+        let not_ready = || validated_probe(br#"{"protocol":1,"localOnly":true,"ready":false,"methods":[],"modalities":[],"precisions":[],"reason":"missing dependencies"}"#).unwrap();
+        assert!(setup_probe_needs_packages(Ok(not_ready()), false, false, &control).unwrap());
+        control.cleanup_pending.store(true, Ordering::Relaxed);
+        for allow in [false, true] {
+            assert!(setup_probe_needs_packages(Ok(not_ready()), false, allow, &control).unwrap_err().contains("cleanup pending"));
+        }
+    }
+
+    #[test]
+    fn setup_ownership_cancel_wins_and_blocks_every_later_launch() {
+        let (control, _) = injected_setup(InjectedRoot::Reaped, Ok(true), false);
+        retry_owned_setup_cleanup(&control, Duration::ZERO).unwrap();
+        let registry = Mutex::new(Some(control.clone()));
+        assert!(cancel_runtime_setup_and_recover(&registry, &control.setup_id, Duration::ZERO).unwrap());
+        let mut starts = 0;
+        let result = with_setup_launch_authority(&control, Duration::from_secs(1), |_| {
+            starts += 1;
+            Ok(())
+        });
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert_eq!(starts, 0);
+    }
+    #[test]
+    fn setup_ownership_launch_wins_but_cancel_ack_waits_for_launch_lock() {
+        let (control, state) = injected_setup(InjectedRoot::Running, Ok(false), true);
+        control.owned_process.lock().unwrap().take();
+        let registry = Arc::new(Mutex::new(Some(control.clone())));
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let attempted = Arc::new(std::sync::Barrier::new(2));
+        let (ack_send, ack_receive) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let launch_control = control.clone();
+            let launch_entered = entered.clone();
+            let launch_attempted = attempted.clone();
+            let launch_state = state.clone();
+            let launch = scope.spawn(move || with_setup_launch_authority(&launch_control, Duration::from_secs(1), |owned| {
+                launch_entered.wait();
+                launch_attempted.wait();
+                assert!(!launch_control.cancelled.load(Ordering::Relaxed));
+                assert!(matches!(ack_receive.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+                *owned = Some(Box::new(InjectedSetupProcess(launch_state)));
+                owned.as_mut().unwrap().start()?;
+                Ok(())
+            }));
+            entered.wait();
+            let cancel_control = control.clone();
+            let cancel_registry = registry.clone();
+            let cancel = scope.spawn(move || {
+                attempted.wait();
+                let result = cancel_runtime_setup_and_recover(&cancel_registry, &cancel_control.setup_id, Duration::ZERO);
+                let _ = ack_send.send(()); // Receiver may close once the launch lock is released.
+                result
+            });
+            launch.join().unwrap().unwrap();
+            assert!(cancel.join().unwrap().unwrap());
+        });
+        assert!(control.cancelled.load(Ordering::Relaxed));
+        assert!(control.owned_process.lock().unwrap().is_some());
+        assert!(ensure_no_retained_setup(&registry).is_err());
+        assert!(retry_owned_setup_cleanup(&control, Duration::ZERO).is_err());
+        { let mut state = state.lock().unwrap(); state.root = InjectedRoot::Reaped; state.tree_empty = Ok(true); state.kill_error = false; }
+        assert!(cancel_runtime_setup_and_recover(&registry, &control.setup_id, Duration::ZERO).unwrap());
+        assert!(registry.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn setup_wall_deadline_never_renews_between_stages() {
+        let control = RuntimeSetupControl { setup_id: "wall-bound-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now() + Duration::from_millis(120)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
+        let first = runtime_setup_remaining(&control, WORKER_PROBE_TIMEOUT).unwrap();
+        thread::sleep(Duration::from_millis(20));
+        let second = runtime_setup_remaining(&control, WORKER_PROBE_TIMEOUT).unwrap();
+        assert!(second < first);
+        assert!(first <= Duration::from_millis(120));
+    }
+
+    #[test]
+    fn setup_wall_deadline_rejects_expired_and_cancelled_before_next_child() {
+        let control = RuntimeSetupControl { setup_id: "wall-expired-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now()), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
+        assert!(runtime_setup_remaining(&control, WORKER_PROBE_TIMEOUT).unwrap_err().contains("deadline"));
+        assert!(control.cancelled.load(Ordering::Relaxed));
+        assert!(runtime_setup_remaining(&control, WORKER_PROBE_TIMEOUT).unwrap_err().contains("cancelled"));
+    }
+
+    #[test]
+    fn setup_wall_cancel_does_not_accept_foreign_identifier() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let registry = Mutex::new(Some(RuntimeSetupControl { setup_id: "wall-own-generation-1234".into(), cancelled: cancelled.clone(), deadline: Some(Instant::now() + Duration::from_secs(1)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) }));
+        assert!(!cancel_runtime_setup(&registry, "wall-foreign-generation-1234").unwrap());
+        assert!(!cancelled.load(Ordering::Relaxed));
+        assert!(cancel_runtime_setup(&registry, "wall-own-generation-1234").unwrap());
+        assert!(cancelled.load(Ordering::Relaxed));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn setup_wall_probe_deadline_reaps_owned_child() {
+        let python = locate_python().expect("Focused child-reap acceptance requires actual Python; unavailable is not PASS");
+        let root = std::env::temp_dir().join(format!("s61-foundry-wall-{}", nanoid::nanoid!()));
+        fs::create_dir_all(&root).unwrap();
+        let worker = root.join("worker.py");
+        let started_marker = root.join("child-started");
+        let completed = root.join("child-completed");
+        fs::write(&worker, "import time,json\nfrom pathlib import Path\nPath(__file__).with_name('child-started').write_text('started')\ntime.sleep(3)\nPath(__file__).with_name('child-completed').write_text('unexpected late child')\nprint(json.dumps({'protocol':1,'localOnly':True,'ready':True,'methods':['full'],'modalities':['text'],'precisions':['fp32'],'reason':None}))\n").unwrap();
+        let control = RuntimeSetupControl { setup_id: "wall-probe-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now() + Duration::from_millis(1500)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
+        let started = Instant::now();
+        let result = probe_worker_with_setup(&root, &python, &worker, "fixture-source", Some(&control));
+        assert!(started_marker.is_file(), "Actual Python child must start; pre-spawn expiration/launch error is not timeout PASS");
+        let error = result.unwrap_err();
+        assert!(error.contains("timed out") || error.contains("deadline"), "Unexpected failure instead of deadline: {error}");
+        assert!(started.elapsed() < Duration::from_secs(7));
+        thread::sleep(Duration::from_millis(3100));
+        assert!(!completed.exists(), "Owned Python child escaped timeout/reap");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn setup_wall_probe_honors_cancel_while_child_is_running() {
+        let python = locate_python().expect("Focused cancellation acceptance requires actual Python; unavailable is not PASS");
+        let root = std::env::temp_dir().join(format!("s61-foundry-cancel-{}", nanoid::nanoid!()));
+        fs::create_dir_all(&root).unwrap();
+        let worker = root.join("worker.py");
+        let started_marker = root.join("child-started");
+        let completed = root.join("child-completed");
+        fs::write(&worker, "import time,json\nfrom pathlib import Path\nPath(__file__).with_name('child-started').write_text('started')\ntime.sleep(3)\nPath(__file__).with_name('child-completed').write_text('unexpected late child')\nprint(json.dumps({'protocol':1,'localOnly':True,'ready':True,'methods':['full'],'modalities':['text'],'precisions':['fp32'],'reason':None}))\n").unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let control = RuntimeSetupControl { setup_id: "wall-cancel-owned-1234".into(), cancelled: cancelled.clone(), deadline: Some(Instant::now() + Duration::from_secs(8)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
+        let observed_marker = started_marker.clone();
+        let trigger = thread::spawn(move || {
+            let until = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < until {
+                if observed_marker.is_file() {
+                    cancelled.store(true, Ordering::Relaxed);
+                    return true;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            false
+        });
+        let result = probe_worker_with_setup(&root, &python, &worker, "fixture-source", Some(&control));
+        let started_before_cancel = trigger.join().unwrap();
+        assert!(started_before_cancel && started_marker.is_file(), "Cancellation must follow observed actual Python startup");
+        assert!(result.unwrap_err().contains("cancelled"));
+        thread::sleep(Duration::from_millis(3100));
+        assert!(!completed.exists(), "Cancelled owned Python child escaped reap");
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn setup_identifiers_are_opaque_and_strict() {
         assert_eq!(runtime_setup_id(None).unwrap().len(), 24);
@@ -3774,7 +4322,7 @@ mod runtime_setup_bounds_tests {
     #[test]
     fn cancellation_only_targets_the_matching_setup_generation() {
         let cancelled = Arc::new(AtomicBool::new(false));
-        let registry = Mutex::new(Some(RuntimeSetupControl { setup_id: "own-generation-1234".into(), cancelled: cancelled.clone() }));
+        let registry = Mutex::new(Some(RuntimeSetupControl { setup_id: "own-generation-1234".into(), cancelled: cancelled.clone(), deadline: None, owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) }));
         assert!(!cancel_runtime_setup(&registry, "foreign-generation").unwrap());
         assert!(!cancelled.load(Ordering::Relaxed));
         assert!(cancel_runtime_setup(&registry, "own-generation-1234").unwrap());
