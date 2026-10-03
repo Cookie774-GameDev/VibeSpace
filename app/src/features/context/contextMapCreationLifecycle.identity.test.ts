@@ -8,7 +8,8 @@ import { createContextSearchIndexPopulationPort } from './contextSearchIndexing'
 import type { ContextSearchDocumentInput, ContextSearchIndexPort } from './contextSearchPipeline';
 import { createContextMapRlmRepository } from './contextRlmProduction';
 import { createContextQueryService } from './contextQueryService';
-import { contextEntityIdForTreeNode } from './migration';
+import { contextEntityIdForTreeNode, contextSelectionSettingKey } from './migration';
+import { createContextGraphRepository } from './repository';
 import type { ContextMapRecord, ProjectContextTree } from './tree';
 
 const ACCOUNT = 'S61B1-index-account';
@@ -105,7 +106,19 @@ async function fixture(options: { legacy?: boolean; longId?: boolean; foreignHit
   expect(JSON.stringify(tree)).toBe(inputBefore);
   expect(store.size).toBe(129);
   const reloaded = await createContextPersistenceService(db, localStorage).load(ACCOUNT, PROJECT);
-  const reloadBefore = JSON.stringify(reloaded);
+  const graphRepository = createContextGraphRepository(db);
+  // Service-local migration reports can differ between initialize()'s memo
+  // and a fresh load(). Assert persisted authority, not that diagnostic memo
+  // or JSON object-key insertion order, and include the raw selection row.
+  const readDurable = async () => {
+    const state = await persistence.load(ACCOUNT, PROJECT);
+    return { accountId: state.accountId, projectId: state.projectId,
+      maps: state.maps, selectedMapId: state.selectedMapId, selectedFile: state.selectedFile,
+      graph: await graphRepository.getSnapshot(ACCOUNT, indexMapId),
+      selection: await db.settings.get(contextSelectionSettingKey(ACCOUNT, PROJECT)),
+    };
+  };
+  const durableBefore = structuredClone(await readDurable());
   const loadedMap = reloaded.maps.find((map) => map.id === indexMapId)!;
   const lexicalSearch = vi.fn(async (request: { accountId: string; mapId: string; query: string; limit: number }) => {
     assertScope(request.accountId, request.mapId);
@@ -131,7 +144,7 @@ async function fixture(options: { legacy?: boolean; longId?: boolean; foreignHit
   const service = createContextQueryService({ repository });
   return { tree, generatedMap, loadedMap, store, service, read, lexicalSearch,
     scope: { accountId: ACCOUNT, projectId: PROJECT },
-    assertUnchanged: async () => expect(JSON.stringify(await persistence.load(ACCOUNT, PROJECT))).toBe(reloadBefore),
+    assertUnchanged: async () => expect(await readDurable()).toEqual(durableBefore),
   };
 }
 

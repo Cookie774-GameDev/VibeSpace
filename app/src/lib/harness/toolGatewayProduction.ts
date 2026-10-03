@@ -849,7 +849,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           ...(worktreeId ? { worktreeId } : {}),
           expiresAt: Date.now() + 30_000,
         } satisfies RlmContextLease;
-        if (args.operation === 'query') {
+        if (args.operation === 'query' && args.continuation === undefined) {
           const observedAuthority = observed;
           if (!observedAuthority) throw new Error('gateway_execution_identity_unavailable');
           if (!baseLease.workspaceId || !baseLease.projectId || !baseLease.worktreeId) {
