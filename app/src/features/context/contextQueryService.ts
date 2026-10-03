@@ -609,10 +609,11 @@ export function createContextQueryService(dependencies: {
     return {
       scope: input.scope,
       createdAt: Date.now(),
-      recordCount: summary?.recordCount ?? records.length,
+      recordCount: records.length,
       recordIds: records.map((record) => record.id),
       contentHashes: records.map((record) => record.contentHash),
       truncated: Boolean(page?.truncated || (summary && summary.recordCount > records.length)),
+      ...(page ? { complete: false } : {}),
     };
   };
 

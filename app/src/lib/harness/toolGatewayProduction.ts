@@ -714,7 +714,7 @@ function findContextNode(
 ): { id: string; title: string; summary: string; path?: string } | null {
   for (const node of nodes) {
     if (node.id === contextId) {
-      return { id: node.id, title: node.title, summary: node.summary, path: node.path };
+      return { id: node.id, title: node.title, summary: node.summary, ...(node.path === undefined ? {} : { path: node.path }) };
     }
     const nested = node.children
       ? findContextNode(
@@ -979,7 +979,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           // allow its final verified publication within the facade's 120s cap.
           expiresAt: Date.now() + (args.operation === 'investigate' ? 120_000 : 30_000),
         } satisfies RlmContextLease);
-        if (args.operation === 'query') {
+        if (args.operation === 'query' && args.continuation === undefined) {
           const observedAuthority = observed;
           if (!observedAuthority) throw new Error('gateway_execution_identity_unavailable');
           if (!baseLease.workspaceId || !baseLease.projectId || !baseLease.worktreeId) {
@@ -1072,7 +1072,9 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
         // Recursive investigate has its own bounded budget and accepts only its
         // operation and question; forwarding display limits makes a valid call fail.
         const portArgs =
-          args.operation === 'investigate' ? { operation: 'investigate', query: args.query } : args;
+          args.operation === 'investigate' ? { operation: 'investigate', query: args.query }
+            : args.operation === 'query' && args.continuation !== undefined
+              ? { ...args, operation: 'search' } : args;
         const result = port.execute(portArgs, lease, context.signal, assertLeaseCurrent);
         if (args.operation !== 'investigate') return result;
         return result.then((value) => {
