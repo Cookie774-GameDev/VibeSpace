@@ -29,7 +29,7 @@ const scope = {accountId: 'account', workspaceId: 'workspace', projectId: 'proje
 beforeEach(async () => {io.selectedOnly = true; const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
   io.hash = [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('');});
 describe('actual factory after-run proof with synthetic filesystem/index IO only', () => {
-  it('denies prior A proof after genuine B search returns an unissuable selected-map capture', async () => {
+  it('retains A proof when unrelated active B cannot escape selected-map retrieval', async () => {
     const lease: RlmContextLease = {...scope, sessionId: 'session', chatId: 'chat', selectedMapId: 'map-a',
       canonicalBinding: {runId: 'run-factory-unavailable', requestId: 'request', attemptNumber: 1},
       contextRevision: 'rlm:1', expiresAt: Date.now() + 60_000};
@@ -44,7 +44,7 @@ describe('actual factory after-run proof with synthetic filesystem/index IO only
     io.selectedOnly = false;
     const b = await factory.execute({operation: 'search', query: 'saffron evidence'}, lease, undefined, current) as
       {items: Array<{record: {title?: string}}>};
-    expect(b.items.some(item => item.record.title === 'map-b.txt')).toBe(true);
-    expect(await read(scope, 'map-a', undefined, run, lease.contextRevision, current)).toBeUndefined();
+    expect(b.items.some(item => item.record.title === 'map-b.txt')).toBe(false);
+    expect(await read(scope, 'map-a', undefined, run, lease.contextRevision, current)).toMatchObject({sourceCount: 1});
   });
 });

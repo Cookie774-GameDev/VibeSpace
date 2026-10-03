@@ -2644,7 +2644,7 @@ describe('production Context Map RLM repository', () => {
         { accountId: 'account-1', projectId: 'project-1' },
         'Observatory Lumen cobalt-fern',
       ),
-    ).resolves.toEqual([]);
+    ).rejects.toMatchObject({code: 'context_index_unavailable', reason: 'index_empty_or_rebuild'});
     expect(indexStatus).toHaveBeenCalledWith('account-1', 'map-1');
     expect(lexicalSearch).not.toHaveBeenCalled();
   });

@@ -9,6 +9,7 @@ import { createRegisteredCodexRlmChild } from '@/lib/ai/adapters/codexRlmBoundCh
 import { currentRlmSourceRevision } from './contextRlmSourceRevision';
 import { currentMembershipDigest, productionIssuedEvidenceRegistry, type EvidenceRevision } from './contextIssuedEvidenceRegistry';
 import { contextEntityIdForTreeNode } from './migration';
+import { ContextSearchReadinessError } from './contextSearchReadiness';
 import { HarnessError } from '@/lib/harness/errors';
 import type { HarnessEvent, VibeSpaceHarness } from '@/lib/harness/types';
 import { classifyJarvisSource } from '@/lib/jarvis/sourcePolicy';
@@ -2080,6 +2081,7 @@ export function createContextMapRlmRepository(
         }
       }
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      let statusFailed = false;
       const searchableMaps =
         useSmallFallback || !dependencies.indexStatus
           ? maps
@@ -2100,12 +2102,17 @@ export function createContextMapRlmRepository(
                       ? map
                       : undefined;
                   } catch {
+                    statusFailed = true;
                     return undefined;
                   }
                 },
               )
             ).filter((map): map is ProductionContextMap => map !== undefined);
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      if (!useSmallFallback && !namedCandidates.length && admittedCandidates.length > 0 &&
+          searchableMaps.length === 0) {
+        throw new ContextSearchReadinessError(statusFailed ? 'index_status_failed' : 'index_empty_or_rebuild');
+      }
       // A short query with a code identifier is already a precise index probe.
       // Broad proper-name probes such as `VFS` can crowd out its source file.
       const exactCodeQuery = exactQuery.trim().split(/\s+/u).length <= 4
@@ -2150,7 +2157,8 @@ export function createContextMapRlmRepository(
                 });
               }
             } catch {
-              continue;
+              if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+              throw new ContextSearchReadinessError('lexical_query_failed');
             }
             if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
           }
@@ -2828,14 +2836,16 @@ export function createProductionRlmChildRunner(
 
 export function createProductionRlmContextTool() {
   const indexPort = createTauriContextSearchIndexPort();
-  const contextMapRepository = createContextMapRlmRepository({
-    loadMaps: (projectId) =>
+  const contextMapDependencies = {
+    loadMaps: (projectId: string | null) =>
       loadPersistedContextMaps(projectId) as unknown as Promise<readonly ProductionContextMap[]>,
     stat: statProjectPath,
     read: readTextFileSample,
     lexicalSearch: createTauriContextLexicalSearchExecutor(),
-    indexStatus: (accountId, mapId) => indexPort.status(accountId, mapId),
-  });
+    indexStatus: (accountId: string, mapId: string) => indexPort.status(accountId, mapId),
+  };
+  const contextMapRepository = createContextMapRlmRepository(contextMapDependencies);
+
   const historyRepository = createHistoryRlmRepository({ load: loadProductionRlmHistory });
   const siyuanRepository = createSiyuanRlmRepository(getProductionSiyuanRlmPort());
   const repository = createProductionFederatedRlmRepository(
@@ -2857,6 +2867,31 @@ export function createProductionRlmContextTool() {
     repository: contextMapRepository,
     limits: queryLimits,
   });
+  // Each trusted selected map owns its issued pointer capabilities. Never mix
+  // unrelated project history or SiYuan results into selected-map retrieval.
+  const selectedServices = new Map<string, {
+    repository: ReturnType<typeof createContextMapRlmRepository>;
+    service: ReturnType<typeof createContextQueryService>;
+  }>();
+  const servicesFor = (lease: RlmContextLease) => {
+    if (!lease.selectedMapId) return { repository: contextMapRepository, service: queryService,
+      investigationService: mappedSourceQueryService };
+    const key = JSON.stringify([lease.accountId, lease.workspaceId, lease.projectId,
+      lease.worktreeId, lease.selectedMapId]);
+    let entry = selectedServices.get(key);
+    if (!entry) {
+      const repository = createContextMapRlmRepository({ ...contextMapDependencies,
+        loadMaps: async (projectId) => (await contextMapDependencies.loadMaps(projectId))
+          .filter(map => map.id === lease.selectedMapId),
+      });
+      entry = { repository, service: createContextQueryService({ repository, limits: queryLimits }) };
+      while (selectedServices.size >= MAX_ACTIVE_SEARCH_MAPS) {
+        selectedServices.delete(selectedServices.keys().next().value!);
+      }
+    } else selectedServices.delete(key);
+    selectedServices.set(key, entry);
+    return { ...entry, investigationService: entry.service };
+  };
   const traceStore = createRlmTraceStore();
   const childRunner = createProductionRlmChildRunner(openCodeHarness);
   const traceBindings = new Map<string, { lease: Readonly<RlmContextLease>; captures: readonly object[]; membershipRevision: string; expiresAt: number }>();
@@ -2879,6 +2914,7 @@ export function createProductionRlmContextTool() {
         if (assertLeaseCurrent && (!token || token !== capturedLease.contextRevision)) throw new Error('rlm_lease_not_current');
         return token && token === capturedLease.contextRevision ? token : undefined;
       };
+      const { repository: activeRepository, service: activeService, investigationService } = servicesFor(capturedLease);
       const scope = scopeOf(capturedLease);
       const captures: object[] = [];
       const citationResults = new WeakMap<object, readonly VerifiedRlmFallbackCitation[]>();
@@ -2887,7 +2923,7 @@ export function createProductionRlmContextTool() {
       let membershipRevision: string | undefined;
       if (capturedLease.selectedMapId && capturedLease.canonicalBinding && capturedLease.chatId && current()) {
         try {
-          membershipRevision = await contextMapRepository.currentMapMembershipRevision(scope, capturedLease.selectedMapId, signal);
+          membershipRevision = await activeRepository.currentMapMembershipRevision(scope, capturedLease.selectedMapId, signal);
         } catch (error) {
           productionIssuedEvidenceRegistry.markUnavailable(capturedLease, current, signal);
           throw error;
@@ -2907,7 +2943,7 @@ export function createProductionRlmContextTool() {
         }
         let capture: object | undefined;
         try {
-          capture = await contextMapRepository.captureIssuedEvidence(scope, capturedLease.selectedMapId!, items.map(item => item.pointer), signal);
+          capture = await activeRepository.captureIssuedEvidence(scope, capturedLease.selectedMapId!, items.map(item => item.pointer), signal);
         } catch (error) {captureInvalid = true; throw error;}
         if (!current()) { captureInvalid = true; return; }
         if (!capture || captures.length >= 128) { captureInvalid = true; return; }
@@ -2940,14 +2976,14 @@ export function createProductionRlmContextTool() {
           return result;
         },
       });
-      const capturedQueryService = withCapture(queryService);
+      const capturedQueryService = withCapture(activeService);
       const port = createRlmOpenCodeTool({
         queryService: Object.freeze({ ...capturedQueryService,
           async address(input: {scope: ContextScope; corpusId: string; position: string; signal?: AbortSignal}) {
-            const result = await contextMapRepository.address(input.scope, input.corpusId, input.position, input.signal);
+            const result = await activeRepository.address(input.scope, input.corpusId, input.position, input.signal);
             if (assertLeaseCurrent) current();
             if (membershipRevision && current()) {
-              const capture = contextMapRepository.captureAddressEvidence(result);
+              const capture = activeRepository.captureAddressEvidence(result);
               if (!capture || captures.length >= 128) captureInvalid = true;
               else captures.push(capture);
             }
@@ -2960,14 +2996,14 @@ export function createProductionRlmContextTool() {
           if (!tuples?.length) return [];
           // Issuance alone does not attest that bytes stayed current while the
           // service awaited. Verify before the fallback registry can stamp them.
-          const proof = await contextMapRepository.currentIssuedEvidenceRevision(scope, capturedLease.selectedMapId!, captures, signal, () => !!current());
+          const proof = await activeRepository.currentIssuedEvidenceRevision(scope, capturedLease.selectedMapId!, captures, signal, () => !!current());
           if (!current() || !proof || proof.membershipRevision !== membershipRevision) return [];
           return tuples;
         },
         rlmRuntime: {
           async investigate(input) {
             const request = input as Parameters<ReturnType<typeof createRlmRuntime>['investigate']>[0];
-            const runtime = createRlmRuntime({ contextTools: withCapture(mappedSourceQueryService), childRunner,
+            const runtime = createRlmRuntime({ contextTools: withCapture(investigationService), childRunner,
               synthesize: synthesizeEvidencePack, partitionSize: 2,
               onTerminalReceipt: receipt => { terminal = receipt; },
             });
@@ -2980,7 +3016,7 @@ export function createProductionRlmContextTool() {
           if (!current() || !sameScope(capturedLease, currentLease)) return undefined;
           const entry = traceBindings.get(runId);
           if (!entry || entry.expiresAt <= Date.now() || !sameScope(entry.lease, capturedLease)) return undefined;
-          const proof = await contextMapRepository.currentIssuedEvidenceRevision(scope, capturedLease.selectedMapId!, entry.captures, signal, () => !!current());
+          const proof = await activeRepository.currentIssuedEvidenceRevision(scope, capturedLease.selectedMapId!, entry.captures, signal, () => !!current());
           if (!current() || !proof || proof.membershipRevision !== entry.membershipRevision || traceBindings.get(runId) !== entry) return undefined;
           const traceScope = rlmTraceScopeFromLease(capturedLease);
           if (!traceScope) return undefined;
@@ -3004,7 +3040,7 @@ export function createProductionRlmContextTool() {
           if (captureInvalid && current()) {
             productionIssuedEvidenceRegistry.markUnavailable(capturedLease, current, signal);
           } else if (membershipRevision && current()) {
-            const published = await productionIssuedEvidenceRegistry.publish(capturedLease, captures, contextMapRepository, current, signal);
+            const published = await productionIssuedEvidenceRegistry.publish(capturedLease, captures, activeRepository, current, signal);
             if (current() && published && terminal) {
               const traceScope = rlmTraceScopeFromLease(capturedLease);
               if (traceScope && traceStore.publish(traceScope, terminal)) {

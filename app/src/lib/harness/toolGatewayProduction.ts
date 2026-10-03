@@ -1,3 +1,4 @@
+import { ContextSearchReadinessError } from '@/features/context/contextSearchReadiness';
 import { queryCommandCatalog } from './commandCatalogQuery';
 import { RlmRuntimeError } from '@/features/context/rlmRuntime';
 import { invoke } from '@tauri-apps/api/core';
@@ -1075,7 +1076,13 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           args.operation === 'investigate' ? { operation: 'investigate', query: args.query }
             : args.operation === 'query' && args.continuation !== undefined
               ? { ...args, operation: 'search' } : args;
-        const result = port.execute(portArgs, lease, context.signal, assertLeaseCurrent);
+        const result = port.execute(portArgs, lease, context.signal, assertLeaseCurrent).catch(error => {
+          if (error instanceof ContextSearchReadinessError) {
+            throw new ToolGatewaySemanticError({ code: error.code, message: error.message,
+              data: { reason: error.reason, indexAvailable: false, grounded: false } });
+          }
+          throw error;
+        });
         if (args.operation !== 'investigate') return result;
         return result.then((value) => {
           if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
