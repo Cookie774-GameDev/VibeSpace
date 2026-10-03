@@ -4267,15 +4267,16 @@ mod runtime_setup_bounds_tests {
         let worker = root.join("worker.py");
         let started_marker = root.join("child-started");
         let completed = root.join("child-completed");
-        fs::write(&worker, "import time,json\nfrom pathlib import Path\nPath(__file__).with_name('child-started').write_text('started')\ntime.sleep(3)\nPath(__file__).with_name('child-completed').write_text('unexpected late child')\nprint(json.dumps({'protocol':1,'localOnly':True,'ready':True,'methods':['full'],'modalities':['text'],'precisions':['fp32'],'reason':None}))\n").unwrap();
-        let control = RuntimeSetupControl { setup_id: "wall-probe-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now() + Duration::from_millis(1500)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
+        fs::write(&worker, "import time,json\nfrom pathlib import Path\nPath(__file__).with_name('child-started').write_text('started')\ntime.sleep(12)\nPath(__file__).with_name('child-completed').write_text('unexpected late child')\nprint(json.dumps({'protocol':1,'localOnly':True,'ready':True,'methods':['full'],'modalities':['text'],'precisions':['fp32'],'reason':None}))\n").unwrap();
+        let control = RuntimeSetupControl { setup_id: "wall-probe-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now() + Duration::from_secs(8)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
         let started = Instant::now();
         let result = probe_worker_with_setup(&root, &python, &worker, "fixture-source", Some(&control));
-        assert!(started_marker.is_file(), "Actual Python child must start; pre-spawn expiration/launch error is not timeout PASS");
+        assert!(started_marker.is_file(), "Actual Python child must start; pre-spawn expiration/launch error is not timeout PASS; elapsed={:?}, error={:?}", started.elapsed(), result.as_ref().err());
         let error = result.unwrap_err();
         assert!(error.contains("timed out") || error.contains("deadline"), "Unexpected failure instead of deadline: {error}");
-        assert!(started.elapsed() < Duration::from_secs(7));
-        thread::sleep(Duration::from_millis(3100));
+        assert!(started.elapsed() < Duration::from_secs(12));
+        assert!(setup_cleanup_is_confirmed(&control), "Deadline must positively confirm root reap and empty owned job");
+        thread::sleep(Duration::from_millis(12100));
         assert!(!completed.exists(), "Owned Python child escaped timeout/reap");
         fs::remove_dir_all(root).unwrap();
     }
