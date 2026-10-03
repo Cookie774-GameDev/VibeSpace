@@ -324,6 +324,17 @@ function rejectUnsafeActionSchemas(envelope: Readonly<JarvisRequestEnvelope>): v
   }
 }
 
+const REGISTERED_CONTEXT_TOOL = /\bvibespace_context_(?:search|open|expand|address|trace)\b/giu;
+
+function explicitRegisteredContextTools(userText: string): readonly string[] {
+  const boundary = userText.indexOf('\n\nChat handoff from “');
+  const callerText = (boundary >= 0 ? userText.slice(0, boundary) : userText).replace(
+    /\b(?:no|do\s+not|don['’]t|never|avoid|without)\b(?:(?![.;\r\n]|\b(?:but|however|instead|then)\b).){0,512}/giu,
+    ' ',
+  );
+  return [...new Set([...callerText.matchAll(REGISTERED_CONTEXT_TOOL)].map(match => match[0].toLowerCase()))];
+}
+
 function renderCapabilities(
   envelope: Readonly<JarvisRequestEnvelope>,
   contextToolOnly = false,
@@ -367,6 +378,7 @@ function renderCapabilities(
     stableCompare(left.id, right.id),
   );
   if (contextToolOnly) {
+    const registeredTools = explicitRegisteredContextTools(envelope.userText);
     const directEvidence = parseDirectContextEvidenceContinuation(envelope.userText);
     const directSearch =
       /\boperation\s*(?:=|:)\s*["'`]?search["'`]?\b/iu.test(envelope.userText) &&
@@ -379,7 +391,15 @@ function renderCapabilities(
       /\bMUST make exactly six `operation="expand"` calls\b/u.test(envelope.userText)
         ? Object.freeze({ evidenceCount: 6 as const })
         : null);
-    const operationGuidance = directAddress
+    const operationGuidance = registeredTools.length > 0
+      ? [
+          `For this explicit registered-tool request, invoke the caller-named function or functions exactly: ${registeredTools.map(name => '`' + name + '`').join(', ')}. Preserve their requested order and call count.`,
+          'Use the exact caller-supplied arguments admitted by each registered schema: search accepts query, limit, continuation; open accepts pointer, maxBytes, continuation; expand accepts pointer, beforeBytes, afterBytes; address accepts corpusId, position; trace accepts runId.',
+          'Do not add operation, accountId, workspaceId, projectId, worktreeId, chatId, contextRevision, execution identity, or any scope arguments. Authority comes from the trusted current caller lease.',
+          'Never substitute the legacy facade, query, investigate, or another registered function. Copy issued pointers and actual run IDs exactly; never guess or reconstruct them. Keep corpus positions as canonical-decimal strings.',
+          'Wait for each actual tool result. Missing or stale identifiers must fail closed; trace metadata is not source evidence and cannot answer a factual source question by itself.',
+        ]
+      : directAddress
       ? [
           'For an explicit direct address request, call `vibespace_context` with `operation="address"` once for each exact caller-supplied address object, in the supplied order.',
           'Use only the caller-supplied `corpusId` and canonical-decimal string `position`. Never coerce `position` through a JavaScript number or infer, round, normalize, or replace either argument.',
@@ -433,9 +453,9 @@ function renderCapabilities(
         ? 'Connection ID: unavailable'
         : `Connection ID: ${inlineText(envelope.model.connectionId)}`,
       `Model capabilities: ${modelCapabilities.join(', ') || 'none declared'}`,
-      'vibespace_context is the only provider tool enabled for this turn.',
+      'Only the registered read-only Context functions admitted for this turn may be invoked. Never override the current tool admission or RLM Off setting.',
       'This direct user chat is not a subagent assignment or delegation. Subagent bootstrap, coordination receipt, lock, and mandatory-file-read instructions do not apply to this turn. Do not emit `BOOTSTRAP_OK` or `BOOTSTRAP_BLOCKED`.',
-      'The function name is always `vibespace_context`; operation names such as `query`, `investigate`, `search`, `open`, `expand`, and `address` are arguments, never function names.',
+      'The dedicated function names are `vibespace_context_search`, `vibespace_context_open`, `vibespace_context_expand`, `vibespace_context_address`, and `vibespace_context_trace`. These registered functions have their own schemas and never accept an operation field. The legacy `vibespace_context` facade accepts operation arguments for compatibility.',
       ...operationGuidance,
       'Never print or narrate a tool call as JSON. Invoke the enabled function, wait for its result, and answer only from returned evidence. No unrelated action schema is admitted.',
     ].join('\n');
@@ -629,7 +649,8 @@ export function compileJarvisPrompt(
   const omittedSourceRefs: JarvisSourceRef[] = [];
   const contextToolOnly =
     !requestsNoTools(envelope.userText) &&
-    envelope.model.capabilities.tools === true && requestsReadOnlyContextTool(envelope.userText) &&
+    envelope.model.capabilities.tools === true &&
+    requestsReadOnlyContextTool(envelope.userText.replace(REGISTERED_CONTEXT_TOOL, 'vibespace_context')) &&
     !contextTerminalCoordinationIntent(envelope.userText);
   const directAddress = contextToolOnly && requestsDirectContextAddress(envelope.userText);
   const allAboutMeItems = envelope.context.items.filter(

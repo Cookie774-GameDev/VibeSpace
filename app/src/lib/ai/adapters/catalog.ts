@@ -111,7 +111,8 @@ export const CODEX_CLI_CONNECTION = externalConnection({
   displayName: 'Codex CLI',
   authSource: 'codex-cli-session',
   promptTransport: CODEX_CLI_DEFINITION.promptTransport,
-  capabilities: { tools: true },
+  // File paths become bounded, policy-checked text/metadata context before native dispatch.
+  capabilities: { files: true, tools: true },
   toolAllowlist: ['vibespace_context'],
 });
 

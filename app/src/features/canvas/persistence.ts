@@ -659,11 +659,18 @@ export function createCanvasPersistenceRepository(db: JarvisDexie): CanvasPersis
   const listRevisions: CanvasPersistenceRepository['listRevisions'] = async (scope, documentId) => {
     assertScope(scope);
     const docId: CanvasDocumentId = parseCanvasDocumentId(documentId);
-    const rows = await db.canvas_revisions
-      .where('[accountId+documentId]')
-      .equals([scope.accountId, docId])
-      .toArray();
-    return [...rows].sort((a, b) => a.sequence - b.sequence);
+    return db.transaction('r', [db.canvas_documents, db.canvas_revisions], async () => {
+      const document = await db.canvas_documents.get(docId);
+      if (
+        !document || document.accountId !== scope.accountId ||
+        document.projectId !== scope.projectId || document.ownerId !== scope.ownerId
+      ) return [];
+      const rows = await db.canvas_revisions
+        .where('[accountId+documentId]')
+        .equals([scope.accountId, docId])
+        .toArray();
+      return [...rows].sort((a, b) => a.sequence - b.sequence);
+    });
   };
 
   return {

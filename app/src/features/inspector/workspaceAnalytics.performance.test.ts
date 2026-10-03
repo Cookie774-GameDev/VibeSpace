@@ -6,6 +6,7 @@ const analyticsHarness = vi.hoisted(() => ({
 
 vi.mock('@/lib/accountIdentity', () => ({
   getActiveAccountIdentity: () => ({ accountId: 'account-a', source: 'local' }),
+  resolveAccountIdentity: () => ({ accountId: 'account-a', source: 'local' }),
 }));
 
 vi.mock('@/features/account/statusAnalytics', () => ({

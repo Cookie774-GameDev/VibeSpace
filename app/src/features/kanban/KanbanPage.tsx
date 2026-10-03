@@ -12,13 +12,11 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { useMilestonesStore } from '@/features/inspector/milestonesStore';
-import { useWorkspaceAnalyticsStore } from '@/features/inspector/workspaceAnalytics';
+import { useScopedMilestones, useScopedMilestoneDraft } from '@/features/inspector/useScopedMilestones';
 import { celebrate } from '@/features/celebrate';
 import { cn, formatRelative } from '@/lib/utils';
 import type { MilestoneItem } from '@/features/inspector/types';
 import { isMilestoneKind } from '@/features/inspector/types';
-import { useKanbanMilestones } from './hooks';
 import {
   useThemeLayoutTransition,
   useThemeMotionLayout,
@@ -59,14 +57,8 @@ function useReducedMotion(): boolean {
 export function KanbanPage() {
   const reducedMotion = useReducedMotion();
 
-  const items = useKanbanMilestones();
-  const addMilestone = useMilestonesStore((s) => s.addMilestone);
-  const updateMilestone = useMilestonesStore((s) => s.updateMilestone);
-  const removeMilestone = useMilestonesStore((s) => s.removeMilestone);
-  const toggleDone = useMilestonesStore((s) => s.toggleDone);
-  const clearCompletedTodos = useMilestonesStore((s) => s.clearCompletedTodos);
-
-  const completedMilestones = useWorkspaceAnalyticsStore((s) => s.completedMilestones);
+  const { items, ready, scopeKey, addMilestone, updateMilestone, removeMilestone,
+    toggleDone, clearCompletedTodos, completedMilestones } = useScopedMilestones();
 
   const todos = useMemo(
     () =>
@@ -91,31 +83,29 @@ export function KanbanPage() {
   const milestonePercent =
     milestones.length > 0 ? Math.round((milestoneDone / milestones.length) * 100) : 0;
 
-  const [todoDraft, setTodoDraft] = useState('');
-  const [milestoneDraft, setMilestoneDraft] = useState('');
+  const [todoDraft, setTodoDraft] = useScopedMilestoneDraft(scopeKey);
+  const [milestoneDraft, setMilestoneDraft] = useScopedMilestoneDraft(scopeKey);
   const [celebrateId, setCelebrateId] = useState<string | null>(null);
 
   const onCheck = (item: MilestoneItem) => {
+    if (!toggleDone(item.id)) return;
     if (item.status !== 'done') {
       setCelebrateId(item.id);
       celebrate('kanban_done', item.title);
       window.setTimeout(() => setCelebrateId(null), 900);
     }
-    toggleDone(item.id);
   };
 
   const addTodo = () => {
     const title = todoDraft.trim();
     if (!title) return;
-    addMilestone(title, 'todo');
-    setTodoDraft('');
+    if (addMilestone(title, 'todo')) setTodoDraft('');
   };
 
   const addMilestoneItem = () => {
     const title = milestoneDraft.trim();
     if (!title) return;
-    addMilestone(title, 'milestone');
-    setMilestoneDraft('');
+    if (addMilestone(title, 'milestone')) setMilestoneDraft('');
   };
 
   return (
@@ -130,7 +120,7 @@ export function KanbanPage() {
           <h1 className="font-display text-hero text-foreground">Kanban</h1>
           <p className="text-secondary text-muted-foreground max-w-xl">
             Knock out today&apos;s to-dos and track milestones that run for weeks. Everything syncs
-            live with the Inspector Trace panel.
+            live with the Inspector Trace panel. Only items assigned to this project are shown; older unassigned items are retained.
           </p>
         </div>
         <AnalyticsSummary
@@ -170,6 +160,7 @@ export function KanbanPage() {
               </Button>
             ) : null
           }
+          enabled={ready}
           draft={todoDraft}
           onDraftChange={setTodoDraft}
           onAdd={addTodo}
@@ -194,6 +185,7 @@ export function KanbanPage() {
           }
           accent="sage"
           progress={milestones.length > 0 ? milestonePercent : undefined}
+          enabled={ready}
           draft={milestoneDraft}
           onDraftChange={setMilestoneDraft}
           onAdd={addMilestoneItem}
@@ -218,6 +210,7 @@ interface ChecklistCardProps {
   accent: 'copper' | 'sage';
   action?: React.ReactNode;
   progress?: number;
+  enabled: boolean;
   draft: string;
   onDraftChange: (v: string) => void;
   onAdd: () => void;
@@ -241,6 +234,7 @@ function ChecklistCard({
   accent,
   action,
   progress,
+  enabled,
   draft,
   onDraftChange,
   onAdd,
@@ -308,6 +302,7 @@ function ChecklistCard({
       <div data-warm-surface="kanban-input" className="flex gap-1.5">
         <Input
           ref={inputRef}
+          disabled={!enabled}
           value={draft}
           onChange={(e) => onDraftChange(e.target.value)}
           onKeyDown={(e) => {
@@ -325,6 +320,7 @@ function ChecklistCard({
           size="sm"
           variant="accent"
           onClick={handleAddRequest}
+          disabled={!enabled}
           aria-label={`Add item to ${title}`}
           data-warm-action="kanban-add"
           data-warm-accent={accent}

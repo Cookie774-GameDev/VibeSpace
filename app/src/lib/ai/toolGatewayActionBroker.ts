@@ -94,8 +94,16 @@ export function createToolGatewayActionBroker(deps: {
     async decide(accountId: string, approvalId: string, choice: 'approve' | 'deny') {
       const waiter = pending.get(approvalId);
       if (!waiter || waiter.accountId !== accountId) return null;
-      if (deps.now() >= waiter.approval.expiresAt) throw Error('tool_action_expired');
-      const scope = await current(waiter.request);
+      let scope: ToolGatewayActionScope;
+      try {
+        if (deps.now() >= waiter.approval.expiresAt) throw Error('tool_action_expired');
+        scope = await current(waiter.request);
+      } catch (error) {
+        // The UI decision and provider tool request share one terminal outcome.
+        // Rejected authority must not leave the provider waiting for the timer.
+        waiter.reject(error instanceof Error ? error : Error('tool_action_decision_failed'));
+        throw error;
+      }
       if (waiter.decision) {
         if (waiter.decision.choice !== choice) throw Error('tool_action_decision_conflict');
         return waiter.decision.promise;

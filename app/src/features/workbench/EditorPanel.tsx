@@ -17,6 +17,7 @@ import {
 } from '@/features/preview/previewDevices';
 import type { WorkbenchPanel } from './types';
 import { EDITOR_LANGUAGES } from './editorLanguages';
+import { preserveEditorLineEndings } from './editorText';
 import { buildDevicePreviewDocument } from './editorPreview';
 import { useWorkbenchStore } from './store';
 import { WorkbenchSaveControls } from './WorkbenchSaveControls';
@@ -41,9 +42,22 @@ interface EditorPanelProps {
  */
 export function EditorPanel({ panel, onUpdate }: EditorPanelProps) {
   const projectId = useAuthStore((state) => state.projectId);
-  const rootDir = getStoredProjectRoot(projectId);
   const openDevicePreview = useWorkbenchStore((s) => s.openDevicePreview);
   const filePath = panel.settings.filePath;
+  const rootBinding = React.useRef({
+    filePath,
+    explicitRoot: panel.settings.cwd,
+    root: panel.settings.cwd || getStoredProjectRoot(projectId),
+  });
+  if (rootBinding.current.filePath !== filePath ||
+    rootBinding.current.explicitRoot !== panel.settings.cwd) {
+    rootBinding.current = {
+      filePath,
+      explicitRoot: panel.settings.cwd,
+      root: panel.settings.cwd || getStoredProjectRoot(projectId),
+    };
+  }
+  const rootDir = rootBinding.current.root;
   const [content, setContent] = React.useState(panel.settings.note ?? '');
   const [savedContent, setSavedContent] = React.useState(panel.settings.note ?? '');
   const [loading, setLoading] = React.useState(false);
@@ -219,10 +233,11 @@ export function EditorPanel({ panel, onUpdate }: EditorPanelProps) {
   };
 
   const onChange = (value: string) => {
-    setContent(value);
+    const next = preserveEditorLineEndings(content, value);
+    setContent(next);
     if (!filePath) {
       onUpdate({
-        settings: { ...panel.settings, note: value.slice(0, 40_000) },
+        settings: { ...panel.settings, note: next.slice(0, 40_000) },
         status: 'busy',
       });
     } else {

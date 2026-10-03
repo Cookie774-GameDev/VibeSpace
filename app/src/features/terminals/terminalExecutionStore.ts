@@ -48,6 +48,8 @@ export interface TerminalExecution {
   timedOut?: boolean;
   settlementError?: string;
   processIdentity?: TerminalProcessIdentity;
+  /** Only set after an empty-command create has a verified native attachment/result. */
+  creationAcknowledged?: boolean;
   updatedAt: number;
 }
 
@@ -210,6 +212,7 @@ type CanonicalExecutionRecord = {
   processIdentity?: TerminalProcessIdentity;
   cancellationRequestId?: string;
   claimed: boolean;
+  creationAcknowledged?: boolean;
   settled: boolean;
   disposed: boolean;
   settlement?: Promise<void>;
@@ -223,7 +226,7 @@ const canonicalSessionOwners = new Map<string, string>();
 const canonicalProcessOwners = new Map<string, string>();
 const pendingLegacyProcessAttachments = new Map<string, TerminalProcessAttachment>();
 const pendingNativeExits = new Map<string, NativeTerminalExitPayload>();
-const settledCanonicalExecutions = new Map<string, { processIdentity?: TerminalProcessIdentity }>();
+const settledCanonicalExecutions = new Map<string, { processIdentity?: TerminalProcessIdentity; creationAcknowledged?: boolean }>();
 let terminalExitListener: Promise<void> | undefined;
 
 function stableIdentifier(value: string, label: string): string {
@@ -508,6 +511,7 @@ function disposeRecord(record: CanonicalExecutionRecord): void {
 function rememberSettledRecord(record: CanonicalExecutionRecord): void {
   settledCanonicalExecutions.delete(record.request.executionId);
   settledCanonicalExecutions.set(record.request.executionId, {
+    ...(record.creationAcknowledged ? { creationAcknowledged: true } : {}),
     ...(record.processIdentity === undefined ? {} : { processIdentity: record.processIdentity }),
   });
   while (settledCanonicalExecutions.size > MAX_EXECUTIONS) {
@@ -864,6 +868,24 @@ export function hasCanonicalTerminalExecution(executionId: string | undefined): 
   return canonicalExecutionId(executionId);
 }
 
+export function isCompletedTerminalCreation(executionId: string | undefined, sessionId: string | null | undefined): boolean {
+  if (!executionId || !sessionId || settledCanonicalExecutions.get(executionId)?.creationAcknowledged !== true) return false;
+  const execution=useTerminalExecutionStore.getState().executions[executionId];
+  return execution?.status==='complete' && execution.creationAcknowledged===true &&
+    execution.sessionId===sessionId && execution.processIdentity?.sessionId===sessionId;
+}
+
+export function isUnclaimedCanonicalTerminalHandoff(accountId: string, runId: string, executionId: string): boolean {
+  const record=canonicalExecutions.get(executionId);
+  if (!record || record.disposed || record.settled || record.claimed || record.sessionId ||
+    record.request.accountId !== accountId || record.request.runId !== runId) return false;
+  // Whole-run cancellation cannot outrun a sibling terminal's verified native exit.
+  return ![...canonicalExecutions.values()].some((sibling) =>
+    sibling.request.accountId === accountId && sibling.request.runId === runId &&
+    !sibling.disposed && !sibling.settled && (sibling.claimed || Boolean(sibling.sessionId)));
+
+}
+
 export function markTerminalExecution(
   id: string | undefined,
   status: TerminalExecutionStatus,
@@ -1044,6 +1066,7 @@ export async function attachTerminalExecution(
     ) {
       canonicalSessionOwners.set(stableSessionId, id);
       canonicalProcessOwners.set(processIdentity.processInstanceId, id);
+      if (!record.request.command.trim() && record.settlement) await record.settlement;
       return true;
     }
     const previousSessionId = record.sessionId;
@@ -1065,6 +1088,28 @@ export async function attachTerminalExecution(
     if (pendingExit) {
       pendingNativeExits.delete(pendingKey);
       await settleTerminalExecutionFromNativeExit(id, pendingExit);
+    } else if (!record.request.command.trim() && !record.cancellationRequestId) {
+      // terminal.create completes when its own native pane exists. CLI launches
+      // retain their process lifetime and settle only through verified native exit.
+      if (!record.settlement) {
+        record.settlement=(async()=>{
+          const completedAt=Date.now();
+          const outcome=await record.controller.recordResult({state:'completed',
+            resultRef:`jterminal_created:${id}:${processIdentity.sessionId}:${processIdentity.processInstanceId}`,
+            completedAt});
+          if (outcome.kind!=='committed') throw new TypeError(`result_${outcome.kind}`);
+          record.creationAcknowledged = true;
+          markCanonical(id,'complete',{sessionId:stableSessionId,processIdentity,creationAcknowledged:true});
+          record.settled=true;disposeRecord(record);rememberSettledRecord(record);
+        })().catch((error: unknown) => {
+          // Keep the exact native owner until cleanup produces a verified exit.
+          // A failed journal commit is never an acknowledged creation.
+          record.settlement = undefined;
+          markCanonical(id, 'failed', { settlementError: 'terminal_creation_commit_failed' });
+          throw error;
+        });
+      }
+      await record.settlement;
     }
     return true;
   }
@@ -1373,3 +1418,28 @@ export async function settleTerminalExecutionFromNativeExit(
   await record.settlement;
   return true;
 }
+
+/** @internal Metadata from issued records joined to actual native process identity only. */
+export async function readRunTerminalOwnershipDiagnostic(scope: Readonly<{ accountId: string; runId: string }>) {
+  const records = [...canonicalExecutions.values()].filter(record =>
+    record.request.accountId === scope.accountId && record.request.runId === scope.runId &&
+    !record.disposed && !record.settled);
+  if (records.length > 100) throw new Error('diagnostic_terminal_bound');
+  const native = await invoke<readonly Readonly<NativeTerminalProcessBinding & {
+    sessionId: string; projectId: string | null;
+  }>[]>('terminal_list');
+  return records.map(record => {
+    const identity = record.processIdentity;
+    const matched = identity ? native.some(row =>
+      row.sessionId === identity.sessionId && row.projectId === identity.projectId &&
+      row.runtimeGeneration === identity.runtimeGeneration &&
+      row.processInstanceId === identity.processInstanceId && row.pid === identity.pid &&
+      row.processStartedAt === identity.processStartedAt) : false;
+    return Object.freeze({
+      executionId: record.request.executionId, claimed: record.claimed,
+      sessionBound: Boolean(record.sessionId), nativeActive: identity ? matched : null,
+      runtimeGeneration: matched ? identity!.runtimeGeneration : null,
+    });
+  });
+}
+export { readRunTerminalQueueDiagnostic } from './terminalCommandQueue';

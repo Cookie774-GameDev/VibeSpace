@@ -15,7 +15,7 @@ import {
 } from '@/features/jarvis-runs/approvalBridge';
 import { resolveAction } from '@/lib/actions';
 import type { ActionRunContext } from '@/lib/actions/types';
-import type { JarvisRun } from '@/lib/jarvis/contracts';
+import type { JarvisApprovalV1, JarvisRun } from '@/lib/jarvis/contracts';
 import type {
   JarvisCanonicalActionExecutionResult,
   JarvisKernelActionPort,
@@ -237,7 +237,17 @@ function continueAfterSettledApproval(input: {
 }
 
 /** Canonical cards load bounded presentation and mutate only through the host bridge. */
-export function ActionApprovalCard({
+export function ActionApprovalCard(props: ActionApprovalCardProps) {
+  // A new protected request must not inherit another request's details or decision.
+  return (
+    <ApprovalRequestCard
+      key={JSON.stringify([props.chatId, props.messageId, props.part.call_id])}
+      {...props}
+    />
+  );
+}
+
+function ApprovalRequestCard({
   part,
   presentation,
   chatId,
@@ -261,7 +271,10 @@ export function ActionApprovalCard({
   const visual = STATUS_VISUALS[displayStatus] ?? STATUS_VISUALS.pending;
   const Icon = definition?.icon ?? HelpCircle;
   const StatusIcon = visual.icon;
-  const terminalCopy = resultLine(displayStatus, part.error);
+  const [approvalExpired, setApprovalExpired] = React.useState(false);
+  const terminalCopy = approvalExpired
+    ? 'Approval expired. The action was not run. Review a new request if it is still needed.'
+    : resultLine(displayStatus, part.error);
   const [decisionState, setDecisionState] = React.useState<
     'idle' | 'busy' | 'submitted' | 'failed'
   >('idle');
@@ -274,6 +287,64 @@ export function ActionApprovalCard({
     part.action_id === 'terminal.run';
 
   React.useEffect(() => setDisplayStatus(part.status), [part.status]);
+  React.useEffect(() => {
+    // Terminal canonical proposals still need protected status readback on reload.
+    if (!approvalId || (part.status !== 'pending' && part.status !== 'cancelled')) return;
+    const identity = getActiveAccountIdentity();
+    if (!identity) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stillOwned = () => !disposed && getActiveAccountIdentity()?.accountId === identity.accountId;
+    const reflect = (status: JarvisApprovalV1['status']) => {
+      if (!stillOwned()) return;
+      if (status === 'expired' || status === 'denied') {
+        setApprovalExpired(status === 'expired');
+        setDisplayStatus('cancelled');
+        setDecisionState('submitted');
+      }
+    };
+    const refresh = async () => {
+      try {
+        const { expireInstalledJarvisApproval } = await import('@/lib/ai/runtime');
+        if (!stillOwned()) return;
+        const state = await expireInstalledJarvisApproval({ accountId: identity.accountId, approvalId });
+        if (!stillOwned()) return;
+        if (state.approvalId !== approvalId || !Number.isFinite(state.expiresAt)) {
+          throw new Error('kernel_expiry_state_unverified');
+        }
+        reflect(state.status);
+        if (state.status === 'pending' && part.status === 'pending') {
+          const remaining = state.expiresAt - Date.now();
+          if (remaining <= 0) throw new Error('kernel_expiry_not_settled');
+          timer = setTimeout(() => void refresh(), Math.min(remaining, 2_147_483_647));
+        }
+      } catch {
+        if (!stillOwned()) return;
+        // A raced decision can commit while expiry reports an uncertain result.
+        // Only a protected status readback may change the presentation.
+        try {
+          const { createJarvisKernelClient } = await import('@/lib/jarvis/kernelClient');
+          const client = createJarvisKernelClient();
+          try {
+            const state = await client.getApprovalStatus({ accountId: identity.accountId, approvalId });
+            if (!stillOwned()) return;
+            if (state.kind !== 'approval_state' || state.accountId !== identity.accountId || state.approvalId !== approvalId) {
+              throw new Error('kernel_expiry_status_unverified');
+            }
+            reflect(state.status);
+            if (state.status === 'expired' || state.status === 'denied') return;
+          } finally { client.dispose(); }
+        } catch { /* retain pending when protected state cannot be verified */ }
+        if (stillOwned()) {
+          setDecisionState('failed');
+          setDecisionFailure('verification');
+        }
+      }
+    };
+    void refresh();
+    return () => { disposed = true; if (timer !== undefined) clearTimeout(timer); };
+  }, [approvalId, part.status]);
+
 
   React.useEffect(() => {
     if (!presentation) return;

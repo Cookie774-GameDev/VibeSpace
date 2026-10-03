@@ -1,3 +1,4 @@
+import { createRunOwnershipDiagnostic, type RunOwnershipDiagnosticPorts } from '@/lib/jarvis/executionJournal/runOwnershipDiagnostic';
 import Dexie from 'dexie';
 import {
   assertActionRequestLive,
@@ -362,6 +363,9 @@ export interface JarvisVoiceRecoveryHandle {
 }
 
 export interface JarvisKernelRuntime {
+  /** @internal No renderer/model/native public dispatcher registration. */
+  inspectRunOwnership(input: Readonly<{ accountId: string; runId: string }>):
+    ReturnType<ReturnType<typeof createRunOwnershipDiagnostic>['inspect']>;
   readonly actions: JarvisKernelActionPort;
   runInitialTurn(
     input: Readonly<JarvisKernelTurnInput>,
@@ -444,6 +448,7 @@ type VerifierSlots = Readonly<{
 }>;
 
 type KernelRuntimeInput = Readonly<{
+  runOwnershipDiagnosticPorts?: RunOwnershipDiagnosticPorts;
   db: JarvisDexie;
   artifactEvidenceAuthorities: CanonicalArtifactEvidenceAuthorities;
   journal: Pick<JarvisExecutionJournal, 'allocateRun' | 'getRun'> &
@@ -451,6 +456,11 @@ type KernelRuntimeInput = Readonly<{
   cancellationDeliveryAuthority: JarvisCancellationDeliveryAuthority;
   abortRegistrationAuthority: JarvisAbortRegistrationAuthority;
   bindKernelActions: JarvisApprovalActionBinder;
+  registerApprovalExpiryDisposal?(dispose: () => void): void;
+  onActionResponseExpired?(input: Readonly<{
+    accountId: string; runId: string; requestId: string; attemptNumber: number;
+    chatId?: string; completedAt: number;
+  }>): void;
   actionCatalog?: JarvisActionCatalog;
   pluginArtifactResults?: Readonly<{
     consumeCanonicalResult(input: {
@@ -1666,6 +1676,7 @@ export function createJarvisKernelRuntime(
     suppliedParent: JarvisRun,
     suppliedAttempt?: Readonly<{ runId: string; requestId: string; attemptNumber: number }>,
     responseBackedApprovalId?: string,
+    allowExpiredResponseRecovery = false,
   ): Promise<CanonicalActionScope> => {
     const canonicalParent = await repositories.run.getById(
       suppliedParent.accountId,
@@ -1753,7 +1764,8 @@ export function createJarvisKernelRuntime(
           attemptNumber: providerScope.attemptNumber,
         });
       }
-      if (canonicalParent.status !== 'awaiting_approval') {
+      if (canonicalParent.status !== 'awaiting_approval' &&
+          !(allowExpiredResponseRecovery && canonicalParent.status === 'running')) {
         throw new Error('kernel_action_scope_mismatch');
       }
       const approval = await repositories.approval.getById(
@@ -1762,7 +1774,9 @@ export function createJarvisKernelRuntime(
       );
       if (
         !approval ||
-        !['pending', 'approved'].includes(approval.status) ||
+        !(['pending', 'approved'].includes(approval.status) ||
+          (allowExpiredResponseRecovery && approval.status === 'expired')) ||
+        (canonicalParent.status === 'running' && approval.status !== 'expired') ||
         approval.runId !== canonicalParent.id ||
         approval.requestId !== providerScope.requestId ||
         approval.attemptNumber !== providerScope.attemptNumber
@@ -3863,6 +3877,33 @@ export function createJarvisKernelRuntime(
     return handle;
   };
 
+  const approvalExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const disarmApprovalExpiry = (approvalId: string) => {
+    const timer = approvalExpiryTimers.get(approvalId);
+    if (timer !== undefined) clearTimeout(timer);
+    approvalExpiryTimers.delete(approvalId);
+  };
+  input.registerApprovalExpiryDisposal?.(() => {
+    for (const id of approvalExpiryTimers.keys()) disarmApprovalExpiry(id);
+  });
+  const armActionResponseExpiry = async (run: JarvisRun, approvalId: string) => {
+    const approval = await repositories.approval.getById(run.accountId, approvalId);
+    if (!approval || approval.runId !== run.id || approval.status !== 'pending') return;
+    disarmApprovalExpiry(approvalId);
+    const fire = () => {
+      approvalExpiryTimers.delete(approvalId);
+      if (input.now() < approval.expiresAt) { schedule(); return; }
+      void actions.expire?.({ parentRun: run, approvalId }).catch(() => {
+        console.warn('Canonical approval expiry failed closed.');
+      });
+    };
+    const schedule = () => {
+      const timer = setTimeout(fire, Math.min(2_147_483_647, Math.max(0, approval.expiresAt - input.now())));
+      (timer as unknown as { unref?: () => void }).unref?.();
+      approvalExpiryTimers.set(approvalId, timer);
+    };
+    schedule();
+  };
   const actions: JarvisKernelActionPort = Object.freeze({
     async create(actionInput: Parameters<JarvisKernelActionPort['create']>[0]) {
       const scope = await loadCanonicalActionScope(actionInput.parentRun, actionInput.attempt);
@@ -3891,6 +3932,7 @@ export function createJarvisKernelRuntime(
         let value: JarvisApprovalV1;
         try {
           value = await capability.decide({ ...actionInput, parentRun });
+          disarmApprovalExpiry(value.id);
         } catch {
           throw new Error('kernel_action_decide_decision_failed');
         }
@@ -3920,6 +3962,42 @@ export function createJarvisKernelRuntime(
         return value;
       });
     },
+    async expire(actionInput: Parameters<NonNullable<JarvisKernelActionPort['expire']>>[0]) {
+      let scope: CanonicalActionScope;
+      try {
+        scope = await loadCanonicalActionScope(actionInput.parentRun, undefined, actionInput.approvalId, true);
+      } catch { throw new Error('kernel_action_expire_scope_failed'); }
+      return invokeActionCapability(scope, async (capability, parentRun, binding) => {
+        if (!capability.expire || !(await hasActionResponseCheckpoint(scope, actionInput.approvalId)))
+          throw new Error('kernel_action_expire_capability_unavailable');
+        let approval: JarvisApprovalV1;
+        try { approval = await capability.expire({ ...actionInput, parentRun }); }
+        catch { throw new Error('kernel_action_expire_decision_failed'); }
+        if (approval.status !== 'expired') throw new Error('kernel_action_expire_decision_failed');
+        const current = await repositories.run.getById(parentRun.accountId, parentRun.id);
+        if (!current) throw new Error('kernel_action_expire_scope_failed');
+        const finalized = await artifacts.commitKernelTurn.finalizeActionResponse({
+          accountId: parentRun.accountId, runId: parentRun.id, requestId: scope.requestId,
+          attemptNumber: scope.attemptNumber, approvalId: approval.id, messageId: `msg_${scope.requestId}`,
+          accountBinding: binding, outcome: 'expired', resultRef: `japproval_expired:${approval.id}`,
+          completedAt: Math.max(input.now(), current.updatedAt),
+        });
+        if (!finalized.committed) throw new Error('kernel_action_expire_finalize_failed');
+        disarmApprovalExpiry(approval.id);
+        binding.assertCurrent();
+        const settled = await repositories.run.getById(parentRun.accountId, parentRun.id);
+        binding.assertCurrent();
+        if (!settled || settled.status !== 'cancelled') throw new Error('kernel_action_expire_finalize_failed');
+        try {
+          input.onActionResponseExpired?.({
+            accountId: parentRun.accountId, runId: parentRun.id, requestId: scope.requestId,
+            attemptNumber: scope.attemptNumber, ...(settled.chatId ? { chatId: settled.chatId } : {}),
+            completedAt: settled.updatedAt,
+          });
+        } catch { console.warn('Canonical approval expiry projection failed closed.'); }
+        return approval;
+      });
+    },
     async execute(actionInput: Parameters<JarvisKernelActionPort['execute']>[0]) {
       const scope = await loadCanonicalActionScope(
         actionInput.parentRun,
@@ -3929,6 +4007,7 @@ export function createJarvisKernelRuntime(
       return invokeActionCapability(scope, async (capability, parentRun, binding) => {
         const responseBacked = await hasActionResponseCheckpoint(scope, actionInput.approvalId);
         const value = await capability.execute({ ...actionInput, parentRun });
+        disarmApprovalExpiry(actionInput.approvalId);
         if (responseBacked && value.kind === 'handoff_pending') {
           const current = await repositories.run.getById(parentRun.accountId, parentRun.id);
           if (!current) throw new Error('kernel_action_scope_mismatch');
@@ -4161,11 +4240,16 @@ export function createJarvisKernelRuntime(
           artifactEffectClaims: boundArtifactEffectClaims,
           takeProviderArtifactDrafts: input.takeProviderArtifactDrafts,
           responseActions,
-          commitActionResponseReady(commitInput) {
-            return artifacts.commitKernelTurn.commitActionResponseReady({
+          async commitActionResponseReady(commitInput) {
+            const committed = await artifacts.commitKernelTurn.commitActionResponseReady({
               ...commitInput,
               accountBinding: binding,
             });
+            if (committed.committed) {
+              try { await armActionResponseExpiry(committed.run, commitInput.approvalId); }
+              catch { console.warn('Canonical approval expiry scheduling failed closed.'); }
+            }
+            return committed;
           },
           commitKernelTurn(commitInput) {
             return artifacts.commitKernelTurn.commitKernelTurn({
@@ -4250,11 +4334,16 @@ export function createJarvisKernelRuntime(
           artifactEffectClaims: boundArtifactEffectClaims,
           takeProviderArtifactDrafts: input.takeProviderArtifactDrafts,
           responseActions,
-          commitActionResponseReady(commitInput) {
-            return artifacts.commitKernelTurn.commitActionResponseReady({
+          async commitActionResponseReady(commitInput) {
+            const committed = await artifacts.commitKernelTurn.commitActionResponseReady({
               ...commitInput,
               accountBinding: binding,
             });
+            if (committed.committed) {
+              try { await armActionResponseExpiry(committed.run, commitInput.approvalId); }
+              catch { console.warn('Canonical approval expiry scheduling failed closed.'); }
+            }
+            return committed;
           },
           commitKernelTurn(commitInput) {
             return artifacts.commitKernelTurn.commitKernelTurn({
@@ -4269,6 +4358,15 @@ export function createJarvisKernelRuntime(
       } finally {
         binding.dispose();
       }
+    },
+    async inspectRunOwnership(diagnosticInput: Readonly<{ accountId: string; runId: string }>) {
+      const binding = issueAccountBinding(diagnosticInput.accountId);
+      try {
+        return await createRunOwnershipDiagnostic({
+          repositories, assertIssuedBinding: assertIssuedAccountBinding,
+          ports: input.runOwnershipDiagnosticPorts,
+        }).inspect(binding, diagnosticInput.runId);
+      } finally { binding.dispose(); }
     },
     async requestCancellation(cancelInput: {
       accountId: string;
@@ -4809,11 +4907,16 @@ export function createJarvisKernelRuntime(
           artifactEffectClaims: boundArtifactEffectClaims,
           takeProviderArtifactDrafts: input.takeProviderArtifactDrafts,
           responseActions,
-          commitActionResponseReady(commitInput) {
-            return artifacts.commitKernelTurn.commitActionResponseReady({
+          async commitActionResponseReady(commitInput) {
+            const committed = await artifacts.commitKernelTurn.commitActionResponseReady({
               ...commitInput,
               accountBinding: state.binding,
             });
+            if (committed.committed) {
+              try { await armActionResponseExpiry(committed.run, commitInput.approvalId); }
+              catch { console.warn('Canonical approval expiry scheduling failed closed.'); }
+            }
+            return committed;
           },
           commitKernelTurn(commitInput) {
             return artifacts.commitKernelTurn.commitKernelTurn({
@@ -5624,11 +5727,16 @@ export function createJarvisKernelRuntime(
           artifactEffectClaims: boundArtifactEffectClaims,
           takeProviderArtifactDrafts: input.takeProviderArtifactDrafts,
           responseActions,
-          commitActionResponseReady(commitInput) {
-            return artifacts.commitKernelTurn.commitActionResponseReady({
+          async commitActionResponseReady(commitInput) {
+            const committed = await artifacts.commitKernelTurn.commitActionResponseReady({
               ...commitInput,
               accountBinding: binding,
             });
+            if (committed.committed) {
+              try { await armActionResponseExpiry(committed.run, commitInput.approvalId); }
+              catch { console.warn('Canonical approval expiry scheduling failed closed.'); }
+            }
+            return committed;
           },
           commitKernelTurn(commitInput) {
             return artifacts.commitKernelTurn.commitKernelTurn({

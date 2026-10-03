@@ -415,7 +415,7 @@ export function Account({ profileOnly = true }: { profileOnly?: boolean }) {
       recordPortableSuccess(portableAccountId, 'export');
       setPortableState('idle');
       setPortableMessage(
-        `Saved ${result.counts.workspaces} workspace${result.counts.workspaces === 1 ? '' : 's'}, ${result.counts.chats} chat${result.counts.chats === 1 ? '' : 's'}, and ${result.counts.canvasDocuments} canvas${result.counts.canvasDocuments === 1 ? '' : 'es'}.`,
+        `Saved ${result.counts.workspaces} workspace${result.counts.workspaces === 1 ? '' : 's'}, ${result.counts.chats} chat${result.counts.chats === 1 ? '' : 's'}, and ${result.counts.canvasDocuments} canvas${result.counts.canvasDocuments === 1 ? '' : 'es'}.${result.counts.tasks ? ` ${result.counts.tasks} task${result.counts.tasks === 1 ? '' : 's'} included.` : ''}`,
       );
       toast.success('Portable backup created', result.filename);
     } catch (error) {
@@ -916,6 +916,14 @@ export function Account({ profileOnly = true }: { profileOnly?: boolean }) {
                 Canvases in file
               </span>
             </div>
+            <p className="mt-2 text-metadata text-muted-foreground">
+              Tasks in file: <strong className="text-foreground">{portablePreview.counts.tasks ?? 0}</strong>
+            </p>
+            {(portablePreview.counts.tasks ?? 0) > 0 ? (
+              <p className="mt-2 text-metadata text-muted-foreground">
+                Imported pending reminders stay dismissed until you reschedule them.
+              </p>
+            ) : null}
             {portablePreview.restorable > 0 ? (
               <>
                 <label className="mt-3 flex items-start gap-2 text-metadata text-muted-foreground">

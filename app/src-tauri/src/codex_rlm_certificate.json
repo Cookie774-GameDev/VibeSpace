@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "proofScope": "pinned-binary-config-loopback",
+  "runtimeSha256": "fcd5eafefb4ff4a607f244e099e0974f66e17966b6ffda6948de2ef3a7a79530",
+  "version": "codex-cli 0.159.2",
+  "commonToolPolicy": [
+    "--ignore-user-config",
+    "--ephemeral",
+    "--json",
+    "--skip-git-repo-check",
+    "read-only",
+    "gpt-6-luna",
+    "approval_policy=\"never\"",
+    "model_reasoning_effort=\"low\"",
+    "web_search=\"disabled\"",
+    "project_doc_max_bytes=0",
+    "features.shell_tool=false",
+    "features.unified_exec=false",
+    "features.apps=false",
+    "features.multi_agent=false",
+    "features.multi_agent_v2=false",
+    "features.image_generation=false",
+    "features.view_image=false",
+    "features.skill_search=false",
+    "features.workspace_dependencies=false",
+    "features.remote_plugin=false",
+    "features.hooks=false",
+    "features.memories=false",
+    "features.code_mode_host=false",
+    "features.code_mode=false",
+    "features.default_mode_request_user_input=false"
+  ],
+  "policyArgvHashes": {
+    "standard": "e4d0f6dd2020de2cad1a9a72f67669c0198e585360171875a0609cce62c2b1da",
+    "priority": "03754b95a73782a5a31f8fc83376a1fb616e016076cf80e96244fd6c8f4a0560"
+  },
+  "environmentMode": "clear-allowlist-native-os-and-same-auth-home",
+  "productionAuthRoute": "forced ChatGPT; checked separately by actual account/read equality",
+  "positiveControlScope": "Synthetic readonly MCP enabled only for fixture to prove actual host handler; production MCP disabled",
+  "authenticatedModelControlsVerified": false,
+  "nativeModelAcceptance": "pending",
+  "policyRevision": "reserved-openai-override-removal",
+  "previousCertificateSha256": "77fab9f37813598bf35805e66730dccae940413312f9dfce9752f197b468b3f9",
+  "policyChange": "Remove only the two rejected model_providers.openai retry overrides; common tool policy unchanged",
+  "startupRejectionReceiptSha256": "62696933c176373ea918285110322bf6edeb721422dab02da5ab49563df5c89c",
+  "currentPolicyStartupVerified": false,
+  "networkRetryPolicy": "Inherited built-in OpenAI defaults; native timeout and containment bound the process. Zero first-party retries are not certified",
+  "requiredNativeVerification": "Updated binary/certificate + same-account binding; no-turn must reach empty-prompt exit, then authenticated nonce and negative controls",
+  "controls": [
+    {
+      "name": "positive-mcp-plain",
+      "receiptSha256": "67da7e2250504f54f92d76719ccab2af9dcbcafa3747effb03903b93f9b1a090",
+      "nonceObserved": true,
+      "hostFixtureCalls": 1,
+      "scope": "extra readonly MCP fixture protocol positive; not production MCP enablement",
+      "requestCount": 2,
+      "completed": true
+    },
+    {
+      "name": "positive-mcp-plain-fast",
+      "receiptSha256": "ca6bfba2782c7296c1b36214059bf8d9aa2f13938b7e38a47cae2cba8a2ded57",
+      "nonceObserved": true,
+      "hostFixtureCalls": 1,
+      "scope": "extra readonly MCP fixture protocol positive; not production MCP enablement",
+      "requestCount": 2,
+      "completed": true
+    },
+    {
+      "name": "negative-mcp-plain",
+      "receiptSha256": "03ac509135390f1acc56536229e982fc4c70525c8c7312d21603daed02b2aa1e",
+      "nonceObserved": true,
+      "hostFixtureCalls": 0,
+      "scope": "fixed tool-policy negative; isolated loopback",
+      "requestCount": 2,
+      "completed": true
+    },
+    {
+      "name": "negative-apps-plain",
+      "receiptSha256": "5dbad2edcb144611bbcb62fa8a8b5d96528b47123ec6b9f076919556873c79cf",
+      "nonceObserved": true,
+      "hostFixtureCalls": 0,
+      "scope": "fixed tool-policy negative; isolated loopback",
+      "requestCount": 2,
+      "completed": true
+    },
+    {
+      "name": "negative-builtin-update_plan",
+      "receiptSha256": "d4f0da909abd2d86805211e9f166f0f434b82df715774bb54ae7c7239c4b51f2",
+      "nonceObserved": true,
+      "hostFixtureCalls": 0,
+      "scope": "fixed tool-policy negative; isolated loopback",
+      "requestCount": 2,
+      "completed": true
+    },
+    {
+      "name": "negative-builtin-exec_command",
+      "receiptSha256": "ec3009742db6c1a0764fa0576ee570ee99ea9c110dd6938bae27ff6b163ba88a",
+      "nonceObserved": true,
+      "hostFixtureCalls": 0,
+      "scope": "fixed tool-policy negative; isolated loopback",
+      "requestCount": 2,
+      "completed": true
+    },
+    {
+      "name": "negative-builtin-shell_command",
+      "receiptSha256": "0e98de9860ecf0186c1544ca9fb4491dfdfd826776e316614df5812af3dde9fb",
+      "nonceObserved": true,
+      "hostFixtureCalls": 0,
+      "scope": "fixed tool-policy negative; isolated loopback",
+      "requestCount": 2,
+      "completed": true
+    },
+    {
+      "name": "negative-builtin-skills.list",
+      "receiptSha256": "ff06b96999a70f37600b3db1c62cd61756743afcdc03fb179c3841fb78ef5186",
+      "nonceObserved": true,
+      "hostFixtureCalls": 0,
+      "scope": "fixed tool-policy negative; isolated loopback",
+      "requestCount": 2,
+      "completed": true
+    },
+    {
+      "name": "negative-builtin-request_user_input",
+      "receiptSha256": "0e6b2622b3d156afd1d0c11742c7c5a3b99026b8b0aa3da8a7e1d2b14e45005c",
+      "nonceObserved": true,
+      "hostFixtureCalls": 0,
+      "scope": "fixed tool-policy negative; isolated loopback",
+      "requestCount": 2,
+      "completed": true
+    }
+  ]
+}

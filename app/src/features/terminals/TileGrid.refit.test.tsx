@@ -200,6 +200,28 @@ describe('TileGrid terminal refit scheduling', () => {
     }
   });
 
+  it('kills the exact acknowledged create shell before closing without cancelling its completed run', async () => {
+    const kill = vi.fn(async () => undefined);
+    const forget = vi.fn();
+    const requestCanonical = vi.fn(async () => null);
+    await expect(requestTerminalLeafClose({ executionId: 'jterm_1', sessionId: 'pty_1' }, {
+      isCompletedCreation: (executionId, sessionId) => executionId === 'jterm_1' && sessionId === 'pty_1',
+      isCanonical: () => true, kill, forget, requestCanonical,
+    })).resolves.toBe('manual_closed');
+    expect(kill).toHaveBeenCalledExactlyOnceWith('pty_1');
+    expect(forget).toHaveBeenCalledExactlyOnceWith('pty_1');
+    expect(requestCanonical).not.toHaveBeenCalled();
+  });
+
+  it('retains an acknowledged create pane when its native kill fails', async () => {
+    const forget = vi.fn();
+    await expect(requestTerminalLeafClose({ executionId: 'jterm_1', sessionId: 'pty_1' }, {
+      isCompletedCreation: () => true,
+      kill: async () => { throw new Error('native kill failed'); }, forget,
+    })).rejects.toThrow('native kill failed');
+    expect(forget).not.toHaveBeenCalled();
+  });
+
   it('rejects unavailable canonical pane close truth without a raw kill', async () => {
     const requestCanonical = vi.fn(async () => null);
     const kill = vi.fn(async () => undefined);

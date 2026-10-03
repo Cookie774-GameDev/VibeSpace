@@ -1,3 +1,4 @@
+import { recordOpenCodeToolPolicyReceipt, toolReceiptBinding } from './providerToolSchemaReceipt';
 import { openCodeToolDetails } from '../publicToolDetails';
 import { selectOpenCodeDispatchPrompt } from './restoredConversationPrompt';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
@@ -337,6 +338,11 @@ function awaitOpenCodePreparation<T>(pending: Promise<T>, signal?: AbortSignal):
 }
 
 class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
+  private readonly toolReceiptBindings = new Map<string, Awaited<ReturnType<typeof toolReceiptBinding>>>();
+  bindToolReceipt(sessionId: string, binding: Awaited<ReturnType<typeof toolReceiptBinding>>): () => void {
+    this.toolReceiptBindings.set(sessionId, binding);
+    return () => { if (this.toolReceiptBindings.get(sessionId) === binding) this.toolReceiptBindings.delete(sessionId); };
+  }
   constructor(readonly handle: OpenCodeServerHandle) {}
 
   readonly global = {
@@ -395,8 +401,15 @@ class OpenCodeHttpSdk implements OpenCodeSdkClientLike {
       return sendOpenCodePromptOnce({
         sessionId: input.path.id,
         messageId,
-        send: () => requestJson(this.handle.generation, this.handle.scope, `${path}/prompt_async`,
-          { method: 'POST', body: JSON.stringify({ ...input.body, messageID: messageId }) }, 30_000),
+        send: async () => {
+          const binding = this.toolReceiptBindings.get(input.path.id);
+          // Dispatch intent is not delivery or schema acceptance.
+          if (binding) recordOpenCodeToolPolicyReceipt(binding, input.body, messageId, input.path.id, 'dispatch-started');
+          const result = await requestJson(this.handle.generation, this.handle.scope, path + '/prompt_async',
+            { method: 'POST', body: JSON.stringify({ ...input.body, messageID: messageId }) }, 30_000);
+          if (binding) recordOpenCodeToolPolicyReceipt(binding, input.body, messageId, input.path.id, 'http-accepted');
+          return result;
+        },
         messages: () => requestJson(this.handle.generation, this.handle.scope, `${path}/message`, {}, 5_000),
       });
     },
@@ -2402,6 +2415,8 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
     }
     boundSessionId = session.sessionId;
     failureStage = 'prompt_dispatch';
+    const receiptBinding = await toolReceiptBinding(request, session.runtimeGeneration).catch(() => ({}));
+    const releaseToolReceipt = client.http.bindToolReceipt(session.sessionId, receiptBinding);
     const dispatch = await coordinator.dispatch({
       scope,
       chatId,
@@ -2437,7 +2452,7 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       expectedSessionId: request.expectedSessionId ?? session.sessionId,
       requireExactRuntimeControls: request.explicitReadRoot === true,
       signal: abortEvents.signal,
-    });
+    }).finally(releaseToolReceipt);
     if (dispatch.kind === 'command')
       throw new Error('VibeSpace slash commands must be consumed before provider dispatch.');
     if (dispatch.kind === 'rejected') throw new Error(dispatch.message);

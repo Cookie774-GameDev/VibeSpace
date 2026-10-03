@@ -32,8 +32,8 @@ function emptyState(): StoredRlmPreferences {
   return {
     version: 1,
     userDefault: true,
-    chats: {},
-    workspaces: {},
+    chats: Object.create(null) as Record<string, LayerRecord>,
+    workspaces: Object.create(null) as Record<string, LayerRecord>,
     lastRefreshAt: null,
     lastRoute: null,
     lastRunStatus: null,
@@ -60,8 +60,9 @@ function readState(storage: Pick<Storage, 'getItem'> | null | undefined): Stored
     if (!parsed || typeof parsed !== 'object') return emptyState();
     const record = parsed as Record<string, unknown>;
     if (record.version !== 1) return emptyState();
-    const chats: Record<string, LayerRecord> = {};
-    const workspaces: Record<string, LayerRecord> = {};
+    // Persisted identities are keys, including names such as __proto__.
+    const chats: Record<string, LayerRecord> = Object.create(null);
+    const workspaces: Record<string, LayerRecord> = Object.create(null);
     if (record.chats && typeof record.chats === 'object') {
       for (const [id, value] of Object.entries(record.chats as Record<string, unknown>)) {
         const layer = asLayer(value);

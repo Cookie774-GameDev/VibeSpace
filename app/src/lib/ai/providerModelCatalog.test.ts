@@ -404,6 +404,70 @@ describe('providerModelCatalog', () => {
     fetchMock.mockRestore();
   });
 
+  it.each(['old-first', 'new-first'] as const)('isolates reconnect discovery from an old account still in flight (%s)', async (order) => {
+    let finishOld!: (response: Response) => void;
+    let finishNew!: (response: Response) => void;
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { finishOld = resolve; }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { finishNew = resolve; }));
+    const oldAccount = { ...ctx, apiKeys: { deepseek: 'old-test-key' } };
+    const newAccount = { ...ctx, apiKeys: { deepseek: 'new-test-key' } };
+    const oldLoad = loadProviderModels('deepseek', oldAccount, { force: true });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const newLoad = loadProviderModels('deepseek', newAccount, { force: true });
+    const response = (id: string) => new Response(JSON.stringify({ data: [{ id, type: 'chat' }] }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 500 });
+      if (order === 'old-first') {
+        finishOld(response('deepseek-old-account'));
+        expect(await oldLoad).toEqual([]);
+        // A late old-account completion must not remove the new fetch's dedupe slot.
+        const duplicate = loadProviderModels('deepseek', newAccount, { force: true });
+        finishNew(response('deepseek-new-account'));
+        expect((await duplicate).map((model) => model.id)).toEqual(['deepseek-new-account']);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      }
+      finishNew(response('deepseek-new-account'));
+      expect((await newLoad).map((model) => model.id)).toEqual(['deepseek-new-account']);
+      finishOld(response('deepseek-old-account'));
+      expect(await oldLoad).toEqual([]);
+      expect(getModelsForProvider('deepseek', newAccount).map((model) => model.id)).toEqual(['deepseek-new-account']);
+      expect(getDiscoveredConnectionModels('deepseek-api').map((model) => model.id)).toEqual(['deepseek-new-account']);
+    } finally {
+      // Always settle the mocked fetches, including when the initial race assertion fails.
+      finishOld(response('deepseek-old-account'));
+      finishNew?.(response('deepseek-new-account'));
+      await Promise.all([oldLoad, newLoad]);
+      fetchMock.mockRestore();
+    }
+  });
+
+  it('invalidates pending discovery on disconnect and deduplicates same-account reads', async () => {
+    let finish!: (response: Response) => void;
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    const account = { ...ctx, apiKeys: { deepseek: 'disconnect-test-key' } };
+    const first = loadProviderModels('deepseek', account, { force: true });
+    const duplicate = loadProviderModels('deepseek', account, { force: true });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    try {
+      expect(await loadProviderModels('deepseek', { ...ctx, apiKeys: {} })).toEqual([]);
+      finish(new Response(JSON.stringify({ data: [{ id: 'deepseek-disconnected', type: 'chat' }] }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }));
+      expect(await first).toEqual([]);
+      expect(await duplicate).toEqual([]);
+      expect(getModelsForProvider('deepseek', account)).toEqual([]);
+      expect(getDiscoveredConnectionModels('deepseek-api')).toEqual([]);
+    } finally {
+      finish(new Response('{}', { status: 200 }));
+      await Promise.all([first, duplicate]);
+      fetchMock.mockRestore();
+    }
+  });
+
   it('does not mark unverified static picker rows as provider models', () => {
     const models = getModelsForProvider('google', ctx);
     expect(models).toEqual([]);

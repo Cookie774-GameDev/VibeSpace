@@ -51,6 +51,8 @@ import type { ProviderId } from '@/types/common';
 import { McpConnections } from './McpConnections';
 import { createOpenCodeHttpClient } from '@/lib/harness/openCodeClient';
 import { harnessRuntimeManager } from '@/lib/harness/runtimeManager';
+import { HarnessReadinessGate } from '@/features/chat/HarnessReadinessGate';
+import { OpenCodeWindowsShellGuidance } from './OpenCodeWindowsShellGuidance';
 import {
   ANTHROPIC_SUBSCRIPTION_POLICY,
   beginOpenCodeSubscription,
@@ -879,6 +881,9 @@ export function SubscriptionCliBridge({
           {busy ? 'Scanning…' : 'Scan now'}
         </Button>
       </div>
+
+      {!subscriptionClient && harnessState.kind !== 'ready' ? <HarnessReadinessGate /> : null}
+      <OpenCodeWindowsShellGuidance />
 
       <OpenCodeSubscriptionCenter
         client={activeSubscriptionClient}

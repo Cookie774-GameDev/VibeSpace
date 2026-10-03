@@ -16,6 +16,52 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+export async function inspectTauriNsisExecutableBinding(built, extracted, {
+  tauriCliVersion,
+  tauriBundlerSourceBlob,
+  bundleKind,
+} = {}) {
+  assert.equal(tauriCliVersion, '2.11.2', 'Changed Tauri CLI requires source reaudit');
+  assert.equal(tauriBundlerSourceBlob, 'ab0a45032f931af32b03c08ec5404c5cfe5c4891', 'Unverified bundler reference source');
+  assert.equal(bundleKind, 'nsis', 'Only the pinned NSIS bundle transformation is supported');
+  const originalToken = Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK');
+  const nsisToken = Buffer.from('__TAURI_BUNDLE_TYPE_VAR_NSS');
+  assert.equal(originalToken.length, nsisToken.length);
+  const originalHash = createHash('sha256');
+  const expectedHash = createHash('sha256');
+  let carry = Buffer.alloc(0), processed = 0, markerOffset = null, byteCount = 0;
+  for await (const chunk of createReadStream(built, { highWaterMark: 64 * 1024 })) {
+    byteCount += chunk.length;
+    originalHash.update(chunk);
+    if (markerOffset !== null) { expectedHash.update(chunk); continue; }
+    const buffer = carry.length ? Buffer.concat([carry, chunk]) : chunk;
+    const index = buffer.indexOf(originalToken);
+    if (index >= 0) {
+      markerOffset = processed + index;
+      expectedHash.update(buffer.subarray(0, index));
+      expectedHash.update(nsisToken);
+      expectedHash.update(buffer.subarray(index + originalToken.length));
+      processed += buffer.length;
+      carry = Buffer.alloc(0);
+    } else {
+      const safeLength = Math.max(0, buffer.length - originalToken.length + 1);
+      expectedHash.update(buffer.subarray(0, safeLength));
+      processed += safeLength;
+      carry = Buffer.from(buffer.subarray(safeLength));
+    }
+  }
+  assert.notEqual(markerOffset, null, 'Pinned original bundle marker missing');
+  expectedHash.update(carry);
+  return {
+    tauriCliVersion, tauriBundlerSourceBlob, bundleKind,
+    transformation: 'FIRST __TAURI_BUNDLE_TYPE_VAR_UNK replaced with __TAURI_BUNDLE_TYPE_VAR_NSS; all other bytes retained',
+    markerOffset, byteCount,
+    restoredExecutableSHA256: originalHash.digest('hex'),
+    expectedNsisExecutableSHA256: expectedHash.digest('hex'),
+    extractedExecutableSHA256: await sha256(extracted),
+  };
+}
+
 export const NATIVE_QA_CARGO_ARGS = Object.freeze([
   'build',
   '--manifest-path',

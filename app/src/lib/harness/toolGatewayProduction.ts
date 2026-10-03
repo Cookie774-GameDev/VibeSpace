@@ -1,7 +1,14 @@
+import { ContextSearchReadinessError } from '@/features/context/contextSearchReadiness';
+import { queryCommandCatalog } from './commandCatalogQuery';
+import { RlmRuntimeError } from '@/features/context/rlmRuntime';
 import { invoke } from '@tauri-apps/api/core';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { getAllActions } from '@/lib/actions';
-import { loadPersistedContextMaps } from '@/features/context';
+import {
+  ensureContextPersistence,
+  getActiveContextPersistenceState,
+  loadPersistedContextMaps,
+} from '@/features/context';
 import { useAllAboutMeStore } from '@/features/all-about-me/store';
 import { useJarvisLearningStore } from '@/features/jarvis-memory/learningStore';
 import { APP_ROUTES, type Route } from '@/features/navigation/routeSchema';
@@ -18,6 +25,7 @@ import { enqueueTerminalCommand } from '@/features/terminals/terminalCommandQueu
 import { useTerminalSchedulerStore } from '@/features/terminals/terminalScheduler';
 import { useTerminalTranscriptStore } from '@/features/terminals/transcriptStore';
 import { useAuthStore } from '@/stores/auth';
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import {
   getVibeSpaceMcpGateway,
   type VibeSpaceGatewayConnection,
@@ -357,10 +365,101 @@ type ToolGatewayRlmContextPort = Readonly<{
     args: Record<string, unknown>,
     lease: RlmContextLease,
     signal?: AbortSignal,
+    assertLeaseCurrent?: (lease: Readonly<RlmContextLease>) => string | undefined,
   ): Promise<unknown>;
 }>;
 
 let rlmContextPort: ToolGatewayRlmContextPort | undefined;
+
+// This is deliberately separate from the gateway session generation: project
+// navigation may keep a session alive, but an in-flight RLM evidence lease must
+// never regain authority after an account/project/map A -> B -> A transition.
+let rlmLeaseEpoch = 0;
+let rlmAuthEpoch = 0;
+let rlmLeaseObserverInstalled = false;
+let rlmObservedAuthScope = '';
+
+function rlmAuthScope(): string {
+  const auth = useAuthStore.getState();
+  const identity = resolveAccountIdentity(auth);
+  return JSON.stringify([identity?.accountId, identity?.source, auth.workspaceId, auth.projectId]);
+}
+
+function ensureRlmLeaseObserver(): void {
+  if (rlmLeaseObserverInstalled) return;
+  rlmLeaseObserverInstalled = true;
+  rlmObservedAuthScope = rlmAuthScope();
+  useAuthStore.subscribe(() => {
+    const next = rlmAuthScope();
+    if (next !== rlmObservedAuthScope) { rlmLeaseEpoch += 1; rlmAuthEpoch += 1; }
+    rlmObservedAuthScope = next;
+  });
+  if (typeof window !== 'undefined') {
+    window.addEventListener('jarvis:context-tree-updated', () => {
+      rlmLeaseEpoch += 1;
+    });
+  }
+}
+
+/** Trusted host readback for the selected map; never accepts a provider scope override. */
+export function readCurrentRlmScopeRevision(scope: Readonly<{
+  accountId: string;
+  workspaceId: string;
+  projectId: string;
+}>, mapId: string): string | undefined {
+  ensureRlmLeaseObserver();
+  const auth = useAuthStore.getState();
+  const identity = resolveAccountIdentity(auth);
+  if (!identity || identity.accountId !== scope.accountId ||
+      String(auth.workspaceId ?? '') !== scope.workspaceId ||
+      String(auth.projectId ?? '') !== scope.projectId ||
+      rlmAuthScope() !== rlmObservedAuthScope) return undefined;
+  const state = getActiveContextPersistenceState(scope.projectId);
+  if (!state || state.accountId !== scope.accountId || state.projectId !== scope.projectId ||
+      state.selectedMapId !== mapId ||
+      !state.maps.some((map) => map.id === mapId && map.status === 'active')) return undefined;
+  return `rlm:${rlmLeaseEpoch}`;
+}
+
+/** Cold initialization precedes token capture; the request cannot choose its authority. */
+export async function prepareCurrentRlmScopeRevision(scope: Readonly<{
+  accountId: string; workspaceId: string; projectId: string;
+}>, mapId: string, signal?: AbortSignal): Promise<boolean> {
+  ensureRlmLeaseObserver();
+  const authEpoch = rlmAuthEpoch;
+  const authScope = rlmAuthScope();
+  const auth = useAuthStore.getState();
+  if (resolveAccountIdentity(auth)?.accountId !== scope.accountId ||
+      String(auth.workspaceId ?? '') !== scope.workspaceId ||
+      String(auth.projectId ?? '') !== scope.projectId || signal?.aborted) return false;
+  if (!getActiveContextPersistenceState(scope.projectId)) {
+    const initialized = await ensureContextPersistence(scope.projectId);
+    if (signal?.aborted || rlmAuthEpoch !== authEpoch || rlmAuthScope() !== authScope ||
+        getActiveContextPersistenceState(scope.projectId) !== initialized) return false;
+  }
+  return !!readCurrentRlmScopeRevision(scope, mapId);
+}
+
+function sameRlmLease(
+  captured: Readonly<RlmContextLease>,
+  issued: Readonly<RlmContextLease>,
+): boolean {
+  const left = captured.canonicalBinding;
+  const right = issued.canonicalBinding;
+  return captured.sessionId === issued.sessionId &&
+    captured.accountId === issued.accountId &&
+    captured.workspaceId === issued.workspaceId &&
+    captured.projectId === issued.projectId &&
+    captured.worktreeId === issued.worktreeId &&
+    captured.chatId === issued.chatId &&
+    captured.selectedMapId === issued.selectedMapId &&
+    captured.contextRevision === issued.contextRevision &&
+    captured.expiresAt === issued.expiresAt &&
+    left?.runId === right?.runId &&
+    left?.requestId === right?.requestId &&
+    left?.attemptNumber === right?.attemptNumber &&
+    JSON.stringify(captured.executionIdentity) === JSON.stringify(issued.executionIdentity);
+}
 
 const SAFE_CITATION_TEXT = /^[^\u0000-\u001f\u007f]{1,1024}$/u;
 
@@ -616,7 +715,7 @@ function findContextNode(
 ): { id: string; title: string; summary: string; path?: string } | null {
   for (const node of nodes) {
     if (node.id === contextId) {
-      return { id: node.id, title: node.title, summary: node.summary, path: node.path };
+      return { id: node.id, title: node.title, summary: node.summary, ...(node.path === undefined ? {} : { path: node.path }) };
     }
     const nested = node.children
       ? findContextNode(
@@ -662,10 +761,16 @@ async function runApprovedAction(
   if (!action) throw new Error('command_not_found');
   const { runToolGatewayAction } = await import('@/lib/ai/runtime');
   const execution = await runToolGatewayAction({ actionId: action.id, params: args, context });
-  if (execution.kind === 'handoff_pending') throw new ToolGatewaySemanticError({
-    code: 'command_handoff_pending', message: 'The protected action was handed off and has not settled.',
-    data: { status: 'handoff_pending', executorKind: execution.executorKind, ownerId: execution.ownerId },
-  });
+  if (execution.kind === 'handoff_pending')
+    throw new ToolGatewaySemanticError({
+      code: 'command_handoff_pending',
+      message: 'The protected action was handed off and has not settled.',
+      data: {
+        status: 'handoff_pending',
+        executorKind: execution.executorKind,
+        ownerId: execution.ownerId,
+      },
+    });
   if (!execution.result.ok) throw new Error('command_failed');
   return { summary: execution.result.summary, data: execution.result.data };
 }
@@ -751,21 +856,7 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
       },
     },
     command: {
-      list: (args) =>
-        getAllActions()
-          .slice(0, (args.limit as number | undefined) ?? 100)
-          .map(({ id, label, description, category, destructive, params }) => ({
-            id,
-            label,
-            description,
-            category,
-            destructive: Boolean(destructive),
-            params: params.map(({ key, type, required }) => ({
-              key,
-              type,
-              required: Boolean(required),
-            })),
-          })),
+      list: (args) => queryCommandCatalog(getAllActions(), args),
       run: (args, context) => {
         const input = args.input ? JSON.parse(stringArg(args, 'input')) : {};
         if (!input || typeof input !== 'object' || Array.isArray(input))
@@ -827,29 +918,69 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
       attach: async (args, context) => ({
         attached: await readContext(stringArg(args, 'contextId'), context.sessionId),
       }),
-      rlm: (args, context) => {
+      rlm: async (args, context) => {
+        ensureRlmLeaseObserver();
+        const admissionAuthEpoch = rlmAuthEpoch;
+        const admissionAuthScope = rlmAuthScope();
         const auth = useAuthStore.getState();
-        if (!auth.localUserId) throw new Error('rlm_context_authority_unavailable');
-        const observed =
-          args.operation === 'query' || args.operation === 'investigate'
-            ? readToolGatewayObservedExecutionAuthority(context.sessionId)
-            : null;
+        if (!resolveAccountIdentity(auth)) throw new Error('rlm_context_authority_unavailable');
+        const observed = readToolGatewayObservedExecutionAuthority(context.sessionId);
         if ((args.operation === 'query' || args.operation === 'investigate') && !observed) {
           throw new Error('gateway_execution_identity_unavailable');
         }
         const authority = readToolGatewaySessionAuthority(context.sessionId);
         if (!authority) throw new Error('rlm_context_authority_unavailable');
         const boundScope = authority.scope;
+        const turnKey = context.messageId ?? context.requestId;
+        const boundTurn = readToolGatewayTurnIdentity(context.sessionId, turnKey);
+        let persisted = getActiveContextPersistenceState(boundScope.projectId);
+        if (boundScope.projectId && boundTurn?.protectedAttempt && !persisted) {
+          persisted = await ensureContextPersistence(boundScope.projectId);
+          const currentTurn = readToolGatewayTurnIdentity(context.sessionId, turnKey);
+          if (context.signal?.aborted ||
+              rlmAuthEpoch !== admissionAuthEpoch || rlmAuthScope() !== admissionAuthScope ||
+              getActiveContextPersistenceState(boundScope.projectId) !== persisted ||
+              readToolGatewaySessionAuthority(context.sessionId) !== authority ||
+              currentTurn?.requestId !== boundTurn?.requestId ||
+              currentTurn?.chatId !== boundTurn?.chatId ||
+              currentTurn?.protectedAttempt !== boundTurn?.protectedAttempt) {
+            throw new Error('rlm_context_authority_unavailable');
+          }
+        }
+        if (rlmAuthEpoch !== admissionAuthEpoch || rlmAuthScope() !== admissionAuthScope) {
+          throw new Error('rlm_context_authority_unavailable');
+        }
+        const selectedMapId = persisted?.accountId === boundScope.accountId &&
+          persisted.projectId === boundScope.projectId &&
+          persisted.selectedMapId &&
+          persisted.maps.some((map) => map.id === persisted.selectedMapId && map.status === 'active')
+          ? persisted.selectedMapId : undefined;
+        const protectedAttempt = boundTurn?.protectedAttempt;
+        const canonicalBinding = protectedAttempt &&
+          protectedAttempt.accountId === boundScope.accountId &&
+          protectedAttempt.requestId === boundTurn.requestId
+          ? Object.freeze({ runId: protectedAttempt.runId,
+              requestId: protectedAttempt.requestId,
+              attemptNumber: protectedAttempt.attemptNumber })
+          : undefined;
         const worktreeId = context.worktree?.trim() || context.directory?.trim();
-        const baseLease = {
+        const leaseEpoch = rlmLeaseEpoch;
+        const leaseRevision = `rlm:${leaseEpoch}`;
+        const baseLease = Object.freeze({
           sessionId: context.sessionId,
-          accountId: auth.localUserId,
+          accountId: boundScope.accountId,
+          contextRevision: leaseRevision,
+          ...(boundTurn ? { chatId: boundTurn.chatId } : {}),
+          ...(selectedMapId ? { selectedMapId } : {}),
+          ...(canonicalBinding ? { canonicalBinding } : {}),
           workspaceId: boundScope.workspaceId,
           ...(boundScope.projectId ? { projectId: boundScope.projectId } : {}),
           ...(worktreeId ? { worktreeId } : {}),
-          expiresAt: Date.now() + 30_000,
-        } satisfies RlmContextLease;
-        if (args.operation === 'query') {
+          // Recursive investigate can spend 90 seconds on bounded child work;
+          // allow its final verified publication within the facade's 120s cap.
+          expiresAt: Date.now() + (args.operation === 'investigate' ? 120_000 : 30_000),
+        } satisfies RlmContextLease);
+        if (args.operation === 'query' && args.continuation === undefined) {
           const observedAuthority = observed;
           if (!observedAuthority) throw new Error('gateway_execution_identity_unavailable');
           if (!baseLease.workspaceId || !baseLease.projectId || !baseLease.worktreeId) {
@@ -912,12 +1043,46 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
             : baseLease;
         const port = rlmContextPort;
         if (!port) throw new Error('rlm_context_unavailable');
+        const assertLeaseCurrent = (captured: Readonly<RlmContextLease>): string | undefined => {
+          if (!sameRlmLease(captured, lease) || context.signal?.aborted || Date.now() >= lease.expiresAt ||
+              rlmLeaseEpoch !== leaseEpoch || rlmAuthScope() !== rlmObservedAuthScope ||
+              readToolGatewaySessionAuthority(context.sessionId) !== authority ||
+              readToolGatewayObservedExecutionAuthority(context.sessionId) !== observed) {
+            return undefined;
+          }
+          const currentAuth = useAuthStore.getState();
+          if (resolveAccountIdentity(currentAuth)?.accountId !== boundScope.accountId ||
+              String(currentAuth.workspaceId ?? '') !== boundScope.workspaceId ||
+              String(currentAuth.projectId ?? '') !== String(boundScope.projectId ?? '')) {
+            return undefined;
+          }
+          const currentTurn = readToolGatewayTurnIdentity(context.sessionId, turnKey);
+          if (currentTurn?.requestId !== boundTurn?.requestId ||
+              currentTurn?.chatId !== boundTurn?.chatId ||
+              currentTurn?.protectedAttempt !== boundTurn?.protectedAttempt) {
+            return undefined;
+          }
+          const currentMap = getActiveContextPersistenceState(boundScope.projectId);
+          const currentSelectedMapId = currentMap?.accountId === boundScope.accountId &&
+            currentMap.projectId === boundScope.projectId && currentMap.selectedMapId &&
+            currentMap.maps.some((map) => map.id === currentMap.selectedMapId && map.status === 'active')
+            ? currentMap.selectedMapId : undefined;
+          return currentSelectedMapId === selectedMapId ? leaseRevision : undefined;
+        };
         // The shared tool schema exposes search display limits on every operation.
         // Recursive investigate has its own bounded budget and accepts only its
         // operation and question; forwarding display limits makes a valid call fail.
         const portArgs =
-          args.operation === 'investigate' ? { operation: 'investigate', query: args.query } : args;
-        const result = port.execute(portArgs, lease, context.signal);
+          args.operation === 'investigate' ? { operation: 'investigate', query: args.query }
+            : args.operation === 'query' && args.continuation !== undefined
+              ? { ...args, operation: 'search' } : args;
+        const result = port.execute(portArgs, lease, context.signal, assertLeaseCurrent).catch(error => {
+          if (error instanceof ContextSearchReadinessError) {
+            throw new ToolGatewaySemanticError({ code: error.code, message: error.message,
+              data: { reason: error.reason, indexAvailable: false, grounded: false } });
+          }
+          throw error;
+        });
         if (args.operation !== 'investigate') return result;
         return result.then((value) => {
           if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
@@ -934,6 +1099,13 @@ export function createProductionToolGatewayDependencies(): ToolGatewayDependenci
           // by the provider response boundary even when the answer is only 13 KB.
           const { budget: _internalBudget, ...safeTrace } = trace as Record<string, unknown>;
           return { ...data, trace: safeTrace };
+        }).catch((error: unknown) => {
+          if (!(error instanceof RlmRuntimeError)) throw error;
+          throw new ToolGatewaySemanticError({
+            code: `rlm_${error.code}`,
+            message: 'The bounded context investigation could not complete.',
+            data: { code: error.code, toolInvocations: error.toolInvocations ?? [] },
+          });
         });
       },
     },

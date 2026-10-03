@@ -496,6 +496,55 @@ describe('createKernelTurnCommit', () => {
     );
   });
 
+  it('retains an unapproved sibling introduced after a valid single-action checkpoint without allowing its completion', async () => {
+    await seed({ source: 'typed_chat', status: 'awaiting_approval', transportAttempts: [], updatedAt: NOW + 5 });
+    const state = harness();
+    // Multi-pending nonfile proposals are not an admitted response-ready batch.
+    const invalidBatch = actionMessage();
+    invalidBatch.parts.push({ kind: 'action_proposal', call_id: 'jarvisapproval:jappr_sibling',
+      action_id: 'terminal.create', params: {}, status: 'pending' });
+    await expect(state.commit.commitActionResponseReady({
+      accountId: 'account-kernel', runId: 'run-kernel', requestId: 'request-kernel', attemptNumber: 1,
+      approvalId: 'jappr_action-ready', accountBinding: state.value, assistantMessage: invalidBatch,
+      artifacts: [], providerResultSource: providerResultSource(), createdAt: NOW + 10,
+    })).rejects.toThrow('action_response_ready_approval_projection_invalid');
+    const ready = await state.commit.commitActionResponseReady({
+      accountId: 'account-kernel', runId: 'run-kernel', requestId: 'request-kernel', attemptNumber: 1,
+      approvalId: 'jappr_action-ready', accountBinding: state.value, assistantMessage: actionMessage(),
+      artifacts: [], providerResultSource: providerResultSource(), createdAt: NOW + 10,
+    });
+    expect(ready).toMatchObject({ committed: true, run: { status: 'awaiting_approval' } });
+    // Simulate a changed persisted projection after the valid checkpoint. This
+    // defensive finalizer case does not authorize or claim nonfile batch support.
+    const storedMessage = (await db.messages.get('message-kernel' as MessageId))!;
+    await db.messages.put({
+      ...storedMessage,
+      parts: [...storedMessage.parts, { kind: 'action_proposal',
+        call_id: 'jarvisapproval:jappr_sibling', action_id: 'terminal.create', params: {}, status: 'pending' }],
+    });
+    const awaiting = fromJarvisRunRow((await db.jarvis_runs.get('run-kernel'))!);
+    await db.jarvis_runs.put(toJarvisRunRow({ ...awaiting, status: 'running', updatedAt: NOW + 11 }));
+    const completed = await state.commit.finalizeActionResponse({
+      accountId: 'account-kernel', runId: 'run-kernel', requestId: 'request-kernel', attemptNumber: 1,
+      approvalId: 'jappr_action-ready', messageId: 'message-kernel', accountBinding: state.value,
+      outcome: 'completed', resultRef: 'jterminal_created:jterm_owned:pty_owned:process_owned', completedAt: NOW + 12,
+    });
+    expect(completed).toMatchObject({ committed: true, run: { status: 'awaiting_approval' } });
+    expect(completed).not.toHaveProperty('run.completedAt');
+    const parts = (await db.messages.get('message-kernel' as MessageId))!.parts;
+    expect(parts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'action_proposal', call_id: 'jarvisapproval:jappr_action-ready', status: 'success' }),
+      expect.objectContaining({ kind: 'action_proposal', call_id: 'jarvisapproval:jappr_sibling', status: 'pending' }),
+    ]));
+    // A sibling completion without its own approval checkpoint cannot settle the run.
+    await expect(state.commit.finalizeActionResponse({
+      accountId: 'account-kernel', runId: 'run-kernel', requestId: 'request-kernel', attemptNumber: 1,
+      approvalId: 'jappr_sibling', messageId: 'message-kernel', accountBinding: state.value,
+      outcome: 'completed', resultRef: 'unapproved-sibling', completedAt: NOW + 13,
+    })).resolves.toMatchObject({ committed: false, reason: 'response_ready_conflict' });
+    expect(fromJarvisRunRow((await db.jarvis_runs.get('run-kernel'))!).status).toBe('awaiting_approval');
+  });
+
   it('persists only a bounded approved files.read result on the finalized action part', async () => {
     await seed({
       source: 'typed_chat',

@@ -1,0 +1,370 @@
+# Task-owned matching-source QA; does not alter the shared CI workflow.
+name: S61 owned-source verification
+on:
+  push:
+    branches: [codex/s61-chat-context-20261002-0411]
+concurrency:
+  group: s61-owned-source-verification-${{ github.sha }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  native-artifact-repack:
+    name: Compress verified R5 native artifact for connector download
+    if: github.event.head_commit.message == 'Verify native ABI and package existing R5 artifact'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check packaging capacity
+        shell: bash
+        run: |
+          python3 -c 'import os,shutil; free=os.sysconf("SC_AVPHYS_PAGES")*os.sysconf("SC_PAGE_SIZE"); assert free>=1024**2*(1024+640), "Insufficient RAM reserve"; assert shutil.disk_usage(".").free>=3*1024**3, "Insufficient packaging disk"; print("Packaging RAM and disk admission PASS")'
+      - name: Download immutable successful R5 build without rebuilding
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: native-windows-debug-60cbcbfb5e44baf541c378aa309e297907ce1e01-36982451812-1
+          path: verified-native
+          github-token: ${{ github.token }}
+          repository: Cookie774-GameDev/VibeSpace
+          run-id: 36982451812
+      - name: Verify every preserved payload and evidence byte
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,pathlib
+          root=pathlib.Path('verified-native').resolve()
+          manifest=json.loads((root/'artifact-manifest.json').read_text())
+          provenance=json.loads((root/'provenance.json').read_text())
+          assert provenance['sourceCommitSHA']=='60cbcbfb5e44baf541c378aa309e297907ce1e01'
+          assert provenance['sourceTreeSHA']=='93a60c59a8a6550bbaf34d91ac2fe6aed24d8efc'
+          expected={f['path']:f for f in manifest['files']+manifest['evidenceFiles']}
+          assert len(expected)==len(manifest['files'])+len(manifest['evidenceFiles'])
+          expected['artifact-manifest.json']=None
+          actual={str(f.relative_to(root)).replace('\\','/') for f in root.rglob('*') if f.is_file()}
+          assert actual==set(expected), 'Unexpected or missing artifact files'
+          for name,item in expected.items():
+              parts=pathlib.PurePosixPath(name).parts
+              assert parts and '..' not in parts and not name.startswith('/')
+              file=root.joinpath(*parts)
+              assert file.is_file() and not file.is_symlink()
+              if item is None: continue
+              assert file.stat().st_size==item['bytes']
+              with file.open('rb') as stream: digest=hashlib.file_digest(stream,'sha256').hexdigest()
+              assert digest==item['sha256'], name
+          print('Exact R5 executable, DLLs, resources and provenance preserved:',len(expected),'files')
+          PY
+      - name: Upload same verified files with bounded transfer compression
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: s61-native-r5-compressed-${{ github.sha }}
+          path: verified-native/
+          compression-level: 6
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  frontend:
+    name: Frontend (typecheck + build + test)
+    needs: windows-inputs
+    if: needs.windows-inputs.outputs.frontend_changed == 'true'
+    runs-on: ubuntu-22.04
+    # Full app vitest is ~11k tests and exceeds the old 15-minute job cap
+    # (GitHub cancelled the step at 15m15s / 15m18s on 5301ff91).
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (Vite)
+        run: npm run build
+
+      - name: Verify owned integration regressions before the broad suite
+        run: >-
+          npm --prefix app run test --
+          src/lib/ai/runtime.test.ts
+          src/features/chat/Composer.undoDraft.test.tsx
+          src/lib/ai/runtime.contextAdvanced.test.ts
+          src/lib/ai/runtime.nativeAppAction.test.ts
+          src/lib/ai/adapters/codexPersistent.contextTool.test.ts
+          src/lib/ai/adapters/catalog.codexFiles.test.ts
+          src/lib/ai/adapters/codexContextTool.test.ts
+          src/lib/ai/adapters/codexRlmParentBinding.test.ts
+          src/lib/ai/adapters/codexRlmExecChild.test.ts
+          src/lib/ai/adapters/codexRlmNativeFactory.test.ts
+          src/features/context/contextRlmProduction.codexChild.test.ts
+          src/features/context/contextRlmTraceStore.test.ts
+          src/features/context/contextRlmSourceRevision.test.ts
+          src/features/context/contextSourceRevisionReader.test.ts
+          src/lib/jarvis/kernelBridgeProtocol.sourceRevision.test.ts
+          src/features/context/rlmOpenCodeTool.trace.test.ts
+          src/features/context/rlmRuntime.terminal.test.ts
+          src/lib/jarvis/kernelClient.sourceRevision.test.ts
+          src/lib/jarvis/kernelClient.test.ts
+          src/lib/jarvis/promptCompiler.advancedContext.test.ts
+          src/lib/harness/commandCatalogQuery.test.ts
+          src/lib/harness/toolGatewayProduction.test.ts
+          src/lib/jarvis/approvalEngine.test.ts
+          src/lib/jarvis/kernelRuntime.test.ts
+          src/features/chat/ActionApprovalCard.test.tsx
+          src/features/chat/Composer.resumeReview.test.tsx
+          src/features/canvas/persistence.durability.test.ts
+          src/features/chat/MessageBubble.test.tsx
+          src/features/settings/SubscriptionCliBridge.bootstrap.test.tsx
+          src/features/settings/sections/WebMcpHealthFreshness.test.tsx
+          src/features/tasks/EventReminderEngine.deliveryRecovery.test.ts
+          src/features/tasks/EventReminderEngine.test.ts
+          src/features/workbench/FilesPanel.race.test.tsx
+          src/features/workbench/store.draftSafety.test.ts
+          src/lib/ai/adapters/providerToolSchemaReceipt.test.ts
+          src/lib/db/nonChatDurability.migration.test.ts
+          src/lib/harness/openCodeNativeTransport.test.ts
+          src/lib/notifications.test.ts
+          src/lib/persistence/nonChatSettings.durability.test.ts
+          src/lib/actions/registryJarvisCore.test.ts
+          src/features/terminals/terminalExecutionStore.test.ts
+          src/features/terminals/TileGrid.refit.test.tsx
+          src/lib/jarvis/kernelTurnCommit.test.ts
+
+      - name: Test (vitest)
+        run: npm --prefix app run test
+
+      - name: Test release manifest
+        run: npm run test:release-manifest
+
+  composer-regression:
+    name: Owned Composer red and green regression
+    needs: windows-inputs
+    if: needs.windows-inputs.outputs.composer_original == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      - name: Preserve the actual failing original regression
+        shell: bash
+        run: |
+          set +e
+          node work/sol61-mission-20261001-S61/worker1/composer-staging/run-packet.cjs red
+          status=$?
+          set -e
+          test "$status" -eq 1
+          node -e 'const fs=require("fs"),r=JSON.parse(fs.readFileSync("work/sol61-mission-20261001-S61/worker1/composer-staging/red-report.json")); const failed=r.testResults.flatMap(x=>x.assertionResults).filter(x=>x.status==="failed"); if(failed.length!==1 || !failed[0].title.includes("removes only the submitted undo command"))throw Error("Original regression did not fail exactly as expected");'
+      - name: Verify the minimal candidate and all draft neighbors
+        run: node work/sol61-mission-20261001-S61/worker1/composer-staging/run-packet.cjs green
+      - name: Upload exact regression receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: s61-composer-red-green-${{ github.sha }}
+          path: |
+            work/sol61-mission-20261001-S61/worker1/composer-staging/*-report.json
+            work/sol61-mission-20261001-S61/worker1/composer-staging/*-receipt.json
+            work/sol61-mission-20261001-S61/worker1/composer-staging/red.log
+            work/sol61-mission-20261001-S61/worker1/composer-staging/green.log
+          if-no-files-found: error
+          retention-days: 3
+
+  windows-inputs:
+    name: Freeze native Windows build inputs
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      cargo_lock: ${{ steps.inputs.outputs.cargo_lock }}
+      windows_config: ${{ steps.inputs.outputs.windows_config }}
+      connector_source: ${{ steps.inputs.outputs.connector_source }}
+      native_changed: ${{ steps.inputs.outputs.native_changed }}
+      composer_original: ${{ steps.inputs.outputs.composer_original }}
+      frontend_changed: ${{ steps.inputs.outputs.frontend_changed }}
+      rust_changed: ${{ steps.inputs.outputs.rust_changed }}
+    steps:
+      - name: Preserve published blob bytes
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+      - name: Compute exact immutable input fingerprints
+        id: inputs
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -cne '${{ github.sha }}') { throw 'Published source mismatch.' }
+          node --input-type=module -e 'import fs from "node:fs"; import crypto from "node:crypto"; import {fingerprint} from "./scripts/prepare-desktop-connector.mjs"; const h=p=>crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex"); fs.appendFileSync(process.env.GITHUB_OUTPUT,"cargo_lock="+h(".github/native-windows-qa/Cargo.lock")+"\nwindows_config="+h("app/src-tauri/tauri.windows.conf.json")+"\nconnector_source="+await fingerprint()+"\n");'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $previous = '${{ github.event.before }}'
+          $nativeChanged = $true
+          $frontendChanged = $true
+          $rustChanged = $true
+          if ($previous -cmatch '^[a-f0-9]{40}$' -and $previous -cne ('0' * 40)) {
+            $changed = @(git diff --name-only $previous '${{ github.sha }}')
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot prove changed build inputs.' }
+            $nativeChanged = @($changed | Where-Object {
+              $_ -notmatch '^work/sol61-mission-20261001-S61/'
+            }).Count -gt 0
+            $frontendChanged = @($changed | Where-Object {
+              $_ -notmatch '^app/src-tauri/' -and
+              $_ -notmatch '^\.github/' -and
+              $_ -notmatch '^scripts/native-windows-qa' -and
+              $_ -notmatch '^work/sol61-mission-20261001-S61/'
+            }).Count -gt 0
+            $rustChanged = $nativeChanged -or ($changed -ccontains '.github/workflows/s61-owned-source.yml')
+          }
+          "native_changed=$($nativeChanged.ToString().ToLowerInvariant())" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+          "frontend_changed=$($frontendChanged.ToString().ToLowerInvariant())" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+          "rust_changed=$($rustChanged.ToString().ToLowerInvariant())" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+          node --input-type=module -e 'import fs from "node:fs"; import crypto from "node:crypto"; const canonical=fs.readFileSync("app/src/features/chat/Composer.tsx","utf8").replace(/\r\n/g,"\n"); const original=crypto.createHash("sha256").update(canonical).digest("hex")==="87eac381c47994d1f1a2bf328e1ffcecaf1d64c5ca8b2a68055e6a070946d2ba"; fs.appendFileSync(process.env.GITHUB_OUTPUT,"composer_original="+original+"\n");'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  native-windows:
+    name: Matching native Windows debug build
+    needs: windows-inputs
+    if: needs.windows-inputs.outputs.native_changed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/native-windows-qa.yml
+    with:
+      source_sha: ${{ github.sha }}
+      cargo_lock_sha256: ${{ needs.windows-inputs.outputs.cargo_lock }}
+      windows_config_sha256: ${{ needs.windows-inputs.outputs.windows_config }}
+      connector_source_sha256: ${{ needs.windows-inputs.outputs.connector_source }}
+
+  rust:
+    name: Rust (cargo check)
+    needs: windows-inputs
+    if: needs.windows-inputs.outputs.rust_changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Verify clean-checkout connector preparation
+        run: node --test scripts/prepare-desktop-connector.ci.test.mjs
+
+      # Direct Cargo checks bypass Tauri's npm hooks. Linux still needs the
+      # preparer's explicit unsupported-platform manifest for the resource glob.
+      - name: Prepare verified Desktop Connector resource
+        run: npm run prepare:desktop-connector
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: cargo check
+        id: cargo-check
+        working-directory: app/src-tauri
+        shell: bash
+        run: |
+          set +e
+          cargo check --release > cargo-check.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "Rust cargo check failed. The complete compiler log is attached as the rust-cargo-check-log artifact."
+            grep -n -E '(^error(\[E[0-9]+\])?:|could not compile|failed to)' cargo-check.log | tail -n 120 || true
+          else
+            tail -n 40 cargo-check.log
+          fi
+          exit "$status"
+
+      - name: Verify native Codex authority and scoped installer cancellation
+        working-directory: app/src-tauri
+        shell: bash
+        run: |
+          # The prebuilt ONNX Runtime uses these GLIBC_2.38 symbols. Check the
+          # real runner ABI before linking; do not replace the library or shim it.
+          ldd --version | head -n 1
+          python3 -c 'import ctypes; libc=ctypes.CDLL(None); [getattr(libc,name) for name in ("__isoc23_strtol","__isoc23_strtoll","__isoc23_strtoull")]; print("Required native library ABI symbols available")'
+          cargo test --release --lib codex_rlm -- --test-threads=1
+          cargo test --release --lib rlm_parent_tests -- --test-threads=1
+          cargo test --release --lib runtime_setup_bounds_tests -- --test-threads=1
+          cargo test --release --lib managed_transport_tool_list -- --test-threads=1
+          cargo test --release --lib connector_ -- --test-threads=1
+
+      # SOURCE-ONLY proposal; root applies to published s61-owned-source.yml privately.
+      # Insert in jobs.rust.steps AFTER all existing Verify native Codex authority Cargo tests, before Upload Rust failure log.
+      - name: Verify exact native semantic gateway catalog accepts five dedicated context tools
+        id: tool-gateway-catalog
+        working-directory: app/src-tauri
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git hash-object -- src/harness/tool_gateway.rs)" = "$(git rev-parse HEAD:app/src-tauri/src/harness/tool_gateway.rs)"
+          set +e
+          cargo test --release --locked --lib harness::tool_gateway::tests::accepts_only_the_fixed_semantic_catalog_and_never_generic_native_invoke -- --exact --test-threads=1 --color=never > tool-gateway-catalog.log 2>&1
+          status=$?
+          set -e
+          cat tool-gateway-catalog.log
+          python3 - "$status" <<'PY'
+          import hashlib,json,os,pathlib,re,subprocess,sys
+          name='harness::tool_gateway::tests::accepts_only_the_fixed_semantic_catalog_and_never_generic_native_invoke'
+          log=pathlib.Path('tool-gateway-catalog.log').read_text(encoding='utf-8')
+          rows=re.findall(r'^test (.+) \.\.\. (ok|FAILED|ignored)$',log,re.M)
+          summaries=re.findall(r'^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;',log,re.M)
+          code=int(sys.argv[1])
+          passed=code==0 and rows==[(name,'ok')] and summaries==[('ok','1','0','0')]
+          source=pathlib.Path('src/harness/tool_gateway.rs').read_bytes()
+          receipt={'status':'PASS_COMPILED_RUST_CATALOG' if passed else 'FAIL','cargoExitCode':code,'expectedCount':1,'actualRows':rows,'summary':summaries,'sourceCommit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'toolGatewaySHA256':hashlib.sha256(source).hexdigest(),'nativeAppAcceptance':False,'installerAcceptance':False}
+          pathlib.Path('tool-gateway-catalog-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf-8')
+          if not passed: raise SystemExit('Exact compiled Rust catalog regression did not pass once without ignored tests')
+          PY
+      - name: Upload immutable Rust catalog regression receipt
+        if: always() && steps.tool-gateway-catalog.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: s61-rust-tool-gateway-catalog-${{ github.sha }}
+          path: |
+            app/src-tauri/tool-gateway-catalog.log
+            app/src-tauri/tool-gateway-catalog-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload Rust failure log
+        if: failure() && steps.cargo-check.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cargo-check-log
+          path: app/src-tauri/cargo-check.log
+          if-no-files-found: error
+          retention-days: 7
+

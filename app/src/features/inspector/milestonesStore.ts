@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { MilestoneItem, MilestoneKind, MilestoneStatus } from './types';
+import { milestoneBelongsToScope, type MilestoneOwnerScope } from './milestoneScope';
+import type { MilestoneItem, MilestoneKind, MilestoneStatus, MilestoneScope } from './types';
 
 function newId(): string {
   return `ms_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -13,6 +14,7 @@ interface MilestonesState {
     kind?: MilestoneKind,
     description?: string,
     deadlineAt?: number,
+    scope?: MilestoneScope,
   ) => string;
   updateMilestone: (
     id: string,
@@ -29,11 +31,12 @@ export const useMilestonesStore = create<MilestonesState>()(
   persist(
     (set, get) => ({
       items: [],
-      addMilestone: (title, kind = 'todo', description, deadlineAt) => {
+      addMilestone: (title, kind = 'todo', description, deadlineAt, scope) => {
         const id = newId();
         const now = Date.now();
         const item: MilestoneItem = {
           id,
+          ...(scope ? { scope: { ...scope } } : {}),
           title: title.trim(),
           description: description?.trim() || undefined,
           deadlineAt: Number.isFinite(deadlineAt) ? deadlineAt : undefined,
@@ -89,6 +92,8 @@ export const useMilestonesStore = create<MilestonesState>()(
   ),
 );
 
-export function openMilestoneCount(): number {
-  return useMilestonesStore.getState().items.filter((i) => i.status !== 'done').length;
+/** No implicit global count: callers must supply their verified owner scope. */
+export function openMilestoneCount(scope: MilestoneOwnerScope | null = null): number {
+  return useMilestonesStore.getState().items.filter((i) =>
+    milestoneBelongsToScope(i, scope) && i.status !== 'done').length;
 }

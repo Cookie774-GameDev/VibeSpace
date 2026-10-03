@@ -10,6 +10,45 @@ const nativeEvent = (data: string, sequence = 1) => ({
 });
 
 describe('native OpenCode transport', () => {
+  it('reads actual provider-model tool schemas through a typed generation and directory bound GET', async () => {
+    const invoke = vi.fn(async () => ({ status: 200, statusText: 'OK', body: '[{"id":"vibespace_context_search","parameters":{"type":"object"}}]' }));
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    const response = await nativeOpenCodeRequest('generation-tool-schema', '/experimental/tool?provider=openrouter&model=google%2Fmodel%3Afree&directory=C%3A%5Cproject', {}, 5000, bridge);
+    await expect(response.json()).resolves.toEqual([{ id: 'vibespace_context_search', parameters: { type: 'object' } }]);
+    expect(invoke).toHaveBeenCalledWith('opencode_server_request', { request: expect.objectContaining({
+      generation: 'generation-tool-schema', route: { kind: 'tool_list', providerId: 'openrouter', modelId: 'google/model:free' }, directory: 'C:\\project',
+    }) });
+  });
+
+  it('rejects malformed missing duplicate and foreign tool-schema queries before IPC', async () => {
+    const invoke = vi.fn(async () => ({ status: 200, statusText: 'OK', body: '[]' }));
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    for (const suffix of [
+      '', '?provider=openai', '?model=model', '?provider=&model=model', '?provider=openai&model=',
+      '?provider=openai&provider=other&model=model', '?provider=openai&model=model&model=other',
+      '?provider=openai&model=model&directory=one&directory=two', '?provider=openai&model=model&directory=',
+      '?provider=openai&model=model&extra=true', '?provider=%ZZ&model=model', '?provider=openai&model=%E0%A4%A',
+      '?provider=openai&model=contains%20space', '?provider=openai&model=bad%0Amodel',
+      '?provider=openai&model=' + 'x'.repeat(513),
+    ]) await expect(nativeOpenCodeRequest('generation', '/experimental/tool' + suffix, {}, 5000, bridge)).rejects.toThrow(/invalid/);
+    await expect(nativeOpenCodeRequest('generation', '/experimental/tool?provider=openai&model=model', { method: 'POST', body: '{}' }, 5000, bridge)).rejects.toThrow(/invalid/);
+    await expect(nativeOpenCodeRequest('generation', '/experimental/tool?provider=openai&model=model', { method: 'GET', body: '{}' }, 5000, bridge)).rejects.toThrow(/body is invalid/);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('does not deduplicate different provider-model generation or directory tool reads', async () => {
+    const invoke = vi.fn(async () => ({ status: 200, statusText: 'OK', body: '[]' }));
+    const bridge = async () => ({ invoke, channel: vi.fn() as never });
+    await Promise.all([
+      nativeOpenCodeRequest('one', '/experimental/tool?provider=openai&model=model-a', {}, 5000, bridge),
+      nativeOpenCodeRequest('one', '/experimental/tool?provider=other&model=model-a', {}, 5000, bridge),
+      nativeOpenCodeRequest('one', '/experimental/tool?provider=openai&model=model-b', {}, 5000, bridge),
+      nativeOpenCodeRequest('two', '/experimental/tool?provider=openai&model=model-a', {}, 5000, bridge),
+      nativeOpenCodeRequest('one', '/experimental/tool?provider=openai&model=model-a&directory=C%3A%5Cproject', {}, 5000, bridge),
+    ]);
+    expect(invoke).toHaveBeenCalledTimes(5);
+  });
+
   it('bounds unresolved distinct native reads without evicting or replaying them', async () => {
     const completions: ((value: unknown) => void)[] = [];
     const invoke = vi.fn(() => new Promise(resolve => completions.push(resolve)));

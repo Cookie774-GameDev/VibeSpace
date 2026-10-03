@@ -76,7 +76,11 @@ type ModelCacheEntry = {
 };
 
 const dynamicModelCache = new Map<ProviderId, ModelCacheEntry>();
-const inflightFetches = new Map<ProviderId, Promise<RegistryModelOption[]>>();
+type InflightModelFetch = {
+  credential: string;
+  promise: Promise<RegistryModelOption[]>;
+};
+const inflightFetches = new Map<ProviderId, InflightModelFetch>();
 
 export function sanitizeModelIdForInput(raw: string): string {
   return raw.trim().replace(/\s+/g, '');
@@ -517,22 +521,33 @@ export async function loadProviderModels(
   }
 
   if (!apiKey && !isLocalProvider(providerId)) {
+    inflightFetches.delete(providerId);
+    dynamicModelCache.delete(providerId);
+    const connectionId = NATIVE_CONNECTION_ID_BY_PROVIDER[providerId];
+    if (connectionId) setDiscoveredConnectionModels(connectionId, []);
     return getModelsForProvider(providerId, ctx);
   }
 
   const inflight = inflightFetches.get(providerId);
-  if (inflight) return inflight;
+  if (inflight?.credential === apiKey) return inflight.promise;
+  const connectionId = NATIVE_CONNECTION_ID_BY_PROVIDER[providerId];
+  if ((inflight && inflight.credential !== apiKey) || (cachedEntry && !cached)) {
+    if (connectionId) setDiscoveredConnectionModels(connectionId, []);
+  }
+  // The latest discovery owns publication. A reconnect must neither inherit
+  // an earlier account's promise nor let its delayed response restore models.
+  const fetch: InflightModelFetch = { credential: apiKey, promise: Promise.resolve([]) };
 
   const promise = (async () => {
     try {
-      const dynamic = apiKey ? await fetchModelsFromProvider(providerId, apiKey) : [];
+      const dynamic = await (apiKey ? fetchModelsFromProvider(providerId, apiKey) : Promise.resolve([]));
+      if (inflightFetches.get(providerId) !== fetch) return [];
       dynamicModelCache.set(providerId, {
         fetchedAt: Date.now(),
         models: dynamic,
         stale: false,
         credential: apiKey,
       });
-      const connectionId = NATIVE_CONNECTION_ID_BY_PROVIDER[providerId];
       if (connectionId) {
         setDiscoveredConnectionModels(
           connectionId,
@@ -546,6 +561,7 @@ export async function loadProviderModels(
       }
       return getModelsForProvider(providerId, ctx);
     } catch (err) {
+      if (inflightFetches.get(providerId) !== fetch) return [];
       dynamicModelCache.set(providerId, {
         fetchedAt: Date.now(),
         models: cached?.models ?? [],
@@ -555,11 +571,12 @@ export async function loadProviderModels(
       });
       return getModelsForProvider(providerId, ctx);
     } finally {
-      inflightFetches.delete(providerId);
+      if (inflightFetches.get(providerId) === fetch) inflightFetches.delete(providerId);
     }
   })();
 
-  inflightFetches.set(providerId, promise);
+  fetch.promise = promise;
+  inflightFetches.set(providerId, fetch);
   return promise;
 }
 

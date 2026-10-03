@@ -34,6 +34,7 @@ function CanvasWallpaper({
     if (!context) return;
     let frame = 0;
     let animation = 0;
+    let disposed = false;
     const seed = Array.from(
       { length: config.quality === 'high' ? 110 : config.quality === 'low' ? 34 : 66 },
       (_, index) => ({
@@ -45,6 +46,11 @@ function CanvasWallpaper({
     );
 
     const draw = () => {
+      if (disposed) return;
+      if (animation) {
+        window.cancelAnimationFrame(animation);
+        animation = 0;
+      }
       const rect = canvas.getBoundingClientRect();
       const ratio = Math.min(window.devicePixelRatio || 1, config.quality === 'high' ? 2 : 1.35);
       const width = Math.max(1, Math.round(rect.width * ratio));
@@ -119,6 +125,7 @@ function CanvasWallpaper({
     window.addEventListener('resize', onResize);
     window.addEventListener('pointermove', onPointerMove, { passive: true });
     return () => {
+      disposed = true;
       window.cancelAnimationFrame(animation);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('pointermove', onPointerMove);

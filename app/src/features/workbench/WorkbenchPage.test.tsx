@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as tauriCore from '@tauri-apps/api/core';
 import { WorkbenchPage } from './WorkbenchPage';
@@ -8,11 +8,13 @@ import { usePluginStore } from '@/features/plugins';
 import { useAuthStore } from '@/stores/auth';
 import type { ProjectId, WorkspaceId } from '@/types/common';
 import { jarvisArtifactRepo } from '@/lib/db/jarvisRepositories';
+import { workspaceRepo, projectRepo } from '@/lib/db/repositories';
 import type { JarvisArtifactV1 } from '@/features/jarvis-command-center/types';
 
 const PROJECT_A = 'project-a' as ProjectId;
 const PROJECT_B = 'project-b' as ProjectId;
 const PROJECT_C = 'project-c' as ProjectId;
+const WORKSPACE_A = 'workspace-a' as WorkspaceId;
 vi.mock('@/features/terminals/TerminalView', () => ({
   TerminalView: ({
     paneId,
@@ -23,7 +25,10 @@ vi.mock('@/features/terminals/TerminalView', () => ({
     startupCommand?: string;
     onReady?: (id: string) => void;
   }) => {
-    React.useEffect(() => onReady?.(`pty-${paneId}`), [onReady, paneId]);
+    const ready = React.useRef(onReady);
+    ready.current = onReady;
+    // A PTY reports readiness once when mounted, not when a callback is replaced.
+    React.useEffect(() => ready.current?.(`pty-${paneId}`), [paneId]);
     return (
       <div data-testid="live-terminal" data-startup-command={startupCommand}>
         Live PTY terminal
@@ -46,7 +51,18 @@ describe('WorkbenchPage', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => null);
     window.localStorage.clear();
     useWorkbenchStore.getState().resetWorkbench();
-    useAuthStore.setState({ cloudSession: null, localUserId: 'local-account', projectId: null });
+    useAuthStore.setState({ cloudSession: null, localUserId: 'local-account', workspaceId: WORKSPACE_A, projectId: null });
+    // These are fixed authority rows, never derived from the current renderer account.
+    vi.spyOn(workspaceRepo, 'getById').mockImplementation(async (id) =>
+      id === WORKSPACE_A
+        ? { id: WORKSPACE_A, name: 'Fixture workspace', owner_id: 'local-account', created_at: 1, updated_at: 1 }
+        : undefined,
+    );
+    vi.spyOn(projectRepo, 'getById').mockImplementation(async (id) =>
+      [PROJECT_A, PROJECT_B, PROJECT_C].includes(id)
+        ? { id, workspace_id: WORKSPACE_A, name: id, created_at: 1, updated_at: 1 }
+        : undefined,
+    );
     usePluginStore.setState({
       connectionsByAccount: {},
       installedPluginIdsByAccount: {},
@@ -54,9 +70,9 @@ describe('WorkbenchPage', () => {
     });
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-  it('exposes name editing, save layout, exit hold, and no Classic/Spawn buttons', () => {
+  it('exposes name editing, save layout, exit hold, and no Classic/Spawn buttons', async () => {
     render(<WorkbenchPage />);
 
     expect(screen.getByRole('main', { name: 'VibeSpace Workbench' })).toBeTruthy();
@@ -68,7 +84,7 @@ describe('WorkbenchPage', () => {
     expect(screen.getByRole('button', { name: 'Templates' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Wallpapers' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Add Terminal' })).toBeTruthy();
-    expect(screen.getAllByTestId('live-terminal').length).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByTestId('live-terminal')).length).toBeGreaterThanOrEqual(1);
   });
 
   it('keeps Relay offline and without owner actions across renderer context changes', () => {
@@ -117,10 +133,10 @@ describe('WorkbenchPage', () => {
 
   it('adds and removes a real terminal panel without auto-running a command', async () => {
     render(<WorkbenchPage />);
-    const before = screen.getAllByTestId('live-terminal').length;
+    const before = (await screen.findAllByTestId('live-terminal')).length;
     const existingPanelIds = useWorkbenchStore.getState().panels.map((panel) => panel.id);
     fireEvent.click(screen.getByRole('button', { name: 'Add Terminal' }));
-    expect(screen.getAllByTestId('live-terminal')).toHaveLength(before + 1);
+    await waitFor(() => expect(screen.getAllByTestId('live-terminal')).toHaveLength(before + 1));
     expect(useWorkbenchStore.getState().panels.at(-1)?.settings.command).toBeUndefined();
     expect(
       screen.getAllByTestId('live-terminal').at(-1)?.hasAttribute('data-startup-command'),
@@ -184,7 +200,9 @@ describe('WorkbenchPage', () => {
 
   it('keeps the added terminal panel available when the native stop fails', async () => {
     render(<WorkbenchPage />);
+    const initial = (await screen.findAllByTestId('live-terminal')).length;
     fireEvent.click(screen.getByRole('button', { name: 'Add Terminal' }));
+    await waitFor(() => expect(screen.getAllByTestId('live-terminal')).toHaveLength(initial + 1));
     const before = screen.getAllByTestId('live-terminal').length;
     const addedPanel = useWorkbenchStore.getState().panels.at(-1)!;
     const invoke = vi.spyOn(tauriCore, 'invoke').mockImplementation(async (command) => {

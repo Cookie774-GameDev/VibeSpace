@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { act, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalViewProps } from '@/features/terminals';
 import { TerminalPanel } from './TerminalPanel';
 import type { WorkbenchPanel } from './types';
@@ -26,9 +26,20 @@ vi.mock('@/features/files/projectFiles', () => ({
 }));
 
 vi.mock('@/stores/auth', () => ({
-  useAuthStore: (selector: (state: { projectId: string | null }) => unknown) =>
-    selector({ projectId: 'project-9' }),
+  useAuthStore: (selector: (state: { projectId: string | null; workspaceId: string; localUserId: string; cloudSession: null }) => unknown) =>
+    selector({ projectId: 'project-9', workspaceId: 'workspace-9', localUserId: 'account-9', cloudSession: null }),
 }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: async () => [
+  { sessionId: 'live', projectId: 'project-9' },
+  { sessionId: 'replacement', projectId: 'project-9' },
+] }));
+vi.mock('@/lib/db/repositories', () => ({
+  workspaceRepo: { getById: async () => ({ owner_id: 'account-9' }) },
+  projectRepo: { getById: async () => ({ workspace_id: 'workspace-9' }) },
+}));
+const settled = async () => { await act(async () => {
+  for (let step = 0; step < 8; step++) await Promise.resolve();
+}); };
 
 function panel(overrides: Partial<WorkbenchPanel> = {}): WorkbenchPanel {
   return {
@@ -48,10 +59,12 @@ function panel(overrides: Partial<WorkbenchPanel> = {}): WorkbenchPanel {
 }
 
 describe('Workbench TerminalPanel scope', () => {
-  it('uses the existing pending-command handler and never replays onto a replacement session', () => {
+  afterEach(cleanup);
+  it('uses the existing pending-command handler and never replays onto a replacement session', async () => {
     const { rerender } = render(
       <TerminalPanel panel={panel({ settings: { resourceId: 'live' } })} onUpdate={vi.fn()} />,
     );
+    await settled();
     act(() => {
       expect(
         deliverWorkbenchTerminalCommand('FASTER', [
@@ -67,10 +80,12 @@ describe('Workbench TerminalPanel scope', () => {
         onUpdate={vi.fn()}
       />,
     );
+    await settled();
     expect(terminalView.mock.lastCall?.[0].pendingCommand).toBeUndefined();
   });
-  it('binds the stable panel and active project identity into TerminalView', () => {
+  it('binds the stable panel and active project identity into TerminalView', async () => {
     render(<TerminalPanel panel={panel()} onUpdate={vi.fn()} />);
+    await settled();
     expect(terminalView.mock.lastCall?.[0].preserveExisting).toBe(true);
 
     expect(screen.getByTestId('terminal-scope').textContent).toBe(
@@ -82,13 +97,14 @@ describe('Workbench TerminalPanel scope', () => {
     );
   });
 
-  it('keeps an explicit panel working directory authoritative', () => {
+  it('keeps an explicit panel working directory authoritative', async () => {
     render(
       <TerminalPanel
         panel={panel({ settings: { cwd: 'C:\\Users\\viper\\Desktop\\scratch' } })}
         onUpdate={vi.fn()}
       />,
     );
+    await settled();
 
     expect(screen.getByTestId('terminal-scope').textContent).toBe(
       JSON.stringify({

@@ -205,7 +205,7 @@ function fixture(actionRegistration: JarvisRegisteredActionDefinition = registra
     }),
     listByRun: vi.fn(async () => [...approvals.values()].map((value) => structuredClone(value))),
   };
-  const capabilitySnapshots = { getForAccount: vi.fn(async () => capabilitySnapshot()) };
+  const capabilitySnapshots = { getForAccount: vi.fn(async (_accountId: string) => capabilitySnapshot()) };
   const entitlementSnapshots = { getForAccount: vi.fn(async () => entitlementSnapshot()) };
   const bindingSelectors = createJarvisApprovalBindingSelectors({
     catalog,
@@ -2817,5 +2817,227 @@ describe('createJarvisActionLiveEvidenceVerifiers', () => {
         evidence as never,
       ),
     ).resolves.toEqual(evidence);
+  });
+});
+
+describe('local actions without billing entitlements', () => {
+  const unavailable: JarvisEntitlementSnapshot = { source: 'unavailable', capabilities: [] };
+  async function createLocal(setup: ReturnType<typeof fixture>) {
+    const put = vi.fn(
+      async (_prepared: Parameters<JarvisIssuedApprovalLifecycle['putPreparedApproval']>[0]) => ({
+        kind: 'committed' as const,
+        value: { id: 'jappr_1', status: 'pending' } as JarvisApprovalV1,
+      }),
+    );
+    const result = await setup.engine
+      .bindIssuedLifecycle(lifecycle({ putPreparedApproval: put }))
+      .create({
+        parentRun: setup.run,
+        attempt: requestAttempt(),
+        actionId: 'notes.create',
+        actionVersion: 1,
+        params: { title: 'hello' },
+        expiresAt: now + 1000,
+      });
+    expect(result.status).toBe('pending');
+    expect(put).toHaveBeenCalledOnce();
+    expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
+    const prepared = put.mock.calls[0]![0];
+    if (!('capabilitySnapshotHash' in prepared) || typeof prepared.capabilitySnapshotHash !== 'string') {
+      throw new Error('Canonical prepared approval did not bind its authorization hash');
+    }
+    return { capabilitySnapshotHash: prepared.capabilitySnapshotHash };
+  }
+  it.each([unavailable, { source: 'server', capabilities: [], verifiedAt: 1, expiresAt: 2 }])(
+    'creates pending approval without billing grant: %j',
+    async (snapshot) => {
+      const setup = fixture(registration({ requiredEntitlements: [] }));
+      setup.entitlementSnapshots.getForAccount.mockResolvedValue(
+        snapshot as JarvisEntitlementSnapshot,
+      );
+      await createLocal(setup);
+    },
+  );
+  it('ignores unrelated plan refresh in local authorization hash', async () => {
+    const setup = fixture(registration({ requiredEntitlements: [] }));
+    setup.entitlementSnapshots.getForAccount.mockResolvedValue(unavailable);
+    const a = await createLocal(setup);
+    setup.entitlementSnapshots.getForAccount.mockResolvedValue(entitlementSnapshot());
+    const b = await createLocal(setup);
+    expect(a.capabilitySnapshotHash).toBe(b.capabilitySnapshotHash);
+  });
+  it.each([
+    unavailable,
+    { source: 'server', capabilities: ['entitlement.notes'], verifiedAt: 1, expiresAt: 2 },
+    { source: 'server', capabilities: [], verifiedAt: 9000, expiresAt: 20000 },
+  ])('keeps paid entitlement fail-closed: %j', async (snapshot) => {
+    const setup = fixture();
+    setup.entitlementSnapshots.getForAccount.mockResolvedValue(
+      snapshot as JarvisEntitlementSnapshot,
+    );
+    await expect(createLocal(setup)).rejects.toSatisfy((e: unknown) =>
+      expectApprovalError(e, 'entitlement_changed'),
+    );
+    expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
+  });
+  it('rejects removed capability', async () => {
+    const setup = fixture(registration({ requiredEntitlements: [] }));
+    setup.entitlementSnapshots.getForAccount.mockResolvedValue(unavailable);
+    setup.capabilitySnapshots.getForAccount.mockResolvedValue({
+      ...capabilitySnapshot(),
+      tools: [],
+    });
+    await expect(createLocal(setup)).rejects.toSatisfy((e: unknown) =>
+      expectApprovalError(e, 'capability_changed'),
+    );
+  });
+  it('rejects account switch during entitlement lookup using real scoped provider', async () => {
+    const { createJarvisCapabilitySnapshotProvider } =
+      await import('@/lib/jarvis/capabilitySnapshot');
+    let active = 'account-a';
+    const real = createJarvisCapabilitySnapshotProvider({
+      getActiveAccountId: () => active,
+      resolveInputForActiveAccount: async () => {
+        const snapshot = capabilitySnapshot();
+        return {
+          capturedAt: 9000,
+          tools: snapshot.tools,
+          plugins: snapshot.plugins,
+          mcps: snapshot.mcps,
+          terminals: snapshot.terminals,
+          agents: snapshot.agents,
+          entitlements: snapshot.entitlements,
+        };
+      },
+    });
+    const setup = fixture(registration({ requiredEntitlements: [] }));
+    setup.capabilitySnapshots.getForAccount.mockImplementation((id) => real.getForAccount(id));
+    setup.entitlementSnapshots.getForAccount.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      active = 'account-b';
+      return unavailable;
+    });
+    await expect(createLocal(setup)).rejects.toThrow();
+    expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
+  });
+});
+
+it('creates only a pending approval for the actual registered local schedule with unavailable billing entitlements', async () => {
+  const { DEFAULT_JARVIS_ACTION_REGISTRATIONS } = await import('@/lib/jarvis/actions/catalog');
+  const action = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+    'schedule.create',
+  )!;
+  expect(action.requiredEntitlements).toEqual([]);
+  expect(action.approval).toBe('always');
+  const setup = fixture(action);
+  const unavailable: JarvisEntitlementSnapshot = { source: 'unavailable', capabilities: [] };
+  setup.entitlementSnapshots.getForAccount.mockResolvedValue(unavailable);
+  setup.capabilitySnapshots.getForAccount.mockResolvedValue({
+    ...capabilitySnapshot(),
+    entitlements: unavailable,
+    tools: [{ id: 'schedule.write', state: 'available', operations: ['execute'] }],
+  });
+  const put = vi.fn(
+    async (_prepared: Parameters<JarvisIssuedApprovalLifecycle['putPreparedApproval']>[0]) => ({
+      kind: 'committed' as const,
+      value: { id: 'jappr_1', status: 'pending' } as JarvisApprovalV1,
+    }),
+  );
+  await expect(
+    setup.engine
+      .bindIssuedLifecycle(lifecycle({ putPreparedApproval: put }))
+      .create({
+        parentRun: setup.run,
+        attempt: requestAttempt(),
+        actionId: action.id,
+        actionVersion: action.version,
+        params: {
+          title: 'Native regression',
+          prompt: 'Return local readiness.',
+          startAtMs: 1786626000000,
+          recurrence: 'once',
+        },
+        expiresAt: now + 1000,
+      }),
+  ).resolves.toMatchObject({ status: 'pending' });
+  expect(put).toHaveBeenCalledOnce();
+  expect(put.mock.calls[0]![0]).toMatchObject({
+    actionId: 'schedule.create',
+    capabilityId: 'schedule.write',
+    targetSnapshot: {
+      kind: 'app_resource',
+      namespace: 'schedule',
+      resourceId: 'Native regression',
+    },
+  });
+  expect(setup.executeRegisteredAction).not.toHaveBeenCalled();
+});
+
+describe('issued approval expiry capability', () => {
+  async function pendingExpiry(expiresAt = now) {
+    const setup = await approvedRequestFixture();
+    const approval = { ...setup.approval, status: 'pending' as const, decidedAt: undefined, expiresAt };
+    setup.approvals.set(approval.id, approval);
+    const decidePreparedApproval = vi.fn(async (_input: { decision: 'approve' | 'deny' | 'expire' }) => ({
+      kind: 'committed' as const, value: { ...approval, status: 'expired' as const, decidedAt: now },
+    }));
+    const issued = lifecycle({ decidePreparedApproval });
+    return { ...setup, approval, decidePreparedApproval, issued,
+      capability: setup.engine.bindIssuedLifecycle(issued) };
+  }
+  it('commits exact expiry at the absolute deadline without any executor or secret resolution', async () => {
+    const s = await pendingExpiry();
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).resolves.toMatchObject({ status: 'expired' });
+    expect(s.decidePreparedApproval).toHaveBeenCalledExactlyOnceWith({ approvalId: s.approval.id, decision: 'expire' });
+    expect(s.executeRegisteredAction).not.toHaveBeenCalled();
+    expect(s.secretHandles.resolveOnce).not.toHaveBeenCalled();
+  });
+  it('rejects a premature expiry without lifecycle mutation', async () => {
+    const s = await pendingExpiry(now + 1);
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'not_expired'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('preserves parameter integrity checks after the deadline', async () => {
+    const s = await pendingExpiry();
+    s.approvals.set(s.approval.id, { ...s.approval, params: { title: 'tampered' } });
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'params_changed'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('rejects another request binding without lifecycle mutation', async () => {
+    const s = await pendingExpiry();
+    s.approvals.set(s.approval.id, { ...s.approval, requestId: 'foreign-request' });
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'run_scope_mismatch'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('cannot expire an approval already consumed by the decision race', async () => {
+    const s = await pendingExpiry();
+    s.approvals.set(s.approval.id, { ...s.approval, status: 'consumed', decidedAt: now, consumedAt: now });
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'not_pending'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('keeps late public Approve rejected and never reinterprets it as expiry or denial', async () => {
+    const s = await pendingExpiry();
+    await expect(s.capability.decide({ parentRun: s.run, approvalId: s.approval.id, decision: 'approve' })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'expired'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('recovers the same already-expired approval without writing another expiry decision', async () => {
+    const s = await pendingExpiry();
+    s.approvals.set(s.approval.id, { ...s.approval, status: 'expired', decidedAt: now });
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).resolves.toMatchObject({ id: s.approval.id, status: 'expired' });
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+    expect(s.executeRegisteredAction).not.toHaveBeenCalled();
+  });
+  it('does not recover an expired approval whose parameters changed', async () => {
+    const s = await pendingExpiry();
+    s.approvals.set(s.approval.id, { ...s.approval, status: 'expired', decidedAt: now, params: { title: 'changed' } });
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toSatisfy((e: unknown) => expectApprovalError(e, 'params_changed'));
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+  });
+  it('rejects revoked lifecycle authority before expiry settlement', async () => {
+    const s = await pendingExpiry();
+    s.issued.dispose();
+    await expect(s.capability.expire!({ parentRun: s.run, approvalId: s.approval.id })).rejects.toBeDefined();
+    expect(s.decidePreparedApproval).not.toHaveBeenCalled();
+    expect(s.executeRegisteredAction).not.toHaveBeenCalled();
   });
 });

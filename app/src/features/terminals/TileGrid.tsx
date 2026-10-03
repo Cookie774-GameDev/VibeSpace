@@ -70,6 +70,7 @@ import { Button } from '@/components/ui/button';
 import { parseTerminalRef, serializeTerminalRef, type TerminalRef } from './terminalRefs';
 import {
   hasCanonicalTerminalExecution,
+  isCompletedTerminalCreation,
   markTerminalExecution,
   requestTerminalExecutionCancellation,
   terminalCancellationDisposition,
@@ -94,12 +95,20 @@ export async function requestTerminalLeafClose(
   leaf: Readonly<{ executionId?: string; sessionId?: string | null }>,
   dependencies: {
     isCanonical?: typeof hasCanonicalTerminalExecution;
+    isCompletedCreation?: typeof isCompletedTerminalCreation;
     requestCanonical?: typeof requestTerminalExecutionCancellation;
     kill?: (sessionId: string) => Promise<unknown>;
     forget?: (sessionId: string) => void;
   } = {},
 ): Promise<'canonical_pending' | 'canonical_terminal' | 'canonical_rejected' | 'manual_closed'> {
   const isCanonical = dependencies.isCanonical ?? hasCanonicalTerminalExecution;
+  if (leaf.executionId && (dependencies.isCompletedCreation ?? isCompletedTerminalCreation)(leaf.executionId,leaf.sessionId)) {
+    if (leaf.sessionId) {
+      await (dependencies.kill ?? ((sessionId) => invoke('terminal_kill',{sessionId})))(leaf.sessionId);
+      (dependencies.forget ?? useTerminalTranscriptStore.getState().forgetSession)(leaf.sessionId);
+    }
+    return 'manual_closed';
+  }
   if (leaf.executionId && isCanonical(leaf.executionId)) {
     const result = await (dependencies.requestCanonical ?? requestTerminalExecutionCancellation)(
       leaf.executionId,
@@ -534,7 +543,8 @@ export function TileGrid({
     // dismissed pane leaked one PTY backend-side until app exit.
     const leaf = allLeaves.find((l) => l.id === paneId);
     if (!leaf) return;
-    const canonical = Boolean(leaf.executionId && hasCanonicalTerminalExecution(leaf.executionId));
+    const canonical = Boolean(leaf.executionId && hasCanonicalTerminalExecution(leaf.executionId) &&
+      !isCompletedTerminalCreation(leaf.executionId, leaf.sessionId));
     if (canonical) pendingCanonicalClosePaneIds.current.add(paneId);
     void requestTerminalLeafClose(leaf)
       .then((outcome) => {

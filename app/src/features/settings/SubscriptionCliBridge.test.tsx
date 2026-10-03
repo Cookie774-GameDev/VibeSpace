@@ -43,6 +43,7 @@ vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
 }));
 
 vi.mock('@/lib/tauri', () => ({
+  isTauri: false,
   openExternal: vi.fn(async () => undefined),
 }));
 

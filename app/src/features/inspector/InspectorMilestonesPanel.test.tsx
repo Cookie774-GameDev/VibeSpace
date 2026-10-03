@@ -1,5 +1,14 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useAuthStore } from '@/stores/auth';
+
+vi.mock('@/lib/db/repositories', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/db/repositories')>('@/lib/db/repositories');
+  return { ...actual,
+    workspaceRepo: { ...actual.workspaceRepo, getById: vi.fn(async () => ({ id: 'S61-workspace-A', owner_id: 'S61-account-A' })) },
+    projectRepo: { ...actual.projectRepo, getById: vi.fn(async () => ({ id: 'S61-project-A', workspace_id: 'S61-workspace-A' })) },
+  };
+});
 
 import { useChatActivityStore } from '@/features/chat/activity/activityStore';
 import type { ChatActivityEvent } from '@/features/chat/activity/types';
@@ -23,12 +32,14 @@ function canonicalActivity(id: string, ts: number): ChatActivityEvent {
 describe('InspectorMilestonesPanel projection boundary', () => {
   beforeEach(() => {
     localStorage.clear();
+    useAuthStore.setState({ localUserId: 'S61-account-A', cloudSession: null,
+      workspaceId: 'S61-workspace-A' as never, projectId: 'S61-project-A' as never });
     useMilestonesStore.setState({ items: [] });
     useChatActivityStore.setState({ eventsByChat: {} });
     useJarvisTaskRunStore.getState().clearForTests();
   });
 
-  it('renders the canonical bounded timeline and ignores legacy activity-store lifecycle writes', () => {
+  it('renders the canonical bounded timeline and ignores legacy activity-store lifecycle writes', async () => {
     useChatActivityStore.getState().record({
       ...canonicalActivity('legacy-event', 1),
       title: 'Legacy activity must stay outside canonical timeline',
@@ -50,8 +61,9 @@ describe('InspectorMilestonesPanel projection boundary', () => {
     expect(screen.queryByText('Legacy activity must stay outside canonical timeline')).toBeNull();
   });
 
-  it('keeps manual milestones editable and separate from canonical activity', () => {
+  it('keeps manual milestones editable and separate from canonical activity', async () => {
     render(<InspectorMilestonesPanel view="milestones" onViewChange={vi.fn()} />);
+    await waitFor(() => expect((screen.getByPlaceholderText('Add milestone…') as HTMLInputElement).disabled).toBe(false));
 
     fireEvent.change(screen.getByPlaceholderText('Add milestone…'), {
       target: { value: 'Review verified output' },

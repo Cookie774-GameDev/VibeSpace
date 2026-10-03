@@ -45,6 +45,10 @@ export type JarvisAbortRegistryCore = {
   registrationAuthority: JarvisAbortRegistrationAuthority;
   cancellationDeliveryAuthority: JarvisCancellationDeliveryAuthority;
   clearRun(accountId: string, runId: string): void;
+  readRunDiagnostic(accountId: string, runId: string): Readonly<{
+    owners: readonly Readonly<{ id: string; kind: string }>[];
+    pendingCancellation: boolean; truncated: boolean; aggregateKind: string | null;
+  }>;
 };
 
 export type JarvisAbortRegistryDependencies = {
@@ -699,7 +703,21 @@ export function createJarvisAbortRegistry(
     },
   };
 
-  return { registrationAuthority, cancellationDeliveryAuthority, clearRun };
+  return {
+    registrationAuthority, cancellationDeliveryAuthority, clearRun,
+    readRunDiagnostic(accountId, runId) {
+      assertStableIdentifier(accountId); assertStableIdentifier(runId);
+      const owners = [...registrations.values()].filter(row =>
+        row.accountId === accountId && targetsRun(row, runId));
+      const state = pending.get(registryKey(accountId, runId));
+      return Object.freeze({
+        owners: owners.slice(0, 100).map(row => Object.freeze({ id: row.registrationId, kind: row.kind })),
+        pendingCancellation: Boolean(state && !state.abandoned && !state.cleared),
+        aggregateKind: state ? aggregateDelivery(state).kind : null,
+        truncated: owners.length > 100,
+      });
+    },
+  };
 }
 
 function fixedCancellationIntentEvent(

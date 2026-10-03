@@ -13,6 +13,7 @@ type NativeTransportRoute =
   | { kind: 'config_providers' }
   | { kind: 'command_list' }
   | { kind: 'skill_list' }
+  | { kind: 'tool_list'; providerId: string; modelId: string }
   | { kind: 'provider_auth' }
   | { kind: 'provider_status' }
   | { kind: 'provider_authorize'; providerId: string }
@@ -127,6 +128,22 @@ function nativeRoute(
   else if (key === 'GET /config/providers') route = { kind: 'config_providers' };
   else if (key === 'GET /command') route = { kind: 'command_list' };
   else if (key === 'GET /skill') route = { kind: 'skill_list' };
+  else if (key === 'GET /experimental/tool') {
+    if (url.pathname !== '/experimental/tool') throw new Error('OpenCode native transport route is invalid.');
+    // The installed SDK requires exact provider/model IDs. Do not default or infer either.
+    try { decodeURIComponent(url.search); } catch { throw new Error('OpenCode tool selection query is invalid.'); }
+    const selection = (name: string): string => {
+      const values = url.searchParams.getAll(name);
+      const value = values[0];
+      if (values.length !== 1 || !value || new TextEncoder().encode(value).byteLength > 512 || /[\s\u0000-\u001f\u007f\ufffd]/u.test(value))
+        throw new Error('OpenCode tool selection query is invalid.');
+      return value;
+    };
+    if (url.searchParams.getAll('directory').length > 1 ||
+      (directory !== undefined && (!directory || directory.length > 4096 || /[\u0000-\u001f\u007f]/u.test(directory))))
+      throw new Error('OpenCode native transport directory is invalid.');
+    route = { kind: 'tool_list', providerId: selection('provider'), modelId: selection('model') };
+  }
   else if (key === 'GET /provider/auth') route = { kind: 'provider_auth' };
   else if (key === 'GET /provider') route = { kind: 'provider_status' };
   else if (
@@ -204,6 +221,7 @@ function nativeRoute(
     else throw new Error('OpenCode native transport route is invalid.');
   } else throw new Error('OpenCode native transport route is invalid.');
   const allowedQueries = new Set(directory === undefined ? [] : ['directory']);
+  if (route.kind === 'tool_list') { allowedQueries.add('provider'); allowedQueries.add('model'); }
   if (route.kind === 'session_messages' && url.searchParams.has('limit'))
     allowedQueries.add('limit');
   for (const key of url.searchParams.keys()) {
@@ -253,6 +271,8 @@ export async function nativeOpenCodeRequest(
   const bridge = await bridgeFactory();
   const method = (init.method ?? 'GET').toUpperCase();
   const mapped = nativeRoute(path, method);
+  if (mapped.route.kind === 'tool_list' && init.body !== undefined && init.body !== null)
+    throw new Error('OpenCode tool discovery body is invalid.');
   if (init.signal?.aborted) throw init.signal.reason;
   const request = {
     generation,

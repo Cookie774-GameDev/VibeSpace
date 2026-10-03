@@ -36,3 +36,27 @@ it('never includes arbitrary native error text or credentials in the displayed e
     /secret-marker/,
   );
 });
+
+it('rejects an acknowledged save when current setup step is stale or absent in native readback', async () => {
+  const requested = { ...draft, displayName: 'Synthetic plugin', step: 3 };
+  for (const step of [1, undefined]) {
+    invoke.mockImplementation(async (command) =>
+      command === 'desktop_connector_status'
+        ? { ...requested, step, hasKey: false }
+        : undefined,
+    );
+    await expect(saveWebMcpDraft(requested, '')).rejects.toThrow(/saved and verified/i);
+  }
+});
+
+it('accepts the exact acknowledged advanced setup step without claiming an active tunnel', async () => {
+  const requested = { ...draft, displayName: 'Synthetic plugin', step: 3 };
+  invoke.mockImplementation(async (command) =>
+    command === 'desktop_connector_status'
+      ? { ...requested, hasKey: false, connectionDetected: false, status: 'disconnected' }
+      : undefined,
+  );
+  await expect(saveWebMcpDraft(requested, '')).resolves.toMatchObject({
+    step: 3, connectionDetected: false, status: 'disconnected',
+  });
+});

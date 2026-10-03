@@ -1,10 +1,13 @@
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/stores/auth', () => ({
-  useAuthStore: (selector: (state: { projectId: null }) => unknown) =>
-    selector({ projectId: null }),
-}));
+vi.mock('@/stores/auth', () => {
+  const state = { projectId: null, workspaceId: null, localUserId: null, cloudSession: null };
+  return { useAuthStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), {
+    getState: () => state,
+    subscribe: () => () => undefined,
+  }) };
+});
 
 vi.mock('./liveWork', () => ({
   focusChat: vi.fn(),

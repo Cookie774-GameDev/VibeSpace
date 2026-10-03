@@ -2766,6 +2766,44 @@ const ALL_DEFAULT_JARVIS_ACTION_REGISTRATIONS: readonly JarvisRegisteredActionDe
     }),
   },
   {
+    id: 'milestone.create',
+    version: 1,
+    title: 'Create milestone',
+    description: 'Create one persistent milestone in the active project with explicit owner approval.',
+    inputSchema: {
+      type: 'object',
+      properties: { title: { type: 'string' }, description: { type: 'string' }, deadlineAt: { type: 'number' } },
+      required: ['title'],
+      additionalProperties: false,
+    },
+    outputSchema: NO_OUTPUT_SCHEMA,
+    requiredCapabilities: ['milestone.write'],
+    requiredEntitlements: [],
+    risk: 'safe-write',
+    approval: 'always',
+    expectedEffect: 'Creates one project-scoped, user-approved persistent milestone.',
+    exposeToAI: true,
+    executor: { kind: 'builtin', registryActionId: 'milestone.create' },
+    credentialBindings: [],
+    validateParameters(input) {
+      const record = plainRecord(input, 'milestone.create parameters');
+      assertExactKeys(record, ['title', 'description', 'deadlineAt'], 'milestone.create parameters');
+      const title = nonblank(record.title, 'milestone.create parameters.title').trim();
+      if (title.length > 240 || /[\u0000-\u001f\u007f]/u.test(title)) catalogError('Milestone title is invalid.');
+      const result: Record<string, unknown> = { title };
+      if (record.description !== undefined) {
+        if (typeof record.description !== 'string' || record.description.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(record.description)) catalogError('Milestone description is invalid.');
+        result.description = record.description.trim();
+      }
+      if (record.deadlineAt !== undefined) {
+        if (typeof record.deadlineAt !== 'number' || !Number.isSafeInteger(record.deadlineAt) || record.deadlineAt <= 0 || record.deadlineAt > 8.64e15) catalogError('Milestone deadline is invalid.');
+        result.deadlineAt = record.deadlineAt;
+      }
+      return result;
+    },
+    deriveTarget: ({ params }) => ({ kind: 'app_resource', namespace: 'milestone', resourceId: String(params.title) }),
+  },
+  {
     id: 'schedule.create',
     version: 1,
     title: 'Create Jarvis schedule',
@@ -2800,6 +2838,25 @@ const ALL_DEFAULT_JARVIS_ACTION_REGISTRATIONS: readonly JarvisRegisteredActionDe
       namespace: 'schedule',
       resourceId: String(params.title),
     }),
+  },
+  {
+    id: 'schedule.pause', version: 1, title: 'Pause schedule',
+    description: 'Pause one schedule in the active project without deleting its history.',
+    inputSchema: {type:'object',properties:{eventId:{type:'string'}},required:['eventId'],additionalProperties:false},
+    outputSchema:NO_OUTPUT_SCHEMA,requiredCapabilities:['schedule.write'],requiredEntitlements:[],
+    risk:'destructive',approval:'always',expectedEffect:'Pauses one owner-approved local schedule.',exposeToAI:true,
+    executor:{kind:'builtin',registryActionId:'schedule.pause'},credentialBindings:[],
+    validateParameters(input){const record=plainRecord(input,'schedule.pause');assertExactKeys(record,['eventId'],'schedule.pause');const eventId=nonblank(record.eventId,'eventId').trim();if(eventId.length>200||!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(eventId))catalogError('eventId is invalid');return {eventId};},
+    deriveTarget:({params})=>({kind:'app_resource',namespace:'schedule',resourceId:String(params.eventId)}),
+  },
+  {
+    id:'chat.rename',version:1,title:'Rename chat',description:'Rename one chat in the active project with explicit owner approval.',
+    inputSchema:{type:'object',properties:{chatId:{type:'string'},title:{type:'string'}},required:['chatId','title'],additionalProperties:false},
+    outputSchema:NO_OUTPUT_SCHEMA,requiredCapabilities:['chat.write'],requiredEntitlements:[],
+    risk:'safe-write',approval:'always',expectedEffect:'Renames one owner-approved local chat.',exposeToAI:true,
+    executor:{kind:'builtin',registryActionId:'chat.rename'},credentialBindings:[],
+    validateParameters(input){const record=plainRecord(input,'chat.rename');assertExactKeys(record,['chatId','title'],'chat.rename');const chatId=nonblank(record.chatId,'chatId').trim();const title=nonblank(record.title,'title').trim();if(chatId.length>200||!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(chatId)||title.length>500||title.includes('\0'))catalogError('chat.rename parameters are invalid');return {chatId,title};},
+    deriveTarget:({params})=>({kind:'app_resource',namespace:'chat',resourceId:String(params.chatId)}),
   },
   {
     id: 'agent.run',
@@ -2847,7 +2904,11 @@ const ALL_DEFAULT_JARVIS_ACTION_REGISTRATIONS: readonly JarvisRegisteredActionDe
     exposeToAI: true,
     executor: { kind: 'builtin', registryActionId: 'terminal.create' },
     credentialBindings: [],
-    validateParameters: (input: Readonly<Record<string, unknown>>) => ({ ...input }),
+    validateParameters: (input: Readonly<Record<string, unknown>>) => {
+      const record = plainRecord(input, 'terminal.create parameters');
+      assertExactKeys(record, [], 'terminal.create parameters');
+      return {};
+    },
     deriveTarget: () => ({ kind: 'external_resource', service: 'terminal', resourceId: 'new' }),
   },
   {

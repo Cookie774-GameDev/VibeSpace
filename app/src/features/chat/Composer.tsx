@@ -1,5 +1,6 @@
 import { openQueuedSideChat, registerQueueSideSender } from './queueSideChat';
 import { useComposerQueueSession } from './composerQueueSession';
+import { useComposerAttachmentSession } from './composerAttachmentSession';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import './composer-frame.css';
@@ -1574,11 +1575,11 @@ export function Composer({
   const queueSession = useComposerQueueSession(queueScope);
   const { messages: queuedMessages, setMessages: setQueuedMessages } = queueSession;
   const escapeCancelRef = useRef<EscapeCancelState>(createEscapeCancelState());
-  const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
-  const [attachedImages, setAttachedImages] = useState<ChatImageAttachment[]>([]);
-  const [attachedTerminals, setAttachedTerminals] = useState<TerminalRef[]>([]);
-  const [attachedPlugins, setAttachedPlugins] = useState<string[]>([]);
-  const [attachedContexts, setAttachedContexts] = useState<ContextChatAttachment[]>([]);
+  const { attachments: draftAttachments, setAttachedFiles, setAttachedImages,
+    setAttachedTerminals, setAttachedPlugins, setAttachedContexts } =
+    useComposerAttachmentSession(queueScope);
+  const { files: attachedFiles, images: attachedImages, terminals: attachedTerminals,
+    plugins: attachedPlugins, contexts: attachedContexts } = draftAttachments;
   const [mediaPreview, setMediaPreview] = useState<MediaPreviewTarget | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [pendingHandoff, setPendingHandoff] = useState<ChatHandoffProjectionV1 | null>(null);
@@ -4318,7 +4319,9 @@ export function Composer({
         role: 'system',
         parts: [{ kind: 'text', text: `${UNDO_STATUS_TEXT} ${summarizeUndoTurn(turn)}` }],
       });
-      setText('');
+      if (textRef.current === originalUserText) {
+        setText(originalUserText.replace(/^\/undo(?:[ \t]*\r?\n|[ \t]+|$)/iu, ''));
+      }
       return true;
     }
     if (cmd === 'redo') {
@@ -6439,7 +6442,7 @@ export function Composer({
       return `${cur}${separator}${clean}`;
     });
     requestAnimationFrame(() => textareaRef.current?.focus());
-  }, []);
+  }, [setAttachedImages, setAttachedFiles]);
 
   const addChatHandoff = useCallback(
     async (payload: ChatDragPayloadV1) => {
@@ -6550,7 +6553,7 @@ export function Composer({
       }
       return result.items;
     });
-  }, []);
+  }, [setAttachedImages]);
 
   const addBrowserImages = useCallback(
     async (files: File[] | FileList) => {
@@ -6675,7 +6678,7 @@ export function Composer({
     }
 
     return attachedAny;
-  }, []);
+  }, [setAttachedFiles]);
 
   /** Shared paste/drop entry: images + videos + general files in one DataTransfer. */
   const attachBrowserFileList = useCallback(
@@ -6721,7 +6724,7 @@ export function Composer({
     );
     setText((cur) => cur || `Please inspect the attached terminal: ${terminalRefLabel(ref)}`);
     requestAnimationFrame(() => textareaRef.current?.focus());
-  }, []);
+  }, [setAttachedTerminals]);
 
   const addDroppedContext = useCallback(
     (raw: string | ContextAttachment) => {
@@ -6748,7 +6751,7 @@ export function Composer({
         toast.error('Context attach rejected', 'The Context attachment is malformed.');
       }
     },
-    [projectId],
+    [projectId, setAttachedContexts],
   );
 
   useEffect(() => {
@@ -7878,6 +7881,11 @@ export function Composer({
                         <Pause />
                       </Button>
                     </Hint>
+                  ) : stoppedRequest && !hasDraft && chatBackendAffinity?.backend === 'codex' ? (
+                    <span role="status" className="text-xs text-muted-foreground">
+                      Exact resume is unavailable. Use Retry in composer to review a new request;
+                      requests with attachments need manual review.
+                    </span>
                   ) : stoppedRequest && !hasDraft ? (
                     <Hint label="Resume current request">
                       <Button

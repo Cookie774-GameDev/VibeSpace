@@ -36,6 +36,24 @@ function receipt(
 }
 
 describe('pre-model local command bridge', () => {
+  it.each(['open codec', 'open codez', 'open clode', 'open settings and open codec'])(
+    'holds the ambiguous local command %s before any executor or model dispatch',
+    async (text) => {
+      const execute = vi.fn();
+      const bridge = new LocalCommandPreModelBridge({ execute });
+      const result = await bridge.process({
+        text,
+        interactionId: 'interaction-ambiguous',
+        context: context('interaction-ambiguous'),
+      });
+      expect(result.holdModel).toBe(true);
+      expect(result.commandOnly).toBe(false);
+      expect(result.modelText).toBe(text);
+      expect(result.receipts).toMatchObject([{ status: 'needs_clarification' }]);
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
   it('leaves model-only text unchanged and does not execute', async () => {
     const execute =
       vi.fn<

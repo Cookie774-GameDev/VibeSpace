@@ -45,6 +45,25 @@ describe('typed kernel client', () => {
     vi.useRealTimers();
   });
 
+  it('run diagnostic rejects foreign host epochs and stamps only its registered native epoch', async () => {
+    tauri.invoke.mockResolvedValue({ epoch: 41, requestId: 'diagnostic-request', deadlineMs: Date.now() + 1_000 });
+    localHost.request.mockResolvedValue({ version: 1, kind: 'unavailable', requestKind: 'run_ownership_diagnostic', reason: 'host_unavailable' });
+    const client = createJarvisKernelClient({ timeoutMs: 1_000 });
+    const pending = client.getRunOwnershipDiagnostic({ runId: 'jrun_fixture' });
+    await vi.waitFor(() => expect(tauri.invoke).toHaveBeenCalledTimes(1));
+    const response = { version: 1 as const, kind: 'run_ownership_diagnostic' as const,
+      accountId: 'account', runId: 'jrun_fixture', authorityEpoch: 3,
+      consistency: 'non_atomic_observation' as const, settlementAuthority: false as const,
+      latestAttempt: null, ownerCount: 0, terminalCount: 0, queueCount: 0,
+      cancellationIntentCount: 0, approvalCount: 0, pendingCancellation: null,
+      terminalRead: 'unavailable' as const, unknowns: ['registry_owner_unavailable'] };
+    emit({ epoch: 42, requestId: 'diagnostic-request', response });
+    expect(tauri.unlisteners.every(unlisten => unlisten.mock.calls.length === 0)).toBe(true);
+    emit({ epoch: 41, requestId: 'diagnostic-request', response });
+    await expect(pending).resolves.toMatchObject({ kind: 'run_ownership_diagnostic', nativeHostEpoch: 41 });
+    expect(localHost.request).not.toHaveBeenCalled(); client.dispose();
+  });
+
   it('exposes only closed typed methods and correlates simultaneous responses', async () => {
     tauri.invoke.mockImplementation(
       async (_command: string, input: { request: { kind: string } }) =>
@@ -63,6 +82,8 @@ describe('typed kernel client', () => {
       'getApprovalPresentation',
       'getApprovalStatus',
       'getCommandCenterSnapshot',
+      'getContextSourceRevision',
+      'getRunOwnershipDiagnostic',
       'retryScheduled',
     ]);
     expect('request' in client).toBe(false);

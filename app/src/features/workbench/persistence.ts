@@ -55,6 +55,9 @@ function safeSettings(value: unknown, forTemplate = false): WorkbenchPanelSettin
   const input = value as Record<string, unknown>;
   const settings: WorkbenchPanelSettings = {};
   if (input.creative) settings.creative = creativeStyle(input.creative);
+  if (input.filesRootScope === 'panel' || input.filesRootScope === 'project') {
+    settings.filesRootScope = input.filesRootScope;
+  }
   for (const key of [
     'url',
     'cwd',

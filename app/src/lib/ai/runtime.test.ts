@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import { resetTurnStoreForTests } from '@/features/chat/runtime/turn/turnStore';
 import { createJarvisDb } from '@/lib/db';
 import { TEST_INDEXED_DB, uniqueTestDbName } from '@/test/indexedDb';
 import type { Agent, Message, Part } from '@/types';
@@ -2259,6 +2260,7 @@ describe('startRuntimeListener agent routing', () => {
   });
 
   beforeEach(() => {
+    resetTurnStoreForTests();
     mocks.listOpenCodeModels.mockReset();
     vi.clearAllMocks();
     resetDiscoveredConnectionModelsForTests();
@@ -2673,7 +2675,7 @@ describe('startRuntimeListener agent routing', () => {
     expect(contextTools.vibespace_context).toBe(true);
     expect(
       Object.entries(contextTools)
-        .filter(([tool]) => tool !== 'vibespace_context')
+        .filter(([tool]) => tool !== 'vibespace_context' && !tool.startsWith('vibespace_context_'))
         .every(([, enabled]) => enabled === false),
     ).toBe(true);
   });
@@ -5805,10 +5807,24 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           }),
         }),
       );
+      const expectedContextTools = [
+        'vibespace_context',
+        'vibespace_context_address',
+        'vibespace_context_expand',
+        'vibespace_context_open',
+        'vibespace_context_search',
+        'vibespace_context_trace',
+      ];
       expect(providerInput.tools.vibespace_context).toBe(true);
       expect(
         Object.entries(providerInput.tools)
-          .filter(([tool]) => tool !== 'vibespace_context')
+          .filter(([, enabled]) => enabled === true)
+          .map(([tool]) => tool)
+          .sort(),
+      ).toEqual(expectedContextTools);
+      expect(
+        Object.entries(providerInput.tools)
+          .filter(([tool]) => !expectedContextTools.includes(tool))
           .every(([, enabled]) => enabled === false),
       ).toBe(true);
       expect(providerInput.messages.at(-1)?.content).toContain(
@@ -7814,6 +7830,141 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     });
   }
 
+  it.each([
+    ['executor_missing', { kind: 'executor_missing' }, 'handoff_pending'],
+    ['delivery_rejected', { kind: 'delivery_rejected', ownerIds: ['owned-terminal'] }, 'handoff_pending'],
+    ['signal_delivered', { kind: 'signal_delivered', ownerIds: ['owned-terminal'] }, 'delivered'],
+  ] as const)('maps composed host cancellation %s without bypassing account authority', async (label, aggregate, expectedState) => {
+    const database = createJarvisDb(uniqueTestDbName('runtime-cancel-host-' + label), TEST_INDEXED_DB);
+    await database.open();
+    const run: JarvisRun = {
+      id: 'jrun_cancel_host_' + label,
+      accountId: 'runtime-test-account',
+      workspaceId: 'workspace-cancel-host',
+      chatId: 'chat-cancel-host',
+      source: 'typed_chat', status: 'running', agentId: 'agent_jarvis',
+      identityVersion: 1, profileRevisionId: 'profile-cancel-host',
+      model: { providerId: 'mock', modelId: 'mock-default', connectionMode: 'local', capabilities: {}, capturedAt: 1 },
+      createdAt: 1, updatedAt: 2,
+    };
+    await database.jarvis_runs.add(toJarvisRunRow(run));
+    const observedCanonicalResults: Awaited<ReturnType<JarvisKernelRuntime['requestCancellation']>>[] = [];
+    const delegatedCancellation = vi.fn<JarvisKernelRuntime['requestCancellation']>();
+    interceptNextKernelRuntime(kernel => {
+      delegatedCancellation.mockImplementation(async input => {
+        // Exercise actual account binding, cancellation intent transaction and registry.
+        // Only a canonical committed result gets this scenario's dependency aggregate.
+        const result = await kernel.requestCancellation(input);
+        observedCanonicalResults.push(result);
+        return result.kind === 'intent_committed' ? { ...result, aggregate } : result;
+      });
+      return Object.freeze({ ...kernel, requestCancellation: delegatedCancellation });
+    });
+    let disposeHost: (() => void) | undefined;
+    try {
+      disposeHost = await installKernelTestHost(database, 'cancel-host-' + label);
+      // Calls the installed host.handleClientRequest, not the standalone mapper.
+      await expect(handleInstalledJarvisKernelClientRequest({
+        version: 1, kind: 'cancel', accountId: run.accountId, runId: run.id,
+      })).resolves.toEqual({ version: 1, kind: 'cancellation_state', runId: run.id, state: expectedState });
+      expect(delegatedCancellation).toHaveBeenCalledWith({ accountId: run.accountId, runId: run.id });
+      expect(observedCanonicalResults[0]).toMatchObject({ kind: 'intent_committed', authorityState: 'current' });
+      const persisted = await database.jarvis_runs.get(run.id);
+      expect(persisted).toEqual(toJarvisRunRow(run));
+      const committedEvents = await database.jarvis_events.toArray();
+      expect(committedEvents).toHaveLength(1);
+      expect(committedEvents[0]).toMatchObject({ run_id: run.id, status: 'cancellation_requested' });
+
+      // Foreign request cannot use the current account's installed host authority.
+      await expect(handleInstalledJarvisKernelClientRequest({
+        version: 1, kind: 'cancel', accountId: 'foreign-account', runId: run.id,
+      })).resolves.toEqual({ version: 1, kind: 'cancellation_state', runId: run.id, state: 'not_found' });
+      expect(observedCanonicalResults.at(-1)).toEqual({ kind: 'authority_revoked_before_intent' });
+      expect(await database.jarvis_events.toArray()).toEqual(committedEvents);
+
+      // A real local account switch also revokes the original request's authority.
+      useAuthStore.setState({ localUserId: 'revoked-current-account' });
+      await expect(handleInstalledJarvisKernelClientRequest({
+        version: 1, kind: 'cancel', accountId: run.accountId, runId: run.id,
+      })).resolves.toEqual({ version: 1, kind: 'cancellation_state', runId: run.id, state: 'not_found' });
+      expect(observedCanonicalResults.at(-1)).toEqual({ kind: 'authority_revoked_before_intent' });
+      expect(await database.jarvis_events.toArray()).toEqual(committedEvents);
+      expect(await database.jarvis_runs.get(run.id)).toEqual(persisted);
+      expect(mocks.runAgent).not.toHaveBeenCalled();
+    } finally {
+      disposeHost?.();
+      mocks.kernelRuntimeInterceptor = null;
+      useAuthStore.setState({ localUserId: 'runtime-test-account' });
+      database.close();
+      await database.delete();
+    }
+  });
+
+
+  it.each([
+    ['chat Off despite automatic On', 'chat-off'],
+    ['automatic On admits all five real tools', 'auto-on'],
+    ['workspace Off without a chat override', 'workspace-off'],
+    ['chat On takes precedence over workspace Off', 'chat-on'],
+  ] as const)('uses trusted installed-kernel provider scope: %s', async (_label, preference) => {
+    const workspaceId = 'workspace-kernel-rlm-admission';
+    const selected = agent('agent_jarvis', 'jarvis', 'Protected Jarvis', true);
+    const harness = kernelRuntimeBindings(selected);
+    const userText = 'Who owns BLUE KITE? Cite the mapped project records.';
+    harness.bindings.getMessages = vi.fn(async () => [{
+      id: 'msg_kernel_user' as MessageId, chat_id: harness.chatId, role: 'user' as const,
+      parts: [{ kind: 'text' as const, text: userText }], created_at: 1, updated_at: 1,
+    }]);
+    const connection = PROVIDER_CONNECTIONS.find(item => item.id === 'opencode-cli')!;
+    mocks.listOpenCodeModels.mockResolvedValue([{ id: 'opencode-go/deepseek-v4-flash-vision-exp', label: 'DeepSeek fixture', variants: ['medium'] }]);
+    rememberLiveOpenCodeProviders([{ id: 'opencode-go', name: 'OpenCode Go', connected: true,
+      models: [{ id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek fixture', variants: ['medium'] }] }]);
+    useAuthStore.setState({ workspaceId: workspaceId as never,
+      chatModelSelection: selectionFromOption(connection.providerId as ProviderId, 'opencode-go/deepseek-v4-flash-vision-exp', connection) });
+    const preferenceStore = await import('@/features/context/rlmPreferenceStore');
+    const scopedOff = preference === 'workspace-off' || preference === 'chat-on';
+    // Only test-local production preference storage; no mocked policy/manifest.
+    localStorage.setItem('vibespace.rlm-preference.v1', JSON.stringify({
+      version: 1, userDefault: true, chats: {},
+      workspaces: scopedOff ? { [workspaceId]: { enabled: false, updatedAt: 1 } } : {},
+      lastRefreshAt: null, lastRoute: null, lastRunStatus: null,
+    }));
+    if (preference === 'chat-off') preferenceStore.setChatRlmEnabled(harness.chatId, false);
+    if (preference === 'chat-on') preferenceStore.setChatRlmEnabled(harness.chatId, true);
+    const database = createJarvisDb(uniqueTestDbName('runtime-kernel-rlm-admission'), TEST_INDEXED_DB);
+    await database.open();
+    await database.chats.add({ id: harness.chatId, workspace_id: workspaceId as never,
+      title: 'Kernel RLM admission', mode: 'chat', active_agent_ids: [selected.id], created_at: 1, updated_at: 1 });
+    mocks.chatGetById.mockResolvedValue(await database.chats.get(harness.chatId));
+    mocks.runAgent.mockImplementation(async input => ({ text: 'Fixture provider response.',
+      usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 }, provider: input.agent.model.provider, model: input.agent.model.model }));
+    const disposeHost = await installKernelTestHost(database, 'kernel-rlm-admission');
+    const stop = startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() });
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId: harness.chatId, text: userText, interactionMode: 'agent',
+        reasoningPreference: { mode: 'normal', effortOverride: 'medium' },
+        runtimeSettings: { effort: 'medium', performance: 'quality' },
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce(), { timeout: 5_000 });
+      const request = mocks.runAgent.mock.calls[0]![0];
+      // Genuine dispatch produced by the installed host's protected provider factory.
+      expect(request).toMatchObject({ chatId: harness.chatId, workspaceId,
+        connectionId: 'opencode-cli', protectedAttempt: { accountId: 'runtime-test-account' } });
+      const enabled = preference === 'auto-on' || preference === 'chat-on';
+      const names = ['search', 'open', 'expand', 'address', 'trace'].map(op => `vibespace_context_${op}`);
+      expect(names.filter(name => request.tools?.[name] === true)).toHaveLength(enabled ? 5 : 0);
+      expect(request.tools?.vibespace_context).toBe(enabled);
+      await vi.waitFor(async () => {
+        const run = await database.jarvis_runs.where('chat_id').equals(harness.chatId).first();
+        expect(run?.status).toBe('completed');
+      }, { timeout: 5_000 });
+    } finally {
+      stop(); await stop.whenIdle(); disposeHost();
+      localStorage.removeItem('vibespace.rlm-preference.v1');
+      database.close(); await database.delete();
+    }
+  }, 15_000);
   it.each(['approve', 'deny', 'cancel'] as const)('keeps the canonical tool request in its owning chat through %s', async (choice) => {
     const selected = agent('agent_jarvis', 'jarvis', 'Protected Jarvis', true);
     const harness = kernelRuntimeBindings(selected);
@@ -8051,6 +8202,307 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     lockTestBackend(backend);
     return selection;
   }
+
+  it.each(['confirmed-interruption', 'acknowledgement-only', 'unknown-interruption', 'genuine-provider-error'] as const)(
+    'settles real kernel Codex native Stop without fabricated cancellation: %s',
+    async (scenario) => {
+      const selection = configureCaoRuntimeSelection('codex');
+      const selectedAgent = agent('agent_kernel_native_stop', 'jarvis', 'You are Jarvis.', true);
+      const harness = kernelRuntimeBindings(selectedAgent);
+      const database = createJarvisDb(uniqueTestDbName('native-stop-confirmation'), TEST_INDEXED_DB);
+      await database.open();
+      await database.chats.add({
+        id: harness.chatId, workspace_id: 'workspace_native_stop_confirmation' as never,
+        title: 'Native Stop confirmation', mode: 'chat', active_agent_ids: [selectedAgent.id],
+        backend_affinity: { version: 1, backend: 'codex', locked: true, selectedAt: 1, lockedAt: 2 },
+        created_at: 1, updated_at: 1,
+      });
+      const originalUser = (await harness.bindings.getMessages())[0]!;
+      await database.messages.add(originalUser);
+      const providerGate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
+      let providerInput!: Parameters<typeof mocks.runAgent>[0];
+      mocks.runAgent.mockImplementationOnce(input => {
+        providerInput = input;
+        return providerGate.promise;
+      });
+      const nativeInterrupt = vi.fn(async () => undefined);
+      const disposeHost = await installKernelTestHost(database, 'native-stop-' + scenario);
+      const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+      try {
+        window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+          accountId: 'runtime-test-account', chatId: harness.chatId,
+          cancellationKey: originalUser.id, text: 'Explain cancellation with examples.',
+          interactionMode: 'agent', modelSelectionOverride: selection,
+        } }));
+        await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+        expect(providerInput.backend).toBe('codex');
+        providerInput.onLiveTurnControl?.({
+          steer: vi.fn(async () => undefined),
+          enqueue: vi.fn(async () => ({ submissionId: 'stop-fixture', threadId: 'stop-thread', turnId: 'stop-turn' })),
+          interrupt: nativeInterrupt,
+        });
+        providerInput.onChunk?.({ delta: 'Cancellation test partial.', first: true });
+        const running = (await database.jarvis_runs.toArray())[0]!;
+        expect(running.status).toBe('running');
+        window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { messageId: originalUser.id } }));
+        await vi.waitFor(() => expect(nativeInterrupt).toHaveBeenCalledOnce());
+        // A native RPC acknowledgement is not a confirmed terminal outcome.
+        expect(providerInput.signal.aborted).toBe(false);
+        expect((await database.jarvis_runs.get(running.id))?.status).toBe('running');
+        expect(await database.jarvis_events.where('run_id').equals(running.id).filter(event => event.status === 'cancellation_requested').count()).toBe(0);
+        if (scenario === 'confirmed-interruption') {
+          // This is the adapter's confirmed interrupted-terminal contract, not a synthetic native receipt.
+          providerGate.reject(new DOMException('The Codex turn was interrupted.', 'AbortError'));
+        } else if (scenario === 'unknown-interruption') {
+          const { CodexInterruptedTurnOutcomeUnknownError } = await import('./adapters/codexPersistent');
+          providerGate.reject(new CodexInterruptedTurnOutcomeUnknownError());
+        } else if (scenario === 'genuine-provider-error') {
+          providerGate.reject(new ProviderRuntimeError({ message: 'Provider unavailable.', code: 'RATE_LIMIT', retryable: true }));
+        } else {
+          providerGate.resolve({ text: 'The provider finished normally.', usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 }, provider: 'openai', model: 'gpt-5.6-terra' });
+        }
+        await stop.whenIdle();
+        const rows = await database.jarvis_runs.toArray();
+        expect(rows).toHaveLength(1);
+        const expected = scenario === 'confirmed-interruption' ? 'cancelled' : scenario === 'acknowledgement-only' ? 'completed' : 'failed';
+        expect(rows[0]?.status).toBe(expected);
+        const events = await database.jarvis_events.where('run_id').equals(running.id).toArray();
+        expect(events.filter(event => event.status === 'cancellation_requested')).toHaveLength(scenario === 'confirmed-interruption' ? 1 : 0);
+        if (scenario === 'confirmed-interruption') {
+          expect(events.some(event => event.status === 'failed')).toBe(false);
+          expect(events.some(event => event.status === 'cancelled')).toBe(true);
+          const { getChatRunState } = await import('@/features/chat/runtime/chatRunState');
+          expect(getChatRunState(harness.chatId)).toMatchObject({ status: 'cancelled', cancellationKey: originalUser.id });
+        } else {
+          expect(events.some(event => event.status === 'cancelled')).toBe(false);
+        }
+        const originalRows = await database.messages.where('chat_id').equals(harness.chatId).filter(message => message.role === 'user').toArray();
+        expect(originalRows.map(message => message.id)).toEqual([originalUser.id]);
+        expect(mocks.runAgent).toHaveBeenCalledOnce();
+      } finally {
+        providerGate.reject(new DOMException('Fixture cleanup', 'AbortError'));
+        stop();
+        await stop.whenIdle();
+        disposeHost();
+        database.close();
+        await database.delete();
+      }
+    }, 15_000,
+  );
+
+  it.each(['current-turn', 'settled-old-reread'] as const)(
+    'projects actual issued canonical approval expiry only onto its current runtime turn: %s',
+    async (scenario) => {
+      const selection = configureCaoRuntimeSelection('codex');
+      const selectedAgent = agent('agent_expiry_projection', 'jarvis', 'You are Jarvis.', true);
+      const harness = kernelRuntimeBindings(selectedAgent);
+      const database = createJarvisDb(uniqueTestDbName('issued-expiry-projection'), TEST_INDEXED_DB);
+      await database.open();
+      await database.chats.add({
+        id: harness.chatId, workspace_id: 'workspace_expiry_projection' as never,
+        title: 'Expiry projection fixture', mode: 'chat', active_agent_ids: [selectedAgent.id],
+        backend_affinity: { version: 1, backend: 'codex', locked: true, selectedAt: 1, lockedAt: 2 },
+        created_at: 1, updated_at: 1,
+      });
+      // The shared selection helper configures only one backend-lock result.
+      // Every incoming turn must instead read the same persisted Codex affinity.
+      const backendPersistence = await vi.importActual<typeof import('./backend/chatBackendPersistence')>(
+        './backend/chatBackendPersistence',
+      );
+      const backendPort: import('./backend/chatBackendPersistence').ChatBackendPersistencePort = {
+        transaction: (run) => database.transaction('rw', database.chats, database.messages, run),
+        getChat: (chatId) => database.chats.get(chatId as ChatId),
+        hasCommittedUserMessage: async (chatId) => Boolean(await database.messages
+          .where('chat_id').equals(chatId).filter(message => message.role === 'user').first()),
+        updateChat: (chatId, patch) => database.chats.update(chatId as ChatId, patch),
+      };
+      mocks.lockChatBackendForDispatch.mockReset();
+      mocks.lockChatBackendForDispatch.mockImplementation((_storage, chatId, committedAt) =>
+        backendPersistence.lockChatBackendForDispatch(backendPort, chatId, committedAt));
+      mocks.chatGetById.mockImplementation((chatId) => database.chats.get(chatId as ChatId));
+      // Composer persists each submitted user before dispatch. Use the same real
+      // database for chronological history and assistant writes; the static
+      // kernelRuntimeBindings history cannot represent a later incoming turn.
+      let messageSequence = 0;
+      let lastMessageAt = 0;
+      const nextMessageAt = () => (lastMessageAt = Math.max(Date.now(), lastMessageAt + 1));
+      const persistedBindings: RuntimeBindings = {
+        ...harness.bindings,
+        getMessages: async () => database.messages.where('chat_id').equals(harness.chatId).sortBy('created_at'),
+        appendMessage: async (message) => {
+          const stamp = nextMessageAt();
+          const row: Message = { ...message, id: `msg_expiry_fixture_${++messageSequence}` as MessageId,
+            created_at: stamp, updated_at: stamp };
+          await database.messages.add(row);
+          return row;
+        },
+        updateMessage: async (id, patch) => { await database.messages.update(id, patch); },
+      };
+      const persistUser = async (id: string, text: string) => {
+        const stamp = nextMessageAt();
+        await database.messages.add({ id: id as MessageId, chat_id: harness.chatId,
+          role: 'user', parts: [{ kind: 'text', text }], created_at: stamp, updated_at: stamp });
+      };
+      let clock = 100;
+      let uuid = 0;
+      const now = () => clock;
+      const randomUUID = () => `expiry-projection-${scenario}-${++uuid}`;
+      const catalog = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS);
+      // Time advances below; the authentic issued capability proof must not rotate with it.
+      const entitlement = () => ({ source: 'local_development' as const, capabilities: [], verifiedAt: 100, expiresAt: 3_600_100 });
+      const capabilitySnapshots = { getForAccount: vi.fn(async () => ({
+        capturedAt: 100,
+        tools: [{ id: 'chat.write', state: 'available' as const, operations: ['execute'], evidenceRef: 'registered:chat.rename:1:test', lastVerifiedAt: 100 }],
+        plugins: [], mcps: [], terminals: [], agents: [], entitlements: entitlement(),
+      })) };
+      const executeRegisteredAction = vi.fn(async (): Promise<import('@/lib/jarvis/approvalEngine').JarvisRegisteredActionDispatchOutcome> => ({ kind: 'executor_returned', result: { ok: true, data: { renamed: true } } }));
+      const securityRuntime = createJarvisSecurityRuntime({
+        repositories: createJarvisRepositories(database), catalog, capabilitySnapshots,
+        entitlementSnapshots: { getForAccount: vi.fn(async () => entitlement()) },
+        credentialGrants: {} as never, credentialAuthorization: {} as never,
+        pluginConnections: { upsertConnection: vi.fn(), removeConnection: vi.fn() },
+        activeAccountId: () => 'runtime-test-account', executeRegisteredAction,
+        bootId: 'expiry-projection-boot', randomUUID, now,
+      });
+      let issuedKernel!: JarvisKernelRuntime;
+      interceptNextKernelRuntime(kernel => { issuedKernel = kernel; return kernel; });
+      const disposeHost = await installJarvisKernelRuntimeHost({
+        db: database, bindKernelActions: securityRuntime.bindKernelActions,
+        actionCatalog: catalog, capabilitySnapshots, randomUUID, now,
+      });
+      const newerGate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
+      let newerInput: Parameters<typeof mocks.runAgent>[0] | undefined;
+      mocks.runAgent.mockResolvedValueOnce({
+        text: ['The rename is prepared for review.', '```action', JSON.stringify({
+          id: 'chat.rename', params: { chatId: harness.chatId, title: 'Never auto rename on expiry' },
+          rationale: 'Request owner approval for the disposable rename.',
+        }), '```'].join('\n'),
+        usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 }, provider: 'openai', model: 'gpt-5.6-terra',
+      });
+      const stop = trackListener(startRuntimeListener(persistedBindings, { jarvisInterlocks: runtimeInterlocks() }));
+      try {
+        await persistUser('msg_expiry_original', 'Rename this chat and request approval.');
+        window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+          accountId: 'runtime-test-account', chatId: harness.chatId, cancellationKey: 'msg_expiry_original',
+          text: 'Rename this chat and request approval.', interactionMode: 'agent', agentApprovalMode: 'review',
+          modelSelectionOverride: selection,
+        } }));
+        await stop.whenIdle();
+        const approvals = await database.jarvis_approvals.toArray();
+        expect(approvals).toHaveLength(1);
+        const approval = approvals[0]!;
+        expect(approval.status).toBe('pending');
+        const originalRun = (await database.jarvis_runs.get(approval.run_id))!;
+        const { getLatestTurnByChatId } = await import('@/features/chat/runtime/turn/turnStore');
+        const { getChatRunState } = await import('@/features/chat/runtime/chatRunState');
+        expect(getLatestTurnByChatId(harness.chatId)?.identity.runId).toBe(originalRun.id);
+        expect(executeRegisteredAction).not.toHaveBeenCalled();
+        if (scenario === 'settled-old-reread') {
+          const pendingTurnBefore = getLatestTurnByChatId(harness.chatId)!;
+          const pendingCompatibilityBefore = getChatRunState(harness.chatId);
+          await persistUser('msg_expiry_blocked', 'Explain a queue without taking actions.');
+          // A genuinely rejected new preparation has no authority over the old
+          // pending turn. This does not invent a blanket pending-Send policy.
+          harness.bindings.getAgentForChat.mockRejectedValueOnce(new Error('Fixture agent lookup unavailable'));
+          window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+            accountId: 'runtime-test-account', chatId: harness.chatId, cancellationKey: 'msg_expiry_blocked',
+            text: 'Explain a queue without taking actions.', interactionMode: 'ask', modelSelectionOverride: selection,
+          } }));
+          await stop.whenIdle();
+          expect((await database.chats.get(harness.chatId))?.backend_affinity?.backend).toBe('codex');
+          expect(mocks.devLog).not.toHaveBeenCalledWith(expect.objectContaining({
+            detail: expect.objectContaining({ providerError: expect.objectContaining({ code: 'chat_backend_connection_mismatch' }) }),
+          }));
+          expect(mocks.devLog).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'error', message: 'AI setup failed before dispatch',
+            detail: { stage: 'agent', error: 'Fixture agent lookup unavailable' },
+          }));
+          // failEarlySetup classifies this as kernel_runtime_setup_agent. Its
+          // compatibility event must not overwrite the older pending turn.
+          const rejectedPreparationErrors = mocks.devLog.mock.calls.map(([entry]) => entry)
+            .filter((entry) => entry.level === 'error');
+          expect(mocks.runAgent, `Rejected preparation evidence: ${JSON.stringify(rejectedPreparationErrors)}`).toHaveBeenCalledOnce();
+          expect((await database.jarvis_approvals.get(approval.id))?.status).toBe('pending');
+          expect(getLatestTurnByChatId(harness.chatId)?.identity.runId).toBe(originalRun.id);
+          expect(getLatestTurnByChatId(harness.chatId)?.status).toBe(pendingTurnBefore.status);
+          expect(getLatestTurnByChatId(harness.chatId)?.cancellationKey).toBe('msg_expiry_original');
+          expect(getChatRunState(harness.chatId)).toEqual(pendingCompatibilityBefore);
+        }
+        const latestBefore = getLatestTurnByChatId(harness.chatId)!;
+        const titleBeforeExpiry = (await database.chats.get(harness.chatId))?.title;
+        // Unit fixture clock moves; no native clock, approval row, status or capability injection.
+        clock = approval.expires_at;
+        const { expireInstalledJarvisApproval } = await import('./runtime');
+        const receipt = await expireInstalledJarvisApproval({ accountId: 'runtime-test-account', approvalId: approval.id });
+        expect(receipt.status).toBe('expired');
+        expect((await database.jarvis_approvals.get(approval.id))?.status).toBe('expired');
+        expect((await database.jarvis_runs.get(originalRun.id))?.status).toBe('cancelled');
+        expect(executeRegisteredAction).not.toHaveBeenCalled();
+        expect((await database.chats.get(harness.chatId))?.title).toBe(titleBeforeExpiry);
+        expect(titleBeforeExpiry).not.toBe('Never auto rename on expiry');
+        const latestAfter = getLatestTurnByChatId(harness.chatId)!;
+        if (scenario === 'current-turn') {
+          expect(latestAfter.identity).toEqual(latestBefore.identity);
+          expect(latestAfter.status).toBe('cancelled');
+          expect(getChatRunState(harness.chatId)).toMatchObject({ status: 'cancelled', cancellationKey: 'msg_expiry_original' });
+          expect(getPreview('runtime-test-account', originalRun.id)).toBeNull();
+        } else {
+          // The old approval is now genuinely settled; only then admit a fresh turn.
+          expect(latestAfter.status).toBe('cancelled');
+          mocks.runAgent.mockImplementationOnce(input => { newerInput = input; return newerGate.promise; });
+          await persistUser('msg_expiry_newer', 'Explain a queue after the old approval expired.');
+          window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+            accountId: 'runtime-test-account', chatId: harness.chatId, cancellationKey: 'msg_expiry_newer',
+            text: 'Explain a queue after the old approval expired.', interactionMode: 'ask', modelSelectionOverride: selection,
+          } }));
+          try {
+            await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
+          } catch (error) {
+            // Preserve the real admission failure in CI instead of attributing
+            // a missing provider call to a pending controller without evidence.
+            const failures = mocks.devLog.mock.calls.map(([entry]) => entry)
+              .filter((entry) => entry.level === 'error');
+            const runs = (await database.jarvis_runs.toArray()).map(({ id, status }) => ({ id, status }));
+            throw new Error(`Fresh persisted expiry turn was not dispatched: ${JSON.stringify({ failures, runs })}`, { cause: error });
+          }
+          expect(await database.messages.where('chat_id').equals(harness.chatId).filter(message => message.role === 'user').sortBy('created_at'))
+            .toEqual(expect.arrayContaining([
+              expect.objectContaining({ id: 'msg_expiry_original' }),
+              expect.objectContaining({ id: 'msg_expiry_blocked' }),
+              expect.objectContaining({ id: 'msg_expiry_newer' }),
+            ]));
+          newerInput!.onChunk?.({ delta: 'The newer turn is still explaining queues.', first: true });
+          const newerBefore = getLatestTurnByChatId(harness.chatId)!;
+          const compatibilityBefore = getChatRunState(harness.chatId);
+          expect(newerBefore.identity.runId).not.toBe(originalRun.id);
+          expect(newerInput!.backend).toBe('codex');
+          expect(newerBefore.cancellationKey).toBe('msg_expiry_newer');
+          expect((await database.chats.get(harness.chatId))?.backend_affinity?.backend).toBe('codex');
+          const oldTerminal = fromJarvisRunRow((await database.jarvis_runs.get(originalRun.id))!);
+          // A terminal old run cannot reopen its issued response capability. This
+          // tests the reachable late historical notification, not a fabricated callback.
+          await expect(issuedKernel.actions.expire!({ parentRun: oldTerminal, approvalId: approval.id })).rejects.toThrow('kernel_action_expire_scope_failed');
+          expect((await expireInstalledJarvisApproval({ accountId: 'runtime-test-account', approvalId: approval.id })).status).toBe('expired');
+          expect(getLatestTurnByChatId(harness.chatId)?.identity).toEqual(newerBefore.identity);
+          expect(getLatestTurnByChatId(harness.chatId)?.status).toBe('running');
+          expect(getChatRunState(harness.chatId)).toEqual(compatibilityBefore);
+          expect(newerInput!.signal.aborted).toBe(false);
+        }
+        const events = await database.jarvis_events.where('run_id').equals(originalRun.id).toArray();
+        expect(events.filter(event => event.type === 'approval' && event.status === 'expired')).toHaveLength(1);
+        expect(events.filter(event => event.type === 'run_state' && event.status === 'cancelled')).toHaveLength(1);
+      } finally {
+        newerGate.resolve({ text: 'The newer response completed.', usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 }, provider: 'openai', model: 'gpt-5.6-terra' });
+        await stop.whenIdle();
+        stop();
+        await stop.whenIdle();
+        disposeHost();
+        securityRuntime.invalidateAll();
+        database.close();
+        await database.delete();
+      }
+    }, 15_000,
+  );
 
   it('binds protected kernel Codex steer and queue to the live provider turn once', async () => {
     const selectedCodexSkills = [{ cwd: 'C:/workspace', name: 'kernel-native-skill', path: 'C:/workspace/.codex/skills/kernel-native-skill/SKILL.md', description: 'Native fixture', enabled: true, scope: 'repo' as const, pluginId: null }];

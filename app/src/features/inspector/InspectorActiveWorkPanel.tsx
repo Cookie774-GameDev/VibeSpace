@@ -18,6 +18,7 @@ import {
   useLiveTerminalStatuses,
 } from './liveWork';
 import { useWorkspaceAnalyticsStore, formatDurationMs } from './workspaceAnalytics';
+import { useScopedMilestones } from './useScopedMilestones';
 import { usePinnedStore } from './pinnedStore';
 
 interface InspectorActiveWorkPanelProps {
@@ -42,7 +43,7 @@ export function InspectorActiveWorkPanel({ workspaceId }: InspectorActiveWorkPan
   const linesRemoved = useWorkspaceAnalyticsStore((s) => s.linesRemoved);
   const foregroundActiveMs = useWorkspaceAnalyticsStore((s) => s.foregroundActiveMs);
   const backgroundRunningMs = useWorkspaceAnalyticsStore((s) => s.backgroundRunningMs);
-  const completedMilestones = useWorkspaceAnalyticsStore((s) => s.completedMilestones);
+  const { completedMilestones } = useScopedMilestones();
   const toolRunCount = useWorkspaceAnalyticsStore((s) => s.toolRunCount);
   const byModel = useWorkspaceAnalyticsStore((s) => s.byModel);
   const pinnedFiles = usePinnedStore((s) => s.files);

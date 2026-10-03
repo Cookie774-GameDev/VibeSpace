@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ProviderConnection, ProviderEvent } from './types';
 import { createCodexPersistentAdapter, resolveCodexExecutable } from './codexPersistent';
+import * as parentBindings from './codexRlmParentBinding';
 
 const connection: ProviderConnection = {
   id: 'openai-codex',
@@ -159,6 +160,45 @@ it.each(['valid', 'wrong-thread', 'wrong-turn', 'wrong-tool'])('scopes native dy
     expect(JSON.stringify(completed?.details)).toContain('verified evidence');
   }
   expect(bridge.dispose).toHaveBeenCalledOnce();
+});
+
+it.each([undefined, 'main', 'workbench-main', 'foreign'])('registers child authority only for an available trusted native caller (%s)', async (caller) => {
+  const registration = vi.spyOn(parentBindings, 'registerLiveCodexRlmParent');
+  const bridge = { bind: vi.fn(), dispose: vi.fn(), execute: vi.fn() };
+  const adapter = createCodexPersistentAdapter({
+    contextTool: async () => bridge,
+    resolveCallerLabel: async () => caller,
+    findExecutable: async () => ({ executableId: 'trusted-codex' }),
+    start: async () => ({ generation: 'caller_generation' }),
+    frames: () => ({ ready: Promise.resolve(), stream: frames() }),
+    write: async () => {}, stop: async () => true,
+  });
+  const run = async () => {
+    for await (const _event of adapter.send!({
+      requestId: 'request_1', connection,
+      codexRoute: { kind: 'official-codex', connectionId: 'openai-codex', providerId: 'openai', modelId: 'gpt-5.6-luna' },
+      chatId: 'caller_chat', prompt: 'Synthetic caller boundary',
+      modelId: 'gpt-5.6-luna', workingDirectory: 'C:\\workspace', interactionMode: 'ask',
+    })) { /* Drain the real adapter lifecycle and release its parent binding. */ }
+  };
+  try {
+    if (caller === 'foreign') {
+      await expect(run()).rejects.toThrow('Codex parent caller is invalid.');
+      expect(registration).not.toHaveBeenCalled();
+    } else {
+      await run();
+      expect(bridge.bind).toHaveBeenCalledOnce();
+      if (caller === undefined) expect(registration).not.toHaveBeenCalled();
+      else expect(registration).toHaveBeenCalledWith(expect.objectContaining({
+        caller, owner: 'caller_chat', generation: 'caller_generation',
+        identity: expect.objectContaining({
+          providerQualifiedModelId: 'openai/gpt-5.6-luna',
+          observedProviderIdentity: 'openai/gpt-5.6-luna',
+        }),
+      }));
+    }
+    expect(bridge.dispose).toHaveBeenCalledOnce();
+  } finally { registration.mockRestore(); }
 });
 
 it('advertises and dispatches explicitly enabled semantic MCP tools through the existing gateway', async () => {

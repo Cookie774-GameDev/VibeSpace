@@ -795,3 +795,17 @@ export function requestTerminalSwarm(): string {
 export function enqueueTerminalClose(count: number): string {
   return useTerminalCommandQueue.getState().requestClose(count);
 }
+
+/** @internal Targeted metadata only; absent live IDs do not prove an empty historical queue. */
+export function readRunTerminalQueueDiagnostic(
+  scope: Readonly<{ accountId: string; runId: string }>, executionIds: readonly string[],
+) {
+  if (executionIds.length > 100) throw new Error('diagnostic_queue_bound');
+  return executionIds.map(executionId => {
+    stableIdentifier(scope.accountId, 'accountId'); stableIdentifier(scope.runId, 'runId');
+    stableIdentifier(executionId, 'executionId');
+    const row = readDurableQueueState(scope.accountId, executionId);
+    if (row && row.runId !== scope.runId) throw new Error('diagnostic_queue_scope_mismatch');
+    return Object.freeze({ executionId, state: row?.state ?? 'missing' as const });
+  });
+}

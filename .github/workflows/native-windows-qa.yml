@@ -19,6 +19,11 @@ on:
         description: Expected connector source fingerprint from the frozen packet
         required: true
         type: string
+      foundry_lifecycle_enabled:
+        description: ROOT reviewed actual child-lifecycle fixtures and supervisor closure
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       source_sha:
@@ -33,6 +38,10 @@ on:
       connector_source_sha256:
         required: true
         type: string
+      foundry_lifecycle_enabled:
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -94,6 +103,12 @@ jobs:
         with:
           node-version: 22
 
+      - name: Verify Windows first-install contracts
+        if: ${{ hashFiles('install/install.ps1', 'scripts/install-windows.test.mjs') != '' }}
+        run: |
+          node --test scripts/install-windows.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.96.0
@@ -107,7 +122,7 @@ jobs:
 
       - name: Verify focused source contracts
         run: |
-          node --test scripts/native-windows-qa.test.mjs scripts/tauri-windows-resource-contract.test.mjs
+          node --test scripts/native-windows-qa.test.mjs scripts/tauri-windows-resource-contract.test.mjs scripts/windows-runtime-dlls.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Admit resource preparation
@@ -125,6 +140,312 @@ jobs:
 
       - name: Admit and build debug executable
         run: node scripts/native-windows-qa.mjs build
+
+      - name: Admit and test focused Workbench Rust regressions on the warm target
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $global:LASTEXITCODE = 0
+          ./scripts/native-windows-qa-preflight.ps1 -Phase before-cargo -EvidenceDirectory work/native-windows-qa/workbench-tests-admission
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $rustManifest = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/Cargo.toml'
+          $rustOutput = Join-Path $env:GITHUB_WORKSPACE 'work/native-windows-qa/workbench-tests'
+          $rustInputPaths = [ordered]@{
+            testScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/s61-workbench-rust-tests.ps1'
+            cargoManifest = $rustManifest
+            cargoLock = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/Cargo.lock'
+          }
+          $rustInputHashes = [ordered]@{}
+          foreach ($key in $rustInputPaths.Keys) {
+            $rustInputHashes[$key] = (Get-FileHash -LiteralPath $rustInputPaths[$key] -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          if ($rustInputHashes.cargoLock -cne $env:QA_CARGO_LOCK_SHA256) { throw 'Rust test lock does not match the frozen QA lock.' }
+          $rustHead = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $rustHead -cne $env:QA_SOURCE_SHA) { throw 'Rust test source commit mismatch.' }
+          $rustPublishedScript = git rev-parse 'HEAD:scripts/s61-workbench-rust-tests.ps1'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot prove published Rust test script.' }
+          $rustWorkingScript = git hash-object -- scripts/s61-workbench-rust-tests.ps1
+          if ($LASTEXITCODE -ne 0 -or $rustWorkingScript -cne $rustPublishedScript) { throw 'Rust test script differs from the frozen published source.' }
+          $rustTarget = [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+          ./scripts/s61-workbench-rust-tests.ps1 -RepositoryRoot $env:GITHUB_WORKSPACE -OutputDirectory $rustOutput -IncludeRestorationRegression
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $rustReceiptPath = Join-Path $rustOutput 'receipt.json'
+          $rustReceipt = Get-Content -LiteralPath $rustReceiptPath -Raw | ConvertFrom-Json
+          $rustExpected = @(
+            'native_app_surface::embedding::tests::packaged_content_requires_its_ready_shell_frame'
+            'native_app_surface::tests::attachment_waits_for_two_matching_ready_observations'
+            'native_app_surface::tests::changed_or_missing_content_resets_attachment_readiness'
+            'native_app_surface::tests::crash_containment_is_scoped_to_the_observed_packaged_notepad'
+            'native_app_surface::tests::contained_notepad_is_fallback_without_embedding_or_process_ownership'
+            'kernel_host::tests::source_revision_closed_dto_rejects_null_partial_and_unknown_binding'
+            'kernel_host::tests::source_revision_dto_rejects_oversized_ids_and_invalid_attempts'
+            'kernel_host::tests::source_revision_response_rejects_epoch_and_hash_boundaries'
+            'kernel_host::tests::source_revision_response_requires_exact_scope_and_binding_correlation'
+            'kernel_host::tests::source_revision_main_reads_use_broker_epoch_without_action_admission'
+            'native_app_surface::embedding::tests::hosts_resizes_hides_and_restores_a_disposable_external_window'
+            'native_app_surface::embedding::tests::restores_content_to_its_original_frame_after_hosting'
+            'native_app_surface::embedding::tests::restores_a_hidden_content_frame_after_hosting'
+            'native_app_surface::embedding::tests::restores_the_original_hidden_state_of_a_hosted_window'
+          )
+          $rustRows = @($rustReceipt.actualResultRows.PSObject.Properties)
+          if ($rustReceipt.status -cne 'PASS_FOCUSED_RUST_CODE_ONLY' -or $rustReceipt.cargoExitCode -ne 0 -or
+              $rustReceipt.expectedCount -ne 14 -or $rustRows.Count -ne 14 -or
+              $rustReceipt.oneCargoInvocation -ne $true -or $rustReceipt.compilationIncluded -ne $true -or
+              $rustReceipt.nativeAppAcceptance -ne $false -or @($rustReceipt.missing).Count -ne 0 -or
+              @($rustReceipt.failed).Count -ne 0 -or @($rustReceipt.unexpected).Count -ne 0) {
+            throw 'Actual Windows Rust test receipt is absent, incomplete, or failed.'
+          }
+          foreach ($row in $rustRows) {
+            if ($rustExpected -cnotcontains $row.Name -or $row.Value -cne 'ok') { throw 'Windows Rust test name or result does not match the exact fourteen-case contract.' }
+          }
+          $rustExpectedArgs = @('test', '--locked', '--manifest-path', $rustManifest, '--lib', '--', '--exact', '--test-threads=1', '--color=never') + $rustExpected
+          if (@($rustReceipt.arguments).Count -ne $rustExpectedArgs.Count) { throw 'Rust test invocation differs from the reviewed warm-target command.' }
+          for ($index = 0; $index -lt $rustExpectedArgs.Count; $index++) {
+            if ($rustReceipt.arguments[$index] -cne $rustExpectedArgs[$index]) { throw 'Rust test invocation differs from the reviewed warm-target command.' }
+          }
+          foreach ($key in $rustInputPaths.Keys) {
+            if ((Get-FileHash -LiteralPath $rustInputPaths[$key] -Algorithm SHA256).Hash.ToLowerInvariant() -cne $rustInputHashes[$key]) {
+              throw 'Frozen Rust test inputs changed during the test invocation.'
+            }
+          }
+          $rustHeadAfter = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $rustHeadAfter -cne $rustHead -or [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) -cne $rustTarget) {
+            throw 'Rust test source or warm target changed during the test invocation.'
+          }
+          $rustBinding = [ordered]@{
+            schemaVersion = 1
+            sourceSHA = $rustHead
+            testScriptGitBlob = $rustPublishedScript
+            inputSHA256 = $rustInputHashes
+            targetDirectory = $rustTarget
+            receiptSHA256 = (Get-FileHash -LiteralPath $rustReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            expectedCount = 14
+            actualPassedCount = $rustRows.Count
+            nativeAppAcceptance = $false
+          }
+          $rustBindingPath = Join-Path $rustOutput 'source-binding.json'
+          $rustBindingBytes = [Text.UTF8Encoding]::new($false).GetBytes(($rustBinding | ConvertTo-Json -Depth 5))
+          $rustBindingFile = [IO.File]::Open($rustBindingPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+          try { $rustBindingFile.Write($rustBindingBytes, 0, $rustBindingBytes.Length) } finally { $rustBindingFile.Dispose() }
+          Write-Output 'PASS: fourteen actual Windows Rust test rows and frozen warm-target source binding.'
+
+      - name: Admit and verify nineteen Foundry setup Rust cases on the warm Windows target
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $global:LASTEXITCODE = 0
+          ./scripts/native-windows-qa-preflight.ps1 -Phase before-cargo -EvidenceDirectory work/native-windows-qa/foundry-tests-admission
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not $IsWindows) { throw 'Foundry proof requires Windows.' }
+          $foundryOutput = Join-Path $env:GITHUB_WORKSPACE 'work/native-windows-qa/foundry-tests'
+          if (Test-Path -LiteralPath $foundryOutput) { throw 'Preserve prior Foundry test proof.' }
+          [void][IO.Directory]::CreateDirectory($foundryOutput)
+          $foundryManifest = Join-Path $env:GITHUB_WORKSPACE 'app/src-tauri/Cargo.toml'
+          $foundryPaths = [ordered]@{
+            foundrySource = 'app/src-tauri/src/model_foundry_training.rs'
+            runtimeSource = 'app/src-tauri/src/harness/runtime.rs'
+            kernelSource = 'app/src-tauri/src/kernel_host.rs'
+            cargoManifest = 'app/src-tauri/Cargo.toml'
+            cargoLock = 'app/src-tauri/Cargo.lock'
+            workflow = '.github/workflows/native-windows-qa.yml'
+          }
+          $foundryHashes = [ordered]@{}
+          foreach ($key in $foundryPaths.Keys) {
+            $foundryHashes[$key] = (Get-FileHash -LiteralPath $foundryPaths[$key] -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($key -cne 'cargoLock') {
+              $published = git rev-parse "HEAD:$($foundryPaths[$key])"
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot prove published Foundry input.' }
+              $working = git hash-object -- $foundryPaths[$key]
+              if ($LASTEXITCODE -ne 0 -or $working -cne $published) { throw 'Foundry input differs from published source.' }
+            }
+          }
+          if ($foundryHashes.cargoLock -cne $env:QA_CARGO_LOCK_SHA256) { throw 'Foundry test lock differs from frozen QA lock.' }
+          $foundryHead = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $foundryHead -cne $env:QA_SOURCE_SHA) { throw 'Foundry source commit mismatch.' }
+          $foundryTarget = [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+          $foundryExpected = @(
+            'model_foundry_training::runtime_setup_bounds_tests::repair_timeout_is_bounded_and_validated'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_ownership_kill_failure_retains_and_denies_next_setup'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_ownership_wait_failure_retains_and_denies_next_setup'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_ownership_root_reaped_does_not_release_live_descendants'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_ownership_unknown_tree_query_never_releases'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_ownership_foreign_token_cannot_retry_or_clear'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_ownership_same_token_retry_releases_only_after_confirmed_closure'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_ownership_old_generation_cannot_clear_new_setup'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_probe_errors_survive_no_pip_mapping_and_cleanup_blocks_every_branch'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_ownership_cancel_wins_and_blocks_every_later_launch'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_ownership_launch_wins_but_cancel_ack_waits_for_launch_lock'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_wall_deadline_never_renews_between_stages'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_wall_deadline_rejects_expired_and_cancelled_before_next_child'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_wall_cancel_does_not_accept_foreign_identifier'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_wall_probe_deadline_reaps_owned_child'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_wall_probe_honors_cancel_while_child_is_running'
+            'model_foundry_training::runtime_setup_bounds_tests::setup_identifiers_are_opaque_and_strict'
+            'model_foundry_training::runtime_setup_bounds_tests::cancellation_only_targets_the_matching_setup_generation'
+            'model_foundry_training::runtime_setup_bounds_tests::pre_cancelled_dependency_command_does_not_spawn'
+          )
+          $foundryArgs = @('test','--locked','--manifest-path',$foundryManifest,'--lib','--','--exact','--test-threads=1','--color=never') + $foundryExpected
+          $foundryRows = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
+          $foundryUtf8 = [Text.UTF8Encoding]::new($false)
+          $foundryLog = Join-Path $foundryOutput 'cargo.log'
+          $foundryStarted = [DateTimeOffset]::UtcNow.ToString('o')
+          $foundryExit = $null
+          $foundryError = $null
+          $foundryPriorModules = $env:PSModulePath
+          try {
+            $env:PSModulePath = (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/Modules') + [IO.Path]::PathSeparator + $foundryPriorModules
+            & cargo @foundryArgs 2>&1 | ForEach-Object {
+              $line = "$_"
+              [IO.File]::AppendAllText($foundryLog,$line+[Environment]::NewLine,$foundryUtf8)
+              Write-Host $line
+              $match = [regex]::Match($line,'^test (.+) \.\.\. (ok|FAILED|ignored)$')
+              if ($match.Success) {
+                $name = $match.Groups[1].Value
+                if ($foundryRows.ContainsKey($name)) { throw 'Duplicate Foundry test result row.' }
+                $foundryRows.Add($name,$match.Groups[2].Value)
+              }
+            }
+            $foundryExit = $LASTEXITCODE
+          } catch { $foundryError = $_.Exception.Message } finally { $env:PSModulePath = $foundryPriorModules }
+          $missing = @($foundryExpected | Where-Object { -not $foundryRows.ContainsKey($_) })
+          $failed = @($foundryExpected | Where-Object { $foundryRows.ContainsKey($_) -and $foundryRows[$_] -cne 'ok' })
+          $unexpected = @($foundryRows.Keys | Where-Object { $foundryExpected -cnotcontains $_ })
+          $foundryStable = $true
+          foreach ($key in $foundryPaths.Keys) {
+            if ((Get-FileHash -LiteralPath $foundryPaths[$key] -Algorithm SHA256).Hash.ToLowerInvariant() -cne $foundryHashes[$key]) { $foundryStable = $false }
+          }
+          $foundryHeadAfter = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $foundryHeadAfter -cne $foundryHead -or [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) -cne $foundryTarget) { $foundryStable = $false }
+          $passed = $null -ne $foundryExit -and $foundryExit -eq 0 -and $null -eq $foundryError -and $foundryStable -and
+            $missing.Count -eq 0 -and $failed.Count -eq 0 -and $unexpected.Count -eq 0 -and $foundryRows.Count -eq 19
+          $receipt = [ordered]@{
+            schemaVersion = 1
+            status = $(if ($passed) { 'PASS_FOCUSED_FOUNDRY_RUST_CODE_ONLY' } else { 'FAIL' })
+            startedAt = $foundryStarted
+            finishedAt = [DateTimeOffset]::UtcNow.ToString('o')
+            sourceSHA = $foundryHead
+            inputSHA256 = $foundryHashes
+            sourceStable = $foundryStable
+            targetDirectory = $foundryTarget
+            arguments = $foundryArgs
+            expectedNames = $foundryExpected
+            expectedCount = 19
+            actualResultRows = $foundryRows
+            actualPassedCount = @($foundryRows.Values | Where-Object { $_ -ceq 'ok' }).Count
+            missing = $missing
+            failed = $failed
+            unexpected = $unexpected
+            cargoExitCode = $foundryExit
+            error = $foundryError
+            oneCargoInvocation = $true
+            compilationIncluded = $true
+            nativeAppAcceptance = $false
+            fullDescendantLifecycleAcceptance = $false
+          }
+          $receiptPath = Join-Path $foundryOutput 'receipt.json'
+          $file = [IO.File]::Open($receiptPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write)
+          try { $bytes = $foundryUtf8.GetBytes(($receipt | ConvertTo-Json -Depth 8)); $file.Write($bytes,0,$bytes.Length) } finally { $file.Dispose() }
+          if (-not $passed) { throw 'Nineteen actual Foundry Windows test rows, frozen source, and warm target must all pass.' }
+          Write-Output 'PASS: nineteen actual Windows Foundry setup Rust rows with frozen source binding; native acceptance remains separate.'
+
+      - name: Provision pinned fixture Python for optional real Foundry lifecycle
+        if: ${{ inputs.foundry_lifecycle_enabled }}
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0; resolved official tag
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+
+      - name: Admit and supervise four actual Foundry child-tree lifecycle cases
+        if: ${{ inputs.foundry_lifecycle_enabled }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $global:LASTEXITCODE = 0
+          $workspace = $env:GITHUB_WORKSPACE
+          $toolRoot = Join-Path $workspace '.github/native-windows-qa/foundry-lifecycle'
+          $runRoot = 'D:\CodexTaskScratch\sol61-mission-20261001-S61\cloud-lifecycle-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT
+          $checkout = Join-Path $runRoot 'checkout'
+          $output = Join-Path $runRoot 'lifecycle-output'
+          $metadata = Join-Path $runRoot 'supervisor'
+          $evidence = Join-Path $workspace 'work/native-windows-qa/foundry-real-lifecycle'
+          if (Test-Path -LiteralPath $runRoot) { throw 'Preserve existing lifecycle checkout/receipts.' }
+          [void][IO.Directory]::CreateDirectory($evidence)
+          $toolPins = [ordered]@{
+            'run-focused.ps1' = 'a375ef9909f0abeb20e97c21d2a887dfa0a635708d3d62aecede5820dc7eea54'
+            'verify-root-supervision.ps1' = '0fe73de35dc4340b17614ecc11e063ddf75eb9a59e49671690015677df6d322c'
+            'lifecycle-tests.rs' = 'b9fa2f38329cda4e4b347aa7408214c6a8a01dfdef3970c8a37e8a51c1eb4654'
+            'supervision-r2/start-supervised.ps1' = '127f6020ba51d73c76c245ae3f29f964d4808f8f522a1b60ce3aa7f4045cd4cc'
+            'supervision-r2/owned-job.cs' = 'ed93063cdbc8c2fba506b35dc4d6026fef5aaa59541b4ce7b34eb60e86db4763'
+            'heavy_job_preflight.py' = 'bd46d3b293cf051f879d204e9cf7f6f3ebfac26a5e26383e26327016f2cac6fb'
+            'caller-exit-containment.cs' = '4d0e9117e0e4a81e0218265ec4155d83069d7403b6e443a42daba51a5ea68d91'
+          }
+          foreach ($name in $toolPins.Keys) {
+            if ((Get-FileHash -LiteralPath (Join-Path $toolRoot $name)).Hash.ToLowerInvariant() -cne $toolPins[$name]) { throw 'Published lifecycle helper byte mismatch.' }
+          }
+          $head = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:QA_SOURCE_SHA) { throw 'Lifecycle source commit mismatch.' }
+          if ((Get-PSDrive D).Free -lt 20GB) { throw 'Lifecycle cold checkout/target requires conservative20GiB; not a measured guarantee.' }
+          $python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+          $pythonSHA = (Get-FileHash -LiteralPath $python).Hash.ToLowerInvariant()
+          $pythonVersion = & $python --version
+          if ($LASTEXITCODE -ne 0 -or $pythonVersion -cne 'Python 3.12.10') { throw 'Pinned fixture Python version mismatch.' }
+          # Admit BEFORE cold clone/preparation and AGAIN adjacent to supervised Cargo.
+          $preflightText = & $python (Join-Path $toolRoot 'heavy_job_preflight.py') --peak-mib 8192 --commit-peak-mib 12288 --reserved-growth-mib 0 --reserved-commit-mib 0
+          $preflightExit = $LASTEXITCODE
+          [IO.File]::WriteAllText((Join-Path $evidence 'preparation-preflight.json'),($preflightText -join "`n"))
+          if ($preflightExit -ne 0) { throw 'Lifecycle cold preparation admission denied.' }
+          [void][IO.Directory]::CreateDirectory($runRoot)
+          git clone --local --no-hardlinks --no-checkout -- $workspace $checkout
+          if ($LASTEXITCODE -ne 0) { throw 'Disposable local source clone failed.' }
+          git -C $checkout -c core.autocrlf=false -c core.eol=lf checkout --detach $env:QA_SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Disposable exact source checkout failed.' }
+          $cloneHead = git -C $checkout rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $cloneHead -cne $head) { throw 'Disposable source mismatch.' }
+          Copy-Item -LiteralPath (Join-Path $workspace '.github/native-windows-qa/Cargo.lock') -Destination (Join-Path $checkout 'app/src-tauri/Cargo.lock')
+          if ((Get-FileHash -LiteralPath (Join-Path $checkout 'app/src-tauri/Cargo.lock')).Hash.ToLowerInvariant() -cne $env:QA_CARGO_LOCK_SHA256) { throw 'Lifecycle frozen lock mismatch.' }
+          $priorConnector = $env:VIBESPACE_CONNECTOR_BUILD_DIR
+          $priorSiyuan = $env:VIBESPACE_SIYUAN_CACHE_DIR
+          try {
+            $env:VIBESPACE_CONNECTOR_BUILD_DIR = Join-Path $runRoot 'connector-cache'
+            $env:VIBESPACE_SIYUAN_CACHE_DIR = Join-Path $runRoot 'siyuan-cache'
+            Push-Location $checkout
+            try {
+              npm ci --ignore-scripts
+              if ($LASTEXITCODE -ne 0) { throw 'Disposable frozen root dependency installation failed.' }
+              npm run prepare:desktop-connector
+              if ($LASTEXITCODE -ne 0) { throw 'Lifecycle verified connector preparation failed.' }
+              npm run prepare:siyuan-runtime
+              if ($LASTEXITCODE -ne 0) { throw 'Lifecycle verified SiYuan preparation failed.' }
+              node scripts/native-windows-qa.mjs snapshot
+              if ($LASTEXITCODE -ne 0) { throw 'Lifecycle generated/native source snapshot failed.' }
+            } finally { Pop-Location }
+          } finally { $env:VIBESPACE_CONNECTOR_BUILD_DIR = $priorConnector; $env:VIBESPACE_SIYUAN_CACHE_DIR = $priorSiyuan }
+          if ((Get-PSDrive D).Free -lt 20GB) { throw 'Post-preparation lifecycle20GiB disk floor denied.' }
+          $lifecycleTree = git rev-parse 'HEAD^{tree}'
+          if ($LASTEXITCODE -ne 0 -or $lifecycleTree -cnotmatch '^[a-f0-9]{40}$') { throw 'Lifecycle full tree unavailable.' }
+          $entry = Join-Path $toolRoot 'ci-entry.ps1'
+          if ((Get-FileHash -LiteralPath $entry).Hash.ToLowerInvariant() -cne 'e6c4f9b3bdc123d7f8bdf6ed79891226552c4fb78495f8c216ba8b410312a6dc') { throw 'Reviewed lifecycle CI entry differs.' }
+          & $entry -ExpectedCommit $head -ExpectedTree $lifecycleTree -DisposableCheckout $checkout -OutputRoot $output -SupervisorMetadataRoot $metadata -AdmissionEvidenceRoot (Join-Path $runRoot 'admission') -ExistingPython $python -ExpectedPythonSHA256 $pythonSHA -ExpectedCargoLockSHA256 $env:QA_CARGO_LOCK_SHA256 -RootGrantID ('ROOT-R29-LIFECYCLE-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT) -WholePeakMiB 8192 -WholeCommitPeakMiB 12288 -ReservedGrowthMiB 0 -ReservedCommitMiB 0 -MaximumSeconds 5390
+          $proofPath = Join-Path $runRoot 'admission/lifecycle-final-proof.json'
+          $proof = Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json
+          if ($proof.status -cne 'PASS' -or $proof.expectedCommit -cne $head -or $proof.expectedTree -cne $lifecycleTree -or $proof.actualCompiledCases -ne 4 -or $proof.actualCompiledFailures -ne 0 -or $proof.outerRootReaped -ne $true -or $proof.outerJobEmpty -ne $true -or $proof.noRetainedChild -ne $true -or $proof.nativeUIAcceptance -ne $false -or $proof.callerFallbackArmed -ne $true -or $proof.callerJobActiveProcesses -ne 1 -or $proof.callerJobOwnPIDOnly -ne $true) { throw 'Actual four-case source/outer lifecycle proof incomplete.' }
+          $expectedLifecycleNames = @(
+            'model_foundry_training::s61_real_setup_lifecycle_tests::real_root_exit_descendant_live_query_then_owned_cleanup'
+            'model_foundry_training::s61_real_setup_lifecycle_tests::real_whole_deadline_reaps_root_and_grandchild'
+            'model_foundry_training::s61_real_setup_lifecycle_tests::real_matching_cancel_reaps_root_and_grandchild'
+            'model_foundry_training::s61_real_setup_lifecycle_tests::real_same_token_retry_retains_handles_after_injected_query_failure'
+          )
+          $lifecycleRows = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
+          foreach ($line in (Get-Content -LiteralPath (Join-Path $output 'cargo.log'))) {
+            $match = [regex]::Match($line,'^test (.+) [.][.][.] (ok|FAILED|ignored)$')
+            if ($match.Success) {
+              $name = $match.Groups[1].Value
+              if ($lifecycleRows.ContainsKey($name)) { throw 'Duplicate actual lifecycle row.' }
+              $lifecycleRows.Add($name,$match.Groups[2].Value)
+            }
+          }
+          if ($lifecycleRows.Count -ne 4) { throw 'Four actual lifecycle test rows required.' }
+          foreach ($name in $expectedLifecycleNames) {
+            if (-not $lifecycleRows.ContainsKey($name) -or $lifecycleRows[$name] -cne 'ok') { throw 'Expected real lifecycle case missing/ignored/failed.' }
+          }
+          [IO.File]::WriteAllText((Join-Path $evidence 'lifecycle-pass.json'),([ordered]@{sourceSHA=$head;sourceTree=$lifecycleTree;actualCompiledCaseCount=4;expectedNames=$expectedLifecycleNames;pythonSHA256=$pythonSHA;finalProofSHA256=(Get-FileHash -LiteralPath $proofPath).Hash.ToLowerInvariant();nativeAppAcceptance=$false}|ConvertTo-Json -Depth 5))
 
       - name: Inspect executable and DLL dependencies
         run: |
@@ -156,7 +477,7 @@ jobs:
           path: work/native-windows-qa/artifact/
           if-no-files-found: error
           retention-days: 3
-          compression-level: 0
+          compression-level: 6
           # Only the explicitly staged verified payload is included; preserve its closure.
           include-hidden-files: true
 
@@ -176,5 +497,261 @@ jobs:
             work/native-windows-qa/*.json
             work/native-windows-qa/*.txt
             work/native-windows-qa/*.log
+            work/native-windows-qa/workbench-tests/**
+            work/native-windows-qa/workbench-tests-admission/**
+            work/native-windows-qa/foundry-tests/**
+            work/native-windows-qa/foundry-tests-admission/**
+            work/native-windows-qa/foundry-real-lifecycle/**
+            D:/CodexTaskScratch/sol61-mission-20261001-S61/cloud-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/admission/**
+            D:/CodexTaskScratch/sol61-mission-20261001-S61/cloud-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/checkout/work/native-windows-qa/input-manifest.json
+            D:/CodexTaskScratch/sol61-mission-20261001-S61/cloud-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/checkout/work/native-windows-qa/provenance.json
+            D:/CodexTaskScratch/sol61-mission-20261001-S61/cloud-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/supervisor/**
+            D:/CodexTaskScratch/sol61-mission-20261001-S61/cloud-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/lifecycle-output/*.json
+            D:/CodexTaskScratch/sol61-mission-20261001-S61/cloud-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/lifecycle-output/*.log
+            D:/CodexTaskScratch/sol61-mission-20261001-S61/cloud-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/lifecycle-output/s61-lifecycle-*/**
           if-no-files-found: warn
           retention-days: 3
+
+  nsis-proof:
+    # Build-only static package proof; executable/VM acceptance is a separate gate.
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      QA_SOURCE_SHA: ${{ inputs.source_sha }}
+      QA_CARGO_LOCK_SHA256: ${{ inputs.cargo_lock_sha256 }}
+      QA_WINDOWS_CONFIG_SHA256: ${{ inputs.windows_config_sha256 }}
+      QA_CONNECTOR_SHA256: ${{ inputs.connector_source_sha256 }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/work/s61-unsigned-nsis-target
+      ORT_CACHE_DIR: ${{ github.workspace }}/work/s61-unsigned-nsis-target/ort-cache
+      CARGO_BUILD_JOBS: '1'
+    steps:
+      - name: Preserve published blob bytes before checkout
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.96.0
+          targets: x86_64-pc-windows-msvc
+      - name: Initialize source-bound unsigned package proof
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:QA_SOURCE_SHA -cnotmatch '^[a-f0-9]{40}$' -or (git rev-parse HEAD) -cne $env:QA_SOURCE_SHA) { throw 'Source identity mismatch.' }
+          foreach ($value in @($env:QA_CARGO_LOCK_SHA256, $env:QA_WINDOWS_CONFIG_SHA256, $env:QA_CONNECTOR_SHA256)) {
+            if ($value -cnotmatch '^[a-f0-9]{64}$') { throw 'Full lowercase SHA-256 required.' }
+          }
+          if ((Get-FileHash '.github/native-windows-qa/Cargo.lock').Hash.ToLowerInvariant() -cne $env:QA_CARGO_LOCK_SHA256) { throw 'Frozen lock mismatch.' }
+          if ((Get-FileHash 'app/src-tauri/tauri.windows.conf.json').Hash.ToLowerInvariant() -cne $env:QA_WINDOWS_CONFIG_SHA256) { throw 'Windows configuration mismatch.' }
+          Copy-Item '.github/native-windows-qa/Cargo.lock' 'app/src-tauri/Cargo.lock'
+          $proof = Join-Path $env:GITHUB_WORKSPACE 'work/s61-nsis-proof'
+          if (Test-Path -LiteralPath $proof) { throw 'Proof output already exists.' }
+          New-Item -ItemType Directory -Path $proof | Out-Null
+          $qaConfig = Join-Path $env:RUNNER_TEMP 's61-unsigned-nsis.generated.json'
+          '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -LiteralPath $qaConfig -Encoding utf8NoBOM
+          @("NSIS_PROOF_DIR=$proof", "NSIS_QA_CONFIG=$qaConfig", "VIBESPACE_CONNECTOR_BUILD_DIR=$(Join-Path $env:RUNNER_TEMP 's61-nsis-connector')", "VIBESPACE_SIYUAN_CACHE_DIR=$(Join-Path $env:RUNNER_TEMP 's61-nsis-siyuan')") | Add-Content -LiteralPath $env:GITHUB_ENV
+          # Store a reusable stricter admission gate; the cold-tree estimates are projections.
+          @'
+          $ErrorActionPreference = 'Stop'
+          $phase = $args[0]
+          $volumes = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:CARGO_TARGET_DIR, $env:ORT_CACHE_DIR) | ForEach-Object { [IO.Path]::GetPathRoot($_) } | Sort-Object -Unique
+          $timer = [Diagnostics.Stopwatch]::StartNew()
+          $samples = [Collections.Generic.List[object]]::new()
+          while ($true) {
+            $os = Get-CimInstance Win32_OperatingSystem -OperationTimeoutSec 5
+            try { $ram = [math]::Floor($os.FreePhysicalMemory / 1024); $commit = [math]::Floor($os.FreeVirtualMemory / 1024) } finally { $os.Dispose() }
+            $disks = @($volumes | ForEach-Object {
+              $id = $_.TrimEnd('\'); $d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$id'" -OperationTimeoutSec 5
+              if (-not $d) { throw 'Output/cache volume unavailable.' }
+              try { @{ volume=$id; freeBytes=[long]$d.FreeSpace } } finally { $d.Dispose() }
+            })
+            $admitted = $ram -ge 11264 -and $commit -ge 16384 -and @($disks | Where-Object freeBytes -lt 21474836480).Count -eq 0
+            $samples.Add(@{ freeRamMiB=$ram; freeCommitMiB=$commit; disks=$disks; admitted=$admitted; measuredAtUTC=[DateTime]::UtcNow.ToString('o') })
+            @{ phase=$phase; freeRamMiB=$ram; freeCommitMiB=$commit; disks=$disks; estimatedPeakRamMiB=8192; estimatedPeakCommitMiB=12288; estimatedDiskBytes=21474836480; estimatesMeasured=$false; admitted=$admitted; measuredAtUTC=$samples[$samples.Count-1].measuredAtUTC; maxCapacityWaitSeconds=90; elapsedSeconds=$timer.Elapsed.TotalSeconds; samples=$samples.ToArray() } | ConvertTo-Json -Depth 7 | Set-Content (Join-Path $env:NSIS_PROOF_DIR ("capacity-"+$phase+'.json'))
+            if ($admitted) { return }
+            $remaining = 90 - $timer.Elapsed.TotalSeconds
+            if ($remaining -le 0) { throw "NSIS capacity denied after bounded wait: RAM $ram/11264MiB, commit $commit/16384MiB; each output/cache volume requires20GiB. See capacity-$phase.json." }
+            Write-Host "Waiting for changed runner capacity: RAM $ram/11264MiB; commit $commit/16384MiB. No build launched."
+            Start-Sleep -Milliseconds ([int][math]::Min(10000, [math]::Ceiling($remaining*1000)))
+          }
+          '@ | Set-Content (Join-Path $proof 'admit.ps1') -Encoding utf8NoBOM
+      - name: Admit cold resource preparation
+        run: '& (Join-Path $env:NSIS_PROOF_DIR ''admit.ps1'') before-prepare'
+      - name: Install locked build tools and verify installer contracts
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test scripts/install-windows.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $cli = Get-Content node_modules/@tauri-apps/cli/package.json -Raw | ConvertFrom-Json
+          if ($cli.version -cne '2.11.2') { throw 'Reaudit NSIS/tool pins for changed Tauri CLI.' }
+      - name: Stage safe archive and actual package verifier
+        run: |
+          @'
+          import assert from 'node:assert/strict';
+          import {execFileSync} from 'node:child_process';
+          import {lstat,readdir,readFile,writeFile,mkdir,realpath} from 'node:fs/promises';
+          import path from 'node:path';
+          import {pathToFileURL} from 'node:url';
+          const root=process.env.GITHUB_WORKSPACE, evidence=process.env.NSIS_PROOF_DIR;
+          const {inspectPeImage,sha256,parseDllReports,verifyDllImports,inspectTauriNsisExecutableBinding}=await import(pathToFileURL(path.join(root,'scripts/native-windows-qa.mjs')));
+          const {verifyResources}=await import(pathToFileURL(path.join(root,'scripts/s61-nsis-reinspect.mjs')));
+          const connectorPreparation=await import(pathToFileURL(path.join(root,'scripts/prepare-desktop-connector.mjs')));
+          const save=async(name,value)=>writeFile(path.join(evidence,name),JSON.stringify(value,null,2)+'\n');
+          async function walk(dir,base=dir) {
+            const files=[];
+            for(const entry of await readdir(dir,{withFileTypes:true})) {
+              const file=path.join(dir,entry.name), st=await lstat(file);
+              assert(!st.isSymbolicLink() && (st.isDirectory()||st.isFile()),'Linked/special extracted entry');
+              const rel=path.relative(await realpath(base),await realpath(file));
+              assert(rel && !rel.startsWith('..') && !path.isAbsolute(rel),'Extracted path escape');
+              if(st.isDirectory()) files.push(...await walk(file,base)); else files.push(file);
+            }
+            return files;
+          }
+          if(process.argv[2]==='extract') {
+            const [tool,archive,out]=process.argv.slice(3);
+            assert(!(await lstat(out).catch(()=>null)),'Extraction target must be new');
+            const listing=execFileSync(tool,['l','-slt','-ba',archive],{encoding:'utf8',maxBuffer:64*1024*1024});
+            const entries=listing.trim().split(/\r?\n\s*\r?\n/u).map(block=>Object.fromEntries(block.split(/\r?\n/u).map(line=>{ const i=line.indexOf(' = '); return i<0?[line,'']:[line.slice(0,i),line.slice(i+3)]; })));
+            const seen=new Set();
+            for(const entry of entries) {
+              const name=entry.Path?.replaceAll('\\','/');
+              assert(name && !name.startsWith('/') && !name.includes(':') && !name.split('/').some(x=>x==='..'||x==='.'||x===''),'Unsafe archive path');
+              assert(!seen.has(name.toLowerCase()),'Archive case collision'); seen.add(name.toLowerCase());
+              assert(!entry['Symbolic Link'] && !entry['Hard Link'] && !/L/u.test(entry.Attributes||''),'Archive link rejected');
+            }
+            await save(path.basename(out)+'-entries.json',entries);
+            await mkdir(out);
+            execFileSync(tool,['x','-y','-o'+out,archive],{encoding:'utf8',maxBuffer:64*1024*1024});
+            const files=await walk(out), paths=new Set();
+            for(const file of files) { const rel=path.relative(out,file).toLowerCase(); assert(!paths.has(rel),'Extracted case collision'); paths.add(rel); }
+          } else if(process.argv[2]==='prove') {
+            const [extracted,built,installer,dumpbin]=process.argv.slice(3);
+            const files=await walk(extracted);
+            const exes=files.filter(x=>path.basename(x).toLowerCase()==='jarvis.exe'); assert.equal(exes.length,1,'Exactly one installed jarvis.exe required');
+            const exe=exes[0], appDir=path.dirname(exe);
+            await save('package-files.json',await Promise.all(files.map(async file=>({path:path.relative(extracted,file).replaceAll('\\','/'),bytes:(await lstat(file)).size,sha256:await sha256(file)}))));
+            const executableBinding=await inspectTauriNsisExecutableBinding(built,exe,{tauriCliVersion:'2.11.2',tauriBundlerSourceBlob:'ab0a45032f931af32b03c08ec5404c5cfe5c4891',bundleKind:'nsis'});
+          await save('executable-binding.json',executableBinding);
+          assert.equal(executableBinding.extractedExecutableSHA256,executableBinding.expectedNsisExecutableSHA256,'Extracted executable differs from exact pinned NSIS transformation');
+            const pe=await inspectPeImage(exe);
+            await save('source-manifest.json',{sourceSHA:process.env.QA_SOURCE_SHA,sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}'],{encoding:'utf8'}).trim(),workflowSHA:process.env.GITHUB_SHA,cargoLockSHA256:await sha256(path.join(root,'app/src-tauri/Cargo.lock')),windowsConfigSHA256:await sha256(path.join(root,'app/src-tauri/tauri.windows.conf.json')),qaConfigSHA256:await sha256(process.env.NSIS_QA_CONFIG),verifierSHA256:await sha256(path.join(root,'scripts/native-windows-qa.mjs')),installerSHA256:await sha256(installer)});
+            const dlls=(await readdir(appDir)).filter(x=>x.toLowerCase().endsWith('.dll'));
+            const inventory={sourceSHA:process.env.QA_SOURCE_SHA,executableSHA256:await sha256(exe),files:await Promise.all(dlls.map(async name=>({name,...await inspectPeImage(path.join(appDir,name),true),sha256:await sha256(path.join(appDir,name))})))};
+            await save('dll-inventory.json',inventory);
+            const reports=[exe,...dlls.map(x=>path.join(appDir,x))].map(file=>execFileSync(dumpbin,['/DEPENDENTS',file],{encoding:'utf8',maxBuffer:16*1024*1024})).join('\n');
+            await writeFile(path.join(evidence,'dll-dependencies.txt'),reports);
+            // An empty app-local closure fails the existing verifier explicitly; no host-DLL fallback.
+            const modules=parseDllReports(reports);
+
+            const base=path.join(root,'app/src-tauri');
+            const resources=await verifyResources(root,appDir,evidence,process.env.NSIS_SEVEN_ZIP,connectorPreparation);
+            const closure=verifyDllImports(modules,inventory);
+            await save('dll-closure.json',closure);
+            await save('package-proof.json',{sourceSHA:process.env.QA_SOURCE_SHA,sourceTree:execFileSync('git',['rev-parse','HEAD^{tree}'],{encoding:'utf8'}).trim(),workflowSHA:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,installer:{file:path.basename(installer),bytes:(await lstat(installer)).size,sha256:await sha256(installer)},executable:{...pe,sha256:await sha256(exe)},cargoLockSHA256:await sha256(path.join(base,'Cargo.lock')),windowsConfigSHA256:await sha256(path.join(base,'tauri.windows.conf.json')),qaConfigSHA256:await sha256(process.env.NSIS_QA_CONFIG),verifierSHA256:await sha256(path.join(root,'scripts/native-windows-qa.mjs')),resources:resources.length,dlls:dlls.length,staticPackageProof:'PASS',installerExecuted:false,nativeAcceptance:'UNVERIFIED',cleanWindowsVM:'UNVERIFIED'});
+          } else throw Error('Expected extract or prove');
+          '@ | Set-Content (Join-Path $env:NSIS_PROOF_DIR 'inspect.mjs') -Encoding utf8NoBOM
+      - name: Provision integrity-pinned NSIS and full extraction tooling
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 's61-nsis-tools'
+          if (Test-Path $tools) { throw 'Fresh tool directory required.' }
+          New-Item -ItemType Directory $tools | Out-Null
+          $archive = Join-Path $tools '7z2603-x64.exe'
+          Invoke-WebRequest 'https://github.com/ip7z/7zip/releases/download/26.03/7z2603-x64.exe' -OutFile $archive
+          if ((Get-FileHash $archive).Hash.ToLowerInvariant() -cne '0859c524b8a63551848f0c246abddcb1d0b7b656b0fbfe879f8d85e61a9e6edd') { throw 'Official 7-Zip 26.03 archive digest mismatch.' }
+          $bootstrap = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
+          if (-not (Test-Path $bootstrap)) { throw 'Runner image 7-Zip unavailable; no installer fallback.' }
+          $full = Join-Path $tools 'full-7zip'
+          node (Join-Path $env:NSIS_PROOF_DIR 'inspect.mjs') extract $bootstrap $archive $full
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $seven = Join-Path $full '7z.exe'
+          if (-not (Test-Path $seven) -or -not (Test-Path (Join-Path $full '7z.dll'))) { throw 'Full NSIS-capable 7-Zip tools missing.' }
+          $sevenVersion = & $seven i
+          if ($LASTEXITCODE -ne 0 -or ($sevenVersion -join "`n") -notmatch '7-Zip 26\.03') { throw '7-Zip version mismatch.' }
+          $zip = Join-Path $tools 'nsis-3.11.zip'
+          Invoke-WebRequest 'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip' -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA1).Hash -cne 'EF7FF767E5CBD9EDD22ADD3A32C9B8F4500BB10D') { throw 'Tauri-pinned NSIS archive mismatch.' }
+          $cache = Join-Path $env:LOCALAPPDATA 'tauri'
+          $nsis = Join-Path $cache 'NSIS'
+          if (Test-Path $nsis) { throw 'Refusing unverified existing NSIS cache.' }
+          $unpacked = Join-Path $tools 'nsis-extracted'
+          node (Join-Path $env:NSIS_PROOF_DIR 'inspect.mjs') extract $seven $zip $unpacked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path $cache -Force | Out-Null
+          Move-Item -LiteralPath (Join-Path $unpacked 'nsis-3.11') -Destination $nsis
+          $plugin = Join-Path $nsis 'Plugins/x86-unicode/additional/nsis_tauri_utils.dll'
+          New-Item -ItemType Directory -Path (Split-Path $plugin) -Force | Out-Null
+          Invoke-WebRequest 'https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll' -OutFile $plugin
+          if ((Get-FileHash $plugin -Algorithm SHA1).Hash -cne '75197FEE3C6A814FE035788D1C34EAD39349B860') { throw 'Tauri NSIS plugin mismatch.' }
+          $compilerVersion = & (Join-Path $nsis 'makensis.exe') /VERSION
+          if ($LASTEXITCODE -ne 0 -or $compilerVersion -notmatch '3\.11') { throw 'NSIS compiler version mismatch.' }
+          @{ cli='2.11.2'; sevenZip='26.03'; sevenZipArchiveSHA256=(Get-FileHash $archive).Hash; sevenZipExeSHA256=(Get-FileHash $seven).Hash; sevenZipDllSHA256=(Get-FileHash (Join-Path $full '7z.dll')).Hash; runnerBootstrapSHA256=(Get-FileHash $bootstrap).Hash; runnerImage=$env:ImageVersion; nsisVersion=$compilerVersion; nsisArchiveSHA1=(Get-FileHash $zip -Algorithm SHA1).Hash; nsisCompilerSHA256=(Get-FileHash (Join-Path $nsis 'makensis.exe')).Hash; nsisPluginSHA1=(Get-FileHash $plugin -Algorithm SHA1).Hash } | ConvertTo-Json | Set-Content (Join-Path $env:NSIS_PROOF_DIR 'tool-manifest.json')
+          "NSIS_SEVEN_ZIP=$seven" | Add-Content -LiteralPath $env:GITHUB_ENV
+      - name: Prepare verified resource inputs
+        run: |
+          node --test scripts/tauri-windows-resource-contract.test.mjs scripts/windows-runtime-dlls.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:desktop-connector
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run prepare:siyuan-runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --input-type=module -e "import assert from 'node:assert/strict'; import {fingerprint} from './scripts/prepare-desktop-connector.mjs'; assert.equal(await fingerprint(),process.env.QA_CONNECTOR_SHA256);"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Admit and build unsigned NSIS release package
+        run: |
+          & (Join-Path $env:NSIS_PROOF_DIR 'admit.ps1') before-build
+          if (Test-Path -LiteralPath $env:CARGO_TARGET_DIR) { throw 'Fresh isolated Cargo target required.' }
+          npm --prefix app run tauri:build -- --bundles nsis --no-sign --ci --config $env:NSIS_QA_CONFIG -- --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash 'app/src-tauri/Cargo.lock').Hash.ToLowerInvariant() -cne $env:QA_CARGO_LOCK_SHA256) { throw 'Build changed frozen Cargo lock.' }
+      - name: Inspect actual extracted NSIS DLL and resource closure
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packages = @(Get-ChildItem -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release/bundle/nsis') -Filter '*.exe' -File)
+          if ($packages.Count -ne 1) { throw 'Exactly one unsigned NSIS artifact required.' }
+          $package = $packages[0].FullName
+          $extracted = Join-Path $env:RUNNER_TEMP 's61-nsis-extracted'
+          node (Join-Path $env:NSIS_PROOF_DIR 'inspect.mjs') extract $env:NSIS_SEVEN_ZIP $package $extracted
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'MSVC inspection tools unavailable.' }
+          $dumpbin = Get-ChildItem -Path (Join-Path $vs 'VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe') -File | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin unavailable.' }
+          Copy-Item -LiteralPath $package -Destination $env:NSIS_PROOF_DIR
+          node (Join-Path $env:NSIS_PROOF_DIR 'inspect.mjs') prove $extracted (Join-Path $env:CARGO_TARGET_DIR 'release/jarvis.exe') $package $dumpbin.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -LiteralPath $env:NSIS_QA_CONFIG -Destination $env:NSIS_PROOF_DIR
+      - name: Upload unsigned package and static proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-nsis-proof-${{ inputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work/s61-nsis-proof/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 6
+      - name: Upload package diagnostics even on a failed proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-nsis-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            work/s61-nsis-proof/*.json
+            work/s61-nsis-proof/*.txt
+            work/s61-nsis-proof/*.ps1
+            work/s61-nsis-proof/*.mjs
+            work/s61-nsis-proof/*.exe
+          if-no-files-found: warn
+          retention-days: 3
+          compression-level: 6

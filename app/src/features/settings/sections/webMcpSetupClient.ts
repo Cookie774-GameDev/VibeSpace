@@ -106,6 +106,7 @@ export async function saveWebMcpDraft(draft: SetupDraft, apiKey: string): Promis
       confirmed.displayName !== pluginName(draft.displayName) ||
       confirmed.tunnelId !== draft.tunnelId.trim() ||
       confirmed.guideTab !== draft.guideTab ||
+      confirmed.step !== draft.step ||
       (apiKey && !confirmed.hasKey)
     )
       throw new Error('Setup readback mismatch');
@@ -115,4 +116,10 @@ export async function saveWebMcpDraft(draft: SetupDraft, apiKey: string): Promis
       describeSetupError(error, 'Setup progress could not be saved and verified. Please retry.'),
     );
   }
+}
+
+/** A saved setup or last ready snapshot does not verify a current connection. */
+export function webMcpConnectionReady(status: WebMcpStatus | undefined, statusAvailable: boolean): boolean {
+  return statusAvailable && status?.connectionDetected === true && status.enabled !== false &&
+    status.status === 'ready' && Number.isSafeInteger(status.toolCount) && status.toolCount > 0;
 }

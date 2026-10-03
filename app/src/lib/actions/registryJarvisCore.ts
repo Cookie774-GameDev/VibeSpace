@@ -1,3 +1,4 @@
+import { assertRegisteredResourceScope } from './registryActionScope';
 import type { ActionDef, ActionResult, ActionRunContext } from './types';
 import type { JarvisRegisteredActionDefinition } from '@/lib/jarvis/actions/catalog';
 import type {
@@ -101,11 +102,8 @@ export function createJarvisTerminalRegisteredActionDispatcher(
         };
       }
     }
-    const protectedScope =
-      actionId === 'terminal.start_cli'
-        ? await (dependencies.resolveProtectedScope ?? resolveProtectedTerminalScope)(input.context)
-        : null;
-    if (actionId === 'terminal.start_cli' && (!protectedScope || !protectedScope.isCurrent())) {
+    const protectedScope = await (dependencies.resolveProtectedScope ?? resolveProtectedTerminalScope)(input.context);
+    if (!protectedScope || !protectedScope.isCurrent()) {
       return {
         kind: 'executor_returned',
         result: fail('Canonical terminal scope was revoked before handoff.'),
@@ -980,9 +978,11 @@ export function createJarvisCoreActions(resolveLegacy: LegacyResolver): ActionDe
         const chatId = text(params, 'chatId') || ctx.chatId || '';
         const title = text(params, 'title');
         if (!chatId || !title) return fail('Chat id and title are required.');
+        const recheckScope = await assertRegisteredResourceScope(ctx, 'chat', chatId);
         const { chatRepo } = await import('@/lib/db/repositories');
         const chat = await chatRepo.getById(chatId as never);
         if (!chat) return fail(`Chat ${chatId} was not found.`);
+        await recheckScope();
         await chatRepo.update(chat.id, { title });
         return ok(`Renamed chat to ${title}.`, { chatId });
       },

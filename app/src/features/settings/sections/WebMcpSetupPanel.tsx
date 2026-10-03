@@ -24,6 +24,7 @@ import tunnelPoster from '@/assets/webmcp/tunnel-setup.jpg';
 import apiPoster from '@/assets/webmcp/api-key-setup.jpg';
 import {
   describeSetupError,
+  webMcpConnectionReady,
   pluginName,
   setupErrorMessages,
   draftFromStatus,
@@ -85,6 +86,7 @@ export function WebMcpSetupPanel({
   onClose: () => void;
 }) {
   const [status, setStatus] = useState(initialStatus);
+  const [statusAvailable, setStatusAvailable] = useState(false);
   const [draft, setDraft] = useState(() => draftFromStatus(initialStatus));
   const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(true);
@@ -107,6 +109,7 @@ export function WebMcpSetupPanel({
   const applyStatus = useCallback((value: WebMcpStatus) => {
     if (!mounted.current) return;
     setStatus(value);
+    setStatusAvailable(true);
     changeStatus.current(value);
   }, []);
   useEffect(() => {
@@ -212,7 +215,10 @@ export function WebMcpSetupPanel({
         .then((value) => {
           if (requestedRevision === revision.current && !savingCount.current) applyStatus(value);
         })
-        .catch(() => {})
+        .catch(() => {
+          if (mounted.current && requestedRevision === revision.current && !savingCount.current)
+            setStatusAvailable(false);
+        })
         .finally(() => {
           pending = false;
         });
@@ -283,12 +289,13 @@ export function WebMcpSetupPanel({
       <ExternalLink size={13} aria-hidden="true" />
     </a>
   );
-  const ready = status?.status === 'ready' && (status.toolCount ?? 0) > 0;
+  const ready = webMcpConnectionReady(status, statusAvailable);
   const active = status?.status === 'ready' || status?.status === 'connecting';
   const tunnelSaved = Boolean(status?.tunnelId && status.tunnelId === draft.tunnelId.trim());
   const credentialStep = draft.step !== 3;
   const displayedError =
     error ||
+    (!statusAvailable && !loading ? 'Connection status unavailable. Checking again; saved setup is preserved.' : '') ||
     (status?.errorCode && Object.hasOwn(setupErrorMessages, status.errorCode)
       ? setupErrorMessages[status.errorCode]
       : '');
@@ -372,7 +379,7 @@ export function WebMcpSetupPanel({
                   <Cloud size={16} aria-hidden="true" />
                   <span>
                     OpenAI tunnel
-                    <small>{ready ? 'Connected' : active ? 'Connecting…' : 'Not connected'}</small>
+                    <small>{!statusAvailable ? 'Status unavailable' : ready ? 'Connected' : active ? 'Connecting…' : 'Not connected'}</small>
                   </span>
                 </div>
               </div>
@@ -553,7 +560,7 @@ export function WebMcpSetupPanel({
           <div className="webmcp-footer-status" role="status">
             <span className={ready ? 'webmcp-dot ready' : 'webmcp-dot'} />
             <span>
-              {ready ? 'Tunnel ready' : active ? 'Connecting…' : 'Not connected'}
+              {!statusAvailable ? 'Connection status unavailable' : ready ? 'Tunnel ready' : active ? 'Connecting…' : 'Not connected'}
               <small>
                 {saveState === 'saving'
                   ? 'Saving securely…'

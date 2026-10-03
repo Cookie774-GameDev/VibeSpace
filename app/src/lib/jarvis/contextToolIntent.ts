@@ -1,6 +1,6 @@
 import { requestsNoProjectRetrieval } from '@/lib/ai/intent';
 
-const EXPLICIT_CONTEXT_TOOL = /\b(?:vibespace_context|context map|rlm)\b/i;
+const EXPLICIT_CONTEXT_TOOL = /\b(?:vibespace_context(?:_(?:search|open|expand|address|trace))?|context map|rlm)\b/i;
 const MUTATING_REQUEST =
   /\b(?:write|create|make|build|generate|save|delete|remove|rename|move|edit|modify|change|run|execute|launch|start|command|terminal)\b/i;
 const EXPLICIT_CONTEXT_MUTATION =
@@ -9,6 +9,8 @@ const NEGATED_MUTATING_SEGMENT =
   /\b(?:do\s+not|don't|never|avoid|without)\b(?:(?![.;\r\n]|\b(?:but|however|instead|then)\b).){0,512}/giu;
 const READ_OR_EVIDENCE_REQUEST =
   /\b(?:read|search|find|look\s+up|answer|quote|cite|citation|source|where\s+(?:you|u)\s+found)\b/i;
+const NATURAL_SOURCE_LOOKUP =
+  /\b(?:what|which|who|when|where|how\s+(?:many|long)|compare|trace)\b/iu;
 const FILE_LIKE_SOURCE = /\b(?:files?|documents?|corpus|records?|sources?|literature)\b/i;
 const BOUNDED_CONTEXT_SOURCE = /\b(?:indexed|mapped|corpus|records?|context\s+authority)\b/i;
 const NATIVE_WORKSPACE_OR_MCP_REQUEST =
@@ -525,7 +527,21 @@ export function requestsReadOnlyContextTool(userText: string): boolean {
     !/\b(?:indexed|mapped)\b/iu.test(contextIntent) &&
     /\b(?:source|configuration|config|cli|test)\s+files?\b|\bfiles?\s+(?:you|we)\s+(?:created|edited|wrote)\b/iu.test(contextIntent)
   ) return false;
-  if (MUTATING_REQUEST.test(affirmativeText)) return false;
+  // Dates and proposals describe recorded events; they do not request execution.
+  // Only normalize these noun phrases for bounded source questions. A mixed
+  // request such as "find the launch date, then start the server" still retains
+  // its native action catalog.
+  const boundedSourceLookup =
+    boundedDirectContextText(userText) &&
+    FILE_LIKE_SOURCE.test(contextIntent) &&
+    BOUNDED_CONTEXT_SOURCE.test(contextIntent) &&
+    (READ_OR_EVIDENCE_REQUEST.test(contextIntent) || NATURAL_SOURCE_LOOKUP.test(contextIntent));
+  const operationText = boundedSourceLookup
+    ? affirmativeText
+        .replace(/\b(?:launch|start)\s+(?:date|proposal|window|timeline)\b/giu, ' ')
+        .replace(/\bbefore\s+(?:launch|start)(?=[.;!?\r\n]|$)/giu, ' ')
+    : affirmativeText;
+  if (MUTATING_REQUEST.test(operationText)) return false;
   // Registered disk reads must stay on files.read, not Context-map search.
   if (/\bfiles\.read\b/i.test(userText) && /[A-Za-z]:[\\/]/.test(userText)) return false;
   if (/\bcurrent working directory\b/i.test(userText) && READ_OR_EVIDENCE_REQUEST.test(userText)) {
@@ -540,6 +556,7 @@ export function requestsReadOnlyContextTool(userText: string): boolean {
     if (relativeLeafNames.size === 1 && everyReferenceIsAStandaloneLeaf) return false;
   }
   return (
+    boundedSourceLookup ||
     (READ_OR_EVIDENCE_REQUEST.test(contextIntent) &&
       FILE_LIKE_SOURCE.test(contextIntent) &&
       BOUNDED_CONTEXT_SOURCE.test(contextIntent)) ||

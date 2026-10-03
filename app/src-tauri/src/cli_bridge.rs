@@ -11,6 +11,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
+#[path = "codex_rlm_native.rs"] pub(crate) mod codex_rlm_native;
+pub(crate) use codex_rlm_native::{CodexRlmParentBinding, account_hash as codex_rlm_account_hash};
+
 const MIN_TIMEOUT_MS: u64 = 100;
 const MAX_TIMEOUT_MS: u64 = 86_400_000; // App-lifetime persistent OpenCode server (24h); still cancellable.
 const MIN_OUTPUT_LIMIT_BYTES: usize = 1_024;
@@ -347,6 +350,7 @@ struct PreparedStartRequest {
     output_limit_bytes: usize,
     tool_scope: bool,
     secret_environment: Option<SecretEnvironment>,
+    strip_provider_environment: bool,
 }
 
 #[derive(PartialEq, Eq)]
@@ -553,6 +557,7 @@ fn prepare_start_request(
         output_limit_bytes: request.output_limit_bytes,
         tool_scope,
         secret_environment: None,
+        strip_provider_environment: false,
     })
 }
 
@@ -1998,6 +2003,9 @@ fn run_supervised_process(
     if let Some(cwd) = &prepared.cwd {
         command.current_dir(cwd);
     }
+    if prepared.strip_provider_environment {
+        codex_rlm_native::configure_rlm_environment(&mut command);
+    }
     if let Some(secret) = &prepared.secret_environment {
         command.env_remove("OPENAI_API_KEY");
         command.env_remove("OPENAI_KEY");
@@ -3097,6 +3105,7 @@ mod tests {
             output_limit_bytes: 1_024,
             tool_scope: false,
             secret_environment: None,
+        strip_provider_environment: false,
         };
         let mut started_count = 0;
 
@@ -3255,4 +3264,18 @@ mod tests {
         let marker = std::env::var_os("VIBESPACE_CLI_BRIDGE_TREE_MARKER").unwrap();
         fs::write(marker, b"grandchild survived").unwrap();
     }
+}
+
+fn start_owned_rlm_supervisor(app:&tauri::AppHandle,state:&CliBridgeState,id:&str,prepared:PreparedStartRequest,directory:PathBuf)->Result<(),String> {
+    validate_runtime_limits(prepared.timeout_ms,prepared.output_limit_bytes)?;
+    let (cancellation,active)=state.register(id)?;
+    let app=app.clone();let id=id.to_string();let limit=prepared.output_limit_bytes;
+    thread::Builder::new().name(format!("codex-rlm-{id}")).spawn(move || {
+        struct OwnedDirectory(PathBuf);impl Drop for OwnedDirectory { fn drop(&mut self){let _=fs::remove_dir(&self.0);} }
+        let _directory=OwnedDirectory(directory);let _active=active;
+        let result=run_supervised_process(prepared,cancellation,
+            ||emit_cli_event(&app,status_event(&id,CliEventStatus::Started,String::new(),None)),
+            |stream,output|emit_cli_event(&app,CliBridgeEvent {request_id:id.clone(),stream,data:output.data,exit_code:None,status:CliEventStatus::Data,truncated:Some(output.truncated)}));
+        match result {Ok(result)=>{let status=match result.terminal {ProcessTerminal::Completed=>CliEventStatus::Completed,ProcessTerminal::Cancelled=>CliEventStatus::Cancelled,ProcessTerminal::TimedOut=>CliEventStatus::TimedOut};emit_cli_event(&app,status_event(&id,status,String::new(),result.exit_code));},Err(_)=>emit_cli_event(&app,status_event(&id,CliEventStatus::Failed,"Codex child process failed".into(),None))}
+    }).map_err(|_|"Codex child supervisor unavailable".to_string())?;Ok(())
 }

@@ -105,14 +105,14 @@ describe('composer file path detection', () => {
     ).toEqual(['C:\\Users\\viper\\notes.txt']);
   });
 
-  it('treats openai-codex as a no-file-attachment connection', () => {
+  it('treats openai-codex as a bounded text-file attachment connection', () => {
     expect(
       connectionSupportsFileAttachments({
         mode: 'single',
         connectionId: 'openai-codex',
         capabilities: { files: false },
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 

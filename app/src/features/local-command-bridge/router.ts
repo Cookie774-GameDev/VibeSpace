@@ -99,6 +99,29 @@ function collectLexicon() {
 }
 
 const LEXICON = collectLexicon();
+// Frequency can rank spelling variants, but cannot choose between intents.
+// Group synonyms so equally close words such as claude/cloude remain safe.
+const WORD_MEANINGS = new Map();
+for (const [category, groups] of Object.entries({
+  action: ACTION_SYNONYMS,
+  family: FAMILY_TERMS,
+  provider: PROVIDER_ALIASES,
+  color: COLOR_ALIASES,
+  page: PAGE_ALIASES,
+})) {
+  for (const [meaning, phrases] of Object.entries(groups)) {
+    for (const phrase of phrases) {
+      for (const word of phraseWords(phrase)) {
+        const meanings = WORD_MEANINGS.get(word) ?? new Set();
+        meanings.add(`${category}:${meaning}`);
+        WORD_MEANINGS.set(word, meanings);
+      }
+    }
+  }
+}
+function wordMeaning(word) {
+  return [...(WORD_MEANINGS.get(word) ?? [word])].sort().join('|');
+}
 const DELETE_INDEX = new Map();
 for (const word of LEXICON.keys()) {
   const distance = word.length >= 7 ? 2 : 1;
@@ -167,19 +190,33 @@ function uncachedTypoCandidate(token) {
   }
   if (candidates.size === 0) return { value: token, distance: 0, corrected: false };
   let best = null;
+  let nearestDistance = Infinity;
+  const nearestMeanings = new Set();
   for (const candidate of candidates) {
     const maxDistance = Math.max(token.length, candidate.length) >= 7 ? 2 : 1;
     const d = levenshtein(token, candidate, maxDistance);
     if (d > maxDistance) continue;
+    if (d < nearestDistance) {
+      nearestDistance = d;
+      nearestMeanings.clear();
+    }
+    if (d === nearestDistance) nearestMeanings.add(wordMeaning(candidate));
     const weight = LEXICON.get(candidate) ?? 0;
     const score = d * 100 - weight;
     if (
       !best ||
-      score < best.score ||
-      (score === best.score && candidate.length > best.value.length)
+      d < best.distance ||
+      (d === best.distance && score < best.score) ||
+      (d === best.distance && score === best.score && candidate.length > best.value.length)
     ) {
       best = { value: candidate, distance: d, corrected: true, score };
     }
+  }
+  if (nearestMeanings.size > 1) {
+    return {
+      value: token, distance: 0, corrected: false, intentConflict: true,
+      providerConflict: [...nearestMeanings].some((meaning) => meaning.includes('provider:')),
+    };
   }
   return best
     ? { value: best.value, distance: best.distance, corrected: true }
@@ -199,6 +236,8 @@ function tokenize(text, baseOffset = 0, correct = true) {
       value: correction.value,
       corrected: correction.corrected,
       distance: correction.distance,
+      intentConflict: correction.intentConflict === true,
+      providerConflict: correction.providerConflict === true,
       start: baseOffset + match.index,
       end: baseOffset + match.index + raw.length,
     });
@@ -861,8 +900,14 @@ function commandFromFrame(span, speech) {
   const direct = directCommandFromFrame(span, speech);
   if (direct) return direct;
 
+  if (tokens.some((token) => token.providerConflict)) {
+    return { status: 'ambiguous', reason: 'typo-intent-conflict' };
+  }
+
   const familyRanking = familyScores(tokens);
-  if (familyRanking.length === 0) return { status: 'ambiguous', reason: 'no-family' };
+  if (familyRanking.length === 0) {
+    return { status: 'ambiguous', reason: tokens.some((token) => token.intentConflict) ? 'typo-intent-conflict' : 'no-family' };
+  }
 
   const family = familyRanking[0][0];
   const familyScore = familyRanking[0][1];

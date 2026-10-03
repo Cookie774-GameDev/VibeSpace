@@ -75,6 +75,7 @@ describe('createJarvisCapabilitySnapshot', () => {
       'canva.designs.search',
       'chat.model.switch',
       'chat.read',
+      'chat.rename',
       'chat.send',
       'creator.start',
       'file.search',
@@ -95,12 +96,42 @@ describe('createJarvisCapabilitySnapshot', () => {
       'google-drive.document.read',
       'google-drive.files.search',
       'mcp.invoke',
+      'milestone.create',
       'schedule.create',
+      'schedule.pause',
       'task.cancel',
       'terminal.create',
       'zapier.action.invoke',
       'zapier.actions.discover',
     ]);
+    expect(byId.get('chat.rename')).toMatchObject({
+      id: 'chat.rename',
+      version: 1,
+      inputSchema: {
+        type: 'object',
+        properties: { chatId: { type: 'string' }, title: { type: 'string' } },
+        required: ['chatId', 'title'],
+        additionalProperties: false,
+      },
+      requiredCapabilities: ['chat.write'],
+      requiredEntitlements: [],
+      risk: 'safe-write',
+      approval: 'always',
+    });
+    expect(byId.get('schedule.pause')).toMatchObject({
+      id: 'schedule.pause',
+      version: 1,
+      inputSchema: {
+        type: 'object',
+        properties: { eventId: { type: 'string' } },
+        required: ['eventId'],
+        additionalProperties: false,
+      },
+      requiredCapabilities: ['schedule.write'],
+      requiredEntitlements: [],
+      risk: 'destructive',
+      approval: 'always',
+    });
     expect(byId.get('file.search')).toMatchObject({
       id: 'file.search',
       version: 1,

@@ -1,5 +1,6 @@
 import type { ContextPersistenceState } from './contextPersistence';
-import type { ContextMapRecord, ProjectContextTree } from './tree';
+import type { ContextMapRecord, ContextTreeNode, ProjectContextTree } from './tree';
+import { contextEntityIdForTreeNode } from './migration';
 
 interface PopulatePersistedCreatedContextMapInput {
   persisted: ContextPersistenceState;
@@ -37,10 +38,23 @@ export async function populatePersistedCreatedContextMap(
   );
   if (!persistedMap) throw new Error('context_search_index_snapshot_invalid');
 
-  // The V2 graph projection stores portable metadata and intentionally drops
-  // local ingestion eligibility. Index from the freshly scanned tree while
-  // retaining the durable map identity.
-  const generatedMap: ContextMapRecord = { ...persistedMap, tree: input.tree };
+  // Keep fresh ingestion metadata, but index the identities that persistence
+  // exposes to search after reload. Raw scan IDs are not durable entity IDs.
+  const persistedIds = new Set<string>();
+  const collect = (node: ContextTreeNode) => {
+    persistedIds.add(node.id);
+    for (const child of node.children ?? []) collect(child);
+  };
+  for (const node of persistedMap.tree.nodes) collect(node);
+  const canonicalNode = (node: ContextTreeNode): ContextTreeNode => {
+    const id = contextEntityIdForTreeNode(persistedMap.id, node.id);
+    if (!persistedIds.has(id)) throw new Error('context_search_index_snapshot_invalid');
+    return { ...node, id, ...(node.children ? { children: node.children.map(canonicalNode) } : {}) };
+  };
+  const generatedMap: ContextMapRecord = {
+    ...persistedMap,
+    tree: { ...input.tree, nodes: input.tree.nodes.map(canonicalNode) },
+  };
   try {
     await input.populateCreatedMap(input.persisted.accountId, generatedMap, input.signal);
   } catch (error) {

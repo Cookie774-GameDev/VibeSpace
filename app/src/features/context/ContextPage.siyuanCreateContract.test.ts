@@ -84,8 +84,15 @@ describe('ContextPage SiYuan creation contract', () => {
 
   it('preserves fresh local ingestion eligibility through RLM and SiYuan creation', () => {
     expect(source).toContain('populatePersistedCreatedContextMap({');
+    // Fresh scan metadata stays on each node while only its identity changes
+    // to the exact entity identity that the persisted map exposes after reload.
     expect(creationLifecycleSource).toContain(
-      'const generatedMap: ContextMapRecord = { ...persistedMap, tree: input.tree }',
+      'contextEntityIdForTreeNode(persistedMap.id, node.id)',
+    );
+    expect(creationLifecycleSource).toContain('if (!persistedIds.has(id))');
+    expect(creationLifecycleSource).toContain('return { ...node, id,');
+    expect(creationLifecycleSource).toContain(
+      'tree: { ...input.tree, nodes: input.tree.nodes.map(canonicalNode) }',
     );
     expect(creationLifecycleSource).toContain(
       'input.populateCreatedMap(input.persisted.accountId, generatedMap, input.signal)',

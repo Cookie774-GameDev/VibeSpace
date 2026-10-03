@@ -1,5 +1,14 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useAuthStore } from '@/stores/auth';
+
+vi.mock('@/lib/db/repositories', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/db/repositories')>('@/lib/db/repositories');
+  return { ...actual,
+    workspaceRepo: { ...actual.workspaceRepo, getById: vi.fn(async () => ({ id: 'S61-workspace-A', owner_id: 'S61-account-A' })) },
+    projectRepo: { ...actual.projectRepo, getById: vi.fn(async () => ({ id: 'S61-project-A', workspace_id: 'S61-workspace-A' })) },
+  };
+});
 import { useMilestonesStore } from '@/features/inspector/milestonesStore';
 import { KanbanPage } from './KanbanPage';
 
@@ -21,13 +30,16 @@ vi.mock('@/features/inspector/workspaceAnalytics', () => ({
 describe('KanbanPage add controls', () => {
   beforeEach(() => {
     localStorage.clear();
+    useAuthStore.setState({ localUserId: 'S61-account-A', cloudSession: null,
+      workspaceId: 'S61-workspace-A' as never, projectId: 'S61-project-A' as never });
     useMilestonesStore.setState({ items: [] });
   });
 
   afterEach(() => cleanup());
 
-  it('focuses the matching input when an empty plus control is clicked', () => {
+  it('focuses the matching input when an empty plus control is clicked', async () => {
     render(<KanbanPage />);
+    await waitFor(() => expect((screen.getByRole('button', { name: "Add item to Today's to-do" }) as HTMLButtonElement).disabled).toBe(false));
     const todoInput = screen.getByRole('textbox', { name: "New item for Today's to-do" });
     const todoAdd = screen.getByRole('button', { name: "Add item to Today's to-do" });
     const milestoneInput = screen.getByRole('textbox', { name: 'New item for Milestones' });
@@ -42,8 +54,9 @@ describe('KanbanPage add controls', () => {
     expect(document.activeElement).toBe(milestoneInput);
   });
 
-  it('adds typed to-dos and milestones through the existing shared store', () => {
+  it('adds typed to-dos and milestones through the existing shared store', async () => {
     const { container } = render(<KanbanPage />);
+    await waitFor(() => expect((screen.getByRole('button', { name: "Add item to Today's to-do" }) as HTMLButtonElement).disabled).toBe(false));
     const todoInput = screen.getByRole('textbox', { name: "New item for Today's to-do" });
     const milestoneInput = screen.getByRole('textbox', { name: 'New item for Milestones' });
 
@@ -64,8 +77,9 @@ describe('KanbanPage add controls', () => {
     expect(container.querySelector('[data-kanban-checklist-grid="expanded"]')).not.toBeNull();
   });
 
-  it('marks warm inputs, cards, and empty states without changing creation behavior', () => {
+  it('marks warm inputs, cards, and empty states without changing creation behavior', async () => {
     const { container } = render(<KanbanPage />);
+    await waitFor(() => expect((screen.getByRole('button', { name: "Add item to Today's to-do" }) as HTMLButtonElement).disabled).toBe(false));
 
     expect(container.querySelectorAll('[data-warm-surface="kanban-input"]')).toHaveLength(2);
     expect(container.querySelectorAll('[data-warm-surface="kanban-empty-copy"]')).toHaveLength(2);
@@ -77,8 +91,9 @@ describe('KanbanPage add controls', () => {
     expect(container.querySelector('[data-warm-surface="kanban-card"]')).not.toBeNull();
   });
 
-  it('names populated inline editors without relying on their current values', () => {
+  it('names populated inline editors without relying on their current values', async () => {
     render(<KanbanPage />);
+    await waitFor(() => expect((screen.getByRole('button', { name: "Add item to Today's to-do" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.change(screen.getByRole('textbox', { name: "New item for Today's to-do" }), {
       target: { value: 'Readable task' },
     });
@@ -94,8 +109,9 @@ describe('KanbanPage add controls', () => {
     ).toBe('');
   });
 
-  it('edits, completes, and reopens a milestone without stale completion state', () => {
+  it('edits, completes, and reopens a milestone without stale completion state', async () => {
     render(<KanbanPage />);
+    await waitFor(() => expect((screen.getByRole('button', { name: "Add item to Today's to-do" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.change(screen.getByRole('textbox', { name: 'New item for Milestones' }), {
       target: { value: 'Draft milestone' },
     });

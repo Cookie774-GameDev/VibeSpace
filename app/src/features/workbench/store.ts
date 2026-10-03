@@ -108,7 +108,7 @@ interface WorkbenchState extends WorkbenchDocument {
   undo: () => void;
   redo: () => void;
   resetWorkbench: () => void;
-  openFileInEditor: (path: string) => string | null;
+  openFileInEditor: (path: string, root?: string) => string | null;
   /**
    * Open (or refresh) a separate device-preview panel/tab for editor content.
    * One panel per device id so iPhone and iPad previews can sit side by side.
@@ -476,19 +476,24 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       lastKnownRevision: state.lastKnownRevision,
     })),
 
-  openFileInEditor: (path) => {
+  openFileInEditor: (path, root) => {
     const clean = path.trim();
     if (!clean) return null;
+    const boundRoot = root?.trim() || undefined;
     const state = get();
     const existing = state.panels.find(
-      (panel) => panel.kind === 'editor' && panel.settings.filePath === clean,
+      (panel) => panel.kind === 'editor' && panel.settings.filePath === clean &&
+        (!boundRoot || panel.settings.cwd === boundRoot),
     );
     if (existing) {
       get().bringToFront(existing.id);
       get().selectPanel(existing.id);
       return existing.id;
     }
-    let editor = state.panels.find((panel) => panel.kind === 'editor' && !panel.settings.filePath);
+    let editor = state.panels.find(
+      (panel) => panel.kind === 'editor' && !panel.settings.filePath && !panel.settings.note &&
+        (!boundRoot || panel.settings.cwd === boundRoot),
+    );
     if (!editor) {
       const id = get().addPanel('editor');
       if (!id) return null;
@@ -501,6 +506,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       settings: {
         ...editor.settings,
         filePath: clean,
+        cwd: boundRoot,
         note: undefined,
         language: clean.split('.').pop()?.toLowerCase(),
       },

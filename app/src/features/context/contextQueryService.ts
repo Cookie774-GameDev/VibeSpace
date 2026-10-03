@@ -28,6 +28,11 @@ export interface ContextSourceRead {
 
 export interface ContextQueryRepository {
   listRecords(scope: ContextScope, signal?: AbortSignal): Promise<readonly ContextRecord[]>;
+  /** Bounded, scope-filtered source inventory for large persisted maps. */
+  listRecordsPage?(scope: ContextScope, limit: number, signal?: AbortSignal): Promise<{
+    items: readonly ContextRecord[];
+    truncated: boolean;
+  }>;
   /** Rebuild only the authority that could own a missing durable record ID. */
   rehydrateMissingRecord?(recordId: string, scope: ContextScope, signal?: AbortSignal): Promise<void>;
   /** Scoped inventory metadata; search/open still validate exact source authority. */
@@ -543,11 +548,17 @@ export function createContextQueryService(dependencies: {
   };
 
   const sources = async (input: { scope: ContextScope; limit?: number; signal?: AbortSignal }) => {
-    const records = await scopedRecords(input.scope, input.signal);
     const maximum = boundedInteger(input.limit, limits.maxSearchResults, limits.maxSearchResults);
+    const page = repository.listRecordsPage
+      ? await repository.listRecordsPage(input.scope, maximum, input.signal)
+      : undefined;
+    abortIfNeeded(input.signal);
+    const records = page
+      ? page.items.filter((record) => inScope(record, input.scope) && record.deletedAt === undefined)
+      : await scopedRecords(input.scope, input.signal);
     return {
       items: records.slice(0, maximum),
-      truncated: records.length > maximum,
+      truncated: Boolean(page?.truncated || records.length > maximum),
     };
   };
 
@@ -584,13 +595,25 @@ export function createContextQueryService(dependencies: {
   };
 
   const checkpoint = async (input: { scope: ContextScope; signal?: AbortSignal }) => {
-    const records = await scopedRecords(input.scope, input.signal);
+    const page = repository.listRecordsPage
+      ? await repository.listRecordsPage(input.scope, limits.maxSearchResults, input.signal)
+      : undefined;
+    abortIfNeeded(input.signal);
+    const records = page
+      ? page.items.filter((record) => inScope(record, input.scope) && record.deletedAt === undefined)
+      : await scopedRecords(input.scope, input.signal);
+    const summary = page && repository.describeSummary
+      ? await repository.describeSummary(input.scope, input.signal)
+      : undefined;
+    abortIfNeeded(input.signal);
     return {
       scope: input.scope,
       createdAt: Date.now(),
       recordCount: records.length,
       recordIds: records.map((record) => record.id),
       contentHashes: records.map((record) => record.contentHash),
+      truncated: Boolean(page?.truncated || (summary && summary.recordCount > records.length)),
+      ...(page ? { complete: false } : {}),
     };
   };
 

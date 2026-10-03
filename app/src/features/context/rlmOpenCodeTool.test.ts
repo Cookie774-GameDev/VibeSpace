@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRlmOpenCodeTool } from './rlmOpenCodeTool';
+import { setChatRlmEnabled } from './rlmPreferenceStore';
 import {
   consumeToolGatewayContextCitationItems,
   clearToolGatewayContextCitationItems,
@@ -63,6 +64,26 @@ function dependencies() {
 }
 
 describe('OpenCode RLM context tool adapter', () => {
+  it('honors chat Off for recursive investigation while allowing bounded Context retrieval', async () => {
+    localStorage.clear();
+    try {
+      setChatRlmEnabled('chat-off', false);
+      const deps = dependencies();
+      const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
+      const chatLease = { ...lease, workspaceId: 'workspace-1', chatId: 'chat-off' };
+      await tool.execute({ operation: 'investigate', query: 'Audit the entire project history' }, chatLease);
+      expect(deps.rlmRuntime.investigate).not.toHaveBeenCalled();
+      expect(deps.queryService.search).toHaveBeenCalledOnce();
+      await tool.execute({ operation: 'search', query: 'Find the signed record' }, chatLease);
+      expect(deps.queryService.search).toHaveBeenCalledTimes(2);
+      await tool.execute({ operation: 'investigate', query: 'Audit the entire project history' },
+        { ...chatLease, chatId: 'chat-on' });
+      expect(deps.rlmRuntime.investigate).toHaveBeenCalledOnce();
+    } finally {
+      localStorage.clear();
+    }
+  });
+
   it('records a failed retrieval route when high-level query search rejects', async () => {
     const storage = {
       getItem: vi.fn(() => null),
@@ -219,9 +240,20 @@ describe('OpenCode RLM context tool adapter', () => {
       text: 'exact',
       truncated: false,
     }) as any);
-    const tool = createRlmOpenCodeTool({ ...deps, now: () => 1_000 });
-    await tool.execute({ operation: 'search', query: 'needle' }, lease);
-    await tool.execute({ operation: 'open', pointer }, lease);
+    const protectedLease = { ...lease, contextRevision: `sha256:${HASH}` };
+    const assertCurrent = vi.fn(() => protectedLease.contextRevision);
+    // Synthetic issued-evidence port: only the fixture's exact pointer receives proof.
+    const verifyIssued = vi.fn(async (result: unknown) => {
+      const value = result as { pointer?: typeof pointer; items?: { pointer: typeof pointer }[] };
+      const issued = value.pointer === pointer || value.items?.some((item) => item.pointer === pointer);
+      return issued ? [{ pointerId: pointer.id, recordId: pointer.recordId,
+        sourceRevision: pointer.sourceVersion, contentHash: pointer.contentHash }] : [];
+    });
+    const tool = createRlmOpenCodeTool({ ...deps, verifiedFallbackCitations: verifyIssued, now: () => 1_000 });
+    await tool.execute({ operation: 'search', query: 'needle' }, protectedLease, undefined, assertCurrent);
+    await tool.execute({ operation: 'open', pointer }, protectedLease, undefined, assertCurrent);
+    expect(verifyIssued).toHaveBeenCalledTimes(2);
+    expect(verifyIssued).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining(protectedLease), undefined);
     const items = consumeToolGatewayContextCitationItems('session-1');
     expect(items.some((item) => item.source.id === 'ptr:rlm:reg:0:512')).toBe(true);
     expect(items[0]!.source.uri).toContain('vibespace:context/evidence/');
@@ -302,6 +334,7 @@ describe('OpenCode RLM context tool adapter', () => {
         question: 'Investigate the entire project history for the leak',
         executionIdentity,
       }),
+      expect.objectContaining(lease),
     );
   });
 
@@ -324,6 +357,7 @@ describe('OpenCode RLM context tool adapter', () => {
           maxWallTimeMs: 60_000,
         }),
       }),
+      expect.objectContaining(lease),
     );
     expect(result).toMatchObject({ answer: 'investigated:cross-source root cause' });
   });
@@ -465,8 +499,16 @@ describe('OpenCode Context citation and cancellation boundaries', () => {
     try {
       const deps = dependencies();
       const search = vi.fn(async () => searchResult);
-      const tool = createRlmOpenCodeTool({ ...deps, queryService: { ...deps.queryService, search }, now: () => 1_000 });
-      await expect(tool.execute(input, lease)).resolves.toBe(searchResult);
+      const protectedLease = { ...lease, contextRevision: `sha256:${HASH}` };
+      const assertCurrent = vi.fn(() => protectedLease.contextRevision);
+      const verifyIssued = vi.fn(async (result: unknown) => result === searchResult ? [{
+        pointerId: pointer.id, recordId: pointer.recordId,
+        sourceRevision: pointer.sourceVersion, contentHash: pointer.contentHash,
+      }] : []);
+      const tool = createRlmOpenCodeTool({ ...deps, queryService: { ...deps.queryService, search },
+        verifiedFallbackCitations: verifyIssued, now: () => 1_000 });
+      await expect(tool.execute(input, protectedLease, undefined, assertCurrent)).resolves.toBe(searchResult);
+      expect(verifyIssued).toHaveBeenCalledWith(searchResult, expect.objectContaining(protectedLease), undefined);
       expect(search).toHaveBeenCalledTimes(1);
       expect(deps.rlmRuntime.investigate).not.toHaveBeenCalled();
       expect(consumeToolGatewayContextCitationItems('different-session')).toEqual([]);

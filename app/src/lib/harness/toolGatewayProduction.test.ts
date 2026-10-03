@@ -1,3 +1,5 @@
+import { RlmRuntimeError } from '@/features/context/rlmRuntime';
+import * as contextPersistence from '@/features/context';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTerminalTranscriptStore } from '@/features/terminals/transcriptStore';
 import { useAuthStore } from '@/stores/auth';
@@ -13,17 +15,22 @@ import {
   grantToolGatewayMutation,
   installToolGatewayRlmContextPort,
   installToolGatewayPluginReadPort,
+  prepareCurrentRlmScopeRevision,
+  readCurrentRlmScopeRevision,
 } from './toolGatewayProduction';
 import { registerToolGatewayFallbackCitations } from './toolGatewayCitations';
 import {
   bindToolGatewayObservedExecutionAuthority,
   bindToolGatewaySessionAuthority,
   captureToolGatewayAuthorityClaim,
+  releaseToolGatewaySessionAuthority,
 } from './toolGatewayAuthority';
 import { parseToolGatewayRequest } from './toolGatewayProtocol';
 import { productionContextGateway } from '@/features/context/gateway/productionContextGateway';
 import { ContextRequiredUnavailableError } from '@/features/context/gateway/ContextGateway';
 import type { ContextReceipt } from '@/features/context/gateway/contextGatewayContracts';
+import type { RlmContextLease } from '@/features/context/rlmOpenCodeTool';
+import { createRlmOpenCodeTool } from '@/features/context/rlmOpenCodeTool';
 
 vi.mock('@/lib/sync', () => ({
   enqueueMutation: vi.fn(async () => 'sync-test'),
@@ -55,6 +62,331 @@ function mutation() {
 }
 
 describe('production tool gateway dependencies', () => {
+  it('admits a cold selected map after persistence publishes its initialization event', async () => {
+    const authority = captureToolGatewayAuthorityClaim()!;
+    expect(bindToolGatewaySessionAuthority('session-rlm-cold', authority, undefined, {
+      requestId: 'provider-turn-cold', chatId: 'chat-cold',
+      protectedAttempt: { accountId: 'account-a', runId: 'run-cold',
+        requestId: 'provider-turn-cold', attemptNumber: 1 },
+    })).toBe(true);
+    const active = { accountId: 'account-a', projectId: 'project-a',
+      selectedMapId: 'map-cold', maps: [{ id: 'map-cold', status: 'active' }] };
+    let initialized = false;
+    const selected = vi.spyOn(contextPersistence, 'getActiveContextPersistenceState')
+      .mockImplementation(() => initialized ? active as never : null);
+    const ensure = vi.spyOn(contextPersistence, 'ensureContextPersistence')
+      .mockImplementation(async () => {
+        initialized = true;
+        window.dispatchEvent(new Event('jarvis:context-tree-updated'));
+        return active as never;
+      });
+    const execute = vi.fn(async (..._args: unknown[]) => ({ mode: 'rlm' }));
+    const dispose = installToolGatewayRlmContextPort({ execute });
+    try {
+      await expect(createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'describe' },
+        { requestId: 'rlm-cold', sessionId: 'session-rlm-cold', messageId: 'provider-turn-cold',
+          directory: 'C:\\work\\project', mutationApproved: false },
+      )).resolves.toEqual({ mode: 'rlm' });
+      expect(ensure).toHaveBeenCalledWith('project-a');
+      const lease = execute.mock.calls.at(-1)![1] as RlmContextLease;
+      expect(lease.selectedMapId).toBe('map-cold');
+      expect(readCurrentRlmScopeRevision({ accountId: 'account-a', workspaceId: 'workspace-a',
+        projectId: 'project-a' }, 'map-cold')).toBe(lease.contextRevision);
+      expect(await prepareCurrentRlmScopeRevision({ accountId: 'account-a',
+        workspaceId: 'workspace-a', projectId: 'project-a' }, 'map-cold')).toBe(true);
+      expect(ensure).toHaveBeenCalledTimes(1);
+    } finally {
+      dispose(); ensure.mockRestore(); selected.mockRestore();
+    }
+  });
+
+  it('rejects cold initialization if auth navigates A-B-A before the lease is issued', async () => {
+    const authority = captureToolGatewayAuthorityClaim()!;
+    expect(bindToolGatewaySessionAuthority('session-rlm-cold-aba', authority, undefined, {
+      requestId: 'provider-turn-cold-aba', chatId: 'chat-cold-aba',
+      protectedAttempt: { accountId: 'account-a', runId: 'run-cold-aba',
+        requestId: 'provider-turn-cold-aba', attemptNumber: 1 },
+    })).toBe(true);
+    const active = { accountId: 'account-a', projectId: 'project-a',
+      selectedMapId: 'map-cold', maps: [{ id: 'map-cold', status: 'active' }] };
+    let initialized = false;
+    const selected = vi.spyOn(contextPersistence, 'getActiveContextPersistenceState')
+      .mockImplementation(() => initialized ? active as never : null);
+    let finish!: () => void;
+    const ensure = vi.spyOn(contextPersistence, 'ensureContextPersistence')
+      .mockImplementation(async () => {
+        await new Promise<void>((resolve) => { finish = resolve; });
+        initialized = true;
+        window.dispatchEvent(new Event('jarvis:context-tree-updated'));
+        return active as never;
+      });
+    const execute = vi.fn(async (..._args: unknown[]) => ({ mode: 'rlm' }));
+    const dispose = installToolGatewayRlmContextPort({ execute });
+    try {
+      const pending = createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'describe' },
+        { requestId: 'rlm-cold-aba', sessionId: 'session-rlm-cold-aba', messageId: 'provider-turn-cold-aba',
+          directory: 'C:\\work\\project', mutationApproved: false },
+      );
+      expect(ensure).toHaveBeenCalledTimes(1);
+      useAuthStore.setState({ projectId: 'project-b' as ProjectId });
+      useAuthStore.setState({ projectId: 'project-a' as ProjectId });
+      finish();
+      await expect(pending).rejects.toThrow('rlm_context_authority_unavailable');
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      dispose(); ensure.mockRestore(); selected.mockRestore();
+    }
+  });
+
+  it('rejects a cold result after session release and a newer attempt is rebound', async () => {
+    const authority = captureToolGatewayAuthorityClaim()!;
+    const sessionId = 'session-rlm-cold-rebind';
+    const requestId = 'provider-turn-cold-rebind';
+    expect(bindToolGatewaySessionAuthority(sessionId, authority, undefined, {
+      requestId, chatId: 'chat-cold-rebind',
+      protectedAttempt: { accountId: 'account-a', runId: 'run-cold-rebind',
+        requestId, attemptNumber: 1 },
+    })).toBe(true);
+    const active = { accountId: 'account-a', projectId: 'project-a',
+      selectedMapId: 'map-cold', maps: [{ id: 'map-cold', status: 'active' }] };
+    let initialized = false;
+    const selected = vi.spyOn(contextPersistence, 'getActiveContextPersistenceState')
+      .mockImplementation(() => initialized ? active as never : null);
+    let finish!: () => void;
+    const ensure = vi.spyOn(contextPersistence, 'ensureContextPersistence')
+      .mockImplementation(async () => {
+        await new Promise<void>((resolve) => { finish = resolve; });
+        initialized = true;
+        window.dispatchEvent(new Event('jarvis:context-tree-updated'));
+        return active as never;
+      });
+    const execute = vi.fn(async (..._args: unknown[]) => ({ mode: 'rlm' }));
+    const dispose = installToolGatewayRlmContextPort({ execute });
+    try {
+      const pending = createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'describe' },
+        { requestId: 'rlm-cold-rebind', sessionId, messageId: requestId,
+          directory: 'C:\\work\\project', mutationApproved: false },
+      );
+      expect(ensure).toHaveBeenCalledTimes(1);
+      releaseToolGatewaySessionAuthority(sessionId);
+      const replacement = captureToolGatewayAuthorityClaim()!;
+      expect(bindToolGatewaySessionAuthority(sessionId, replacement, undefined, {
+        requestId, chatId: 'chat-cold-rebind',
+        protectedAttempt: { accountId: 'account-a', runId: 'run-cold-rebind',
+          requestId, attemptNumber: 2 },
+      })).toBe(true);
+      finish();
+      await expect(pending).rejects.toThrow('rlm_context_authority_unavailable');
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      dispose(); ensure.mockRestore(); selected.mockRestore();
+      releaseToolGatewaySessionAuthority(sessionId);
+    }
+  });
+
+  it('keeps a recursive investigation lease through its bounded work and expires it at 120 seconds', async () => {
+    const authority = captureToolGatewayAuthorityClaim()!;
+    expect(bindToolGatewayObservedExecutionAuthority('session-1', authority, {
+      executionIdentity: observedIdentity, performance: 'quality',
+    })).toBe(true);
+    const startedAt = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+    const execute = vi.fn(async (_input: unknown, lease: RlmContextLease,
+      _signal: AbortSignal | undefined, assertCurrent: (value: RlmContextLease) => string | undefined) => {
+      expect(lease.expiresAt - startedAt).toBe(120_000);
+      clock.mockReturnValue(startedAt + 31_000);
+      expect(assertCurrent(lease)).toBe(lease.contextRevision);
+      clock.mockReturnValue(startedAt + 95_000);
+      expect(assertCurrent(lease)).toBe(lease.contextRevision);
+      clock.mockReturnValue(startedAt + 120_001);
+      expect(assertCurrent(lease)).toBeUndefined();
+      return { mode: 'rlm' };
+    });
+    const dispose = installToolGatewayRlmContextPort({ execute });
+    try {
+      await expect(createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'investigate', query: 'Trace the selected physical source' },
+        { requestId: 'rlm-long', sessionId: 'session-1', messageId: 'message-1',
+          directory: 'C:\\work\\project', mutationApproved: false },
+      )).resolves.toEqual({ mode: 'rlm' });
+      expect(execute).toHaveBeenCalledTimes(1);
+    } finally {
+      dispose(); clock.mockRestore();
+    }
+  });
+
+  it('revokes an issued RLM evidence lease after project A-B-A navigation', async () => {
+    const execute = vi.fn(async (..._args: unknown[]) => ({ mode: 'rlm' }));
+    const dispose = installToolGatewayRlmContextPort({ execute });
+    try {
+      await createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'describe' },
+        { requestId: 'rlm-aba', sessionId: 'session-1', messageId: 'message-1',
+          directory: 'C:\\work\\project', mutationApproved: false },
+      );
+      const call = execute.mock.calls.at(-1)!;
+      const lease = call[1] as RlmContextLease;
+      const assertCurrent = call[3] as (value: Readonly<RlmContextLease>) => string | undefined;
+      expect(Object.isFrozen(lease)).toBe(true);
+      expect(assertCurrent(lease)).toBe(lease.contextRevision);
+      const factoryAndPortClone = Object.freeze({ ...lease,
+        ...(lease.executionIdentity ? { executionIdentity: Object.freeze({ ...lease.executionIdentity }) } : {}),
+        ...(lease.canonicalBinding ? { canonicalBinding: Object.freeze({ ...lease.canonicalBinding }) } : {}),
+      });
+      expect(assertCurrent(factoryAndPortClone)).toBe(lease.contextRevision);
+      useAuthStore.setState({ projectId: 'project-b' as ProjectId });
+      useAuthStore.setState({ projectId: 'project-a' as ProjectId });
+      expect(assertCurrent(lease)).toBeUndefined();
+    } finally {
+      dispose();
+    }
+  });
+
+  it('revokes an issued RLM evidence lease after selected-map A-B-A publication', async () => {
+    const active = { accountId: 'account-a', projectId: 'project-a',
+      selectedMapId: 'map-a', maps: [{ id: 'map-a', status: 'active' }] };
+    const selected = vi.spyOn(contextPersistence, 'getActiveContextPersistenceState')
+      .mockReturnValue(active as never);
+    const execute = vi.fn(async (..._args: unknown[]) => ({ mode: 'rlm' }));
+    const dispose = installToolGatewayRlmContextPort({ execute });
+    try {
+      await createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'describe' },
+        { requestId: 'rlm-map-aba', sessionId: 'session-1', messageId: 'message-1',
+          directory: 'C:\\work\\project', mutationApproved: false },
+      );
+      const call = execute.mock.calls.at(-1)!;
+      const lease = call[1] as RlmContextLease;
+      const assertCurrent = call[3] as (value: Readonly<RlmContextLease>) => string | undefined;
+      expect(assertCurrent(lease)).toBe(lease.contextRevision);
+      expect(readCurrentRlmScopeRevision({ accountId: 'account-a', workspaceId: 'workspace-a',
+        projectId: 'project-a' }, 'map-a')).toBe(lease.contextRevision);
+      selected.mockReturnValue({ ...active, selectedMapId: 'map-b',
+        maps: [{ id: 'map-b', status: 'active' }] } as never);
+      window.dispatchEvent(new Event('jarvis:context-tree-updated'));
+      selected.mockReturnValue(active as never);
+      window.dispatchEvent(new Event('jarvis:context-tree-updated'));
+      expect(assertCurrent(lease)).toBeUndefined();
+      expect(readCurrentRlmScopeRevision({ accountId: 'account-a', workspaceId: 'workspace-a',
+        projectId: 'project-a' }, 'map-a')).not.toBe(lease.contextRevision);
+    } finally {
+      dispose();
+      selected.mockRestore();
+    }
+  });
+
+  it('accepts the real RLM port lease clone, then rejects an async result after project A-B-A', async () => {
+    const result = { items: [] as unknown[] };
+    const search = vi.fn(async () => result);
+    const empty = async () => result;
+    const port = createRlmOpenCodeTool({
+      queryService: { describe: empty, search, open: empty, expand: empty,
+        related: empty, timeline: empty, sources: empty, checkpoint: empty },
+      rlmRuntime: { investigate: empty },
+      verifiedFallbackCitations: async () => [],
+    });
+    const dispose = installToolGatewayRlmContextPort(port);
+    const input = { requestId: 'rlm-real-port', sessionId: 'session-1', messageId: 'message-1',
+      directory: 'C:\\work\\project', mutationApproved: false };
+    try {
+      await expect(createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'search', query: 'needle' }, input)).resolves.toBe(result);
+      let resolveDeferred!: (value: typeof result) => void;
+      search.mockImplementationOnce(() => new Promise<typeof result>((resolve) => {
+        resolveDeferred = resolve;
+      }));
+      const pending = createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'search', query: 'needle' }, input);
+      useAuthStore.setState({ projectId: 'project-b' as ProjectId });
+      useAuthStore.setState({ projectId: 'project-a' as ProjectId });
+      resolveDeferred(result);
+      await expect(pending).rejects.toMatchObject({ code: 'lease_not_current' });
+    } finally {
+      dispose();
+    }
+  });
+
+  it('binds RLM trace authority to the issued attempt and authenticated selected map', async () => {
+    const authority = captureToolGatewayAuthorityClaim()!;
+    const sessionId = 'session-rlm-issued-map';
+    const binding = { accountId: 'account-a', runId: 'jrun_issued_map',
+      requestId: 'provider-turn-map', attemptNumber: 2 };
+    expect(bindToolGatewaySessionAuthority(sessionId, authority, undefined, {
+      requestId: binding.requestId, chatId: 'chat-map', protectedAttempt: binding,
+    })).toBe(true);
+    expect(bindToolGatewayObservedExecutionAuthority(sessionId, authority, {
+      executionIdentity: observedIdentity, performance: 'quality',
+    })).toBe(true);
+    const selected = vi.spyOn(contextPersistence, 'getActiveContextPersistenceState')
+      .mockReturnValue({ accountId: 'account-a', projectId: 'project-a',
+        selectedMapId: 'map-active',
+        maps: [{ id: 'map-active', status: 'active' }] } as never);
+    const execute = vi.fn(async (..._args: unknown[]) => ({ answer: 'Bounded retrieval' }));
+    const dispose = installToolGatewayRlmContextPort({ execute });
+    const input = { requestId: 'tool-map', sessionId, messageId: binding.requestId,
+      directory: 'C:\\work\\project', mutationApproved: false };
+    try {
+      await createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'investigate', query: 'Find mapped source' }, input);
+      expect(execute).toHaveBeenLastCalledWith(expect.anything(),
+        expect.objectContaining({ accountId: 'account-a', selectedMapId: 'map-active',
+          canonicalBinding: { runId: binding.runId, requestId: binding.requestId,
+            attemptNumber: 2 } }), undefined, expect.any(Function));
+
+      selected.mockReturnValue({ accountId: 'other-account', projectId: 'project-a',
+        selectedMapId: 'map-active',
+        maps: [{ id: 'map-active', status: 'active' }] } as never);
+      await createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'investigate', query: 'Find mapped source' }, input);
+      expect(execute.mock.calls.at(-1)?.[1]).not.toHaveProperty('selectedMapId');
+    } finally {
+      dispose();
+      selected.mockRestore();
+    }
+  });
+
+  it('captures the exact bound chat identity for RLM preferences instead of model input', async () => {
+    const authority = captureToolGatewayAuthorityClaim()!;
+    const sessionId = 'session-rlm-chat-preference';
+    expect(
+      bindToolGatewaySessionAuthority(sessionId, authority, undefined, {
+        requestId: 'provider-turn-chat',
+        chatId: 'chat-rlm-off',
+      }),
+    ).toBe(true);
+    expect(
+      bindToolGatewayObservedExecutionAuthority(sessionId, authority, {
+        executionIdentity: observedIdentity,
+        performance: 'quality',
+      }),
+    ).toBe(true);
+    const execute = vi.fn(async () => ({ answer: 'Bounded retrieval' }));
+    const dispose = installToolGatewayRlmContextPort({ execute });
+    try {
+      await createProductionToolGatewayDependencies().context.rlm(
+        { operation: 'investigate', query: 'Find the project fixture' },
+        {
+          requestId: 'tool-chat',
+          sessionId,
+          messageId: 'provider-turn-chat',
+          directory: 'C:\\work\\project',
+          mutationApproved: false,
+        },
+      );
+      expect(execute).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ chatId: 'chat-rlm-off' }),
+        undefined,
+        expect.any(Function),
+      );
+    } finally {
+      dispose();
+    }
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
     clearToolGatewayMutationGrants();
@@ -569,6 +901,7 @@ describe('production tool gateway dependencies', () => {
         worktreeId: 'C:\\work\\project\\.worktrees\\feature',
       }),
       undefined,
+      expect.any(Function),
     );
     dispose();
   });
@@ -674,7 +1007,7 @@ describe('production tool gateway dependencies', () => {
     expect(execute).toHaveBeenCalledWith(args, expect.objectContaining({
       sessionId: 'session-1', accountId: 'account-a', projectId: 'project-a',
       worktreeId: 'C:\\work\\project\\.worktrees\\feature', executionIdentity: observedIdentity,
-    }), signal);
+    }), signal, expect.any(Function));
     expect(ask).not.toHaveBeenCalled();
     ask.mockRestore();
     dispose();
@@ -701,6 +1034,7 @@ describe('production tool gateway dependencies', () => {
       { operation: 'investigate', query: 'Trace mapped source.' },
       expect.objectContaining({ executionIdentity: observedIdentity }),
       undefined,
+      expect.any(Function),
     );
     dispose();
   });
@@ -728,8 +1062,36 @@ describe('production tool gateway dependencies', () => {
     expect(result).toMatchObject({ answer: 'Grounded answer', citations: [citation],
       trace: { mode: 'rlm', usage: { subcalls: 1 }, events: [{ type: 'child_completed' }] } });
     expect((result as { trace: Record<string, unknown> }).trace).not.toHaveProperty('budget');
+    expect(consumeToolGatewayContextCitationItems('session-1')).toEqual([]);
+    const original = await execute.mock.results[0]!.value;
+    expect(original.answer).toBe('Grounded answer');
+    expect(original.trace).toHaveProperty('budget');
     dispose();
   });
+
+  it.each(['execution_route_unavailable', 'cancelled'] as const)(
+    'preserves safe actual tool receipts on recursive %s errors', async (code) => {
+      const authority = captureToolGatewayAuthorityClaim()!;
+      expect(bindToolGatewayObservedExecutionAuthority('session-1', authority, {
+        executionIdentity: observedIdentity, performance: 'quality',
+      })).toBe(true);
+      const error = new RlmRuntimeError(code, 'private provider payload must not escape');
+      const invocation = Object.freeze({ id: 'run-trace:tool-1', runId: 'run-trace',
+        operation: 'search' as const, depth: 0, startedAt: 10, finishedAt: 12,
+        status: 'completed' as const });
+      error.toolInvocations = Object.freeze([invocation]);
+      const dispose = installToolGatewayRlmContextPort({ execute: vi.fn(async () => { throw error; }) });
+      try {
+        await expect(createProductionToolGatewayDependencies().context.rlm(
+          { operation: 'investigate', query: 'Find mapped source.' },
+          { requestId: 'request-failed-trace', sessionId: 'session-1', messageId: 'message-1',
+            directory: 'C:\\work\\project', mutationApproved: false },
+        )).rejects.toMatchObject({ code: `rlm_${code}`,
+          message: 'The bounded context investigation could not complete.',
+          data: { code, toolInvocations: [invocation] } });
+      } finally { dispose(); }
+    },
+  );
 
   it('preserves the exact empty-first failure receipt as a continuable semantic boundary', async () => {
     const authority = captureToolGatewayAuthorityClaim()!;

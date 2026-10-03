@@ -15,7 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { cn } from '@/lib/utils';
 import { ActivityRow } from '@/features/chat/activity';
 import { useJarvisTaskRunStore } from '@/features/jarvis-runs/taskRunStore';
-import { useMilestonesStore } from './milestonesStore';
+import { useScopedMilestones, useScopedMilestoneDraft } from './useScopedMilestones';
 import { isMilestoneKind } from './types';
 import type { MilestoneItem } from './types';
 
@@ -27,12 +27,9 @@ interface InspectorMilestonesPanelProps {
 }
 
 export function InspectorMilestonesPanel({ view, onViewChange }: InspectorMilestonesPanelProps) {
-  const allItems = useMilestonesStore((s) => s.items);
+  const { items: allItems, ready, scopeKey, addMilestone, updateMilestone,
+    removeMilestone, toggleDone } = useScopedMilestones();
   const items = React.useMemo(() => allItems.filter(isMilestoneKind), [allItems]);
-  const addMilestone = useMilestonesStore((s) => s.addMilestone);
-  const updateMilestone = useMilestonesStore((s) => s.updateMilestone);
-  const removeMilestone = useMilestonesStore((s) => s.removeMilestone);
-  const toggleDone = useMilestonesStore((s) => s.toggleDone);
   const eventsByChat = useJarvisTaskRunStore((s) => s.activityByChat);
   const activityEvents = React.useMemo(() => {
     const chatKeys = Object.keys(eventsByChat);
@@ -43,7 +40,7 @@ export function InspectorMilestonesPanel({ view, onViewChange }: InspectorMilest
       .slice(-16);
   }, [eventsByChat]);
 
-  const [draft, setDraft] = React.useState('');
+  const [draft, setDraft] = useScopedMilestoneDraft(scopeKey);
   const [celebrateId, setCelebrateId] = React.useState<string | null>(null);
 
   const doneCount = items.filter((i) => i.status === 'done').length;
@@ -52,18 +49,16 @@ export function InspectorMilestonesPanel({ view, onViewChange }: InspectorMilest
   const onAdd = () => {
     const title = draft.trim();
     if (!title) return;
-    addMilestone(title, 'milestone');
-    setDraft('');
+    if (addMilestone(title, 'milestone')) setDraft('');
   };
 
   const onCheck = (id: string) => {
     const item = items.find((i) => i.id === id);
-    if (!item) return;
+    if (!item || !toggleDone(id)) return;
     if (item.status !== 'done') {
       setCelebrateId(id);
       window.setTimeout(() => setCelebrateId(null), 900);
     }
-    toggleDone(id);
   };
 
   return (
@@ -124,6 +119,7 @@ export function InspectorMilestonesPanel({ view, onViewChange }: InspectorMilest
           <div className="flex gap-1.5">
             <Input
               value={draft}
+              disabled={!ready}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') onAdd();
@@ -136,7 +132,7 @@ export function InspectorMilestonesPanel({ view, onViewChange }: InspectorMilest
               size="sm"
               variant="accent"
               onClick={onAdd}
-              disabled={!draft.trim()}
+              disabled={!ready || !draft.trim()}
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
@@ -144,7 +140,7 @@ export function InspectorMilestonesPanel({ view, onViewChange }: InspectorMilest
 
           {items.length === 0 ? (
             <p className="text-secondary text-muted-foreground italic px-0.5">
-              No milestones yet. Add your first checkpoint above.
+              No milestones assigned to this project. Older unassigned items are retained.
             </p>
           ) : (
             <ul className="flex flex-col gap-1.5">

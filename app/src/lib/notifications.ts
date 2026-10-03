@@ -108,6 +108,7 @@ function shouldSkipDuplicateDoneNotification(
   title: string,
   body?: string,
   completionIdentity?: string,
+  onReserved?: (key: string, entry: { observedAt: number; ttlMs: number }) => void,
 ): boolean {
   const stableCompletionIdentity =
     typeof completionIdentity === 'string' &&
@@ -129,7 +130,9 @@ function shouldSkipDuplicateDoneNotification(
     return true;
   }
   recentDoneNotifications.delete(key);
-  recentDoneNotifications.set(key, { observedAt: now, ttlMs });
+  const entry = { observedAt: now, ttlMs };
+  recentDoneNotifications.set(key, entry);
+  onReserved?.(key, entry);
   if (recentDoneNotifications.size > MAX_RECENT_DONE_NOTIFICATIONS) {
     for (const [entryKey, entry] of recentDoneNotifications) {
       if (now - entry.observedAt >= entry.ttlMs) {
@@ -173,9 +176,12 @@ export async function notifyDone(
   if (!options.force) {
     if (!state.notificationMaster || !state.doneNotifications[kind]) return null;
   }
+  const reservation: { current?: { key: string; entry: { observedAt: number; ttlMs: number } } } = {};
   if (
     !options.skipDedupe &&
-    shouldSkipDuplicateDoneNotification(kind, title, body, options.completionIdentity)
+    shouldSkipDuplicateDoneNotification(kind, title, body, options.completionIdentity, (key, entry) => {
+      reservation.current = { key, entry };
+    })
   ) {
     return null;
   }
@@ -214,6 +220,13 @@ export async function notifyDone(
     },
   });
 
+  // Non-granted permission never reaches a native/browser send. Release only
+  // this attempt's reservation so a real recovery can retry immediately.
+  // Granted-but-none and thrown calls may have been accepted: retain dedupe.
+  if (result.channel === 'none' && result.permission !== 'granted' && reservation.current &&
+      recentDoneNotifications.get(reservation.current.key) === reservation.current.entry) {
+    recentDoneNotifications.delete(reservation.current.key);
+  }
   if (result.channel === 'native' || result.channel === 'browser') {
     maybeBumpBadge();
   }

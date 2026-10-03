@@ -146,6 +146,65 @@ describe('notifications', () => {
     });
   });
 
+  it.each(['denied', 'unavailable'] as const)('S61B2 retries an unaccepted %s identity immediately after recovery', async permission => {
+    mocks.notify.mockResolvedValueOnce({ channel: 'none', permission, message: 'No native send' });
+    const identity = { completionIdentity: `S61B2-event-${permission}` };
+    expect((await notifyDone('reminders', 'S61B2 event', 'Due', identity))?.channel).toBe('none');
+    mocks.notify.mockResolvedValueOnce({ channel: 'native', permission: 'granted', message: 'Accepted' });
+    expect((await notifyDone('reminders', 'S61B2 event', 'Due', identity))?.channel).toBe('native');
+    expect(await notifyDone('reminders', 'S61B2 event', 'Due', identity)).toBeNull();
+    expect(mocks.notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('S61B2 retains suppression for a granted but uncertain native outcome', async () => {
+    mocks.notify.mockResolvedValueOnce({ channel: 'none', permission: 'granted', message: 'Unconfirmed' });
+    const identity = { completionIdentity: 'S61B2-uncertain' };
+    await notifyDone('reminders', 'S61B2 event', 'Due', identity);
+    expect(await notifyDone('reminders', 'S61B2 event', 'Due', identity)).toBeNull();
+    expect(mocks.notify).toHaveBeenCalledOnce();
+  });
+
+  it('S61B2 does not repeat a rejected adapter call with an ambiguous acceptance', async () => {
+    mocks.notify.mockRejectedValueOnce(new Error('adapter outcome unknown'));
+    const identity = { completionIdentity: 'S61B2-throw' };
+    await expect(notifyDone('reminders', 'S61B2 event', 'Due', identity)).rejects.toThrow('adapter outcome unknown');
+    expect(await notifyDone('reminders', 'S61B2 event', 'Due', identity)).toBeNull();
+    expect(mocks.notify).toHaveBeenCalledOnce();
+  });
+
+  it('S61B2 suppresses concurrent duplicate while native acknowledgement is pending', async () => {
+    let complete!: (result: { channel: 'native'; permission: 'granted'; message: string }) => void;
+    mocks.notify.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const identity = { completionIdentity: 'S61B2-flight' };
+    const first = notifyDone('reminders', 'S61B2 event', 'Due', identity);
+    expect(await notifyDone('reminders', 'S61B2 event', 'Due', identity)).toBeNull();
+    complete({ channel: 'native', permission: 'granted', message: 'Accepted' });
+    await expect(first).resolves.toMatchObject({ channel: 'native' });
+    expect(mocks.notify).toHaveBeenCalledOnce();
+  });
+  it('S61B2 does not clear a newer accepted reservation when an old attempt fails late', async () => {
+    let now = 1_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    let finishOld!: (result: { channel: 'none'; permission: 'denied'; message: string }) => void;
+    mocks.notify.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
+    const identity = { completionIdentity: 'S61B2-late-old' };
+    const old = notifyDone('reminders', 'S61B2 event', 'Due', identity);
+    now += 10 * 60_000 + 1;
+    await notifyDone('reminders', 'S61B2 event', 'Due', identity);
+    finishOld({ channel: 'none', permission: 'denied', message: 'Old attempt denied' });
+    await old;
+    expect(await notifyDone('reminders', 'S61B2 event', 'Due', identity)).toBeNull();
+    expect(mocks.notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('S61B2 failed explicit skipDedupe test cannot remove an accepted identity', async () => {
+    const identity = { completionIdentity: 'S61B2-test-override' };
+    await notifyDone('reminders', 'S61B2 event', 'Due', identity);
+    mocks.notify.mockResolvedValueOnce({ channel: 'none', permission: 'denied', message: 'Test denied' });
+    await notifyDone('reminders', 'S61B2 event', 'Due', { ...identity, skipDedupe: true });
+    expect(await notifyDone('reminders', 'S61B2 event', 'Due', identity)).toBeNull();
+    expect(mocks.notify).toHaveBeenCalledTimes(2);
+  });
   it('dedupes identical done notifications fired in quick succession', async () => {
     await notifyDone('jarvis', 'Jarvis done', 'Finished');
     await notifyDone('jarvis', 'Jarvis done', 'Finished');

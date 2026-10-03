@@ -107,6 +107,11 @@ function boundedId(value: string, prefix = 'ctx'): string {
   return `${prefix}_${hashToken(value)}`;
 }
 
+/** Preserve the V2 entity ID used when a search index returns a canonical node. */
+export function contextEntityIdForTreeNode(mapId: string, nodeId: string): string {
+  return boundedId(`${mapId}:${nodeId}`, 'ctxent');
+}
+
 function plainRecord(value: unknown, reason: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(reason);
   const prototype = Object.getPrototypeOf(value);
@@ -394,7 +399,7 @@ export function convertContextMapRecordV1ToSnapshotV2(
   const provenance: ContextProvenanceV2[] = [];
 
   const walk = (node: ContextTreeNode, parentEntityId?: string) => {
-    const entityId = boundedId(`${mapId}:${node.id}`, 'ctxent');
+    const entityId = contextEntityIdForTreeNode(mapId, node.id);
     const entityProvenanceId = boundedId(`${entityId}:provenance`, 'ctxprov');
     const entityCreatedAt = optionalTime(node.createdAt, createdAt);
     const entityUpdatedAt = Math.max(optionalTime(node.modifiedAt, updatedAt), entityCreatedAt);

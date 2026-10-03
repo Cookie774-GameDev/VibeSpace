@@ -1,5 +1,5 @@
 /**
- * nativeBridge â€” Model Foundry native boundary (adapted).
+ * nativeBridge — Model Foundry native boundary (adapted).
  *
  * The preserved Foundry source exposed an older-generation native command
  * surface. The merged architecture keeps the newer canonical Rust commands
@@ -331,11 +331,11 @@ export async function getFoundryTrainingRuntimeStatus(): Promise<FoundryTraining
     };
   const status = await readWorkerStatus();
   return {
-    installed: status.installed,
-    qloraInstalled: status.methods.includes('qlora'),
+    installed: status.installed && status.attested && status.methods.includes('full'),
+    qloraInstalled: status.installed && status.attested && status.methods.includes('full') && status.methods.includes('qlora'),
     detail:
       status.reason ??
-      (status.installed
+      (status.installed && status.attested && status.methods.includes('full')
         ? 'Local training runtime is installed.'
         : 'Local training runtime is not installed yet.'),
   };
@@ -350,11 +350,11 @@ export async function installFoundryTrainingDependencies(
     { includeQlora },
   );
   return {
-    installed: status.installed,
-    qloraInstalled: status.methods.includes('qlora'),
+    installed: status.installed && status.attested && status.methods.includes('full'),
+    qloraInstalled: status.installed && status.attested && status.methods.includes('full') && status.methods.includes('qlora'),
     detail:
       status.reason ??
-      (status.installed
+      (status.installed && status.attested && status.methods.includes('full')
         ? 'Local training runtime is installed.'
         : 'Local training runtime installation failed.'),
   };

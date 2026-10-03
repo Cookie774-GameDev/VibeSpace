@@ -68,4 +68,15 @@ describe('RLM preference store', () => {
     expect(status).toContain(new Date(refreshed).toISOString());
     expect(status).toContain('Last run: ok');
   });
+
+  it('treats inherited object names as ordinary chat and workspace identities', () => {
+    expect(resolveRlmEnabled({ chatId: 'toString', workspaceId: 'constructor', storage }))
+      .toMatchObject({ enabled: true, source: 'user' });
+    expect(setChatRlmEnabled('__proto__', false, storage))
+      .toMatchObject({ enabled: false, source: 'chat' });
+    expect(resolveRlmEnabled({ chatId: '__proto__', storage }))
+      .toMatchObject({ enabled: false, source: 'chat' });
+    expect(resolveRlmEnabled({ chatId: 'other-chat', storage }))
+      .toMatchObject({ enabled: true, source: 'user' });
+  });
 });

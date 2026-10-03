@@ -1,8 +1,11 @@
 export const KERNEL_BRIDGE_VERSION = 1 as const;
 export const KERNEL_HOST_REQUEST_EVENT = 'jarvis:kernel-host-request-v1';
 export const KERNEL_CLIENT_RESPONSE_EVENT = 'jarvis:kernel-client-response-v1';
+export type KernelSourceRevisionBinding = Readonly<{ runId: string; requestId: string; attemptNumber: number }>;
 
 export type KernelClientRequestV1 =
+  | Readonly<{ version: 1; kind: 'run_ownership_diagnostic'; runId: string }>
+  | Readonly<{ version: 1; kind: 'context_source_revision'; accountId: string; chatId: string; mapId: string; binding?: KernelSourceRevisionBinding }>
   | Readonly<{
       version: 1;
       kind: 'turn_dispatch';
@@ -72,6 +75,8 @@ export type KernelUnavailableReason =
   | 'kernel_not_activated';
 
 export type KernelClientResponseV1 =
+  | (Readonly<{ version: 1; kind: 'run_ownership_diagnostic' }> & import('./executionJournal/runOwnershipDiagnosticReader').RunDiagnosticProjection)
+  | Readonly<{ version: 1; kind: 'context_source_revision'; accountId: string; workspaceId: string; projectId: string; worktreeHash: string; chatId: string; mapId: string; authorityEpoch: number; sourceRevision: string; membershipRevision: string; revisionKind: 'map-membership' | 'issued-evidence'; wholeMapDiskFreshness: false; sourceCount: number; verifiedBytes: number; binding?: KernelSourceRevisionBinding }>
   | Readonly<{ version: 1; kind: 'turn_accepted'; runId: string }>
   | Readonly<{ version: 1; kind: 'approval_created'; approvalId: string }>
   | Readonly<{
@@ -178,8 +183,18 @@ function id(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= 512;
 }
 
+// Source reads share the installed reader's ASCII-only 200-character policy.
+function sourceRevisionId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/.test(value);
+}
+
 function epoch(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
+}
+function sourceRevisionBinding(value: unknown): boolean {
+  if (value === undefined) return true;
+  const record = dataRecord(value);
+  return !!record && exactKeys(record, ['runId', 'requestId', 'attemptNumber']) && sourceRevisionId(record.runId) && sourceRevisionId(record.requestId) && Number.isSafeInteger(record.attemptNumber) && Number(record.attemptNumber) > 0 && Number(record.attemptNumber) <= 4_294_967_295;
 }
 
 export function isKernelClientRequestV1(value: unknown): value is KernelClientRequestV1 {
@@ -240,6 +255,10 @@ export function isKernelClientRequestV1(value: unknown): value is KernelClientRe
         id(record.runId) &&
         id(record.attemptId)
       );
+    case 'run_ownership_diagnostic':
+      return exactKeys(record, ['version', 'kind', 'runId']) && typeof record.runId === 'string' && /^jrun_[A-Za-z0-9_-]{1,195}$/u.test(record.runId);
+    case 'context_source_revision':
+      return exactKeys(record, ['version', 'kind', 'accountId', 'chatId', 'mapId', ...(record.binding === undefined ? [] : ['binding'])]) && sourceRevisionId(record.accountId) && sourceRevisionId(record.chatId) && sourceRevisionId(record.mapId) && sourceRevisionBinding(record.binding);
     case 'command_center_snapshot':
       return exactKeys(record, ['version', 'kind', 'accountId']) && id(record.accountId);
     default:
@@ -248,6 +267,8 @@ export function isKernelClientRequestV1(value: unknown): value is KernelClientRe
 }
 
 const REQUEST_KINDS = new Set<KernelClientRequestKind>([
+  'run_ownership_diagnostic',
+  'context_source_revision',
   'turn_dispatch',
   'approval_create',
   'approval_present',
@@ -333,6 +354,14 @@ export function isKernelClientResponseV1(value: unknown): value is KernelClientR
         (record.continuation === undefined || record.continuation === 'tool_request') &&
         (record.status === 'approved' || record.status === 'denied')
       );
+    case 'run_ownership_diagnostic':
+      return exactKeys(record, ['version', 'kind', 'accountId', 'runId', 'authorityEpoch', 'consistency', 'settlementAuthority', 'latestAttempt', 'ownerCount', 'terminalCount', 'queueCount', 'cancellationIntentCount', 'approvalCount', 'pendingCancellation', 'terminalRead', 'unknowns']) &&
+        sourceRevisionId(record.accountId) && typeof record.runId === 'string' && /^jrun_[A-Za-z0-9_-]{1,195}$/u.test(record.runId) && epoch(record.authorityEpoch) &&
+        record.consistency === 'non_atomic_observation' && record.settlementAuthority === false &&
+        diagnosticAttempt(record.latestAttempt) && [record.ownerCount, record.terminalCount, record.queueCount].every(v => Number.isSafeInteger(v) && Number(v) >= 0 && Number(v) <= 100) &&
+        Number.isSafeInteger(record.cancellationIntentCount) && Number(record.cancellationIntentCount) >= 0 && Number(record.cancellationIntentCount) <= 128 && Number.isSafeInteger(record.approvalCount) && Number(record.approvalCount) >= 0 && Number(record.approvalCount) <= 100 && (record.pendingCancellation === null || typeof record.pendingCancellation === 'boolean') && ['observed', 'unavailable'].includes(String(record.terminalRead)) && Array.isArray(record.unknowns) && record.unknowns.length <= 8 && record.unknowns.every(v => typeof v === 'string' && DIAGNOSTIC_UNKNOWNS.has(v));
+    case 'context_source_revision':
+      return exactKeys(record, ['version', 'kind', 'accountId', 'workspaceId', 'projectId', 'worktreeHash', 'chatId', 'mapId', 'authorityEpoch', 'sourceRevision', 'membershipRevision', 'revisionKind', 'wholeMapDiskFreshness', 'sourceCount', 'verifiedBytes', ...(record.binding === undefined ? [] : ['binding'])]) && sourceRevisionId(record.accountId) && sourceRevisionId(record.workspaceId) && sourceRevisionId(record.projectId) && sourceRevisionId(record.chatId) && sourceRevisionId(record.mapId) && epoch(record.authorityEpoch) && typeof record.worktreeHash === 'string' && /^sha256:[a-f0-9]{64}$/u.test(record.worktreeHash) && typeof record.sourceRevision === 'string' && /^sha256:[a-f0-9]{64}$/u.test(record.sourceRevision) && typeof record.membershipRevision === 'string' && /^sha256:[a-f0-9]{64}$/u.test(record.membershipRevision) && record.wholeMapDiskFreshness === false && Number.isSafeInteger(record.sourceCount) && Number(record.sourceCount) >= 0 && Number(record.sourceCount) <= 128 && Number.isSafeInteger(record.verifiedBytes) && Number(record.verifiedBytes) >= 0 && Number(record.verifiedBytes) <= 8 * 1024 * 1024 && (record.binding === undefined ? record.revisionKind === 'map-membership' && record.sourceRevision === record.membershipRevision && record.sourceCount === 0 && record.verifiedBytes === 0 : record.revisionKind === 'issued-evidence') && sourceRevisionBinding(record.binding);
     case 'approval_state':
       return (
         exactKeys(record, ['version', 'kind', 'accountId', 'approvalId', 'status']) &&
@@ -404,6 +433,8 @@ export function unavailableKernelResponse(
 const RESPONSE_FOR_REQUEST: Readonly<
   Record<KernelClientRequestKind, KernelClientResponseV1['kind']>
 > = Object.freeze({
+  run_ownership_diagnostic: 'run_ownership_diagnostic',
+  context_source_revision: 'context_source_revision',
   turn_dispatch: 'turn_accepted',
   approval_create: 'approval_created',
   approval_present: 'approval_presentation',
@@ -422,6 +453,10 @@ export function responseMatchesKernelRequest(
   if (response.kind === 'unavailable') return response.requestKind === request.kind;
   if (RESPONSE_FOR_REQUEST[request.kind] !== response.kind) return false;
   switch (request.kind) {
+    case 'run_ownership_diagnostic':
+      return response.kind === 'run_ownership_diagnostic' && response.runId === request.runId;
+    case 'context_source_revision':
+      return response.kind === 'context_source_revision' && response.accountId === request.accountId && response.chatId === request.chatId && response.mapId === request.mapId && response.binding?.runId === request.binding?.runId && response.binding?.requestId === request.binding?.requestId && response.binding?.attemptNumber === request.binding?.attemptNumber;
     case 'approval_present':
       return (
         response.kind === 'approval_presentation' && response.approvalId === request.approvalId
@@ -484,4 +519,11 @@ export function isKernelClientRequestRegistration(
     Number.isSafeInteger(record.deadlineMs) &&
     Number(record.deadlineMs) >= 0,
   );
+}
+
+const DIAGNOSTIC_UNKNOWNS = new Set(['cross_webview_owner_fence_unavailable', 'durable_owner_generation_correlation_unavailable', 'full_message_proposal_join_unverified', 'native_terminal_read_unavailable', 'historical_queue_execution_ids_unavailable', 'journal_history_outside_window', 'registry_owner_unavailable', 'registry_owner_window_truncated']);
+function diagnosticAttempt(value: unknown): boolean {
+  if (value === null) return true;
+  const record = dataRecord(value);
+  return !!record && exactKeys(record, ['requestId', 'attemptNumber']) && sourceRevisionId(record.requestId) && Number.isSafeInteger(record.attemptNumber) && Number(record.attemptNumber) > 0;
 }

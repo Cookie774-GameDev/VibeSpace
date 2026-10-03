@@ -13,6 +13,7 @@ const COLLECTIONS = [
   'projects',
   'chats',
   'messages',
+  'tasks',
   'canvas_documents',
   'canvas_pages',
   'canvas_objects',
@@ -48,6 +49,7 @@ export interface WorkspaceRestoreCounts {
   readonly chats: number;
   readonly messages: number;
   readonly canvasDocuments: number;
+  readonly tasks?: number;
 }
 
 export interface WorkspaceRestorePreview {
@@ -175,6 +177,52 @@ function assertRelationships(rows: Record<RestoreCollection, readonly JsonRow[]>
   for (const row of rows.messages) {
     if (!chatIds.has(requiredString(row, 'chat_id'))) {
       throw new WorkspaceRestoreError('artifact_invalid', 'Backup contains an orphaned message.');
+    }
+  }
+  const projectWorkspaces = new Map(rows.projects.map((row) => [row.id, row.workspace_id]));
+  for (const row of rows.tasks) {
+    const workspaceId = requiredString(row, 'workspace_id');
+    if (!workspaceIds.has(workspaceId) ||
+        (row.project_id !== undefined && row.project_id !== null &&
+          projectWorkspaces.get(row.project_id) !== workspaceId)) {
+      throw new WorkspaceRestoreError('artifact_invalid', 'Backup task scope is invalid.');
+    }
+    requiredString(row, 'title');
+    if (!['open', 'in_progress', 'blocked', 'done', 'cancelled'].includes(String(row.status)) ||
+        !['low', 'normal', 'high', 'urgent'].includes(String(row.priority)) ||
+        ![1, 2, 3, 5, 8, 13].includes(Number(row.effort)) || typeof row.effort !== 'number' ||
+        !['low', 'medium', 'high'].includes(String(row.energy_required)) ||
+        !['user_voice', 'user_text', 'extracted_chat', 'extracted_meeting', 'agent'].includes(String(row.created_by)) ||
+        !Array.isArray(row.context_tags) || !row.context_tags.every((tag) => typeof tag === 'string') ||
+        !Array.isArray(row.source_refs) || !Array.isArray(row.reminders) ||
+        typeof row.created_at !== 'number' || !Number.isFinite(row.created_at) ||
+        typeof row.updated_at !== 'number' || !Number.isFinite(row.updated_at)) {
+      throw new WorkspaceRestoreError('artifact_invalid', 'Backup task is invalid.');
+    }
+    const references = [...row.source_refs];
+    if (row.completion_evidence !== undefined) references.push(row.completion_evidence);
+    for (const reference of references) {
+      const value = asObject(reference);
+      if (!value || !['chat_message', 'meeting', 'file', 'email', 'calendar_event', 'memory', 'url', 'task'].includes(String(value.kind)) ||
+          typeof value.id !== 'string' || !value.id.trim() ||
+          (value.excerpt !== undefined && typeof value.excerpt !== 'string') ||
+          (value.ts !== undefined && (typeof value.ts !== 'number' || !Number.isFinite(value.ts)))) {
+        throw new WorkspaceRestoreError('artifact_invalid', 'Backup task source reference is invalid.');
+      }
+    }
+    for (const reminder of row.reminders) {
+      const value = asObject(reminder);
+      if (!value || value.task_id !== row.id ||
+          typeof value.id !== 'string' || !value.id.trim() ||
+          typeof value.fires_at !== 'number' || !Number.isFinite(value.fires_at) ||
+          (value.smart_reason !== undefined && typeof value.smart_reason !== 'string') ||
+          (value.message_override !== undefined && typeof value.message_override !== 'string') ||
+          !Array.isArray(value.channels) || !value.channels.every((channel) =>
+            ['banner', 'push', 'watch', 'email', 'sms', 'voice', 'imessage', 'in_app'].includes(String(channel))) ||
+          !Array.isArray(value.snooze_history) ||
+          !['scheduled', 'fired', 'snoozed', 'dismissed', 'completed'].includes(String(value.status))) {
+        throw new WorkspaceRestoreError('artifact_invalid', 'Backup task reminder is invalid.');
+      }
     }
   }
   for (const collection of [
@@ -363,6 +411,7 @@ function parseArtifact(content: string, identity: AccountIdentity) {
     projects: rowsFrom(data.projects, 'projects'),
     chats: rowsFrom(data.chats, 'chats'),
     messages: rowsFrom(data.messages, 'messages'),
+    tasks: rowsFrom(data.tasks ?? [], 'tasks'),
     canvas_documents: rowsFrom(canvas.documents, 'canvas documents'),
     canvas_pages: rowsFrom(canvas.pages, 'canvas pages'),
     canvas_objects: rowsFrom(canvas.objects, 'canvas objects'),
@@ -458,6 +507,7 @@ export async function previewWorkspaceRestore(
       chats: rows.chats.length,
       messages: rows.messages.length,
       canvasDocuments: rows.canvas_documents.length,
+      ...(rows.tasks.length > 0 ? { tasks: rows.tasks.length } : {}),
     }),
     rows: Object.freeze(rows),
   });
@@ -484,6 +534,21 @@ export async function restoreWorkspaceBackup(
         }
         let restored = 0;
         let preservedLocal = 0;
+        // Existing scope rows win conflicts, but must not redirect imported tasks
+        // into another account or a different workspace.
+        for (const task of preview.rows.tasks) {
+          const workspaceId = requiredString(task, 'workspace_id');
+          const workspace = await database.workspaces.get(workspaceId as WorkspaceId);
+          if (workspace && workspace.owner_id !== identity.accountId) {
+            throw new WorkspaceRestoreError('artifact_account_mismatch', 'Task workspace ownership conflicts.');
+          }
+          if (task.project_id !== undefined && task.project_id !== null) {
+            const project = await database.projects.get(requiredString(task, 'project_id') as ProjectId);
+            if (project && project.workspace_id !== workspaceId) {
+              throw new WorkspaceRestoreError('artifact_account_mismatch', 'Task project ownership conflicts.');
+            }
+          }
+        }
         for (const collection of COLLECTIONS) {
           const table = database.table(collection);
           for (const row of preview.rows[collection]) {
@@ -492,7 +557,16 @@ export async function restoreWorkspaceBackup(
               preservedLocal++;
               continue;
             }
-            await table.add({ ...row });
+            // Backups preserve reminder history, but importing must not replay
+            // scheduled notifications or another install's delivery claim.
+            const restoredRow = collection === 'tasks'
+              ? { ...row, reminders: (row.reminders as readonly JsonRow[]).map((reminder) => {
+                  const { delivery_claim: _claim, ...history } = reminder;
+                  return { ...history, status: reminder.status === 'scheduled' || reminder.status === 'snoozed'
+                    ? 'dismissed' : reminder.status };
+                }) }
+              : { ...row };
+            await table.add(restoredRow);
             restored++;
           }
         }

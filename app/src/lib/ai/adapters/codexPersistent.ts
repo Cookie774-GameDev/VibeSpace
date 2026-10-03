@@ -1,3 +1,5 @@
+import { recordCodexProviderAccountProof, recordCodexProviderAccountInvalidation } from './codexProviderAccountProof';
+import { recordCodexSchemaReceipt, toolReceiptBinding } from './providerToolSchemaReceipt';
 import { decodeCodexThreadCache, encodeCodexThreadCache } from './codexThreadCache';
 import { createCodexControlBridge } from './codexControlBridge';
 import {
@@ -8,6 +10,7 @@ import {
 import { restoredConversationPrompt } from './restoredConversationPrompt';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { codexTurnLease } from './codexTurnLease';
+import { registerLiveCodexRlmParent } from './codexRlmParentBinding';
 import {
   CODEX_CONTEXT_TOOL,
   createCodexToolGateway,
@@ -160,6 +163,7 @@ async function prepare<T>(
 
 export interface CodexPersistentDependencies {
   contextTool?(request: ProviderRequest): Promise<CodexContextToolBridge | null>;
+  resolveCallerLabel?(): Promise<string | undefined>;
   workingDirectory?(selected: string | undefined): Promise<string>;
   findExecutable(): Promise<Readonly<{ executableId: string }> | undefined>;
   start(
@@ -301,6 +305,17 @@ export async function resolveCodexExecutable(
 
 const defaultDependencies: CodexPersistentDependencies = {
   contextTool: createCodexToolGateway,
+  resolveCallerLabel: async () => {
+    // Missing native metadata cannot grant a child authority. Ordinary parent
+    // Context dispatch remains usable through independently supplied transports.
+    if (typeof window === 'undefined') return undefined;
+    const native = (window as unknown as {
+      __TAURI_INTERNALS__?: { metadata?: { currentWebview?: { label?: unknown } } };
+    }).__TAURI_INTERNALS__;
+    if (typeof native?.metadata?.currentWebview?.label !== 'string') return undefined;
+    const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+    return getCurrentWebview().label;
+  },
   workingDirectory: resolveCodexWorkingDirectory,
   findExecutable: () => resolveCodexExecutable(),
   start: startNativeCodexAppServer,
@@ -1120,6 +1135,7 @@ async function* sendCodexRequest(
   let turnStartSubmitted = false;
   let interruptedBeforeBinding = false;
   let terminal = false;
+  let releaseRlmParent: (() => void) | undefined;
   const acceptedNativeQueue = new Map<string, string>();
   let nativeQueueAddInFlight = false;
   let drainingAcceptedNativeQueue = false;
@@ -1128,6 +1144,7 @@ async function* sendCodexRequest(
     (message) => dependencies.write(generation, message),
     mode,
   );
+  let providerAccountEpoch = 1;
   const pendingControlResponses = new Map<
     string,
     {
@@ -1234,6 +1251,10 @@ async function* sendCodexRequest(
       activeIterator,
       firstFrame,
       (frame) => {
+        if (frame.method === 'account/updated' || frame.method === 'account/login/completed') {
+          providerAccountEpoch += 1;
+          recordCodexProviderAccountInvalidation(generation, providerAccountEpoch, frame);
+        }
         const id = typeof frame.id === 'string' ? frame.id : '';
         if (!id || !controlRequestIds.delete(id)) return false;
         const pending = pendingControlResponses.get(id);
@@ -1319,7 +1340,15 @@ async function* sendCodexRequest(
             ? { dynamicTools: contextTool.dynamicTools ?? [CODEX_CONTEXT_TOOL] }
             : {}),
         });
-    await dependencies.write(generation, threadRequest);
+    let observedThreadRequest = threadRequest;
+    const schemaBinding = {
+      ...await toolReceiptBinding(request, generation).catch(() => ({})),
+      providerId: exactIdentity.modelProvider, upstreamModelId: exactIdentity.model,
+      effort: exactIdentity.effort ?? 'provider-default',
+      fastVariant: exactIdentity.serviceTier === 'fast' ? 'priority' : 'standard',
+    };
+    await dependencies.write(generation, observedThreadRequest);
+    await recordCodexSchemaReceipt(schemaBinding, observedThreadRequest, 'sent');
     let threadResponse = await prepare(request, request.sessionId ? 'resume' : 'thread', () =>
       responseFrame(reader, threadRequestId),
     );
@@ -1337,9 +1366,7 @@ async function* sendCodexRequest(
       // Isolated provider profiles may not contain an implicitly cached thread.
       // No turn was sent: start once and restore the supplied chat context.
       threadRequestId = requestId(request.requestId, 'thread');
-      await dependencies.write(
-        generation,
-        buildCodexThreadStartRequest({
+      observedThreadRequest = buildCodexThreadStartRequest({
           requestId: threadRequestId,
           identity: exactIdentity,
           mode,
@@ -1347,8 +1374,9 @@ async function* sendCodexRequest(
           ...(contextTool
             ? { dynamicTools: contextTool.dynamicTools ?? [CODEX_CONTEXT_TOOL] }
             : {}),
-        }),
-      );
+        });
+      await dependencies.write(generation, observedThreadRequest);
+      await recordCodexSchemaReceipt(schemaBinding, observedThreadRequest, 'sent');
       threadResponse = await responseFrame(reader, threadRequestId);
       resumed = false;
     }
@@ -1383,7 +1411,40 @@ async function* sendCodexRequest(
       );
       if (!validated.ok)
         throw new Error('Codex Context thread identity mismatch: ' + validated.field + '.');
+      await recordCodexSchemaReceipt(schemaBinding, observedThreadRequest, 'rpc-accepted', threadId);
       contextTool.bind(threadId, exactIdentity, generation);
+      if (startRoute.kind === 'official-codex') {
+        const caller = await dependencies.resolveCallerLabel?.();
+        if (caller !== undefined && caller !== 'main' && caller !== 'workbench-main')
+          throw new Error('Codex parent caller is invalid.');
+        if (caller !== undefined) {
+          const qualified = exactIdentity.model.includes('/') ? exactIdentity.model : exactIdentity.modelProvider + '/' + exactIdentity.model;
+          const separator = qualified.indexOf('/');
+          let accountSequence = 0;
+          const accountReadId = requestId(request.requestId, 'provider_account_proof');
+          await recordCodexProviderAccountProof(
+            schemaBinding, threadId, accountReadId,
+            () => sendControlRequest({ id: accountReadId, method: 'account/read', params: { refreshToken: false } }),
+            () => !terminal && !streamAbort.signal.aborted && !request.signal?.aborted && Boolean(threadId),
+            undefined, () => providerAccountEpoch,
+          );
+          releaseRlmParent = registerLiveCodexRlmParent({
+            caller, owner: ownerId, generation, signal: request.signal,
+            identity: {
+              transportConnectionId: request.connection.id, transportAdapterId: request.connection.adapterId,
+              upstreamProviderId: qualified.slice(0, separator), upstreamModelId: qualified.slice(separator + 1),
+              providerQualifiedModelId: qualified, observedProviderIdentity: qualified,
+              authBillingRoute: request.connection.authSource, effort: exactIdentity.effort ?? 'provider-default',
+              fastVariant: exactIdentity.serviceTier === 'fast' ? 'priority' : exactIdentity.serviceTier ?? 'standard', catalogRevision: generation,
+            },
+            active: () => !terminal && !streamAbort.signal.aborted && Boolean(threadId),
+            accountRead: () => sendControlRequest({
+              id: requestId(request.requestId, 'rlm_account_' + String(++accountSequence)),
+              method: 'account/read', params: { refreshToken: false },
+            }),
+          });
+        }
+      }
     }
     if (resumed && request.systemPrompt?.trim()) {
       // Resume restores the old developer message. Publish this turn's compiled
@@ -1988,6 +2049,7 @@ async function* sendCodexRequest(
     }
     throw error;
   } finally {
+    releaseRlmParent?.();
     request.onLiveTurnControl?.(null);
     if (cancellationCleanup) await cancellationCleanup;
     rejectPendingControlResponses(

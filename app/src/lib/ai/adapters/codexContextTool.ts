@@ -1,3 +1,4 @@
+import { CONTEXT_RLM_ADVANCED_TOOLS } from '@/features/context/contextRlmToolDefinitions';
 import { CODEX_COORDINATION_TOOLS, CODEX_COORDINATION_GATEWAY_NAMES } from './codexCoordinationTools';
 import type { ProviderRequest } from './types';
 import type { CodexBackendIdentity, CodexDynamicTool } from './codexAppServerProtocol';
@@ -11,7 +12,7 @@ export const CODEX_CONTEXT_TOOL = {
   inputSchema: {
     type: 'object',
     properties: {
-      operation: { type: 'string', enum: ['describe', 'query', 'investigate', 'search', 'open', 'expand', 'sources', 'related', 'timeline', 'address'] },
+      operation: { type: 'string', enum: ['query', 'describe', 'search', 'open', 'expand', 'address', 'related', 'timeline', 'sources', 'checkpoint', 'investigate', 'trace'] },
       query: { type: 'string' },
       limit: { type: 'integer' },
       pointer: { type: 'object' },
@@ -20,8 +21,9 @@ export const CODEX_CONTEXT_TOOL = {
       afterBytes: { type: 'integer' },
       continuation: { type: 'string' },
       recordId: { type: 'string' },
-      corpusId: { type: 'string' },
-      position: { type: 'string' },
+      corpusId: { type: 'string', minLength: 1, maxLength: 200 },
+      position: { type: 'string', pattern: '^(0|[1-9][0-9]{0,16})$' },
+      runId: { type: 'string', minLength: 1, maxLength: 128 },
     },
     required: ['operation'],
     additionalProperties: false,
@@ -76,6 +78,17 @@ export const CODEX_PLUGIN_RUN_TOOL: CodexDynamicTool = Object.freeze({
   },
 });
 
+export const CODEX_COMMAND_LIST_TOOL: CodexDynamicTool = Object.freeze({
+  type: 'function', name: 'command_list',
+  description: 'Discover registered VibeSpace actions by query matching ID, label, or description. Use offset to page; details=true returns items, total, nextOffset and truncation. Without details the result remains an array. Propose actions using the Agent action contract; listing never executes them.',
+  inputSchema: { type: 'object', properties: {
+    limit: { type: 'integer', minimum: 0, maximum: 100 },
+    query: { type: 'string', minLength: 1, maxLength: 512 },
+    offset: { type: 'integer', minimum: 0, maximum: 100000 },
+    details: { type: 'boolean' },
+  }, additionalProperties: false },
+});
+
 type CodexGatewayToolName = 'vibespace_context' | keyof typeof CODEX_EXTERNAL_TO_GATEWAY_TOOL;
 type CodexGatewayResult = {
   success: boolean;
@@ -84,6 +97,10 @@ type CodexGatewayResult = {
 
 const CODEX_EXTERNAL_TO_GATEWAY_TOOL = Object.freeze({
   ...CODEX_COORDINATION_GATEWAY_NAMES,
+  command_list: 'command.list',
+  vibespace_context_search: 'vibespace_context_search', vibespace_context_open: 'vibespace_context_open',
+  vibespace_context_expand: 'vibespace_context_expand', vibespace_context_address: 'vibespace_context_address',
+  vibespace_context_trace: 'vibespace_context_trace',
   mcp_list: 'mcp.list',
   mcp_run: 'mcp.run',
   plugins_list: 'plugins.list',
@@ -113,6 +130,7 @@ async function createCodexGatewayTool(
     (request.tools?.['mcp.list'] === true || request.tools?.['mcp.run'] === true);
   const pluginsRequested = options.includePlugins &&
     (request.tools?.['plugins.list'] === true || request.tools?.['plugins.run'] === true);
+  const commandListRequested = options.includeCoordination && request.tools?.['command.list'] === true;
   const coordinationTools = options.includeCoordination
     ? CODEX_COORDINATION_TOOLS.filter(tool => request.tools?.[CODEX_COORDINATION_GATEWAY_NAMES[tool.name as keyof typeof CODEX_COORDINATION_GATEWAY_NAMES]] === true)
     : [];
@@ -121,7 +139,7 @@ async function createCodexGatewayTool(
     const { resolveRlmEnabled } = await import('@/features/context/rlmPreferenceStore');
     contextEnabled = resolveRlmEnabled({ workspaceId: request.workspaceId, chatId: request.chatId }).enabled;
   }
-  if (!contextEnabled && !mcpRequested && !pluginsRequested && coordinationTools.length === 0) {
+  if (!contextEnabled && !mcpRequested && !pluginsRequested && coordinationTools.length === 0 && !commandListRequested) {
     return null;
   }
   const authority = await import('@/lib/harness/toolGatewayAuthority');
@@ -141,11 +159,12 @@ async function createCodexGatewayTool(
   const { parseToolGatewayRequest } = await import('@/lib/harness/toolGatewayProtocol');
   const runtime = createToolGatewayRuntime(createProductionToolGatewayDependencies());
   const dynamicTools = [
-    ...(contextEnabled ? [CODEX_CONTEXT_TOOL] : []),
+    ...(contextEnabled ? [CODEX_CONTEXT_TOOL, ...CONTEXT_RLM_ADVANCED_TOOLS] : []),
     ...(mcpRequested && request.tools?.['mcp.list'] === true ? [CODEX_MCP_LIST_TOOL] : []),
     ...(mcpRequested && request.tools?.['mcp.run'] === true ? [CODEX_MCP_RUN_TOOL] : []),
     ...(pluginsRequested && request.tools?.['plugins.list'] === true ? [CODEX_PLUGIN_LIST_TOOL] : []),
     ...(pluginsRequested && request.tools?.['plugins.run'] === true ? [CODEX_PLUGIN_RUN_TOOL] : []),
+    ...(commandListRequested ? [CODEX_COMMAND_LIST_TOOL] : []),
     ...coordinationTools,
   ] as readonly CodexDynamicTool[];
   const toolNames = dynamicTools.map((tool) => tool.name as CodexGatewayToolName);
@@ -191,7 +210,9 @@ async function createCodexGatewayTool(
     dynamicTools: Object.freeze([...dynamicTools]),
     toolNames: Object.freeze([...toolNames]),
     bind(threadId, identity, generation) {
-      const qualified = identity.model;
+      const qualified = identity.model.includes('/')
+        ? identity.model
+        : `${identity.modelProvider}/${identity.model}`;
       const separator = qualified.indexOf('/');
       if (!authority.bindToolGatewaySessionAuthority(
         threadId,
@@ -213,7 +234,7 @@ async function createCodexGatewayTool(
           providerQualifiedModelId: qualified,
           authBillingRoute: request.connection.authSource,
           effort: identity.effort ?? 'provider-default',
-          fastVariant: identity.serviceTier ?? 'standard',
+          fastVariant: identity.serviceTier === 'fast' ? 'priority' : identity.serviceTier ?? 'standard',
           catalogRevision: generation,
           observedProviderIdentity: qualified,
         },

@@ -1053,14 +1053,20 @@ describe('production Context Map RLM repository', () => {
     const results = await Promise.all(searches);
     expect(results.every((hits) => hits[0]?.preview.includes('cobalt-fern'))).toBe(true);
     expect(read).toHaveBeenCalledTimes(1);
-    // The shared source result is still validated after its read.
-    expect(stat).toHaveBeenCalledTimes(11);
+    // Five sizing probes and five pre-hash probes preserve the size bound;
+    // five SHA snapshots share one physical read and its post-read SHA probe.
+    expect(stat).toHaveBeenCalledTimes(16);
+    expect(stat.mock.calls.filter(([, sha]) => sha === false)).toHaveLength(10);
+    expect(stat.mock.calls.filter(([, sha]) => sha === true)).toHaveLength(6);
+    expect(new Set(stat.mock.calls.map(([path]) => path))).toEqual(new Set(['C:\\repo\\book.txt']));
 
     await repository.search(scope, 'Observatory Lumen');
     expect(read).toHaveBeenCalledTimes(2);
     // A later sequential search performs a fresh authority build and source
     // revalidation rather than retaining source bytes.
-    expect(stat).toHaveBeenCalledTimes(14);
+    expect(stat).toHaveBeenCalledTimes(20);
+    expect(stat.mock.calls.filter(([, sha]) => sha === false)).toHaveLength(12);
+    expect(stat.mock.calls.filter(([, sha]) => sha === true)).toHaveLength(8);
   });
 
   it('stops sizing a large map once the small-map fallback budget is exceeded', async () => {
@@ -1110,7 +1116,7 @@ describe('production Context Map RLM repository', () => {
       await readGate;
       return { ok: true as const, path, content };
     });
-    const stat = vi.fn(async (path) => ({
+    const stat = vi.fn(async (path: string, _includeSha256?: boolean) => ({
       ok: true as const,
       path,
       kind: 'file' as const,
@@ -1136,7 +1142,11 @@ describe('production Context Map RLM repository', () => {
     releaseRead();
     await expect(second).resolves.toHaveLength(1);
     expect(read).toHaveBeenCalledTimes(1);
-    expect(stat).toHaveBeenCalledTimes(5);
+    // Each waiter performs sizing + pre-hash + SHA admission; only the
+    // surviving shared read performs post-read SHA validation.
+    expect(stat).toHaveBeenCalledTimes(7);
+    expect(stat.mock.calls.filter(([, sha]) => sha === false)).toHaveLength(4);
+    expect(stat.mock.calls.filter(([, sha]) => sha === true)).toHaveLength(3);
   });
 
   it('bounds concurrent source validation and preserves stable authority ordering', async () => {
@@ -1529,45 +1539,48 @@ describe('production Context Map RLM repository', () => {
   });
 
   it('fails closed when source bytes change after the authority snapshot', async () => {
-    const changedSha = `sha256:${'b'.repeat(64)}` as const;
-    const stat = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true as const,
-        path: 'C:\\repo\\book.txt',
-        kind: 'file' as const,
-        size: 64,
-        modifiedMs: 20,
-        sha256: SHA,
-      })
-      .mockResolvedValueOnce({
-        ok: true as const,
-        path: 'C:\\repo\\book.txt',
-        kind: 'file' as const,
-        size: 64,
-        modifiedMs: 21,
-        sha256: changedSha,
+    const originalContent = 'Observatory Lumen uses cobalt-fern verification 47291.';
+    const changedContent = originalContent.replace('cobalt', 'violet');
+    expect(new TextEncoder().encode(changedContent).length).toBe(new TextEncoder().encode(originalContent).length);
+    const originalSha = await contentSha(originalContent);
+    const changedSha = await contentSha(changedContent);
+    expect(changedSha).not.toBe(originalSha);
+    const fixture = (mutateAfterSnapshot: boolean) => {
+      let changed = false;
+      const stat = vi.fn(async (path: string, includeSha256?: boolean) => ({
+        ok: true as const, path, kind: 'file' as const,
+        size: new TextEncoder().encode(originalContent).length,
+        modifiedMs: changed ? 21 : 20,
+        ...(includeSha256 ? { sha256: changed ? changedSha : originalSha } : {}),
+      }));
+      const read = vi.fn(async (path: string) => {
+        changed = mutateAfterSnapshot;
+        return { ok: true as const, path, content: changed ? changedContent : originalContent };
       });
-    const repository = createContextMapRlmRepository({
-      loadMaps: vi.fn(async () => maps()),
-      stat,
-      read: vi.fn(async (path) => ({
-        ok: true as const,
-        path,
-        content: 'Observatory Lumen uses cobalt-fern.',
-      })),
-      lexicalSearch: vi.fn(async () => [
-        {
-          documentId: 'file-1',
-          excerpt: 'Observatory Lumen uses cobalt-fern.',
-          score: 10,
-        },
-      ]),
-    });
+      const repository = createContextMapRlmRepository({
+        loadMaps: async () => maps(), stat, read,
+        lexicalSearch: async () => [{ documentId: 'file-1', excerpt: 'untrusted derivative', score: 10 }],
+      });
+      return { repository, stat, read };
+    };
+    const scope = { accountId: 'account-1', projectId: 'project-1' };
+    const stable = fixture(false);
+    const hits = await stable.repository.search(scope, 'Observatory Lumen');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.preview).toContain('cobalt-fern');
+    expect(hits[0]?.preview).not.toContain('untrusted derivative');
+    expect(stable.read).toHaveBeenCalledTimes(1);
+    expect(stable.stat.mock.calls.filter(([, sha]) => sha === false)).toHaveLength(2);
+    expect(stable.stat.mock.calls.filter(([, sha]) => sha === true)).toHaveLength(2);
 
-    await expect(
-      repository.search({ accountId: 'account-1', projectId: 'project-1' }, 'Observatory Lumen'),
-    ).resolves.toEqual([]);
+    const changing = fixture(true);
+    await expect(changing.repository.search(scope, 'Observatory Lumen')).resolves.toEqual([]);
+    // Correct bytes/hash initially were admitted. Same-length changed bytes
+    // are rejected after the snapshot, rather than an exhausted mock or an
+    // always-invalid size/hash making this negative pass accidentally.
+    expect(changing.read).toHaveBeenCalledTimes(1);
+    expect(changing.stat.mock.calls.filter(([, sha]) => sha === false)).toHaveLength(2);
+    expect(changing.stat.mock.calls.filter(([, sha]) => sha === true)).toHaveLength(1);
   });
 
   it('publishes a successful peer when the latest shared-build waiter aborts', async () => {
@@ -2414,7 +2427,7 @@ describe('production Context Map RLM repository', () => {
       sizeBytes: content.length,
       modifiedAt: 20,
     }));
-    const stat = vi.fn(async (path: string) => ({
+    const stat = vi.fn(async (path: string, _includeSha256?: boolean) => ({
       ok: true as const,
       path,
       kind: 'file' as const,
@@ -2445,7 +2458,12 @@ describe('production Context Map RLM repository', () => {
 
     expect(hits).toHaveLength(8);
     expect(lexicalSearch).toHaveBeenCalledTimes(1);
-    expect(stat.mock.calls.length).toBeLessThanOrEqual(16);
+    // Each of eight selected candidates has size-only preflight, SHA
+    // snapshot and post-read SHA validation; no 312-file hash sweep.
+    expect(stat).toHaveBeenCalledTimes(24);
+    expect(stat.mock.calls.filter(([, sha]) => sha === false)).toHaveLength(8);
+    expect(stat.mock.calls.filter(([, sha]) => sha === true)).toHaveLength(16);
+    expect(new Set(stat.mock.calls.map(([path]) => path)).size).toBe(8);
     expect(read).toHaveBeenCalledTimes(8);
     expect(stat.mock.calls.some(([path]) => String(path).endsWith('shard-311.txt'))).toBe(false);
     expect(hits.every((hit) => !hit.preview.includes('untrusted derivative excerpt'))).toBe(true);
@@ -2626,7 +2644,7 @@ describe('production Context Map RLM repository', () => {
         { accountId: 'account-1', projectId: 'project-1' },
         'Observatory Lumen cobalt-fern',
       ),
-    ).resolves.toEqual([]);
+    ).rejects.toMatchObject({code: 'context_index_unavailable', reason: 'index_empty_or_rebuild'});
     expect(indexStatus).toHaveBeenCalledWith('account-1', 'map-1');
     expect(lexicalSearch).not.toHaveBeenCalled();
   });
@@ -2801,7 +2819,14 @@ describe('production Context Map RLM repository', () => {
 
     expect(hits).toHaveLength(20);
     expect(read).toHaveBeenCalledTimes(96);
-    expect(stat.mock.calls.filter(([, includeSha]) => includeSha === false)).toHaveLength(96);
+    // One sizing pass plus one pre-hash probe for each of 96 candidates.
+    expect(stat.mock.calls.filter(([, includeSha]) => includeSha === false)).toHaveLength(192);
+    expect(stat.mock.calls.filter(([, includeSha]) => includeSha === true)).toHaveLength(192);
+    for (const node of fixtureMaps[0]!.tree.nodes) {
+      expect(read.mock.calls.filter(([path]) => path === node.path)).toHaveLength(1);
+      expect(stat.mock.calls.filter(([path, sha]) => path === node.path && sha === false)).toHaveLength(2);
+      expect(stat.mock.calls.filter(([path, sha]) => path === node.path && sha === true)).toHaveLength(2);
+    }
   });
 
   it('retrieves bounded files in a small mixed-size map without reading oversized bodies', async () => {
