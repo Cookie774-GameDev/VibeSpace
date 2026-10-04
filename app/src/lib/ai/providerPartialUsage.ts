@@ -33,6 +33,7 @@ export function providerPartialUsage(
   const totalTokens = providerReportedMetric(snapshot.totalTokens);
   const cacheReadTokens = providerReportedMetric(snapshot.cacheReadTokens);
   const cacheWriteTokens = providerReportedMetric(snapshot.cacheWriteTokens);
+  const reasoningTokens = providerReportedMetric(snapshot.reasoningTokens);
   const costUsd = providerReportedMetric(snapshot.costUsd, false);
 
   if (
@@ -41,6 +42,7 @@ export function providerPartialUsage(
     totalTokens === undefined &&
     cacheReadTokens === undefined &&
     cacheWriteTokens === undefined &&
+    reasoningTokens === undefined &&
     costUsd === undefined
   ) {
     return undefined;
@@ -52,6 +54,7 @@ export function providerPartialUsage(
     ...(totalTokens === undefined ? {} : { total_tokens: totalTokens }),
     ...(cacheReadTokens === undefined ? {} : { cache_read_tokens: cacheReadTokens }),
     ...(cacheWriteTokens === undefined ? {} : { cache_write_tokens: cacheWriteTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoning_tokens: reasoningTokens }),
     ...(costUsd === undefined ? {} : { cost_usd: costUsd }),
     provider,
     model,

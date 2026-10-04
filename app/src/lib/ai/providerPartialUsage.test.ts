@@ -11,6 +11,7 @@ function snapshot(
     total: number;
     cacheRead: number;
     cacheWrite: number;
+    reasoning: number;
     cost: number;
   }>,
 ): UsageSnapshot {
@@ -21,6 +22,7 @@ function snapshot(
     ...(values.total === undefined ? {} : { totalTokens: reported(values.total) }),
     ...(values.cacheRead === undefined ? {} : { cacheReadTokens: reported(values.cacheRead) }),
     ...(values.cacheWrite === undefined ? {} : { cacheWriteTokens: reported(values.cacheWrite) }),
+    ...(values.reasoning === undefined ? {} : { reasoningTokens: reported(values.reasoning) }),
     ...(values.cost === undefined ? {} : { costUsd: reported(values.cost) }),
   };
 }
@@ -34,6 +36,7 @@ describe('providerPartialUsage', () => {
         total: 99,
         cacheRead: 0,
         cacheWrite: 8,
+        reasoning: 17,
         cost: 0.00289665,
       }),
       'openai',
@@ -46,12 +49,76 @@ describe('providerPartialUsage', () => {
       total_tokens: 99,
       cache_read_tokens: 0,
       cache_write_tokens: 8,
+      reasoning_tokens: 17,
       cost_usd: 0.00289665,
       provider: 'openai',
       model: 'gpt-5.6-luna',
     });
     expect(Object.isFrozen(usage)).toBe(true);
   });
+
+  it('retains a provider-reported reasoning-only snapshot, including zero, without deriving counts', () => {
+    expect(
+      providerPartialUsage(
+        { capturedAt: 1, reasoningTokens: reported(0) },
+        'openai',
+        'gpt-6-luna',
+      ),
+    ).toEqual({
+      reasoning_tokens: 0,
+      provider: 'openai',
+      model: 'gpt-6-luna',
+    });
+  });
+
+  it('ignores estimated or unsafe reasoning counts while retaining actual input usage', () => {
+    const estimated = providerPartialUsage(
+      {
+        capturedAt: 1,
+        inputTokens: reported(12),
+        reasoningTokens: { value: 7, provenance: 'estimated' },
+      },
+      'openai',
+      'gpt-6-luna',
+    );
+    const unsafe = providerPartialUsage(
+      {
+        capturedAt: 1,
+        inputTokens: reported(12),
+        reasoningTokens: reported(Number.MAX_SAFE_INTEGER + 1),
+      },
+      'openai',
+      'gpt-6-luna',
+    );
+
+    expect(estimated).toEqual({
+      input_tokens: 12,
+      provider: 'openai',
+      model: 'gpt-6-luna',
+    });
+    expect(unsafe).toEqual(estimated);
+  });
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    'ignores invalid provider reasoning count %s',
+    (reasoningTokens) => {
+      expect(
+        providerPartialUsage(
+          {
+            capturedAt: 1,
+            inputTokens: reported(12),
+            reasoningTokens: reported(reasoningTokens),
+          },
+          'openai',
+          'gpt-6-luna',
+        ),
+      ).toEqual({
+        input_tokens: 12,
+        provider: 'openai',
+        model: 'gpt-6-luna',
+      });
+    },
+  );
 
   it('keeps only finite nonnegative provider-reported values', () => {
     const usage = providerPartialUsage(

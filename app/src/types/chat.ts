@@ -170,6 +170,8 @@ export type Message = {
     total_tokens?: number;
     input_tokens?: number;
     output_tokens?: number;
+    /** Provider-reported detail; do not add it to output_tokens or total_tokens. */
+    reasoning_tokens?: number;
     cache_read_tokens?: number;
     cache_write_tokens?: number;
     cost_usd?: number;

@@ -44,6 +44,124 @@ const codexRoute = Object.freeze({
   modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
 });
 
+it.each([false, true])(
+  'counts only the active turn across multiple provider responses (resumed=%s)',
+  async (resumed) => {
+    const staleUsage = {
+      method: 'thread/tokenUsage/updated',
+      params: {
+        threadId: 'thread_native_1',
+        turnId: 'prior_turn',
+        tokenUsage: {
+          total: {
+            inputTokens: 900,
+            outputTokens: 100,
+            totalTokens: 1000,
+            cachedInputTokens: 400,
+            cacheWriteInputTokens: 0,
+            reasoningOutputTokens: 50,
+          },
+          last: { inputTokens: 900, outputTokens: 100, totalTokens: 1000 },
+        },
+      },
+    };
+    const usage = (total: Record<string, number>, last: Record<string, number>) => ({
+      method: 'thread/tokenUsage/updated',
+      params: {
+        threadId: 'thread_native_1',
+        turnId: 'turn_native_1',
+        tokenUsage: { total, last },
+      },
+    });
+    const first = usage(
+      {
+        inputTokens: 1000,
+        outputTokens: 120,
+        totalTokens: 1120,
+        cachedInputTokens: 440,
+        cacheWriteInputTokens: 0,
+        reasoningOutputTokens: 60,
+      },
+      {
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+        cachedInputTokens: 40,
+        cacheWriteInputTokens: 0,
+        reasoningOutputTokens: 10,
+      },
+    );
+    const second = usage(
+      {
+        inputTokens: 1030,
+        outputTokens: 125,
+        totalTokens: 1155,
+        cachedInputTokens: 450,
+        cacheWriteInputTokens: 0,
+        reasoningOutputTokens: 63,
+      },
+      {
+        inputTokens: 30,
+        outputTokens: 5,
+        totalTokens: 35,
+        cachedInputTokens: 10,
+        cacheWriteInputTokens: 0,
+        reasoningOutputTokens: 3,
+      },
+    );
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'usage-regression-codex' }),
+      start: async () => ({ generation: 'usage-regression-generation' }),
+      frames: () => ({
+        ready: Promise.resolve(),
+        stream: (async function* () {
+          for await (const frame of frames()) {
+            if (frame.id === 'request_1_thread' && resumed) {
+              yield { ...frame, id: 'request_1_resume' };
+              // Real app-server resume can emit the previous turn's usage
+              // after turn/start is written but before the new turn binds.
+              yield staleUsage;
+            } else if (frame.method === 'turn/completed') {
+              yield first;
+              yield staleUsage;
+              yield second;
+              yield second; // Duplicate notification must not add tokens.
+              yield frame;
+            } else yield frame;
+          }
+        })(),
+      }),
+      write: async () => undefined,
+      stop: async () => true,
+    });
+    const events: ProviderEvent[] = [];
+    for await (const event of adapter.send!({
+      requestId: 'request_1',
+      connection,
+      codexRoute,
+      prompt: 'Report the workshop capacity.',
+      modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+      workingDirectory: 'C:\\workspace',
+      interactionMode: 'ask',
+      ...(resumed ? { sessionId: 'thread_native_1' } : {}),
+    }))
+      events.push(event);
+    const usageEvents = events.filter((event) => event.type === 'usage');
+    expect(usageEvents).toHaveLength(3);
+    expect(usageEvents.at(-1)).toMatchObject({
+      usage: {
+        inputTokens: { value: 130, provenance: 'provider-reported' },
+        outputTokens: { value: 25, provenance: 'provider-reported' },
+        totalTokens: { value: 155, provenance: 'provider-reported' },
+        cacheReadTokens: { value: 50, provenance: 'provider-reported' },
+        cacheWriteTokens: { value: 0, provenance: 'provider-reported' },
+        reasoningTokens: { value: 13, provenance: 'provider-reported' },
+      },
+    });
+    expect(events.at(-1)).toEqual({ type: 'done', finishReason: 'completed' });
+  },
+);
+
 async function* frames() {
   yield {
     id: 'request_1_model_1',
@@ -111,6 +229,69 @@ async function* frames() {
     },
   };
 }
+
+it.each([true, false])(
+  'does not charge previous-turn usage to a cancelled resumed turn (baseline=%s)',
+  async (hasBaseline) => {
+    const prior = {
+      method: 'thread/tokenUsage/updated',
+      params: {
+        threadId: 'thread_native_1',
+        turnId: 'prior_turn',
+        tokenUsage: {
+          total: { inputTokens: 17748, outputTokens: 27, totalTokens: 17775 },
+          last: { inputTokens: 17748, outputTokens: 27, totalTokens: 17775 },
+        },
+      },
+    };
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'cancel-usage-codex' }),
+      start: async () => ({ generation: 'cancel-usage-generation' }),
+      frames: () => ({
+        ready: Promise.resolve(),
+        stream: (async function* () {
+          for await (const frame of frames()) {
+            if (frame.id === 'request_1_thread') {
+              yield { ...frame, id: 'request_1_resume' };
+              if (hasBaseline) yield prior;
+            } else if (frame.method === 'turn/completed') {
+              // Observed official app-server behavior: cancellation can
+              // relabel an unchanged prior usage snapshot with the new ID.
+              yield { ...prior, params: { ...prior.params, turnId: 'turn_native_1' } };
+              yield {
+                ...frame,
+                params: { ...frame.params, turn: { id: 'turn_native_1', status: 'interrupted' } },
+              };
+            } else yield frame;
+          }
+        })(),
+      }),
+      write: async () => undefined,
+      stop: async () => true,
+    });
+    const events: ProviderEvent[] = [];
+    const consume = async () => {
+      for await (const event of adapter.send!({
+        requestId: 'request_1',
+        connection,
+        codexRoute,
+        sessionId: 'thread_native_1',
+        prompt: 'Write workshop ideas.',
+        modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
+        workingDirectory: 'C:\\workspace',
+        interactionMode: 'ask',
+      }))
+        events.push(event);
+    };
+    await expect(consume()).rejects.toMatchObject({ name: 'AbortError' });
+    const usage = events.find((event) => event.type === 'usage');
+    expect(usage?.type === 'usage' ? usage.usage.totalTokens : undefined).toMatchObject({
+      provenance: 'unavailable',
+    });
+    if (usage?.type === 'usage') expect(usage.usage.totalTokens?.value).toBeUndefined();
+    expect(events.some((event) => event.type === 'done')).toBe(false);
+  },
+);
 
 async function* framesForAgentProfile(profile: 'full' | 'review') {
   for await (const frame of frames()) {

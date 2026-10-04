@@ -602,33 +602,58 @@ function effort(request: Readonly<ProviderRequest>): string | null {
   return value;
 }
 
-function createTurnUsageAccumulator() {
+function createTurnUsageAccumulator(resumed: boolean) {
   const baseline = new Map<string, number | null>();
-  return (usage: UsageSnapshot, frame: NativeFrame): UsageSnapshot => {
+  const counters = [
+    ['inputTokens', 'inputTokens'],
+    ['outputTokens', 'outputTokens'],
+    ['totalTokens', 'totalTokens'],
+    ['cacheReadTokens', 'cachedInputTokens'],
+    ['cacheWriteTokens', 'cacheWriteInputTokens'],
+    ['reasoningTokens', 'reasoningOutputTokens'],
+  ] as const;
+  const observePriorUsage = (frame: NativeFrame) => {
+    const totals = recordOf(recordOf(recordOf(frame.params)?.tokenUsage)?.total);
+    for (const [key, source] of counters) {
+      const total = totals?.[source];
+      baseline.set(
+        key,
+        typeof total === 'number' && Number.isSafeInteger(total) && total >= 0 ? total : null,
+      );
+    }
+  };
+  const accumulate = (usage: UsageSnapshot, frame: NativeFrame): UsageSnapshot => {
     const totals = recordOf(recordOf(recordOf(frame.params)?.tokenUsage)?.total);
     const result = { ...usage };
-    for (const [key, source] of [
-      ['inputTokens', 'inputTokens'],
-      ['outputTokens', 'outputTokens'],
-      ['totalTokens', 'totalTokens'],
-      ['cacheReadTokens', 'cachedInputTokens'],
-      ['cacheWriteTokens', 'cacheWriteInputTokens'],
-      ['reasoningTokens', 'reasoningOutputTokens'],
-    ] as const) {
+    const replayedPriorUsage =
+      resumed &&
+      baseline.get('totalTokens') === totals?.totalTokens &&
+      typeof usage.totalTokens?.value === 'number' &&
+      usage.totalTokens.value > 0;
+    for (const [key, source] of counters) {
       const total = totals?.[source];
       const last = usage[key]?.value;
-      const valid = typeof total === 'number' && Number.isFinite(total) && total >= 0;
+      const valid = typeof total === 'number' && Number.isSafeInteger(total) && total >= 0;
       if (!baseline.has(key)) {
-        baseline.set(key, valid && last !== undefined && total >= last ? total - last : null);
+        // On resume, `last` may still be the predecessor's counters even
+        // when the server labels the snapshot with the new cancelled turn.
+        // Only an observed pre-turn total establishes that thread baseline.
+        baseline.set(
+          key,
+          !resumed && valid && last !== undefined && Number.isSafeInteger(last) && total >= last
+            ? total - last
+            : null,
+        );
       }
       const before = baseline.get(key);
       result[key] =
-        valid && before !== null && before !== undefined && total >= before
+        !replayedPriorUsage && valid && before !== null && before !== undefined && total >= before
           ? { value: total - before, provenance: 'provider-reported' }
           : { provenance: 'unavailable', reason: 'Codex did not report a complete turn counter.' };
     }
     return result;
   };
+  return { observePriorUsage, accumulate };
 }
 
 export function codexApprovalPolicyForRequest(
@@ -1598,7 +1623,7 @@ async function* sendCodexRequest(
       );
     }
 
-    const turnUsage = createTurnUsageAccumulator();
+    const turnUsage = createTurnUsageAccumulator(resumed);
     let priorProviderFailure: Readonly<ReturnType<typeof providerErrorDetails>> | undefined;
     const providerFailureFallback = {
       providerId: request.connection.providerId,
@@ -1616,6 +1641,16 @@ async function* sendCodexRequest(
       if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
       const frame = await nextFrame(reader, 'Codex app-server ended before terminal state.');
       if (request.signal?.aborted) throw new DOMException('The request was aborted.', 'AbortError');
+      if (
+        !turnId &&
+        resumed &&
+        !drainingAcceptedNativeQueue &&
+        frame.method === 'thread/tokenUsage/updated' &&
+        recordOf(frame.params)?.threadId === threadId
+      ) {
+        turnUsage.observePriorUsage(frame);
+        continue;
+      }
       if (isCodexSkillsChangedNotification(frame)) {
         try {
           const entry = await prepare(request, 'skills_changed', () => refreshNativeSkills(true));
@@ -2037,7 +2072,7 @@ async function* sendCodexRequest(
           continue;
         }
         if (queuedAutoObserved && event.type === 'text') continue;
-        yield event.type === 'usage' ? { ...event, usage: turnUsage(event.usage, frame) } : event;
+        yield event.type === 'usage' ? { ...event, usage: turnUsage.accumulate(event.usage, frame) } : event;
       }
       if (terminal) return;
     }
