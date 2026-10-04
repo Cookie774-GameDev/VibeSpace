@@ -108,7 +108,6 @@ function chat(id: string, title: string, projectId: string | null = null): Chat 
     title,
     workspace_id: 'workspace-a',
     project_id: projectId,
-    archived: true,
     active_agent_ids: [],
     created_at: 1,
     updated_at: 1,
@@ -160,22 +159,26 @@ afterEach(() => {
 });
 
 describe('HistoryList destructive confirmation', () => {
-  it('shows only archived chats in the current project, including during a project switch', () => {
+  it('shows saved and archived chats in the current project, including during a project switch', () => {
     mocks.activeProjectId = 'project-a';
     mocks.chats = [
-      chat('archived-a', 'Archived A', 'project-a'),
+      { ...chat('archived-a', 'Archived A', 'project-a'), archived: true },
       { ...chat('active-a', 'Active A', 'project-a'), archived: false },
+      chat('saved-a', 'Saved A', 'project-a'),
       chat('archived-b', 'Archived B', 'project-b'),
       chat('unassigned', 'Unassigned'),
     ];
     const view = renderHistory();
     expect(screen.getByText('Archived A')).toBeTruthy();
-    expect(screen.queryByText('Active A')).toBeNull();
+    expect(screen.getByText('Active A')).toBeTruthy();
+    expect(screen.getByText('Saved A')).toBeTruthy();
     expect(screen.queryByText('Archived B')).toBeNull();
     expect(screen.queryByText('Unassigned')).toBeNull();
     mocks.activeProjectId = 'project-b';
     view.rerender(<HistoryList selectedChatId={null} onSelectChat={vi.fn()} />);
     expect(screen.queryByText('Archived A')).toBeNull();
+    expect(screen.queryByText('Active A')).toBeNull();
+    expect(screen.queryByText('Saved A')).toBeNull();
     expect(screen.getByText('Archived B')).toBeTruthy();
     mocks.activeProjectId = null;
     view.rerender(<HistoryList selectedChatId={null} onSelectChat={vi.fn()} />);

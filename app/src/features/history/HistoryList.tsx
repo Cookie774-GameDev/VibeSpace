@@ -63,13 +63,15 @@ interface PendingHistoryDeletion {
 const MAX_ROWS = 200;
 
 function matchesHistoryProject(chat: Chat, projectId: ProjectId | null): boolean {
-  return chat.archived === true && (chat.project_id ?? null) === projectId;
+  // Saved chats normally have no archived flag. Both saved and archived
+  // records belong in History; permanent deletion removes the record itself.
+  return (chat.project_id ?? null) === projectId;
 }
 
 /**
  * Left rail of the Session History page.
  *
- * Live-streams archived chats for the current project, sorted by `updated_at desc`
+ * Live-streams saved chats for the current project, sorted by `updated_at desc`
  * and capped at {@link MAX_ROWS}. Search is best-effort: titles are filtered
  * client-side, and a second live query scans message text for matches when
  * the query is at least 2 chars (kept off below that to avoid a full scan

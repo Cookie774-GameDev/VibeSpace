@@ -6,6 +6,8 @@ import './sakura-history.css';
 import { browserChatStore } from '@/features/browser-chat/browserChatStore';
 import { openStoredChat } from './openStoredChat';
 import { toast } from '@/components/ui/toast';
+import { useAuthStore } from '@/stores/auth';
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
 
 /**
  * Top-level Session History page.
@@ -19,8 +21,14 @@ import { toast } from '@/components/ui/toast';
  * the selection — fresh page open lands on "pick a chat".
  */
 export function HistoryPage() {
+  const historyScope = useAuthStore((state) => JSON.stringify([
+    resolveAccountIdentity(state)?.accountId ?? null, state.workspaceId ?? null, state.projectId ?? null,
+  ]));
   const [selectedChatId, setSelectedChatId] = React.useState<ChatId | null>(null);
   const [selectedSnapshotId, setSelectedSnapshotId] = React.useState<string | null>(null);
+  const [selectionScope, setSelectionScope] = React.useState(historyScope);
+  const visibleChatId = selectionScope === historyScope ? selectedChatId : null;
+  const visibleSnapshotId = selectionScope === historyScope ? selectedSnapshotId : null;
   const openBrowserChat = async (chatId: ChatId) => {
     browserChatStore.getState().setEngine('browser', chatId);
     const result = await openStoredChat(chatId);
@@ -32,24 +40,26 @@ export function HistoryPage() {
   return (
     <div
       data-monochrome-route="history"
-      data-warm-state={selectedChatId ? 'selected' : 'empty'}
+      data-warm-state={visibleChatId ? 'selected' : 'empty'}
       className="flex h-full w-full overflow-hidden bg-background text-foreground [html[data-theme=monochrome]_&]:font-sans [html[data-theme=monochrome]_&>div]:border-border-mid"
     >
       <HistoryList
-        selectedChatId={selectedChatId}
-        selectedSnapshotId={selectedSnapshotId}
+        selectedChatId={visibleChatId}
+        selectedSnapshotId={visibleSnapshotId}
         onSelectChat={(chatId) => {
+          setSelectionScope(historyScope);
           setSelectedChatId(chatId);
           if (chatId) setSelectedSnapshotId(null);
         }}
         onSelectSnapshot={(snapshotId) => {
+          setSelectionScope(historyScope);
           setSelectedSnapshotId(snapshotId);
           if (snapshotId) setSelectedChatId(null);
         }}
         onOpenBrowserChat={openBrowserChat}
       />
       <div data-warm-surface="history-replay" className="min-w-0 flex-1">
-        <Replay chatId={selectedChatId} snapshotId={selectedSnapshotId} />
+        <Replay chatId={visibleChatId} snapshotId={visibleSnapshotId} />
       </div>
     </div>
   );
