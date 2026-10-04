@@ -339,7 +339,14 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
 // ── Dynamic Ollama model discovery ──────────────────────────────────────
 
 let _discoveredOllama: string[] = [];
-let _foundryModels: Array<{ id: string; label: string }> = [];
+let _foundryModels: Array<{ id: string; label: string; method?: string }> = [];
+function foundryScope(): string {
+  const state = useAuthStore.getState();
+  return state.cloudSession?.user_id ?? state.localUserId ?? 'local';
+}
+let _foundryScope = '';
+let _foundryHydrationScope = '';
+let _foundryHydrationGeneration = 0;
 let _discoveredListeners: Array<() => void> = [];
 let _foundryHydration: Promise<void> | null = null;
 
@@ -354,13 +361,16 @@ export function getDiscoveredOllamaModels(): readonly string[] {
 }
 
 export function syncFoundryModelOptions(
-  models: ReadonlyArray<{ id: string; label: string }>,
+  models: ReadonlyArray<{ id: string; label: string; method?: string }>,
+  scope = foundryScope(),
 ): void {
+  if (scope !== foundryScope()) return;
+  _foundryScope = scope;
   _foundryModels = models
-    .map((model) => ({ id: model.id.trim(), label: model.label.trim() }))
+    .map((model) => ({ id: model.id.trim(), label: model.label.trim(), method: model.method }))
     .filter(
       (model, index, all) =>
-        model.id.startsWith('foundry:') &&
+        /^(?:artifact--|foundry:)[A-Za-z0-9_-]{1,64}$/.test(model.id) &&
         Boolean(model.label) &&
         all.findIndex((candidate) => candidate.id === model.id) === index,
     );
@@ -369,11 +379,16 @@ export function syncFoundryModelOptions(
 
 export function getOllamaModelOptions(): ModelOption[] {
   return [
-    ..._foundryModels.map((model) => ({
-      provider: 'ollama' as const,
-      id: model.id,
-      label: model.label,
-    })),
+    ...(_foundryScope === foundryScope() ? _foundryModels : [])
+      .filter((model) => model.id.startsWith('foundry:') || model.method === 'knowledge')
+      .map((model) => ({
+        provider: 'ollama' as const,
+        id:
+          model.method === 'knowledge' && model.id.startsWith('artifact--')
+            ? `foundry:${model.id.slice('artifact--'.length)}`
+            : model.id,
+        label: model.label,
+      })),
     ..._discoveredOllama.map((name) => ({
       provider: 'ollama' as const,
       id: name,
@@ -382,8 +397,18 @@ export function getOllamaModelOptions(): ModelOption[] {
   ];
 }
 
+export function getFoundryModelOptions(): ModelOption[] {
+  if (_foundryScope !== foundryScope()) return [];
+  return _foundryModels
+    .filter((model) => model.id.startsWith('artifact--') && model.method !== 'knowledge')
+    .map((model) => ({ provider: 'foundry', id: model.id, label: model.label }));
+}
+
 function hydrateFoundryModelOptions(): Promise<void> {
-  if (_foundryHydration) return _foundryHydration;
+  const scope = foundryScope();
+  if (_foundryHydration && _foundryHydrationScope === scope) return _foundryHydration;
+  const generation = ++_foundryHydrationGeneration;
+  _foundryHydrationScope = scope;
   _foundryHydration = (async () => {
     const { foundryModelOptions, loadJobs } = await import('@/features/model-foundry/modelHub');
     let jobs = typeof window === 'undefined' ? [] : loadJobs(window.localStorage);
@@ -394,13 +419,19 @@ function hydrateFoundryModelOptions(): Promise<void> {
     } catch {
       // Browser preview and an unavailable native host use the durable snapshot.
     }
-    syncFoundryModelOptions(foundryModelOptions(jobs));
-  })();
+    if (generation === _foundryHydrationGeneration)
+      syncFoundryModelOptions(foundryModelOptions(jobs), scope);
+  })().finally(() => {
+    if (generation === _foundryHydrationGeneration) _foundryHydration = null;
+  });
   return _foundryHydration;
 }
 
 /** React hook: returns current discovered Ollama models as ModelOption[]. */
 export function useOllamaModelOptions(): ModelOption[] {
+  const scope = useAuthStore(
+    (state) => state.cloudSession?.user_id ?? state.localUserId ?? 'local',
+  );
   const [, bump] = useState(0);
   useEffect(() => {
     const listener = () => bump((n) => n + 1);
@@ -409,14 +440,38 @@ export function useOllamaModelOptions(): ModelOption[] {
     return () => {
       _discoveredListeners = _discoveredListeners.filter((l) => l !== listener);
     };
-  }, []);
+  }, [scope]);
   return useMemo(
     () => getOllamaModelOptions(),
     [
       _discoveredOllama.length,
+      scope,
       _discoveredOllama.join('\0'),
       _foundryModels.length,
-      _foundryModels.map((model) => `${model.id}\0${model.label}`).join('\u0001'),
+      _foundryModels.map((model) => `${model.id}\0${model.label}\0${model.method}`).join('\u0001'),
+    ],
+  );
+}
+
+/** Native Foundry weights retain their provider instead of becoming Ollama/CLI aliases. */
+export function useFoundryModelOptions(): ModelOption[] {
+  const scope = useAuthStore(
+    (state) => state.cloudSession?.user_id ?? state.localUserId ?? 'local',
+  );
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const listener = () => bump((n) => n + 1);
+    _discoveredListeners.push(listener);
+    void hydrateFoundryModelOptions();
+    return () => {
+      _discoveredListeners = _discoveredListeners.filter((entry) => entry !== listener);
+    };
+  }, [scope]);
+  return useMemo(
+    () => getFoundryModelOptions(),
+    [
+      scope,
+      _foundryModels.map((model) => `${model.id}\0${model.label}\0${model.method}`).join('\u0001'),
     ],
   );
 }

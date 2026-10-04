@@ -15,6 +15,26 @@ import {
 } from './trainingRuntime';
 
 describe('trainingRuntime', () => {
+  it('repairs only the bundled worker when a private Python runtime already exists', async () => {
+    const invoke = vi.fn<TrainingRuntimeInvoke>().mockResolvedValue({
+      installed: true,
+      attested: true,
+      protocol: 1,
+      sourceSha256: 'a'.repeat(64),
+      python: 'D:/foundry/python.exe',
+      methods: ['full'],
+      modalities: ['text'],
+      precisions: ['bf16'],
+      reason: null,
+    });
+    await installLocalTrainingWorker({ native: true, invoke, allowDependencyRepair: false });
+    expect(invoke).toHaveBeenCalledWith('model_foundry_install_training_worker', {
+      includeQlora: false,
+      allowDependencyRepair: false,
+      dependencyTimeoutSeconds: 240,
+    });
+  });
+
   it('reports a truthful web-preview boundary without invoking native code', async () => {
     const invoke = vi.fn();
 

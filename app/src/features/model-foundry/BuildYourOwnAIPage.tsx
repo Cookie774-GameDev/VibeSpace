@@ -509,7 +509,16 @@ export function BuildYourOwnAIPage() {
     setTrainingWorkerBusy(true);
     setTrainingWorkerError(null);
     try {
-      setTrainingWorker(await installLocalTrainingWorker({ includeQlora: true }));
+      const repairOnly = Boolean(
+        trainingWorker?.installed && !trainingWorker.attested && trainingWorker.python,
+      );
+      setTrainingWorker(
+        await installLocalTrainingWorker(
+          repairOnly
+            ? { includeQlora: false, allowDependencyRepair: false }
+            : { includeQlora: true },
+        ),
+      );
     } catch (error) {
       setTrainingWorkerError(
         error instanceof Error ? error.message : 'Could not set up the local training worker.',
@@ -522,7 +531,7 @@ export function BuildYourOwnAIPage() {
     } finally {
       setTrainingWorkerBusy(false);
     }
-  }, []);
+  }, [trainingWorker]);
 
   return (
     <main
@@ -692,7 +701,11 @@ export function BuildYourOwnAIPage() {
                 ) : (
                   <ShieldCheck className="h-3.5 w-3.5" />
                 )}
-                {trainingWorkerBusy ? 'Setting up…' : 'Set up local worker'}
+                {trainingWorkerBusy
+                  ? 'Setting up…'
+                  : trainingWorker?.installed && trainingWorker.python
+                    ? 'Repair local worker'
+                    : 'Set up local worker'}
               </Button>
             )}
           </section>

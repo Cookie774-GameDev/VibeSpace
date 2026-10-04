@@ -604,11 +604,13 @@ describe('model foundry domain', () => {
         id: 'artifact--job_12345',
         label: 'Release specialist',
         subtitle: 'Verified local knowledge · Qwen 2.5 1.5B Instruct',
+        method: 'knowledge',
       },
       {
         id: 'artifact--job_weight',
         label: 'Release adapter',
         subtitle: 'Verified local LoRA model · Qwen 2.5 1.5B Instruct',
+        method: 'lora',
       },
     ]);
   });

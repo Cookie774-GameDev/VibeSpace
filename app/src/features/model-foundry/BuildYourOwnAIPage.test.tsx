@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { BuildYourOwnAIPage } from './BuildYourOwnAIPage';
 
 const installWorker = vi.fn();
+const workerState = vi.hoisted(() => ({ repair: false }));
 
 vi.mock('./BuildYourOwnAIHub', () => ({
   detectHardware: () => new Promise(() => {}),
@@ -28,21 +29,38 @@ vi.mock('./BuildYourOwnAIHub', () => ({
 vi.mock('./trainingRuntime', () => ({
   getLocalTrainingWorkerStatus: () =>
     Promise.resolve({
-      installed: false,
+      installed: workerState.repair,
       attested: false,
       localOnly: true,
       protocol: 1,
       sourceSha256: '',
-      python: null,
+      python: workerState.repair ? 'D:/private/python.exe' : null,
       methods: [],
       modalities: [],
       precisions: [],
-      reason: 'The verified local training worker has not been installed.',
+      reason: workerState.repair
+        ? 'The local training worker failed integrity verification.'
+        : 'The verified local training worker has not been installed.',
     }),
   installLocalTrainingWorker: (options: unknown) => installWorker(options),
 }));
 
 describe('BuildYourOwnAIPage', () => {
+  it('repairs a stale worker without requesting package downloads', async () => {
+    workerState.repair = true;
+    installWorker.mockClear();
+    try {
+      render(<BuildYourOwnAIPage />);
+      await screen.findByText(/failed integrity verification/i);
+      fireEvent.click(screen.getByRole('button', { name: /Repair local worker/i }));
+      expect(installWorker).toHaveBeenCalledWith({
+        includeQlora: false,
+        allowDependencyRepair: false,
+      });
+    } finally {
+      workerState.repair = false;
+    }
+  });
   it('exposes a dedicated scenic canvas without replacing the real interface', async () => {
     render(<BuildYourOwnAIPage />);
 
@@ -107,7 +125,12 @@ describe('BuildYourOwnAIPage', () => {
   it('opens each of the four methods directly without claiming unverified readiness', async () => {
     render(<BuildYourOwnAIPage />);
     await screen.findByText(/verified local training worker has not been installed/i);
-    for (const [label, method] of [['RAG: Add knowledge', 'knowledge'], ['LoRA: Teach a specialty', 'lora'], ['QLoRA: Train efficiently', 'qlora'], ['Full weight: Train all weights', 'full']]) {
+    for (const [label, method] of [
+      ['RAG: Add knowledge', 'knowledge'],
+      ['LoRA: Teach a specialty', 'lora'],
+      ['QLoRA: Train efficiently', 'qlora'],
+      ['Full weight: Train all weights', 'full'],
+    ]) {
       fireEvent.click(screen.getByRole('button', { name: label }));
       expect(screen.getByRole('dialog').getAttribute('data-method')).toBe(method);
       fireEvent.click(screen.getByRole('button', { name: 'Close builder' }));

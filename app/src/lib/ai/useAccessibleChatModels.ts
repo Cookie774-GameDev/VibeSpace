@@ -12,7 +12,12 @@ import {
   refreshConnectedProviderModels,
 } from './providerModelCatalog';
 import { listPromotedAdapters } from '@/features/model-foundry/adapterRegistry';
-import { getAccessibleModelOptions, getAccessibleProviders, useOllamaModelOptions } from './models';
+import {
+  getAccessibleModelOptions,
+  getAccessibleProviders,
+  useOllamaModelOptions,
+  useFoundryModelOptions,
+} from './models';
 import type { ProviderConnection, ProviderDiscoveredModel } from './adapters/types';
 import {
   CODEX_CLI_CONNECTION,
@@ -112,9 +117,11 @@ export interface ModelPickerGroup {
  * routes merely because they share a model heading.
  */
 export function isModelPickerRouteCompatibleWithBackend(
-  route: Pick<ModelPickerOption, 'connectionId'>,
+  route: Pick<ModelPickerOption, 'connectionId'> & Partial<Pick<ModelPickerOption, 'provider'>>,
   backend: ChatBackend,
 ): boolean {
+  // Foundry uses its native command boundary before either CLI dispatch branch.
+  if (route.provider === 'foundry' && !route.connectionId) return true;
   const isOfficialCodexRoute = route.connectionId === CODEX_CLI_CONNECTION.id;
   const isManagedCodexBridgeRoute = route.connectionId === OPENCODE_CLI_CONNECTION.id;
   return backend === 'codex'
@@ -136,8 +143,7 @@ function filterModelPickerOptionForBackend(
   const nativeCodexIndex =
     backend === 'codex'
       ? routes.findIndex(
-          (route) =>
-            route.connectionId === CODEX_CLI_CONNECTION.id && route.available !== false,
+          (route) => route.connectionId === CODEX_CLI_CONNECTION.id && route.available !== false,
         )
       : -1;
   const orderedRoutes =
@@ -224,6 +230,8 @@ export function findBackendModelPickerRoute(
 
   const currentConnectionId =
     typeof selection.connectionId === 'string' ? selection.connectionId : undefined;
+  // A local Foundry selection is already exact; do not repeatedly rebind it to a CLI.
+  if (selection.providerId === 'foundry' && !currentConnectionId) return undefined;
   const preferNativeCodexRoute =
     backend === 'codex' && currentConnectionId === OPENCODE_CLI_CONNECTION.id;
   if (
@@ -236,8 +244,7 @@ export function findBackendModelPickerRoute(
 
   const compatible = options.filter(
     (option) =>
-      option.available !== false &&
-      isModelPickerRouteCompatibleWithBackend(option, backend),
+      option.available !== false && isModelPickerRouteCompatibleWithBackend(option, backend),
   );
   const selectionOwner = modelRouteOwner(selection.modelId, selection.providerId);
   if (!selectionOwner) return undefined;
@@ -375,11 +382,7 @@ export function refreshAccessibleChatModelCatalog(): Promise<void> {
 }
 
 export type OpenCodeCatalogRefreshReason =
-  | 'initial'
-  | 'requested'
-  | 'scheduled'
-  | 'retry'
-  | 'authority-changed';
+  'initial' | 'requested' | 'scheduled' | 'retry' | 'authority-changed';
 
 export interface OpenCodeCatalogEvidence {
   readonly schemaVersion: 1;
@@ -790,9 +793,7 @@ const openCodeRuntimeCatalogSubscribers = new Set<() => void>();
 function readOpenCodeRuntimeAuthority(): Omit<OpenCodeRuntimeCatalogAuthority, 'revision'> {
   const snapshot = harnessRuntimeManager.getSnapshot();
   const generation =
-    snapshot.kind === 'ready'
-      ? (harnessRuntimeManager.getConnection()?.generation ?? null)
-      : null;
+    snapshot.kind === 'ready' ? (harnessRuntimeManager.getConnection()?.generation ?? null) : null;
   return Object.freeze({
     generation,
     ready: snapshot.kind === 'checking' || generation !== null,
@@ -1194,6 +1195,7 @@ export function useAccessibleChatModels() {
   const defaultLocalModel = useAuthStore((s) => s.defaultLocalModel);
   const preferredConnections = useAuthStore((s) => s.preferredConnectionIdByProviderFamily ?? {});
   const ollamaOptions = useOllamaModelOptions();
+  const nativeFoundryOptions = useFoundryModelOptions();
   const [connectionRevision, setConnectionRevision] = useState(0);
   const [foundryRevision, setFoundryRevision] = useState(0);
   const [catalogRevision, setCatalogRevision] = useState(0);
@@ -1331,30 +1333,32 @@ export function useAccessibleChatModels() {
         setCodexCatalogRevision((value) => value + 1);
       }, delay);
     };
-    void loadCodexModels().then((models) => {
-      if (cancelled) return;
-      if (models.length === 0) {
-        scheduleRefresh(CODEX_MODEL_FAILURE_RETRY_MS);
-        return;
-      }
-      const verifiedAt = Date.now();
-      setDiscoveredConnectionModels(
-        'openai-codex',
-        models.map((model) => ({
-          id: model.id,
-          label: model.label,
-          ...(model.variants ? { variants: model.variants } : {}),
-          ...(model.defaultReasoningEffort
-            ? { defaultReasoningEffort: model.defaultReasoningEffort }
-            : {}),
-          source: 'cli_model' as const,
-          lastVerifiedAt: verifiedAt,
-        })),
-      );
-      scheduleRefresh(MODEL_CATALOG_REFRESH_INTERVAL_MS);
-    }).catch(() => {
-      if (!cancelled) scheduleRefresh(CODEX_MODEL_FAILURE_RETRY_MS);
-    });
+    void loadCodexModels()
+      .then((models) => {
+        if (cancelled) return;
+        if (models.length === 0) {
+          scheduleRefresh(CODEX_MODEL_FAILURE_RETRY_MS);
+          return;
+        }
+        const verifiedAt = Date.now();
+        setDiscoveredConnectionModels(
+          'openai-codex',
+          models.map((model) => ({
+            id: model.id,
+            label: model.label,
+            ...(model.variants ? { variants: model.variants } : {}),
+            ...(model.defaultReasoningEffort
+              ? { defaultReasoningEffort: model.defaultReasoningEffort }
+              : {}),
+            source: 'cli_model' as const,
+            lastVerifiedAt: verifiedAt,
+          })),
+        );
+        scheduleRefresh(MODEL_CATALOG_REFRESH_INTERVAL_MS);
+      })
+      .catch(() => {
+        if (!cancelled) scheduleRefresh(CODEX_MODEL_FAILURE_RETRY_MS);
+      });
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
@@ -1457,8 +1461,7 @@ export function useAccessibleChatModels() {
     };
     const codexReadyNow = isLiveCliReady(CODEX_CLI_CONNECTION.id);
     const openCodeAuthority = currentOpenCodeRuntimeCatalogAuthority();
-    const openCodeReadyNow =
-      isLiveCliReady(OPENCODE_CLI_CONNECTION.id) && openCodeAuthority.ready;
+    const openCodeReadyNow = isLiveCliReady(OPENCODE_CLI_CONNECTION.id) && openCodeAuthority.ready;
 
     if (!codexReadyNow) {
       setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, []);
@@ -1483,9 +1486,7 @@ export function useAccessibleChatModels() {
     const codexLoad = codexReadyNow
       ? (codexPersistentAdapter.listModels?.() ?? Promise.resolve([]))
       : Promise.resolve(undefined);
-    const openCodeLoad = openCodeReadyNow
-      ? loadOpenCodeModels(true)
-      : Promise.resolve(undefined);
+    const openCodeLoad = openCodeReadyNow ? loadOpenCodeModels(true) : Promise.resolve(undefined);
     const [codexResult, openCodeResult] = await Promise.allSettled([codexLoad, openCodeLoad]);
 
     const currentCodexReady = isLiveCliReady(CODEX_CLI_CONNECTION.id);
@@ -1733,21 +1734,31 @@ export function useAccessibleChatModels() {
     void foundryRevision;
     const foundryAdapters =
       typeof window === 'undefined' ? [] : listPromotedAdapters(window.localStorage);
-    if (foundryAdapters.length === 0) return connectionGroups;
+    if (foundryAdapters.length === 0 && nativeFoundryOptions.length === 0) return connectionGroups;
     const foundryGroup: ModelPickerGroup = {
       id: 'provider:foundry',
       provider: 'foundry',
       label: getProviderDisplayName('foundry'),
-      options: foundryAdapters.map((record) => ({
-        id: `foundry:${record.projectId}--${record.jobId}`,
-        provider: 'foundry' as ProviderId,
-        modelId: `${record.projectId}--${record.jobId}`,
-        label: record.projectName?.trim()
-          ? record.projectName.trim()
-          : `Local champion · ${record.jobId}`,
-        available: true,
-        catalogSource: 'provider-live' as const,
-      })),
+      options: [
+        ...nativeFoundryOptions.map((model) => ({
+          id: `foundry:${model.id}`,
+          provider: 'foundry' as ProviderId,
+          modelId: model.id,
+          label: model.label,
+          available: true,
+          catalogSource: 'provider-live' as const,
+        })),
+        ...foundryAdapters.map((record) => ({
+          id: `foundry:${record.projectId}--${record.jobId}`,
+          provider: 'foundry' as ProviderId,
+          modelId: `${record.projectId}--${record.jobId}`,
+          label: record.projectName?.trim()
+            ? record.projectName.trim()
+            : `Local champion · ${record.jobId}`,
+          available: true,
+          catalogSource: 'provider-live' as const,
+        })),
+      ],
     };
     return [...connectionGroups, foundryGroup];
   }, [
@@ -1762,6 +1773,7 @@ export function useAccessibleChatModels() {
     openCodeReady,
     preferredConnections,
     foundryRevision,
+    nativeFoundryOptions,
   ]);
 
   const flatOptions = useMemo(

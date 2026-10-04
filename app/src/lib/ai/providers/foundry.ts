@@ -1,5 +1,5 @@
 import type { LLMProvider, LLMRequest, LLMResponse } from '../types';
-import { estimateInputTokens, llmContentToText } from '../types';
+import { llmContentToText } from '../types';
 import { generateFromFoundryArtifact } from '@/features/model-foundry/nativeBridge';
 import { canRoutePromotedAdapter } from '@/features/model-foundry/adapterRegistry';
 import { isTauri } from '@/lib/utils';
@@ -11,6 +11,13 @@ function parseArtifactModelId(model: string): {
   jobId: string;
   nativeArtifact: boolean;
 } {
+  if (model.startsWith('artifact--')) {
+    const jobId = model.slice('artifact--'.length);
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(jobId)) {
+      throw new Error('Choose a verified Foundry adapter before sending.');
+    }
+    return { projectId: 'artifact', jobId, nativeArtifact: true };
+  }
   const match = MODEL_ID.exec(model);
   if (!match) throw new Error('Choose a verified Foundry adapter before sending.');
   return { projectId: match[1]!, jobId: match[2]!, nativeArtifact: match[1] === 'artifact' };
@@ -67,7 +74,7 @@ export const foundryProvider: LLMProvider = {
     return {
       text: response.text,
       usage: {
-        input_tokens: response.inputTokens || estimateInputTokens(prompt),
+        input_tokens: response.inputTokens,
         output_tokens: response.outputTokens,
         cost_usd: 0,
       },

@@ -39,6 +39,20 @@ describe('Foundry compiled prompt transport', () => {
     });
   });
 
+  it.each(['codex', 'opencode'] as const)(
+    'uses Foundry native inference while the chat engine is %s',
+    async (backend) => {
+      const response = await runAgent({
+        agent,
+        backend,
+        messages: [{ role: 'user', content: 'A public local test.' }],
+      });
+      expect(foundryRun).toHaveBeenCalledOnce();
+      expect(response.provider).toBe('foundry');
+      expect(response.model).toBe('artifact--verified');
+    },
+  );
+
   it('sends the compiled system text to the local provider for protected dispatch', async () => {
     await runAgent({
       agent,
@@ -65,7 +79,9 @@ describe('Foundry compiled prompt transport', () => {
   it('keeps the agent prompt for ordinary uncompiled requests', async () => {
     await runAgent({ agent, messages: [{ role: 'user', content: 'Hello' }] });
     expect(foundryRun).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: expect.objectContaining({ system_prompt: 'LEGACY SYSTEM PROMPT' }) }),
+      expect.objectContaining({
+        agent: expect.objectContaining({ system_prompt: 'LEGACY SYSTEM PROMPT' }),
+      }),
     );
   });
 });

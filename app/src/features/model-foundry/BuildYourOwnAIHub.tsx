@@ -463,10 +463,16 @@ export function BuildYourOwnAIHub({
     setTrainingSetupBusy(true);
     setTrainingSetupError(null);
     try {
+      const repairOnly = Boolean(
+        effectiveTrainingWorker?.installed &&
+        !effectiveTrainingWorker.attested &&
+        effectiveTrainingWorker.python,
+      );
       setResolvedTrainingWorker(
         await installLocalTrainingWorker({
-          includeQlora,
-          ...((requestedStorageRoot ?? hardware.recommendedStorageRoot)
+          includeQlora: repairOnly ? false : includeQlora,
+          ...(repairOnly ? { allowDependencyRepair: false } : {}),
+          ...((requestedStorageRoot ?? (repairOnly ? null : hardware.recommendedStorageRoot))
             ? { storageRoot: (requestedStorageRoot ?? hardware.recommendedStorageRoot)! }
             : {}),
         }),
@@ -1126,9 +1132,11 @@ export function BuildYourOwnAIHub({
                 <section className="rounded-lg border border-border p-4">
                   <h4 className="font-semibold">Unlock verified weight training</h4>
                   <p className="mt-1 text-secondary text-muted-foreground">
-                    Install the private, hash-checked worker and test this computer for LoRA, QLoRA,
-                    and Full support. This downloads dependencies; your source files stay local.
-                    Unsupported methods remain blocked from starting, with a reason.
+                    {effectiveTrainingWorker?.installed &&
+                    !effectiveTrainingWorker.attested &&
+                    effectiveTrainingWorker.python
+                      ? 'Repair the verified worker using the existing private Python runtime. No dependency downloads are requested.'
+                      : 'Install the private, hash-checked worker and test this computer for LoRA, QLoRA, and Full support. This downloads dependencies; your source files stay local. Unsupported methods remain blocked from starting, with a reason.'}
                   </p>
                   <Button
                     type="button"
@@ -1139,7 +1147,11 @@ export function BuildYourOwnAIHub({
                   >
                     {trainingSetupBusy
                       ? 'Setting up verified training…'
-                      : 'Set up LoRA, QLoRA, and Full'}
+                      : effectiveTrainingWorker?.installed &&
+                          !effectiveTrainingWorker.attested &&
+                          effectiveTrainingWorker.python
+                        ? 'Repair verified worker'
+                        : 'Set up LoRA, QLoRA, and Full'}
                   </Button>
                   {trainingSetupError && (
                     <p className="mt-2 text-secondary text-amber-300">{trainingSetupError}</p>

@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { useAuthStore } from '@/stores/auth';
-import { syncDiscoveredOllamaModels } from './models';
+import { syncDiscoveredOllamaModels, syncFoundryModelOptions } from './models';
 import {
   buildConnectionPickerGroups,
   buildLiveOpenCodePickerModels,
@@ -58,9 +58,7 @@ const { refreshConnectedProviderModelsMock } = vi.hoisted(() => ({
 }));
 const runtimeManagerHarness = vi.hoisted(() => {
   let snapshot: { kind: string; source?: string; version?: string } = { kind: 'checking' };
-  let connection:
-    | { version: string; source: 'system' | 'managed'; generation: string }
-    | undefined;
+  let connection: { version: string; source: 'system' | 'managed'; generation: string } | undefined;
   const listeners = new Set<() => void>();
   return {
     manager: {
@@ -167,9 +165,16 @@ describe('useAccessibleChatModels', () => {
     useAuthStore.setState({ offlineMode: true });
     const hook = renderHook(() => useAccessibleChatModels());
     ensureExternalConnectionAutoDetection.mockClear();
-    act(() => runtimeManagerHarness.emit({ kind: 'ready' }, {
-      version: '1.18.29', source: 'system', generation: 'offline-ready',
-    }));
+    act(() =>
+      runtimeManagerHarness.emit(
+        { kind: 'ready' },
+        {
+          version: '1.18.29',
+          source: 'system',
+          generation: 'offline-ready',
+        },
+      ),
+    );
     expect(ensureExternalConnectionAutoDetection).not.toHaveBeenCalled();
     hook.unmount();
   });
@@ -1312,7 +1317,9 @@ describe('useAccessibleChatModels', () => {
       expect(getDiscoveredConnectionModels('openai-codex')).toEqual([
         expect.objectContaining({ defaultReasoningEffort: 'low' }),
       ]);
-      const routes = result.current.flatOptions.flatMap((option) => option.alternativeRoutes ?? [option]);
+      const routes = result.current.flatOptions.flatMap(
+        (option) => option.alternativeRoutes ?? [option],
+      );
       expect(routes).toEqual([
         expect.objectContaining({
           connectionId: 'openai-codex',
@@ -1706,6 +1713,46 @@ describe('useAccessibleChatModels foundry adapter injection', () => {
     isConnectionSessionChecked.mockReturnValue(false);
     listPersistentOpenCodeModels.mockReset();
     listPersistentOpenCodeModels.mockResolvedValue([]);
+    syncFoundryModelOptions([]);
+  });
+
+  it('discovers the native N13 artifact and preserves its local route under both chat engines', async () => {
+    window.localStorage.setItem(
+      'vibespace.model-foundry.jobs.v2',
+      JSON.stringify([
+        {
+          id: 'job_0-vjmMedLqAeGX',
+          name: 'N13 smoke test',
+          method: 'full',
+          status: 'completed',
+          artifactVerified: true,
+          artifactPath: 'D:/private/weight-artifact',
+          baseModelId: 'smollm2-135m-instruct',
+        },
+      ]),
+    );
+    syncFoundryModelOptions([{ id: 'artifact--job_0-vjmMedLqAeGX', label: 'N13 smoke test' }]);
+    const { result } = renderHook(() => useAccessibleChatModels());
+    await waitFor(() => {
+      const foundry = result.current.groups.find((group) => group.provider === 'foundry');
+      expect(foundry?.options.map((option) => option.modelId)).toContain(
+        'artifact--job_0-vjmMedLqAeGX',
+      );
+    });
+    for (const backend of ['codex', 'opencode'] as const) {
+      const groups = filterModelPickerGroupsForBackend(result.current.groups, backend);
+      const model = groups.find((group) => group.provider === 'foundry')?.options[0];
+      expect(model?.provider).toBe('foundry');
+      expect(model?.connectionId).toBeUndefined();
+      expect(model?.modelId).toBe('artifact--job_0-vjmMedLqAeGX');
+      expect(
+        findBackendModelPickerRoute(
+          { mode: 'single', providerId: 'foundry', modelId: model?.modelId },
+          groups.flatMap((group) => group.options),
+          backend,
+        ),
+      ).toBeUndefined();
+    }
   });
 
   function seedAdapter(args: { promote: boolean; gate?: 'pass' | 'blocked' }): void {
@@ -1762,7 +1809,6 @@ describe('useAccessibleChatModels foundry adapter injection', () => {
   });
 });
 
-
 describe('linear OpenCode subscription partitioning', () => {
   it('does not rescan unrelated provider routes for each OpenAI subscription model', () => {
     const unrelated = 'other-provider/independent-model';
@@ -1773,14 +1819,18 @@ describe('linear OpenCode subscription partitioning', () => {
         const models = [
           { id: unrelated, label: 'Independent model', source: 'opencode-live' as const },
           ...Array.from({ length: seeds }, (_, index) => ({
-            id: `openai/model-${index}`, label: `Model ${index}`, source: 'opencode-live' as const,
+            id: `openai/model-${index}`,
+            label: `Model ${index}`,
+            source: 'opencode-live' as const,
           })),
         ];
         const groups = buildConnectionPickerGroups({
           connections: [OPENCODE_CLI_CONNECTION],
           modelsByProvider: {},
           modelsByConnection: { [OPENCODE_CLI_CONNECTION.id]: models },
-          stateByConnection: { [OPENCODE_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' } },
+          stateByConnection: {
+            [OPENCODE_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' },
+          },
         });
         expect(groups.flatMap((group) => group.options)).toHaveLength(seeds + 1);
         return canonicalize.mock.calls.filter(([id]) => id === unrelated).length;

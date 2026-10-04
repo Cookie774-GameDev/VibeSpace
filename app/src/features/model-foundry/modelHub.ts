@@ -876,12 +876,19 @@ export function foundryModelOptions(jobs: unknown): Array<{
   id: string;
   label: string;
   subtitle: string;
+  method: TrainingMethod;
 }> {
   if (!Array.isArray(jobs)) return [];
   return (jobs as FoundryJob[])
     .filter(
       (job) =>
-        job.status === 'completed' && job.artifactVerified === true && Boolean(job.artifactPath),
+        job &&
+        job.status === 'completed' &&
+        job.artifactVerified === true &&
+        Boolean(job.artifactPath) &&
+        typeof job.name === 'string' &&
+        Boolean(job.name.trim()) &&
+        ['knowledge', 'lora', 'qlora', 'full'].includes(job.method),
     )
     .filter((job) => NATIVE_ARTIFACT_JOB_ID.test(job.id))
     .map((job) => {
@@ -893,6 +900,7 @@ export function foundryModelOptions(jobs: unknown): Array<{
       return {
         id: nativeArtifactModelId(job.id),
         label: job.name,
+        method: job.method,
         subtitle: `Verified local ${artifactKind} · ${baseModel?.label ?? job.baseModelId}`,
       };
     });

@@ -455,16 +455,21 @@ export async function inspectFoundryArtifact(
 
 type FoundryChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
+interface NativeFoundryChatResponse {
+  artifactId: string; modelName: string; version: number; method: 'lora' | 'qlora' | 'full';
+  text: string; inputTokens: number; outputTokens: number;
+}
+
 async function chatWithArtifact(
   artifactId: string,
   prompt: string,
   maxNewTokens?: number,
   messages?: readonly FoundryChatMessage[],
-): Promise<string> {
+): Promise<NativeFoundryChatResponse> {
   const requestId = 'foundry-bridge-' + crypto.randomUUID();
   // The chat command performs its own completed-job and full artifact checks.
   // A separate prepare call repeats an expensive full weight-manifest scan.
-  const response = await invoke<{ text?: string; content?: string; message?: string }>(
+  const response = await invoke<NativeFoundryChatResponse>(
     'model_foundry_chat',
     {
       requestId,
@@ -473,7 +478,14 @@ async function chatWithArtifact(
       maxOutputTokens: maxNewTokens ?? null,
     },
   );
-  return response.text ?? response.content ?? response.message ?? '';
+  if (!response || response.artifactId !== artifactId || typeof response.modelName !== 'string' ||
+      !response.modelName.trim() || !Number.isInteger(response.version) || response.version < 1 ||
+      !['lora', 'qlora', 'full'].includes(response.method) || typeof response.text !== 'string' ||
+      !response.text.trim() || !Number.isSafeInteger(response.inputTokens) || response.inputTokens < 0 ||
+      !Number.isSafeInteger(response.outputTokens) || response.outputTokens < 1) {
+    throw new Error('Model Foundry returned mismatched or incomplete inference evidence.');
+  }
+  return response;
 }
 
 export async function generateFromFoundryArtifact(args: {
@@ -484,14 +496,20 @@ export async function generateFromFoundryArtifact(args: {
   maxNewTokens?: number;
 }): Promise<FoundryArtifactGeneration> {
   if (!isTauri) throw new Error('Local adapter inference is available only in the desktop app.');
-  const text = await chatWithArtifact(args.jobId, args.prompt, args.maxNewTokens, args.messages);
+  const response = await chatWithArtifact(args.jobId, args.prompt, args.maxNewTokens, args.messages);
   const jobs = await invoke<CurrentFoundryJob[]>('model_foundry_list_jobs');
-  const job = jobs.find((entry) => entry.id === args.jobId);
+  const job = Array.isArray(jobs) ? jobs.find((entry) => entry.id === args.jobId) : undefined;
+  if (!job || job.status !== 'completed' || job.artifactVerified !== true ||
+      job.name !== response.modelName || job.version !== response.version || job.method !== response.method ||
+      typeof job.artifactSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(job.artifactSha256) ||
+      (args.projectId !== 'artifact' && job.projectId !== args.projectId)) {
+    throw new Error('Model Foundry returned mismatched or unverified artifact identity.');
+  }
   return {
-    text,
-    inputTokens: estimateTokens(args.prompt),
-    outputTokens: estimateTokens(text),
-    artifactManifestSha256: job?.artifactSha256 ?? '',
+    text: response.text,
+    inputTokens: response.inputTokens,
+    outputTokens: response.outputTokens,
+    artifactManifestSha256: job.artifactSha256,
   };
 }
 
@@ -520,7 +538,7 @@ export async function evaluateFoundryArtifact(args: {
   }[] = [];
   let passed = 0;
   for (const evaluationCase of cases) {
-    const output = await chatWithArtifact(args.jobId, evaluationCase.prompt, args.maxNewTokens);
+    const output = (await chatWithArtifact(args.jobId, evaluationCase.prompt, args.maxNewTokens)).text;
     const normalizedOutput = output.trim().toLowerCase();
     const normalizedExpected = evaluationCase.expectedCompletion.trim().toLowerCase();
     const score =

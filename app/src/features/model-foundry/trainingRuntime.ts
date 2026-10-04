@@ -113,6 +113,7 @@ interface TrainingRuntimeOptions {
   invoke?: TrainingRuntimeInvoke;
   includeQlora?: boolean;
   storageRoot?: string;
+  allowDependencyRepair?: boolean;
 }
 
 const WEIGHT_METHODS = new Set<WeightTrainingMethod>(['lora', 'qlora', 'full']);
@@ -285,6 +286,9 @@ export async function installLocalTrainingWorker(
   return normalizeStatus(
     (await invoke('model_foundry_install_training_worker', {
       includeQlora: options.includeQlora === true,
+      ...(options.allowDependencyRepair === false
+        ? { allowDependencyRepair: false, dependencyTimeoutSeconds: 240 }
+        : {}),
       ...(options.storageRoot?.trim() ? { storageRoot: options.storageRoot.trim() } : {}),
     })) as NativeTrainingWorkerStatus,
   );

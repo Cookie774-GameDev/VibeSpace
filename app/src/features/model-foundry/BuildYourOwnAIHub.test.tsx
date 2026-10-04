@@ -42,6 +42,41 @@ const verifiedModel: VerifiedTrainingModel = {
 };
 
 describe('BuildYourOwnAIHub', () => {
+  it('offers worker repair using existing Python without dependency installation', async () => {
+    const stale: LocalTrainingWorkerStatus = {
+      installed: true,
+      attested: false,
+      localOnly: true,
+      protocol: 1,
+      sourceSha256: 'a'.repeat(64),
+      python: 'D:/private/python.exe',
+      methods: [],
+      modalities: [],
+      precisions: [],
+      reason: 'The local training worker failed integrity verification.',
+    };
+    installTrainingWorker.mockResolvedValue({
+      ...stale,
+      attested: true,
+      methods: ['full'],
+      reason: null,
+    });
+    render(
+      <BuildYourOwnAIHub
+        open
+        onOpenChange={vi.fn()}
+        trainingWorker={stale}
+        verifiedTrainingModels={[verifiedModel]}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /Repair verified worker/i }));
+    await waitFor(() =>
+      expect(installTrainingWorker).toHaveBeenCalledWith({
+        includeQlora: false,
+        allowDependencyRepair: false,
+      }),
+    );
+  });
   beforeEach(() => {
     window.localStorage.clear();
     tauriInvoke.mockReset();
@@ -692,19 +727,54 @@ describe('BuildYourOwnAIHub', () => {
   });
   it('keeps an active purpose draft when a historical job completes during refresh', async () => {
     let resolveJobs!: (jobs: unknown[]) => void;
-    const pending = new Promise<unknown[]>((resolve) => { resolveJobs = resolve; });
+    const pending = new Promise<unknown[]>((resolve) => {
+      resolveJobs = resolve;
+    });
     const fallback = tauriInvoke.getMockImplementation()!;
-    tauriInvoke.mockImplementation((command: string) => command === 'model_foundry_list_jobs' ? pending : fallback(command));
+    tauriInvoke.mockImplementation((command: string) =>
+      command === 'model_foundry_list_jobs' ? pending : fallback(command),
+    );
     render(<BuildYourOwnAIHub open onOpenChange={vi.fn()} onActivateArtifact={vi.fn()} />);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Purpose' }), { target: { value: 'Preserve this new model purpose' } });
-    await waitFor(() => expect(tauriInvoke.mock.calls.some(([command]) => command === 'model_foundry_list_jobs')).toBe(true), { timeout: 5_000 });
-    await act(async () => { resolveJobs([{ id: 'historical_job', name: 'History model', baseModelId: TRAINABLE_MODELS[0].id, method: 'knowledge', status: 'completed', progress: 100, artifactPath: 'C:/synthetic/history.json', artifactVerified: true, createdAt: '1', updatedAt: '2' }]); await pending; });
-    await waitFor(() => expect(loadJobs(window.localStorage).some((job) => job.id === 'historical_job')).toBe(true));
-    expect(screen.getByRole('textbox', { name: 'Purpose' })).toHaveProperty('value', 'Preserve this new model purpose');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Purpose' }), {
+      target: { value: 'Preserve this new model purpose' },
+    });
+    await waitFor(
+      () =>
+        expect(
+          tauriInvoke.mock.calls.some(([command]) => command === 'model_foundry_list_jobs'),
+        ).toBe(true),
+      { timeout: 5_000 },
+    );
+    await act(async () => {
+      resolveJobs([
+        {
+          id: 'historical_job',
+          name: 'History model',
+          baseModelId: TRAINABLE_MODELS[0].id,
+          method: 'knowledge',
+          status: 'completed',
+          progress: 100,
+          artifactPath: 'C:/synthetic/history.json',
+          artifactVerified: true,
+          createdAt: '1',
+          updatedAt: '2',
+        },
+      ]);
+      await pending;
+    });
+    await waitFor(() =>
+      expect(loadJobs(window.localStorage).some((job) => job.id === 'historical_job')).toBe(true),
+    );
+    expect(screen.getByRole('textbox', { name: 'Purpose' })).toHaveProperty(
+      'value',
+      'Preserve this new model purpose',
+    );
     fireEvent.click(screen.getByRole('button', { name: 'View model library' }));
     expect(screen.getByRole('button', { name: 'Use History model with this agent' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2100));
+    });
     expect(screen.getByText('Step 5 of 6')).toBeTruthy();
   });
 });
