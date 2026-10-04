@@ -1478,8 +1478,8 @@ export function BrowserChatHub({
               </div>
               <div className="flex items-start gap-2 text-[10px] leading-4 text-muted-foreground">
                 <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-copper" />
-                Google and other external sign-in opens in your OS default browser. Its cookies are
-                never copied into VibeSpace.
+                Supported sign-in pages stay inside this provider view. Their cookies remain in
+                VibeSpace’s isolated provider profile.
               </div>
             </div>
           </aside>

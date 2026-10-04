@@ -124,6 +124,73 @@ describe('BrowserProviderSurface', () => {
     await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
   });
 
+  it('parks the native page while an overlapping VibeSpace popover is open', async () => {
+    const runtime = {
+      openManaged: vi.fn(async () => ({
+        kind: 'managed' as const,
+        providerId: 'chatgpt' as const,
+      })),
+      hideAll: vi.fn(async () => undefined),
+      openSystemBrowser: vi.fn(async () => undefined),
+      openExternalNavigation: vi.fn(async () => undefined),
+      openChatGptPlugins: vi.fn(async () => undefined),
+    };
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
+    await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
+
+    const popover = document.createElement('div');
+    popover.setAttribute('role', 'dialog');
+    popover.setAttribute('data-state', 'open');
+    document.body.appendChild(popover);
+    await waitFor(() => expect(runtime.hideAll).toHaveBeenCalledOnce());
+    expect(runtime.openManaged).toHaveBeenCalledOnce();
+
+    popover.remove();
+    await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledTimes(2));
+  });
+
+  it('follows an animated sidebar width change even when the host receives no resize event', async () => {
+    let rect = visibleRect;
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(() => rect);
+    const runtime = {
+      openManaged: vi.fn(async () => ({
+        kind: 'managed' as const,
+        providerId: 'chatgpt' as const,
+      })),
+      hideAll: vi.fn(async () => undefined),
+      openSystemBrowser: vi.fn(async () => undefined),
+      openExternalNavigation: vi.fn(async () => undefined),
+      openChatGptPlugins: vi.fn(async () => undefined),
+    };
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
+    await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
+
+    rect = { ...visibleRect, x: 4, left: 4, width: 916, right: 920 };
+    act(() => useUIStore.setState({ navOpen: !useUIStore.getState().navOpen }));
+    await waitFor(() =>
+      expect(runtime.openManaged).toHaveBeenLastCalledWith(
+        browserChatProvider('chatgpt'),
+        { x: 4, y: 30, width: 916, height: 640 },
+        undefined,
+        ACCOUNT_PROFILE_A,
+        'chat-browser',
+      ),
+    );
+    expect(runtime.openManaged).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps opening status until the matching native page finishes loading', async () => {
     let sendLoad:
       | ((load: {
@@ -385,6 +452,31 @@ describe('BrowserProviderSurface', () => {
       'chat-second',
     );
     expect(runtime.hideAll).toHaveBeenCalledOnce();
+  });
+
+  it('parks the native child when closing Browser Chat selects a normal chat', async () => {
+    const runtime = {
+      openManaged: vi.fn(async () => ({
+        kind: 'managed' as const,
+        providerId: 'chatgpt' as const,
+      })),
+      hideAll: vi.fn(async () => undefined),
+      openSystemBrowser: vi.fn(async () => undefined),
+      openExternalNavigation: vi.fn(async () => undefined),
+      openChatGptPlugins: vi.fn(async () => undefined),
+    };
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
+    await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
+
+    act(() => useUIStore.setState({ activeChatId: 'chat-native' }));
+    await waitFor(() => expect(runtime.hideAll).toHaveBeenCalledOnce());
+    expect(runtime.openManaged).toHaveBeenCalledOnce();
   });
 
   it('re-hides a stale native open that resolves after route teardown', async () => {

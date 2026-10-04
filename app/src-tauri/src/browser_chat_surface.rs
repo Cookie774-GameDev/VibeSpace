@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{
     webview::{NewWindowResponse, PageLoadEvent, Webview, WebviewBuilder},
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, WebviewUrl, WebviewWindow,
 };
 
 use crate::workbench_browser_surface::with_isolated_child_webview2_environment;
@@ -226,11 +226,11 @@ fn relative_bounds(
 fn apply_bounds(provider: &Webview, bounds: &BrowserChatBounds) -> Result<(), String> {
     let (position, size) = relative_bounds(bounds)?;
     provider
-        .set_position(position)
-        .map_err(|error| format!("browser_chat_position_failed:{error}"))?;
-    provider
-        .set_size(size)
-        .map_err(|error| format!("browser_chat_size_failed:{error}"))
+        .set_bounds(Rect {
+            position: position.into(),
+            size: size.into(),
+        })
+        .map_err(|error| format!("browser_chat_bounds_failed:{error}"))
 }
 
 fn is_browser_chat_label(label: &str) -> bool {
@@ -285,22 +285,27 @@ fn deactivate_surface(
     mode: SurfaceDeactivationMode,
 ) -> Result<(), String> {
     if let Some(webview) = app.get_webview(label) {
-        // On Windows/WebView2 a hidden child can retain its last compositor surface
-        // and stay painted over the default VibeSpace page. A tracked account surface
-        // stays alive but parked off-screen at 1px so ordinary route changes do not
-        // reload ChatGPT or trigger its restart/recovery page. Legacy and orphaned
-        // surfaces are still closed so an old renderer cannot overlay the shell.
-        let _ = webview.set_position(LogicalPosition::new(-32_000.0, -32_000.0));
-        let _ = webview.set_size(LogicalSize::new(1.0, 1.0));
+        // A child WebView paints above the shell. Hide it before parking its
+        // compositor bounds so menus and other chats are never covered. The
+        // tracked page stays alive and can be shown again without reloading.
+        let hide_result = webview
+            .hide()
+            .map_err(|error| format!("browser_chat_hide_failed:{error}"));
+        let park_result = webview
+            .set_bounds(Rect {
+                position: LogicalPosition::new(-32_000.0, -32_000.0).into(),
+                size: LogicalSize::new(1.0, 1.0).into(),
+            })
+            .map_err(|error| format!("browser_chat_park_failed:{error}"));
         match mode {
             SurfaceDeactivationMode::PreserveSession => {
-                // Keeping WebView2 composited at an off-screen 1px location avoids
-                // the stale hidden-child frame while retaining the live provider page.
-                let _ = webview.show();
+                hide_result?;
+                park_result?;
             }
             SurfaceDeactivationMode::Destroy => {
-                let _ = webview.hide();
-                let _ = webview.close();
+                webview
+                    .close()
+                    .map_err(|error| format!("browser_chat_close_failed:{error}"))?;
             }
         }
     }
@@ -518,7 +523,9 @@ fn open_provider(
         .lock()
         .map_err(|_| "browser_chat_surface_lock_unavailable".to_string())?;
 
-    hide_surfaces_except(&app, &state, Some(&label))?;
+    if state.visible_label.as_deref() != Some(label.as_str()) {
+        hide_surfaces_except(&app, &state, Some(&label))?;
+    }
 
     let (webview, created) = if let Some(existing) = app.get_webview(&label) {
         apply_bounds(&existing, &bounds)?;

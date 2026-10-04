@@ -23,6 +23,8 @@ interface BrowserProviderSurfaceProps {
 
 const GEOMETRY_EPSILON = 0.5;
 const TRANSITION_FOLLOW_MS = 500;
+const BLOCKING_OVERLAY_SELECTOR =
+  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
 
 function boundsEqual(left: ProviderSurfaceBounds | null, right: ProviderSurfaceBounds): boolean {
   return Boolean(
@@ -42,6 +44,21 @@ function geometryAncestors(host: HTMLElement): Element[] {
     current = current.parentElement;
   }
   return result;
+}
+
+function hasOverlappingOverlay(host: HTMLElement, bounds: DOMRect): boolean {
+  return [...document.querySelectorAll<HTMLElement>(BLOCKING_OVERLAY_SELECTOR)].some((overlay) => {
+    if (host.contains(overlay) || overlay.getAttribute('aria-hidden') === 'true') return false;
+    const rect = overlay.getBoundingClientRect();
+    return (
+      rect.width > 0 &&
+      rect.height > 0 &&
+      rect.left < bounds.right &&
+      rect.right > bounds.left &&
+      rect.top < bounds.bottom &&
+      rect.bottom > bounds.top
+    );
+  });
 }
 
 export function BrowserProviderSurface({
@@ -242,7 +259,9 @@ export function BrowserProviderSurface({
         rect.width >= 1 &&
         rect.height >= 1;
 
-      if (!rendered) {
+      // Child WebViews paint above the main WebView regardless of CSS z-index.
+      // Park the provider while a VibeSpace menu or dialog overlaps its area.
+      if (!rendered || hasOverlappingOverlay(host, rect)) {
         hideManagedSurface();
         return;
       }
@@ -316,8 +335,17 @@ export function BrowserProviderSurface({
         : new MutationObserver(() => scheduleSynchronize());
     mutationObserver?.observe(document.body, {
       attributes: true,
+      childList: true,
       subtree: true,
-      attributeFilter: ['class', 'style', 'hidden', 'data-state'],
+      attributeFilter: ['class', 'style', 'hidden', 'data-state', 'aria-hidden'],
+    });
+
+    // NavPane width is animated by Motion. Its position can change without a
+    // ResizeObserver notification for this host, so follow the shell transition.
+    const unsubscribeShellGeometry = useUIStore.subscribe((next, previous) => {
+      if (next.navOpen !== previous.navOpen || next.inspectorOpen !== previous.inspectorOpen) {
+        startTransitionFollow();
+      }
     });
 
     window.addEventListener('resize', handleGeometryEvent);
@@ -347,6 +375,7 @@ export function BrowserProviderSurface({
       window.cancelAnimationFrame(transitionFrame);
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
+      unsubscribeShellGeometry();
       window.removeEventListener('resize', handleGeometryEvent);
       document.removeEventListener('scroll', handleGeometryEvent, true);
       document.removeEventListener('transitionrun', handleTransitionStart, true);
