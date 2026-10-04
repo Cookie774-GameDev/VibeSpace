@@ -243,7 +243,19 @@ const REQUIRED_CONNECTOR_FILES: &[&str] = &[
 
 // Refuse both symbolic links and Windows junction/reparse destinations before repair.
 fn connector_path_is_unlinked(path: &Path) -> Result<(), String> {
-    for ancestor in path.ancestors() {
+    connector_path_is_unlinked_preflight(path, &mut std::collections::HashSet::new())
+}
+
+fn connector_path_is_unlinked_preflight(
+    path: &Path,
+    checked_ancestors: &mut std::collections::HashSet<PathBuf>,
+) -> Result<(), String> {
+    for (depth, ancestor) in path.ancestors().enumerate() {
+        // During the read-only preflight, inspect each destination and reuse
+        // already checked parents. Every extraction write uses a fresh check.
+        if depth > 0 && checked_ancestors.contains(ancestor) {
+            continue;
+        }
         match fs::symlink_metadata(ancestor) {
             Ok(metadata) => {
                 let mut linked = metadata.file_type().is_symlink();
@@ -255,6 +267,7 @@ fn connector_path_is_unlinked(path: &Path) -> Result<(), String> {
                 if linked {
                     return Err("Connector linked storage is not supported.".into());
                 }
+                checked_ancestors.insert(ancestor.to_owned());
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return Err("Cannot inspect connector storage.".into()),
@@ -270,8 +283,9 @@ fn connector_required_files_match(
     for required in REQUIRED_CONNECTOR_FILES {
         let path = root.join(required);
         connector_path_is_unlinked(&path)?;
+        let index = connector_required_entry_index(archive, required)?;
         let mut entry = archive
-            .by_name(required)
+            .by_index(index)
             .map_err(|_| "Connector package is incomplete.")?;
         if entry.is_dir() || entry.size() == 0 {
             return Err("Connector package is incomplete.".into());
@@ -305,6 +319,17 @@ fn connector_required_files_match(
     Ok(true)
 }
 
+fn connector_required_entry_index(
+    archive: &zip::ZipArchive<fs::File>,
+    required: &str,
+) -> Result<usize, String> {
+    // Windows ZipFile.CreateFromDirectory uses backslashes in entry names.
+    archive
+        .index_for_name(required)
+        .or_else(|| archive.index_for_name(&required.replace('/', "\\")))
+        .ok_or_else(|| "Connector package is incomplete.".into())
+}
+
 fn unpack_verified_bundle(
     archive_path: &Path,
     expected: &str,
@@ -333,6 +358,7 @@ fn unpack_verified_bundle(
     let marker = root.join(".installed");
     connector_path_is_unlinked(&marker)?;
     // Validate every archive destination before changing any installed bytes.
+    let mut checked_ancestors = std::collections::HashSet::new();
     for i in 0..archive.len() {
         let entry = archive
             .by_index(i)
@@ -345,12 +371,13 @@ fn unpack_verified_bundle(
         {
             return Err("Unsafe connector entry.".into());
         }
-        connector_path_is_unlinked(&root.join(relative))?;
+        connector_path_is_unlinked_preflight(&root.join(relative), &mut checked_ancestors)?;
     }
     // Validate the required archive closure even when installation is missing.
     for required in REQUIRED_CONNECTOR_FILES {
+        let index = connector_required_entry_index(&archive, required)?;
         let entry = archive
-            .by_name(required)
+            .by_index(index)
             .map_err(|_| "Connector package is incomplete.")?;
         if entry.is_dir() || entry.size() == 0 {
             return Err("Connector package is incomplete.".into());
@@ -1035,6 +1062,9 @@ mod tests {
     }
     impl BundleFixture {
         fn new(omit: Option<&str>) -> Self {
+            Self::new_with_separator(omit, false)
+        }
+        fn new_with_separator(omit: Option<&str>, windows_names: bool) -> Self {
             use std::io::Write;
             let temp = std::env::temp_dir().join(format!(
                 "vibespace-connector-repair-{}-{}",
@@ -1052,7 +1082,11 @@ mod tests {
                     continue;
                 }
                 zip.start_file(
-                    *required,
+                    if windows_names {
+                        required.replace('/', "\\")
+                    } else {
+                        required.to_string()
+                    },
                     zip::write::SimpleFileOptions::default()
                         .compression_method(zip::CompressionMethod::Stored),
                 )
@@ -1097,6 +1131,19 @@ mod tests {
             fs::read(state.join("setup.json")).unwrap(),
             b"synthetic-saved-setup"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn connector_accepts_windows_created_archive_paths() {
+        let fixture = BundleFixture::new_with_separator(None, true);
+        fixture.install().unwrap();
+        assert_eq!(
+            fs::read(fixture.root.join("runtime/node.exe")).unwrap(),
+            b"synthetic-bundle:runtime/node.exe"
+        );
+        fixture.install().unwrap();
+        assert!(fixture.root.join(".installed").is_file());
     }
 
     #[test]

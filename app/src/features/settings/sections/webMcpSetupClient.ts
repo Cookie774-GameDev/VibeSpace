@@ -90,7 +90,7 @@ export async function setupAction(action: string): Promise<void> {
   try {
     await boundedNative(
       invoke('desktop_connector_setup', { action }),
-      action === 'prepare' || action === 'repair' ? 90000 : 65000,
+      action === 'prepare' || action === 'repair' ? 240000 : 65000,
     );
   } catch (error) {
     throw new Error(

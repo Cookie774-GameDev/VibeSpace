@@ -95,6 +95,7 @@ export function WebMcpSetupPanel({
   const [error, setError] = useState('');
   const [replacingKey, setReplacingKey] = useState(false);
   const latestDraft = useRef(draft);
+  const preparingDraft = useRef<Partial<SetupDraft>>({});
   const latestKey = useRef('');
   const mounted = useRef(true);
   const revision = useRef(0);
@@ -116,7 +117,6 @@ export function WebMcpSetupPanel({
   const prepare = useCallback(
     async (action = 'prepare') => {
       const request = ++preparationRequest.current;
-      const version = revision.current;
       setLoading(true);
       setError('');
       const current = () => mounted.current && preparationRequest.current === request;
@@ -126,14 +126,7 @@ export function WebMcpSetupPanel({
         if (!current()) return;
         applyStatus(value);
         const saved = draftFromStatus(value);
-        latestDraft.current =
-          version === revision.current
-            ? saved
-            : {
-                ...saved,
-                guideTab: latestDraft.current.guideTab,
-                step: latestDraft.current.step,
-              };
+        latestDraft.current = { ...saved, ...preparingDraft.current };
         setDraft(latestDraft.current);
       } catch (cause) {
         if (current())
@@ -184,6 +177,7 @@ export function WebMcpSetupPanel({
         if (key) acknowledgedKeyRevision.current = keyVersion;
         if (mounted.current) {
           if (version === revision.current) {
+            preparingDraft.current = {};
             applyStatus(confirmed);
             setSaveState('saved');
             setError('');
@@ -217,6 +211,7 @@ export function WebMcpSetupPanel({
   const scheduleSave = () => {
     clearTimeout(timer.current);
     setSaveState('pending');
+    if (loading || !statusAvailable || !status?.connectionDetected) return;
     timer.current = setTimeout(() => {
       if (!validateSetupDraft(latestDraft.current, latestKey.current.trim()))
         void save().catch(() => {});
@@ -226,9 +221,19 @@ export function WebMcpSetupPanel({
     revision.current++;
     setError('');
     latestDraft.current = { ...latestDraft.current, ...patch };
+    preparingDraft.current = { ...preparingDraft.current, ...patch };
     setDraft(latestDraft.current);
-    if (!loading) scheduleSave();
+    scheduleSave();
   };
+  useEffect(() => {
+    if (
+      !loading &&
+      statusAvailable &&
+      status?.connectionDetected &&
+      (Object.keys(preparingDraft.current).length > 0 || latestKey.current.trim())
+    )
+      scheduleSave();
+  }, [loading, statusAvailable, status?.connectionDetected]);
   useEffect(() => {
     if (loading) return;
     let pending = false;
@@ -380,8 +385,9 @@ export function WebMcpSetupPanel({
         <div className="webmcp-body" aria-busy={loading}>
           {loading && (
             <p role="status" className="webmcp-hint">
-              <Loader2 className="animate-spin" size={18} /> Preparing your packaged tools… You can
-              watch the tutorials while preparation finishes.
+              <Loader2 className="animate-spin" size={18} /> Preparing your packaged tools…
+              First-time setup can take a few minutes. You can enter your details and watch the
+              tutorials while preparation finishes.
             </p>
           )}
           <div className="webmcp-checks" aria-label="Connection checks">
@@ -476,7 +482,7 @@ export function WebMcpSetupPanel({
                     spellCheck={false}
                     autoComplete="off"
                     value={draft.tunnelId}
-                    disabled={loading || busy || active}
+                    disabled={busy || active}
                     onChange={(event) => updateDraft({ tunnelId: event.target.value })}
                   />
                   {tunnelSaved && (
@@ -514,7 +520,7 @@ export function WebMcpSetupPanel({
                       maxLength={4096}
                       placeholder="Paste restricted runtime key"
                       value={apiKey}
-                      disabled={loading || busy || active}
+                      disabled={busy || active}
                       onChange={(event) => {
                         revision.current++;
                         keyRevision.current++;
@@ -541,7 +547,7 @@ export function WebMcpSetupPanel({
                   value={draft.displayName}
                   maxLength={64}
                   onChange={(event) => updateDraft({ displayName: event.target.value })}
-                  disabled={loading || busy}
+                  disabled={busy}
                 />
                 <span className="webmcp-hint">
                   Only the label you use in ChatGPT. Leave blank to use VibeSpace Desktop.

@@ -18,8 +18,9 @@ it('shows both tutorials and ChatGPT instructions while native preparation is pe
   render(<WebMcpSetupPanel onStatus={vi.fn()} onClose={vi.fn()} />);
   expect(screen.getByLabelText('Tunnel setup tutorial')).toBeTruthy();
   expect((screen.getByRole('textbox', { name: 'Tunnel ID' }) as HTMLInputElement).disabled).toBe(
-    true,
+    false,
   );
+  expect((screen.getByLabelText('Runtime API key') as HTMLInputElement).disabled).toBe(false);
   fireEvent.click(screen.getByRole('tab', { name: 'API key video' }));
   expect(screen.getByLabelText('Runtime API key tutorial')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: /Add to ChatGPT/ }));
@@ -44,7 +45,7 @@ it('ends a stuck preparation with a retryable error and ignores a late reply aft
   const onStatus = vi.fn();
   const view = render(<WebMcpSetupPanel onStatus={onStatus} onClose={vi.fn()} />);
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(90000);
+    await vi.advanceTimersByTimeAsync(240000);
   });
   expect(screen.getByRole('alert').textContent).toMatch(/timed out/i);
   expect(screen.getByRole('button', { name: 'Retry preparation' })).toBeTruthy();
@@ -115,6 +116,40 @@ function backend() {
   });
   return { getStatus: () => status };
 }
+it('accepts credentials during preparation, preserves them and saves only after readiness', async () => {
+  const server = backend();
+  const backendInvoke = invoke.getMockImplementation()!;
+  let release!: () => void;
+  invoke.mockImplementation((command, args) =>
+    args?.action === 'prepare'
+      ? new Promise<void>((resolve) => {
+          release = resolve;
+        })
+      : backendInvoke(command, args),
+  );
+  render(<WebMcpSetupPanel onStatus={vi.fn()} onClose={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('Tunnel ID'), {
+    target: { value: 'tunnel_entered_12345678' },
+  });
+  fireEvent.change(screen.getByLabelText('Runtime API key'), {
+    target: { value: 'synthetic-runtime-key' },
+  });
+  fireEvent.change(screen.getByRole('textbox', { name: 'WebMCP app name' }), {
+    target: { value: 'Entered while preparing' },
+  });
+  expect(invoke).not.toHaveBeenCalledWith(
+    'desktop_connector_setup',
+    expect.objectContaining({ action: 'save' }),
+  );
+  await act(async () => release());
+  await waitFor(() => expect(server.getStatus().tunnelId).toBe('tunnel_entered_12345678'));
+  expect((screen.getByLabelText('Tunnel ID') as HTMLInputElement).value).toBe(
+    'tunnel_entered_12345678',
+  );
+  expect(server.getStatus().displayName).toBe('Entered while preparing');
+  expect(server.getStatus().hasKey).toBe(true);
+  expect(JSON.stringify(localStorage)).not.toContain('synthetic-runtime-key');
+});
 it('saves the tunnel, selected video and name across panel close/reopen', async () => {
   const server = backend();
   render(<DesktopConnectorSetup />);
