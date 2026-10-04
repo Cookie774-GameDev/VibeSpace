@@ -70,7 +70,13 @@ describe('BrowserProviderSurface', () => {
       }),
     };
     const provider = browserChatProvider('chatgpt');
-    const rendered = render(<BrowserProviderSurface provider={provider} accountProfileKey={ACCOUNT_PROFILE_A} runtime={runtime} />);
+    const rendered = render(
+      <BrowserProviderSurface
+        provider={provider}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
 
     expect(screen.getByLabelText('ChatGPT provider surface')).toBeTruthy();
     await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
@@ -90,6 +96,70 @@ describe('BrowserProviderSurface', () => {
     expect(unsubscribeHostGeometry).toHaveBeenCalledOnce();
   });
 
+  it('uses the entire host area for the full-page provider view', async () => {
+    const runtime = {
+      openManaged: vi.fn(async () => ({
+        kind: 'managed' as const,
+        providerId: 'chatgpt' as const,
+      })),
+      hideAll: vi.fn(async () => undefined),
+      openSystemBrowser: vi.fn(async () => undefined),
+      openExternalNavigation: vi.fn(async () => undefined),
+      openChatGptPlugins: vi.fn(async () => undefined),
+    };
+
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+        fullPage
+      />,
+    );
+
+    const host = screen.getByLabelText('ChatGPT provider surface');
+    expect(host.className).toContain('min-h-0');
+    expect(host.className).not.toContain('rounded-xl');
+    await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
+  });
+
+  it('mounts a validated provider frame in a plain browser without external actions', async () => {
+    let geometryListener: (() => void) | undefined;
+    const runtime = {
+      openManaged: vi.fn(async () => ({
+        kind: 'embedded_frame' as const,
+        providerId: 'chatgpt' as const,
+        url: 'https://chatgpt.com/',
+      })),
+      hideAll: vi.fn(async () => undefined),
+      openSystemBrowser: vi.fn(async () => undefined),
+      openExternalNavigation: vi.fn(async () => undefined),
+      openChatGptPlugins: vi.fn(async () => undefined),
+      subscribeHostGeometry: vi.fn(async (listener: () => void) => {
+        geometryListener = listener;
+        return () => undefined;
+      }),
+    };
+
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+        fullPage
+      />,
+    );
+
+    const frame = await screen.findByTitle('ChatGPT');
+    expect(frame.tagName).toBe('IFRAME');
+    expect(frame.getAttribute('src')).toBe('https://chatgpt.com/');
+    expect(screen.queryByRole('button', { name: /Open ChatGPT/i })).toBeNull();
+    await waitFor(() => expect(geometryListener).toBeTypeOf('function'));
+    act(() => geometryListener?.());
+    await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
+    expect(runtime.openSystemBrowser).not.toHaveBeenCalled();
+  });
+
   it('hides immediately when the Browser Chat host is not rendered', async () => {
     vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(hiddenRect);
     const runtime = {
@@ -103,7 +173,13 @@ describe('BrowserProviderSurface', () => {
       openChatGptPlugins: vi.fn(async () => undefined),
     };
 
-    render(<BrowserProviderSurface provider={browserChatProvider('chatgpt')} accountProfileKey={ACCOUNT_PROFILE_A} runtime={runtime} />);
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
 
     await waitFor(() => expect(runtime.hideAll).toHaveBeenCalledOnce());
     expect(runtime.openManaged).not.toHaveBeenCalled();
@@ -121,7 +197,13 @@ describe('BrowserProviderSurface', () => {
       openChatGptPlugins: vi.fn(async () => undefined),
     };
 
-    render(<BrowserProviderSurface provider={browserChatProvider('chatgpt')} accountProfileKey={ACCOUNT_PROFILE_A} runtime={runtime} />);
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
     await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
 
     act(() => useUIStore.setState({ route: 'files' }));
@@ -185,7 +267,13 @@ describe('BrowserProviderSurface', () => {
       openChatGptPlugins: vi.fn(async () => undefined),
     };
 
-    render(<BrowserProviderSurface provider={browserChatProvider('chatgpt')} accountProfileKey={ACCOUNT_PROFILE_A} runtime={runtime} />);
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
     await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
 
     act(() => useUIStore.setState({ route: 'terminal' }));
@@ -222,7 +310,13 @@ describe('BrowserProviderSurface', () => {
       }),
     };
 
-    render(<BrowserProviderSurface provider={browserChatProvider('chatgpt')} accountProfileKey={ACCOUNT_PROFILE_A} runtime={runtime} />);
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
     await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
 
     hostGeometryListener?.();
@@ -237,7 +331,7 @@ describe('BrowserProviderSurface', () => {
     expect(runtime.openManaged).toHaveBeenCalledTimes(2);
   });
 
-  it('shows a truthful fallback action when managed opening fails', async () => {
+  it('shows an in-app error without launching an external browser when opening fails', async () => {
     const runtime = {
       openManaged: vi.fn(async () => {
         throw new Error('managed unavailable');
@@ -247,9 +341,16 @@ describe('BrowserProviderSurface', () => {
       openExternalNavigation: vi.fn(async () => undefined),
       openChatGptPlugins: vi.fn(async () => undefined),
     };
-    render(<BrowserProviderSurface provider={browserChatProvider('claude')} accountProfileKey={ACCOUNT_PROFILE_A} runtime={runtime} />);
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('claude')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
 
-    expect(await screen.findByText(/managed provider surface is unavailable/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: /open claude in system browser/i })).toBeTruthy();
+    expect(await screen.findByText(/provider surface is unavailable/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /open claude in system browser/i })).toBeNull();
+    expect(runtime.openSystemBrowser).not.toHaveBeenCalled();
   });
 });

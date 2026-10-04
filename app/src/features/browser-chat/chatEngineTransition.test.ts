@@ -62,25 +62,21 @@ describe('chat engine transition', () => {
     expect(deps.setEngine).toHaveBeenCalledWith('browser', 'chat-empty');
   });
 
-  it('opens the existing ChatGPT Browser Chat instead of creating another', async () => {
-    const activateChat = vi.fn();
+  it('creates another Browser Chat when a populated chat selects Browser Chat', async () => {
     const deps = dependencies({
       countMessages: vi.fn(async () => 2),
-      findExistingBrowserChat: vi.fn(() => 'chat-chatgpt'),
-      activateChat,
     });
     const transition = createChatEngineTransition(deps);
 
     await expect(
       transition({ chatId: 'chat-native-history', targetEngine: 'browser' }),
     ).resolves.toEqual({
-      status: 'reused',
-      chatId: 'chat-chatgpt',
+      status: 'created',
+      chatId: 'new-chat',
       engine: 'browser',
     });
-    expect(activateChat).toHaveBeenCalledWith('chat-chatgpt');
-    expect(deps.createChat).not.toHaveBeenCalled();
-    expect(deps.setEngine).not.toHaveBeenCalled();
+    expect(deps.createChat).toHaveBeenCalledOnce();
+    expect(deps.setEngine).toHaveBeenCalledWith('browser', 'new-chat');
   });
 
   it('opens a new chat in the selected engine when the current chat has messages', async () => {

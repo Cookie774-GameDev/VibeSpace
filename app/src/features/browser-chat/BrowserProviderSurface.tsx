@@ -1,7 +1,6 @@
 import * as React from 'react';
-import { ExternalLink, ShieldCheck } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
 import { useUIStore } from '@/stores/ui';
 import { resolveChatEngine, useBrowserChatStore } from './browserChatStore';
 import type { BrowserChatProviderDefinition } from './providerRegistry';
@@ -19,21 +18,19 @@ interface BrowserProviderSurfaceProps {
   readonly navigationUrl?: string;
   readonly runtime?: ProviderSurfaceController;
   readonly onNavigation?: (navigation: ProviderSurfaceNavigation) => void;
+  readonly fullPage?: boolean;
 }
 
 const GEOMETRY_EPSILON = 0.5;
 const TRANSITION_FOLLOW_MS = 500;
 
-function boundsEqual(
-  left: ProviderSurfaceBounds | null,
-  right: ProviderSurfaceBounds,
-): boolean {
+function boundsEqual(left: ProviderSurfaceBounds | null, right: ProviderSurfaceBounds): boolean {
   return Boolean(
     left &&
-      Math.abs(left.x - right.x) <= GEOMETRY_EPSILON &&
-      Math.abs(left.y - right.y) <= GEOMETRY_EPSILON &&
-      Math.abs(left.width - right.width) <= GEOMETRY_EPSILON &&
-      Math.abs(left.height - right.height) <= GEOMETRY_EPSILON,
+    Math.abs(left.x - right.x) <= GEOMETRY_EPSILON &&
+    Math.abs(left.y - right.y) <= GEOMETRY_EPSILON &&
+    Math.abs(left.width - right.width) <= GEOMETRY_EPSILON &&
+    Math.abs(left.height - right.height) <= GEOMETRY_EPSILON,
   );
 }
 
@@ -53,10 +50,12 @@ export function BrowserProviderSurface({
   navigationUrl,
   runtime = browserChatSurface,
   onNavigation,
+  fullPage = false,
 }: BrowserProviderSurfaceProps) {
   const hostRef = React.useRef<HTMLDivElement>(null);
   const hiddenRef = React.useRef(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [embeddedUrl, setEmbeddedUrl] = React.useState<string | null>(null);
   const route = useUIStore((state) => state.route);
   const activeChatId = useUIStore((state) => state.activeChatId);
   const engine = useBrowserChatStore((state) => resolveChatEngine(state, activeChatId));
@@ -157,8 +156,9 @@ export function BrowserProviderSurface({
               break;
             }
             setError(null);
+            setEmbeddedUrl(result.kind === 'embedded_frame' ? result.url : null);
             setProviderRuntime(provider.id, {
-              pageStatus: result.kind === 'managed' ? 'ready' : 'system_browser',
+              pageStatus: result.kind === 'managed' ? 'ready' : 'opening',
               toolBridgeStatus: provider.toolBridgeStatus,
             });
           } catch (cause) {
@@ -166,6 +166,7 @@ export function BrowserProviderSurface({
               const message =
                 cause instanceof Error ? cause.message : 'Managed provider surface failed.';
               setError(message);
+              setEmbeddedUrl(null);
               setProviderRuntime(provider.id, {
                 pageStatus: 'error',
                 toolBridgeStatus: provider.toolBridgeStatus,
@@ -320,33 +321,38 @@ export function BrowserProviderSurface({
     <div
       ref={hostRef}
       aria-label={`${provider.label} provider surface`}
-      className="relative min-h-[22rem] flex-1 overflow-hidden rounded-xl border border-border/80 bg-background"
+      className={
+        fullPage
+          ? 'relative min-h-0 flex-1 overflow-hidden bg-background'
+          : 'relative min-h-[22rem] flex-1 overflow-hidden rounded-xl border border-border/80 bg-background'
+      }
     >
-      <div className="absolute inset-0 grid place-items-center p-8 text-center">
-        <div className="max-w-md space-y-3">
-          <ShieldCheck className="mx-auto h-8 w-8 text-accent-copper" aria-hidden />
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">
-              {error ? 'Managed provider surface is unavailable' : `Opening ${provider.label}`}
-            </h3>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              {error
-                ? `${error} Your provider account is untouched; use the supported system-browser fallback.`
-                : 'The provider owns this page and sign-in. VibeSpace does not read passwords, cookies, prompts, or replies.'}
-            </p>
+      {surfaceVisible && embeddedUrl && !error ? (
+        <iframe
+          key={`${provider.id}:${accountProfileKey}`}
+          title={provider.label}
+          src={embeddedUrl}
+          className="absolute inset-0 h-full w-full border-0"
+          referrerPolicy="no-referrer"
+          sandbox="allow-forms allow-same-origin allow-scripts"
+        />
+      ) : (
+        <div className="absolute inset-0 grid place-items-center p-8 text-center">
+          <div className="max-w-md space-y-3">
+            <ShieldCheck className="mx-auto h-8 w-8 text-accent-copper" aria-hidden />
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">
+                {error ? 'Provider surface is unavailable' : `Opening ${provider.label}`}
+              </h3>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {error
+                  ? `${error} The provider page could not be opened inside VibeSpace.`
+                  : 'The provider owns this page and sign-in. VibeSpace does not read passwords, cookies, prompts, or replies.'}
+              </p>
+            </div>
           </div>
-          {error ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void runtime.openSystemBrowser(provider)}
-            >
-              <ExternalLink className="mr-2 h-4 w-4" />
-              Open {provider.label} in system browser
-            </Button>
-          ) : null}
         </div>
-      </div>
+      )}
     </div>
   );
 }

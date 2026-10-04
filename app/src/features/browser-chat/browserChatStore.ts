@@ -102,20 +102,13 @@ export function findExclusiveBrowserChatId(
   return null;
 }
 
-function exclusiveBrowserPreferences(
+function updatedBrowserPreferences(
   current: Record<string, BrowserChatPreference>,
   chatId: string,
   engine: VibeSpaceChatEngine,
   providerId: BrowserChatProviderId,
 ): Record<string, BrowserChatPreference> {
   const chatPreferences = { ...current };
-  if (engine === 'browser') {
-    for (const [id, preference] of Object.entries(chatPreferences)) {
-      if (id !== chatId && preference.engine === 'browser' && preference.providerId === providerId) {
-        chatPreferences[id] = { ...preference, engine: 'native' };
-      }
-    }
-  }
   chatPreferences[chatId] = { engine, providerId };
   return chatPreferences;
 }
@@ -266,7 +259,7 @@ export function createBrowserChatStore(storage: BrowserChatStorage = localStorag
             if (!validChatId(chatId)) return { engine };
             const providerId = current.chatPreferences[chatId]?.providerId ?? current.providerId;
             return {
-              chatPreferences: exclusiveBrowserPreferences(
+              chatPreferences: updatedBrowserPreferences(
                 current.chatPreferences,
                 chatId,
                 engine,

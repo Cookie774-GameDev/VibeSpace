@@ -122,9 +122,7 @@ describe('Browser Chat managed provider surface', () => {
       undefined,
       ACCOUNT_PROFILE_A,
     );
-    const chatgpt = fake.windows.get(
-      surfaceKey('browser-chat-chatgpt', ACCOUNT_PROFILE_A),
-    );
+    const chatgpt = fake.windows.get(surfaceKey('browser-chat-chatgpt', ACCOUNT_PROFILE_A));
 
     await controller.openManaged(
       browserChatProvider('claude'),
@@ -132,9 +130,7 @@ describe('Browser Chat managed provider surface', () => {
       undefined,
       ACCOUNT_PROFILE_A,
     );
-    const claude = fake.windows.get(
-      surfaceKey('browser-chat-claude', ACCOUNT_PROFILE_A),
-    );
+    const claude = fake.windows.get(surfaceKey('browser-chat-claude', ACCOUNT_PROFILE_A));
 
     expect(chatgpt?.hide).toHaveBeenCalledOnce();
     expect(claude?.show).toHaveBeenCalledOnce();
@@ -152,18 +148,8 @@ describe('Browser Chat managed provider surface', () => {
     const bounds = { x: 20, y: 30, width: 800, height: 600 };
 
     const [first, second] = await Promise.all([
-      controller.openManaged(
-        browserChatProvider('chatgpt'),
-        bounds,
-        undefined,
-      ACCOUNT_PROFILE_A,
-      ),
-      controller.openManaged(
-        browserChatProvider('chatgpt'),
-        bounds,
-        undefined,
-      ACCOUNT_PROFILE_A,
-      ),
+      controller.openManaged(browserChatProvider('chatgpt'), bounds, undefined, ACCOUNT_PROFILE_A),
+      controller.openManaged(browserChatProvider('chatgpt'), bounds, undefined, ACCOUNT_PROFILE_A),
     ]);
 
     expect(first).toEqual({ kind: 'managed', providerId: 'chatgpt' });
@@ -204,7 +190,7 @@ describe('Browser Chat managed provider surface', () => {
     ).toHaveBeenCalled();
   });
 
-  it('uses a truthful system-browser fallback outside the desktop shell', async () => {
+  it('returns an in-app frame URL outside the desktop shell without launching a tab', async () => {
     const fake = platform(false);
     const controller = createProviderSurfaceController(fake.implementation);
 
@@ -220,8 +206,32 @@ describe('Browser Chat managed provider surface', () => {
       ACCOUNT_PROFILE_A,
     );
 
-    expect(result).toEqual({ kind: 'system_browser', providerId: 'gemini' });
+    expect(result).toEqual({
+      kind: 'embedded_frame',
+      providerId: 'gemini',
+      url: 'https://gemini.google.com/',
+    });
     expect(fake.created).toHaveLength(0);
+    expect(fake.opened).toEqual([]);
+
+    await controller.openManaged(
+      browserChatProvider('gemini'),
+      { x: 1, y: 1, width: 500, height: 300 },
+      undefined,
+      ACCOUNT_PROFILE_A,
+    );
+    expect(fake.opened).toEqual([]);
+
+    await controller.hideAll();
+    await controller.openManaged(
+      browserChatProvider('gemini'),
+      { x: 1, y: 1, width: 500, height: 300 },
+      undefined,
+      ACCOUNT_PROFILE_A,
+    );
+    expect(fake.opened).toEqual([]);
+
+    await controller.openSystemBrowser(browserChatProvider('gemini'));
     expect(fake.opened).toEqual(['https://gemini.google.com/']);
   });
 
@@ -257,7 +267,7 @@ describe('Browser Chat managed provider surface', () => {
           height: 400,
         },
         undefined,
-      ACCOUNT_PROFILE_A,
+        ACCOUNT_PROFILE_A,
       ),
     ).rejects.toThrow(/browser chat bounds/i);
     await expect(

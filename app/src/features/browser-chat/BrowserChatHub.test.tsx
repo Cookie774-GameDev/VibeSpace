@@ -203,8 +203,24 @@ describe('BrowserChatHub', () => {
         initialProjects={initialProjects}
         initialOutputFeed={initialOutputFeed}
         createChat={createChat}
+        fullPage={false}
       />,
     );
+
+  it('shows only the embedded ChatGPT surface in the default full-page view', () => {
+    render(
+      <BrowserChatHub
+        chatId="chat-browser"
+        database={testDatabase}
+        bindingScope={{ accountId: 'account-1', workspaceId: 'workspace-1' }}
+      />,
+    );
+
+    expect(screen.getByLabelText('ChatGPT provider surface')).toBeTruthy();
+    expect(screen.queryByLabelText('Browser Chat providers')).toBeNull();
+    expect(screen.queryByLabelText('Browser Chat connection inspector')).toBeNull();
+    expect(screen.queryByText(/Context map/i)).toBeNull();
+  });
 
   it('shows the three provider-owned surfaces with separate page and bridge status', () => {
     renderHub();
@@ -214,7 +230,7 @@ describe('BrowserChatHub', () => {
     expect(screen.getByRole('tab', { name: /Gemini/i })).toBeTruthy();
     expect(screen.getByText(/page status/i)).toBeTruthy();
     expect(screen.getByText(/tool bridge/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: /open chatgpt/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /open chatgpt/i })).toBeNull();
     expect(screen.queryByText(/sign in or sign up/i)).toBeNull();
     expect(screen.getByText(/not auto-connected/i)).toBeTruthy();
     expect(screen.getByText(/provider subscription and limits still apply/i)).toBeTruthy();
@@ -740,10 +756,7 @@ describe('BrowserChatHub', () => {
     expect(screen.getByLabelText('ChatGPT provider surface')).toBe(providerSurface);
   });
 
-  it('shows per-session evidence and opens a validated saved conversation from its action menu', async () => {
-    const openExternalNavigation = vi
-      .spyOn(browserChatSurface, 'openExternalNavigation')
-      .mockResolvedValue();
+  it('shows per-session evidence and keeps saved conversation actions in VibeSpace', async () => {
     publishBrowserChatToolCatalog({
       accountId: 'account-1',
       toolNames: ['fs.read'],
@@ -810,14 +823,8 @@ describe('BrowserChatHub', () => {
     expect(screen.getByText(/Active · page ready · fs\.read running/i)).toBeTruthy();
     expect(providerSurfaceHarness.navigationUrl).toBe('https://chatgpt.com/c/conversation-1');
     fireEvent.click(screen.getByRole('button', { name: `Actions for ${title}` }));
-    fireEvent.click(screen.getByRole('menuitem', { name: `Open ${title} externally` }));
-
-    await waitFor(() =>
-      expect(openExternalNavigation).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'chatgpt' }),
-        'https://chatgpt.com/c/conversation-1',
-      ),
-    );
+    expect(screen.queryByRole('menuitem', { name: /externally/i })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: `Remove ${title}` })).toBeTruthy();
   });
 
   it('selects an existing saved row when provider navigation reaches its conversation', async () => {

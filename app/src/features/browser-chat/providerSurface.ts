@@ -9,10 +9,7 @@ import {
   type BrowserChatProviderId,
 } from './providerRegistry';
 import { CHATGPT_PLUGINS_URL } from './mcpConnection';
-import {
-  normalizeProviderNavigation,
-  type ProviderNavigationKind,
-} from './providerNavigation';
+import { normalizeProviderNavigation, type ProviderNavigationKind } from './providerNavigation';
 import {
   isBrowserChatAccountProfileKey,
   type BrowserChatAccountProfileKey,
@@ -59,9 +56,7 @@ export function normalizeProviderSurfaceNavigation(
     url: navigation.normalizedUrl,
     timestamp,
     kind: navigation.kind,
-    ...(navigation.conversationKey
-      ? { providerConversationKey: navigation.conversationKey }
-      : {}),
+    ...(navigation.conversationKey ? { providerConversationKey: navigation.conversationKey } : {}),
     ...(navigation.projectKey ? { providerProjectKey: navigation.projectKey } : {}),
   };
 }
@@ -107,7 +102,7 @@ export interface ProviderSurfaceController {
     accountProfileKey?: BrowserChatAccountProfileKey,
   ): Promise<
     | { kind: 'managed'; providerId: BrowserChatProviderId }
-    | { kind: 'system_browser'; providerId: BrowserChatProviderId }
+    | { kind: 'embedded_frame'; providerId: BrowserChatProviderId; url: string }
   >;
   openSystemBrowser(provider: BrowserChatProviderDefinition): Promise<void>;
   openExternalNavigation(
@@ -127,9 +122,7 @@ export type NativeBrowserChatInvoke = (
   args?: Record<string, unknown>,
 ) => Promise<unknown>;
 
-function requireAccountProfileKey(
-  profileKey: unknown,
-): BrowserChatAccountProfileKey {
+function requireAccountProfileKey(profileKey: unknown): BrowserChatAccountProfileKey {
   if (!isBrowserChatAccountProfileKey(profileKey)) {
     throw new Error('Browser Chat account profile key is unavailable.');
   }
@@ -216,7 +209,7 @@ export function createProviderSurfaceController(
   let operationTail: Promise<void> = Promise.resolve();
   let visibilityGeneration = 0;
 
-  const serialized = <T,>(operation: () => Promise<T>): Promise<T> => {
+  const serialized = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = operationTail.then(operation, operation);
     operationTail = result.then(
       () => undefined,
@@ -257,8 +250,7 @@ export function createProviderSurfaceController(
         }
         const targetUrl = navigation.normalizedUrl;
         if (!platform.desktop) {
-          await platform.openExternal(targetUrl);
-          return { kind: 'system_browser' as const, providerId: provider.id };
+          return { kind: 'embedded_frame' as const, providerId: provider.id, url: targetUrl };
         }
 
         const relative = {
@@ -482,12 +474,7 @@ async function controller(): Promise<ProviderSurfaceController> {
 
 export const browserChatSurface: ProviderSurfaceController = {
   async openManaged(provider, bounds, navigationUrl, accountProfileKey) {
-    return (await controller()).openManaged(
-      provider,
-      bounds,
-      navigationUrl,
-      accountProfileKey,
-    );
+    return (await controller()).openManaged(provider, bounds, navigationUrl, accountProfileKey);
   },
   async openSystemBrowser(provider) {
     return (await controller()).openSystemBrowser(provider);

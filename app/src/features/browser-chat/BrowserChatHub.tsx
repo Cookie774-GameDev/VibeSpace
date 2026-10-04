@@ -47,7 +47,6 @@ import { BrowserProviderSurface } from './BrowserProviderSurface';
 import type { ProviderSurfaceNavigation } from './providerSurface';
 import {
   browserChatStore,
-  findExclusiveBrowserChatId,
   migrateLegacyBrowserChatPreferences,
   useBrowserChatStore,
 } from './browserChatStore';
@@ -157,6 +156,7 @@ type BrowserChatHubProps = {
   readonly initialProjects?: ReadonlyArray<Project>;
   readonly initialOutputFeed?: BrowserChatOutputFeed;
   readonly createChat?: typeof ensureActiveChat;
+  readonly fullPage?: boolean;
 };
 
 export function BrowserChatHub({
@@ -168,6 +168,7 @@ export function BrowserChatHub({
   initialProjects,
   initialOutputFeed,
   createChat = ensureActiveChat,
+  fullPage = true,
 }: BrowserChatHubProps) {
   const providerId = useBrowserChatStore(
     (state) => state.chatPreferences[chatId ?? '']?.providerId ?? state.providerId,
@@ -268,21 +269,26 @@ export function BrowserChatHub({
   >(() => [...(initialSessions ?? [])]);
   React.useEffect(() => {
     if (initialSessions || !accountId || !bindingWorkspaceId || !accountProfileKey) return;
-    void migrateLegacyBrowserChatPreferences({
-      database,
-      accountId,
-      workspaceId: bindingWorkspaceId,
-      accountProfileKey,
-      clearCollapsedChatPreferences: clearLegacyChatPreferences,
-      preferences: legacyChatPreferences,
-    }).catch((cause) => {
-      toast.error(
-        'Browser Chat migration incomplete',
-        cause instanceof Error
-          ? cause.message
-          : 'Some legacy Browser Chat preferences could not be migrated.',
-      );
-    });
+    // Mode selection can update the store inside a Dexie chats transaction.
+    // Start the bindings migration after that transaction leaves Dexie's zone.
+    const timer = window.setTimeout(() => {
+      void migrateLegacyBrowserChatPreferences({
+        database,
+        accountId,
+        workspaceId: bindingWorkspaceId,
+        accountProfileKey,
+        clearCollapsedChatPreferences: clearLegacyChatPreferences,
+        preferences: legacyChatPreferences,
+      }).catch((cause) => {
+        toast.error(
+          'Browser Chat migration incomplete',
+          cause instanceof Error
+            ? cause.message
+            : 'Some legacy Browser Chat preferences could not be migrated.',
+        );
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [
     accountId,
     accountProfileKey,
@@ -636,13 +642,6 @@ export function BrowserChatHub({
   };
 
   const createBrowserChat = async () => {
-    const existingId = findExclusiveBrowserChatId(browserChatStore.getState(), provider.id);
-    if (existingId) {
-      setProvider(provider.id, existingId);
-      setEngine('browser', existingId);
-      setActiveChat(existingId as ChatId);
-      return;
-    }
     const nextId = await createChat({
       forceNew: true,
       title: `${provider.label} browser chat`,
@@ -674,28 +673,6 @@ export function BrowserChatHub({
       !accountProfileKey ||
       savingProviderNavigation
     ) {
-      return;
-    }
-    const existingId = findExclusiveBrowserChatId(
-      browserChatStore.getState(),
-      navigation.providerId,
-    );
-    if (existingId) {
-      const existingSession = sessions.find((session) => session.binding.chatId === existingId);
-      if (existingSession) {
-        openBrowserSession(existingSession.binding);
-        void updateBrowserSession(existingSession.binding, {
-          lastOpenedAt: navigation.timestamp,
-          resumeUrl: navigation.url,
-          providerConversationKey: navigation.providerConversationKey,
-          bindingState: 'bound',
-        });
-      } else {
-        setProvider(navigation.providerId, existingId);
-        setEngine('browser', existingId);
-        setActiveChat(existingId as ChatId);
-      }
-      setPendingProviderNavigation(null);
       return;
     }
     setSavingProviderNavigation(true);
@@ -827,20 +804,6 @@ export function BrowserChatHub({
       toast.error(
         'Browser Chat removal failed',
         cause instanceof Error ? cause.message : 'The local binding could not be removed.',
-      );
-    }
-  };
-
-  const openBrowserSessionExternally = async (binding: BrowserChatBindingRow) => {
-    const providerDefinition = browserChatProvider(binding.provider);
-    const location = binding.resumeUrl ?? providerDefinition.homeUrl;
-    try {
-      await browserChatSurface.openExternalNavigation(providerDefinition, location);
-      setActionMenuBindingId(null);
-    } catch (cause) {
-      toast.error(
-        'Provider session could not be opened',
-        cause instanceof Error ? cause.message : 'The saved provider location is unavailable.',
       );
     }
   };
@@ -1220,15 +1183,6 @@ export function BrowserChatHub({
                 <button
                   type="button"
                   role="menuitem"
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[10px] text-foreground hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-copper/50"
-                  onClick={() => void openBrowserSessionExternally(binding)}
-                >
-                  <ExternalLink className="h-3 w-3" aria-hidden />
-                  Open {binding.localTitle} externally
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
                   className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[10px] text-destructive hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-copper/50"
                   onClick={() => {
                     setActionMenuBindingId(null);
@@ -1245,6 +1199,31 @@ export function BrowserChatHub({
       </div>
     );
   };
+
+  if (fullPage) {
+    return (
+      <section
+        aria-label="Browser Chat"
+        data-vibespace-page="browser-chat"
+        className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
+      >
+        {accountProfileKey ? (
+          <BrowserProviderSurface
+            key={`${provider.id}:${accountProfileKey}`}
+            provider={provider}
+            accountProfileKey={accountProfileKey}
+            navigationUrl={activeBinding?.resumeUrl ?? provider.homeUrl}
+            onNavigation={captureProviderNavigation}
+            fullPage
+          />
+        ) : (
+          <div role="status" className="grid h-full place-items-center p-8 text-center text-sm">
+            Select a valid VibeSpace account before opening ChatGPT.
+          </div>
+        )}
+      </section>
+    );
+  }
 
   return (
     <section
@@ -1385,15 +1364,6 @@ export function BrowserChatHub({
           <Badge variant={pageStatus === 'ready' ? 'success' : 'secondary'}>
             Page · {statusLabel(pageStatus)}
           </Badge>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => void browserChatSurface.openSystemBrowser(provider)}
-          >
-            <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
-            {provider.id === 'chatgpt' ? 'Open ChatGPT' : 'System browser'}
-          </Button>
         </div>
       </header>
 

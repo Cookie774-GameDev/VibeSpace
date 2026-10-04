@@ -76,14 +76,14 @@ describe('Browser Chat engine state', () => {
     expect(storage.getItem(BROWSER_CHAT_STORAGE_KEY)).not.toContain('collapsed-chat');
   });
 
-  it('keeps only one ChatGPT Browser Chat open and reuses that chat', () => {
+  it('preserves multiple ChatGPT Browser Chat selections', () => {
     const store = createBrowserChatStore(memoryStorage());
     store.getState().setEngine('browser', 'chat-chatgpt');
     store.getState().setProvider('chatgpt', 'chat-chatgpt');
     store.getState().setEngine('browser', 'chat-second');
 
-    expect(findExclusiveBrowserChatId(store.getState(), 'chatgpt')).toBe('chat-second');
-    expect(resolveChatEngine(store.getState(), 'chat-chatgpt')).toBe('native');
+    expect(findExclusiveBrowserChatId(store.getState(), 'chatgpt')).toBe('chat-chatgpt');
+    expect(resolveChatEngine(store.getState(), 'chat-chatgpt')).toBe('browser');
     expect(resolveChatEngine(store.getState(), 'chat-second')).toBe('browser');
   });
 

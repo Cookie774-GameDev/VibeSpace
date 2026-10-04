@@ -6,7 +6,6 @@ import { useUIStore } from '@/stores/ui';
 import type { ChatId } from '@/types';
 import {
   browserChatStore,
-  findExclusiveBrowserChatId,
   resolveChatEngine,
   type VibeSpaceChatEngine,
 } from './browserChatStore';
@@ -41,8 +40,6 @@ export interface ChatEngineTransitionDependencies {
   getScope(chatId: string): ChatEngineTransitionScope | null;
   reuseEmptyChat(chatId: string, mutation: () => boolean): Promise<boolean>;
   setEngine(engine: VibeSpaceChatEngine, chatId: string): void;
-  findExistingBrowserChat?(targetEngine: VibeSpaceChatEngine): string | null;
-  activateChat?(chatId: string): void;
 }
 
 export interface ChatEngineTransitionScope {
@@ -83,11 +80,6 @@ const defaultDependencies: ChatEngineTransitionDependencies = {
       beforeActivate,
     }),
   getEngine: storedChatEngine,
-  findExistingBrowserChat: (targetEngine) =>
-    targetEngine === 'browser'
-      ? findExclusiveBrowserChatId(browserChatStore.getState(), 'chatgpt')
-      : null,
-  activateChat: (chatId) => useUIStore.getState().setActiveChat(chatId),
   getScope: () => {
     const auth = useAuthStore.getState();
     const identity = resolveAccountIdentity(auth);
@@ -151,18 +143,6 @@ export function createChatEngineTransition(dependencies: ChatEngineTransitionDep
         chatId: input.chatId,
         engine: currentEngine,
       });
-    }
-
-    if (input.targetEngine === 'browser') {
-      const existing = dependencies.findExistingBrowserChat?.(input.targetEngine);
-      if (existing && existing !== input.chatId) {
-        dependencies.activateChat?.(existing);
-        return Promise.resolve({
-          status: 'reused',
-          chatId: existing,
-          engine: 'browser',
-        });
-      }
     }
 
     const sourceScope = dependencies.getScope(input.chatId);
