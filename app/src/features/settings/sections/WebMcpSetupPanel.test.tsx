@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import { StrictMode } from 'react';
 import { DesktopConnectorSetup } from './DesktopConnectorSetup';
 import { WebMcpSetupPanel } from './WebMcpSetupPanel';
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
@@ -8,6 +9,39 @@ afterEach(() => {
   cleanup();
   invoke.mockReset();
   localStorage.clear();
+});
+it('shares preparation across development effect replay instead of reporting a competing owner', async () => {
+  let release!: () => void;
+  let preparing = false;
+  let ready = false;
+  invoke.mockImplementation((command, args) => {
+    if (command === 'desktop_connector_status')
+      return Promise.resolve({ packaged: true, status: 'disconnected', connectionDetected: ready });
+    if (args?.action === 'prepare') {
+      if (preparing) return Promise.reject('CONNECTOR_LOCK_IN_USE');
+      preparing = true;
+      return new Promise<void>((resolve) => {
+        release = () => {
+          ready = true;
+          resolve();
+        };
+      });
+    }
+    return Promise.resolve();
+  });
+  render(
+    <StrictMode>
+      <WebMcpSetupPanel onStatus={vi.fn()} onClose={vi.fn()} />
+    </StrictMode>,
+  );
+  await act(async () => {});
+  const requests = invoke.mock.calls.filter(
+    ([command, args]) => command === 'desktop_connector_setup' && args?.action === 'prepare',
+  );
+  await act(async () => release());
+  await waitFor(() => expect(screen.queryByText(/Preparing your packaged tools/)).toBeNull());
+  expect(requests).toHaveLength(1);
+  expect(screen.queryByRole('alert')).toBeNull();
 });
 it('shows both tutorials and ChatGPT instructions while native preparation is pending', async () => {
   invoke.mockImplementation((command) =>

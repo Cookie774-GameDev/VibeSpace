@@ -107,6 +107,7 @@ export function WebMcpSetupPanel({
   const acknowledgedKeyRevision = useRef(-1);
   const changeStatus = useRef(onStatus);
   const preparationRequest = useRef(0);
+  const nativePreparation = useRef<Promise<void>>();
   changeStatus.current = onStatus;
   const applyStatus = useCallback((value: WebMcpStatus) => {
     if (!mounted.current) return;
@@ -119,9 +120,14 @@ export function WebMcpSetupPanel({
       const request = ++preparationRequest.current;
       setLoading(true);
       setError('');
+      // Development effect replay must observe the same native installation.
+      const operation =
+        action === 'prepare'
+          ? (nativePreparation.current ??= setupAction(action))
+          : setupAction(action);
       const current = () => mounted.current && preparationRequest.current === request;
       try {
-        await setupAction(action);
+        await operation;
         const value = await readWebMcpStatus();
         if (!current()) return;
         applyStatus(value);
@@ -137,6 +143,7 @@ export function WebMcpSetupPanel({
             ),
           );
       } finally {
+        if (nativePreparation.current === operation) nativePreparation.current = undefined;
         if (current()) setLoading(false);
       }
     },

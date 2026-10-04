@@ -426,9 +426,16 @@ fn unpack_verified_bundle(
     Ok(root.to_owned())
 }
 
+fn connector_runtime_lock(lock: &Mutex<()>) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+    // Relay runtime extraction and setup share this in-process lock. Queue
+    // preparation behind that work; a busy thread is not an external owner.
+    lock.lock()
+        .map_err(|_| "Connector runtime is unavailable.".into())
+}
+
 fn start_connector(app: &AppHandle, open_setup: bool) -> Result<(), String> {
     let state = app.state::<DesktopConnectorState>();
-    let _guard = state.0.try_lock().map_err(|_| "CONNECTOR_LOCK_IN_USE")?;
+    let _guard = connector_runtime_lock(&state.0)?;
     if read_status(app).is_err() {
         if interrupted_gateway_lock(&state_dir(app)?)? {
             return Err("CONNECTOR_LOCK_INVALID".into());
@@ -842,6 +849,25 @@ pub async fn desktop_connector_setup(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn preparation_waits_for_work_in_this_app_without_claiming_an_external_owner() {
+        use std::sync::{mpsc, Arc};
+        let runtime = Arc::new(Mutex::new(()));
+        let first_request = runtime.lock().unwrap();
+        let queued = Arc::clone(&runtime);
+        let (entered, started) = mpsc::channel();
+        let (completed, result) = mpsc::channel();
+        let second_request = std::thread::spawn(move || {
+            entered.send(()).unwrap();
+            let outcome = connector_runtime_lock(&queued).map(|_| ());
+            completed.send(outcome).unwrap();
+        });
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(result.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        drop(first_request);
+        assert_eq!(result.recv_timeout(Duration::from_secs(5)).unwrap(), Ok(()));
+        second_request.join().unwrap();
+    }
     use super::*;
     fn interrupted_fixture() -> PathBuf {
         let state = std::env::temp_dir().join(format!(
