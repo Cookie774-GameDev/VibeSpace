@@ -11,6 +11,9 @@ use crate::harness::managed_codex_proxy_runtime::{
 use crate::harness::managed_codex_route::{revalidate_translation_route, ManagedCodexRouteState};
 #[path = "managed_codex_connected_provider.rs"]
 pub(super) mod connected_provider;
+#[path = "managed_codex_model_handoff.rs"]
+mod model_handoff;
+use model_handoff::CodexModelHandoff;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -442,6 +445,7 @@ pub struct RunningCodexServer {
     process: OwnedProcessGuard,
     proxy_process: Option<OwnedProcessGuard>,
     proxy_runtime: Option<SealedReviewedOpenCodexRuntime>,
+    model_handoff: Option<CodexModelHandoff>,
     stopped: bool,
 }
 
@@ -460,6 +464,7 @@ impl RunningCodexServer {
             rlm_profile_generation: rlm_profile_generation(),
             rlm_observation: Arc::new(Mutex::new(RlmParentObservation::default())),
             model_id: "opencode-go/deepseek-v4-flash-vision-exp".to_string(),
+            model_handoff: None,
             caller_label: caller_label.to_string(),
             owner_id: owner_id.to_string(),
             route_identity: "official:openai-codex".to_string(),
@@ -732,6 +737,7 @@ fn launch_server(
     route_identity: String,
     stderr_failure_category: Arc<Mutex<Option<CodexStderrCategory>>>,
     proxy: Option<(OwnedProcessGuard, PathBuf, SealedReviewedOpenCodexRuntime)>,
+    model_handoff: Option<CodexModelHandoff>,
 ) -> Result<RunningCodexServer, String> {
     let (proxy, codex_home) = match proxy {
         Some((process, home, runtime)) => (
@@ -849,6 +855,7 @@ fn launch_server(
         rlm_profile_generation: rlm_profile_generation(),
         rlm_observation: Arc::new(Mutex::new(RlmParentObservation::default())),
         model_id,
+        model_handoff,
         caller_label,
         owner_id,
         route_identity,
@@ -1189,6 +1196,7 @@ fn start_internal(
             route_identity.clone(),
             stderr_failure_category.clone(),
             proxy,
+            translation_provider.as_ref().map(|provider| provider.model_handoff()).transpose()?,
         )
     });
     let running = match running {
@@ -1288,9 +1296,13 @@ fn stream_internal(
     let cancelled = Arc::new(AtomicBool::new(false));
     let task_cancelled = cancelled.clone();
     let rlm_observation = running.rlm_observation.clone();
+    let model_handoff = running.model_handoff.clone();
     let task = thread::spawn(move || {
         let mut sequence = 0_u64;
-        let mut timed_frame = |frame| {
+        let mut timed_frame = |mut frame| {
+            if let Some(handoff) = &model_handoff {
+                handoff.inbound(&mut frame);
+            }
             if let Ok(mut observation)=rlm_observation.lock(){observation.inbound(&frame);}
             sequence += 1;
             CodexAppServerStreamMessage::Frame {
@@ -1400,6 +1412,11 @@ fn write_internal(
     if active.caller_label != caller || active.stream_id.is_empty() {
         return Err("Codex app-server stream owner is unavailable.".to_string());
     }
+    let frame = if let Some(handoff) = &running.model_handoff {
+        encode_outbound_frame(&handoff.outbound(&message)?)?
+    } else {
+        frame
+    };
     running.rlm_observation.lock().map_err(|_|"Codex parent observation unavailable")?.outbound(&message);
     let stdin = running
         .stdin

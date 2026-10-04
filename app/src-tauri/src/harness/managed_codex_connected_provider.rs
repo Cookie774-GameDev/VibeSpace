@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use super::model_handoff::{CodexModelHandoff, PRIVATE_PROVIDER_ID};
 use std::io::Read;
 use tauri::{AppHandle, Manager};
 
@@ -107,7 +108,9 @@ fn from_catalog(catalog: &Value, qualified: &str) -> Result<ConnectedProvider, S
         }
     }
     let upstream_model = model["api"]["id"].as_str().unwrap_or(model_id);
-    if !clean_value(upstream_model) || upstream_model.len() > 256 {
+    if !clean_value(upstream_model)
+        || CodexModelHandoff::new(qualified.into(), upstream_model).is_err()
+    {
         return Err("Connected upstream model identity is invalid.".into());
     }
     let efforts = model["variants"]
@@ -173,6 +176,10 @@ pub(in crate::harness) fn resolve(
 }
 
 impl ConnectedProvider {
+    pub(in crate::harness) fn model_handoff(&self) -> Result<CodexModelHandoff, String> {
+        CodexModelHandoff::new(format!("{}/{}", self.provider, self.model), &self.upstream_model)
+    }
+
     pub(in crate::harness) fn provider_id(&self) -> &str {
         &self.provider
     }
@@ -197,8 +204,8 @@ impl ConnectedProvider {
         if !super::valid_identifier(session_id, 256) {
             return Err("Invalid managed proxy session identity.".into());
         }
-        // A private ID prevents upstream built-in presets overriding a custom
-        // OpenCode destination. Its alias preserves the selected public identity.
+        // The private key prevents upstream preset collisions. The native model
+        // handoff preserves the public selection across this private catalog.
         let mut headers = self.headers.clone();
         if self.provider == OPENCODE_GO_PROVIDER_ID {
             headers.insert(
@@ -221,10 +228,11 @@ impl ConnectedProvider {
         if let Some(context) = self.context_window.filter(|value| *value > 0) {
             provider["modelContextWindows"] = json!({self.upstream_model.clone(): context});
         }
-        let model = format!("{}/{}", self.provider, self.model);
+        let handoff = self.model_handoff()?;
+        let model = handoff.wire_model();
         // This newly generated profile uses the pinned runtime's current schema.
         let config = json!({"hostname":"127.0.0.1", "port":port, "openaiProviderTierVersion":2,
-            "providers":{"vibespace-connected":provider}, "defaultProvider":"vibespace-connected",
+            "providers":{PRIVATE_PROVIDER_ID:provider}, "defaultProvider":PRIVATE_PROVIDER_ID,
             "defaultModelAliases":false, "modelPickerOrder":[model], "subagentModels":[model],
             "clientIntegrations":{"codex":true,"grok":false,"claude-desktop":false},"claudeCode":{"enabled":false}});
         Ok(ManagedCodexProxyProfile {
@@ -242,6 +250,41 @@ mod tests {
         json!({"connected":["custom"], "all":[{"id":"custom","key":"test-secret-only",
         "options":{"baseURL":"https://configured.example/v1","headers":{"x-custom":"private-header"}},
         "models":{"vendor/model":{"api":{"id":"vendor/model","npm":npm,"url":"https://wrong.example/v1"}}}}]})
+    }
+    #[test]
+    fn profile_uses_private_wire_identity_without_changing_the_public_selection() {
+        let mut catalog = fixture("@ai-sdk/openai");
+        catalog["connected"] = json!(["opencode-go"]);
+        catalog["all"][0]["id"] = json!("opencode-go");
+        catalog["all"][0]["models"] = json!({"gpt-6-luna": {
+            "api": {"id":"gpt-6-luna", "npm":"@ai-sdk/openai"},
+            "variants": {"low":{}}
+        }});
+        let selected = from_catalog(&catalog, "opencode-go/gpt-6-luna").unwrap();
+        let profile = selected.profile(23570, "chat-handoff").unwrap();
+        let config: Value = serde_json::from_slice(&profile.opencodex_config_json).unwrap();
+        assert_eq!(selected.provider_id(), "opencode-go");
+        assert_eq!(selected.upstream_model_id(), "gpt-6-luna");
+        assert_eq!(config["providers"]["vibespace-connected"]["alias"], "opencode-go");
+        assert_eq!(config["modelPickerOrder"], json!(["vibespace-connected/gpt-6-luna"]));
+        assert_eq!(config["subagentModels"], config["modelPickerOrder"]);
+        assert!(String::from_utf8(profile.codex_config_toml).unwrap()
+            .contains("model = \"vibespace-connected/gpt-6-luna\""));
+    }
+
+    #[test]
+    fn private_wire_identity_uses_the_native_model_when_the_public_model_is_an_alias() {
+        let mut catalog = fixture("@ai-sdk/openai-compatible");
+        catalog["all"][0]["models"] = json!({"friendly-model": {
+            "api":{"id":"vendor/model", "npm":"@ai-sdk/openai-compatible"}
+        }});
+        let selected = from_catalog(&catalog, "custom/friendly-model").unwrap();
+        let config: Value = serde_json::from_slice(&selected.profile(23571, "chat-alias").unwrap().opencodex_config_json).unwrap();
+        assert_eq!(config["modelPickerOrder"], json!(["vibespace-connected/vendor/model"]));
+        assert!(from_catalog(&{
+            catalog["all"][0]["models"]["friendly-model"]["api"]["id"] = json!("unsafe\"model");
+            catalog
+        }, "custom/friendly-model").is_err());
     }
     #[test]
     fn follows_exact_connected_endpoint_model_and_protocol_without_persisting_secrets() {
