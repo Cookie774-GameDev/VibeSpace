@@ -120,7 +120,7 @@ describe('resolveChatListActivity', () => {
     expect(slow.cycleMs).toBeLessThanOrEqual(1_800);
   });
 
-  it('settles recent completion and error once, then becomes idle', () => {
+  it('keeps completion visible until read while transient errors settle', () => {
     expect(
       resolveChatListActivity({
         runs: [run('completed', NOW - 1_000)],
@@ -148,7 +148,7 @@ describe('resolveChatListActivity', () => {
         events: [],
         nowMs: NOW,
       }).state,
-    ).toBe('idle');
+    ).toBe('complete');
   });
 });
 
@@ -204,7 +204,7 @@ describe('ChatListActivityIndicator', () => {
       /\.chat-activity-indicator\[data-state='complete'\]\s*\{[^}]*color:\s*var\(--chat-activity-complete\)/s,
     );
     expect(stylesheet).toMatch(
-      /\.chat-activity-completion-dot\s*\{[^}]*animation:\s*chat-activity-completion-dot\s+3\.6s/s,
+      /\.chat-activity-completion-dot\s*\{[^}]*animation:\s*chat-activity-completion-dot\s+4\.2s/s,
     );
     expect(stylesheet).toMatch(/prefers-reduced-motion: reduce[\s\S]*animation:\s*none !important/);
   });

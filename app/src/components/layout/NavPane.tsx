@@ -21,13 +21,23 @@ import {
   AppWindow,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Hint } from '@/components/ui/tooltip';
 import { toast } from '@/components/ui/toast';
 import { useUIStore } from '@/stores/ui';
 import type { Route } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
-import { db, projectRepo, chatRepo } from '@/lib/db';
+import { db, projectRepo, chatRepo, messageRepo } from '@/lib/db';
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import type { Project } from '@/lib/db/schema';
 import type { Agent, ChatId, ProjectId, WorkspaceId } from '@/types';
 import type { Chat } from '@/types/chat';
@@ -38,7 +48,11 @@ import { SidebarFilesTree } from '@/features/files/SidebarFilesTree';
 import { openOrFocusWorkbenchWindow } from '@/features/workbench/window';
 import { useWorkbenchStore } from '@/features/workbench/store';
 import { chatPinPatch, isChatPinned, sortChatsForDisplay } from '@/features/chat/chatPin';
-import { ensureActiveChat } from '@/features/chat/chatLifecycle';
+import {
+  branchChatFromMessage,
+  ensureActiveChat,
+  formatBranchChatTitle,
+} from '@/features/chat/chatLifecycle';
 import { useStorageDoctorSnapshot } from '@/features/doctor/StorageDoctorNotice';
 import { isStorageDoctorUnavailableError } from '@/lib/doctor/storageDoctor';
 import { mergeChatActivityEvents, type ChatListRunSignal } from '@/features/chat/activity';
@@ -65,6 +79,8 @@ const KERNEL_SMOKE_ENABLED = isKernelSmokeEnabled({
   devBuild: import.meta.env.DEV,
   explicitFlag: import.meta.env.VITE_SIK_SMOKE,
 });
+
+type PendingChatDelete = { chat: Chat; accountId: string; workspaceId: string };
 
 /**
  * NavPane - 240px expanded, 56px collapsed.
@@ -105,6 +121,7 @@ export function NavPane() {
 
   const workspaceId = useAuthStore((s) => s.workspaceId) as WorkspaceId | null;
   const localUserId = useAuthStore((s) => s.localUserId);
+  const cloudSession = useAuthStore((s) => s.cloudSession);
   const projectId = useAuthStore((s) => s.projectId) as ProjectId | null;
   const setProjectId = useAuthStore((s) => s.setProjectId);
 
@@ -152,6 +169,9 @@ export function NavPane() {
 
   const pinnedChats = React.useMemo(() => (chats ?? []).filter((c) => isChatPinned(c)), [chats]);
   const unpinnedChats = React.useMemo(() => (chats ?? []).filter((c) => !isChatPinned(c)), [chats]);
+  const [deleteCandidate, setDeleteCandidate] = React.useState<PendingChatDelete | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
+  const readScope = `${cloudSession?.user_id ?? localUserId ?? 'local'}:${workspaceId ?? 'none'}`;
 
   const onTogglePinChat = async (chat: Chat) => {
     const nextPinned = !isChatPinned(chat);
@@ -170,6 +190,72 @@ export function NavPane() {
     setActiveChat(c.id as unknown as ChatId);
     setChatMode(c.mode);
     setRoute('chat');
+  };
+
+  const onForkChat = async (chat: Chat) => {
+    if (!workspaceId || chat.workspace_id !== workspaceId) return;
+    if (chatCreationBlocked) {
+      toast.warning('Chat storage unavailable', 'Try again when local storage is healthy.');
+      return;
+    }
+    try {
+      const messages = await messageRepo.listByChat(chat.id);
+      if (messages.length) {
+        await branchChatFromMessage({
+          chatId: chat.id,
+          messageId: messages[messages.length - 1].id,
+        });
+      } else {
+        const fork = await chatRepo.create({
+          workspace_id: chat.workspace_id,
+          project_id: chat.project_id,
+          title: formatBranchChatTitle(chat.title),
+          mode: chat.mode,
+          active_agent_ids: [...chat.active_agent_ids],
+          connection: chat.connection,
+          backend_affinity: chat.backend_affinity,
+        });
+        openChat(fork);
+      }
+    } catch (error) {
+      toast.error('Could not fork chat', error instanceof Error ? error.message : 'Try again.');
+    }
+  };
+
+  const queueDeleteChat = (chat: Chat) => {
+    const auth = useAuthStore.getState();
+    const accountId = resolveAccountIdentity(auth)?.accountId;
+    if (!accountId || String(auth.workspaceId) !== String(chat.workspace_id)) return;
+    setDeleteCandidate({ chat, accountId, workspaceId: String(chat.workspace_id) });
+  };
+
+  const confirmDeleteChat = async () => {
+    const pending = deleteCandidate;
+    const auth = useAuthStore.getState();
+    if (!pending || String(auth.workspaceId) !== pending.workspaceId) {
+      setDeleteCandidate(null);
+      return;
+    }
+    const { chat: candidate, accountId } = pending;
+    setDeleting(true);
+    try {
+      await chatRepo.deleteAuthorized(candidate.id, {
+        expectedAccountId: accountId,
+        expectedWorkspaceId: pending.workspaceId,
+        expectedProjectId: candidate.project_id ? String(candidate.project_id) : null,
+        expectedUpdatedAt: candidate.updated_at,
+        getActiveAccountId: () =>
+          resolveAccountIdentity(useAuthStore.getState())?.accountId ?? null,
+        getActiveWorkspaceId: () => String(useAuthStore.getState().workspaceId ?? ''),
+      });
+      if (String(candidate.id) === activeChatId) setActiveChat(null);
+      setDeleteCandidate(null);
+      toast.success('Chat deleted');
+    } catch (error) {
+      toast.error('Could not delete chat', error instanceof Error ? error.message : 'Try again.');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   // ---------- create handlers ----------
@@ -433,7 +519,7 @@ export function NavPane() {
           ) : (
             pinnedChats.map((c) => (
               <ChatNavRow
-                key={c.id}
+                key={`${readScope}:${c.id}`}
                 chat={c}
                 navOpen={navOpen}
                 active={(c.id as unknown as string) === activeChatId}
@@ -442,8 +528,11 @@ export function NavPane() {
                   liveActivityByChat[String(c.id)] ?? [],
                 )}
                 activityRuns={taskRunsByChat[String(c.id)] ?? []}
+                readScope={readScope}
                 onOpen={() => openChat(c)}
                 onTogglePin={() => void onTogglePinChat(c)}
+                onFork={() => void onForkChat(c)}
+                onDelete={() => queueDeleteChat(c)}
               />
             ))
           )}
@@ -534,7 +623,7 @@ export function NavPane() {
           ) : (
             unpinnedChats.map((c) => (
               <ChatNavRow
-                key={c.id}
+                key={`${readScope}:${c.id}`}
                 chat={c}
                 navOpen={navOpen}
                 active={(c.id as unknown as string) === activeChatId}
@@ -543,8 +632,11 @@ export function NavPane() {
                   liveActivityByChat[String(c.id)] ?? [],
                 )}
                 activityRuns={taskRunsByChat[String(c.id)] ?? []}
+                readScope={readScope}
                 onOpen={() => openChat(c)}
                 onTogglePin={() => void onTogglePinChat(c)}
+                onFork={() => void onForkChat(c)}
+                onDelete={() => queueDeleteChat(c)}
               />
             ))
           )}
@@ -624,6 +716,42 @@ export function NavPane() {
           </div>
         )}
       </div>
+      <Dialog
+        open={deleteCandidate !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setDeleteCandidate(null);
+        }}
+      >
+        <DialogContent
+          role="alertdialog"
+          hideClose
+          aria-labelledby="nav-delete-chat-title"
+          aria-describedby="nav-delete-chat-description"
+        >
+          <DialogHeader>
+            <DialogTitle id="nav-delete-chat-title">Delete chat permanently?</DialogTitle>
+            <DialogDescription id="nav-delete-chat-description">
+              “{deleteCandidate?.chat.title ?? 'Untitled chat'}” and its messages will be deleted.
+              This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" disabled={deleting}>
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={deleting}
+              onClick={() => void confirmDeleteChat()}
+            >
+              Delete chat
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </motion.aside>
   );
 }

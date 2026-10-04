@@ -66,20 +66,14 @@
 }
 
 .chat-activity-completion-dot {
-  width: 12px;
-  height: 12px;
+  width: 7px;
+  height: 7px;
   display: grid;
   place-items: center;
   border-radius: 999px;
   background: var(--chat-activity-complete);
-  color: #102940;
   box-shadow: 0 0 0 0 var(--chat-activity-glow);
-  animation: chat-activity-completion-dot 3.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
-}
-
-.chat-activity-completion-dot svg {
-  width: 11px;
-  height: 11px;
+  animation: chat-activity-completion-dot 4.2s ease-in-out infinite;
 }
 
 .chat-activity-terminal {

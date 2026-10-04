@@ -50,9 +50,12 @@ describe('ChatNavRow handoff actions', () => {
     window.addEventListener('vibespace:chat-open-beside', beside);
     renderRow();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Chat actions for Source chat' }));
+    fireEvent.contextMenu(screen.getByTestId('chat-nav-row-chat-source'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Send context to current chat' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Chat actions for Source chat' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Source chat' }), {
+      key: 'F10',
+      shiftKey: true,
+    });
     fireEvent.click(screen.getByRole('menuitem', { name: 'Open beside current chat' }));
 
     expect(context).toHaveBeenCalledOnce();

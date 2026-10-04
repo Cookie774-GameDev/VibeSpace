@@ -53,6 +53,9 @@ describe('safe chat handoff projection', () => {
     expect(renderChatHandoffPrompt(projection, 'Please continue this work.')).toContain(
       'final marker',
     );
+    expect(renderChatHandoffPrompt(projection, 'Please continue this work.')).toContain(
+      `Last meaningful activity: ${projection.lastMeaningfulActivity}`,
+    );
   });
 
   it('excludes private reasoning, secrets, raw tool payloads, and binary bytes', () => {

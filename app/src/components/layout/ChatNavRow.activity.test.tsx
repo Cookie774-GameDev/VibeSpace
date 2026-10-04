@@ -1,12 +1,14 @@
 import * as React from 'react';
 import { fireEvent, render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@/types/chat';
 import { ChatNavRow } from './ChatNavRow';
 
 vi.mock('@/features/chat/useChatPointerDrag', () => ({ useChatPointerDrag: () => ({}) }));
 
 const chat = { id: 'chat-1', title: 'Research', workspace_id: 'workspace-1' } as Chat;
+
+beforeEach(() => window.localStorage.clear());
 
 describe('ChatNavRow completion', () => {
   it('stops only the finished chat while another chat continues working', () => {
@@ -62,5 +64,29 @@ describe('ChatNavRow completion', () => {
       />,
     );
     expect(view.container.querySelector('[data-chat-activity-completion-dot]')).not.toBeNull();
+  });
+
+  it('persists unread and read states across row remounts', () => {
+    const props = {
+      chat,
+      navOpen: true,
+      readScope: 'account:workspace-1',
+      onOpen: vi.fn(),
+      onTogglePin: vi.fn(),
+    };
+    const runs = [{ chatId: 'chat-1', status: 'completed', updatedAt: Date.now() }];
+    const view = render(<ChatNavRow {...props} activityRuns={runs} />);
+    expect(view.container.querySelector('[data-chat-activity-completion-dot]')).not.toBeNull();
+    view.unmount();
+    const restored = render(<ChatNavRow {...props} />);
+    expect(restored.container.querySelector('[data-chat-activity-completion-dot]')).not.toBeNull();
+    fireEvent.contextMenu(restored.getByTestId('chat-nav-row-chat-1'));
+    fireEvent.click(restored.getByRole('menuitem', { name: 'Mark as read' }));
+    restored.unmount();
+    const read = render(<ChatNavRow {...props} activityRuns={runs} />);
+    expect(read.container.querySelector('[data-chat-activity-completion-dot]')).toBeNull();
+    fireEvent.contextMenu(read.getByTestId('chat-nav-row-chat-1'));
+    fireEvent.click(read.getByRole('menuitem', { name: 'Mark as unread' }));
+    expect(read.container.querySelector('[data-chat-activity-completion-dot]')).not.toBeNull();
   });
 });

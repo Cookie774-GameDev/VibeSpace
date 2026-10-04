@@ -22,7 +22,6 @@ export interface ChatListActivityResolution {
 }
 
 const ERROR_SETTLE_MS = 3_200;
-const COMPLETION_SETTLE_MS = 12_000;
 const CADENCE_WINDOW_MS = 4_000;
 const ACTIVE_TOOL_KINDS = new Set<ChatActivityEvent['kind']>(['tool', 'file', 'diff', 'url']);
 const QUEUED_STATUSES = new Set([
@@ -129,10 +128,9 @@ export function resolveChatListActivity({
 
   if (COMPLETE_STATUSES.has(status)) {
     const changedAt = timestamp(latestRun?.updatedAt);
-    if (changedAt > 0 && nowMs - changedAt <= COMPLETION_SETTLE_MS) {
-      return resolution('complete', 3_600, 0.72, changedAt + COMPLETION_SETTLE_MS, changedAt);
-    }
-    return resolution('idle', 0, 0);
+    return changedAt > 0
+      ? resolution('complete', 4_200, 0.72, undefined, changedAt)
+      : resolution('idle', 0, 0);
   }
 
   if (latestRun?.requiresManualRecovery) {
@@ -172,18 +170,8 @@ export function resolveChatListActivity({
     );
   }
   // Only the top-level agent finishing can stand in for a missing run signal.
-  if (
-    latestEvent?.kind === 'agent' &&
-    latestEvent.status === 'done' &&
-    nowMs - latestEvent.ts <= COMPLETION_SETTLE_MS
-  ) {
-    return resolution(
-      'complete',
-      3_600,
-      0.72,
-      latestEvent.ts + COMPLETION_SETTLE_MS,
-      latestEvent.ts,
-    );
+  if (latestEvent?.kind === 'agent' && latestEvent.status === 'done') {
+    return resolution('complete', 4_200, 0.72, undefined, latestEvent.ts);
   }
   return resolution('idle', 0, 0);
 }
@@ -192,6 +180,7 @@ export interface ChatListActivityIndicatorProps {
   chatId?: string;
   chatLabel?: string;
   acknowledgedThrough?: number;
+  forceUnread?: boolean;
   runs: readonly ChatListRunSignal[];
   events: readonly ChatActivityEvent[];
   now?: () => number;
@@ -201,6 +190,7 @@ export function ChatListActivityIndicator({
   chatId,
   chatLabel = 'Chat',
   acknowledgedThrough = 0,
+  forceUnread = false,
   runs,
   events,
   now = Date.now,
@@ -212,10 +202,11 @@ export function ChatListActivityIndicator({
       events: chatId ? events.filter((event) => String(event.chatId) === chatId) : events,
       nowMs,
     });
-    return result.terminalAt && result.terminalAt <= acknowledgedThrough
-      ? resolution('idle', 0, 0)
-      : result;
-  }, [acknowledgedThrough, chatId, events, nowMs, runs]);
+    if (forceUnread && result.state === 'idle') return resolution('complete', 4_200, 0.72);
+    if (result.terminalAt && result.terminalAt <= acknowledgedThrough)
+      return forceUnread ? resolution('complete', 4_200, 0.72) : resolution('idle', 0, 0);
+    return result;
+  }, [acknowledgedThrough, chatId, events, forceUnread, nowMs, runs]);
 
   React.useEffect(() => {
     setNowMs(now());
@@ -255,11 +246,7 @@ export function ChatListActivityIndicator({
                 aria-hidden="true"
                 className="chat-activity-completion-dot"
                 data-chat-activity-completion-dot
-              >
-                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="m3 6 2 2 4-4" />
-                </svg>
-              </span>
+              />
             ) : resolved.state === 'error' || resolved.state === 'cancelled' ? (
               <span className="chat-activity-terminal" aria-hidden="true">
                 {resolved.state === 'error' ? '!' : '−'}

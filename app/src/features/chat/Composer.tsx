@@ -6485,13 +6485,19 @@ export function Composer({
         const scope = () =>
           JSON.stringify([
             resolveAccountIdentity(useAuthStore.getState())?.accountId,
+            useAuthStore.getState().localUserId,
             useAuthStore.getState().workspaceId,
           ]);
         const before = scope();
         const workspace = auth.workspaceId
           ? await workspaceRepo.getById(auth.workspaceId)
           : undefined;
-        if (!accountId || workspace?.owner_id !== accountId || scope() !== before) {
+        if (
+          !accountId ||
+          !workspace ||
+          (workspace.owner_id !== accountId && workspace.owner_id !== auth.localUserId) ||
+          scope() !== before
+        ) {
           toast.warning(
             'Chat reference unavailable',
             'Return to the account and workspace that owns this chat.',

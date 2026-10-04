@@ -401,6 +401,12 @@ describe('Composer chat handoff integration', () => {
 
   it('renders Composer, resolves a real drop, replaces the card, and never auto-sends', async () => {
     useUIStore.setState({ activeChatId: 'chat-target' });
+    useAuthStore.setState({
+      cloudSession: { user_id: 'cloud-account', email: 'test@example.com', expires_at: 999 },
+    });
+    vi.spyOn(workspaceRepo, 'getById').mockResolvedValue({
+      owner_id: 'reference-test-owner',
+    } as never);
     const create = vi.spyOn(messageRepo, 'create');
     vi.spyOn(chatRepo, 'getById').mockImplementation(async (id) =>
       String(id) === 'chat-source' ? sourceChat : targetChat,

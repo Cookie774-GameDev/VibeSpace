@@ -326,6 +326,9 @@ export function renderChatHandoffPrompt(
     `Boundary message: ${projection.boundaryMessageId ?? 'none'}`,
     projection.goal ? `Current goal: ${projection.goal}` : '',
     `Status: ${projection.status}`,
+    projection.lastMeaningfulActivity
+      ? `Last meaningful activity: ${projection.lastMeaningfulActivity}`
+      : '',
     summaryGroups,
     'Complete visible transcript from the most recent three calendar days:',
     recent || '(No visible recent messages.)',
