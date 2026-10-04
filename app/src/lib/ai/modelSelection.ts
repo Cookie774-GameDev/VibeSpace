@@ -418,10 +418,14 @@ export function canSendModelRequest(
 export function formatChatModelSelectionLabel(
   selection: ChatModelSelection,
   ctx: ModelSelectionContext,
+  liveOption?: Readonly<{ id: string; label: string }>,
 ): string {
   if (selection.mode === 'none') return CHOOSE_MODEL_LABEL;
   if (selection.mode === 'hive') {
     return `Hive · ${HIVE_LABELS[selection.hiveId]}`;
+  }
+  if (liveOption?.id === selectionOptionId(selection) && liveOption.label.trim()) {
+    return liveOption.label.trim();
   }
   const label = getModelLabelForProvider(selection.providerId, selection.modelId, ctx);
   const providerName = getProviderDisplayName(selection.providerId);

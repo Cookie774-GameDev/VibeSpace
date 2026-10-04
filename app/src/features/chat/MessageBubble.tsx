@@ -19,6 +19,7 @@ export interface MessageBubbleProps {
   compact?: boolean;
   creatorDraftKind?: JarvisCreatorKind;
   showActivityLedger?: boolean;
+  showIdentity?: boolean;
 }
 
 const SPRING = 'spring' as const;
@@ -50,6 +51,7 @@ export function MessageBubble({
   compact = false,
   creatorDraftKind,
   showActivityLedger = true,
+  showIdentity = true,
 }: MessageBubbleProps) {
   const agent = useAgentStore((s) => (message.agent_id ? s.agents[message.agent_id] : undefined));
   const messageLayout = useThemeMotionLayout(true);
@@ -234,26 +236,32 @@ export function MessageBubble({
           compact ? 'max-w-[98%] gap-1.5' : 'max-w-[88%] gap-2',
         )}
       >
-        <span data-pet-message-avatar={compact ? 'true' : undefined} className="mt-0.5 shrink-0">
+        <span
+          data-pet-message-avatar={compact ? 'true' : undefined}
+          aria-hidden={!showIdentity || undefined}
+          className={cn('mt-0.5 shrink-0', !showIdentity && 'invisible')}
+        >
           <Avatar seed={slug} size={compact ? 22 : 28} />
         </span>
         <div className="group flex min-w-0 flex-col gap-1">
-          <div className="flex min-w-0 items-baseline gap-1.5">
-            <span className="text-ui-strong text-foreground">{agent?.name ?? 'Assistant'}</span>
-            <span className="text-metadata text-muted-foreground">
-              {formatRelative(message.created_at)}
-            </span>
-            {message.usage?.model && (
-              <span
-                className={cn(
-                  'text-metadata text-muted-foreground font-mono truncate',
-                  compact ? 'max-w-[10ch]' : 'max-w-[20ch]',
-                )}
-              >
-                {message.usage.model}
+          {showIdentity ? (
+            <div className="flex min-w-0 items-baseline gap-1.5">
+              <span className="text-ui-strong text-foreground">{agent?.name ?? 'Assistant'}</span>
+              <span className="text-metadata text-muted-foreground">
+                {formatRelative(message.created_at)}
               </span>
-            )}
-          </div>
+              {message.usage?.model && (
+                <span
+                  className={cn(
+                    'text-metadata text-muted-foreground font-mono truncate',
+                    compact ? 'max-w-[10ch]' : 'max-w-[20ch]',
+                  )}
+                >
+                  {message.usage.model}
+                </span>
+              )}
+            </div>
+          ) : null}
           <div
             className={cn(
               'min-w-0',

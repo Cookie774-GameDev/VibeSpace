@@ -19,6 +19,23 @@ function message(role: Message['role'], parts: Message['parts']): Message {
 }
 
 describe('MessageBubble assistant activity ledger', () => {
+  it('renders continuation content without a second identity and preserves response details', () => {
+    const rendered = render(
+      <TooltipProvider>
+        <MessageBubble
+          message={{
+            ...message('assistant', [{ kind: 'text', text: 'Continuation content' }]),
+            usage: { model: 'openai/gpt-6.1-sol', execution: { mode: 'normal' } },
+          }}
+          showIdentity={false}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.queryByText('Assistant')).toBeNull();
+    expect(screen.getByText('Continuation content')).toBeTruthy();
+    expect(screen.getByText('Response details')).toBeTruthy();
+    expect(rendered.container.querySelector('[data-message-actions]')).toBeTruthy();
+  });
   it.each([{ parts: [] }, { parts: [{ kind: 'text' as const, text: '  ' }] }])('hides an empty assistant placeholder: %j', ({ parts }) => {
     const rendered = render(<TooltipProvider><MessageBubble message={message('assistant', parts)} /></TooltipProvider>);
     expect(rendered.container.textContent).toBe('');

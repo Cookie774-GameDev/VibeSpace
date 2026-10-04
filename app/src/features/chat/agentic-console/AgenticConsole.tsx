@@ -673,6 +673,7 @@ function BlockView({
   creatorDraftKind,
   nativeCheckpoint = false,
   hideNativeCheckpoint = false,
+  showIdentity = true,
 }: {
   block: TranscriptBlock;
   finalAnswerId?: string;
@@ -680,6 +681,7 @@ function BlockView({
   creatorDraftKind?: JarvisCreatorKind;
   nativeCheckpoint?: boolean;
   hideNativeCheckpoint?: boolean;
+  showIdentity?: boolean;
 }) {
   if (block.kind === 'prompt') return <PromptBand block={block} />;
   if (block.kind === 'answer') {
@@ -756,6 +758,7 @@ function BlockView({
         compact={compact}
         creatorDraftKind={creatorDraftKind}
         showActivityLedger={false}
+        showIdentity={showIdentity}
       />
     </div>
   );
@@ -914,6 +917,46 @@ export function selectAssistantLedgerOwnerIds(messages: readonly Message[]): Rea
   }
   commitTurn();
   return owners;
+}
+
+function selectPermissionContinuationIds(messages: readonly Message[]): ReadonlySet<string> {
+  const continuations = new Set<string>();
+  let turn: Message[] = [];
+  const commitTurn = () => {
+    const replies = turn.filter(
+      (message) =>
+        message.role === 'assistant' &&
+        message.parts.some((part) => part.kind === 'text' && part.text.trim()),
+    );
+    const speakers = new Set(
+      replies.flatMap((message) => (message.agent_id ? [message.agent_id] : [])),
+    );
+    if (replies.length > 0 && speakers.size <= 1) {
+      for (const message of turn) {
+        if (
+          message.role !== 'assistant' ||
+          (message.agent_id && speakers.size > 0 && !speakers.has(message.agent_id))
+        )
+          continue;
+        if (
+          message.parts.some((part) => part.kind === 'permission_request') &&
+          message.parts.every(
+            (part) =>
+              part.kind === 'permission_request' || (part.kind === 'text' && !part.text.trim()),
+          )
+        ) {
+          continuations.add(String(message.id));
+        }
+      }
+    }
+    turn = [];
+  };
+  for (const message of messages) {
+    if (message.role === 'user') commitTurn();
+    turn.push(message);
+  }
+  commitTurn();
+  return continuations;
 }
 
 type NativeCheckpointLedgerPlacement = Readonly<{
@@ -1236,6 +1279,10 @@ export function AgenticConsole({
     () => selectAssistantLedgerOwnerIds(messages),
     [messages],
   );
+  const permissionContinuationIds = React.useMemo(
+    () => selectPermissionContinuationIds(messages),
+    [messages],
+  );
   const nativeCheckpointLedgers = React.useMemo(
     () => nativeCheckpointLedgerPlacements(blocks, messagesBySource),
     [blocks, messagesBySource],
@@ -1501,6 +1548,9 @@ export function AgenticConsole({
                     finalAnswerId={finalAnswerId}
                     compact={compact}
                     creatorDraftKind={creatorDraftKind}
+                    showIdentity={
+                      !sourceMessage || !permissionContinuationIds.has(String(sourceMessage.id))
+                    }
                     nativeCheckpoint={nativeCheckpointSourceIds.has(block.sourceId)}
                     hideNativeCheckpoint={
                       latestTurnActivityCollapsed &&

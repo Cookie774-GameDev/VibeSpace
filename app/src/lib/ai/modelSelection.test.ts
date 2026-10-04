@@ -15,6 +15,7 @@ import {
 import { syncDiscoveredOllamaModels } from './models';
 import type { Agent } from '@/types';
 import type { ProviderCapabilities } from './adapters/types';
+import { CODEX_CLI_CONNECTION, OPENCODE_CLI_CONNECTION } from './adapters/catalog';
 import {
   activateKernelSmokeBinding,
   clearKernelSmokeBinding,
@@ -91,6 +92,59 @@ describe('modelSelection', () => {
         defaultLocalModel: 'llama3.2',
       }),
     ).toBe(CHOOSE_MODEL_LABEL);
+  });
+
+  it.each([
+    ['opencode-cli', 'openai', 'openai/gpt-6.1-sol', 'GPT-6.1 Sol'],
+    ['openai-codex', 'openai', 'gpt-6-luna', 'GPT-6 Luna'],
+  ] as const)(
+    'uses the exact live %s picker label for its selected route',
+    (connectionId, providerId, modelId, label) => {
+      const selection = selectionFromOption(
+        providerId,
+        modelId,
+        connectionId === 'opencode-cli' ? OPENCODE_CLI_CONNECTION : CODEX_CLI_CONNECTION,
+      );
+      expect(
+        formatChatModelSelectionLabel(
+          selection,
+          {
+            apiKeys: {},
+            offlineMode: false,
+            plan: 'free',
+            defaultLocalModel: 'llama3.2',
+          },
+          { id: `${connectionId}:${modelId}`, label },
+        ),
+      ).toBe(label);
+    },
+  );
+
+  it('does not use a different connection or model label for the selected route', () => {
+    const selection = selectionFromOption(
+      'openai',
+      'openai/gpt-6.1-sol',
+      OPENCODE_CLI_CONNECTION,
+    );
+    const ctx = {
+      apiKeys: {},
+      offlineMode: false,
+      plan: 'free',
+      defaultLocalModel: 'llama3.2',
+    } as const;
+    const fallback = formatChatModelSelectionLabel(selection, ctx);
+    expect(
+      formatChatModelSelectionLabel(selection, ctx, {
+        id: 'openai-codex:openai/gpt-6.1-sol',
+        label: 'Wrong connection',
+      }),
+    ).toBe(fallback);
+    expect(
+      formatChatModelSelectionLabel(selection, ctx, {
+        id: 'opencode-cli:openai/gpt-6-luna',
+        label: 'Wrong model',
+      }),
+    ).toBe(fallback);
   });
 
   it('blocks typed send when no model is selected', () => {

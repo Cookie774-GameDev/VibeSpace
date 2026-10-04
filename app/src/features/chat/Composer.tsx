@@ -8160,12 +8160,12 @@ function ModelPicker({
   const setAutomaticModelRoutingEnabled = useAuthStore((s) => s.setAutomaticModelRoutingEnabled);
   const hiveEnabled = isHiveProductEnabled();
   const [selectedId, setSelectedId] = useState('');
-  const displayLabel = formatChatModelSelectionLabel(selection, modelCtx);
   const activeProvider = selection.mode === 'single' ? selection.providerId : undefined;
   const activeModel = selection.mode === 'single' ? selection.modelId : undefined;
   const activeRoute = flatOptions
     .flatMap((option) => option.alternativeRoutes ?? [option])
     .find((option) => option.id === selectionOptionId(selection));
+  const displayLabel = formatChatModelSelectionLabel(selection, modelCtx, activeRoute);
   const effortOptions = listEffortOptions((activeRoute?.variants ?? []).map((id) => ({ id })));
   const initialEffort =
     reasoningMode === 'token-final-boss' ? (effortOptions.at(-1)?.label ?? 'auto') : manualEffort;

@@ -17,6 +17,8 @@ import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
 import { clearPreview, setPreview } from '../streamingPreviewStore';
 import { publishTurnEvent } from '../runtime/turn/turnStore';
+import { useAgentStore } from '@/stores/agents';
+import type { Agent } from '@/types';
 
 function message(
   id: string,
@@ -37,6 +39,110 @@ function message(
 }
 
 describe('AgenticConsole', () => {
+  const permission = (status: 'pending' | 'approved_plan'): Message['parts'][number] => ({
+    kind: 'permission_request',
+    request: {
+      id: 'permission-external-directory',
+      title: 'Allow external_directory',
+      description: 'OpenCode requests approval for external_directory.',
+      risk: 'high',
+      action: 'apply_changes',
+      status,
+    },
+  });
+
+  it('keeps a completed permission card and Jarvis reply under one assistant identity', () => {
+    const agentId = 'agent-identity-regression' as Agent['id'];
+    useAgentStore
+      .getState()
+      .registerAgent({ id: agentId, name: 'Jarvis', slug: 'jarvis' } as Agent);
+    try {
+      const answer = {
+        ...message(
+          'identity-answer',
+          'assistant',
+          3,
+          [{ kind: 'text', text: 'Hello, sir. What can I help you with?' }],
+          { model: 'openai/gpt-6.1-sol' },
+        ),
+        agent_id: agentId,
+      };
+      renderConsole({
+        chatId: 'chat-console',
+        messages: [
+          message('identity-prompt', 'user', 1, [{ kind: 'text', text: 'hi' }]),
+          message('identity-permission', 'assistant', 2, [permission('approved_plan')]),
+          answer,
+        ],
+        activity: [],
+        sessionEvidence: { status: 'completed' },
+      });
+      expect(screen.getAllByText('Jarvis')).toHaveLength(1);
+      expect(screen.queryByText('Assistant')).toBeNull();
+      expect(screen.getByText('Allow external_directory')).toBeTruthy();
+      expect(screen.getByText('Permission status: approved_plan')).toBeTruthy();
+      expect(screen.getByText('Hello, sir. What can I help you with?')).toBeTruthy();
+      expect(document.querySelector('[data-assistant-final-answer]')?.textContent).toContain(
+        'openai/gpt-6.1-sol',
+      );
+    } finally {
+      useAgentStore.getState().unregisterAgent(agentId);
+    }
+  });
+
+  it('preserves the pending permission identity and controls before a reply', () => {
+    renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('pending-prompt', 'user', 1, [{ kind: 'text', text: 'hi' }]),
+        message('pending-permission', 'assistant', 2, [permission('pending')]),
+      ],
+      activity: [],
+      sessionEvidence: { status: 'running' },
+    });
+    expect(screen.getAllByText('Assistant')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Approve once' })).toBeTruthy();
+  });
+
+  it('preserves a permission identity belonging to a different agent', () => {
+    renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('different-agent-prompt', 'user', 1, [{ kind: 'text', text: 'Check both agents' }]),
+        {
+          ...message('different-agent-permission', 'assistant', 2, [permission('pending')]),
+          agent_id: 'permission-agent' as Agent['id'],
+        },
+        {
+          ...message('different-agent-answer', 'assistant', 3, [
+            { kind: 'text', text: 'Other agent reply' },
+          ]),
+          agent_id: 'reply-agent' as Agent['id'],
+        },
+      ],
+      activity: [],
+      sessionEvidence: { status: 'running' },
+    });
+    expect(screen.getAllByText('Assistant')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Approve once' })).toBeTruthy();
+  });
+
+  it('does not use a previous turn reply to suppress a new permission identity', () => {
+    renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('previous-prompt', 'user', 1, [{ kind: 'text', text: 'Previous request' }]),
+        message('previous-answer', 'assistant', 2, [{ kind: 'text', text: 'Previous reply' }]),
+        message('current-prompt', 'user', 3, [{ kind: 'text', text: 'Current request' }]),
+        message('current-permission', 'assistant', 4, [permission('pending')]),
+      ],
+      activity: [],
+      sessionEvidence: { status: 'running' },
+    });
+    expect(screen.getAllByText('Assistant')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Approve once' })).toBeTruthy();
+  });
+
   it.each(['codex', 'opencode'])('renders a %s greeting as an ordinary assistant reply', (route) => {
     const rendered = renderConsole({
       chatId: 'chat-console',
