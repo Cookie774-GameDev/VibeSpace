@@ -685,8 +685,20 @@ function BlockView({
   if (block.kind === 'answer') {
     const finalAnswerIndex = block.message.parts.reduce((last, part, index) => part.kind === 'text' && part.text.trim() ? index : last, -1);
     const finalInMessage = block.id === `message:${block.message.id}:answer:${finalAnswerIndex}`;
+    if (nativeCheckpoint && hideNativeCheckpoint) return null;
+    if (finalInMessage) {
+      return (
+        <div className="agentic-answer is-final" data-message-id={block.message.id} data-assistant-final-answer="true">
+          <MessageBubble
+            message={{ ...block.message, parts: [{ kind: 'text', text: block.text }] }}
+            compact={compact}
+            creatorDraftKind={creatorDraftKind}
+            showActivityLedger={false}
+          />
+        </div>
+      );
+    }
     if (nativeCheckpoint) {
-      if (hideNativeCheckpoint) return null;
       const final = block.id === finalAnswerId;
       return (
         <div

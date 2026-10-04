@@ -67,17 +67,21 @@ export function selectAgenticSessionEvidence(
   const status =
     turn.status === 'completed'
       ? 'completed'
-      : turn.status === 'failed' || turn.status === 'interrupted'
-        ? 'error'
-        : turn.status;
+      : turn.status === 'interrupted'
+        ? 'partial'
+        : turn.status === 'failed'
+          ? 'error'
+          : turn.status;
   return Object.freeze({
     status,
     currentOperation:
-      status === 'error'
-        ? turn.error?.message ?? 'Failed'
-        : status === 'cancelled'
-          ? 'Cancelled'
-          : status.replaceAll('_', ' '),
+      turn.status === 'interrupted'
+        ? 'Interrupted · outcome unknown'
+        : status === 'error'
+          ? turn.error?.message ?? 'Failed'
+          : status === 'cancelled'
+            ? 'Cancelled'
+            : status.replaceAll('_', ' '),
     ...(turn.provider?.modelId ? { model: turn.provider.modelId } : {}),
     startedAt: turn.acceptedAt,
     ...(turn.terminalAt ? { endedAt: turn.terminalAt } : {}),

@@ -16,6 +16,7 @@ import { DEFAULT_CONSOLE_PREFERENCES, saveConsolePreferences } from './preferenc
 import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
 import { clearPreview, setPreview } from '../streamingPreviewStore';
+import { publishTurnEvent } from '../runtime/turn/turnStore';
 
 function message(
   id: string,
@@ -36,6 +37,41 @@ function message(
 }
 
 describe('AgenticConsole', () => {
+  it.each(['codex', 'opencode'])('renders a %s greeting as an ordinary assistant reply', (route) => {
+    const rendered = renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message(`user-${route}`, 'user', 1, [{ kind: 'text', text: 'Hi there' }]),
+        message(`answer-${route}`, 'assistant', 2, [{ kind: 'text', text: 'Hello, sir.' }], {
+          model: route === 'opencode' ? 'opencode/openai/gpt-6-luna' : 'gpt-6-luna',
+        }),
+      ],
+      activity: [],
+      sessionEvidence: { status: 'completed' },
+    });
+    expect(screen.getAllByText('Assistant')).toHaveLength(1);
+    expect(screen.getByText('Hello, sir.')).toBeTruthy();
+    expect(rendered.container.querySelector('[data-assistant-final-answer] .text-metadata')?.textContent).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Copy message' })).toBeTruthy();
+    expect(rendered.container.textContent).not.toContain('Final response');
+    expect(rendered.container.querySelector('[data-native-assistant-checkpoint]')).toBeNull();
+  });
+
+  it('shows one thinking indicator without an empty assistant identity while awaiting text', () => {
+    const rendered = renderConsole({
+      chatId: 'chat-console',
+      messages: [
+        message('waiting-user', 'user', 1, [{ kind: 'text', text: 'Hi there' }]),
+        message('waiting-answer', 'assistant', 2, [{ kind: 'text', text: '' }]),
+      ],
+      activity: [],
+      sessionEvidence: { status: 'running' },
+    });
+    expect(screen.queryByText('Assistant')).toBeNull();
+    expect(rendered.container.querySelectorAll('[data-live-turn-status]')).toHaveLength(1);
+    expect(rendered.container.querySelector('[data-message-actions]')).toBeNull();
+  });
+
   it('keeps follow-up live activity after its own prompt rather than the previous answer', () => {
     const rendered = renderConsole({chatId: 'chat-console', messages: [
       message('old-user', 'user', 1, [{kind: 'text', text: 'Old request'}]),
@@ -909,7 +945,7 @@ describe('AgenticConsole', () => {
         sessionEvidence: { status: 'running' },
       });
 
-      expect(rendered.container.querySelectorAll('.agentic-answer__text')).toHaveLength(2);
+      expect(rendered.container.querySelectorAll('[data-assistant-final-answer]')).toHaveLength(2);
       act(() => setPreview({
         accountId,
         chatId: 'chat-console',
@@ -919,13 +955,19 @@ describe('AgenticConsole', () => {
         updatedAt: 3,
         segments: [{ kind: 'text', id: 'part-0', text: 'Partial response.' }],
       }));
-      expect(rendered.container.querySelectorAll('.agentic-answer__text')).toHaveLength(1);
+      expect(rendered.container.querySelectorAll('[data-assistant-final-answer]')).toHaveLength(1);
       expect(rendered.container.textContent).toContain('Unrelated durable note.');
       expect(rendered.container.querySelector('[data-streaming-chat-preview]')?.textContent)
         .toContain('Partial response.');
 
+      act(() => publishTurnEvent({ accountId, runId: 'chat-preview:msg-live' }, {
+        type: 'turn.interrupted', at: 4, reason: 'restored_without_live_owner',
+      }));
+      expect(rendered.container.querySelectorAll('[data-assistant-final-answer]')).toHaveLength(2);
+      expect(rendered.container.querySelector('[data-streaming-chat-preview]')).toBeNull();
+
       act(() => clearPreview(accountId, 'chat-preview:msg-live'));
-      expect(rendered.container.querySelectorAll('.agentic-answer__text')).toHaveLength(2);
+      expect(rendered.container.querySelectorAll('[data-assistant-final-answer]')).toHaveLength(2);
       expect(rendered.container.querySelector('[data-streaming-chat-preview]')).toBeNull();
     } finally {
       act(() => clearPreview(accountId, 'chat-preview:msg-live'));
@@ -1445,10 +1487,10 @@ describe('AgenticConsole', () => {
     );
     expect(ledger.textContent).toContain('Edited 1');
     expect(rendered.container.querySelectorAll('[data-native-assistant-checkpoint]')).toHaveLength(
-      2,
+      1,
     );
     expect(rendered.container.textContent).not.toContain('Final response');
-    expect(rendered.container.textContent).not.toContain('Assistant');
+    expect(screen.getAllByText('Assistant')).toHaveLength(1);
     expect(rendered.container.textContent).not.toContain('C:\\');
   });
 
@@ -1478,7 +1520,7 @@ describe('AgenticConsole', () => {
       sessionEvidence: { status: 'completed' },
     });
 
-    const checkpoint = rendered.container.querySelector('[data-native-assistant-checkpoint="final"]');
+    const checkpoint = rendered.container.querySelector('[data-assistant-final-answer="true"]');
     expect(checkpoint?.querySelector('[data-assistant-rich-text="true"]')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Completed' })).toBeTruthy();
     expect(screen.getByText('Read the file')).toBeTruthy();
@@ -1498,7 +1540,7 @@ describe('AgenticConsole', () => {
       sessionEvidence: { status: 'completed' },
     });
 
-    const answer = rendered.container.querySelector('.agentic-answer__text');
+    const answer = rendered.container.querySelector('[data-assistant-final-answer] [data-assistant-rich-text]');
     expect(answer?.getAttribute('data-assistant-rich-text')).toBe('true');
     expect(screen.getByRole('heading', { name: 'Result' })).toBeTruthy();
     expect(screen.getByText('Stable')).toBeTruthy();
@@ -1655,12 +1697,12 @@ describe('AgenticConsole', () => {
     });
 
     expect(rendered.container.querySelectorAll('[data-native-assistant-checkpoint]')).toHaveLength(
-      5,
+      4,
     );
     expect(rendered.container.querySelectorAll('[data-assistant-activity-ledger]')).toHaveLength(4);
     expect(screen.getAllByRole('button', { name: /show activity details/i })).toHaveLength(4);
     expect(rendered.container.textContent).not.toMatch(
-      /PRIVATE internal|PRIVATE project|Final response|Assistant|C:\\private|private command/iu,
+      /PRIVATE internal|PRIVATE project|Final response|C:\\private|private command/iu,
     );
 
     fireEvent.click(screen.getAllByRole('button', { name: /show activity details/i })[0]!);

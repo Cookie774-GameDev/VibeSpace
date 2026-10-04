@@ -9,7 +9,7 @@ import {
   subscribeChatPreviews,
   subscribePreviews,
 } from './streamingPreviewStore';
-import { resetTurnStoreForTests } from './runtime/turn/turnStore';
+import { getTurn, publishTurnEvent, resetTurnStoreForTests } from './runtime/turn/turnStore';
 
 const preview = {
   accountId: 'account-a',
@@ -21,6 +21,17 @@ const preview = {
 };
 
 describe('streaming preview store', () => {
+  it('retires an interrupted chat preview without erasing saved public evidence', () => {
+    setPreview(preview);
+    publishTurnEvent(preview, { type: 'turn.interrupted', at: 11, reason: 'restored_without_live_owner' });
+    expect(getChatPreview('account-a', 'chat-1')).toBeNull();
+    expect(getPreview('account-a', 'run-1')?.text).toBe('Safe preview.');
+    expect(getTurn('account-a', 'run-1')).toMatchObject({
+      status: 'interrupted', errorCode: 'restored_without_live_owner',
+      public: { text: 'Safe preview.' },
+    });
+  });
+
   beforeEach(() => {
     resetTurnStoreForTests();
     clearAccountPreviews('account-a');

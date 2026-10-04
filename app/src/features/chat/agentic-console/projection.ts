@@ -337,6 +337,12 @@ function resultDiffPathMatch(
 
 function projectMessage(message: Message, preserveAssistantMessages: boolean): TranscriptBlock[] {
   const sourceId = `message:${message.id}`;
+  // A provider placeholder is not a public reply. Live status owns the waiting
+  // phase until the assistant has text or structured content to display.
+  if (message.role === 'assistant' && message.parts.every(
+    (part) => part.kind === 'text' && !part.text.trim(),
+  )) return [];
+
   if (
     hasInteractiveParts(message) ||
     message.role === 'system' ||

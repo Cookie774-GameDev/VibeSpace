@@ -19,6 +19,12 @@ function message(role: Message['role'], parts: Message['parts']): Message {
 }
 
 describe('MessageBubble assistant activity ledger', () => {
+  it.each([{ parts: [] }, { parts: [{ kind: 'text' as const, text: '  ' }] }])('hides an empty assistant placeholder: %j', ({ parts }) => {
+    const rendered = render(<TooltipProvider><MessageBubble message={message('assistant', parts)} /></TooltipProvider>);
+    expect(rendered.container.textContent).toBe('');
+    expect(rendered.container.querySelector('[data-message-actions]')).toBeNull();
+  });
+
   it('keeps one assistant identity and replaces raw tool evidence with the safe collapsed ledger', () => {
     render(
       <TooltipProvider>

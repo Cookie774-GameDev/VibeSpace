@@ -111,6 +111,10 @@ export function MessageBubble({
 
   // System notices stay centered, while a durable provider failure needs the
   // transcript's full width so its route/request/run evidence remains legible.
+  if (message.role === 'assistant' && message.parts.every(
+    (part) => part.kind === 'text' && !part.text.trim(),
+  )) return null;
+
   if (message.role === 'system') {
     return (
       <motion.div

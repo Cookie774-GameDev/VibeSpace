@@ -142,6 +142,9 @@ export function getChatPreview(
   chatId: string,
 ): Readonly<JarvisStreamingPreview> | null {
   const turn = getLatestTurn(accountId, chatId);
+  // An interrupted owner cannot publish a live stream. Keep its checkpoint
+  // available for recovery, but let the saved assistant message own the UI.
+  if (turn?.status === 'interrupted') return null;
   const projected = selectTurnPreview(turn);
   if (!projected || (!projected.text && projected.segments.length === 0)) return null;
   return projected as Readonly<JarvisStreamingPreview>;

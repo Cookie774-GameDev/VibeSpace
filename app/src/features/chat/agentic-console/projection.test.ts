@@ -11,6 +11,14 @@ import {
   windowTranscriptBlocks,
 } from './projection';
 
+describe('empty assistant placeholder projection', () => {
+  it.each([false, true])('omits blank placeholders with preserveAssistantMessages=%s', (preserveAssistantMessages) => {
+    expect(projectAgenticTranscript([
+      message('empty', 'assistant', 2, [{ kind: 'text', text: '  ' }]),
+    ], [], { preserveAssistantMessages })).toEqual([]);
+  });
+});
+
 function message(
   id: string,
   role: Message['role'],
