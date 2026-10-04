@@ -26,7 +26,7 @@ export type SetupDraft = {
 export const setupLinks = {
   'open-tunnels': 'https://platform.openai.com/settings/organization/tunnels',
   'open-api-keys': 'https://platform.openai.com/settings/organization/api-keys',
-  'open-chatgpt': 'https://chatgpt.com/#settings/Connectors',
+  'open-chatgpt': 'https://chatgpt.com/plugins',
 } as const;
 export type SetupLink = keyof typeof setupLinks;
 export const setupErrorMessages: Record<string, string> = {

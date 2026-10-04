@@ -24,6 +24,10 @@ it('shows both tutorials and ChatGPT instructions while native preparation is pe
   expect(screen.getByLabelText('Runtime API key tutorial')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: /Add to ChatGPT/ }));
   expect(screen.getByText('One last step in ChatGPT')).toBeTruthy();
+  const plugins = screen.getByRole('link', { name: 'Open ChatGPT Plugins' });
+  expect(plugins.getAttribute('href')).toBe('https://chatgpt.com/plugins');
+  fireEvent.click(plugins);
+  expect(invoke).toHaveBeenCalledWith('desktop_connector_setup', { action: 'open-chatgpt' });
   expect(
     (screen.getByRole('button', { name: 'Connect tunnel' }) as HTMLButtonElement).disabled,
   ).toBe(true);

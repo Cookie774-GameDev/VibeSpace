@@ -47,11 +47,46 @@ it('opens in-app setup only on explicit action and displays verified tool status
   expect(await screen.findByRole('dialog', { name: 'WebMCP setup' })).toBeTruthy();
   expect(screen.getByText(/Setup complete/)).toBeTruthy();
 });
-it('does not claim missing resources are preloaded', async () => {
+it('keeps setup guidance available without claiming missing resources are preloaded', async () => {
   invoke.mockResolvedValue({ packaged: false, status: 'disconnected', connectionDetected: false });
   render(<DesktopConnectorSetup />);
   await screen.findByText('Connector package is not included in this build.');
-  expect((screen.getByRole('button', { name: 'Setup' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Setup' }) as HTMLButtonElement).disabled).toBe(false);
+});
+it('ends initial checking on a failed status request and lets setup retry', async () => {
+  invoke.mockRejectedValue(new Error('native status unavailable'));
+  render(<DesktopConnectorSetup />);
+  await screen.findByText('Connection status unavailable · checking again');
+  expect(screen.queryByText('Checking connection…')).toBeNull();
+  const setup = screen.getByRole('button', { name: 'Setup' });
+  expect((setup as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(setup);
+  expect(await screen.findByRole('dialog', { name: 'WebMCP setup' })).toBeTruthy();
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith('desktop_connector_setup', { action: 'prepare' }),
+  );
+});
+it('offers setup while the initial status request has not replied', () => {
+  invoke.mockReturnValue(new Promise(() => {}));
+  render(<DesktopConnectorSetup />);
+  expect((screen.getByRole('button', { name: 'Setup' }) as HTMLButtonElement).disabled).toBe(false);
+});
+it('makes verified local tools available without requiring tunnel credentials', async () => {
+  invoke.mockResolvedValue({
+    packaged: true,
+    connectionDetected: true,
+    connectionFile: 'C:/local/state/connection.json',
+    status: 'disconnected',
+    toolCount: 54,
+    hasKey: false,
+    setupComplete: false,
+  });
+  const onConnectionReady = vi.fn();
+  render(<DesktopConnectorSetup onConnectionReady={onConnectionReady} />);
+  await waitFor(() =>
+    expect(onConnectionReady).toHaveBeenCalledWith('C:/local/state/connection.json'),
+  );
+  expect(invoke).not.toHaveBeenCalledWith('desktop_connector_setup', { action: 'connect' });
 });
 it('retains setup progress without claiming a saved key is a verified connection', async () => {
   invoke.mockResolvedValue({ packaged: true, hasKey: true, status: 'connecting', toolCount: 45 });

@@ -17,6 +17,7 @@ export function DesktopConnectorSetup({
 }) {
   const [status, setStatus] = useState<Status>();
   const [statusAvailable, setStatusAvailable] = useState(false);
+  const [checking, setChecking] = useState(true);
   const [setupOpen, setSetupOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -41,6 +42,7 @@ export function DesktopConnectorSetup({
         })
         .finally(() => {
           pending = false;
+          if (active && requested === revision.current) setChecking(false);
         });
     };
     refresh();
@@ -85,13 +87,18 @@ export function DesktopConnectorSetup({
   const complete =
     status?.setupComplete === true || (status?.status === 'ready' && status.toolCount > 0);
   useEffect(() => {
-    if (statusAvailable && complete && status?.connectionDetected && status.connectionFile)
+    if (
+      statusAvailable &&
+      status?.connectionDetected &&
+      status.connectionFile &&
+      status.toolCount > 0
+    )
       onConnectionReady?.(status.connectionFile);
   }, [
-    complete,
     statusAvailable,
     status?.connectionDetected,
     status?.connectionFile,
+    status?.toolCount,
     onConnectionReady,
   ]);
   return (
@@ -105,10 +112,10 @@ export function DesktopConnectorSetup({
           <p className="mt-1 text-sm text-muted-foreground">
             {complete
               ? 'Setup complete. Manage your MCP connection below.'
-              : 'Connect your OpenAI tunnel in a guided panel. Your progress is saved on this computer.'}
+              : 'Prepare local browser and desktop tools, then optionally connect an OpenAI tunnel. Your progress is saved on this computer.'}
           </p>
         </div>
-        <Button onClick={() => setSetupOpen(true)} disabled={busy || !status?.packaged}>
+        <Button onClick={() => setSetupOpen(true)} disabled={busy}>
           {busy
             ? 'Applying…'
             : complete
@@ -119,12 +126,12 @@ export function DesktopConnectorSetup({
         </Button>
       </div>
       <p role="status" className="mt-3 text-sm text-muted-foreground">
-        {!status
+        {checking && !status
           ? 'Checking connection…'
-          : !status.packaged
-            ? 'Connector package is not included in this build.'
-            : !statusAvailable
-              ? 'Connection status unavailable · checking again'
+          : !statusAvailable
+            ? 'Connection status unavailable · checking again'
+            : !status?.packaged
+              ? 'Connector package is not included in this build.'
               : status.enabled === false
                 ? 'MCP is off · automatic recovery paused'
                 : webMcpConnectionReady(status, statusAvailable)

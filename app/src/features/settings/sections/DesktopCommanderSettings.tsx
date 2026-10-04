@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { requestOpenMcpManager } from '@/features/plugins/openMcpManager';
+import { chooseProjectFiles } from '@/features/files/projectFiles';
 import { DesktopConnectorSetup } from './DesktopConnectorSetup';
 import {
   connectDesktopCommander,
@@ -62,6 +63,7 @@ export function DesktopCommanderSettings({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [choosing, setChoosing] = useState(false);
   const attemptedAutoConnection = useRef(false);
   const lifetime = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -101,7 +103,7 @@ export function DesktopCommanderSettings({
   }
   const onConnectionReady = useCallback(
     (file: string) => {
-      if (attemptedAutoConnection.current || client || path || busy) return;
+      if (attemptedAutoConnection.current || client || path || busy || choosing) return;
       attemptedAutoConnection.current = true;
       setPath(file);
       void run(async (signal) => {
@@ -111,13 +113,37 @@ export function DesktopCommanderSettings({
         return loaded;
       }, 'Connected to the VibeSpace Desktop Commander copy.');
     },
-    [client, path, busy, connect],
+    [client, path, busy, choosing, connect],
   );
   function update<K extends keyof DesktopCommanderConfig>(
     key: K,
     value: DesktopCommanderConfig[K],
   ) {
     setDraft((current) => (current ? { ...current, [key]: value } : current));
+  }
+  function changeConnectionPath(value: string) {
+    setPath(value);
+    setClient(undefined);
+    setSnapshot(undefined);
+    setDraft(undefined);
+    setEditing(undefined);
+    setMessage('');
+    setError('');
+  }
+  async function chooseConnectionFile() {
+    setChoosing(true);
+    try {
+      const files = await chooseProjectFiles(false, {
+        title: 'Choose Desktop Commander connection file',
+        extensions: ['json'],
+      });
+      if (!lifetime.current?.signal.aborted && files[0]) changeConnectionPath(files[0]);
+    } catch {
+      if (!lifetime.current?.signal.aborted)
+        setError('The file chooser could not open. Paste the full connection file path instead.');
+    } finally {
+      if (!lifetime.current?.signal.aborted) setChoosing(false);
+    }
   }
   return (
     <section
@@ -143,9 +169,9 @@ export function DesktopCommanderSettings({
         </a>
         <ol className="ml-5 mt-3 list-decimal space-y-2 text-sm text-muted-foreground">
           <li>
-            Extract the VibeSpace Desktop Commander package. In that folder, run{' '}
-            <code>npm ci --ignore-scripts</code>, <code>npm run browser:install</code>, then{' '}
-            <code>npm start</code>.
+            Install Node.js 22 or later and Microsoft Edge. Extract the VibeSpace Desktop Commander
+            package into a private folder. In that folder, run <code>npm ci --ignore-scripts</code>,{' '}
+            <code>npm run browser:install</code>, then <code>npm start</code>.
           </li>
           <li>
             Select the package’s <code>state/connection.json</code> below. Its private connection
@@ -171,21 +197,9 @@ export function DesktopCommanderSettings({
         <Button variant="secondary" onClick={requestOpenMcpManager}>
           Open MCP connections
         </Button>
-        <video
-          className="mt-3 w-full rounded-lg"
-          controls
-          preload="none"
-          aria-label="Browser Agent setup walkthrough"
-          src="/browser-agent-setup/setup.webm"
-        >
-          <track
-            kind="captions"
-            src="/browser-agent-setup/setup.vtt"
-            srcLang="en"
-            label="English"
-            default
-          />
-        </video>
+        <p className="mt-3 text-sm text-muted-foreground">
+          For the original tunnel and API-key video guides, open Setup above.
+        </p>
       </details>
       <div className="my-3 flex flex-wrap items-end gap-2">
         <label className="min-w-0 flex-1 text-sm">
@@ -194,21 +208,20 @@ export function DesktopCommanderSettings({
             aria-label="Desktop Commander connection file"
             className={`${inputClass} mt-1 w-full`}
             value={path}
-            disabled={busy}
-            onChange={(event) => {
-              setPath(event.target.value);
-              setClient(undefined);
-              setSnapshot(undefined);
-              setDraft(undefined);
-              setEditing(undefined);
-              setMessage('');
-              setError('');
-            }}
+            disabled={busy || choosing}
+            onChange={(event) => changeConnectionPath(event.target.value)}
             placeholder="C:\…\state\connection.json"
           />
         </label>
         <Button
-          disabled={busy || !path.trim()}
+          variant="secondary"
+          disabled={busy || choosing}
+          onClick={() => void chooseConnectionFile()}
+        >
+          {choosing ? 'Choosing…' : 'Choose connection file'}
+        </Button>
+        <Button
+          disabled={busy || choosing || !path.trim()}
           onClick={() =>
             void run(async (signal) => {
               const next = await connect(path.trim());

@@ -162,7 +162,7 @@ fn setup_link(action: &str) -> Option<&'static str> {
     match action {
         "open-tunnels" => Some("https://platform.openai.com/settings/organization/tunnels"),
         "open-api-keys" => Some("https://platform.openai.com/settings/organization/api-keys"),
-        "open-chatgpt" => Some("https://chatgpt.com/#settings/Connectors"),
+        "open-chatgpt" => Some("https://chatgpt.com/plugins"),
         _ => None,
     }
 }
@@ -955,6 +955,10 @@ mod tests {
         assert_eq!(
             setup_link("open-api-keys"),
             Some("https://platform.openai.com/settings/organization/api-keys")
+        );
+        assert_eq!(
+            setup_link("open-chatgpt"),
+            Some("https://chatgpt.com/plugins")
         );
         assert_eq!(setup_link("https://untrusted.invalid"), None);
         let status = disconnected_status(

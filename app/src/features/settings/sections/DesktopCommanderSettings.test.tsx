@@ -3,11 +3,31 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 vi.mock('@/features/plugins/openMcpManager', () => ({ requestOpenMcpManager: vi.fn() }));
 import { DesktopCommanderSettings } from './DesktopCommanderSettings';
 const invoke = vi.hoisted(() => vi.fn());
+const chooseProjectFiles = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+vi.mock('@/features/files/projectFiles', () => ({ chooseProjectFiles }));
 beforeEach(() => invoke.mockResolvedValue(undefined));
 afterEach(() => {
   cleanup();
   invoke.mockReset();
+  chooseProjectFiles.mockReset();
+});
+it('chooses the private connection file and opens the genuine MCP manager', async () => {
+  const { requestOpenMcpManager } = await import('@/features/plugins/openMcpManager');
+  chooseProjectFiles.mockResolvedValue(['C:/private desktop/state/connection.json']);
+  render(<DesktopCommanderSettings />);
+  fireEvent.click(screen.getByRole('button', { name: 'Choose connection file' }));
+  await waitFor(() =>
+    expect(
+      (screen.getByLabelText('Desktop Commander connection file') as HTMLInputElement).value,
+    ).toBe('C:/private desktop/state/connection.json'),
+  );
+  expect(chooseProjectFiles).toHaveBeenCalledWith(false, {
+    title: 'Choose Desktop Commander connection file',
+    extensions: ['json'],
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Open MCP connections' }));
+  expect(requestOpenMcpManager).toHaveBeenCalled();
 });
 it('edits all six real settings and preserves unsaved changes in other fields', async () => {
   const config = {
@@ -72,6 +92,26 @@ it('edits all six real settings and preserves unsaved changes in other fields', 
   });
   expect(screen.queryByLabelText('File Read Limit')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Reload configuration' })).toBeNull();
+});
+it('preserves a manually entered path when the chooser is cancelled or unavailable', async () => {
+  render(<DesktopCommanderSettings />);
+  const input = screen.getByLabelText('Desktop Commander connection file') as HTMLInputElement;
+  fireEvent.change(input, { target: { value: 'C:/private/state/connection.json' } });
+  chooseProjectFiles.mockResolvedValueOnce([]);
+  fireEvent.click(screen.getByRole('button', { name: 'Choose connection file' }));
+  await waitFor(() =>
+    expect(
+      (screen.getByRole('button', { name: 'Choose connection file' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  expect(input.value).toBe('C:/private/state/connection.json');
+  chooseProjectFiles.mockRejectedValueOnce(new Error('fixture chooser failure'));
+  fireEvent.click(screen.getByRole('button', { name: 'Choose connection file' }));
+  expect((await screen.findByRole('alert')).textContent).toContain(
+    'Paste the full connection file path',
+  );
+  expect(input.value).toBe('C:/private/state/connection.json');
 });
 it('shows a save failure without claiming success or discarding the edit', async () => {
   const config = {

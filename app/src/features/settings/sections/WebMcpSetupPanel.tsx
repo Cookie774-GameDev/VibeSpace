@@ -558,7 +558,9 @@ export function WebMcpSetupPanel({
             <section className="webmcp-chatgpt">
               <h3>One last step in ChatGPT</h3>
               <p>
-                Create an app named <strong>{pluginName(draft.displayName)}</strong>, choose{' '}
+                Open ChatGPT Plugins in the workspace associated with your tunnel. Use the plus
+                button to create a developer-mode app named{' '}
+                <strong>{pluginName(draft.displayName)}</strong>, choose{' '}
                 <strong>Connection: Tunnel</strong>, select your tunnel, and review its tools.
               </p>
               <div className="webmcp-connection-receipt">
@@ -573,7 +575,11 @@ export function WebMcpSetupPanel({
                   </p>
                 </div>
               </div>
-              {link('open-chatgpt', 'Open ChatGPT Apps')}
+              {link('open-chatgpt', 'Open ChatGPT Plugins')}
+              <p className="webmcp-hint">
+                If your tunnel is missing, check its ChatGPT workspace association and your Tunnels
+                Read + Use permissions. Developer mode must be enabled for your account.
+              </p>
               <p className="webmcp-hint">
                 Adding the app happens in your browser. Tunnel readiness does not mean the ChatGPT
                 app has been added.
