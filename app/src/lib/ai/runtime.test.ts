@@ -99,6 +99,7 @@ const mocks = vi.hoisted(() => ({
   nativeFetch: vi.fn(),
   buildRoutedMcpTaskContext: vi.fn(),
   bindPersistentOpenCodeQuestionRoute: vi.fn(),
+  waitForPersistentOpenCodeChatRelease: vi.fn(async (_chatId: string): Promise<void> => undefined),
   isActiveOpenCodeChildApproval: vi.fn(() => false),
   kernelRuntimeInterceptor: null as
     | ((composition: JarvisKernelRuntimeComposition) => JarvisKernelRuntimeComposition)
@@ -132,6 +133,7 @@ vi.mock('./adapters/opencodePersistent', async (importOriginal) => {
   return {
     ...actual,
     bindPersistentOpenCodeQuestionRoute: mocks.bindPersistentOpenCodeQuestionRoute,
+    waitForPersistentOpenCodeChatRelease: mocks.waitForPersistentOpenCodeChatRelease,
     isActiveOpenCodeChildApproval: mocks.isActiveOpenCodeChildApproval,
     openCodePersistentAdapter: {
       ...actual.openCodePersistentAdapter,
@@ -2287,6 +2289,8 @@ describe('startRuntimeListener agent routing', () => {
     mocks.nativeFetch.mockReset();
     mocks.buildRoutedMcpTaskContext.mockReset();
     mocks.bindPersistentOpenCodeQuestionRoute.mockReset();
+    mocks.waitForPersistentOpenCodeChatRelease.mockReset();
+    mocks.waitForPersistentOpenCodeChatRelease.mockResolvedValue(undefined);
     mocks.kernelRuntimeInterceptor = null;
     mocks.voiceCanSpeak = true;
     clearOpenCodeApprovalStatuses();
@@ -11408,6 +11412,45 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     }
   });
 
+  it('waits for the stopped OpenCode slot before resuming once and rejects duplicate resumes', async () => {
+    const harness = kernelRuntimeBindings(agent('agent_resume', 'apple', 'Answer clearly.'));
+    const release = deferred<void>();
+    mocks.waitForPersistentOpenCodeChatRelease.mockReturnValue(release.promise);
+    mocks.runAgent.mockImplementation((input) => new Promise((_resolve, reject) => {
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    const sent: SendDetail[] = [];
+    const observe = (event: Event) => sent.push((event as CustomEvent<SendDetail>).detail);
+    window.addEventListener('jarvis:send', observe);
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', {
+        detail: { chatId: harness.chatId, text: 'Finish the same task.', cancellationKey: 'msg_kernel_user' },
+      }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { chatId: harness.chatId } }));
+      await stop.whenIdle();
+      window.dispatchEvent(new CustomEvent('jarvis:resume', {
+        detail: { chatId: harness.chatId, cancellationKey: 'resume-held' },
+      }));
+      await vi.waitFor(() => expect(mocks.waitForPersistentOpenCodeChatRelease).toHaveBeenCalledWith(String(harness.chatId)));
+      expect(sent).toHaveLength(1);
+      const onUnavailable = vi.fn();
+      window.dispatchEvent(new CustomEvent('jarvis:resume', {
+        detail: { chatId: harness.chatId, cancellationKey: 'resume-duplicate', onUnavailable },
+      }));
+      expect(onUnavailable).toHaveBeenCalledOnce();
+      release.resolve();
+      await vi.waitFor(() => expect(sent).toHaveLength(2));
+      expect(sent[1]).toMatchObject({ cancellationKey: 'resume-held', resumeOriginalText: 'Finish the same task.' });
+    } finally {
+      release.resolve();
+      window.removeEventListener('jarvis:send', observe);
+      stop();
+      await stop.whenIdle();
+    }
+  });
+
   it('retains the original task across repeated resumes cancelled before provider dispatch', async () => {
     const harness = kernelRuntimeBindings(
       agent('agent_apple', 'apple', 'Always answer with APPLE.'),
@@ -11436,6 +11479,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
             detail: { chatId: harness.chatId, cancellationKey: `resume_${round}` },
           }),
         );
+        await vi.waitFor(() => expect(sent).toHaveLength(round + 2));
         expect(sent.at(-1)?.text).toContain(original);
         expect(sent.at(-1)?.text.match(/Write a TypeScript CSV parser/g)).toHaveLength(1);
       }

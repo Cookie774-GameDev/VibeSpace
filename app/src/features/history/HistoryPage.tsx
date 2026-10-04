@@ -4,7 +4,8 @@ import { Replay } from './Replay';
 import type { ChatId } from '@/types';
 import './sakura-history.css';
 import { browserChatStore } from '@/features/browser-chat/browserChatStore';
-import { useUIStore } from '@/stores/ui';
+import { openStoredChat } from './openStoredChat';
+import { toast } from '@/components/ui/toast';
 
 /**
  * Top-level Session History page.
@@ -20,12 +21,12 @@ import { useUIStore } from '@/stores/ui';
 export function HistoryPage() {
   const [selectedChatId, setSelectedChatId] = React.useState<ChatId | null>(null);
   const [selectedSnapshotId, setSelectedSnapshotId] = React.useState<string | null>(null);
-  const setActiveChat = useUIStore((state) => state.setActiveChat);
-  const setRoute = useUIStore((state) => state.setRoute);
-  const openBrowserChat = (chatId: ChatId) => {
+  const openBrowserChat = async (chatId: ChatId) => {
     browserChatStore.getState().setEngine('browser', chatId);
-    setActiveChat(chatId);
-    setRoute('chat');
+    const result = await openStoredChat(chatId);
+    if (result.status !== 'opened' && result.status !== 'superseded') {
+      toast.error('Chat not opened', 'The saved chat could not be restored. Please try again.');
+    }
   };
 
   return (

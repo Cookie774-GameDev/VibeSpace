@@ -6,7 +6,7 @@ import { browserChatStore, resolveChatEngine } from '@/features/browser-chat/bro
 import type { BrowserChatProviderId } from '@/features/browser-chat/providerRegistry';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
-import type { Chat, ChatId, ProviderId } from '@/types';
+import type { Chat, ChatId, ProjectId, ProviderId } from '@/types';
 
 export type StoredChatEngineIdentity = {
   readonly engine: 'native' | 'browser';
@@ -22,19 +22,21 @@ export type StoredChatOpenResult =
   | { readonly status: 'not-found' | 'forbidden' | 'superseded' | 'failed' };
 
 export interface StoredChatNavigationDependencies {
-  getScope(): { readonly accountId: string | null; readonly workspaceId: string | null };
+  getScope(): { readonly accountId: string | null; readonly workspaceId: string | null; readonly projectId?: string | null };
   getChat(chatId: ChatId): Promise<Chat | undefined>;
+  restoreArchivedChat(chatId: ChatId): Promise<void>;
   restoreExactModel(connection: ProviderConnection): void;
   readStoredEngine(chatId: string): StoredChatEngineIdentity;
   restoreExactEngine(chatId: string, identity: StoredChatEngineIdentity): void;
-  activateAndRoute(chatId: string): void;
+  activateAndRoute(chatId: string, projectId: ProjectId | null): void;
 }
 
 function sameScope(
   left: ReturnType<StoredChatNavigationDependencies['getScope']>,
   right: ReturnType<StoredChatNavigationDependencies['getScope']>,
 ) {
-  return left.accountId === right.accountId && left.workspaceId === right.workspaceId;
+  return left.accountId === right.accountId && left.workspaceId === right.workspaceId &&
+    left.projectId === right.projectId;
 }
 
 /**
@@ -61,6 +63,17 @@ export function createStoredChatNavigator(deps: StoredChatNavigationDependencies
     if (!chat) return { status: 'not-found' };
     if (String(chat.workspace_id) !== initialScope.workspaceId) return { status: 'forbidden' };
 
+    if (chat.archived) {
+      try {
+        await deps.restoreArchivedChat(chat.id);
+      } catch {
+        return { status: 'failed' };
+      }
+      if (request !== latestRequest || !sameScope(initialScope, deps.getScope())) {
+        return { status: 'superseded' };
+      }
+    }
+
     let model: 'none' | 'restored' | 'unavailable' = 'none';
     if (chat.connection?.modelId?.trim()) {
       try {
@@ -80,7 +93,7 @@ export function createStoredChatNavigator(deps: StoredChatNavigationDependencies
     try {
       const storedEngine = deps.readStoredEngine(String(chat.id));
       deps.restoreExactEngine(String(chat.id), storedEngine);
-      deps.activateAndRoute(String(chat.id));
+      deps.activateAndRoute(String(chat.id), chat.project_id ?? null);
     } catch {
       return { status: 'failed' };
     }
@@ -95,9 +108,11 @@ export const openStoredChat = createStoredChatNavigator({
     return {
       accountId: resolveAccountIdentity(auth)?.accountId ?? null,
       workspaceId: auth.workspaceId ? String(auth.workspaceId) : null,
+      projectId: auth.projectId ? String(auth.projectId) : null,
     };
   },
   getChat: (chatId) => chatRepo.getById(chatId),
+  restoreArchivedChat: async (chatId) => { await chatRepo.update(chatId, { archived: false }); },
   restoreExactModel: (connection) => {
     useAuthStore
       .getState()
@@ -121,7 +136,8 @@ export const openStoredChat = createStoredChatNavigator({
     state.setProvider(identity.providerId, chatId);
     state.setEngine(identity.engine, chatId);
   },
-  activateAndRoute: (chatId) => {
+  activateAndRoute: (chatId, projectId) => {
+    useAuthStore.getState().setProjectId(projectId);
     useUIStore.setState({ activeChatId: chatId, route: 'chat' });
   },
 });

@@ -30,13 +30,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('dexie-react-hooks', () => ({
   useLiveQuery: () => {
-    const slot = mocks.liveQueryCall++ % 6;
+    const slot = mocks.liveQueryCall++ % 5;
     if (slot === 0) return mocks.chats;
     if (slot === 1) return [];
     if (slot === 2) return {};
     if (slot === 3) return null;
-    if (slot === 4) return mocks.bindings;
-    return mocks.snapshots;
+    return mocks.bindings;
   },
 }));
 
@@ -109,6 +108,7 @@ function chat(id: string, title: string, projectId: string | null = null): Chat 
     title,
     workspace_id: 'workspace-a',
     project_id: projectId,
+    archived: true,
     active_agent_ids: [],
     created_at: 1,
     updated_at: 1,
@@ -160,6 +160,28 @@ afterEach(() => {
 });
 
 describe('HistoryList destructive confirmation', () => {
+  it('shows only archived chats in the current project, including during a project switch', () => {
+    mocks.activeProjectId = 'project-a';
+    mocks.chats = [
+      chat('archived-a', 'Archived A', 'project-a'),
+      { ...chat('active-a', 'Active A', 'project-a'), archived: false },
+      chat('archived-b', 'Archived B', 'project-b'),
+      chat('unassigned', 'Unassigned'),
+    ];
+    const view = renderHistory();
+    expect(screen.getByText('Archived A')).toBeTruthy();
+    expect(screen.queryByText('Active A')).toBeNull();
+    expect(screen.queryByText('Archived B')).toBeNull();
+    expect(screen.queryByText('Unassigned')).toBeNull();
+    mocks.activeProjectId = 'project-b';
+    view.rerender(<HistoryList selectedChatId={null} onSelectChat={vi.fn()} />);
+    expect(screen.queryByText('Archived A')).toBeNull();
+    expect(screen.getByText('Archived B')).toBeTruthy();
+    mocks.activeProjectId = null;
+    view.rerender(<HistoryList selectedChatId={null} onSelectChat={vi.fn()} />);
+    expect(screen.queryByText('Archived B')).toBeNull();
+    expect(screen.getByText('Unassigned')).toBeTruthy();
+  });
   it('labels and opens a durable Browser Chat binding without replaying provider content', () => {
     const onSelectChat = vi.fn();
     const onOpenBrowserChat = vi.fn();
@@ -180,7 +202,7 @@ describe('HistoryList destructive confirmation', () => {
     expect(document.body.textContent).not.toMatch(/provider message|provider reply/i);
   });
 
-  it('opens and explicitly deletes only a local imported ChatGPT snapshot', async () => {
+  it('excludes imported snapshots without archived-chat and project identity', () => {
     const onSelectChat = vi.fn();
     const onSelectSnapshot = vi.fn();
     mocks.snapshots = [
@@ -201,27 +223,10 @@ describe('HistoryList destructive confirmation', () => {
       />,
     );
 
-    expect(screen.getByText('Imported snapshot · ChatGPT')).toBeTruthy();
-    fireEvent.click(screen.getByText('Imported Alpha').closest('button')!);
-    expect(onSelectSnapshot).toHaveBeenCalledWith('snapshot-a');
-    expect(onSelectChat).toHaveBeenCalledWith(null);
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Delete imported snapshot Imported Alpha' }),
-    );
-    const dialog = screen.getByRole('alertdialog', {
-      name: 'Delete local snapshot Imported Alpha?',
-    });
-    expect(dialog.textContent).toMatch(/original ChatGPT conversation.*not changed/i);
-    fireEvent.click(screen.getByRole('button', { name: 'Delete local snapshot' }));
-
-    await waitFor(() =>
-      expect(mocks.removeSnapshot).toHaveBeenCalledWith(
-        { accountId: 'account-a', workspaceId: 'workspace-a' },
-        'snapshot-a',
-      ),
-    );
-    expect(mocks.remove).not.toHaveBeenCalled();
+    expect(screen.queryByText('Imported Alpha')).toBeNull();
+    expect(screen.queryByText('Imported snapshot · ChatGPT')).toBeNull();
+    expect(onSelectSnapshot).not.toHaveBeenCalled();
+    expect(mocks.removeSnapshot).not.toHaveBeenCalled();
   });
 
   it('opens an alert dialog for one chat and keeps Cancel focused without deleting', async () => {
@@ -296,7 +301,8 @@ describe('HistoryList destructive confirmation', () => {
     expect(mocks.remove.mock.calls).toEqual([['chat-a'], ['chat-b']]);
   });
 
-  it('reconciles a mixed-project batch through each target chat project', async () => {
+  it('clears only the current project and preserves another project intent', async () => {
+    mocks.activeProjectId = 'project-a';
     mocks.chats = [
       chat('chat-a', 'Alpha chat', 'project-a'),
       chat('chat-b', 'Beta chat', 'project-b'),
@@ -314,15 +320,15 @@ describe('HistoryList destructive confirmation', () => {
     renderHistory();
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear visible' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Delete 2 chats' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 1 chat' }));
 
-    await waitFor(() => expect(mocks.remove).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mocks.remove).toHaveBeenCalledTimes(1));
     expect(
       store.read({ accountId: 'account-a', workspaceId: 'workspace-a', projectId: 'project-a' }),
     ).toEqual({ version: 1, intent: { kind: 'reuse-primary' } });
     expect(
       store.read({ accountId: 'account-a', workspaceId: 'workspace-a', projectId: 'project-b' }),
-    ).toEqual({ version: 1, intent: { kind: 'reuse-primary' } });
+    ).toEqual({ version: 1, intent: { kind: 'specific-chat', chatId: 'chat-b' }, primaryChatId: 'chat-b' });
   });
 
   it('fails closed if the active workspace changes before explicit confirmation', async () => {

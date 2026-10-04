@@ -77,6 +77,7 @@ describe('stored chat navigation', () => {
   const activateAndRoute = vi.fn<StoredChatNavigationDependencies['activateAndRoute']>(() =>
     events.push('route'),
   );
+  const restoreArchivedChat = vi.fn(async (_chatId: ChatId) => { events.push('restore'); });
   const deps = {
     getScope,
     getChat,
@@ -84,6 +85,7 @@ describe('stored chat navigation', () => {
     readStoredEngine,
     restoreExactEngine,
     activateAndRoute,
+    restoreArchivedChat,
   } satisfies StoredChatNavigationDependencies;
 
   beforeEach(() => {
@@ -108,8 +110,20 @@ describe('stored chat navigation', () => {
       engine: 'browser',
       providerId: 'chatgpt',
     });
-    expect(deps.activateAndRoute).toHaveBeenCalledWith('chat-a');
+    expect(deps.activateAndRoute).toHaveBeenCalledWith('chat-a', null);
     expect(events).toEqual(['model', 'engine', 'route']);
+  });
+
+  it('restores the exact archived chat before opening it for continued messaging', async () => {
+    deps.getChat.mockResolvedValueOnce({ ...chat(), archived: true });
+    const restored = deferred<void>();
+    restoreArchivedChat.mockImplementationOnce(() => restored.promise);
+    const request = createStoredChatNavigator(deps)('chat-a' as ChatId);
+    await vi.waitFor(() => expect(restoreArchivedChat).toHaveBeenCalledWith('chat-a'));
+    expect(activateAndRoute).not.toHaveBeenCalled();
+    restored.resolve();
+    await expect(request).resolves.toMatchObject({ status: 'opened', chatId: 'chat-a' });
+    expect(activateAndRoute).toHaveBeenCalledOnce();
   });
 
   it('opens messages when the exact stored model is unavailable without selecting a replacement', async () => {
@@ -126,7 +140,7 @@ describe('stored chat navigation', () => {
     });
 
     expect(deps.restoreExactModel).toHaveBeenCalledTimes(1);
-    expect(deps.activateAndRoute).toHaveBeenCalledWith('chat-a');
+    expect(deps.activateAndRoute).toHaveBeenCalledWith('chat-a', null);
     expect(events).toEqual(['model', 'engine', 'route']);
   });
 
@@ -160,7 +174,7 @@ describe('stored chat navigation', () => {
     await expect(olderRequest).resolves.toEqual({ status: 'superseded' });
 
     expect(deps.activateAndRoute).toHaveBeenCalledTimes(1);
-    expect(deps.activateAndRoute).toHaveBeenCalledWith('chat-newest');
+    expect(deps.activateAndRoute).toHaveBeenCalledWith('chat-newest', null);
   });
 
   it('does not activate when the account or workspace changes during lookup', async () => {

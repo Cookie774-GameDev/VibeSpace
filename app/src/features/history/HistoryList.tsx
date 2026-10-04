@@ -42,8 +42,6 @@ export interface HistoryListProps {
   onOpenBrowserChat?: (id: ChatId) => void;
 }
 
-type ProjectFilter = 'all' | 'active';
-
 interface PendingHistoryDeletion {
   chatIds?: ChatId[];
   snapshotId?: string;
@@ -64,18 +62,20 @@ interface PendingHistoryDeletion {
 
 const MAX_ROWS = 200;
 
+function matchesHistoryProject(chat: Chat, projectId: ProjectId | null): boolean {
+  return chat.archived === true && (chat.project_id ?? null) === projectId;
+}
+
 /**
  * Left rail of the Session History page.
  *
- * Live-streams chats for the active workspace, sorted by `updated_at desc`
+ * Live-streams archived chats for the current project, sorted by `updated_at desc`
  * and capped at {@link MAX_ROWS}. Search is best-effort: titles are filtered
  * client-side, and a second live query scans message text for matches when
  * the query is at least 2 chars (kept off below that to avoid a full scan
  * on every keystroke).
  *
- * The project filter chip row is intentionally minimal — "All projects" or
- * the user's active project. Switching projects elsewhere in the app
- * automatically updates the chip.
+ * Switching projects elsewhere updates the list and its project chip.
  */
 export function HistoryList({
   selectedChatId,
@@ -90,7 +90,6 @@ export function HistoryList({
   const agents = useAgentStore((s) => s.agents);
 
   const [query, setQuery] = React.useState('');
-  const [projectFilter, setProjectFilter] = React.useState<ProjectFilter>('all');
   const [deleting, setDeleting] = React.useState(false);
   const [pendingDeletion, setPendingDeletion] = React.useState<PendingHistoryDeletion | null>(null);
   const deletionSessionId = React.useId();
@@ -182,15 +181,16 @@ export function HistoryList({
     [accountId, activeProjectId, deletionSessionId, workspaceId],
   );
 
-  // Live chat list, scoped to workspace, sorted newest-first, capped.
+  // Scope before the cap so another project's rows cannot displace this history.
   const chats = useLiveQuery(
     async () => {
       if (!workspaceId) return [] as Chat[];
-      const rows = await db.chats.where('workspace_id').equals(workspaceId).toArray();
+      const rows = (await db.chats.where('workspace_id').equals(workspaceId).toArray())
+        .filter((chat) => matchesHistoryProject(chat, activeProjectId));
       rows.sort((a, b) => b.updated_at - a.updated_at);
       return rows.slice(0, MAX_ROWS);
     },
-    [workspaceId],
+    [workspaceId, activeProjectId],
     [] as Chat[],
   );
   chatsRef.current = chats ?? [];
@@ -265,24 +265,9 @@ export function HistoryList({
     [browserBindings],
   );
 
-  const importedSnapshots = useLiveQuery(
-    async () => {
-      if (!accountId || !workspaceId) return [] as BrowserChatSnapshotRow[];
-      const rows = await db.browser_chat_snapshots
-        .where('[accountId+workspaceId]')
-        .equals([accountId, String(workspaceId)])
-        .toArray();
-      return rows.sort((left, right) => right.updatedAt - left.updatedAt);
-    },
-    [accountId, workspaceId],
-    [] as BrowserChatSnapshotRow[],
-  );
-
   const filtered = React.useMemo(() => {
-    let rows = chats ?? [];
-    if (projectFilter === 'active' && activeProjectId) {
-      rows = rows.filter((c) => c.project_id === activeProjectId);
-    }
+    // Also guard the previous live-query result while a project switch resolves.
+    let rows = (chats ?? []).filter((chat) => matchesHistoryProject(chat, activeProjectId));
     const q = query.trim().toLowerCase();
     if (q) {
       rows = rows.filter((c) => {
@@ -292,18 +277,11 @@ export function HistoryList({
       });
     }
     return rows;
-  }, [chats, query, projectFilter, activeProjectId, messageMatches]);
+  }, [chats, query, activeProjectId, messageMatches]);
 
-  const filteredSnapshots = React.useMemo(() => {
-    if (projectFilter === 'active') return [] as BrowserChatSnapshotRow[];
-    const q = query.trim().toLocaleLowerCase();
-    if (!q) return importedSnapshots;
-    return importedSnapshots.filter(
-      (snapshot) =>
-        snapshot.title.toLocaleLowerCase().includes(q) ||
-        snapshot.messages.some((message) => message.text.toLocaleLowerCase().includes(q)),
-    );
-  }, [importedSnapshots, projectFilter, query]);
+  // Imports lack archived-chat and project identity, so this scoped history
+  // cannot include them. Stored imports remain intact.
+  const filteredSnapshots: BrowserChatSnapshotRow[] = [];
 
   const removeChats = async (request: PendingHistoryDeletion) => {
     const chatIds = request.chatIds ?? [];
@@ -537,18 +515,11 @@ export function HistoryList({
 
         <div className="mt-2 flex flex-wrap gap-1.5">
           <FilterChip
-            active={projectFilter === 'all'}
-            onClick={() => setProjectFilter('all')}
-            label="All projects"
+            active
+            onClick={() => undefined}
+            label={activeProject?.name ?? (activeProjectId ? 'Current project' : 'Unassigned chats')}
+            hue={activeProject?.color_hue}
           />
-          {activeProject && (
-            <FilterChip
-              active={projectFilter === 'active'}
-              onClick={() => setProjectFilter('active')}
-              label={activeProject.name}
-              hue={activeProject.color_hue}
-            />
-          )}
         </div>
       </div>
 

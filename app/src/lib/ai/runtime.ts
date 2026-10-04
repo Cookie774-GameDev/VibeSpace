@@ -5793,6 +5793,7 @@ export function startRuntimeListener(
   const nativeSteersAcknowledged = new Set<string>();
   const nativeQueuesInFlight = new Set<string>();
   const nativeQueuesAcknowledged = new Set<string>();
+  const resumesInFlight = new Set<string>();
   const completedNativeTurns = new WeakMap<AbortController, boolean>();
   const suspendedSendDetails = new Map<string, Array<{
     send: SendDetail;
@@ -9801,7 +9802,7 @@ export function startRuntimeListener(
     const detail = (e as CustomEvent<ResumeDetail>).detail;
     const chatId = String(detail?.chatId ?? '').trim();
     if (!chatId || !detail?.cancellationKey) return;
-    if ((controllersByChatId.get(chatId)?.size ?? 0) > 0) {
+    if (resumesInFlight.has(chatId) || (controllersByChatId.get(chatId)?.size ?? 0) > 0) {
       devConsole.log({
         channel: 'ai',
         level: 'warn',
@@ -9853,40 +9854,65 @@ export function startRuntimeListener(
       return;
     }
     const suspendedSend = stopped.send;
-    let currentCaoPolicy: ReturnType<typeof caoResumePolicy> | undefined;
-    if (detail.caoExpectedAuthority) {
-      try {
-        currentCaoPolicy = caoResumePolicy(
-          suspendedSend,
-          detail.caoExpectedAuthority,
-          useJarvisInteractionStore.getState().modeForChat(chatId),
-          readPermissionAccess(chatId).access,
-        );
-      } catch {
-        publishChatRunState({
-          chatId,
-          cancellationKey: detail.cancellationKey,
-          status: 'error',
-          errorCode: 'cao_control_resume_authority_changed',
-        });
+    const resumeScope = useAuthStore.getState();
+    const dispatchResume = () => {
+      const currentScope = useAuthStore.getState();
+      if (runtimeStopped || (controllersByChatId.get(chatId)?.size ?? 0) > 0 ||
+        suspendedSendDetails.get(chatId)?.length !== 1 ||
+        suspendedSendDetails.get(chatId)?.[0] !== stopped ||
+        resolveAccountIdentity(currentScope)?.accountId !== resolveAccountIdentity(resumeScope)?.accountId ||
+        currentScope.workspaceId !== resumeScope.workspaceId || currentScope.projectId !== resumeScope.projectId) {
+        detail.onUnavailable?.();
         return;
       }
-    }
-    const resumed: SendDetail = {
-      ...suspendedSend,
-      ...currentCaoPolicy,
-      chatId,
-      cancellationKey: detail.cancellationKey,
-      resumeOriginalText: suspendedSend.resumeOriginalText ?? suspendedSend.text,
-      resumeOfCancellationKey:
-        suspendedSend.resumeOfCancellationKey ?? String(suspendedSend.cancellationKey ?? ''),
-      text: [
-        'Continue the interrupted task using any progress already retained in this persistent session. If the request was stopped before it reached you, begin the original task below. Do not repeat completed work, change model controls, or discard queued context.',
-        'Original user request:',
-        suspendedSend.resumeOriginalText ?? suspendedSend.text,
-      ].join('\n\n'),
+      let currentCaoPolicy: ReturnType<typeof caoResumePolicy> | undefined;
+      if (detail.caoExpectedAuthority) {
+        try {
+          currentCaoPolicy = caoResumePolicy(
+            suspendedSend,
+            detail.caoExpectedAuthority,
+            useJarvisInteractionStore.getState().modeForChat(chatId),
+            readPermissionAccess(chatId).access,
+          );
+        } catch {
+          publishChatRunState({
+            chatId,
+            cancellationKey: detail.cancellationKey,
+            status: 'error',
+            errorCode: 'cao_control_resume_authority_changed',
+          });
+          return;
+        }
+      }
+      const resumed: SendDetail = {
+        ...suspendedSend,
+        ...currentCaoPolicy,
+        chatId,
+        cancellationKey: detail.cancellationKey,
+        resumeOriginalText: suspendedSend.resumeOriginalText ?? suspendedSend.text,
+        resumeOfCancellationKey:
+          suspendedSend.resumeOfCancellationKey ?? String(suspendedSend.cancellationKey ?? ''),
+        text: [
+          'Continue the interrupted task using any progress already retained in this persistent session. If the request was stopped before it reached you, begin the original task below. Do not repeat completed work, change model controls, or discard queued context.',
+          'Original user request:',
+          suspendedSend.resumeOriginalText ?? suspendedSend.text,
+        ].join('\n\n'),
+      };
+      window.dispatchEvent(new CustomEvent(sendEventName, { detail: resumed }));
     };
-    window.dispatchEvent(new CustomEvent(sendEventName, { detail: resumed }));
+    if (stopped.backend !== 'opencode') {
+      dispatchResume();
+      return;
+    }
+    resumesInFlight.add(chatId);
+    void trackListenerOwnedTask(waitForPersistentOpenCodeChatRelease(chatId)
+      .then(dispatchResume)
+      .catch((error) => {
+        devConsole.log({ channel: 'ai', level: 'warn', message: 'OpenCode resume waiting for previous turn failed',
+          detail: { chatId, error: safeErrorMessage(error) } });
+        detail.onUnavailable?.();
+      })
+      .finally(() => resumesInFlight.delete(chatId)));
   };
 
   const handleQueue = (e: Event) => {
