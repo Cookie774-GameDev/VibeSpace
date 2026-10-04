@@ -35,6 +35,12 @@ import type {
 import type { JarvisTerminalOwnedExecution } from '@/lib/jarvis/approvalEngine';
 import type { JarvisQueuedCancellationTransitionAuthority } from '@/lib/jarvis/executionJournal/abortRegistry';
 import type { CanonicalTerminalEvidence } from '@/lib/jarvis/artifactProducerAdapters';
+import {
+  acceptTurn,
+  getLatestTurn,
+  publishTurnEvent,
+  subscribeTurns,
+} from '@/features/chat/runtime/turn/turnStore';
 
 const notificationMocks = vi.hoisted(() => ({
   notifyDone: vi.fn(),
@@ -59,6 +65,11 @@ function claimTerminalExecution(
   scope: Readonly<{ accountId: string; workspaceId: string; projectId: string }> = exactClaimScope,
 ) {
   return claimTerminalExecutionWithScope(executionId, scope);
+}
+
+function startChatRun(accountId: string, runId: string, chatId: string): void {
+  acceptTurn({ accountId, chatId, runId, requestId: `request-${runId}`, attempt: 1 }, 1);
+  publishTurnEvent({ accountId, runId }, { type: 'turn.running', at: 2 });
 }
 
 describe('terminal execution lifecycle', () => {
@@ -384,36 +395,106 @@ describe('terminal execution lifecycle', () => {
     };
   }
 
-  it('completes terminal.create only after an exact native attachment and committed creation result', async () => {
-    const harness = canonicalHarness({ command: '' });
-    expect(isUnclaimedCanonicalTerminalHandoff('account-a', 'jrun_1', 'jterm_1')).toBe(true);
-    expect(isUnclaimedCanonicalTerminalHandoff('account-b', 'jrun_1', 'jterm_1')).toBe(false);
-    expect(harness.recordResult).not.toHaveBeenCalled();
-    expect(await claimTerminalExecution('jterm_1')).toBe(true);
-    expect(isUnclaimedCanonicalTerminalHandoff('account-a', 'jrun_1', 'jterm_1')).toBe(false);
-    expect(await attachTerminalExecution('jterm_1', { ...processAttachment, accountId: 'account-b' })).toBe(false);
-    expect(harness.recordResult).not.toHaveBeenCalled();
-    expect(await attachTerminalExecution('jterm_1', processAttachment)).toBe(true);
-    expect(harness.recordResult).toHaveBeenCalledOnce();
-    expect(harness.recordResult).toHaveBeenCalledWith(expect.objectContaining({
-      state: 'completed', resultRef: 'jterminal_created:jterm_1:pty_1:process-instance-1',
-    }));
-    expect(isCompletedTerminalCreation('jterm_1', 'pty_1')).toBe(true);
-    expect(isCompletedTerminalCreation('jterm_1', 'foreign-pty')).toBe(false);
-    expect(harness.registrations.size).toBe(0);
-    expect(harness.execution.dispose).toHaveBeenCalledOnce();
-    expect(await attachTerminalExecution('jterm_1', processAttachment)).toBe(false);
-    expect(harness.recordResult).toHaveBeenCalledOnce();
+  it('settles the current public chat run once after terminal.create commits', async () => {
+    const runId = 'jrun_terminal_create_public';
+    const chatId = 'chat_terminal_create_public';
+    startChatRun('account-a', runId, chatId);
+    const runStates: string[] = [];
+    const onRunState = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId: string; status: string }>).detail;
+      if (detail.chatId === chatId) runStates.push(detail.status);
+    };
+    window.addEventListener('jarvis:run-state', onRunState);
+
+    try {
+      const harness = canonicalHarness({ command: '', runId });
+      expect(isUnclaimedCanonicalTerminalHandoff('account-a', runId, 'jterm_1')).toBe(true);
+      expect(isUnclaimedCanonicalTerminalHandoff('account-b', runId, 'jterm_1')).toBe(false);
+      expect(harness.recordResult).not.toHaveBeenCalled();
+      expect(await claimTerminalExecution('jterm_1')).toBe(true);
+      expect(isUnclaimedCanonicalTerminalHandoff('account-a', runId, 'jterm_1')).toBe(false);
+      expect(
+        await attachTerminalExecution('jterm_1', { ...processAttachment, accountId: 'account-b' }),
+      ).toBe(false);
+      expect(harness.recordResult).not.toHaveBeenCalled();
+      expect(runStates).toEqual([]);
+      expect(getLatestTurn('account-a', chatId)?.status).toBe('running');
+
+      expect(await attachTerminalExecution('jterm_1', processAttachment)).toBe(true);
+      expect(harness.recordResult).toHaveBeenCalledOnce();
+      expect(harness.recordResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          state: 'completed',
+          resultRef: 'jterminal_created:jterm_1:pty_1:process-instance-1',
+        }),
+      );
+      expect(runStates).toEqual(['done']);
+      expect(getLatestTurn('account-a', chatId)?.status).toBe('completed');
+      expect(isCompletedTerminalCreation('jterm_1', 'pty_1')).toBe(true);
+      expect(isCompletedTerminalCreation('jterm_1', 'foreign-pty')).toBe(false);
+      expect(harness.registrations.size).toBe(0);
+      expect(harness.execution.dispose).toHaveBeenCalledOnce();
+      expect(await attachTerminalExecution('jterm_1', processAttachment)).toBe(false);
+      expect(harness.recordResult).toHaveBeenCalledOnce();
+      expect(runStates).toEqual(['done']);
+    } finally {
+      window.removeEventListener('jarvis:run-state', onRunState);
+    }
+  });
+
+  it('keeps a committed terminal.create complete when a turn subscriber throws', async () => {
+    const runId = 'jrun_terminal_create_subscriber_error';
+    const chatId = 'chat_terminal_create_subscriber_error';
+    startChatRun('account-a', runId, chatId);
+    const runStates: string[] = [];
+    const onRunState = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId: string; status: string }>).detail;
+      if (detail.chatId === chatId) runStates.push(detail.status);
+    };
+    window.addEventListener('jarvis:run-state', onRunState);
+    const unsubscribe = subscribeTurns(() => {
+      throw new Error('turn subscriber failed');
+    });
+
+    try {
+      const harness = canonicalHarness({ command: '', runId });
+      expect(await claimTerminalExecution('jterm_1')).toBe(true);
+      await expect(attachTerminalExecution('jterm_1', processAttachment)).resolves.toBe(true);
+      expect(harness.recordResult).toHaveBeenCalledOnce();
+      expect(isCompletedTerminalCreation('jterm_1', 'pty_1')).toBe(true);
+      expect(useTerminalExecutionStore.getState().executions.jterm_1?.status).toBe('complete');
+      expect(getLatestTurn('account-a', chatId)?.status).toBe('completed');
+      expect(runStates).toEqual(['done']);
+    } finally {
+      unsubscribe();
+      window.removeEventListener('jarvis:run-state', onRunState);
+    }
   });
 
   it('does not acknowledge a create whose cancellation intent precedes native attachment', async () => {
-    const harness = canonicalHarness({ command: '' });
-    expect(await claimTerminalExecution('jterm_1')).toBe(true);
-    await requestTerminalExecutionCancellation('jterm_1');
-    expect(await attachTerminalExecution('jterm_1', processAttachment)).toBe(true);
-    expect(harness.recordResult).not.toHaveBeenCalled();
-    expect(isCompletedTerminalCreation('jterm_1', 'pty_1')).toBe(false);
-    expect(harness.execution.dispose).not.toHaveBeenCalled();
+    const runId = 'jrun_terminal_create_cancel_public';
+    const chatId = 'chat_terminal_create_cancel_public';
+    startChatRun('account-a', runId, chatId);
+    const runStates: string[] = [];
+    const onRunState = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId: string; status: string }>).detail;
+      if (detail.chatId === chatId) runStates.push(detail.status);
+    };
+    window.addEventListener('jarvis:run-state', onRunState);
+
+    try {
+      const harness = canonicalHarness({ command: '', runId });
+      expect(await claimTerminalExecution('jterm_1')).toBe(true);
+      await requestTerminalExecutionCancellation('jterm_1');
+      expect(await attachTerminalExecution('jterm_1', processAttachment)).toBe(true);
+      expect(harness.recordResult).not.toHaveBeenCalled();
+      expect(isCompletedTerminalCreation('jterm_1', 'pty_1')).toBe(false);
+      expect(harness.execution.dispose).not.toHaveBeenCalled();
+      expect(runStates).not.toContain('done');
+      expect(getLatestTurn('account-a', chatId)?.status).toBe('running');
+    } finally {
+      window.removeEventListener('jarvis:run-state', onRunState);
+    }
   });
 
   it('does not terminalize a run from a queued owner while a sibling terminal is already claimed', async () => {

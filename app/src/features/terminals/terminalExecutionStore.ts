@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { create } from 'zustand';
 
+import { publishChatRunState } from '@/features/chat/runtime/chatRunState';
+import { getLatestTurn, getTurn } from '@/features/chat/runtime/turn/turnStore';
 import type {
   JarvisAbortRegistration,
   JarvisAbortRegistrationAuthority,
@@ -649,6 +651,40 @@ function markCanonical(
   }
 }
 
+function settlePublicChatRunForTerminalCreate(record: CanonicalExecutionRecord): void {
+  const turn = getTurn(record.request.accountId, record.request.runId);
+  if (!turn) return;
+
+  const latest = getLatestTurn(record.request.accountId, turn.identity.chatId);
+  if (
+    !latest ||
+    latest.identity.runId !== record.request.runId ||
+    latest.status === 'completed' ||
+    latest.status === 'failed' ||
+    latest.status === 'cancelled' ||
+    latest.status === 'interrupted'
+  ) {
+    return;
+  }
+
+  try {
+    publishChatRunState({ chatId: turn.identity.chatId, status: 'done' });
+  } catch {
+    // A store subscriber must not unwind the already-committed terminal result.
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('jarvis:run-state', {
+            detail: { chatId: turn.identity.chatId, status: 'done' },
+          }),
+        );
+      }
+    } catch {
+      // The durable result remains authoritative if the compatibility signal also fails.
+    }
+  }
+}
+
 function nativeRegistration(record: CanonicalExecutionRecord): JarvisAbortRegistration {
   const registrationId = `terminal:${record.request.executionId}`;
   return Object.freeze({
@@ -1092,15 +1128,24 @@ export async function attachTerminalExecution(
       // terminal.create completes when its own native pane exists. CLI launches
       // retain their process lifetime and settle only through verified native exit.
       if (!record.settlement) {
-        record.settlement=(async()=>{
-          const completedAt=Date.now();
-          const outcome=await record.controller.recordResult({state:'completed',
-            resultRef:`jterminal_created:${id}:${processIdentity.sessionId}:${processIdentity.processInstanceId}`,
-            completedAt});
-          if (outcome.kind!=='committed') throw new TypeError(`result_${outcome.kind}`);
+        record.settlement = (async () => {
+          const completedAt = Date.now();
+          const outcome = await record.controller.recordResult({
+            state: 'completed',
+            resultRef: `jterminal_created:${id}:${processIdentity.sessionId}:${processIdentity.processInstanceId}`,
+            completedAt,
+          });
+          if (outcome.kind !== 'committed') throw new TypeError(`result_${outcome.kind}`);
           record.creationAcknowledged = true;
-          markCanonical(id,'complete',{sessionId:stableSessionId,processIdentity,creationAcknowledged:true});
-          record.settled=true;disposeRecord(record);rememberSettledRecord(record);
+          markCanonical(id, 'complete', {
+            sessionId: stableSessionId,
+            processIdentity,
+            creationAcknowledged: true,
+          });
+          record.settled = true;
+          disposeRecord(record);
+          rememberSettledRecord(record);
+          settlePublicChatRunForTerminalCreate(record);
         })().catch((error: unknown) => {
           // Keep the exact native owner until cleanup produces a verified exit.
           // A failed journal commit is never an acknowledged creation.
