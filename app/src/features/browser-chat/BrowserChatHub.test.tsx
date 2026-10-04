@@ -39,6 +39,7 @@ const providerSurfaceHarness = vi.hoisted(() => ({
         providerId: 'chatgpt';
         surfaceId: string;
         accountProfileKey: `profile_${string}`;
+        pageId: string;
         url: string;
         timestamp: number;
         kind: 'conversation';
@@ -589,6 +590,7 @@ describe('BrowserChatHub', () => {
       providerId: 'chatgpt',
       surfaceId: 'browser-chat-chatgpt',
       accountProfileKey: providerSurfaceHarness.accountProfileKey!,
+      pageId: 'chat-regular',
       url: 'https://chatgpt.com/c/conversation-1',
       timestamp: 101,
       kind: 'conversation',
@@ -888,11 +890,24 @@ describe('BrowserChatHub', () => {
       { binding: bindingA, chat: chats[0]! },
       { binding: bindingB, chat: chats[1]! },
     ]);
+    const activeBeforeBackgroundEvent = useUIStore.getState().activeChatId;
+    providerSurfaceHarness.onNavigation?.({
+      providerId: 'chatgpt',
+      surfaceId: 'browser-chat-chatgpt',
+      accountProfileKey: providerSurfaceHarness.accountProfileKey!,
+      pageId: 'chat-conversation-b',
+      url: 'https://chatgpt.com/c/conversation-b',
+      timestamp: 219,
+      kind: 'conversation',
+      providerConversationKey: 'conversation-b',
+    });
+    expect(useUIStore.getState().activeChatId).toBe(activeBeforeBackgroundEvent);
     await act(async () => {
       providerSurfaceHarness.onNavigation?.({
         providerId: 'chatgpt',
         surfaceId: 'browser-chat-chatgpt',
         accountProfileKey: providerSurfaceHarness.accountProfileKey!,
+        pageId: 'chat-conversation-a',
         url: 'https://chatgpt.com/c/conversation-b',
         timestamp: 220,
         kind: 'conversation',
@@ -966,6 +981,7 @@ describe('BrowserChatHub', () => {
         providerId: 'chatgpt',
         surfaceId: 'browser-chat-chatgpt',
         accountProfileKey: providerSurfaceHarness.accountProfileKey!,
+        pageId: 'chat-original',
         url: 'https://chatgpt.com/c/conversation-new',
         timestamp: 320,
         kind: 'conversation',

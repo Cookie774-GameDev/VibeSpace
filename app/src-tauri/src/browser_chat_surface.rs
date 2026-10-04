@@ -17,15 +17,17 @@ use std::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{
-    webview::{Webview, WebviewBuilder},
+    webview::{NewWindowResponse, PageLoadEvent, Webview, WebviewBuilder},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
 };
 
+use crate::workbench_browser_surface::with_isolated_child_webview2_environment;
+
 const NAVIGATION_EVENT: &str = "browser-chat://navigation";
+const LOAD_EVENT: &str = "browser-chat://load";
 
 #[derive(Debug, Clone)]
 struct SurfaceRecord {
-    provider_id: &'static str,
     label: String,
 }
 
@@ -75,9 +77,19 @@ struct BrowserChatNavigation {
     provider_id: String,
     surface_id: String,
     account_profile_key: String,
+    page_id: String,
     url: String,
     timestamp: u64,
     kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserChatLoad {
+    provider_id: String,
+    account_profile_key: String,
+    page_id: String,
+    phase: &'static str,
 }
 
 #[derive(Clone)]
@@ -169,11 +181,36 @@ fn profile_digest(profile_key: &str) -> Result<String, String> {
     Ok(encoded)
 }
 
-fn surface_label(provider_id: &str, digest: &str) -> Result<String, String> {
-    if digest.len() < 16 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+fn validate_page_id(page_id: &str) -> Result<(), String> {
+    if page_id.is_empty()
+        || page_id.len() > 160
+        || page_id.trim() != page_id
+        || page_id.chars().any(char::is_control)
+    {
+        return Err("browser_chat_page_id_invalid".to_string());
+    }
+    Ok(())
+}
+
+fn page_digest(page_id: &str) -> Result<String, String> {
+    validate_page_id(page_id)?;
+    let digest = Sha256::digest(page_id.as_bytes());
+    Ok(format!("{digest:x}"))
+}
+
+fn surface_label(provider_id: &str, digest: &str, page_digest: &str) -> Result<String, String> {
+    if digest.len() < 16
+        || page_digest.len() < 16
+        || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !page_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
         return Err("browser_chat_profile_digest_invalid".to_string());
     }
-    Ok(format!("browser-chat-{provider_id}-{}", &digest[..16]))
+    Ok(format!(
+        "browser-chat-{provider_id}-{}-{}",
+        &digest[..16],
+        &page_digest[..16]
+    ))
 }
 
 fn relative_bounds(
@@ -220,7 +257,16 @@ fn is_profile_scoped_browser_chat_label(label: &str) -> bool {
     .iter()
     .any(|prefix| {
         label.strip_prefix(prefix).is_some_and(|digest| {
-            digest.len() == 16 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            let mut parts = digest.split('-');
+            let profile = parts.next();
+            let page = parts.next();
+            parts.next().is_none()
+                && profile.is_some_and(|part| {
+                    part.len() == 16 && part.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+                && page.is_some_and(|part| {
+                    part.len() == 16 && part.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
         })
     })
 }
@@ -288,11 +334,15 @@ fn hide_surfaces_except(
         .webviews()
         .into_iter()
         .map(|(label, _)| label)
-        .filter(|label| is_browser_chat_label(label) && Some(label.as_str()) != selected)
+        .filter(|label| {
+            is_browser_chat_label(label)
+                && Some(label.as_str()) != selected
+                && !LEGACY_SURFACE_LABELS.contains(&label.as_str())
+                && !state.surfaces.iter().any(|surface| surface.label == *label)
+        })
         .collect();
     for label in leftover {
-        let tracked = state.surfaces.iter().any(|surface| surface.label == label);
-        deactivate_surface(app, &label, surface_deactivation_mode(&label, tracked))?;
+        deactivate_surface(app, &label, SurfaceDeactivationMode::Destroy)?;
     }
     Ok(())
 }
@@ -393,6 +443,7 @@ fn navigation_kind(provider_id: &str, path: &str) -> Option<&'static str> {
 fn normalized_navigation(
     provider: &ProviderConfig,
     account_profile_key: &str,
+    page_id: &str,
     candidate: &url::Url,
     timestamp: u64,
 ) -> Option<BrowserChatNavigation> {
@@ -409,6 +460,7 @@ fn normalized_navigation(
         provider_id: provider.id.to_string(),
         surface_id: provider.label.to_string(),
         account_profile_key: account_profile_key.to_string(),
+        page_id: page_id.to_string(),
         url: format!("https://{}{}", provider.hostname, candidate.path()),
         timestamp,
         kind: kind.to_string(),
@@ -419,7 +471,8 @@ fn normalized_provider_url(provider: &ProviderConfig, raw_url: &str) -> Option<u
     let candidate = raw_url.parse().ok()?;
     let placeholder_profile =
         "profile_0000000000000000000000000000000000000000000000000000000000000000";
-    let navigation = normalized_navigation(provider, placeholder_profile, &candidate, 0)?;
+    let navigation =
+        normalized_navigation(provider, placeholder_profile, "default", &candidate, 0)?;
     navigation.url.parse().ok()
 }
 
@@ -453,12 +506,14 @@ fn open_provider(
     app: AppHandle,
     provider: ProviderConfig,
     profile_key: String,
+    page_id: String,
     navigation_url: Option<url::Url>,
     bounds: BrowserChatBounds,
     requested_generation: u64,
 ) -> Result<bool, String> {
     let digest = profile_digest(&profile_key)?;
-    let label = surface_label(provider.id, &digest)?;
+    let page_digest = page_digest(&page_id)?;
+    let label = surface_label(provider.id, &digest, &page_digest)?;
     let mut state = SURFACE_STATE
         .lock()
         .map_err(|_| "browser_chat_surface_lock_unavailable".to_string())?;
@@ -483,6 +538,14 @@ fn open_provider(
         let navigation_app = app.clone();
         let navigation_provider = provider.clone();
         let navigation_profile_key = profile_key.clone();
+        let navigation_page_id = page_id.clone();
+        let load_app = app.clone();
+        let load_profile_key = profile_key.clone();
+        let load_page_id = page_id.clone();
+        let load_provider_id = provider.id;
+        let popup_app = app.clone();
+        let popup_label = label.clone();
+        let popup_provider_id = provider.id;
         let builder = WebviewBuilder::new(label.clone(), WebviewUrl::External(target))
             .data_directory(profile_directory(&app, provider.id, &digest)?)
             .focused(false)
@@ -492,6 +555,7 @@ fn open_provider(
                     if let Some(navigation) = normalized_navigation(
                         &navigation_provider,
                         &navigation_profile_key,
+                        &navigation_page_id,
                         candidate,
                         now_millis(),
                     ) {
@@ -499,16 +563,51 @@ fn open_provider(
                     }
                 }
                 allowed
+            })
+            .on_page_load(move |_webview, payload| {
+                if !provider_navigation_allowed(load_provider_id, payload.url())
+                    || payload.url().as_str() == "about:blank"
+                {
+                    return;
+                }
+                let phase = if matches!(payload.event(), PageLoadEvent::Finished) {
+                    "finished"
+                } else {
+                    "started"
+                };
+                let _ = load_app.emit_to(
+                    "main",
+                    LOAD_EVENT,
+                    BrowserChatLoad {
+                        provider_id: load_provider_id.to_string(),
+                        account_profile_key: load_profile_key.clone(),
+                        page_id: load_page_id.clone(),
+                        phase,
+                    },
+                );
+            })
+            .on_new_window(move |target, _features| {
+                if provider_navigation_allowed(popup_provider_id, &target)
+                    && target.as_str() != "about:blank"
+                {
+                    let app = popup_app.clone();
+                    let label = popup_label.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(webview) = app.get_webview(&label) {
+                            let _ = webview.navigate(target);
+                        }
+                    });
+                }
+                NewWindowResponse::Deny
             });
-        let created = main
-            .add_child(builder, position, size)
-            .map_err(|error| format!("browser_chat_create_failed:{error}"))?;
+        let created =
+            with_isolated_child_webview2_environment(|| main.add_child(builder, position, size))
+                .map_err(|error| format!("browser_chat_create_failed:{error}"))?;
         (created, true)
     };
 
     if !state.surfaces.iter().any(|surface| surface.label == label) {
         state.surfaces.push(SurfaceRecord {
-            provider_id: provider.id,
             label: label.clone(),
         });
     }
@@ -557,12 +656,14 @@ pub async fn browser_chat_surface_open(
     caller: WebviewWindow,
     provider_id: String,
     provider_profile_key: String,
+    page_id: String,
     navigation_url: Option<String>,
     bounds: BrowserChatBounds,
 ) -> Result<BrowserChatSurfaceStatus, String> {
     ensure_main_caller(caller.label())?;
     validate_bounds(&bounds)?;
     validate_profile_key(&provider_profile_key)?;
+    validate_page_id(&page_id)?;
     let provider = provider_config(&provider_id)?;
     let navigation_url = navigation_url
         .as_deref()
@@ -579,6 +680,7 @@ pub async fn browser_chat_surface_open(
             app,
             provider,
             provider_profile_key,
+            page_id,
             navigation_url,
             bounds,
             requested_generation,
@@ -618,30 +720,21 @@ pub async fn browser_chat_surface_hide(
     app: AppHandle,
     caller: WebviewWindow,
     provider_id: String,
+    provider_profile_key: String,
+    page_id: String,
 ) -> Result<(), String> {
     ensure_main_caller(caller.label())?;
     let provider = provider_config(&provider_id)?;
+    let profile_digest = profile_digest(&provider_profile_key)?;
+    let page_digest = page_digest(&page_id)?;
+    let label = surface_label(provider.id, &profile_digest, &page_digest)?;
     SURFACE_VISIBILITY_GENERATION.fetch_add(1, Ordering::AcqRel);
     tauri::async_runtime::spawn_blocking(move || {
         let mut state = SURFACE_STATE
             .lock()
             .map_err(|_| "browser_chat_surface_lock_unavailable".to_string())?;
-        let labels: Vec<String> = state
-            .surfaces
-            .iter()
-            .filter(|surface| surface.provider_id == provider.id)
-            .map(|surface| surface.label.clone())
-            .collect();
-        for label in &labels {
-            deactivate_surface(&app, label, SurfaceDeactivationMode::PreserveSession)?;
-        }
-        let legacy_label = format!("browser-chat-{}", provider.id);
-        deactivate_surface(&app, &legacy_label, SurfaceDeactivationMode::Destroy)?;
-        if state
-            .visible_label
-            .as_ref()
-            .is_some_and(|visible| labels.iter().any(|label| label == visible))
-        {
+        deactivate_surface(&app, &label, SurfaceDeactivationMode::PreserveSession)?;
+        if state.visible_label.as_deref() == Some(label.as_str()) {
             state.visible_label = None;
         }
         Ok::<(), String>(())
@@ -658,11 +751,17 @@ mod tests {
     #[test]
     fn preserves_tracked_profile_sessions_but_destroys_legacy_or_orphan_surfaces() {
         assert_eq!(
-            surface_deactivation_mode("browser-chat-chatgpt-0123456789abcdef", true),
+            surface_deactivation_mode(
+                "browser-chat-chatgpt-0123456789abcdef-fedcba9876543210",
+                true
+            ),
             SurfaceDeactivationMode::PreserveSession
         );
         assert_eq!(
-            surface_deactivation_mode("browser-chat-claude-0123456789abcdef", true),
+            surface_deactivation_mode(
+                "browser-chat-claude-0123456789abcdef-fedcba9876543210",
+                true
+            ),
             SurfaceDeactivationMode::PreserveSession
         );
         assert_eq!(
@@ -673,13 +772,17 @@ mod tests {
             surface_deactivation_mode("browser-chat-chatgpt-fedcba9876543210", false),
             SurfaceDeactivationMode::Destroy
         );
+        assert_eq!(
+            surface_deactivation_mode("browser-chat-chatgpt-fedcba9876543210", true),
+            SurfaceDeactivationMode::Destroy
+        );
     }
 
     #[test]
     fn treats_legacy_and_profile_scoped_labels_as_browser_chat_surfaces() {
         assert!(is_browser_chat_label("browser-chat-chatgpt"));
         assert!(is_browser_chat_label(
-            "browser-chat-chatgpt-0123456789abcdef"
+            "browser-chat-chatgpt-0123456789abcdef-fedcba9876543210"
         ));
         assert!(!is_browser_chat_label("browser-chat-attacker"));
         assert!(!is_browser_chat_label("main"));
@@ -723,6 +826,9 @@ mod tests {
             "profile_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         )
         .is_err());
+        assert!(validate_page_id("chat-one").is_ok());
+        assert!(validate_page_id("bad\npage").is_err());
+        assert!(validate_page_id("").is_err());
     }
 
     #[test]
@@ -757,9 +863,15 @@ mod tests {
         .expect("valid profile");
         assert_eq!(account_a, account_a_again);
         assert_ne!(account_a, account_b);
+        let page_a = page_digest("chat-one").expect("valid page");
+        let page_b = page_digest("chat-two").expect("valid page");
         assert_ne!(
-            surface_label("chatgpt", &account_a).expect("valid label"),
-            surface_label("chatgpt", &account_b).expect("valid label")
+            surface_label("chatgpt", &account_a, &page_a).expect("valid label"),
+            surface_label("chatgpt", &account_b, &page_a).expect("valid label")
+        );
+        assert_ne!(
+            surface_label("chatgpt", &account_a, &page_a).expect("valid label"),
+            surface_label("chatgpt", &account_a, &page_b).expect("valid label")
         );
     }
 
@@ -807,6 +919,7 @@ mod tests {
         let navigation = normalized_navigation(
             &provider,
             account_profile_key,
+            "chat-one",
             &"https://chatgpt.com/c/conversation-123?utm_source=test#fragment"
                 .parse()
                 .expect("valid url"),
@@ -817,12 +930,14 @@ mod tests {
         assert_eq!(navigation.provider_id, "chatgpt");
         assert_eq!(navigation.surface_id, "browser-chat-chatgpt");
         assert_eq!(navigation.account_profile_key, account_profile_key);
+        assert_eq!(navigation.page_id, "chat-one");
         assert_eq!(navigation.url, "https://chatgpt.com/c/conversation-123");
         assert_eq!(navigation.timestamp, 42);
         assert_eq!(navigation.kind, "conversation");
         assert!(normalized_navigation(
             &provider,
             account_profile_key,
+            "chat-one",
             &"https://auth.openai.com/authorize"
                 .parse()
                 .expect("valid identity url"),
@@ -832,6 +947,7 @@ mod tests {
         assert!(normalized_navigation(
             &provider,
             account_profile_key,
+            "chat-one",
             &"https://chatgpt.com/unsupported/path"
                 .parse()
                 .expect("valid provider url"),

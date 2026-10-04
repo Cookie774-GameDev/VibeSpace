@@ -62,6 +62,8 @@ export function BrowserProviderSurface({
   const surfaceVisible = Boolean(activeChatId) && route === 'chat' && engine === 'browser';
   const setProviderRuntime = useBrowserChatStore((state) => state.setProviderRuntime);
   const onNavigationRef = React.useRef(onNavigation);
+  const loadSubscriptionReadyRef = React.useRef<Promise<void>>(Promise.resolve());
+  const navigationSubscriptionReadyRef = React.useRef<Promise<void>>(Promise.resolve());
   onNavigationRef.current = onNavigation;
 
   const requestHide = React.useCallback(
@@ -73,34 +75,75 @@ export function BrowserProviderSurface({
     [runtime],
   );
 
-  React.useEffect(() => {
-    if (!runtime.subscribeNavigation) return;
+  React.useLayoutEffect(() => {
+    if (!runtime.subscribeNavigation) {
+      navigationSubscriptionReadyRef.current = Promise.resolve();
+      return;
+    }
     let disposed = false;
     let unsubscribe: (() => void) | undefined;
-    void runtime
+    navigationSubscriptionReadyRef.current = runtime
       .subscribeNavigation((navigation) => {
         if (
           disposed ||
           navigation.providerId !== provider.id ||
-          navigation.accountProfileKey !== accountProfileKey
+          navigation.accountProfileKey !== accountProfileKey ||
+          navigation.pageId !== activeChatId
         ) {
           return;
         }
-        setProviderRuntime(provider.id, {
-          pageStatus: 'ready',
-          toolBridgeStatus: provider.toolBridgeStatus,
-        });
         onNavigationRef.current?.(navigation);
       })
       .then((nextUnsubscribe) => {
         if (disposed) nextUnsubscribe();
         else unsubscribe = nextUnsubscribe;
       });
+    void navigationSubscriptionReadyRef.current.catch(() => undefined);
     return () => {
       disposed = true;
       unsubscribe?.();
     };
-  }, [accountProfileKey, provider.id, provider.toolBridgeStatus, runtime, setProviderRuntime]);
+  }, [accountProfileKey, activeChatId, provider.id, runtime]);
+
+  React.useLayoutEffect(() => {
+    if (!runtime.subscribeLoad) {
+      loadSubscriptionReadyRef.current = Promise.resolve();
+      return;
+    }
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    loadSubscriptionReadyRef.current = runtime
+      .subscribeLoad((load) => {
+        if (
+          disposed ||
+          load.providerId !== provider.id ||
+          load.accountProfileKey !== accountProfileKey ||
+          load.pageId !== activeChatId
+        ) {
+          return;
+        }
+        setProviderRuntime(provider.id, {
+          pageStatus: load.phase === 'finished' ? 'ready' : 'opening',
+          toolBridgeStatus: provider.toolBridgeStatus,
+        });
+      })
+      .then((nextUnsubscribe) => {
+        if (disposed) nextUnsubscribe();
+        else unsubscribe = nextUnsubscribe;
+      });
+    void loadSubscriptionReadyRef.current.catch(() => undefined);
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [
+    accountProfileKey,
+    activeChatId,
+    provider.id,
+    provider.toolBridgeStatus,
+    runtime,
+    setProviderRuntime,
+  ]);
 
   React.useLayoutEffect(() => {
     if (!surfaceVisible) {
@@ -145,20 +188,25 @@ export function BrowserProviderSurface({
           const bounds = nextBounds;
           queuedBounds = null;
           try {
+            await Promise.all([
+              loadSubscriptionReadyRef.current,
+              navigationSubscriptionReadyRef.current,
+            ]);
+            if (disposed || !hostVisible) break;
             const result = await runtime.openManaged(
               provider,
               bounds,
               navigationUrl,
               accountProfileKey,
+              activeChatId ?? undefined,
             );
             if (disposed || !hostVisible) {
-              await requestHide(true);
               break;
             }
             setError(null);
             setEmbeddedUrl(result.kind === 'embedded_frame' ? result.url : null);
             setProviderRuntime(provider.id, {
-              pageStatus: result.kind === 'managed' ? 'ready' : 'opening',
+              pageStatus: result.kind === 'managed' && result.loaded ? 'ready' : 'opening',
               toolBridgeStatus: provider.toolBridgeStatus,
             });
           } catch (cause) {
@@ -211,11 +259,14 @@ export function BrowserProviderSurface({
 
       if (!force && boundsEqual(lastBounds, bounds)) return;
 
+      const firstOpen = lastBounds === null;
       lastBounds = bounds;
-      setProviderRuntime(provider.id, {
-        pageStatus: 'opening',
-        toolBridgeStatus: provider.toolBridgeStatus,
-      });
+      if (firstOpen) {
+        setProviderRuntime(provider.id, {
+          pageStatus: 'opening',
+          toolBridgeStatus: provider.toolBridgeStatus,
+        });
+      }
       void openLatestBounds(bounds);
     };
 
@@ -309,6 +360,7 @@ export function BrowserProviderSurface({
     };
   }, [
     accountProfileKey,
+    activeChatId,
     navigationUrl,
     provider,
     requestHide,
@@ -329,7 +381,7 @@ export function BrowserProviderSurface({
     >
       {surfaceVisible && embeddedUrl && !error ? (
         <iframe
-          key={`${provider.id}:${accountProfileKey}`}
+          key={`${provider.id}:${accountProfileKey}:${activeChatId}`}
           title={provider.label}
           src={embeddedUrl}
           className="absolute inset-0 h-full w-full border-0"

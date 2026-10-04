@@ -85,6 +85,7 @@ describe('BrowserProviderSurface', () => {
       { x: 20, y: 30, width: 900, height: 640 },
       undefined,
       ACCOUNT_PROFILE_A,
+      'chat-browser',
     );
     await waitFor(() => expect(runtime.subscribeHostGeometry).toHaveBeenCalledOnce());
 
@@ -120,6 +121,100 @@ describe('BrowserProviderSurface', () => {
     const host = screen.getByLabelText('ChatGPT provider surface');
     expect(host.className).toContain('min-h-0');
     expect(host.className).not.toContain('rounded-xl');
+    await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
+  });
+
+  it('keeps opening status until the matching native page finishes loading', async () => {
+    let sendLoad:
+      | ((load: {
+          providerId: string;
+          accountProfileKey: string;
+          pageId: string;
+          phase: 'started' | 'finished';
+        }) => void)
+      | undefined;
+    const runtime = {
+      openManaged: vi.fn(async () => ({
+        kind: 'managed' as const,
+        providerId: 'chatgpt' as const,
+        loaded: false,
+      })),
+      hideAll: vi.fn(async () => undefined),
+      openSystemBrowser: vi.fn(async () => undefined),
+      openExternalNavigation: vi.fn(async () => undefined),
+      openChatGptPlugins: vi.fn(async () => undefined),
+      subscribeLoad: vi.fn(async (listener: typeof sendLoad) => {
+        sendLoad = listener;
+        return () => undefined;
+      }),
+    };
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
+    await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
+    expect(browserChatStore.getState().providerRuntime.chatgpt?.pageStatus).toBe('opening');
+
+    act(() =>
+      sendLoad?.({
+        providerId: 'chatgpt',
+        accountProfileKey: ACCOUNT_PROFILE_A,
+        pageId: 'other-chat',
+        phase: 'finished',
+      }),
+    );
+    expect(browserChatStore.getState().providerRuntime.chatgpt?.pageStatus).toBe('opening');
+    act(() =>
+      sendLoad?.({
+        providerId: 'chatgpt',
+        accountProfileKey: ACCOUNT_PROFILE_A,
+        pageId: 'chat-browser',
+        phase: 'finished',
+      }),
+    );
+    expect(browserChatStore.getState().providerRuntime.chatgpt?.pageStatus).toBe('ready');
+  });
+
+  it('subscribes to native page events before it starts opening a page', async () => {
+    let releaseLoad: ((unsubscribe: () => void) => void) | undefined;
+    let releaseNavigation: ((unsubscribe: () => void) => void) | undefined;
+    const loadSubscription = new Promise<() => void>((resolve) => {
+      releaseLoad = resolve;
+    });
+    const navigationSubscription = new Promise<() => void>((resolve) => {
+      releaseNavigation = resolve;
+    });
+    const runtime = {
+      openManaged: vi.fn(async () => ({
+        kind: 'managed' as const,
+        providerId: 'chatgpt' as const,
+        loaded: false,
+      })),
+      hideAll: vi.fn(async () => undefined),
+      openSystemBrowser: vi.fn(async () => undefined),
+      openExternalNavigation: vi.fn(async () => undefined),
+      openChatGptPlugins: vi.fn(async () => undefined),
+      subscribeLoad: vi.fn(() => loadSubscription),
+      subscribeNavigation: vi.fn(() => navigationSubscription),
+    };
+    render(
+      <BrowserProviderSurface
+        provider={browserChatProvider('chatgpt')}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
+
+    expect(runtime.subscribeLoad).toHaveBeenCalledOnce();
+    expect(runtime.subscribeNavigation).toHaveBeenCalledOnce();
+    expect(runtime.openManaged).not.toHaveBeenCalled();
+    releaseLoad?.(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(runtime.openManaged).not.toHaveBeenCalled();
+    releaseNavigation?.(() => undefined);
     await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
   });
 
@@ -248,7 +343,48 @@ describe('BrowserProviderSurface', () => {
       { x: 20, y: 30, width: 900, height: 640 },
       undefined,
       ACCOUNT_PROFILE_B,
+      'chat-browser',
     );
+  });
+
+  it('opens a separate managed page when the active Browser Chat tab changes', async () => {
+    browserChatStore.setState({
+      chatPreferences: {
+        'chat-browser': { engine: 'browser', providerId: 'chatgpt' },
+        'chat-second': { engine: 'browser', providerId: 'chatgpt' },
+      },
+    });
+    const runtime = {
+      openManaged: vi.fn(async () => ({
+        kind: 'managed' as const,
+        providerId: 'chatgpt' as const,
+        loaded: true,
+      })),
+      hideAll: vi.fn(async () => undefined),
+      openSystemBrowser: vi.fn(async () => undefined),
+      openExternalNavigation: vi.fn(async () => undefined),
+      openChatGptPlugins: vi.fn(async () => undefined),
+    };
+    const provider = browserChatProvider('chatgpt');
+    render(
+      <BrowserProviderSurface
+        provider={provider}
+        accountProfileKey={ACCOUNT_PROFILE_A}
+        runtime={runtime}
+      />,
+    );
+    await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledOnce());
+
+    act(() => useUIStore.setState({ activeChatId: 'chat-second' }));
+    await waitFor(() => expect(runtime.openManaged).toHaveBeenCalledTimes(2));
+    expect(runtime.openManaged).toHaveBeenLastCalledWith(
+      provider,
+      { x: 20, y: 30, width: 900, height: 640 },
+      undefined,
+      ACCOUNT_PROFILE_A,
+      'chat-second',
+    );
+    expect(runtime.hideAll).toHaveBeenCalledOnce();
   });
 
   it('re-hides a stale native open that resolves after route teardown', async () => {
@@ -280,7 +416,8 @@ describe('BrowserProviderSurface', () => {
     await waitFor(() => expect(runtime.hideAll).toHaveBeenCalledOnce());
     releaseOpen?.();
 
-    await waitFor(() => expect(runtime.hideAll).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(runtime.hideAll).toHaveBeenCalledOnce();
   });
 
   it('coalesces geometry bursts while one native surface update is in flight', async () => {

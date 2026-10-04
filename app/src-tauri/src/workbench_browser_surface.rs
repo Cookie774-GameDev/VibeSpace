@@ -77,7 +77,7 @@ impl Drop for WebView2EnvironmentRestore {
     }
 }
 
-fn with_isolated_child_webview2_environment<T>(create: impl FnOnce() -> T) -> T {
+pub(crate) fn with_isolated_child_webview2_environment<T>(create: impl FnOnce() -> T) -> T {
     #[cfg(windows)]
     {
         // The acceptance harness exposes only the already-created trusted main

@@ -12,8 +12,8 @@ import {
 const ACCOUNT_PROFILE_A =
   'profile_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as const;
 
-function surfaceKey(label: string, profileKey?: string): string {
-  return `${label}:${profileKey ?? ''}`;
+function surfaceKey(label: string, profileKey?: string, pageId = 'default'): string {
+  return `${label}:${profileKey ?? ''}:${pageId}`;
 }
 
 function fakeWindow(label: string): ManagedProviderSurface {
@@ -29,17 +29,22 @@ function fakeWindow(label: string): ManagedProviderSurface {
 
 function platform(desktop = true) {
   const windows = new Map<string, ManagedProviderSurface>();
-  const created: Array<{ label: string; options: WebviewOptions; profileKey?: string }> = [];
+  const created: Array<{
+    label: string;
+    options: WebviewOptions;
+    profileKey?: string;
+    pageId?: string;
+  }> = [];
   const opened: string[] = [];
   const implementation: ProviderSurfacePlatform = {
     desktop,
-    async getSurface(label, profileKey) {
-      return windows.get(surfaceKey(label, profileKey)) ?? null;
+    async getSurface(label, profileKey, pageId) {
+      return windows.get(surfaceKey(label, profileKey, pageId)) ?? null;
     },
-    createSurface(label, options, profileKey) {
+    createSurface(label, options, profileKey, pageId) {
       const window = fakeWindow(label);
-      windows.set(surfaceKey(label, profileKey), window);
-      created.push({ label, options, profileKey });
+      windows.set(surfaceKey(label, profileKey, pageId), window);
+      created.push({ label, options, profileKey, pageId });
       return window;
     },
     async openExternal(url) {
@@ -65,12 +70,42 @@ describe('Browser Chat managed provider surface', () => {
     expect(invoke).toHaveBeenCalledWith('browser_chat_surface_open', {
       providerId: 'chatgpt',
       providerProfileKey: ACCOUNT_PROFILE_A,
+      pageId: 'default',
       bounds: { x: 120, y: 90, width: 880, height: 620 },
     });
     await surface.hide();
     expect(invoke).toHaveBeenLastCalledWith('browser_chat_surface_hide', {
       providerId: 'chatgpt',
+      providerProfileKey: ACCOUNT_PROFILE_A,
+      pageId: 'default',
     });
+  });
+
+  it('reports a stalled native creation and invalidates any late child surface', async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn((command: string) =>
+        command === 'browser_chat_surface_open'
+          ? new Promise<unknown>(() => undefined)
+          : Promise.resolve(undefined),
+      );
+      const surface = createNativeManagedProviderSurface(
+        'browser-chat-chatgpt',
+        invoke,
+        ACCOUNT_PROFILE_A,
+        'chat-one',
+      );
+      await surface.setPosition({ x: 0, y: 0 });
+      await surface.setSize({ width: 600, height: 400 });
+
+      const opening = surface.show();
+      const rejected = expect(opening).rejects.toThrow(/did not open within 30 seconds/i);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(invoke).toHaveBeenCalledWith('browser_chat_surface_hide_all');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('creates a child surface with registry-owned HTTPS, main-relative bounds, and account scope', async () => {
@@ -137,6 +172,71 @@ describe('Browser Chat managed provider surface', () => {
     expect(claude?.setFocus).toHaveBeenCalledOnce();
   });
 
+  it('keeps two ChatGPT pages independent while sharing their account profile', async () => {
+    const fake = platform();
+    const controller = createProviderSurfaceController(fake.implementation);
+    const provider = browserChatProvider('chatgpt');
+    const bounds = { x: 0, y: 0, width: 600, height: 400 };
+
+    await controller.openManaged(provider, bounds, undefined, ACCOUNT_PROFILE_A, 'chat-one');
+    await controller.openManaged(provider, bounds, undefined, ACCOUNT_PROFILE_A, 'chat-two');
+
+    const first = fake.windows.get(surfaceKey(provider.windowLabel, ACCOUNT_PROFILE_A, 'chat-one'));
+    const second = fake.windows.get(
+      surfaceKey(provider.windowLabel, ACCOUNT_PROFILE_A, 'chat-two'),
+    );
+    expect(fake.created).toHaveLength(2);
+    expect(fake.created.map((entry) => entry.profileKey)).toEqual([
+      ACCOUNT_PROFILE_A,
+      ACCOUNT_PROFILE_A,
+    ]);
+    expect(fake.created.map((entry) => entry.pageId)).toEqual(['chat-one', 'chat-two']);
+    expect(first?.hide).toHaveBeenCalledOnce();
+    expect(second?.show).toHaveBeenCalledOnce();
+
+    await controller.openManaged(provider, bounds, undefined, ACCOUNT_PROFILE_A, 'chat-one');
+    expect(fake.created).toHaveLength(2);
+    expect(first?.show).toHaveBeenCalledTimes(2);
+    expect(second?.hide).toHaveBeenCalledOnce();
+    expect(fake.opened).toEqual([]);
+  });
+
+  it('reports a page ready only after its native load event finishes', async () => {
+    const fake = platform();
+    let sendLoad:
+      | ((event: {
+          providerId: string;
+          accountProfileKey: string;
+          pageId: string;
+          phase: 'started' | 'finished';
+        }) => void)
+      | undefined;
+    fake.implementation.subscribeLoad = async (listener) => {
+      sendLoad = listener;
+      return () => undefined;
+    };
+    const controller = createProviderSurfaceController(fake.implementation);
+    await controller.subscribeLoad?.(() => undefined);
+    const provider = browserChatProvider('chatgpt');
+    const bounds = { x: 0, y: 0, width: 600, height: 400 };
+
+    expect(
+      await controller.openManaged(provider, bounds, undefined, ACCOUNT_PROFILE_A, 'chat-one'),
+    ).toMatchObject({ loaded: false });
+    sendLoad?.({
+      providerId: 'chatgpt',
+      accountProfileKey: ACCOUNT_PROFILE_A,
+      pageId: 'chat-one',
+      phase: 'finished',
+    });
+    expect(
+      await controller.openManaged(provider, bounds, undefined, ACCOUNT_PROFILE_A, 'chat-one'),
+    ).toMatchObject({ loaded: true });
+    expect(
+      await controller.openManaged(provider, bounds, undefined, ACCOUNT_PROFILE_A, 'chat-two'),
+    ).toMatchObject({ loaded: false });
+  });
+
   it('serializes concurrent opens so only one child surface is created per provider profile', async () => {
     const fake = platform();
     const originalCreate = fake.implementation.createSurface;
@@ -152,7 +252,7 @@ describe('Browser Chat managed provider surface', () => {
       controller.openManaged(browserChatProvider('chatgpt'), bounds, undefined, ACCOUNT_PROFILE_A),
     ]);
 
-    expect(first).toEqual({ kind: 'managed', providerId: 'chatgpt' });
+    expect(first).toEqual({ kind: 'managed', providerId: 'chatgpt', loaded: false });
     expect(second).toEqual(first);
     expect(fake.created).toHaveLength(1);
   });
@@ -278,6 +378,15 @@ describe('Browser Chat managed provider surface', () => {
         'bad\nprofile' as never,
       ),
     ).rejects.toThrow(/profile key/i);
+    await expect(
+      controller.openManaged(
+        browserChatProvider('chatgpt'),
+        { x: 0, y: 0, width: 600, height: 400 },
+        undefined,
+        ACCOUNT_PROFILE_A,
+        'bad\npage',
+      ),
+    ).rejects.toThrow(/page ID/i);
     expect(fake.created).toHaveLength(0);
   });
 });

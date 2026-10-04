@@ -809,6 +809,7 @@ export function BrowserChatHub({
   };
 
   const captureProviderNavigation = (navigation: ProviderSurfaceNavigation) => {
+    if (navigation.pageId !== chatId) return;
     const activeBinding = sessions.find(
       (session) =>
         session.binding.chatId === chatId && session.binding.provider === navigation.providerId,

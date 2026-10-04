@@ -16,6 +16,21 @@ import {
 } from './providerProfileScope';
 
 export const BROWSER_CHAT_PROVIDER_NAVIGATION_EVENT = 'browser-chat://navigation';
+export const BROWSER_CHAT_PROVIDER_LOAD_EVENT = 'browser-chat://load';
+const NATIVE_OPEN_TIMEOUT_MS = 30_000;
+
+function requirePageId(pageId: unknown): string {
+  if (
+    typeof pageId !== 'string' ||
+    pageId.length === 0 ||
+    pageId.length > 160 ||
+    pageId.trim() !== pageId ||
+    /[\u0000-\u001f\u007f]/u.test(pageId)
+  ) {
+    throw new Error('Browser Chat page ID is unavailable.');
+  }
+  return pageId;
+}
 
 function browserChatProviderSurfaceId(providerId: BrowserChatProviderId): string {
   return `browser-chat-${providerId}`;
@@ -25,6 +40,7 @@ export interface ProviderSurfaceNavigation {
   readonly providerId: BrowserChatProviderId;
   readonly surfaceId: string;
   readonly accountProfileKey: BrowserChatAccountProfileKey;
+  readonly pageId: string;
   readonly url: string;
   readonly timestamp: number;
   readonly kind: ProviderNavigationKind;
@@ -36,9 +52,17 @@ export interface NativeProviderSurfaceNavigation {
   readonly providerId: string;
   readonly surfaceId: string;
   readonly accountProfileKey: string;
+  readonly pageId: string;
   readonly url: string;
   readonly timestamp: number;
   readonly kind: string;
+}
+
+export interface NativeProviderSurfaceLoad {
+  readonly providerId: string;
+  readonly accountProfileKey: string;
+  readonly pageId: string;
+  readonly phase: 'started' | 'finished';
 }
 
 export function normalizeProviderSurfaceNavigation(
@@ -46,6 +70,7 @@ export function normalizeProviderSurfaceNavigation(
   accountProfileKey: BrowserChatAccountProfileKey,
   rawUrl: string,
   timestamp: number = Date.now(),
+  pageId: string = 'default',
 ): ProviderSurfaceNavigation | null {
   const navigation = normalizeProviderNavigation(providerId, rawUrl);
   if (!navigation) return null;
@@ -53,6 +78,7 @@ export function normalizeProviderSurfaceNavigation(
     providerId,
     surfaceId: browserChatProviderSurfaceId(providerId),
     accountProfileKey,
+    pageId,
     url: navigation.normalizedUrl,
     timestamp,
     kind: navigation.kind,
@@ -80,11 +106,16 @@ export interface ManagedProviderSurface {
 
 export interface ProviderSurfacePlatform {
   readonly desktop: boolean;
-  getSurface(label: string, profileKey?: string): Promise<ManagedProviderSurface | null>;
+  getSurface(
+    label: string,
+    profileKey?: string,
+    pageId?: string,
+  ): Promise<ManagedProviderSurface | null>;
   createSurface(
     label: string,
     options: WebviewOptions,
     profileKey?: string,
+    pageId?: string,
   ): ManagedProviderSurface | Promise<ManagedProviderSurface>;
   openExternal(url: string): Promise<void>;
   hideAllSurfaces?(): Promise<void>;
@@ -92,6 +123,7 @@ export interface ProviderSurfacePlatform {
   subscribeNavigation?(
     listener: (navigation: NativeProviderSurfaceNavigation) => void,
   ): Promise<() => void>;
+  subscribeLoad?(listener: (load: NativeProviderSurfaceLoad) => void): Promise<() => void>;
 }
 
 export interface ProviderSurfaceController {
@@ -100,8 +132,9 @@ export interface ProviderSurfaceController {
     bounds: ProviderSurfaceBounds,
     navigationUrl?: string,
     accountProfileKey?: BrowserChatAccountProfileKey,
+    pageId?: string,
   ): Promise<
-    | { kind: 'managed'; providerId: BrowserChatProviderId }
+    | { kind: 'managed'; providerId: BrowserChatProviderId; loaded?: boolean }
     | { kind: 'embedded_frame'; providerId: BrowserChatProviderId; url: string }
   >;
   openSystemBrowser(provider: BrowserChatProviderDefinition): Promise<void>;
@@ -115,6 +148,7 @@ export interface ProviderSurfaceController {
   subscribeNavigation?(
     listener: (navigation: ProviderSurfaceNavigation) => void,
   ): Promise<() => void>;
+  subscribeLoad?(listener: (load: NativeProviderSurfaceLoad) => void): Promise<() => void>;
 }
 
 export type NativeBrowserChatInvoke = (
@@ -133,12 +167,14 @@ export function createNativeManagedProviderSurface(
   label: string,
   invoke: NativeBrowserChatInvoke,
   profileKey: BrowserChatAccountProfileKey,
+  pageId: string = 'default',
 ): ManagedProviderSurface {
   const provider = BROWSER_CHAT_PROVIDERS.find((candidate) => candidate.windowLabel === label);
   if (!provider) {
     throw new Error('Unsupported Browser Chat provider window label.');
   }
   const providerProfileKey = requireAccountProfileKey(profileKey);
+  const browserPageId = requirePageId(pageId);
   let navigationUrl: string | undefined;
   let bounds: ProviderSurfaceBounds = {
     x: Number.NaN,
@@ -151,17 +187,35 @@ export function createNativeManagedProviderSurface(
     label,
     async show() {
       assertBounds(bounds);
-      await invoke('browser_chat_surface_open', {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const opening = invoke('browser_chat_surface_open', {
         providerId: provider.id,
         providerProfileKey,
+        pageId: browserPageId,
         bounds,
         ...(navigationUrl ? { navigationUrl } : {}),
       });
+      try {
+        await Promise.race([
+          opening,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => {
+              // Invalidate a late native creation so it cannot cover another VibeSpace page.
+              void invoke('browser_chat_surface_hide_all').catch(() => undefined);
+              reject(new Error('Browser Chat did not open within 30 seconds.'));
+            }, NATIVE_OPEN_TIMEOUT_MS);
+          }),
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
       navigationUrl = undefined;
     },
     async hide() {
       await invoke('browser_chat_surface_hide', {
         providerId: provider.id,
+        providerProfileKey,
+        pageId: browserPageId,
       });
     },
     async setFocus() {
@@ -203,9 +257,11 @@ export function createProviderSurfaceController(
       readonly providerId: BrowserChatProviderId;
       readonly label: string;
       readonly accountProfileKey: BrowserChatAccountProfileKey;
+      readonly pageId: string;
     }
   >();
   const lastRequestedNavigation = new Map<string, string>();
+  const loadedPages = new Set<string>();
   let operationTail: Promise<void> = Promise.resolve();
   let visibilityGeneration = 0;
 
@@ -226,6 +282,7 @@ export function createProviderSurfaceController(
           const surface = await platform.getSurface(
             surfaceRecord.label,
             surfaceRecord.accountProfileKey,
+            surfaceRecord.pageId,
           );
           if (surface) await surface.hide();
         }),
@@ -233,7 +290,13 @@ export function createProviderSurfaceController(
   };
 
   return {
-    async openManaged(provider, bounds, requestedNavigationUrl, requestedAccountProfileKey) {
+    async openManaged(
+      provider,
+      bounds,
+      requestedNavigationUrl,
+      requestedAccountProfileKey,
+      requestedPageId,
+    ) {
       const requestedGeneration = visibilityGeneration;
       return serialized(async () => {
         assertBounds(bounds);
@@ -241,6 +304,7 @@ export function createProviderSurfaceController(
           throw new Error('Unsupported Browser Chat provider definition.');
         }
         const accountProfileKey = requireAccountProfileKey(requestedAccountProfileKey);
+        const pageId = requirePageId(requestedPageId ?? 'default');
         const navigation = normalizeProviderNavigation(
           provider.id,
           requestedNavigationUrl ?? provider.homeUrl,
@@ -259,9 +323,9 @@ export function createProviderSurfaceController(
           width: bounds.width,
           height: bounds.height,
         };
-        const surfaceKey = `${provider.windowLabel}:${accountProfileKey}`;
+        const surfaceKey = `${provider.windowLabel}:${accountProfileKey}:${pageId}`;
         await hideExcept(surfaceKey);
-        let surface = await platform.getSurface(provider.windowLabel, accountProfileKey);
+        let surface = await platform.getSurface(provider.windowLabel, accountProfileKey, pageId);
         if (!surface) {
           let pending = pendingCreations.get(surfaceKey);
           if (!pending) {
@@ -278,6 +342,7 @@ export function createProviderSurfaceController(
                   focus: false,
                 },
                 accountProfileKey,
+                pageId,
               ),
             );
             pendingCreations.set(surfaceKey, pending);
@@ -295,12 +360,13 @@ export function createProviderSurfaceController(
           providerId: provider.id,
           label: provider.windowLabel,
           accountProfileKey,
+          pageId,
         });
         await surface.setPosition({ x: relative.x, y: relative.y });
         await surface.setSize({ width: relative.width, height: relative.height });
         if (lastRequestedNavigation.get(surfaceKey) !== targetUrl) {
           await surface.setNavigationUrl?.(targetUrl);
-          lastRequestedNavigation.set(surfaceKey, targetUrl);
+          loadedPages.delete(surfaceKey);
         }
 
         // A route-leave hide increments the generation immediately, even while
@@ -308,16 +374,21 @@ export function createProviderSurfaceController(
         // become visible after the user has already left Browser Chat.
         if (requestedGeneration !== visibilityGeneration) {
           await surface.hide();
-          return { kind: 'managed' as const, providerId: provider.id };
+          return { kind: 'managed' as const, providerId: provider.id, loaded: false };
         }
 
         await surface.show();
+        lastRequestedNavigation.set(surfaceKey, targetUrl);
         if (requestedGeneration !== visibilityGeneration) {
           await surface.hide();
-          return { kind: 'managed' as const, providerId: provider.id };
+          return { kind: 'managed' as const, providerId: provider.id, loaded: false };
         }
         await surface.setFocus();
-        return { kind: 'managed' as const, providerId: provider.id };
+        return {
+          kind: 'managed' as const,
+          providerId: provider.id,
+          loaded: loadedPages.has(surfaceKey),
+        };
       });
     },
 
@@ -352,7 +423,8 @@ export function createProviderSurfaceController(
           await hideExcept();
         }
         knownSurfaces.clear();
-        lastRequestedNavigation.clear();
+        // Parked native pages retain their current navigation across tab switches.
+        if (!platform.desktop) lastRequestedNavigation.clear();
       });
     },
 
@@ -366,6 +438,7 @@ export function createProviderSurfaceController(
           if (
             !isBrowserChatProviderId(event.providerId) ||
             !isBrowserChatAccountProfileKey(event.accountProfileKey) ||
+            typeof event.pageId !== 'string' ||
             !Number.isFinite(event.timestamp) ||
             event.timestamp < 0
           ) {
@@ -378,13 +451,31 @@ export function createProviderSurfaceController(
             event.accountProfileKey,
             event.url,
             event.timestamp,
+            event.pageId,
           );
           if (!normalized || normalized.kind !== event.kind) return;
-          lastRequestedNavigation.set(
-            `${expectedSurfaceId}:${event.accountProfileKey}`,
-            normalized.url,
-          );
+          const surfaceKey = `${expectedSurfaceId}:${event.accountProfileKey}:${event.pageId}`;
+          lastRequestedNavigation.set(surfaceKey, normalized.url);
           listener(normalized);
+        })) ?? (() => undefined)
+      );
+    },
+
+    async subscribeLoad(listener) {
+      return (
+        (await platform.subscribeLoad?.((event) => {
+          if (
+            !isBrowserChatProviderId(event.providerId) ||
+            !isBrowserChatAccountProfileKey(event.accountProfileKey) ||
+            typeof event.pageId !== 'string' ||
+            !['started', 'finished'].includes(event.phase)
+          ) {
+            return;
+          }
+          const surfaceKey = `${browserChatProviderSurfaceId(event.providerId)}:${event.accountProfileKey}:${event.pageId}`;
+          if (event.phase === 'finished') loadedPages.add(surfaceKey);
+          else loadedPages.delete(surfaceKey);
+          listener(event);
         })) ?? (() => undefined)
       );
     },
@@ -413,28 +504,35 @@ async function defaultPlatform(): Promise<ProviderSurfacePlatform> {
   const currentWindow = getCurrentWindow();
   const nativeInvoke: NativeBrowserChatInvoke = (command, args) => invoke(command, args);
   const managedSurfaces = new Map<string, ManagedProviderSurface>();
-  const surfaceKey = (label: string, profileKey: unknown) =>
-    `${label}:${requireAccountProfileKey(profileKey)}`;
+  const surfaceKey = (label: string, profileKey: unknown, pageId: unknown) =>
+    `${label}:${requireAccountProfileKey(profileKey)}:${requirePageId(pageId ?? 'default')}`;
 
   return {
     desktop: true,
-    async getSurface(label, profileKey) {
-      const key = surfaceKey(label, profileKey);
+    async getSurface(label, profileKey, pageId) {
+      const key = surfaceKey(label, profileKey, pageId);
       let surface = managedSurfaces.get(key);
       if (!surface) {
         surface = createNativeManagedProviderSurface(
           label,
           nativeInvoke,
           requireAccountProfileKey(profileKey),
+          requirePageId(pageId ?? 'default'),
         );
         managedSurfaces.set(key, surface);
       }
       return surface;
     },
-    async createSurface(label, options, profileKey) {
+    async createSurface(label, options, profileKey, pageId) {
       const accountProfileKey = requireAccountProfileKey(profileKey);
-      const key = surfaceKey(label, accountProfileKey);
-      const surface = createNativeManagedProviderSurface(label, nativeInvoke, accountProfileKey);
+      const browserPageId = requirePageId(pageId ?? 'default');
+      const key = surfaceKey(label, accountProfileKey, browserPageId);
+      const surface = createNativeManagedProviderSurface(
+        label,
+        nativeInvoke,
+        accountProfileKey,
+        browserPageId,
+      );
       await surface.setPosition({ x: options.x, y: options.y });
       await surface.setSize({ width: options.width, height: options.height });
       await surface.setNavigationUrl?.(typeof options.url === 'string' ? options.url : undefined);
@@ -462,6 +560,11 @@ async function defaultPlatform(): Promise<ProviderSurfacePlatform> {
         (event) => listener(event.payload),
       );
     },
+    async subscribeLoad(listener) {
+      return listen<NativeProviderSurfaceLoad>(BROWSER_CHAT_PROVIDER_LOAD_EVENT, (event) =>
+        listener(event.payload),
+      );
+    },
   };
 }
 
@@ -473,8 +576,14 @@ async function controller(): Promise<ProviderSurfaceController> {
 }
 
 export const browserChatSurface: ProviderSurfaceController = {
-  async openManaged(provider, bounds, navigationUrl, accountProfileKey) {
-    return (await controller()).openManaged(provider, bounds, navigationUrl, accountProfileKey);
+  async openManaged(provider, bounds, navigationUrl, accountProfileKey, pageId) {
+    return (await controller()).openManaged(
+      provider,
+      bounds,
+      navigationUrl,
+      accountProfileKey,
+      pageId,
+    );
   },
   async openSystemBrowser(provider) {
     return (await controller()).openSystemBrowser(provider);
@@ -493,5 +602,8 @@ export const browserChatSurface: ProviderSurfaceController = {
   },
   async subscribeNavigation(listener) {
     return (await controller()).subscribeNavigation?.(listener) ?? (() => undefined);
+  },
+  async subscribeLoad(listener) {
+    return (await controller()).subscribeLoad?.(listener) ?? (() => undefined);
   },
 };
