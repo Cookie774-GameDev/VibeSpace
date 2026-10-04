@@ -76,14 +76,15 @@ describe('catalog browser sign-in and credential recovery', () => {
 
   it('offers Supabase project credentials separately and does not claim OAuth or accept a failed probe', async () => {
     open('supabase');
-    fireEvent.click(screen.getByRole('button', { name: 'Use a project API key instead' }));
-    fireEvent.change(screen.getByLabelText('Project URL'), {
+    const dialog = within(screen.getByRole('dialog'));
+    fireEvent.click(dialog.getByRole('button', { name: 'Use a project API key instead' }));
+    fireEvent.change(dialog.getByLabelText('Project URL'), {
       target: { value: 'https://example.supabase.co' },
     });
-    fireEvent.change(screen.getByLabelText('Project API key'), {
+    fireEvent.change(dialog.getByLabelText('Project API key'), {
       target: { value: 'sb_publishable_test_only' },
     });
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Connect' }));
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
     await waitFor(() =>
       expect(management.testConnection).toHaveBeenCalledWith({
         accountId: 'oauth-ui-test',
@@ -96,7 +97,7 @@ describe('catalog browser sign-in and credential recovery', () => {
       fieldId: 'key',
       value: 'sb_publishable_test_only',
     });
-    expect((await screen.findByRole('alert')).textContent).toContain('Invalid test credential');
+    expect((await dialog.findByRole('alert')).textContent).toContain('Invalid test credential');
     expect(management.beginAuthorization).not.toHaveBeenCalled();
   });
 });

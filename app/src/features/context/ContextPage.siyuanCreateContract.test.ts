@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(resolve(__dirname, 'ContextPage.tsx'), 'utf8');
+const source = readFileSync(resolve(__dirname, 'ContextPage.tsx'), 'utf8').replace(/\r\n/g, '\n');
 const creationLifecycleSource = readFileSync(
   resolve(__dirname, 'contextMapCreationLifecycle.ts'),
   'utf8',
@@ -317,6 +317,8 @@ describe('ContextPage SiYuan creation contract', () => {
     const errorStart = source.indexOf("'SiYuan Context Map unavailable',");
     const errorEnd = source.indexOf("'Unknown local vault error',", errorStart);
     expect(errorStart).toBeGreaterThan(-1);
-    expect(source.slice(errorStart, errorEnd)).toContain("typeof error === 'string' && error.trim()");
+    expect(source.slice(errorStart, errorEnd)).toContain(
+      "typeof error === 'string' && error.trim()",
+    );
   });
 });
