@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 use tauri::{
     webview::{NewWindowResponse, PageLoadEvent, Webview, WebviewBuilder},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, WebviewUrl,
+    WebviewWindowBuilder,
 };
 
 use crate::workbench_browser_surface::with_isolated_child_webview2_environment;
@@ -48,6 +49,7 @@ static SURFACE_STATE: Mutex<SurfaceState> = Mutex::new(SurfaceState {
 // Hide commands increment this before waiting for the native operation mutex. An in-flight open
 // therefore knows it is stale before it can show the child on a route that has already changed.
 static SURFACE_VISIBILITY_GENERATION: AtomicU64 = AtomicU64::new(0);
+static AUTH_POPUP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const LEGACY_SURFACE_LABELS: [&str; 3] = [
     "browser-chat-chatgpt",
@@ -507,6 +509,30 @@ fn profile_directory(
     Ok(profile_dir)
 }
 
+#[cfg(windows)]
+fn enable_provider_autofill(webview: &Webview) -> Result<(), String> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings4;
+    use windows::core::Interface;
+
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    webview
+        .with_webview(move |native| {
+            let result = (|| unsafe {
+                let core = native.controller().CoreWebView2()?;
+                let settings: ICoreWebView2Settings4 = core.Settings()?.cast()?;
+                settings.SetIsPasswordAutosaveEnabled(true)?;
+                settings.SetIsGeneralAutofillEnabled(true)
+            })()
+            .map_err(|error: windows::core::Error| error.to_string());
+            let _ = sender.send(result);
+        })
+        .map_err(|error| format!("browser_chat_autofill_dispatch_failed:{error}"))?;
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|error| format!("browser_chat_autofill_timeout:{error}"))?
+        .map_err(|error| format!("browser_chat_autofill_failed:{error}"))
+}
+
 fn open_provider(
     app: AppHandle,
     provider: ProviderConfig,
@@ -551,7 +577,6 @@ fn open_provider(
         let load_page_id = page_id.clone();
         let load_provider_id = provider.id;
         let popup_app = app.clone();
-        let popup_label = label.clone();
         let popup_provider_id = provider.id;
         let builder = WebviewBuilder::new(label.clone(), WebviewUrl::External(target))
             .data_directory(profile_directory(&app, provider.id, &digest)?)
@@ -593,23 +618,46 @@ fn open_provider(
                     },
                 );
             })
-            .on_new_window(move |target, _features| {
-                if provider_navigation_allowed(popup_provider_id, &target)
-                    && target.as_str() != "about:blank"
-                {
-                    let app = popup_app.clone();
-                    let label = popup_label.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Some(webview) = app.get_webview(&label) {
-                            let _ = webview.navigate(target);
-                        }
-                    });
+            .on_new_window(move |target, features| {
+                if !provider_navigation_allowed(popup_provider_id, &target) {
+                    return NewWindowResponse::Deny;
                 }
-                NewWindowResponse::Deny
+
+                // OAuth popups need their opener to complete the provider's
+                // callback. Redirecting the parent WebView loses that link and
+                // can leave Google sign-in waiting forever. Window features
+                // reuse the opener's WebView2 environment, including its
+                // persistent provider cookies, inside a VibeSpace window.
+                let popup_id = AUTH_POPUP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+                let popup = WebviewWindowBuilder::new(
+                    &popup_app,
+                    format!("vibespace-auth-{popup_id}"),
+                    WebviewUrl::External("about:blank".parse().expect("valid blank URL")),
+                )
+                .window_features(features)
+                .title("VibeSpace sign-in")
+                .center()
+                .on_navigation(move |candidate| {
+                    provider_navigation_allowed(popup_provider_id, candidate)
+                })
+                .on_new_window(|_, _| NewWindowResponse::Deny)
+                .build();
+
+                match popup {
+                    Ok(window) => NewWindowResponse::Create { window },
+                    Err(error) => {
+                        eprintln!("[browser-chat] auth popup failed: {error}");
+                        NewWindowResponse::Deny
+                    }
+                }
             });
         let created =
             with_isolated_child_webview2_environment(|| main.add_child(builder, position, size))
                 .map_err(|error| format!("browser_chat_create_failed:{error}"))?;
+        #[cfg(windows)]
+        if let Err(error) = enable_provider_autofill(&created) {
+            eprintln!("[browser-chat] {error}");
+        }
         (created, true)
     };
 
