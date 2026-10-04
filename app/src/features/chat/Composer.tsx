@@ -1,6 +1,7 @@
 import { openQueuedSideChat, registerQueueSideSender } from './queueSideChat';
 import { useComposerQueueSession } from './composerQueueSession';
 import { useComposerAttachmentSession } from './composerAttachmentSession';
+import { SketchPanel } from './SketchPanel';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import './composer-frame.css';
@@ -1581,6 +1582,7 @@ export function Composer({
   const { files: attachedFiles, images: attachedImages, terminals: attachedTerminals,
     plugins: attachedPlugins, contexts: attachedContexts } = draftAttachments;
   const [mediaPreview, setMediaPreview] = useState<MediaPreviewTarget | null>(null);
+  const [sketchOpen, setSketchOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [pendingHandoff, setPendingHandoff] = useState<ChatHandoffProjectionV1 | null>(null);
   const pendingHandoffRef = useRef<ChatHandoffProjectionV1 | null>(null);
@@ -7420,6 +7422,12 @@ export function Composer({
                 rows={1}
                 onChange={(e) => {
                   const nextDraft = e.target.value;
+                  if (nextDraft.trim().toLowerCase() === '/sketch') {
+                    setText('');
+                    setSlashCtx(null);
+                    setSketchOpen(true);
+                    return;
+                  }
                   if (selectedHarnessCommandRef.current &&
                       !nextDraft.startsWith(`/${selectedHarnessCommandRef.current.commandIdentifier}`)) {
                     selectedHarnessCommandRef.current = null;
@@ -8067,6 +8075,21 @@ export function Composer({
       </div>
       {mediaPreview ? (
         <MediaPreviewPanel target={mediaPreview} onClose={() => setMediaPreview(null)} />
+      ) : null}
+      {sketchOpen ? (
+        <SketchPanel
+          key={queueScope}
+          scope={queueScope}
+          onClose={() => {
+            setSketchOpen(false);
+            requestAnimationFrame(() => textareaRef.current?.focus());
+          }}
+          onSave={async (file) => {
+            if (attachedImages.length >= 24) throw new Error('This draft already has 24 media attachments. Remove one and save again.');
+            const image = await imageAttachmentFromBrowserFile(file);
+            setAttachedImages((current) => appendComposerMedia(current, [image]));
+          }}
+        />
       ) : null}
     </div>
   );
