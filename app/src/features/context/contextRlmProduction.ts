@@ -10,6 +10,7 @@ import { currentRlmSourceRevision } from './contextRlmSourceRevision';
 import { currentMembershipDigest, productionIssuedEvidenceRegistry, type EvidenceRevision } from './contextIssuedEvidenceRegistry';
 import { contextEntityIdForTreeNode } from './migration';
 import { ContextSearchReadinessError } from './contextSearchReadiness';
+import { createContextSearchIndexPopulationPort, type ContextSearchIndexMap } from './contextSearchIndexing';
 import { HarnessError } from '@/lib/harness/errors';
 import type { HarnessEvent, VibeSpaceHarness } from '@/lib/harness/types';
 import { classifyJarvisSource } from '@/lib/jarvis/sourcePolicy';
@@ -65,6 +66,7 @@ const MAX_CONCURRENT_SOURCE_VALIDATIONS = 8;
 const MAX_CONTEXT_MAP_SEARCH_RESULTS = 20;
 const MAX_ISSUED_POINTER_CAPABILITIES = 128;
 const MAX_ACTIVE_SEARCH_MAPS = 5;
+const MAX_CONCURRENT_LEXICAL_PROBES = 4;
 const MAX_LEXICAL_CANDIDATES_PER_MAP = 32;
 const MAX_PHYSICAL_SEARCH_CANDIDATES = 20;
 const MAX_SEARCH_SOURCE_BYTES = 8 * 1024 * 1024;
@@ -76,6 +78,25 @@ const MAX_LARGE_ADDRESS_SHARDS = 256;
 const SAFE_LARGE_ADDRESS_ID = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,199}$/u;
 const SHA256_REVISION = /^sha256:[a-f0-9]{64}$/u;
 const CANONICAL_LARGE_ADDRESS_POSITION = /^(?:0|[1-9][0-9]*)$/u;
+// Shared across factories as well as selected-map services. No reader may
+// mistake an in-progress derivative population for a complete index.
+interface ProductionIndexRecovery {
+  promise: Promise<void>;
+  controller: AbortController;
+  subscribers: number;
+}
+const productionIndexRecoveries = new Map<string, ProductionIndexRecovery>();
+const productionFailedIndexRecoveries = new Set<string>();
+
+async function awaitIndexRecovery(recovery: ProductionIndexRecovery, signal?: AbortSignal): Promise<void> {
+  recovery.subscribers++;
+  try {
+    return await awaitWithSignal(recovery.promise, signal);
+  } finally {
+    recovery.subscribers--;
+    if (recovery.subscribers === 0) recovery.controller.abort();
+  }
+}
 
 export function requestsMappedFileAuthority(query: string): boolean {
   return /\b(?:files?|filename|source\s+(?:file|filename|path))\b/i.test(query);
@@ -135,7 +156,13 @@ interface ContextMapRlmDependencies {
   indexStatus?(
     accountId: string,
     mapId: string,
+    signal?: AbortSignal,
   ): Promise<Readonly<{ documentCount: number; needsRebuild: boolean }>>;
+  repairEmptyIndex?(
+    scope: ContextScope,
+    map: ProductionContextMap,
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
 
 interface SearchAuthorityCandidate {
@@ -511,7 +538,7 @@ export function mentionsMappedPath(query: string, path: string): boolean {
   const normalizedQuery = query.replaceAll('\\', '/').toLocaleLowerCase('en-US');
   const normalizedPath = path.replaceAll('\\', '/').toLocaleLowerCase('en-US');
   const boundary = (candidate: string) =>
-    new RegExp(
+    normalizedQuery.includes(candidate) && new RegExp(
       `(?<![\\p{L}\\p{N}_./-])${escapeRegExp(candidate)}(?=$|[^\\p{L}\\p{N}_./-]|[.!?](?:\\s|$))`,
       'u',
     ).test(normalizedQuery);
@@ -554,14 +581,23 @@ function lexicalQueriesForPlan(plan: ReturnType<typeof buildMeaningfulQueryPlan>
   );
 }
 
+// A multi-fact question may get each requested attribute from a different
+// source. Do not let the first ownership term discard the other evidence.
+const FACTUAL_QUERY_ATTRIBUTES = Object.freeze([
+  { query: /^(?:owner|owns|owned)$/u, source: /\b(?:owner|owns|owned)\b/iu },
+  { query: /^depot$/u, source: /\bdepot\b/iu },
+  { query: /^steward$/u, source: /\bsteward\b/iu },
+  { query: /^ceiling$/u, source: /\bceiling\b/iu },
+  { query: /^backoff$/u, source: /\bbackoff\b/iu },
+]);
+
 function meaningfulQueryMatches(
   content: string,
   plan: ReturnType<typeof buildMeaningfulQueryPlan>,
 ): { offset: number; score: number; factualAttributeMatched: boolean } | undefined {
   const folded = content.toLocaleLowerCase('en-US');
-  const factualAttribute = plan.terms.find((term) => /^(?:owner|owns|owned|depot)$/u.test(term));
-  const factualAttributeMatched = factualAttribute !== undefined &&
-    (factualAttribute === 'depot' ? /\bdepot\b/iu : /\b(?:owner|owns|owned)\b/iu).test(content);
+  const factualAttributeMatched = FACTUAL_QUERY_ATTRIBUTES.some(attribute =>
+    plan.terms.some(term => attribute.query.test(term)) && attribute.source.test(content));
   const matches = plan.terms.flatMap((term) => {
     const first = folded.indexOf(term);
     if (first < 0) return [];
@@ -2082,6 +2118,7 @@ export function createContextMapRlmRepository(
       }
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
       let statusFailed = false;
+      let recoveryFailed = false;
       const searchableMaps =
         useSmallFallback || !dependencies.indexStatus
           ? maps
@@ -2091,10 +2128,24 @@ export function createContextMapRlmRepository(
                 MAX_ACTIVE_SEARCH_MAPS,
                 async (map): Promise<ProductionContextMap | undefined> => {
                   try {
-                    const status = await dependencies.indexStatus!(
-                      normalizedScope.accountId,
-                      map.id,
-                    );
+                    let status = await (signal
+                      ? dependencies.indexStatus!(normalizedScope.accountId, map.id, signal)
+                      : dependencies.indexStatus!(normalizedScope.accountId, map.id));
+                    // Chat can use persisted maps without visiting Context Page's
+                    // hydration effect. Recover only a confirmed-empty derivative,
+                    // never replace a populated or rebuild-required index.
+                    if (!status.needsRebuild && status.documentCount === 0 &&
+                        !namedCandidates.length && dependencies.repairEmptyIndex) {
+                      try {
+                        await dependencies.repairEmptyIndex(normalizedScope, map, signal);
+                        signal?.throwIfAborted();
+                        status = await dependencies.indexStatus!(normalizedScope.accountId, map.id, signal);
+                      } catch {
+                        signal?.throwIfAborted();
+                        recoveryFailed = true;
+                        return undefined;
+                      }
+                    }
                     // Structural map nodes can include oversized or binary files that
                     // have no searchable body. Admit a healthy nonempty index and
                     // validate each returned hit against the mapped physical source.
@@ -2111,7 +2162,8 @@ export function createContextMapRlmRepository(
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
       if (!useSmallFallback && !namedCandidates.length && admittedCandidates.length > 0 &&
           searchableMaps.length === 0) {
-        throw new ContextSearchReadinessError(statusFailed ? 'index_status_failed' : 'index_empty_or_rebuild');
+        throw new ContextSearchReadinessError(statusFailed ? 'index_status_failed' :
+          recoveryFailed ? 'index_recovery_failed' : 'index_empty_or_rebuild');
       }
       // A short query with a code identifier is already a precise index probe.
       // Broad proper-name probes such as `VFS` can crowd out its source file.
@@ -2131,13 +2183,12 @@ export function createContextMapRlmRepository(
           // Literal index queries intersect their words. Long source questions
           // also need their individual code terms even when an early phrase
           // finds a generic document (for example an ELOOP error table).
-          const queries = [...lexicalQueries, ...lexicalTermQueries(meaningfulPlan)];
-          for (const [queryIndex, lexicalQuery] of queries.entries()) {
-            if (exactCodeQuery && queryIndex > 0 && matchesByDocument.size > 0) break;
-            if (queryIndex === lexicalQueries.length && matchesByDocument.size > 0 &&
-                meaningfulPlan.terms.length <= 4) break;
+          const primaryQueries = [...new Set(lexicalQueries)];
+          const termQueries = [...new Set(lexicalTermQueries(meaningfulPlan))]
+            .filter(term => !primaryQueries.includes(term));
+          const probe = async (lexicalQuery: string) => {
             try {
-              for (const match of parseSearchResults(
+              return parseSearchResults(
                 await dependencies.lexicalSearch(
                   {
                     accountId: normalizedScope.accountId,
@@ -2148,17 +2199,38 @@ export function createContextMapRlmRepository(
                   },
                   signal,
                 ),
-              )) {
-                const current = matchesByDocument.get(match.documentId);
-                matchesByDocument.set(match.documentId, {
-                  match: current && current.match.score > match.score ? current.match : match,
-                  score: (current?.score ?? 0) + match.score,
-                  probes: (current?.probes ?? 0) + 1,
-                });
-              }
+              );
             } catch {
               if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
               throw new ContextSearchReadinessError('lexical_query_failed');
+            }
+          };
+          const collect = (matches: ReturnType<typeof parseSearchResults>) => {
+            for (const match of matches) {
+              const current = matchesByDocument.get(match.documentId);
+              matchesByDocument.set(match.documentId, {
+                match: current && current.match.score > match.score ? current.match : match,
+                score: (current?.score ?? 0) + match.score,
+                probes: (current?.probes ?? 0) + 1,
+              });
+            }
+          };
+          if (exactCodeQuery) {
+            // Keep the cheap exact-hit early exit: no extra probes when the
+            // literal query already selected the document.
+            for (const lexicalQuery of [...primaryQueries, ...termQueries]) {
+              if (matchesByDocument.size > 0) break;
+              collect(await probe(lexicalQuery));
+              signal?.throwIfAborted();
+            }
+          } else {
+            // Independent long-question probes retain deterministic aggregation
+            // and relevance coverage without serial native round trips.
+            for (const matches of await mapBoundedInOrder(primaryQueries,
+              MAX_CONCURRENT_LEXICAL_PROBES, probe)) collect(matches);
+            if (matchesByDocument.size === 0 || meaningfulPlan.terms.length > 4) {
+              for (const matches of await mapBoundedInOrder(termQueries,
+                MAX_CONCURRENT_LEXICAL_PROBES, probe)) collect(matches);
             }
             if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
           }
@@ -2376,7 +2448,7 @@ export function createContextMapRlmRepository(
       // When factual evidence exists, subject-only matches must not consume
       // the bounded result page or expand unrelated history.
       const precisionHits = namedCandidates.length === 0 &&
-        meaningfulPlan.terms.some((term) => /^(?:owner|owns|owned|depot)$/u.test(term)) &&
+        FACTUAL_QUERY_ATTRIBUTES.some(attribute => meaningfulPlan.terms.some(term => attribute.query.test(term))) &&
         hitAuthorities.some((entry) => entry.factualAttributeMatched)
         ? hitAuthorities.filter((entry) => entry.factualAttributeMatched)
         : hitAuthorities;
@@ -2836,13 +2908,105 @@ export function createProductionRlmChildRunner(
 
 export function createProductionRlmContextTool() {
   const indexPort = createTauriContextSearchIndexPort();
-  const contextMapDependencies = {
+  const indexRecoveries = productionIndexRecoveries;
+  const indexRecoveryKey = (accountId: string, mapId: string) => JSON.stringify([accountId, mapId]);
+  const contextMapDependencies: ContextMapRlmDependencies = {
     loadMaps: (projectId: string | null) =>
       loadPersistedContextMaps(projectId) as unknown as Promise<readonly ProductionContextMap[]>,
     stat: statProjectPath,
     read: readTextFileSample,
     lexicalSearch: createTauriContextLexicalSearchExecutor(),
-    indexStatus: (accountId: string, mapId: string) => indexPort.status(accountId, mapId),
+    async indexStatus(accountId, mapId, signal) {
+      const key = indexRecoveryKey(accountId, mapId);
+      const pending = indexRecoveries.get(key);
+      if (pending) await awaitIndexRecovery(pending, signal);
+      signal?.throwIfAborted();
+      const status = await indexPort.status(accountId, mapId);
+      if (productionFailedIndexRecoveries.has(key)) {
+        if (status.documentCount === 0 && !status.needsRebuild) productionFailedIndexRecoveries.delete(key);
+        else throw new ContextSearchReadinessError('index_recovery_failed');
+      }
+      return status;
+    },
+    async repairEmptyIndex(scope, map, callerSignal) {
+      const key = indexRecoveryKey(scope.accountId, map.id);
+      const pending = indexRecoveries.get(key);
+      if (pending) return awaitIndexRecovery(pending, callerSignal);
+      const controller = new AbortController();
+      const signal = controller.signal;
+      let publicationAttempted = false;
+      const recovery = (async () => {
+        if (sourceKindForMap(map) !== 'file_version') throw new Error('index_recovery_unsupported');
+        const snapshot = JSON.stringify(map);
+        const assertMapCurrent = async () => {
+          const current = (await contextMapDependencies.loadMaps(scope.projectId ?? null))
+            .find(candidate => candidate.id === map.id && candidate.status === 'active');
+          if (!current || JSON.stringify(current) !== snapshot) throw new Error('index_recovery_scope_changed');
+        };
+        signal?.throwIfAborted();
+        await assertMapCurrent();
+        // Project absolute legacy node paths into the same root-relative format
+        // as map creation. This is an ephemeral projection, not a map rewrite.
+        const root = map.rootDir.replaceAll('\\', '/').replace(/\/+$/u, '');
+        const nodes = flatten(map.tree.nodes).filter(node => node.kind === 'file' && node.path)
+          .map(node => {
+            const physical = sourcePath(map.rootDir, node.path!)?.replaceAll('\\', '/');
+            if (!physical || !physical.toLocaleLowerCase('en-US').startsWith(root.toLocaleLowerCase('en-US') + '/')) {
+              throw new Error('index_recovery_source_outside_map');
+            }
+            return { ...node, children: undefined, path: physical.slice(root.length + 1) };
+          });
+        const projected: ContextSearchIndexMap = { ...map, tree: { nodes } };
+        const ownedDocumentIds = new Set<string>();
+        const population = createContextSearchIndexPopulationPort({
+          port: {
+            status: (accountId, mapId) => indexPort.status(accountId, mapId),
+            async replaceDocuments(accountId, mapId, documents) {
+              signal?.throwIfAborted();
+              await assertMapCurrent();
+              signal?.throwIfAborted();
+              // Track attempted commits too: a transport failure can occur
+              // after the native index has already committed these exact IDs.
+              publicationAttempted = true;
+              for (const document of documents) ownedDocumentIds.add(document.documentId);
+              return indexPort.replaceDocuments(accountId, mapId, documents);
+            },
+            async deleteDocuments(accountId, mapId, ids) {
+              // Population holds its global exclusive lease through cleanup.
+              // After publication starts, remove only IDs this recovery owns,
+              // even if the map changed. Otherwise its partial index would look
+              // healthy on the next call. A queued population cannot race this.
+              if (ownedDocumentIds.size > 0) {
+                const owned = ids.filter(id => ownedDocumentIds.has(id));
+                if (owned.length > 0) return indexPort.deleteDocuments(accountId, mapId, owned);
+                return { affectedDocuments: 0, documentCount: (await indexPort.status(accountId, mapId)).documentCount };
+              }
+              await assertMapCurrent();
+              return indexPort.deleteDocuments(accountId, mapId, ids);
+            },
+          },
+        });
+        await population.repairEmptyMap(scope.accountId, projected, signal);
+        signal?.throwIfAborted();
+        await assertMapCurrent();
+      })().catch(async (error: unknown) => {
+        // A failure before publication cannot poison an independently healthy
+        // index. Quarantine only possible partial writes that cleanup left behind.
+        if (publicationAttempted) {
+          try {
+            if ((await indexPort.status(scope.accountId, map.id)).documentCount > 0) {
+              productionFailedIndexRecoveries.add(key);
+            }
+          } catch { productionFailedIndexRecoveries.add(key); }
+        }
+        throw error;
+      });
+      const entry = { promise: recovery, controller, subscribers: 0 };
+      indexRecoveries.set(key, entry);
+      const release = () => { if (indexRecoveries.get(key) === entry) indexRecoveries.delete(key); };
+      recovery.then(release, release);
+      return awaitIndexRecovery(entry, callerSignal);
+    },
   };
   const contextMapRepository = createContextMapRlmRepository(contextMapDependencies);
 
@@ -2931,7 +3095,7 @@ export function createProductionRlmContextTool() {
         if (!membershipRevision) captureInvalid = true;
         if (!current()) membershipRevision = undefined;
       }
-      const captureResult = async (result: unknown) => {
+      const captureResult = async (result: unknown, issuedAuthorityPointer?: ContextPointer) => {
         if (!membershipRevision || !current() || !result || typeof result !== 'object') return;
         const shaped = result as { items?: readonly ContextSearchItem[]; pointer?: ContextPointer; record?: ContextRecord };
         const items = Array.isArray(shaped.items) ? shaped.items : shaped.pointer && shaped.record
@@ -2941,9 +3105,19 @@ export function createProductionRlmContextTool() {
         if (items.some(item => !item?.record || !item?.pointer || item.record.id !== item.pointer.recordId)) {
           captureInvalid = true; return;
         }
+        // Successful open/expand returns a bounded derived span. Attest the
+        // source through its original issued authority, without granting the
+        // returned span an independent search capability.
+        if (issuedAuthorityPointer && (items.length !== 1 || items.some(item =>
+          item.pointer.recordId !== issuedAuthorityPointer.recordId ||
+          item.pointer.contentHash !== issuedAuthorityPointer.contentHash ||
+          item.pointer.sourceVersion !== issuedAuthorityPointer.sourceVersion))) {
+          captureInvalid = true; return;
+        }
         let capture: object | undefined;
         try {
-          capture = await activeRepository.captureIssuedEvidence(scope, capturedLease.selectedMapId!, items.map(item => item.pointer), signal);
+          capture = await activeRepository.captureIssuedEvidence(scope, capturedLease.selectedMapId!,
+            issuedAuthorityPointer ? [issuedAuthorityPointer] : items.map(item => item.pointer), signal);
         } catch (error) {captureInvalid = true; throw error;}
         if (!current()) { captureInvalid = true; return; }
         if (!capture || captures.length >= 128) { captureInvalid = true; return; }
@@ -2962,16 +3136,18 @@ export function createProductionRlmContextTool() {
           return result;
         },
         async open(input: Parameters<typeof service.open>[0]) {
+          const authorityPointer = Object.freeze({ ...input.pointer });
           const result = await service.open(input);
           if (assertLeaseCurrent) current();
-          await captureResult(result);
+          await captureResult(result, authorityPointer);
           if (assertLeaseCurrent) current();
           return result;
         },
         async expand(input: Parameters<typeof service.expand>[0]) {
+          const authorityPointer = Object.freeze({ ...input.pointer });
           const result = await service.expand(input);
           if (assertLeaseCurrent) current();
-          await captureResult(result);
+          await captureResult(result, authorityPointer);
           if (assertLeaseCurrent) current();
           return result;
         },
