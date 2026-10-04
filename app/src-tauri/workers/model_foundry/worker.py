@@ -640,10 +640,24 @@ def _assert_model_device(model: Any, requested: str) -> str:
     }
     if not devices or devices != {expected}:
         _fail(
-            f"Calibration found model tensors on {sorted(devices) or ['no device']}; "
+            f"Model tensors are on {sorted(devices) or ['no device']}; "
             f"requested {requested}-only training cannot fall back or offload."
         )
     return f"{expected}:0" if expected == "cuda" else expected
+
+
+def _optimizer_device_evidence(optimizer: Any, requested: str) -> list[str]:
+    # A scalar step counter can live on CPU without offloading model moments.
+    devices = sorted({
+        str(value.device)
+        for state in optimizer.state.values()
+        for name, value in state.items()
+        if hasattr(value, "device") and (name != "step" or value.numel() > 1)
+    })
+    expected = "cuda" if requested == "gpu" else "cpu"
+    if not devices or any(device.split(":", 1)[0] != expected for device in devices):
+        _fail("Training optimizer state does not match the selected device; CPU offload is forbidden.")
+    return devices
 
 
 def _target_modules_for_training(request: dict[str, Any], multimodal: bool) -> Any:
@@ -980,6 +994,29 @@ def _example_prompt_prefix(record: dict[str, Any]) -> str:
     return f"User: {str(record['prompt']).strip()}\nAssistant: "
 
 
+def _tokenize_training_text(tokenizer: Any, record: dict[str, Any], max_length: int) -> dict[str, Any]:
+    """Match the model's inference format, with completion-only loss labels."""
+    prompt_text = _example_prompt_prefix(record)
+    full_text = _example_text(record)
+    if prompt_text and getattr(tokenizer, "chat_template", None):
+        messages = [{"role": "user", "content": str(record["prompt"]).strip()}]
+        prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        full_text = tokenizer.apply_chat_template(
+            [*messages, {"role": "assistant", "content": str(record.get("response", record.get("completion"))).strip()}],
+            tokenize=False, add_generation_prompt=False,
+        )
+    # Templates already contain the model's special tokens.
+    kwargs = {"truncation": True, "max_length": max_length}
+    if prompt_text and getattr(tokenizer, "chat_template", None):
+        kwargs["add_special_tokens"] = False
+    encoded = tokenizer(full_text, **kwargs)
+    prompt_count = len(tokenizer(prompt_text, **kwargs)["input_ids"]) if prompt_text else 0
+    encoded["labels"] = training_labels(encoded["input_ids"], prompt_count, encoded.get("attention_mask"))
+    if not any(label != -100 for label in encoded["labels"][1:]):
+        _fail("A training completion was truncated or empty; increase maxSequenceLength or shorten its prompt.")
+    return encoded
+
+
 def completion_only_labels(input_ids: list[int], prompt_token_count: int) -> list[int]:
     """Mask prompt tokens (HF ignore index -100) so loss trains only on the
     completion. Bounded: never masks more tokens than the record contains."""
@@ -1125,6 +1162,8 @@ def train(request_path: str) -> int:
         # the complete trainable model on the selected CUDA device or fail.
         model_kwargs["device_map"] = {"": 0}
     elif use_gpu:
+        model_kwargs["device_map"] = {"": 0}
+        model_kwargs["low_cpu_mem_usage"] = True
         model_kwargs["torch_dtype"] = (
             torch.bfloat16
             if hasattr(torch.cuda, "is_bf16_supported")
@@ -1215,26 +1254,7 @@ def train(request_path: str) -> int:
                 dtype=torch.long,
             )
             return encoded
-        encoded = tokenizer(
-            _example_text(record),
-            truncation=True,
-            max_length=max_length,
-        )
-        prompt_prefix = _example_prompt_prefix(record)
-        prompt_token_count = 0
-        if prompt_prefix:
-            prompt_ids = tokenizer(
-                prompt_prefix,
-                truncation=True,
-                max_length=max_length,
-            )["input_ids"]
-            prompt_token_count = len(prompt_ids)
-        encoded["labels"] = training_labels(
-            encoded["input_ids"],
-            prompt_token_count,
-            encoded.get("attention_mask"),
-        )
-        return encoded
+        return _tokenize_training_text(tokenizer, record, max_length)
 
     tokenized = [tokenize(record) for record in dataset]
     tokenized_validation = [tokenize(record) for record in validation_dataset]
@@ -1327,6 +1347,9 @@ def train(request_path: str) -> int:
             )
         ),
     )
+    effective_device = _assert_model_device(trainer.model, training_device)
+    if use_gpu:
+        torch.cuda.reset_peak_memory_stats()
     # Native Rust consumes stdout as one strict JSON completion receipt. The
     # Transformers trainer writes progress and metric dictionaries to stdout,
     # so keep the whole noisy lifecycle on stderr and reserve stdout for the
@@ -1337,7 +1360,9 @@ def train(request_path: str) -> int:
         output_dir,
         tokenizer,
         processor,
+        requested_device=training_device,
     )
+    optimizer_devices = _optimizer_device_evidence(trainer.optimizer, training_device)
     (output_dir / "vibespace-training.json").write_text(
         json.dumps(
             {
@@ -1348,6 +1373,8 @@ def train(request_path: str) -> int:
                 "requestedConfig": config,
                 "effectiveConfig": {
                     **config,
+                    "device": effective_device,
+                    "cpuOffload": False,
                     "precision": (
                         "bf16"
                         if use_bf16
@@ -1357,6 +1384,13 @@ def train(request_path: str) -> int:
                     ),
                 },
                 "targetModules": request.get("targetModules"),
+                "deviceEvidence": {
+                    "requested": training_device,
+                    "parameterDevices": sorted({str(p.device) for p in trainer.model.parameters()}),
+                    "optimizerStateDevices": optimizer_devices,
+                    "gpuName": torch.cuda.get_device_name(0) if use_gpu else None,
+                    "peakAllocatedVramBytes": torch.cuda.max_memory_allocated() if use_gpu else None,
+                },
                 "datasetSha256": _sha256_file(Path(str(request["datasetPath"]))),
                 "validationDatasetSha256": _sha256_file(
                     Path(str(request["validationDatasetPath"]))
@@ -1401,16 +1435,27 @@ def _run_training_lifecycle(
     output_dir: Path,
     tokenizer: Any,
     processor: Any,
+    requested_device: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Run noisy Transformers work away from the stdout protocol channel."""
     with contextlib.redirect_stdout(sys.stderr):
         training_result = trainer.train(resume_from_checkpoint=resume_checkpoint or None)
         evaluation_metrics = trainer.evaluate()
+        _validate_training_metrics(training_result.metrics, evaluation_metrics)
+        if requested_device is not None:
+            _optimizer_device_evidence(trainer.optimizer, requested_device)
         trainer.save_model(str(output_dir))
         tokenizer.save_pretrained(str(output_dir))
         if processor is not None:
             processor.save_pretrained(str(output_dir))
     return training_result, evaluation_metrics
+
+
+def _validate_training_metrics(training: dict[str, Any], evaluation: dict[str, Any]) -> None:
+    for metrics, key in ((training, "train_loss"), (evaluation, "eval_loss")):
+        value = metrics.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            _fail(f"Training requires a finite measured {key}; no completed artifact was saved.")
 
 
 def _read_inference_request(request_path: str) -> dict[str, Any]:
@@ -1475,6 +1520,7 @@ def _read_inference_request(request_path: str) -> dict[str, Any]:
         "baseModelPath": str(model),
         "artifactPath": str(artifact),
         "responsePath": str(response),
+        "trainingMetadata": metadata,
         "messages": normalized_messages,
         "modelModalities": metadata.get("modelModalities", ["text"]),
         "maxOutputTokens": _bounded_integer(
@@ -1527,8 +1573,11 @@ def infer(request_path: str) -> int:
         _fail("The trained model tokenizer has no safe generation boundary.")
     model_source = artifact_path if method == "full" else model_path
     model_class = AutoModelForImageTextToText if multimodal else AutoModelForCausalLM
+    compute_device = _inference_compute_device(torch, request["trainingMetadata"])
+    device = "cuda" if compute_device == "gpu" else "cpu"
     model = model_class.from_pretrained(
-        model_source, local_files_only=True, trust_remote_code=False, torch_dtype="auto"
+        model_source, local_files_only=True, trust_remote_code=False, torch_dtype="auto",
+        low_cpu_mem_usage=True, device_map={"": 0 if compute_device == "gpu" else "cpu"},
     )
     if method in ("lora", "qlora"):
         try:
@@ -1541,8 +1590,8 @@ def infer(request_path: str) -> int:
             is_trainable=False,
             local_files_only=True,
         )
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
+    _assert_model_device(model, compute_device)
     model.eval()
     messages = request["messages"]
     if getattr(tokenizer, "chat_template", None):
@@ -1560,22 +1609,7 @@ def infer(request_path: str) -> int:
     configured_context = int(getattr(model.config, "max_position_embeddings", 4096))
     context_tokens = max(256, min(configured_context, 16384))
     output_budget = min(int(request["maxOutputTokens"]), context_tokens - 1)
-    encoded = (
-        processor(
-            text=prompt,
-            images=None,
-            return_tensors="pt",
-            truncation=True,
-            max_length=context_tokens - output_budget,
-        )
-        if processor is not None
-        else tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=context_tokens - output_budget,
-        )
-    )
+    encoded = _encode_inference_prompt(tokenizer, processor, prompt, context_tokens - output_budget)
     encoded = {key: value.to(device) for key, value in encoded.items()}
     input_tokens = int(encoded["input_ids"].shape[-1])
     with torch.inference_mode():
@@ -1602,6 +1636,9 @@ def infer(request_path: str) -> int:
                 "text": text,
                 "inputTokens": input_tokens,
                 "outputTokens": int(output_ids.shape[-1]),
+                "device": str(next(model.parameters()).device),
+                "computeDevice": compute_device,
+                "cpuOffload": False,
             },
             separators=(",", ":"),
         ),
@@ -1609,6 +1646,16 @@ def infer(request_path: str) -> int:
     )
     temporary.replace(response_path)
     return 0
+
+
+def _encode_inference_prompt(tokenizer: Any, processor: Any, prompt: str, max_length: int) -> dict[str, Any]:
+    kwargs = {"return_tensors": "pt", "truncation": True, "max_length": max_length}
+    if getattr(tokenizer, "chat_template", None):
+        # apply_chat_template already inserts the template's special tokens.
+        kwargs["add_special_tokens"] = False
+    if processor is not None:
+        return processor(text=prompt, images=None, **kwargs)
+    return tokenizer(prompt, **kwargs)
 
 
 def _fail(message: str) -> None:
@@ -1635,6 +1682,14 @@ def _require_training_device(torch_module: Any, requested: str) -> str:
     if device == "gpu" and not bool(torch_module.cuda.is_available()):
         _fail("GPU-only training requires a compatible local CUDA GPU and runtime.")
     return device
+
+
+def _inference_compute_device(torch_module: Any, metadata: dict[str, Any]) -> str:
+    config = metadata.get("requestedConfig")
+    if isinstance(config, dict) and "computeDevice" in config:
+        return _require_training_device(torch_module, config["computeDevice"])
+    # Older artifacts predate explicit placement; retain their existing behavior.
+    return "gpu" if torch_module.cuda.is_available() else "cpu"
 
 
 def _compatible_training_arguments(

@@ -9,6 +9,10 @@ use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
+#[path = "model_foundry_resources.rs"]
+mod resources;
+use resources::{weight_training_requirements, WeightTrainingRequirements};
+
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
@@ -250,34 +254,6 @@ pub struct FoundryHardwareProfile {
     accelerators: Vec<String>,
     storage_root: String,
     recommended_storage_root: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct WeightTrainingRequirements {
-    vram_gb: f64,
-    ram_gb: f64,
-    storage_gb: f64,
-}
-
-fn weight_training_requirements(method: &str, parameters_b: f64) -> WeightTrainingRequirements {
-    let parameters_b = parameters_b.max(0.1);
-    match method {
-        "qlora" => WeightTrainingRequirements {
-            vram_gb: (parameters_b * 4.0).max(6.0).ceil(),
-            ram_gb: (parameters_b * 12.0).max(16.0).ceil(),
-            storage_gb: (parameters_b * 8.0).max(10.0).ceil(),
-        },
-        "lora" => WeightTrainingRequirements {
-            vram_gb: (parameters_b * 8.0).max(8.0).ceil(),
-            ram_gb: (parameters_b * 16.0).max(16.0).ceil(),
-            storage_gb: (parameters_b * 12.0).max(12.0).ceil(),
-        },
-        _ => WeightTrainingRequirements {
-            vram_gb: (parameters_b * 16.0).max(4.0).ceil(),
-            ram_gb: (parameters_b * 32.0).max(8.0).ceil(),
-            storage_gb: (parameters_b * 40.0).max(4.0).ceil(),
-        },
-    }
 }
 
 fn validate_weight_hardware(

@@ -6,11 +6,14 @@ import {
   Database,
   FileText,
   FlaskConical,
+  Gauge,
   HardDrive,
+  MemoryStick,
   ShieldCheck,
   Sparkles,
   Trash2,
   Upload,
+  Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
@@ -1400,77 +1403,242 @@ export function BuildYourOwnAIHub({
               {method !== 'knowledge' && (
                 <div className="space-y-4">
                   <section
-                    className="rounded-lg border border-border p-4"
+                    className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-br from-accent-copper/5 via-panel to-background p-4 shadow-soft sm:p-5"
                     aria-labelledby="foundry-compute-profile"
                   >
-                    <h4 id="foundry-compute-profile" className="font-semibold">
-                      Choose speed and memory use
-                    </h4>
-                    <p className="mt-1 text-secondary text-muted-foreground">
-                      Start with a profile, then use Advanced settings only if you want exact
-                      control.
-                    </p>
-                    <div className="mt-3" role="group" aria-label="Training device">
-                      <p className="text-metadata font-medium text-muted-foreground">
-                        Model compute device
-                      </p>
-                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="mb-1 flex items-center gap-2 text-metadata font-semibold uppercase tracking-[0.14em] text-accent-copper">
+                          <Cpu className="h-4 w-4" aria-hidden="true" /> Compute plan
+                        </p>
+                        <h4 id="foundry-compute-profile" className="font-semibold">
+                          Choose where training runs
+                        </h4>
+                        <p className="mt-1 max-w-2xl text-secondary text-muted-foreground">
+                          Device placement and memory use are separate controls. Choose a device,
+                          then tune the batch profile for the capacity this computer reports.
+                        </p>
+                      </div>
+                      <span className="hidden shrink-0 rounded-full border border-border/80 bg-background/60 px-2.5 py-1 text-metadata text-muted-foreground sm:inline-flex">
+                        LOCAL ONLY
+                      </span>
+                    </div>
+
+                    <div className="mt-5" role="group" aria-label="Training device">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="text-metadata font-medium text-muted-foreground">
+                          Compute device
+                        </p>
+                        <span className="text-metadata text-muted-foreground" aria-live="polite">
+                          {trainingConfig.computeDevice === 'gpu'
+                            ? matchingCalibration?.computeDevice === 'gpu' &&
+                              matchingCalibration.qualified
+                              ? `Calibrated · ${matchingCalibration.device}`
+                              : hardware.os === 'Detecting…'
+                                ? 'Checking hardware…'
+                                : hardware.gpu && hardware.vramGb > 0
+                                  ? `${hardware.vramGb} GB VRAM reported`
+                                  : 'No GPU reported'
+                            : `${hardware.ramGb || 'Unknown'} GB system RAM reported`}
+                        </span>
+                      </div>
+                      <div className="grid gap-2.5 sm:grid-cols-2">
                         {(
                           [
-                            [
-                              'gpu',
-                              'GPU only',
-                              'Requires CUDA and never falls back to CPU training.',
-                            ],
-                            ['cpu', 'CPU only', 'Uses CPU training even when a GPU is present.'],
+                            {
+                              device: 'gpu',
+                              label: 'GPU only',
+                              eyebrow: 'CUDA acceleration',
+                              description:
+                                'Weights, gradients, and optimizer steps stay on the GPU. Host RAM supports the app, runtime and training data. If CUDA cannot pass calibration, training stays blocked.',
+                              Icon: Cpu,
+                            },
+                            {
+                              device: 'cpu',
+                              label: 'CPU only',
+                              eyebrow: 'System memory',
+                              description:
+                                method === 'qlora'
+                                  ? 'Unavailable for QLoRA. This method requires GPU execution.'
+                                  : 'Usually slower. Training runs on the processor; the GPU stays unused even when present.',
+                              Icon: Gauge,
+                            },
                           ] as const
-                        ).map(([device, label, copy]) => (
-                          <button
-                            key={device}
-                            type="button"
-                            disabled={method === 'qlora' && device === 'cpu'}
-                            aria-pressed={trainingConfig.computeDevice === device}
-                            onClick={() =>
-                              setTrainingConfig((current) => ({
-                                ...current,
-                                computeDevice: device,
-                              }))
-                            }
-                            className={cn(
-                              'rounded-lg border p-3 text-left transition-colors',
-                              trainingConfig.computeDevice === device
-                                ? 'border-accent-copper bg-accent-copper/10'
-                                : 'border-border hover:bg-muted',
-                            )}
-                          >
-                            <strong className="block">{label}</strong>
-                            <span className="mt-1 block text-metadata text-muted-foreground">
-                              {copy}
-                            </span>
-                          </button>
-                        ))}
+                        ).map(({ device, label, eyebrow, description, Icon }) => {
+                          const selected = trainingConfig.computeDevice === device;
+                          const unavailable = method === 'qlora' && device === 'cpu';
+                          return (
+                            <button
+                              key={device}
+                              type="button"
+                              disabled={unavailable}
+                              aria-pressed={selected}
+                              aria-describedby={
+                                unavailable ? 'foundry-qlora-cpu-device-help' : undefined
+                              }
+                              onClick={() =>
+                                setTrainingConfig((current) => ({
+                                  ...current,
+                                  computeDevice: device,
+                                }))
+                              }
+                              className={cn(
+                                'group relative flex min-h-28 items-start gap-3 overflow-hidden rounded-xl border p-3.5 text-left transition-[border-color,background-color,box-shadow,transform] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-copper/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none',
+                                selected
+                                  ? 'border-accent-copper/70 bg-accent-copper/10 shadow-[inset_0_0_0_1px_hsl(var(--accent-copper)/0.12),0_8px_24px_hsl(var(--accent-copper)/0.08)]'
+                                  : unavailable
+                                    ? 'cursor-not-allowed border-border/70 bg-muted/30 opacity-60'
+                                    : 'border-border bg-background/55 hover:-translate-y-0.5 hover:border-accent-copper/45 hover:bg-muted/70',
+                              )}
+                            >
+                              {selected && (
+                                <svg
+                                  aria-hidden="true"
+                                  viewBox="0 0 80 80"
+                                  className="pointer-events-none absolute -right-4 -top-6 h-24 w-24 text-accent-copper/30 motion-safe:animate-pulse motion-reduce:animate-none"
+                                >
+                                  <circle
+                                    cx="40"
+                                    cy="40"
+                                    r="30"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeDasharray="2 5"
+                                    strokeWidth="1.5"
+                                  />
+                                </svg>
+                              )}
+                              <span
+                                className={cn(
+                                  'relative mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-lg border transition-colors',
+                                  selected
+                                    ? 'border-accent-copper/35 bg-accent-copper/10 text-accent-copper'
+                                    : 'border-border bg-muted/50 text-muted-foreground',
+                                )}
+                              >
+                                <Icon
+                                  aria-hidden="true"
+                                  className={cn(
+                                    'h-5 w-5',
+                                    selected &&
+                                      'motion-safe:animate-pulse motion-reduce:animate-none',
+                                  )}
+                                />
+                              </span>
+                              <span className="relative min-w-0 flex-1">
+                                <span className="flex items-center gap-2">
+                                  <strong>{label}</strong>
+                                  {selected && (
+                                    <Check
+                                      aria-hidden="true"
+                                      className="h-4 w-4 text-accent-copper"
+                                    />
+                                  )}
+                                </span>
+                                <span className="mt-0.5 block text-metadata font-medium text-accent-copper/90">
+                                  {eyebrow}
+                                </span>
+                                <span className="mt-1.5 block text-metadata leading-relaxed text-muted-foreground">
+                                  {description}
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
+                      {method === 'qlora' && (
+                        <p id="foundry-qlora-cpu-device-help" className="sr-only">
+                          QLoRA requires GPU-only training. CPU-only training cannot be selected.
+                        </p>
+                      )}
+                      <p className="mt-2 text-metadata text-muted-foreground">
+                        A hardware report is an estimate. GPU training must pass calibration on the
+                        selected model and settings before it can start.
+                      </p>
                     </div>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                      {TRAINING_COMPUTE_PRESETS.map((preset) => (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          aria-pressed={computePresetId === preset.id}
-                          onClick={() => selectComputePreset(preset.id)}
-                          className={cn(
-                            'rounded-lg border p-3 text-left transition-colors',
-                            computePresetId === preset.id
-                              ? 'border-accent-copper bg-accent-copper/10'
-                              : 'border-border hover:bg-muted',
-                          )}
-                        >
-                          <strong className="block">{preset.label}</strong>
-                          <span className="mt-1 block text-metadata text-muted-foreground">
-                            {preset.summary}
-                          </span>
-                        </button>
-                      ))}
+
+                    <div className="mt-5 border-t border-border/70 pt-4">
+                      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                        <p className="text-metadata font-medium text-muted-foreground">
+                          Memory and batch profile
+                        </p>
+                        <span className="text-metadata text-muted-foreground">
+                          Does not change the compute device
+                        </span>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {TRAINING_COMPUTE_PRESETS.map((preset) => {
+                          const selected = computePresetId === preset.id;
+                          const Icon =
+                            preset.id === 'low-memory'
+                              ? MemoryStick
+                              : preset.id === 'balanced'
+                                ? Gauge
+                                : Zap;
+                          const memoryTier =
+                            preset.id === 'low-memory'
+                              ? 'LOW PEAK MEMORY'
+                              : preset.id === 'balanced'
+                                ? 'MODERATE'
+                                : 'HIGHER HEADROOM';
+                          return (
+                            <button
+                              key={preset.id}
+                              type="button"
+                              aria-pressed={selected}
+                              onClick={() => selectComputePreset(preset.id)}
+                              className={cn(
+                                'group rounded-lg border p-3 text-left transition-[border-color,background-color,box-shadow] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-copper/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transition-none',
+                                selected
+                                  ? 'border-accent-copper/60 bg-accent-copper/10 shadow-[inset_0_0_0_1px_hsl(var(--accent-copper)/0.1)]'
+                                  : 'border-border bg-background/40 hover:border-accent-copper/35 hover:bg-muted/70',
+                              )}
+                            >
+                              <span className="flex items-center justify-between gap-2">
+                                <span className="flex items-center gap-2">
+                                  <Icon
+                                    aria-hidden="true"
+                                    className={cn(
+                                      'h-4 w-4 text-muted-foreground transition-colors group-hover:text-accent-copper',
+                                      selected &&
+                                        'text-accent-copper motion-safe:animate-pulse motion-reduce:animate-none',
+                                    )}
+                                  />
+                                  <strong>{preset.label}</strong>
+                                </span>
+                                {selected && (
+                                  <Check
+                                    aria-hidden="true"
+                                    className="h-3.5 w-3.5 text-accent-copper"
+                                  />
+                                )}
+                              </span>
+                              <span className="mt-2 block text-[0.62rem] font-semibold tracking-[0.1em] text-accent-copper/90">
+                                {memoryTier}
+                              </span>
+                              <span className="mt-1 block min-h-10 text-metadata leading-relaxed text-muted-foreground">
+                                {preset.summary}
+                              </span>
+                              <span className="mt-2 flex flex-wrap gap-1.5 text-[0.65rem] text-foreground/80">
+                                <span className="rounded bg-muted/70 px-1.5 py-0.5">
+                                  Batch {preset.batchSize}
+                                </span>
+                                <span className="rounded bg-muted/70 px-1.5 py-0.5">
+                                  Grad {preset.gradientAccumulation}×
+                                </span>
+                                <span className="rounded bg-muted/70 px-1.5 py-0.5">
+                                  {preset.maxSequenceLength.toLocaleString()} tokens
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="mt-2 text-metadata text-muted-foreground">
+                        Lower peak memory can take longer. Faster profiles need verified memory
+                        headroom. These profiles change batch size, gradient accumulation and
+                        context length only; they do not change the selected compute device.
+                      </p>
                     </div>
                     {durationEstimate && (
                       <div className="mt-3 rounded-md bg-muted/60 p-3" aria-live="polite">

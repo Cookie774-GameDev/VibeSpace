@@ -352,16 +352,16 @@ export function planLocalTrainingMethod(input: {
       ? { vram: 0, ram: 4, storage: 2, workload: 'light' as const }
       : input.method === 'qlora'
         ? {
-            vram: Math.max(6, parametersB * 4),
-            ram: Math.max(16, parametersB * 12),
-            storage: Math.max(10, parametersB * 8),
+            vram: Math.max(2, parametersB * 4),
+            ram: Math.max(4, parametersB * 12),
+            storage: Math.max(2, parametersB * 8),
             workload: 'moderate' as const,
           }
         : input.method === 'lora'
           ? {
-              vram: Math.max(8, parametersB * 8),
-              ram: Math.max(16, parametersB * 16),
-              storage: Math.max(12, parametersB * 12),
+              vram: Math.max(2, parametersB * 8),
+              ram: Math.max(4, parametersB * 16),
+              storage: Math.max(2, parametersB * 12),
               workload: 'moderate' as const,
             }
           : {

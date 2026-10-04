@@ -353,6 +353,63 @@ describe('BuildYourOwnAIHub', () => {
     expect((screen.getByRole('button', { name: /^CPU only/i }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+    expect(
+      screen.getByText('QLoRA requires GPU-only training. CPU-only training cannot be selected.'),
+    ).toBeTruthy();
+  });
+
+  it('keeps the compute device selected when changing the memory profile', async () => {
+    const worker: LocalTrainingWorkerStatus = {
+      installed: true,
+      attested: true,
+      localOnly: true,
+      protocol: 1,
+      sourceSha256: 'a'.repeat(64),
+      python: 'python',
+      methods: ['lora', 'qlora', 'full'],
+      modalities: ['text'],
+      precisions: ['bf16', 'int4'],
+      reason: null,
+    };
+    render(
+      <BuildYourOwnAIHub
+        open
+        onOpenChange={vi.fn()}
+        trainingWorker={worker}
+        verifiedTrainingModels={[{ ...verifiedModel, installed: true, verified: true }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^LoRA fine-tuning/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(screen.getByRole('heading', { name: 'Choose where training runs' })).toBeTruthy();
+    expect(screen.getByText(/Device placement and memory use are separate controls/i)).toBeTruthy();
+    const gpuOnly = screen.getByRole('button', { name: /^GPU only/i });
+    const cpuOnly = screen.getByRole('button', { name: /^CPU only/i });
+    expect(gpuOnly.textContent).toContain(
+      'Weights, gradients, and optimizer steps stay on the GPU.',
+    );
+    expect(gpuOnly.textContent).toContain('Host RAM supports the app, runtime and training data.');
+    expect(gpuOnly.textContent).toContain(
+      'If CUDA cannot pass calibration, training stays blocked.',
+    );
+    await waitFor(() => expect(screen.getByText('12 GB VRAM reported')).toBeTruthy());
+
+    fireEvent.click(cpuOnly);
+    expect(cpuOnly.getAttribute('aria-pressed')).toBe('true');
+    expect(cpuOnly.textContent).toContain('Usually slower.');
+    expect(cpuOnly.textContent).toMatch(/GPU (stays|remains) unused/);
+    await waitFor(() => expect(screen.getByText('32 GB system RAM reported')).toBeTruthy());
+
+    const balanced = screen.getByRole('button', { name: /^Balanced/i });
+    fireEvent.click(balanced);
+    expect(balanced.getAttribute('aria-pressed')).toBe('true');
+    expect(cpuOnly.getAttribute('aria-pressed')).toBe('true');
+    expect(balanced.textContent).toContain('Batch 1');
+    expect(balanced.textContent).toContain('Grad 4×');
+    expect(balanced.textContent).toContain('2,048 tokens');
   });
 
   it('activates only a verified completed artifact', () => {
@@ -651,4 +708,3 @@ describe('BuildYourOwnAIHub', () => {
     expect(screen.getByText('Step 5 of 6')).toBeTruthy();
   });
 });
-

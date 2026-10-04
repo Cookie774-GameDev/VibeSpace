@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
-use std::io::{BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,19 +10,30 @@ use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
+#[path = "foundry_worker_supervisor.rs"]
+mod worker_supervisor;
+pub(crate) use worker_supervisor::verify_training_artifact;
+#[cfg(test)]
+use worker_supervisor::drain_bounded;
+use worker_supervisor::{
+    configure_hidden_worker_command, configure_worker_environment,
+    file_sha256 as artifact_file_sha256, validate_inference_receipt, validate_training_metadata,
+    validate_training_receipt, verify_training_artifact_for_method,
+    write_and_verify_training_artifact, write_bounded_log, TrainingArtifactEvidence,
+    TrainingCatalogFile, TrainingCatalogModel, WorkerRegistry, MAX_WORKER_LOG_BYTES,
+    MODEL_MARKER_FILE as TRAINING_MODEL_MARKER, WORKER_PROTOCOL,
+};
+
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-const WORKER_PROTOCOL: u8 = 1;
 const WORKER_SOURCE: &str = include_str!("../workers/model_foundry/worker.py");
-const TRAINING_CATALOG_SOURCE: &str = include_str!("../workers/model_foundry/training-models.json");
 const TRAINING_REAL_REQUIREMENTS: &str =
     include_str!("../workers/model_foundry/requirements-real.lock");
 const TRAINING_QLORA_REQUIREMENTS: &str =
     include_str!("../workers/model_foundry/requirements-qlora.lock");
-const TRAINING_ARTIFACT_MANIFEST: &str = ".vibespace-artifact.json";
 const CALIBRATION_WARMUP_STEPS: u16 = 3;
 const CALIBRATION_MEASURED_STEPS: u16 = 10;
 const CALIBRATION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -80,9 +90,8 @@ impl SetupProcessOps for NativeSetupProcess {
 }
 
 fn setup_cleanup_is_confirmed(control: &RuntimeSetupControl) -> bool {
-    control.owned_process.try_lock().map(|owned| {
-        owned.is_none() && !control.cleanup_pending.load(Ordering::Relaxed)
-    }).unwrap_or(false)
+    control.owned_process.try_lock().map(|owned| owned.is_none() && !control.cleanup_pending.load(Ordering::Relaxed))
+        .unwrap_or(false)
 }
 
 fn release_setup_if_closed(
@@ -106,7 +115,8 @@ fn ensure_no_retained_setup(registry: &Mutex<Option<RuntimeSetupControl>>) -> Re
     Ok(())
 }
 
-fn retry_owned_setup_cleanup(control: &RuntimeSetupControl, budget: Duration) -> Result<(), String> {
+fn retry_owned_setup_cleanup(control: &RuntimeSetupControl, budget: Duration,
+) -> Result<(), String> {
     let mut owned = control.owned_process.try_lock().map_err(|_| {
         control.cleanup_pending.store(true, Ordering::Relaxed);
         "Runtime setup owned child cleanup is busy; ownership retained.".to_string()
@@ -119,9 +129,7 @@ fn retry_owned_setup_cleanup(control: &RuntimeSetupControl, budget: Duration) ->
     let termination_error = process.terminate_tree().err();
     let until = Instant::now() + budget;
     loop {
-        let closure = process.poll_root().and_then(|root| {
-            process.tree_empty().map(|empty| root.is_some() && empty)
-        });
+        let closure = process.poll_root().and_then(|root| process.tree_empty().map(|empty| root.is_some() && empty));
         match closure {
             Ok(true) => {
                 *owned = None; // Drop child/job only after root reap AND job empty.
@@ -243,7 +251,8 @@ fn bounded_setup_process_output(
             if let Some(status) = status {
                 return Ok(Output { status,
                     stdout: read_bounded_capture(&stdout_path, operation, "stdout")?,
-                    stderr: read_bounded_capture(&stderr_path, operation, "stderr")? });
+                    stderr: read_bounded_capture(&stderr_path, operation, "stderr")?,
+                });
             }
             if started.elapsed() >= timeout { return Err(format!("{operation} timed out.")); }
             thread::sleep(Duration::from_millis(25));
@@ -263,7 +272,8 @@ fn dependency_repair_timeout(seconds: Option<u64>) -> Result<Duration, String> {
     Ok(Duration::from_secs(seconds))
 }
 
-fn runtime_setup_remaining(control: &RuntimeSetupControl, cap: Duration) -> Result<Duration, String> {
+fn runtime_setup_remaining(control: &RuntimeSetupControl, cap: Duration,
+) -> Result<Duration, String> {
     if control.cancelled.load(Ordering::Relaxed) {
         return Err("Runtime setup cancelled.".into());
     }
@@ -290,7 +300,8 @@ fn runtime_setup_id(value: Option<String>) -> Result<String, String> {
 }
 
 #[cfg(test)]
-fn cancel_runtime_setup(registry: &Mutex<Option<RuntimeSetupControl>>, setup_id: &str) -> Result<bool, String> {
+fn cancel_runtime_setup(registry: &Mutex<Option<RuntimeSetupControl>>, setup_id: &str,
+) -> Result<bool, String> {
     let active = registry.lock().map_err(|_| "Runtime setup registry unavailable.".to_string())?;
     let Some(control) = active.as_ref().filter(|control| control.setup_id == setup_id) else { return Ok(false); };
     control.cancelled.store(true, Ordering::Relaxed);
@@ -306,19 +317,12 @@ pub async fn model_foundry_cancel_training_worker_setup(setup_id: String) -> Res
 }
 const WORKER_PROBE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_PROCESS_CAPTURE_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_ARTIFACT_FILES: usize = 4_096;
-const MAX_ARTIFACT_DEPTH: usize = 8;
-const MAX_ARTIFACT_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_WORKER_LOG_BYTES: usize = 256 * 1024;
 const MAX_INFERENCE_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 const INFERENCE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const TRAINING_MODEL_MARKER: &str = ".vibespace-model.json";
 const MAX_TRAINING_MODEL_MARKER_BYTES: u64 = 4 * 1024;
 const DOWNLOAD_BUFFER_BYTES: usize = 1024 * 1024;
-static ACTIVE_TRAINING: LazyLock<Mutex<BTreeMap<String, Arc<Mutex<Child>>>>> =
-    LazyLock::new(|| Mutex::new(BTreeMap::new()));
-static ACTIVE_INFERENCE: LazyLock<Mutex<BTreeMap<String, Arc<Mutex<Child>>>>> =
-    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+static ACTIVE_TRAINING: LazyLock<WorkerRegistry> = LazyLock::new(WorkerRegistry::new);
+static ACTIVE_INFERENCE: LazyLock<WorkerRegistry> = LazyLock::new(WorkerRegistry::new);
 static ACTIVE_MODEL_DOWNLOAD: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 static MODEL_STORAGE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static TRAINING_RUNTIME_SETUP: Mutex<()> = Mutex::new(());
@@ -349,34 +353,11 @@ struct WorkerProbeCache {
 }
 
 pub(crate) fn foundry_storage_busy() -> Result<bool, String> {
-    Ok(!ACTIVE_TRAINING
-        .lock()
-        .map_err(|_| "Model Foundry training registry is unavailable.".to_string())?
-        .is_empty()
+    Ok(!ACTIVE_TRAINING.is_empty()?
         || ACTIVE_MODEL_DOWNLOAD
             .lock()
             .map_err(|_| "Training model download registry is unavailable.".to_string())?
             .is_some())
-}
-
-struct TrainingRegistryGuard(String);
-
-impl Drop for TrainingRegistryGuard {
-    fn drop(&mut self) {
-        if let Ok(mut active) = ACTIVE_TRAINING.lock() {
-            active.remove(&self.0);
-        }
-    }
-}
-
-struct InferenceRegistryGuard(String);
-
-impl Drop for InferenceRegistryGuard {
-    fn drop(&mut self) {
-        if let Ok(mut active) = ACTIVE_INFERENCE.lock() {
-            active.remove(&self.0);
-        }
-    }
 }
 
 struct ModelDownloadGuard;
@@ -387,37 +368,6 @@ impl Drop for ModelDownloadGuard {
             *active = None;
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct TrainingCatalogFile {
-    path: String,
-    bytes: u64,
-    sha256: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct TrainingCatalogModel {
-    pub(crate) id: String,
-    pub(crate) label: String,
-    pub(crate) source_id: String,
-    pub(crate) revision: String,
-    pub(crate) license: String,
-    pub(crate) license_url: String,
-    pub(crate) gated: bool,
-    pub(crate) parameters_b: f64,
-    pub(crate) download_bytes: u64,
-    pub(crate) expected_ram_gb: u16,
-    pub(crate) expected_vram_gb: u16,
-    pub(crate) context_tokens: u32,
-    pub(crate) precision: String,
-    pub(crate) modalities: Vec<String>,
-    pub(crate) speed: String,
-    pub(crate) quality: String,
-    pub(crate) cpu_practical: bool,
-    pub(crate) files: Vec<TrainingCatalogFile>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -461,82 +411,16 @@ struct TrainingCatalogManifest {
 }
 
 fn valid_hex(value: &str, length: usize) -> bool {
-    value.len() == length && value.chars().all(|character| character.is_ascii_hexdigit())
+    worker_supervisor::valid_hex(value, length)
 }
 
 fn safe_catalog_component(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
-        })
+    worker_supervisor::safe_catalog_component(value)
 }
 
 pub(crate) fn training_catalog() -> Result<Vec<TrainingCatalogModel>, String> {
-    let manifest: TrainingCatalogManifest = serde_json::from_str(TRAINING_CATALOG_SOURCE)
-        .map_err(|error| format!("Verified training model catalog is invalid: {error}"))?;
-    if manifest.schema_version != 1
-        || manifest.source_host != "huggingface.co"
-        || manifest.updated_at.trim().is_empty()
-        || manifest.models.len() < 5
-    {
-        return Err("Verified training model catalog metadata is incomplete.".into());
-    }
-    let mut ids = BTreeSet::new();
-    let mut sources = BTreeSet::new();
-    for model in &manifest.models {
-        let download_bytes = model.files.iter().try_fold(0_u64, |total, file| {
-            total
-                .checked_add(file.bytes)
-                .ok_or_else(|| "Training model download size overflowed.".to_string())
-        })?;
-        let mut paths = BTreeSet::new();
-        let source_parts = model.source_id.split('/').collect::<Vec<_>>();
-        if !safe_catalog_component(&model.id)
-            || model.label.trim().is_empty()
-            || !ids.insert(model.id.clone())
-            || !sources.insert((model.source_id.clone(), model.revision.clone()))
-            || source_parts.len() != 2
-            || !source_parts
-                .iter()
-                .all(|component| safe_catalog_component(component))
-            || !valid_hex(&model.revision, 40)
-            || model.license != "apache-2.0"
-            || model.license_url != "https://www.apache.org/licenses/LICENSE-2.0"
-            || model.gated
-            || !model.parameters_b.is_finite()
-            || model.parameters_b <= 0.0
-            || model.expected_ram_gb == 0
-            || model.expected_vram_gb == 0
-            || model.context_tokens == 0
-            || model.modalities.is_empty()
-            || !model
-                .modalities
-                .iter()
-                .all(|modality| matches!(modality.as_str(), "text" | "image" | "video" | "audio"))
-            || !model.modalities.iter().any(|modality| modality == "text")
-            || !matches!(model.speed.as_str(), "fast" | "medium" | "slow")
-            || !matches!(model.quality.as_str(), "efficient" | "balanced" | "high")
-            || model.files.is_empty()
-            || model.download_bytes != download_bytes
-            || !model.files.iter().all(|file| {
-                file.bytes > 0
-                    && valid_hex(&file.sha256, 64)
-                    && !file.path.is_empty()
-                    && !file.path.contains("..")
-                    && !file.path.contains(['/', '\\'])
-                    && safe_catalog_component(&file.path)
-                    && paths.insert(file.path.clone())
-            })
-            || !paths.contains("config.json")
-            || !paths.contains("model.safetensors")
-        {
-            return Err("Verified training model catalog contains an unsafe entry.".into());
-        }
-    }
-    Ok(manifest.models)
+    worker_supervisor::training_catalog()
 }
-
 fn training_model_download_url(
     model: &TrainingCatalogModel,
     file: &TrainingCatalogFile,
@@ -627,49 +511,13 @@ fn verify_training_model_directory(
     model_root: &Path,
     model: &TrainingCatalogModel,
 ) -> Result<u64, String> {
-    if !model_root.is_dir() {
-        return Err("The verified trainable base model is not installed.".into());
-    }
-    let entries = fs::read_dir(&model_root)
-        .map_err(|error| format!("Could not inspect trainable base model: {error}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Could not inspect trainable base model: {error}"))?;
-    if entries.iter().any(|entry| {
-        entry.file_name().to_str().is_none_or(|name| {
-            name != TRAINING_MODEL_MARKER && !model.files.iter().any(|file| file.path == name)
-        })
-    }) {
-        return Err("Trainable base model contains unexpected or missing files.".into());
-    }
-    let mut total = 0_u64;
-    for expected in &model.files {
-        let path = model_root.join(&expected.path);
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|_| format!("Trainable base model file is missing: {}", expected.path))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err("Trainable base model contains an unsafe filesystem entry.".into());
-        }
-        let (bytes, sha256) = artifact_file_sha256(&path)?;
-        if bytes != expected.bytes || sha256 != expected.sha256 {
-            return Err(format!(
-                "Trainable base model file failed integrity verification: {}",
-                expected.path
-            ));
-        }
-        total = total
-            .checked_add(bytes)
-            .ok_or_else(|| "Trainable base model size overflowed.".to_string())?;
-    }
-    if total != model.download_bytes {
-        return Err("Trainable base model size does not match its verified manifest.".into());
-    }
-    Ok(total)
+    worker_supervisor::verify_training_model_directory(model_root, model)
 }
 
 fn verify_training_model_files(root: &Path, model: &TrainingCatalogModel) -> Result<u64, String> {
-    verify_training_model_directory(&root.join("base-models").join(&model.id), model)
+    worker_supervisor::verify_training_model_directory(&root.join("base-models").join(&model.id), model,
+    )
 }
-
 fn training_model_status(root: &Path, model: TrainingCatalogModel) -> TrainingCatalogEntry {
     let directory = root.join("base-models").join(&model.id);
     if !directory.is_dir() {
@@ -805,32 +653,6 @@ struct TrainingWorkerProbe {
     reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct TrainingArtifactFile {
-    path: String,
-    bytes: u64,
-    sha256: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TrainingArtifactManifest {
-    schema_version: u8,
-    method: String,
-    file_count: usize,
-    storage_bytes: u64,
-    sha256: String,
-    files: Vec<TrainingArtifactFile>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TrainingArtifactEvidence {
-    pub(crate) file_count: usize,
-    pub(crate) storage_bytes: u64,
-    pub(crate) sha256: String,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TrainingConfiguration {
@@ -921,16 +743,6 @@ struct TrainingRunRequest {
     target_modules: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TrainingRunResponse {
-    protocol: u8,
-    local_only: bool,
-    completed: bool,
-    method: String,
-    artifact_path: String,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct TrainingRunResult {
     pub(crate) artifact_path: PathBuf,
@@ -955,18 +767,6 @@ struct InferenceRequest {
     response_path: String,
     messages: Vec<InferenceMessage>,
     max_output_tokens: u32,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct InferenceResponse {
-    protocol: u8,
-    local_only: bool,
-    completed: bool,
-    method: String,
-    text: String,
-    input_tokens: u64,
-    output_tokens: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -1006,176 +806,6 @@ pub(crate) fn training_model_path(root: &Path, base_model_id: &str) -> Result<Pa
         .find(|model| model.id == base_model_id)
         .ok_or_else(|| "The selected model has no verified local training manifest.".to_string())?;
     Ok(root.join("base-models").join(model.id))
-}
-
-fn artifact_file_sha256(path: &Path) -> Result<(u64, String), String> {
-    let file = fs::File::open(path)
-        .map_err(|error| format!("Could not inspect training artifact: {error}"))?;
-    let bytes = file
-        .metadata()
-        .map_err(|error| format!("Could not inspect training artifact: {error}"))?
-        .len();
-    let mut reader = BufReader::new(file);
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
-    loop {
-        let count = reader
-            .read(&mut buffer)
-            .map_err(|error| format!("Could not hash training artifact: {error}"))?;
-        if count == 0 {
-            break;
-        }
-        digest.update(&buffer[..count]);
-    }
-    Ok((bytes, format!("{:x}", digest.finalize())))
-}
-
-fn collect_artifact_files(
-    root: &Path,
-    directory: &Path,
-    depth: usize,
-    files: &mut Vec<TrainingArtifactFile>,
-) -> Result<(), String> {
-    if depth > MAX_ARTIFACT_DEPTH {
-        return Err("Training artifact directory nesting exceeds the safe limit.".into());
-    }
-    let mut entries = fs::read_dir(directory)
-        .map_err(|error| format!("Could not inspect training artifact directory: {error}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Could not inspect training artifact directory: {error}"))?;
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| format!("Could not inspect training artifact entry: {error}"))?;
-        if metadata.file_type().is_symlink() {
-            return Err("Training artifacts may not contain symbolic links.".into());
-        }
-        if metadata.is_dir() {
-            collect_artifact_files(root, &path, depth + 1, files)?;
-            continue;
-        }
-        if !metadata.is_file() {
-            return Err("Training artifact contains an unsupported filesystem entry.".into());
-        }
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|_| "Training artifact escaped its verified root.".to_string())?
-            .to_string_lossy()
-            .replace('\\', "/");
-        if relative == TRAINING_ARTIFACT_MANIFEST {
-            continue;
-        }
-        if files.len() >= MAX_ARTIFACT_FILES {
-            return Err("Training artifact contains too many files.".into());
-        }
-        let (bytes, sha256) = artifact_file_sha256(&path)?;
-        files.push(TrainingArtifactFile {
-            path: relative,
-            bytes,
-            sha256,
-        });
-    }
-    Ok(())
-}
-
-fn artifact_manifest_from_files(
-    method: &str,
-    files: Vec<TrainingArtifactFile>,
-) -> Result<TrainingArtifactManifest, String> {
-    if !matches!(method, "lora" | "qlora" | "full") {
-        return Err("Training artifact method is unsupported.".into());
-    }
-    if files.is_empty() {
-        return Err("Training produced no artifact files.".into());
-    }
-    let storage_bytes = files.iter().try_fold(0_u64, |total, file| {
-        total
-            .checked_add(file.bytes)
-            .ok_or_else(|| "Training artifact size overflowed.".to_string())
-    })?;
-    let mut aggregate = Sha256::new();
-    for file in &files {
-        aggregate.update(file.path.as_bytes());
-        aggregate.update([0]);
-        aggregate.update(file.bytes.to_le_bytes());
-        aggregate.update(file.sha256.as_bytes());
-        aggregate.update([0]);
-    }
-    Ok(TrainingArtifactManifest {
-        schema_version: 1,
-        method: method.to_string(),
-        file_count: files.len(),
-        storage_bytes,
-        sha256: format!("{:x}", aggregate.finalize()),
-        files,
-    })
-}
-
-fn current_artifact_manifest(
-    root: &Path,
-    method: &str,
-) -> Result<TrainingArtifactManifest, String> {
-    if !root.is_dir() {
-        return Err("Training artifact directory is missing.".into());
-    }
-    let mut files = Vec::new();
-    collect_artifact_files(root, root, 0, &mut files)?;
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    artifact_manifest_from_files(method, files)
-}
-
-pub(crate) fn write_and_verify_training_artifact(
-    root: &Path,
-    method: &str,
-) -> Result<TrainingArtifactEvidence, String> {
-    let manifest = current_artifact_manifest(root, method)?;
-    let bytes = serde_json::to_vec_pretty(&manifest)
-        .map_err(|error| format!("Could not encode training artifact manifest: {error}"))?;
-    if bytes.len() as u64 > MAX_ARTIFACT_MANIFEST_BYTES {
-        return Err("Training artifact manifest exceeds the safe size limit.".into());
-    }
-    let path = root.join(TRAINING_ARTIFACT_MANIFEST);
-    let temporary = root.join(format!("{TRAINING_ARTIFACT_MANIFEST}.tmp"));
-    fs::write(&temporary, bytes)
-        .map_err(|error| format!("Could not write training artifact manifest: {error}"))?;
-    fs::rename(&temporary, &path)
-        .map_err(|error| format!("Could not activate training artifact manifest: {error}"))?;
-    verify_training_artifact(root)
-}
-
-pub(crate) fn verify_training_artifact(root: &Path) -> Result<TrainingArtifactEvidence, String> {
-    let path = root.join(TRAINING_ARTIFACT_MANIFEST);
-    let metadata =
-        fs::metadata(&path).map_err(|_| "Training artifact manifest is missing.".to_string())?;
-    if metadata.len() > MAX_ARTIFACT_MANIFEST_BYTES {
-        return Err("Training artifact manifest exceeds the safe size limit.".into());
-    }
-    let expected: TrainingArtifactManifest = serde_json::from_slice(
-        &fs::read(&path)
-            .map_err(|error| format!("Could not read training artifact manifest: {error}"))?,
-    )
-    .map_err(|error| format!("Training artifact manifest is invalid: {error}"))?;
-    if expected.schema_version != 1
-        || expected.file_count != expected.files.len()
-        || expected.file_count == 0
-        || expected.file_count > MAX_ARTIFACT_FILES
-    {
-        return Err("Training artifact manifest metadata is invalid.".into());
-    }
-    let current = current_artifact_manifest(root, &expected.method)?;
-    if current.files != expected.files
-        || current.file_count != expected.file_count
-        || current.storage_bytes != expected.storage_bytes
-        || current.sha256 != expected.sha256
-    {
-        return Err("Training artifact failed integrity verification.".into());
-    }
-    Ok(TrainingArtifactEvidence {
-        file_count: current.file_count,
-        storage_bytes: current.storage_bytes,
-        sha256: current.sha256,
-    })
 }
 
 fn private_python(root: &Path) -> PathBuf {
@@ -1249,47 +879,21 @@ fn read_bounded_capture(path: &Path, operation: &str, stream: &str) -> Result<Ve
     Ok(bytes)
 }
 
-fn foundry_worker_environment_paths(root: &Path) -> Vec<(&'static str, PathBuf)> {
-    let cache_root = root.join("worker-cache");
-    let temp = cache_root.join("temp");
-    let hf_home = cache_root.join("huggingface");
-    let hf_hub = hf_home.join("hub");
-    vec![
-        ("TEMP", temp.clone()),
-        ("TMP", temp.clone()),
-        ("TMPDIR", temp),
-        ("PIP_CACHE_DIR", cache_root.join("pip")),
-        ("UV_CACHE_DIR", cache_root.join("uv")),
-        ("HF_HOME", hf_home.clone()),
-        ("HF_HUB_CACHE", hf_hub.clone()),
-        ("HUGGINGFACE_HUB_CACHE", hf_hub),
-        ("HF_XET_CACHE", hf_home.join("xet")),
-        ("HF_ASSETS_CACHE", hf_home.join("assets")),
-        ("HF_DATASETS_CACHE", hf_home.join("datasets")),
-        ("TRANSFORMERS_CACHE", hf_home.join("transformers")),
-        ("TORCH_HOME", cache_root.join("torch")),
-        ("TORCHINDUCTOR_CACHE_DIR", cache_root.join("torch-inductor")),
-        ("TRITON_CACHE_DIR", cache_root.join("triton")),
-        ("CUDA_CACHE_PATH", cache_root.join("cuda")),
-        ("PYTHONPYCACHEPREFIX", cache_root.join("python-bytecode")),
-        ("XDG_CACHE_HOME", cache_root.join("xdg")),
-        ("MPLCONFIGDIR", cache_root.join("matplotlib")),
-    ]
-}
-
 fn configure_foundry_worker_environment(command: &mut Command, root: &Path) -> Result<(), String> {
-    for (name, path) in foundry_worker_environment_paths(root) {
-        fs::create_dir_all(&path).map_err(|error| {
-            format!("Could not prepare the private Model Foundry {name} directory: {error}")
-        })?;
-        command.env(name, path);
-    }
-    command.env("HF_HUB_DISABLE_TELEMETRY", "1");
-    Ok(())
+    configure_worker_environment(command, root)
 }
-
 fn process_capture_root(root: &Path) -> PathBuf {
     root.join("worker-cache").join("process-captures")
+}
+
+fn private_file_entry_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "Could not inspect a private Model Foundry job path: {error}"
+        )),
+    }
 }
 
 fn bounded_process_output(
@@ -1308,7 +912,10 @@ fn reap_owned_child(child: &mut Child, operation: &str) -> Result<(), String> {
             Ok(Some(_)) => return Ok(()),
             Ok(None) if Instant::now() < until => thread::sleep(Duration::from_millis(25)),
             Ok(None) => return Err(format!("{operation} owned child cleanup remains pending.")),
-            Err(error) => return Err(format!("Could not acknowledge {operation} owned child reap: {error}")),
+            Err(error) => {
+                return Err(format!("Could not acknowledge {operation} owned child reap: {error}"
+                ))
+            }
         }
     }
 }
@@ -1664,8 +1271,10 @@ fn probe_worker_with_setup(
             None => WORKER_PROBE_TIMEOUT,
         };
         let output = match setup.filter(|control| control.deadline.is_some()) {
-            Some(control) => bounded_setup_process_output(command, &process_capture_root(root), timeout, "worker probe", control),
-            None => bounded_process_output_with_cancel(command, &process_capture_root(root), timeout, "worker probe", setup.map(|control| control.cancelled.as_ref())),
+            Some(control) => bounded_setup_process_output(command, &process_capture_root(root), timeout, "worker probe", control,
+            ),
+            None => bounded_process_output_with_cancel(command, &process_capture_root(root), timeout, "worker probe", setup.map(|control| control.cancelled.as_ref()),
+            ),
         }?;
         if let Some(control) = setup { runtime_setup_remaining(control, WORKER_PROBE_TIMEOUT)?; }
         if !output.status.success() {
@@ -1953,7 +1562,8 @@ fn inspect_worker(root: &Path) -> TrainingWorkerStatus {
     inspect_worker_with_setup(root, None)
 }
 
-fn inspect_worker_with_setup(root: &Path, setup: Option<&RuntimeSetupControl>) -> TrainingWorkerStatus {
+fn inspect_worker_with_setup(root: &Path, setup: Option<&RuntimeSetupControl>,
+) -> TrainingWorkerStatus {
     let expected = expected_source_sha256();
     let path = worker_path(root);
     let private = private_python(root);
@@ -2354,11 +1964,7 @@ fn install_training_model(
     let _storage_guard = MODEL_STORAGE_LOCK
         .lock()
         .map_err(|_| "Training model storage lock is unavailable.".to_string())?;
-    if !ACTIVE_TRAINING
-        .lock()
-        .map_err(|_| "Model Foundry training registry is unavailable.".to_string())?
-        .is_empty()
-    {
+    if !ACTIVE_TRAINING.is_empty()? {
         return Err("Stop active local training before activating a base model update.".into());
     }
     activate_training_model(&staging, &destination, replace)?;
@@ -2466,11 +2072,7 @@ pub fn model_foundry_remove_training_model(
     {
         return Err("Cancel the active training model download before removing a model.".into());
     }
-    if !ACTIVE_TRAINING
-        .lock()
-        .map_err(|_| "Model Foundry training registry is unavailable.".to_string())?
-        .is_empty()
-    {
+    if !ACTIVE_TRAINING.is_empty()? {
         return Err("Stop active local training before removing a base model.".into());
     }
     let root = training_root(&app)?;
@@ -2499,7 +2101,8 @@ fn install_training_runtime(
     // not only a dependency command that will never run.
     let control = RuntimeSetupControl {
         setup_id, cancelled: Arc::new(AtomicBool::new(false)),
-        deadline: whole_deadline, owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
+        deadline: whole_deadline, owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)),
+    };
     *ACTIVE_RUNTIME_SETUP.lock().map_err(|_| "Runtime setup registry unavailable.".to_string())? = Some(control.clone());
     let _control_guard = RuntimeSetupControlGuard(control.clone());
     runtime_setup_remaining(&control, dependency_timeout)?;
@@ -2529,16 +2132,19 @@ fn install_training_runtime(
     let python_text = python.to_string_lossy().into_owned();
     let expected = expected_source_sha256();
     let probe_result = probe_worker_with_setup(&root, &python_text, &path, &expected, Some(&control));
-    let needs_packages = setup_probe_needs_packages(probe_result, include_qlora, allow_dependency_repair, &control)?;
+    let needs_packages = setup_probe_needs_packages(probe_result, include_qlora, allow_dependency_repair, &control,
+    )?;
     runtime_setup_remaining(&control, dependency_timeout)?;
     if control.cancelled.load(Ordering::Relaxed) {
         return Err("Runtime setup cancelled.".into());
     }
     if needs_packages {
         if !allow_dependency_repair {
-            return Err("Verified worker restored; dependency repair requires explicit resource admission.".into());
+            return Err("Verified worker restored; dependency repair requires explicit resource admission.".into(),
+            );
         }
-        install_private_training_packages(&python, &root, include_qlora, dependency_timeout, &control.cancelled)?;
+        install_private_training_packages(&python, &root, include_qlora, dependency_timeout, &control.cancelled,
+        )?;
         clear_worker_probe_cache();
     }
 
@@ -2578,7 +2184,8 @@ pub async fn model_foundry_install_training_worker(
         if let Some(storage_root) = storage_root.as_deref() {
             crate::model_foundry::configure_foundry_storage(&app, storage_root)?;
         }
-        install_training_runtime(&app, include_qlora.unwrap_or(false), allow_dependency_repair, dependency_timeout, setup_id, whole_deadline)
+        install_training_runtime(&app, include_qlora.unwrap_or(false), allow_dependency_repair, dependency_timeout, setup_id, whole_deadline,
+        )
     })
     .await
     .map_err(|error| format!("Model Foundry setup worker failed: {error}"))?
@@ -2594,26 +2201,6 @@ fn safe_job_id(value: &str) -> Result<&str, String> {
         return Err("Invalid Model Foundry training job identifier.".into());
     }
     Ok(value)
-}
-
-fn drain_bounded<R: Read>(mut reader: R, maximum: usize) -> Vec<u8> {
-    let mut output = Vec::with_capacity(maximum.min(16 * 1024));
-    let mut buffer = [0_u8; 8 * 1024];
-    loop {
-        let count = match reader.read(&mut buffer) {
-            Ok(0) | Err(_) => break,
-            Ok(count) => count,
-        };
-        let remaining = maximum.saturating_sub(output.len());
-        if remaining > 0 {
-            output.extend_from_slice(&buffer[..count.min(remaining)]);
-        }
-    }
-    output
-}
-
-fn write_bounded_log(path: &Path, bytes: &[u8]) {
-    let _ = fs::write(path, &bytes[..bytes.len().min(MAX_WORKER_LOG_BYTES)]);
 }
 
 pub(crate) fn latest_training_checkpoint(output: &Path) -> Result<Option<PathBuf>, String> {
@@ -2782,73 +2369,35 @@ pub(crate) fn run_training_worker(
     fs::rename(&temporary, &request_path)
         .map_err(|error| format!("Could not activate the local training request: {error}"))?;
 
+    let compute_device = request.training_config.compute_device.clone();
     let mut command = Command::new(python);
     command
         .arg(&worker)
         .arg("train")
         .arg(&request_path)
-        .current_dir(&root)
-        .env("HF_HUB_OFFLINE", "1")
-        .env("TRANSFORMERS_OFFLINE", "1")
-        .env("TOKENIZERS_PARALLELISM", "false")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .current_dir(&root);
+    configure_hidden_worker_command(&mut command);
     configure_foundry_worker_environment(&mut command, &root)?;
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Could not start the verified local training worker: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Local training stdout was unavailable.".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Local training stderr was unavailable.".to_string())?;
-    let stdout_thread = std::thread::spawn(move || drain_bounded(stdout, MAX_WORKER_LOG_BYTES));
-    let stderr_thread = std::thread::spawn(move || drain_bounded(stderr, MAX_WORKER_LOG_BYTES));
-    let child = Arc::new(Mutex::new(child));
-    {
-        let mut active = ACTIVE_TRAINING
-            .lock()
-            .map_err(|_| "Model Foundry training registry is unavailable.".to_string())?;
-        if active.insert(job_id.to_string(), child.clone()).is_some() {
-            let _ = child.lock().map(|mut process| process.kill());
-            return Err("This Model Foundry training job is already active.".into());
-        }
-    }
     drop(storage_guard);
-    let _registry_guard = TrainingRegistryGuard(job_id.to_string());
-    let exit = loop {
-        let result = child
-            .lock()
-            .map_err(|_| "Model Foundry training process is unavailable.".to_string())?
-            .try_wait()
-            .map_err(|error| format!("Could not monitor the local training worker: {error}"))?;
-        if let Some(status) = result {
-            break status;
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    };
-    let stdout = stdout_thread.join().unwrap_or_default();
-    let stderr = stderr_thread.join().unwrap_or_default();
-    write_bounded_log(&job_dir.join("worker.stdout.log"), &stdout);
-    write_bounded_log(&job_dir.join("worker.stderr.log"), &stderr);
-    if !exit.success() {
+    let execution = ACTIVE_TRAINING.run(
+        job_id,
+        command,
+        MAX_WORKER_LOG_BYTES,
+        None,
+        "training worker",
+    )?;
+    write_bounded_log(&job_dir.join("worker.stdout.log"), &execution.stdout)?;
+    write_bounded_log(&job_dir.join("worker.stderr.log"), &execution.stderr)?;
+    if execution.timed_out {
+        return Err(
+            "The local training worker timed out. Review its bounded local job log.".into(),
+        );
+    }
+    if !execution.status.success() {
         return Err("The local training worker failed. Review its bounded local job log.".into());
     }
-    let response: TrainingRunResponse = serde_json::from_slice(&stdout).map_err(|_| {
-        "The local training worker returned invalid completion evidence.".to_string()
-    })?;
-    if response.protocol != WORKER_PROTOCOL
-        || !response.local_only
-        || !response.completed
-        || response.method != method
-        || PathBuf::from(response.artifact_path) != output
-    {
-        return Err("The local training worker returned mismatched completion evidence.".into());
-    }
+    validate_training_receipt(&execution.stdout, method, &output)?;
+    validate_training_metadata(&output, &compute_device, true)?;
     let evidence = write_and_verify_training_artifact(&output, method)?;
     Ok(TrainingRunResult {
         artifact_path: output,
@@ -2926,10 +2475,17 @@ pub(crate) fn run_foundry_inference(
     if artifact.parent() != Some(job_dir.as_path()) {
         return Err("Model Foundry weight artifact escaped its private job directory.".into());
     }
-    verify_training_artifact(&artifact)?;
+    verify_training_artifact_for_method(&artifact, method)?;
 
     let request_path = job_dir.join(format!("inference-{request_id}.request.json"));
     let response_path = job_dir.join(format!("inference-{request_id}.response.json"));
+    let temporary = request_path.with_extension("json.tmp");
+    if private_file_entry_exists(&request_path)?
+        || private_file_entry_exists(&response_path)?
+        || private_file_entry_exists(&temporary)?
+    {
+        return Err("Local inference request paths are already in use.".into());
+    }
     let request = InferenceRequest {
         protocol: WORKER_PROTOCOL,
         local_only: true,
@@ -2946,7 +2502,6 @@ pub(crate) fn run_foundry_inference(
             .collect(),
         max_output_tokens,
     };
-    let temporary = request_path.with_extension("json.tmp");
     fs::write(
         &temporary,
         serde_json::to_vec(&request)
@@ -2962,71 +2517,39 @@ pub(crate) fn run_foundry_inference(
             .arg(&worker)
             .arg("infer")
             .arg(&request_path)
-            .current_dir(&root)
-            .env("HF_HUB_OFFLINE", "1")
-            .env("TRANSFORMERS_OFFLINE", "1")
-            .env("TOKENIZERS_PARALLELISM", "false")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .current_dir(&root);
+        configure_hidden_worker_command(&mut command);
         configure_foundry_worker_environment(&mut command, &root)?;
-        let child = command.spawn().map_err(|error| {
-            format!("Could not start the verified local inference worker: {error}")
-        })?;
-        let child = Arc::new(Mutex::new(child));
-        {
-            let mut active = ACTIVE_INFERENCE
-                .lock()
-                .map_err(|_| "Model Foundry inference registry is unavailable.".to_string())?;
-            if active
-                .insert(request_id.to_string(), child.clone())
-                .is_some()
-            {
-                let _ = child.lock().map(|mut process| process.kill());
-                return Err("This Model Foundry inference request is already active.".into());
-            }
+        let execution = ACTIVE_INFERENCE.run(
+            &request_id,
+            command,
+            MAX_WORKER_LOG_BYTES,
+            Some(INFERENCE_TIMEOUT),
+            "inference worker",
+        )?;
+        write_bounded_log(
+            &job_dir.join(format!("inference-{request_id}.stdout.log")),
+            &execution.stdout,
+        )?;
+        write_bounded_log(
+            &job_dir.join(format!("inference-{request_id}.stderr.log")),
+            &execution.stderr,
+        )?;
+        if execution.timed_out {
+            return Err("Local trained-model inference exceeded the safe time limit.".into());
         }
-        let _registry_guard = InferenceRegistryGuard(request_id.to_string());
-        let started = Instant::now();
-        loop {
-            if let Some(status) = child
-                .lock()
-                .map_err(|_| "Model Foundry inference process is unavailable.".to_string())?
-                .try_wait()
-                .map_err(|error| format!("Could not monitor local model inference: {error}"))?
-            {
-                if !status.success() {
+        if !execution.status.success() {
                     return Err("The verified local model could not complete inference.".into());
-                }
-                break;
-            }
-            if started.elapsed() >= INFERENCE_TIMEOUT {
-                if let Ok(mut process) = child.lock() {
-                    let _ = process.kill();
-                    let _ = process.wait();
-                }
-                return Err("Local trained-model inference exceeded the safe time limit.".into());
-            }
-            std::thread::sleep(Duration::from_millis(100));
         }
-        let metadata = fs::metadata(&response_path)
+        let metadata = fs::symlink_metadata(&response_path)
             .map_err(|_| "Local inference returned no completion evidence.".to_string())?;
-        if !metadata.is_file() || metadata.len() > MAX_INFERENCE_RESPONSE_BYTES {
+        if !metadata.is_file() || metadata.file_type().is_symlink()
+            || metadata.len() > MAX_INFERENCE_RESPONSE_BYTES {
             return Err("Local inference completion evidence is invalid.".into());
         }
-        let response: InferenceResponse = serde_json::from_slice(
-            &fs::read(&response_path)
-                .map_err(|error| format!("Could not read local inference evidence: {error}"))?,
-        )
-        .map_err(|_| "Local inference completion evidence is malformed.".to_string())?;
-        if response.protocol != WORKER_PROTOCOL
-            || !response.local_only
-            || !response.completed
-            || response.method != method
-            || response.text.trim().is_empty()
-        {
-            return Err("Local inference completion evidence did not match the request.".into());
-        }
+        let response_bytes = fs::read(&response_path)
+                .map_err(|error| format!("Could not read local inference evidence: {error}"))?;
+        let response = validate_inference_receipt(&response_bytes, method, None)?;
         Ok(FoundryInferenceResult {
             text: response.text,
             input_tokens: response.input_tokens,
@@ -3034,44 +2557,19 @@ pub(crate) fn run_foundry_inference(
         })
     })();
     let _ = fs::remove_file(&request_path);
+    let _ = fs::remove_file(&temporary);
     let _ = fs::remove_file(&response_path);
     result.map_err(|error| format!("{error} (Model Foundry job {job_id})"))
 }
 
 pub(crate) fn cancel_foundry_inference(request_id: &str) -> Result<bool, String> {
     let request_id = safe_job_id(request_id)?;
-    let child = ACTIVE_INFERENCE
-        .lock()
-        .map_err(|_| "Model Foundry inference registry is unavailable.".to_string())?
-        .get(request_id)
-        .cloned();
-    let Some(child) = child else {
-        return Ok(false);
-    };
-    child
-        .lock()
-        .map_err(|_| "Model Foundry inference process is unavailable.".to_string())?
-        .kill()
-        .map_err(|error| format!("Could not stop local trained-model inference: {error}"))?;
-    Ok(true)
+    ACTIVE_INFERENCE.cancel(&request_id)
 }
 
 pub(crate) fn cancel_training_worker(job_id: &str) -> Result<bool, String> {
     let job_id = safe_job_id(job_id)?;
-    let child = ACTIVE_TRAINING
-        .lock()
-        .map_err(|_| "Model Foundry training registry is unavailable.".to_string())?
-        .get(job_id)
-        .cloned();
-    let Some(child) = child else {
-        return Ok(false);
-    };
-    child
-        .lock()
-        .map_err(|_| "Model Foundry training process is unavailable.".to_string())?
-        .kill()
-        .map_err(|error| format!("Could not stop the local training worker: {error}"))?;
-    Ok(true)
+    ACTIVE_TRAINING.cancel(&job_id)
 }
 
 #[cfg(test)]
@@ -3849,8 +3347,9 @@ torch.utils.checkpoint: use_reentrant should be passed explicitly.
     #[test]
     fn cancelling_registered_training_worker_stops_child_and_releases_registry() {
         let job_id = format!("job_foundry_cancel_{}", nanoid::nanoid!());
+        let worker_id = job_id.clone();
         #[cfg(target_os = "windows")]
-        let mut command = {
+        let command = {
             let mut command = hidden_command("powershell");
             command.args([
                 "-NoProfile",
@@ -3861,33 +3360,29 @@ torch.utils.checkpoint: use_reentrant should be passed explicitly.
             command
         };
         #[cfg(not(target_os = "windows"))]
-        let mut command = {
+        let command = {
             let mut command = hidden_command("sh");
-            command.args(["-c", "read -r waiting"]);
-            command.stdin(Stdio::piped());
+            command.args(["-c", "sleep 30"]);
             command
         };
-        command.stdout(Stdio::null()).stderr(Stdio::null());
-        let child = Arc::new(Mutex::new(command.spawn().unwrap()));
-        ACTIVE_TRAINING
-            .lock()
-            .unwrap()
-            .insert(job_id.clone(), child.clone());
-        let registry_guard = TrainingRegistryGuard(job_id.clone());
-
-        let cancelled = cancel_training_worker(&job_id);
-        let mut process = child.lock().unwrap();
-        if !matches!(cancelled, Ok(true)) {
-            let _ = process.kill();
+        let task = thread::spawn(move || {
+            ACTIVE_TRAINING.run(
+                &worker_id,
+                command,
+                MAX_WORKER_LOG_BYTES,
+                None,
+                "training worker",
+            )
+        });
+        let until = Instant::now() + Duration::from_secs(3);
+        while !ACTIVE_TRAINING.is_active(&job_id).unwrap() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(10));
         }
-        let exit = process.wait();
-        drop(process);
-        drop(registry_guard);
-        let remains_registered = ACTIVE_TRAINING.lock().unwrap().contains_key(&job_id);
-
-        assert_eq!(cancelled.unwrap(), true);
-        assert!(!exit.unwrap().success());
-        assert!(!remains_registered);
+        assert!(ACTIVE_TRAINING.is_active(&job_id).unwrap());
+        assert!(cancel_training_worker(&job_id).unwrap());
+        let execution = task.join().unwrap().unwrap();
+        assert!(!execution.status.success());
+        assert!(ACTIVE_TRAINING.is_empty().unwrap());
     }
 
     #[test]
@@ -4060,8 +3555,10 @@ mod runtime_setup_bounds_tests {
         assert!(dependency_repair_timeout(Some(901)).is_err());
     }
     #[derive(Clone, Copy)]
-    enum InjectedRoot { Running, Reaped, WaitError }
-    struct InjectedClosure { root: InjectedRoot, tree_empty: Result<bool, String>, kill_error: bool, kills: usize }
+    enum InjectedRoot { Running, Reaped, WaitError,
+    }
+    struct InjectedClosure { root: InjectedRoot, tree_empty: Result<bool, String>, kill_error: bool, kills: usize,
+    }
     struct InjectedSetupProcess(Arc<Mutex<InjectedClosure>>);
     impl SetupProcessOps for InjectedSetupProcess {
         fn terminate_tree(&mut self) -> Result<(), String> {
@@ -4074,23 +3571,25 @@ mod runtime_setup_bounds_tests {
                 InjectedRoot::Running => Ok(None),
                 InjectedRoot::WaitError => Err("injected try_wait failure".into()),
                 InjectedRoot::Reaped => {
-                    #[cfg(target_os = "windows")]
-                    use std::os::windows::process::ExitStatusExt;
                     #[cfg(unix)]
                     use std::os::unix::process::ExitStatusExt;
+                    #[cfg(target_os = "windows")]
+                    use std::os::windows::process::ExitStatusExt;
                     Ok(Some(std::process::ExitStatus::from_raw(0)))
                 }
             }
         }
         fn tree_empty(&mut self) -> Result<bool, String> { self.0.lock().unwrap().tree_empty.clone() }
     }
-    fn injected_setup(root: InjectedRoot, tree_empty: Result<bool, String>, kill_error: bool)
-        -> (RuntimeSetupControl, Arc<Mutex<InjectedClosure>>)
+    fn injected_setup(root: InjectedRoot, tree_empty: Result<bool, String>, kill_error: bool,
+    ) -> (RuntimeSetupControl, Arc<Mutex<InjectedClosure>>)
     {
-        let state = Arc::new(Mutex::new(InjectedClosure { root, tree_empty, kill_error, kills: 0 }));
+        let state = Arc::new(Mutex::new(InjectedClosure { root, tree_empty, kill_error, kills: 0,
+        }));
         let control = RuntimeSetupControl {
             setup_id: "injected-own-setup-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: None,
-            owned_process: Arc::new(Mutex::new(Some(Box::new(InjectedSetupProcess(state.clone()))))),
+            owned_process: Arc::new(Mutex::new(Some(Box::new(InjectedSetupProcess(state.clone(),
+            ))))),
             cleanup_pending: Arc::new(AtomicBool::new(false)),
         };
         (control, state)
@@ -4121,7 +3620,8 @@ mod runtime_setup_bounds_tests {
     }
     #[test]
     fn setup_ownership_unknown_tree_query_never_releases() {
-        let (control, _) = injected_setup(InjectedRoot::Reaped, Err("injected job query failure".into()), false);
+        let (control, _) = injected_setup(InjectedRoot::Reaped, Err("injected job query failure".into()), false,
+        );
         assert_retained_and_denied(&control);
     }
     #[test]
@@ -4162,10 +3662,13 @@ mod runtime_setup_bounds_tests {
     fn setup_probe_errors_survive_no_pip_mapping_and_cleanup_blocks_every_branch() {
         let (control, _) = injected_setup(InjectedRoot::Reaped, Ok(true), false);
         retry_owned_setup_cleanup(&control, Duration::ZERO).unwrap();
-        for error in ["worker probe timed out", "Runtime setup cancelled", "owned child cleanup pending"] {
+        for error in ["worker probe timed out", "Runtime setup cancelled", "owned child cleanup pending",
+        ] {
             assert_eq!(setup_probe_needs_packages(Err(error.into()), false, false, &control).unwrap_err(), error);
         }
-        let not_ready = || validated_probe(br#"{"protocol":1,"localOnly":true,"ready":false,"methods":[],"modalities":[],"precisions":[],"reason":"missing dependencies"}"#).unwrap();
+        let not_ready = || {
+            validated_probe(br#"{"protocol":1,"localOnly":true,"ready":false,"methods":[],"modalities":[],"precisions":[],"reason":"missing dependencies"}"#).unwrap()
+        };
         assert!(setup_probe_needs_packages(Ok(not_ready()), false, false, &control).unwrap());
         control.cleanup_pending.store(true, Ordering::Relaxed);
         for allow in [false, true] {
@@ -4200,7 +3703,8 @@ mod runtime_setup_bounds_tests {
             let launch_entered = entered.clone();
             let launch_attempted = attempted.clone();
             let launch_state = state.clone();
-            let launch = scope.spawn(move || with_setup_launch_authority(&launch_control, Duration::from_secs(1), |owned| {
+            let launch = scope.spawn(move || {
+                with_setup_launch_authority(&launch_control, Duration::from_secs(1), |owned| {
                 launch_entered.wait();
                 launch_attempted.wait();
                 assert!(!launch_control.cancelled.load(Ordering::Relaxed));
@@ -4208,13 +3712,15 @@ mod runtime_setup_bounds_tests {
                 *owned = Some(Box::new(InjectedSetupProcess(launch_state)));
                 owned.as_mut().unwrap().start()?;
                 Ok(())
-            }));
+                })
+            });
             entered.wait();
             let cancel_control = control.clone();
             let cancel_registry = registry.clone();
             let cancel = scope.spawn(move || {
                 attempted.wait();
-                let result = cancel_runtime_setup_and_recover(&cancel_registry, &cancel_control.setup_id, Duration::ZERO);
+                let result = cancel_runtime_setup_and_recover(&cancel_registry, &cancel_control.setup_id, Duration::ZERO,
+                );
                 let _ = ack_send.send(()); // Receiver may close once the launch lock is released.
                 result
             });
@@ -4232,7 +3738,8 @@ mod runtime_setup_bounds_tests {
 
     #[test]
     fn setup_wall_deadline_never_renews_between_stages() {
-        let control = RuntimeSetupControl { setup_id: "wall-bound-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now() + Duration::from_millis(120)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
+        let control = RuntimeSetupControl { setup_id: "wall-bound-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now() + Duration::from_millis(120)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)),
+        };
         let first = runtime_setup_remaining(&control, WORKER_PROBE_TIMEOUT).unwrap();
         thread::sleep(Duration::from_millis(20));
         let second = runtime_setup_remaining(&control, WORKER_PROBE_TIMEOUT).unwrap();
@@ -4242,7 +3749,8 @@ mod runtime_setup_bounds_tests {
 
     #[test]
     fn setup_wall_deadline_rejects_expired_and_cancelled_before_next_child() {
-        let control = RuntimeSetupControl { setup_id: "wall-expired-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now()), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
+        let control = RuntimeSetupControl { setup_id: "wall-expired-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now()), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)),
+        };
         assert!(runtime_setup_remaining(&control, WORKER_PROBE_TIMEOUT).unwrap_err().contains("deadline"));
         assert!(control.cancelled.load(Ordering::Relaxed));
         assert!(runtime_setup_remaining(&control, WORKER_PROBE_TIMEOUT).unwrap_err().contains("cancelled"));
@@ -4251,7 +3759,8 @@ mod runtime_setup_bounds_tests {
     #[test]
     fn setup_wall_cancel_does_not_accept_foreign_identifier() {
         let cancelled = Arc::new(AtomicBool::new(false));
-        let registry = Mutex::new(Some(RuntimeSetupControl { setup_id: "wall-own-generation-1234".into(), cancelled: cancelled.clone(), deadline: Some(Instant::now() + Duration::from_secs(1)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) }));
+        let registry = Mutex::new(Some(RuntimeSetupControl { setup_id: "wall-own-generation-1234".into(), cancelled: cancelled.clone(), deadline: Some(Instant::now() + Duration::from_secs(1)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)),
+        }));
         assert!(!cancel_runtime_setup(&registry, "wall-foreign-generation-1234").unwrap());
         assert!(!cancelled.load(Ordering::Relaxed));
         assert!(cancel_runtime_setup(&registry, "wall-own-generation-1234").unwrap());
@@ -4261,14 +3770,16 @@ mod runtime_setup_bounds_tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn setup_wall_probe_deadline_reaps_owned_child() {
-        let python = locate_python().expect("Focused child-reap acceptance requires actual Python; unavailable is not PASS");
+        let python = locate_python().expect("Focused child-reap acceptance requires actual Python; unavailable is not PASS",
+        );
         let root = std::env::temp_dir().join(format!("s61-foundry-wall-{}", nanoid::nanoid!()));
         fs::create_dir_all(&root).unwrap();
         let worker = root.join("worker.py");
         let started_marker = root.join("child-started");
         let completed = root.join("child-completed");
         fs::write(&worker, "import time,json\nfrom pathlib import Path\nPath(__file__).with_name('child-started').write_text('started')\ntime.sleep(12)\nPath(__file__).with_name('child-completed').write_text('unexpected late child')\nprint(json.dumps({'protocol':1,'localOnly':True,'ready':True,'methods':['full'],'modalities':['text'],'precisions':['fp32'],'reason':None}))\n").unwrap();
-        let control = RuntimeSetupControl { setup_id: "wall-probe-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now() + Duration::from_secs(8)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
+        let control = RuntimeSetupControl { setup_id: "wall-probe-owned-1234".into(), cancelled: Arc::new(AtomicBool::new(false)), deadline: Some(Instant::now() + Duration::from_secs(8)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)),
+        };
         let started = Instant::now();
         let result = probe_worker_with_setup(&root, &python, &worker, "fixture-source", Some(&control));
         assert!(started_marker.is_file(), "Actual Python child must start; pre-spawn expiration/launch error is not timeout PASS; elapsed={:?}, error={:?}", started.elapsed(), result.as_ref().err());
@@ -4284,7 +3795,8 @@ mod runtime_setup_bounds_tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn setup_wall_probe_honors_cancel_while_child_is_running() {
-        let python = locate_python().expect("Focused cancellation acceptance requires actual Python; unavailable is not PASS");
+        let python = locate_python().expect("Focused cancellation acceptance requires actual Python; unavailable is not PASS",
+        );
         let root = std::env::temp_dir().join(format!("s61-foundry-cancel-{}", nanoid::nanoid!()));
         fs::create_dir_all(&root).unwrap();
         let worker = root.join("worker.py");
@@ -4292,7 +3804,8 @@ mod runtime_setup_bounds_tests {
         let completed = root.join("child-completed");
         fs::write(&worker, "import time,json\nfrom pathlib import Path\nPath(__file__).with_name('child-started').write_text('started')\ntime.sleep(3)\nPath(__file__).with_name('child-completed').write_text('unexpected late child')\nprint(json.dumps({'protocol':1,'localOnly':True,'ready':True,'methods':['full'],'modalities':['text'],'precisions':['fp32'],'reason':None}))\n").unwrap();
         let cancelled = Arc::new(AtomicBool::new(false));
-        let control = RuntimeSetupControl { setup_id: "wall-cancel-owned-1234".into(), cancelled: cancelled.clone(), deadline: Some(Instant::now() + Duration::from_secs(8)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) };
+        let control = RuntimeSetupControl { setup_id: "wall-cancel-owned-1234".into(), cancelled: cancelled.clone(), deadline: Some(Instant::now() + Duration::from_secs(8)), owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)),
+        };
         let observed_marker = started_marker.clone();
         let trigger = thread::spawn(move || {
             let until = Instant::now() + Duration::from_secs(2);
@@ -4323,7 +3836,8 @@ mod runtime_setup_bounds_tests {
     #[test]
     fn cancellation_only_targets_the_matching_setup_generation() {
         let cancelled = Arc::new(AtomicBool::new(false));
-        let registry = Mutex::new(Some(RuntimeSetupControl { setup_id: "own-generation-1234".into(), cancelled: cancelled.clone(), deadline: None, owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)) }));
+        let registry = Mutex::new(Some(RuntimeSetupControl { setup_id: "own-generation-1234".into(), cancelled: cancelled.clone(), deadline: None, owned_process: Arc::new(Mutex::new(None)), cleanup_pending: Arc::new(AtomicBool::new(false)),
+        }));
         assert!(!cancel_runtime_setup(&registry, "foreign-generation").unwrap());
         assert!(!cancelled.load(Ordering::Relaxed));
         assert!(cancel_runtime_setup(&registry, "own-generation-1234").unwrap());
@@ -4334,7 +3848,8 @@ mod runtime_setup_bounds_tests {
     #[test]
     fn pre_cancelled_dependency_command_does_not_spawn() {
         let cancelled = AtomicBool::new(true);
-        let result = bounded_process_output_with_cancel(hidden_command("nonexistent-no-spawn"), Path::new("unused-no-files"), Duration::from_secs(1), "dependency repair", Some(&cancelled));
+        let result = bounded_process_output_with_cancel(hidden_command("nonexistent-no-spawn"), Path::new("unused-no-files"), Duration::from_secs(1), "dependency repair", Some(&cancelled),
+        );
         assert!(result.unwrap_err().contains("cancelled"));
     }
 }

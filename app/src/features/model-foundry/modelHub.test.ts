@@ -33,6 +33,49 @@ const workstation = {
 };
 
 describe('model foundry domain', () => {
+  it('fits a small text adapter on modest CUDA hardware without CPU fallback', () => {
+    const worker = {
+      installed: true,
+      attested: true,
+      version: '1',
+      methods: ['lora'] as const,
+      modalities: ['text'] as const,
+      precisions: ['bf16'] as const,
+    };
+    const hardware = { ...workstation, ramGb: 16, vramGb: 6, freeStorageGb: 32 };
+    const plan = planLocalTrainingMethod({
+      method: 'lora',
+      parametersB: 0.135,
+      hardware,
+      worker,
+      computeDevice: 'gpu',
+    });
+    expect(plan).toMatchObject({
+      available: true,
+      fallbackMethod: null,
+      requiredVramGb: 2,
+      requiredRamGb: 4,
+      requiredStorageGb: 2,
+    });
+    expect(
+      planLocalTrainingMethod({
+        method: 'lora',
+        parametersB: 1,
+        hardware,
+        worker,
+        computeDevice: 'gpu',
+      }).available,
+    ).toBe(false);
+    expect(
+      planLocalTrainingMethod({
+        method: 'lora',
+        parametersB: 0.135,
+        hardware: { ...hardware, vramGb: 0, accelerators: [] },
+        worker,
+        computeDevice: 'gpu',
+      }).available,
+    ).toBe(false);
+  });
   it('blocks unknown capacity and requires actual RAM for knowledge indexing', () => {
     for (const hardware of [
       { ...workstation, ramGb: 0, vramGb: 0 },
@@ -159,12 +202,12 @@ describe('model foundry domain', () => {
     expect(
       validateFoundryTrainingConfiguration({ ...baseline, loraRank: 512, loraAlpha: 1024 }),
     ).toBeNull();
-    expect(
-      validateFoundryTrainingConfiguration({ ...baseline, loraRank: 513 }),
-    ).toMatch(/LoRA rank.*512/);
-    expect(
-      validateFoundryTrainingConfiguration({ ...baseline, loraAlpha: 1025 }),
-    ).toMatch(/LoRA alpha.*1024/);
+    expect(validateFoundryTrainingConfiguration({ ...baseline, loraRank: 513 })).toMatch(
+      /LoRA rank.*512/,
+    );
+    expect(validateFoundryTrainingConfiguration({ ...baseline, loraAlpha: 1025 })).toMatch(
+      /LoRA alpha.*1024/,
+    );
   });
 
   it('estimates the explicitly selected device and never treats GPU-only as a CPU fallback', () => {
