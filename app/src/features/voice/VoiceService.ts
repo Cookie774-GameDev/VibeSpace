@@ -416,11 +416,15 @@ class VoiceServiceImpl extends VoiceEmitter {
 
   /** Stop the current recognition session. No-op if not listening. */
   stopListening(): void {
+    const wasWaitingForRestart = this.wantsActive && this.recognition === null;
     this.wantsActive = false;
     this.clearInactivityTimer();
     const r = this.recognition;
     if (!r) {
       this.active = false;
+      // Chromium can end one segment before the scheduled restart begins.
+      // There is no recognizer left to emit `voice:end` for a stop in that gap.
+      if (wasWaitingForRestart) this.emit('voice:end', undefined);
       dispatchExclusiveEvent(VOICE_EXCLUSIVE_STOP_EVENT);
       return;
     }

@@ -103,6 +103,33 @@ describe('VoiceService exclusive mic lifecycle', () => {
     }
   });
 
+  it('ends immediately when stopped between Chromium recognition segments', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(window, 'SpeechRecognition', {
+      value: MockRecognition,
+      configurable: true,
+    });
+    const ends = vi.fn();
+    const offEnd = VoiceService.on('voice:end', ends);
+    try {
+      expect(VoiceService.startListening()).toBe(true);
+      const first = lastRecognition;
+      first?.onend?.(new Event('end'));
+      expect(ends).toHaveBeenCalledTimes(1);
+      expect(VoiceService.isListening()).toBe(false);
+      expect(VoiceService.wantsListening()).toBe(true);
+
+      VoiceService.stopListening();
+      expect(ends).toHaveBeenCalledTimes(2);
+      expect(VoiceService.wantsListening()).toBe(false);
+      await vi.advanceTimersByTimeAsync(60);
+      expect(lastRecognition).toBe(first);
+    } finally {
+      offEnd();
+      vi.useRealTimers();
+    }
+  });
+
   it('can synchronously interrupt the active recognition session for a new mic owner', () => {
     Object.defineProperty(window, 'SpeechRecognition', {
       value: MockRecognition,
