@@ -52,8 +52,9 @@ export function shouldScheduleQueuedRunFlush(
 export function shouldDispatchNextQueuedMessage(
   sending: boolean,
   explicitSteerInFlight: boolean,
+  runStatus?: string,
 ): boolean {
-  return !sending && !explicitSteerInFlight;
+  return !sending && !explicitSteerInFlight && runStatus !== 'running';
 }
 
 /**

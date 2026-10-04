@@ -58,6 +58,18 @@ describe('composerQueuePolicy', () => {
     expect(shouldDispatchNextQueuedMessage(false, true)).toBe(false);
   });
 
+  it.each(['opencode', 'codex'])('retains the %s FIFO while the full turn is still running', () => {
+    const queue = [createQueuedMessage('later one', 'after-run', 1, 'one')!,
+      createQueuedMessage('later two', 'after-run', 2, 'two')!];
+    for (const phase of ['approval', 'question', 'streaming', 'post-tool']) {
+      expect(shouldDispatchNextQueuedMessage(false, false, 'running'), phase).toBe(false);
+      expect(queue.map(item => item.id)).toEqual(['one', 'two']);
+    }
+    for (const status of ['done', 'error', 'cancelled']) {
+      expect(shouldDispatchNextQueuedMessage(false, false, status)).toBe(true);
+    }
+  });
+
   it('pops FIFO and labels modes for UI', () => {
     const a = createQueuedMessage('one', 'after-tool', 1, 'a')!;
     const b = createQueuedMessage('two', 'after-run', 2, 'b')!;

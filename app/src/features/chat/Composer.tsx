@@ -1,5 +1,6 @@
 import { openQueuedSideChat, registerQueueSideSender } from './queueSideChat';
 import { useComposerQueueSession } from './composerQueueSession';
+import { waitForPersistentOpenCodeChatRelease } from '@/lib/ai/adapters/opencodePersistent';
 import { useComposerAttachmentSession } from './composerAttachmentSession';
 import { SketchPanel } from './SketchPanel';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -4661,7 +4662,7 @@ export function Composer({
     }
     if (
       !caoDecision?.control &&
-      jarvisRunning &&
+      (jarvisRunning || getChatRunState(String(chatId))?.status === 'running') &&
       !options.bypassQueue &&
       (!overrideText || options.promptForgeApproved)
     ) {
@@ -5486,7 +5487,16 @@ export function Composer({
     void dispatchQueuedMessageAfterAcceptance(
       queued,
       payload,
-      (nextPayload) => {
+      async (nextPayload) => {
+        // A terminal kernel checkpoint can precede native cancellation cleanup.
+        // Retain the FIFO item until its predecessor releases the provider slot.
+        if (payload === queued.text) {
+          if (!shouldDispatchNextQueuedMessage(sendingRef.current,
+            queuedInterruptInFlightRef.current !== null, getChatRunState(String(chatId))?.status)) return false;
+          await waitForPersistentOpenCodeChatRelease(String(chatId));
+          if (!shouldDispatchNextQueuedMessage(sendingRef.current,
+            queuedInterruptInFlightRef.current !== null, getChatRunState(String(chatId))?.status)) return false;
+        }
         const queuedHandoff = queuedHandoffsRef.current.get(queued.id);
         return handleSend(nextPayload, {
           bypassQueue: true,
@@ -5694,6 +5704,7 @@ export function Composer({
       !shouldDispatchNextQueuedMessage(
         sendingRef.current,
         queuedInterruptInFlightRef.current !== null,
+        getChatRunState(String(chatId))?.status,
       )
     )
       return;
@@ -5731,10 +5742,10 @@ export function Composer({
       return;
     }
     playComposerKeySound(e.nativeEvent);
-    // Mod+Enter always sends, regardless of any popover state
+    // Mod+Enter sends when idle and queues after the full turn while running.
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      void handleSend();
+      void handleSend(undefined, { flushMode: 'after-run' });
       return;
     }
 

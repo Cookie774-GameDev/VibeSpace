@@ -66,6 +66,7 @@ import {
   openCodeCatalogRevision,
   openCodeChecklistSnapshotsFromMessages,
   openCodePersistentAdapter,
+  waitForPersistentOpenCodeChatRelease,
   OPENCODE_FAILURE_ABORT_TIMEOUT_MS,
   parseOpenCodeLiveModels,
   parseConnectedOpenCodeProviderIds,
@@ -691,6 +692,42 @@ describe('persistent OpenCode question transport authority', () => {
     expect(
       nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/prompt_async')),
     ).toHaveLength(0);
+  });
+
+  it('keeps a cancelled question turn owned until its remote abort settles', async () => {
+    configureManagedQuestionTransport([questionAskedEvent()]);
+    const controller = new AbortController();
+    const { iterator } = await startWaitingQuestion('held-abort', controller.signal);
+    const transport = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let releaseAbort!: () => void;
+    const abortGate = new Promise<void>(resolve => { releaseAbort = resolve; });
+    let reachedAbort!: () => void;
+    const abortStarted = new Promise<void>(resolve => { reachedAbort = resolve; });
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (args[1].includes('/abort')) { reachedAbort(); await abortGate; }
+      return transport(...args);
+    });
+    controller.abort();
+    await abortStarted;
+    let retired = false;
+    const retirement = iterator.return?.().then(() => { retired = true; });
+    let followupReady = false;
+    const readiness = waitForPersistentOpenCodeChatRelease('chat-held-abort').then(() => { followupReady = true; });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(retired).toBe(false);
+      expect(followupReady).toBe(false);
+      const next = openCodePersistentAdapter.send!({
+        ...questionProviderRequest('followup-after-held-abort'), chatId: 'chat-held-abort',
+      })[Symbol.asyncIterator]();
+      await expect(next.next()).rejects.toThrow('already has an active request');
+    } finally {
+      releaseAbort();
+      await retirement;
+      await readiness;
+    }
+    expect(retired).toBe(true);
+    expect(followupReady).toBe(true);
   });
 
   it('continues an exactly accepted prompt after an ambiguous dispatch timeout without resending', async () => {

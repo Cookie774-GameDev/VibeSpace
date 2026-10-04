@@ -2420,6 +2420,42 @@ describe('startRuntimeListener agent routing', () => {
     }
   });
 
+  it('waits for the OpenCode request release before persisting and dispatching explicit follow-up', async () => {
+    const gate = deferred<void>();
+    const appendUserMessage = vi.fn(async (message) => ({ ...message,
+      id: 'followup_after_release' as MessageId, created_at: 2, updated_at: 2 }));
+    const dispatchSend = vi.fn();
+    const accepted = vi.fn();
+    const handoff = dispatchRuntimeSteerHandoff({
+      chatId: 'followup_release', text: 'Follow up after cancellation.',
+      activeSend: { chatId: 'followup_release' as ChatId, text: 'Original.' },
+      awaitPreviousTurn: () => gate.promise,
+      appendUserMessage, dispatchSend, onAccepted: accepted,
+    });
+    await Promise.resolve();
+    expect(appendUserMessage).not.toHaveBeenCalled();
+    expect(dispatchSend).not.toHaveBeenCalled();
+    expect(accepted).not.toHaveBeenCalled();
+    gate.resolve();
+    await handoff;
+    expect(dispatchSend).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      text: 'Follow up after cancellation.', cancellationKey: 'followup_after_release',
+    }));
+  });
+
+  it('retains an explicit follow-up when the old provider cannot confirm release', async () => {
+    const appendUserMessage = vi.fn();
+    const dispatchSend = vi.fn();
+    await expect(dispatchRuntimeSteerHandoff({
+      chatId: 'followup_release_failed', text: 'Keep this queued.',
+      activeSend: { chatId: 'followup_release_failed' as ChatId, text: 'Original.' },
+      awaitPreviousTurn: async () => { throw new Error('old turn still active'); },
+      appendUserMessage, dispatchSend,
+    })).rejects.toThrow('old turn still active');
+    expect(appendUserMessage).not.toHaveBeenCalled();
+    expect(dispatchSend).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, 'off'] as const)(
     'respects explicit optimizer %s and legacy requested mode on the first send',
     async (tokenOptimizationMode) => {

@@ -109,6 +109,7 @@ import {
   bindPersistentOpenCodeQuestionRoute,
   isActiveOpenCodeChildApproval,
   respondToPersistentOpenCodeApproval,
+  waitForPersistentOpenCodeChatRelease,
 } from '@/lib/ai/adapters/opencodePersistent';
 import { openCodeChecklistParts } from '@/lib/ai/openCodeChecklist';
 import {
@@ -3625,8 +3626,10 @@ export async function dispatchRuntimeSteerHandoff(input: {
   activeSend: SendDetail;
   appendUserMessage: RuntimeBindings['appendMessage'];
   dispatchSend: (detail: SendDetail) => void;
+  awaitPreviousTurn?: () => Promise<void>;
   onAccepted?: SteerDetail['onAccepted'];
 }): Promise<MessageId> {
+  await input.awaitPreviousTurn?.();
   const userMessage = await input.appendUserMessage({
     chat_id: input.chatId as ChatId,
     role: 'user',
@@ -6007,6 +6010,7 @@ export function startRuntimeListener(
         chatId,
         text: pending.text,
         activeSend: pending.send,
+        awaitPreviousTurn: () => waitForPersistentOpenCodeChatRelease(chatId),
         appendUserMessage: bindings.appendMessage,
         dispatchSend: (detail) => window.dispatchEvent(new CustomEvent(sendEventName, { detail })),
         onAccepted: pending.onAccepted,

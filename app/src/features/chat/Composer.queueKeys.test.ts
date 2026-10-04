@@ -23,6 +23,11 @@ describe('Composer queue keyboard contract', () => {
     expect(source).toContain("void handleSend(undefined, { flushMode: 'after-run' })");
   });
 
+  it('uses after-run queueing for the first Ctrl/Meta+Enter handler, including running turns', () => {
+    const handler = source.match(/if \(\(e.metaKey \|\| e.ctrlKey\) && e.key === 'Enter'\) \{([\s\S]*?)\n    \}/u)?.[1];
+    expect(handler).toContain("handleSend(undefined, { flushMode: 'after-run' })");
+  });
+
   it('leaves Shift+Enter available for a newline', () => {
     expect(source).not.toMatch(/e\.key === 'Enter' && e\.shiftKey[\s\S]{0,120}handleSend/u);
   });

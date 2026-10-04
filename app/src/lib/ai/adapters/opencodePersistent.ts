@@ -671,7 +671,24 @@ const sessions = new OpenCodeSessionPool(
 );
 const coordinator = new OpenCodeTurnCoordinator(sessions);
 const turnGate = new OpenCodeTurnGate();
-const activeRequests = new Map<string, { scope: HarnessScope; chatId: string }>();
+const activeRequests = new Map<string, { scope: HarnessScope; chatId: string; released: Promise<void> }>();
+
+/** Kernel cancellation may finish before the provider generator retires. */
+export async function waitForPersistentOpenCodeChatRelease(chatId: string): Promise<void> {
+  const previous = [...activeRequests.values()].filter(active => active.chatId === chatId);
+  if (!previous.length) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.all(previous.map(active => active.released)),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('OpenCode is still stopping the previous turn. The message remains queued.')), 5_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 type ActivePersistentApprovalSession = {
   readonly requestId: string;
   readonly http: OpenCodeHttpSdk;
@@ -2267,16 +2284,22 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       throw error;
     }
   })();
-  activeRequests.set(request.requestId, { scope, chatId });
+  let releaseRequest!: () => void;
+  let rejectRelease!: (error: unknown) => void;
+  const released = new Promise<void>((resolve, reject) => { releaseRequest = resolve; rejectRelease = reject; });
+  void released.catch(() => undefined);
+  activeRequests.set(request.requestId, { scope, chatId, released });
   const abortEvents = new AbortController();
   let boundSessionId: string | undefined;
   let retireCommand: (() => Promise<unknown>) | undefined;
   let rateLimitDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
   const boundChildSessions = new Set<string>();
+  let cancellationTask: Promise<void> | undefined;
   const abort = () => {
     turnGate.cancel(chatId);
     abortEvents.abort();
-    void sessions.cancelChat(scope, chatId).catch(() => undefined);
+    cancellationTask ??= sessions.cancelChat(scope, chatId);
+    void cancellationTask.catch(() => undefined);
   };
   request.signal?.addEventListener('abort', abort, { once: true });
   let failureStage: PersistentTurnFailureStage = 'session_binding';
@@ -3264,8 +3287,17 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       }
       releaseToolGatewaySessionAuthority(boundSessionId);
     }
-    turnGate.finish(turn);
-    activeRequests.delete(request.requestId);
+    try {
+      // Do not release this chat while the native agent may still be working.
+      await cancellationTask;
+      turnGate.finish(turn);
+      activeRequests.delete(request.requestId);
+      releaseRequest();
+    } catch (error) {
+      // Failed abort remains owned; a follow-up must not overlap an unknown turn.
+      rejectRelease(error);
+      throw error;
+    }
   }
 }
 
