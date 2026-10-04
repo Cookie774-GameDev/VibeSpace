@@ -62,7 +62,7 @@ export function createPonytailArtifact({
         `Pinned upstream hash mismatch for ${artifact.path}: expected ${expectedHash}, received ${actualHash}.`,
       );
     }
-    source.set(artifact.path, Buffer.from(bytes).toString('utf8'));
+    source.set(artifact.path, Buffer.from(bytes).toString('utf8').replace(/\r\n?/gu, '\n'));
   }
 
   const provenance = source.get('UPSTREAM.md');

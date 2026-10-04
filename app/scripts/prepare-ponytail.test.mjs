@@ -98,6 +98,28 @@ test('builds generated catalog data from hash-verified stock files and builder o
   }
 });
 
+test('generates the same artifact from LF and CRLF vendored skills', () => {
+  const fixture = createFixture();
+  try {
+    const options = {
+      upstreamRoot: fixture.upstreamRoot,
+      pin: fixture.pin,
+      runBuilder: () => fixture.fullInstructions,
+    };
+    const baseline = createPonytailArtifact(options);
+    for (const relativePath of ['skills/ponytail/SKILL.md', 'skills/ponytail-audit/SKILL.md']) {
+      writeFileSync(
+        path.join(fixture.upstreamRoot, relativePath),
+        fixture.source[relativePath].replace(/\n/gu, '\r\n'),
+        'utf8',
+      );
+    }
+    assert.deepEqual(createPonytailArtifact(options), baseline);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('fails closed on a changed upstream artifact before executing the builder', () => {
   const fixture = createFixture();
   try {
