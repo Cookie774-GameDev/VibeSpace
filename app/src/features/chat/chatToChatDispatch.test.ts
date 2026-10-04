@@ -337,6 +337,37 @@ describe('dispatchChatToChat', () => {
     });
   });
 
+  it('delivers between saved local chats while the workspace row is being restored', async () => {
+    const local = createHarness();
+    local.workspaces.clear();
+    await expect(dispatchChatToChat(INPUT, local.deps)).resolves.toMatchObject({
+      status: 'dispatched',
+    });
+    expect(local.dispatchKernel).toHaveBeenCalledOnce();
+
+    const cloud = createHarness();
+    cloud.workspaces.clear();
+    cloud.setScope({ ...cloud.scope(), identitySource: 'supabase' });
+    await expect(dispatchChatToChat(INPUT, cloud.deps)).resolves.toMatchObject({
+      status: 'rejected', reason: 'access_denied',
+    });
+  });
+
+  it('keeps a locally owned chat deliverable after cloud sign-in', async () => {
+    const signedIn = createHarness();
+    signedIn.setScope({
+      ...signedIn.scope(), accountId: 'cloud-account', identitySource: 'supabase',
+      localOwnerId: 'account-a', epoch: 1,
+    });
+    signedIn.deps.captureSyncOwner = () => ({
+      state: 'cloud', userId: 'cloud-account', capturedAt: 1,
+    });
+    await expect(dispatchChatToChat(INPUT, signedIn.deps)).resolves.toMatchObject({
+      status: 'dispatched',
+    });
+    expect(signedIn.dispatchKernel).toHaveBeenCalledOnce();
+  });
+
   it('detects account A to B to A epoch changes and emits nothing after persistence', async () => {
     const harness = createHarness();
     const claim = harness.deps.claimChatDispatch;

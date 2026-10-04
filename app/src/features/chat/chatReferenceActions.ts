@@ -3,7 +3,13 @@ import type { Chat, Message } from '@/types/chat';
 import type { ChatToChatDispatchInput, ChatToChatDispatchReceipt } from './chatToChatDispatch';
 import { projectChatHandoff, renderChatReferenceTranscript } from './chatHandoffProjection';
 
-type Scope = { accountId: string; workspaceId: string | null; epoch: number };
+type Scope = {
+  accountId: string;
+  localOwnerId?: string | null;
+  identitySource?: 'supabase' | 'local';
+  workspaceId: string | null;
+  epoch: number;
+};
 export interface ChatReferenceDependencies {
   scope(): Scope | null;
   getChat(id: string): Promise<Chat | undefined>;
@@ -32,6 +38,7 @@ async function defaultDependencies(): Promise<ChatReferenceDependencies> {
       if (
         JSON.stringify(resolveAccountIdentity(next)) !==
           JSON.stringify(resolveAccountIdentity(prev)) ||
+        next.localUserId !== prev.localUserId ||
         next.workspaceId !== prev.workspaceId ||
         next.projectId !== prev.projectId
       )
@@ -45,6 +52,8 @@ async function defaultDependencies(): Promise<ChatReferenceDependencies> {
       return identity
         ? {
             accountId: identity.accountId,
+            localOwnerId: auth.localUserId,
+            identitySource: identity.source,
             workspaceId: auth.workspaceId ?? null,
             epoch: scopeEpoch,
           }
@@ -89,7 +98,10 @@ export async function executeChatReferenceAction(
       )
         return null;
       const workspace = await deps.getWorkspace(String(source.workspace_id));
-      if (workspace?.owner_id !== scope.accountId) return null;
+      const owned = workspace
+        ? workspace.owner_id === scope.accountId || workspace.owner_id === scope.localOwnerId
+        : scope.identitySource === 'local' || Boolean(scope.localOwnerId);
+      if (!owned) return null;
       const sourceMessages = await deps.listMessages(ctx.chatId!);
       if (
         targetId !== ctx.chatId &&

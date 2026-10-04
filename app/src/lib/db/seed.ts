@@ -29,7 +29,12 @@ export type SeedResult = {
 
 async function restoreAuthFromExistingWorkspace(force = false): Promise<void> {
   const auth = useAuthStore.getState();
-  if (auth.workspaceId && !force) return;
+  if (auth.workspaceId && auth.localUserId && !force) return;
+  if (auth.workspaceId && !force) {
+    const activeWorkspace = await db.workspaces.get(auth.workspaceId);
+    if (activeWorkspace) auth.setLocalUser(activeWorkspace.owner_id);
+    return;
+  }
   const workspace = await db.workspaces.toCollection().first();
   if (!workspace) return;
   auth.setWorkspaceId(workspace.id);
@@ -59,6 +64,12 @@ export async function seedIfEmpty(): Promise<SeedResult> {
     // this window would replace that authority and hide its surviving chats,
     // maps, and jobs. Only a genuine first launch with no complete scope may
     // claim new active workspace/project IDs below.
+    if (!persistedAuth.cloudSession) {
+      const activeWorkspace = await db.workspaces.get(persistedAuth.workspaceId);
+      if (activeWorkspace && activeWorkspace.owner_id !== persistedAuth.localUserId) {
+        useAuthStore.getState().setLocalUser(activeWorkspace.owner_id);
+      }
+    }
     return { seeded: false };
   }
 

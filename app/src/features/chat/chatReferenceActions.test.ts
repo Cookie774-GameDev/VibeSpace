@@ -156,6 +156,24 @@ describe('chat reference actions', () => {
       false,
     );
   });
+  it('reads a referenced local chat while its workspace row is temporarily absent', async () => {
+    const { deps } = fixture();
+    deps.scope = () => ({ accountId: 'owner', identitySource: 'local', workspaceId: 'ws', epoch: 1 });
+    deps.getWorkspace = async () => undefined;
+    expect((await executeChatReferenceAction('read', { chatId: 'source' }, ctx, deps)).ok).toBe(true);
+    deps.scope = () => ({ accountId: 'owner', identitySource: 'supabase', workspaceId: 'ws', epoch: 1 });
+    expect((await executeChatReferenceAction('read', { chatId: 'source' }, ctx, deps)).ok).toBe(false);
+  });
+  it('reads a locally owned reference after cloud sign-in', async () => {
+    const { deps } = fixture();
+    deps.scope = () => ({
+      accountId: 'cloud-account', localOwnerId: 'owner', identitySource: 'supabase',
+      workspaceId: 'ws', epoch: 1,
+    });
+    expect((await executeChatReferenceAction('read', { chatId: 'source' }, {
+      ...ctx, accountId: 'cloud-account',
+    }, deps)).ok).toBe(true);
+  });
   it('rejects scope changes during retrieval', async () => {
     const { deps, scope } = fixture();
     deps.listMessages = async () => {

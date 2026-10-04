@@ -19,6 +19,10 @@ const seedHarness = vi.hoisted(() => {
 
   const workspacesTable = {
     count: vi.fn(async () => workspaces.size),
+    get: vi.fn(async (id: string) => {
+      const row = workspaces.get(id);
+      return row ? structuredClone(row) : undefined;
+    }),
     add: vi.fn(async (row: StoredRow) => {
       workspaces.set(row.id, structuredClone(row));
       return row.id;
@@ -211,6 +215,36 @@ describe('seedIfEmpty canonical built-ins', () => {
       workspaceId: 'wsp_persisted_scope',
       projectId: 'prj_persisted_scope',
     });
+  });
+
+  it('restores a missing local user from the selected saved workspace', async () => {
+    seedHarness.workspaces.set('wsp_saved', {
+      id: 'wsp_saved', owner_id: 'usr_saved', name: 'Personal', created_at: 1, updated_at: 1,
+    });
+    useAuthStore.setState({
+      localUserId: null,
+      workspaceId: 'wsp_saved' as WorkspaceId,
+      projectId: 'prj_saved' as ProjectId,
+    });
+    await expect(seedIfEmpty()).resolves.toEqual({ seeded: false });
+    expect(useAuthStore.getState().localUserId).toBe('usr_saved');
+    expect(useAuthStore.getState().workspaceId).toBe('wsp_saved');
+    expect(seedHarness.workspacesTable.add).not.toHaveBeenCalled();
+  });
+
+  it('rebinds a stale local identity to the selected saved workspace owner', async () => {
+    seedHarness.workspaces.set('wsp_saved', {
+      id: 'wsp_saved', owner_id: 'usr_saved', name: 'Personal', created_at: 1, updated_at: 1,
+    });
+    useAuthStore.setState({
+      localUserId: 'usr_stale',
+      workspaceId: 'wsp_saved' as WorkspaceId,
+      projectId: 'prj_saved' as ProjectId,
+    });
+    await expect(seedIfEmpty()).resolves.toEqual({ seeded: false });
+    expect(useAuthStore.getState().localUserId).toBe('usr_saved');
+    expect(useAuthStore.getState().workspaceId).toBe('wsp_saved');
+    expect(seedHarness.workspacesTable.add).not.toHaveBeenCalled();
   });
 
   it('rechecks freshness inside the transaction and adopts a concurrent seed winner', async () => {

@@ -75,6 +75,7 @@ export type ChatToChatDispatchReceipt =
 
 export type ActiveDispatchScope = Readonly<{
   accountId: string;
+  localOwnerId?: string | null;
   identitySource: 'supabase' | 'local';
   workspaceId: string | null;
   projectId: string | null;
@@ -108,6 +109,7 @@ export type ChatToChatDispatchDeps = {
 
 type AuthoritySnapshot = Readonly<{
   accountId: string;
+  localOwnerId?: string | null;
   identitySource: ActiveDispatchScope['identitySource'];
   activeWorkspaceId: string | null;
   activeProjectId: string | null;
@@ -164,6 +166,7 @@ useAuthStore.subscribe((current, previous) => {
   if (
     currentIdentity?.accountId !== previousIdentity?.accountId ||
     currentIdentity?.source !== previousIdentity?.source ||
+    current.localUserId !== previous.localUserId ||
     String(current.workspaceId ?? '') !== String(previous.workspaceId ?? '') ||
     String(current.projectId ?? '') !== String(previous.projectId ?? '')
   ) {
@@ -435,7 +438,8 @@ async function resolveAuthority(
   const sourceWorkspaceId = String(source.workspace_id);
   const targetWorkspaceId = String(target.workspace_id);
   // No canonical cross-workspace handoff policy exists yet, so cross-workspace dispatch fails closed.
-  if (sourceWorkspaceId !== targetWorkspaceId) return { ok: false, reason: 'access_denied' };
+  if (sourceWorkspaceId !== targetWorkspaceId || sourceWorkspaceId !== activeBefore.workspaceId)
+    return { ok: false, reason: 'access_denied' };
   let sourceWorkspace: Workspace | undefined;
   let targetWorkspace: Workspace | undefined;
   let sourceProject: Project | undefined;
@@ -450,13 +454,20 @@ async function resolveAuthority(
   } catch {
     return { ok: false, reason: 'access_denied' };
   }
+  const localUnrestoredWorkspace =
+    (activeBefore.identitySource === 'local' || !!activeBefore.localOwnerId) &&
+    !sourceWorkspace &&
+    !targetWorkspace;
   if (
-    !sourceWorkspace ||
-    !targetWorkspace ||
-    String(sourceWorkspace.id) !== sourceWorkspaceId ||
-    String(targetWorkspace.id) !== targetWorkspaceId ||
-    sourceWorkspace.owner_id !== activeBefore.accountId ||
-    targetWorkspace.owner_id !== activeBefore.accountId
+    !localUnrestoredWorkspace &&
+    (!sourceWorkspace ||
+      !targetWorkspace ||
+      String(sourceWorkspace.id) !== sourceWorkspaceId ||
+      String(targetWorkspace.id) !== targetWorkspaceId ||
+      (sourceWorkspace.owner_id !== activeBefore.accountId &&
+        sourceWorkspace.owner_id !== activeBefore.localOwnerId) ||
+      (targetWorkspace.owner_id !== activeBefore.accountId &&
+        targetWorkspace.owner_id !== activeBefore.localOwnerId))
   )
     return { ok: false, reason: 'access_denied' };
   if (
@@ -479,18 +490,19 @@ async function resolveAuthority(
     target,
     snapshot: Object.freeze({
       accountId: activeBefore.accountId,
+      localOwnerId: activeBefore.localOwnerId,
       identitySource: activeBefore.identitySource,
       activeWorkspaceId: activeBefore.workspaceId,
       activeProjectId: activeBefore.projectId,
       epoch: activeBefore.epoch,
       sourceChatId: input.sourceChatId,
       sourceWorkspaceId,
-      sourceWorkspaceRevision: sourceWorkspace.updated_at,
+      sourceWorkspaceRevision: sourceWorkspace?.updated_at ?? 0,
       sourceProjectId: projectId(source),
       sourceProjectRevision: sourceProject?.updated_at ?? null,
       targetChatId: input.targetChatId,
       targetWorkspaceId,
-      targetWorkspaceRevision: targetWorkspace.updated_at,
+      targetWorkspaceRevision: targetWorkspace?.updated_at ?? 0,
       targetProjectId: projectId(target),
       targetProjectRevision: targetProject?.updated_at ?? null,
     }),
@@ -677,6 +689,7 @@ function currentAuthorityMatches(
   if (
     !active ||
     active.accountId !== authority.accountId ||
+    active.localOwnerId !== authority.localOwnerId ||
     active.identitySource !== authority.identitySource ||
     active.workspaceId !== authority.activeWorkspaceId ||
     active.projectId !== authority.activeProjectId ||
@@ -755,6 +768,7 @@ function readBrowserActiveScope(): ActiveDispatchScope | null {
   if (!identity) return null;
   return Object.freeze({
     accountId: identity.accountId,
+    localOwnerId: auth.localUserId,
     identitySource: identity.source,
     workspaceId: auth.workspaceId ? String(auth.workspaceId) : null,
     projectId: auth.projectId ? String(auth.projectId) : null,

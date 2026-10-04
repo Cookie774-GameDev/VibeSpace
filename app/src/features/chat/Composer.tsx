@@ -6481,7 +6481,7 @@ export function Composer({
     async (payload: ChatDragPayloadV1) => {
       try {
         const auth = useAuthStore.getState();
-        const accountId = resolveAccountIdentity(auth)?.accountId;
+        const identity = resolveAccountIdentity(auth);
         const scope = () =>
           JSON.stringify([
             resolveAccountIdentity(useAuthStore.getState())?.accountId,
@@ -6493,9 +6493,12 @@ export function Composer({
           ? await workspaceRepo.getById(auth.workspaceId)
           : undefined;
         if (
-          !accountId ||
-          !workspace ||
-          (workspace.owner_id !== accountId && workspace.owner_id !== auth.localUserId) ||
+          !identity ||
+          !auth.workspaceId ||
+          (!workspace && identity.source !== 'local' && !auth.localUserId) ||
+          (workspace &&
+            workspace.owner_id !== identity.accountId &&
+            workspace.owner_id !== auth.localUserId) ||
           scope() !== before
         ) {
           toast.warning(

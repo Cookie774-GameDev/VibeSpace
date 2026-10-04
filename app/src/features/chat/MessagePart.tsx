@@ -37,8 +37,57 @@ import { presentProviderError } from '@/lib/ai/providerError';
 import { AssistantRichText } from './AssistantRichText';
 import { ToolFileLink } from './activity-ledger/ToolDetailsInspector';
 import { resolveToolChatRoot } from './activity-ledger/toolFileActions';
-import { messageRepo } from '@/lib/db/repositories';
+import { chatRepo, messageRepo } from '@/lib/db/repositories';
 import { MediaPreviewPanel, type MediaPreviewTarget } from './MediaPreviewPanel';
+import { useAuthStore } from '@/stores/auth';
+import { useUIStore } from '@/stores/ui';
+import { toast } from '@/components/ui/toast';
+import type { ChatId } from '@/types/common';
+
+function TaskMessageSourceLink({
+  sourceChatId,
+  recipientChatId,
+}: {
+  sourceChatId: string;
+  recipientChatId?: string;
+}) {
+  const openSource = async () => {
+    const workspaceId = useAuthStore.getState().workspaceId;
+    if (!workspaceId || !recipientChatId) return;
+    try {
+      const [source, recipient] = await Promise.all([
+        chatRepo.getById(sourceChatId as ChatId),
+        chatRepo.getById(recipientChatId as ChatId),
+      ]);
+      if (
+        !source ||
+        !recipient ||
+        source.archived ||
+        String(source.workspace_id) !== String(workspaceId) ||
+        String(recipient.workspace_id) !== String(workspaceId) ||
+        useAuthStore.getState().workspaceId !== workspaceId
+      ) {
+        toast.warning('Source chat unavailable', 'The task chat is no longer in this workspace.');
+        return;
+      }
+      const ui = useUIStore.getState();
+      ui.setActiveChat(source.id);
+      ui.setChatMode(source.mode);
+      ui.setRoute('chat');
+    } catch {
+      toast.warning('Source chat unavailable', 'Could not open the task chat. Please try again.');
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={() => void openSource()}
+      className="mt-1 text-metadata font-medium text-accent-copper underline-offset-2 hover:underline focus-visible:underline"
+    >
+      Sent by task
+    </button>
+  );
+}
 
 function ChatFileReference({ path, chatId }: { path: string; chatId?: string }) {
   const [projectRoot, setProjectRoot] = useState<string>();
@@ -714,6 +763,7 @@ export function MessagePart({
 
     case 'chat_handoff': {
       const handoff = part.handoff;
+      const sentByTask = 'dispatch' in handoff && !!handoff.dispatch;
       return (
         <section
           aria-label={`Handoff from ${handoff.sourceTitle}`}
@@ -734,6 +784,9 @@ export function MessagePart({
           <p className="mt-1 text-metadata text-muted-foreground">
             Safe context snapshot · {handoff.projection.status}
           </p>
+          {sentByTask ? (
+            <TaskMessageSourceLink sourceChatId={handoff.sourceChatId} recipientChatId={chatId} />
+          ) : null}
         </section>
       );
     }

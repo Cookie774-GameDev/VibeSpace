@@ -476,6 +476,32 @@ describe('Composer chat handoff integration', () => {
     window.removeEventListener('jarvis:send', send);
   });
 
+  it('accepts a saved local chat while its workspace row is being restored', async () => {
+    useUIStore.setState({ activeChatId: 'chat-target' });
+    useAuthStore.setState({
+      cloudSession: { user_id: 'cloud-account', email: 'test@example.com', expires_at: 999 },
+    });
+    vi.spyOn(workspaceRepo, 'getById').mockResolvedValue(undefined);
+    vi.spyOn(chatRepo, 'getById').mockImplementation(async (id) =>
+      String(id) === 'chat-source' ? sourceChat : targetChat,
+    );
+    vi.spyOn(messageRepo, 'listByChat').mockResolvedValue([message('Saved local activity')]);
+    const warning = vi.spyOn(toast, 'warning');
+    const { container } = render(
+      <TooltipProvider><Composer chatId="chat-target" /></TooltipProvider>,
+    );
+    fireEvent.drop(container.querySelector('[data-composer-drop-zone="true"]')!, {
+      dataTransfer: {
+        types: [VIBESPACE_CHAT_MIME], files: [],
+        getData: (type: string) => type === VIBESPACE_CHAT_MIME
+          ? JSON.stringify({ version: 1, chatId: 'chat-source', workspaceId: 'workspace-1', projectId: 'project-1', title: 'Source' })
+          : '',
+      },
+    });
+    expect(await screen.findByRole('button', { name: 'Reference Canonical source title' })).toBeTruthy();
+    expect(warning).not.toHaveBeenCalled();
+  });
+
   it('persists one canonical handoff part, preserves the rendered card on dispatch failure, and retries without duplicate persistence', async () => {
     enableTestModel();
     useUIStore.setState({ activeChatId: 'chat-target' });
