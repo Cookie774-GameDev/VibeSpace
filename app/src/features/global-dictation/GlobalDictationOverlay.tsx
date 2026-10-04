@@ -355,9 +355,11 @@ export function GlobalDictationOverlay({
   const hint =
     state === 'error'
       ? errorMessage
-      : statusMessage ||
-        partial ||
-        (state === 'ready' ? `${dictationHotkey} · VibeSpace STT` : STATE_HINT[state]);
+      : busy
+        ? STATE_HINT[state]
+        : statusMessage ||
+          partial ||
+          (state === 'ready' ? `${dictationHotkey} · VibeSpace STT` : STATE_HINT[state]);
   return (
     <div
       data-tauri-drag-region
@@ -398,14 +400,26 @@ export function GlobalDictationOverlay({
         </button>
       ) : (
         <div aria-hidden="true" className="pointer-events-none min-w-0 flex-1 [&_canvas]:!h-5">
-          {listening ? (
+          {busy ? (
+            <div
+              data-dictation-progress={state}
+              className="flex h-5 items-center justify-center gap-1"
+            >
+              {[0, 1, 2].map((index) => (
+                <span
+                  key={index}
+                  className="h-1 w-1 animate-pulse rounded-full bg-accent-cyan motion-reduce:animate-none"
+                  style={{ animationDelay: `${index * 180}ms` }}
+                />
+              ))}
+            </div>
+          ) : listening ? (
             <DictationLevelMeter levelRef={levelRef} />
           ) : (
             <div
               className={cn(
                 'h-px rounded-full bg-accent-copper/50',
                 state === 'error' && 'bg-destructive',
-                busy && 'opacity-40',
               )}
             />
           )}

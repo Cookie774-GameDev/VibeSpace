@@ -257,6 +257,48 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     vi.useRealTimers();
   });
 
+  it('shows progress throughout final transcription and native delivery', async () => {
+    let finishTranscription!: () => void;
+    let finishHide!: () => void;
+    const session = fakeSession('ready to paste');
+    session.stop.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishTranscription = resolve;
+        }),
+    );
+    tauriMocks.windowApi.hide.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishHide = resolve;
+        }),
+    );
+    sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
+      cb.onOpen?.();
+      return session;
+    });
+
+    const { container } = render(<GlobalDictationOverlay />);
+    await openOverlay();
+    await openOverlay();
+    expect(container.querySelector('[data-dictation-progress="transcribing"]')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('Transcribing');
+
+    await act(async () => {
+      finishTranscription();
+    });
+    expect(container.querySelector('[data-dictation-progress="pasting"]')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('Pasting');
+
+    await act(async () => {
+      finishHide();
+    });
+    expect(container.querySelector('[data-dictation-progress]')).toBeNull();
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('dictation_paste_text', {
+      text: 'ready to paste',
+    });
+  });
+
   it('preserves a batch-transcription diagnostic instead of overwriting it as empty speech', async () => {
     let callbacks: SessionCallbacks | null = null;
     const session = fakeSession('', 'Local faster-whisper');

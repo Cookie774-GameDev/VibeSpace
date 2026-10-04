@@ -43,6 +43,11 @@ impl SavedField {
                 .ok()
                 .map_err(|_| "Windows text access is unavailable.")?;
             let _apartment = ComApartment;
+            // Hiding the mini overlay often returns focus to the exact saved
+            // field. Avoid another UIA SetFocus round trip in that case.
+            if self.matches_focus().unwrap_or(false) {
+                return Ok(());
+            }
             if let Some(tab) = &self.tab {
                 let selected = tab
                     .resolve()
