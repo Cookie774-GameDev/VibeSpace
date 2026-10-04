@@ -86,6 +86,24 @@ test('resolves the Vitest CLI from a workspace-hoisted installation', async (t) 
   assert.equal(resolveVitestCli(appDir), cliPath);
 });
 
+test('resolves the Vitest CLI when package exports hide the CLI subpath', async (t) => {
+  const repoRoot = await mkdtemp(path.join(tmpdir(), 'vibespace-vitest-exports-'));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+
+  const appDir = path.join(repoRoot, 'app');
+  const packageDir = path.join(repoRoot, 'node_modules', 'vitest');
+  const cliPath = path.join(packageDir, 'vitest.mjs');
+  await mkdir(appDir, { recursive: true });
+  await mkdir(packageDir, { recursive: true });
+  await writeFile(
+    path.join(packageDir, 'package.json'),
+    JSON.stringify({ name: 'vitest', exports: { './package.json': './package.json' } }),
+  );
+  await writeFile(cliPath, '');
+
+  assert.equal(resolveVitestCli(appDir), cliPath);
+});
+
 test('resolves the Vitest CLI from an app-local installation', async (t) => {
   const repoRoot = await mkdtemp(path.join(tmpdir(), 'vibespace-vitest-local-'));
   t.after(() => rm(repoRoot, { recursive: true, force: true }));

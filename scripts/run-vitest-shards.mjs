@@ -1,4 +1,5 @@
 import { readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -116,7 +117,12 @@ export function buildVitestArgs(shard, maxWorkers = DEFAULT_MAX_WORKERS) {
 
 export function resolveVitestCli(appDir) {
   try {
-    return createRequire(path.join(appDir, 'package.json')).resolve('vitest/vitest.mjs');
+    const packageJson = createRequire(path.join(appDir, 'package.json')).resolve(
+      'vitest/package.json',
+    );
+    const cli = path.join(path.dirname(packageJson), 'vitest.mjs');
+    if (!existsSync(cli)) throw new Error(`Vitest CLI is missing: ${cli}`);
+    return cli;
   } catch (error) {
     throw new Error(
       `Unable to resolve the installed Vitest CLI from ${appDir}. Run the workspace dependency install before executing the full suite.`,
