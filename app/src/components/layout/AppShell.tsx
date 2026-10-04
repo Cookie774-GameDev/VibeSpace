@@ -5,6 +5,7 @@ import { resolveTheme, useUIStore } from '@/stores/ui';
 import { SakuraBackdrop } from '@/features/appearance/sakura';
 import { BrowserChatBindingHost } from '@/features/browser-chat/BrowserChatBindingHost';
 import { BrowserChatSurfaceGuard } from '@/features/browser-chat/BrowserChatSurfaceGuard';
+import { resolveChatEngine, useBrowserChatStore } from '@/features/browser-chat/browserChatStore';
 import { FocusModeExit, useFullscreenStore } from '@/features/fullscreen';
 import { useThemeMotionTransition } from '@/features/appearance/themeMotion';
 import { isTauri } from '@/lib/utils';
@@ -55,6 +56,8 @@ export function AppShell({ children }: AppShellProps) {
   const inspectorOpen = useUIStore((s) => s.inspectorOpen);
   const chatMode = useUIStore((s) => s.chatMode);
   const route = useUIStore((s) => s.route);
+  const activeChatId = useUIStore((s) => s.activeChatId);
+  const activeChatEngine = useBrowserChatStore((state) => resolveChatEngine(state, activeChatId));
   const theme = useUIStore((s) => s.theme);
   const focusActive = useFullscreenStore((s) => s.focusActive);
   const sakuraActive = resolveTheme(theme) === 'sakura';
@@ -162,7 +165,9 @@ export function AppShell({ children }: AppShellProps) {
                 >
                   {children}
                 </main>
-                {showPeripheralChrome && chatMode === 'council' && <CouncilActivityStrip />}
+                {showPeripheralChrome &&
+                  chatMode === 'council' &&
+                  !(route === 'chat' && activeChatEngine === 'browser') && <CouncilActivityStrip />}
               </div>
 
               {showPeripheralChrome && (

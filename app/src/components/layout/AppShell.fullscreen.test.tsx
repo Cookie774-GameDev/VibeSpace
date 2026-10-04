@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFullscreenStore } from '@/features/fullscreen/fullscreenStore';
+import { browserChatStore } from '@/features/browser-chat/browserChatStore';
 import { useUIStore, type Route } from '@/stores/ui';
 
 vi.mock('./TopBar', () => ({ TopBar: () => <div data-testid="top-bar" /> }));
@@ -22,6 +23,7 @@ describe('AppShell Workspace Focus Mode', () => {
   beforeEach(() => {
     useUIStore.setState(useUIStore.getInitialState(), true);
     useUIStore.setState({ route: 'chat', theme: 'default', chatMode: 'council' });
+    browserChatStore.setState({ engine: 'native', chatPreferences: {} });
     useFullscreenStore.setState({
       focusActive: false,
       activationOrder: [],
@@ -98,6 +100,22 @@ describe('AppShell Workspace Focus Mode', () => {
     act(() => useFullscreenStore.getState().setFocusActive(false));
     expect(rendered.getByTestId('stateful-workspace')).toBe(workspace);
     expect(mounts).toBe(1);
+  });
+
+  it('omits Council activity chrome for Browser Chat and restores it for native chat', () => {
+    useUIStore.setState({ activeChatId: 'chat-browser' });
+    browserChatStore.setState({
+      chatPreferences: { 'chat-browser': { engine: 'browser', providerId: 'chatgpt' } },
+    });
+    const rendered = render(
+      <AppShell>
+        <section data-testid="active-workspace" />
+      </AppShell>,
+    );
+    expect(rendered.queryByTestId('activity-strip')).toBeNull();
+
+    act(() => useUIStore.setState({ activeChatId: 'chat-native' }));
+    expect(rendered.getByTestId('activity-strip')).toBeTruthy();
   });
 
   it('does not replace the existing full-bleed Workbench shell', () => {

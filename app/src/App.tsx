@@ -52,6 +52,7 @@ import { createAccessViewModel } from '@/features/access/accessViewModel';
 import { AppShell } from '@/components/layout';
 import { JarvisContextMenu } from '@/components/layout/JarvisContextMenu';
 import { PageRouter } from '@/components/layout/PageRouter';
+import { resolveChatEngine, useBrowserChatStore } from '@/features/browser-chat/browserChatStore';
 import { NavigationHistoryBoundary } from '@/features/navigation/NavigationHistoryBoundary';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { waitForIdle } from '@/stability/bootWhenVisible';
@@ -673,6 +674,7 @@ async function syncPlanFromProfile(userId: string, requestGeneration: number): P
 function ActiveCanvas() {
   const route = useUIStore((s) => s.route);
   const activeChatId = useUIStore((s) => s.activeChatId);
+  const chatEngine = useBrowserChatStore((state) => resolveChatEngine(state, activeChatId));
 
   // V3 — non-chat routes go through the lazy PageRouter.
   if (route !== 'chat') {
@@ -683,8 +685,20 @@ function ActiveCanvas() {
   return (
     <React.Suspense fallback={null}>
       <div className="flex h-full min-h-0 flex-col">
-        {activeChatId && <div className="flex justify-end px-3 py-1"><button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => useUIStore.getState().setChatMode('council')}>Council</button></div>}
-        <div className="flex-1 min-h-0"><ChatView /></div>
+        {activeChatId && chatEngine !== 'browser' && (
+          <div className="flex justify-end px-3 py-1">
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => useUIStore.getState().setChatMode('council')}
+            >
+              Council
+            </button>
+          </div>
+        )}
+        <div className="flex-1 min-h-0">
+          <ChatView />
+        </div>
       </div>
     </React.Suspense>
   );

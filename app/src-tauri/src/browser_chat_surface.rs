@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{
     webview::{NewWindowResponse, PageLoadEvent, Webview, WebviewBuilder},
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, WebviewUrl,
 };
 
 use crate::workbench_browser_surface::with_isolated_child_webview2_environment;
@@ -660,7 +660,7 @@ fn open_provider(
 #[tauri::command]
 pub async fn browser_chat_surface_open(
     app: AppHandle,
-    caller: WebviewWindow,
+    caller: Webview,
     provider_id: String,
     provider_profile_key: String,
     page_id: String,
@@ -703,10 +703,7 @@ pub async fn browser_chat_surface_open(
 }
 
 #[tauri::command]
-pub async fn browser_chat_surface_hide_all(
-    app: AppHandle,
-    caller: WebviewWindow,
-) -> Result<(), String> {
+pub async fn browser_chat_surface_hide_all(app: AppHandle, caller: Webview) -> Result<(), String> {
     ensure_main_caller(caller.label())?;
     SURFACE_VISIBILITY_GENERATION.fetch_add(1, Ordering::AcqRel);
     tauri::async_runtime::spawn_blocking(move || {
@@ -725,7 +722,7 @@ pub async fn browser_chat_surface_hide_all(
 #[tauri::command]
 pub async fn browser_chat_surface_hide(
     app: AppHandle,
-    caller: WebviewWindow,
+    caller: Webview,
     provider_id: String,
     provider_profile_key: String,
     page_id: String,
