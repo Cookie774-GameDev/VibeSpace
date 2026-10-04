@@ -30,6 +30,20 @@ export const setupLinks = {
 } as const;
 export type SetupLink = keyof typeof setupLinks;
 export const setupErrorMessages: Record<string, string> = {
+  CONNECTOR_LOCK_INVALID:
+    'An interrupted local startup is blocking the connector. Repair interrupted setup to preserve the old marker and try again.',
+  CONNECTOR_LOCK_IN_USE:
+    'Another connector process still owns this setup. Wait for that process; its files have been preserved.',
+  CONNECTOR_START_TIMEOUT:
+    'The packaged connector did not become ready in time. Retry preparation to check it again.',
+  CONNECTOR_STORAGE_UNAVAILABLE:
+    'The packaged tools could not be installed. Check available disk space and retry preparation.',
+  CONNECTOR_PACKAGE_INVALID:
+    'The connector package is missing or could not be verified. Update VibeSpace and retry preparation.',
+  WINDOWS_STARTUP_UNAVAILABLE:
+    'Windows could not verify the startup setting. Check Windows startup permissions. Your tunnel connection is separate.',
+  CONNECTOR_REQUEST_TIMEOUT:
+    'The native connector request timed out. Retry preparation to check it again.',
   CREDENTIAL_STORAGE_UNAVAILABLE:
     'Windows secure storage could not save or unlock your API key. The tunnel has not been authenticated.',
   INVALID_PLUGIN_NAME: 'Use a plugin name of at most 64 characters without control characters.',
@@ -54,10 +68,30 @@ export function describeSetupError(error: unknown, fallback: string): string {
   return fallback;
 }
 export const pluginName = (name: string) => name.trim() || 'VibeSpace Desktop';
-export const readWebMcpStatus = () => invoke<WebMcpStatus>('desktop_connector_status');
+async function boundedNative<T>(operation: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(setupErrorMessages.CONNECTOR_REQUEST_TIMEOUT)),
+          milliseconds,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+export const readWebMcpStatus = () =>
+  boundedNative(invoke<WebMcpStatus>('desktop_connector_status'), 8000);
 export async function setupAction(action: string): Promise<void> {
   try {
-    await invoke('desktop_connector_setup', { action });
+    await boundedNative(
+      invoke('desktop_connector_setup', { action }),
+      action === 'prepare' || action === 'repair' ? 90000 : 65000,
+    );
   } catch (error) {
     throw new Error(
       describeSetupError(error, 'The local connector action could not be confirmed. Please retry.'),
@@ -91,16 +125,19 @@ export async function saveWebMcpDraft(draft: SetupDraft, apiKey: string): Promis
   const problem = validateSetupDraft(draft, apiKey);
   if (problem) throw new Error(problem);
   try {
-    await invoke('desktop_connector_setup', {
-      action: 'save',
-      draft: {
-        displayName: pluginName(draft.displayName),
-        tunnelId: draft.tunnelId.trim(),
-        guideTab: draft.guideTab,
-        step: draft.step,
-        ...(apiKey ? { apiKey } : {}),
-      },
-    });
+    await boundedNative(
+      invoke('desktop_connector_setup', {
+        action: 'save',
+        draft: {
+          displayName: pluginName(draft.displayName),
+          tunnelId: draft.tunnelId.trim(),
+          guideTab: draft.guideTab,
+          step: draft.step,
+          ...(apiKey ? { apiKey } : {}),
+        },
+      }),
+      65000,
+    );
     const confirmed = await readWebMcpStatus();
     if (
       confirmed.displayName !== pluginName(draft.displayName) ||
@@ -119,7 +156,16 @@ export async function saveWebMcpDraft(draft: SetupDraft, apiKey: string): Promis
 }
 
 /** A saved setup or last ready snapshot does not verify a current connection. */
-export function webMcpConnectionReady(status: WebMcpStatus | undefined, statusAvailable: boolean): boolean {
-  return statusAvailable && status?.connectionDetected === true && status.enabled !== false &&
-    status.status === 'ready' && Number.isSafeInteger(status.toolCount) && status.toolCount > 0;
+export function webMcpConnectionReady(
+  status: WebMcpStatus | undefined,
+  statusAvailable: boolean,
+): boolean {
+  return (
+    statusAvailable &&
+    status?.connectionDetected === true &&
+    status.enabled !== false &&
+    status.status === 'ready' &&
+    Number.isSafeInteger(status.toolCount) &&
+    status.toolCount > 0
+  );
 }

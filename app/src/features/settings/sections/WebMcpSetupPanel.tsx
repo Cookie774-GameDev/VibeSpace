@@ -105,6 +105,7 @@ export function WebMcpSetupPanel({
   const keyRevision = useRef(0);
   const acknowledgedKeyRevision = useRef(-1);
   const changeStatus = useRef(onStatus);
+  const preparationRequest = useRef(0);
   changeStatus.current = onStatus;
   const applyStatus = useCallback((value: WebMcpStatus) => {
     if (!mounted.current) return;
@@ -112,29 +113,53 @@ export function WebMcpSetupPanel({
     setStatusAvailable(true);
     changeStatus.current(value);
   }, []);
+  const prepare = useCallback(
+    async (action = 'prepare') => {
+      const request = ++preparationRequest.current;
+      const version = revision.current;
+      setLoading(true);
+      setError('');
+      const current = () => mounted.current && preparationRequest.current === request;
+      try {
+        await setupAction(action);
+        const value = await readWebMcpStatus();
+        if (!current()) return;
+        applyStatus(value);
+        const saved = draftFromStatus(value);
+        latestDraft.current =
+          version === revision.current
+            ? saved
+            : {
+                ...saved,
+                guideTab: latestDraft.current.guideTab,
+                step: latestDraft.current.step,
+              };
+        setDraft(latestDraft.current);
+      } catch (cause) {
+        if (current())
+          setError(
+            describeSetupError(
+              cause,
+              'Could not prepare WebMCP. Retry preparation to check it again.',
+            ),
+          );
+      } finally {
+        if (current()) setLoading(false);
+      }
+    },
+    [applyStatus],
+  );
   useEffect(() => {
     mounted.current = true;
-    void (async () => {
-      try {
-        await setupAction('prepare');
-        const value = await readWebMcpStatus();
-        if (!mounted.current) return;
-        applyStatus(value);
-        latestDraft.current = draftFromStatus(value);
-        setDraft(latestDraft.current);
-      } catch {
-        if (mounted.current) setError('Could not prepare WebMCP. Close this panel and try again.');
-      } finally {
-        if (mounted.current) setLoading(false);
-      }
-    })();
+    void prepare();
     return () => {
       mounted.current = false;
+      preparationRequest.current++;
       clearTimeout(timer.current);
       latestKey.current = '';
       acknowledgedKeyRevision.current = -1;
     };
-  }, [applyStatus]);
+  }, [prepare]);
   const save = useCallback(async () => {
     clearTimeout(timer.current);
     const current = { ...latestDraft.current };
@@ -202,7 +227,7 @@ export function WebMcpSetupPanel({
     setError('');
     latestDraft.current = { ...latestDraft.current, ...patch };
     setDraft(latestDraft.current);
-    scheduleSave();
+    if (!loading) scheduleSave();
   };
   useEffect(() => {
     if (loading) return;
@@ -295,7 +320,9 @@ export function WebMcpSetupPanel({
   const credentialStep = draft.step !== 3;
   const displayedError =
     error ||
-    (!statusAvailable && !loading ? 'Connection status unavailable. Checking again; saved setup is preserved.' : '') ||
+    (!statusAvailable && !loading
+      ? 'Connection status unavailable. Checking again; saved setup is preserved.'
+      : '') ||
     (status?.errorCode && Object.hasOwn(setupErrorMessages, status.errorCode)
       ? setupErrorMessages[status.errorCode]
       : '');
@@ -332,7 +359,7 @@ export function WebMcpSetupPanel({
           <button
             type="button"
             aria-current={credentialStep ? 'step' : undefined}
-            disabled={loading || busy}
+            disabled={busy}
             onClick={() => updateDraft({ step: 1 })}
           >
             <span className={ready ? 'complete' : ''}>{ready ? <Check size={14} /> : '1'}</span>
@@ -341,7 +368,7 @@ export function WebMcpSetupPanel({
           <button
             type="button"
             aria-current={!credentialStep ? 'step' : undefined}
-            disabled={loading || busy}
+            disabled={busy}
             onClick={() => updateDraft({ step: 3 })}
           >
             <span>
@@ -351,216 +378,242 @@ export function WebMcpSetupPanel({
           </button>
         </nav>
         <div className="webmcp-body" aria-busy={loading}>
-          {loading ? (
-            <p role="status" className="webmcp-preparing">
-              <Loader2 className="animate-spin" size={18} /> Preparing your packaged tools…
+          {loading && (
+            <p role="status" className="webmcp-hint">
+              <Loader2 className="animate-spin" size={18} /> Preparing your packaged tools… You can
+              watch the tutorials while preparation finishes.
             </p>
-          ) : (
-            <>
-              <div className="webmcp-checks" aria-label="Connection checks">
-                <div data-verified={status?.connectionDetected && (status?.toolCount ?? 0) > 0}>
-                  <Monitor size={16} aria-hidden="true" />
-                  <span>
-                    Local tools
-                    <small>
-                      {status?.toolCount ? status.toolCount + ' available' : 'Not ready'}
-                    </small>
-                  </span>
-                </div>
-                <ArrowRight size={13} aria-hidden="true" />
-                <div data-verified={status?.hasKey === true}>
-                  <ShieldCheck size={16} aria-hidden="true" />
-                  <span>
-                    Secure key<small>{status?.hasKey ? 'Saved on this PC' : 'Not saved yet'}</small>
-                  </span>
-                </div>
-                <ArrowRight size={13} aria-hidden="true" />
-                <div data-verified={ready}>
-                  <Cloud size={16} aria-hidden="true" />
-                  <span>
-                    OpenAI tunnel
-                    <small>{!statusAvailable ? 'Status unavailable' : ready ? 'Connected' : active ? 'Connecting…' : 'Not connected'}</small>
-                  </span>
-                </div>
-              </div>
-              <div className="webmcp-guide-tabs" role="tablist" aria-label="Setup tutorial">
-                {(['tunnel', 'api'] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    id={'webmcp-tab-' + tab}
-                    role="tab"
-                    type="button"
-                    aria-selected={draft.guideTab === tab}
-                    aria-controls="webmcp-guide"
-                    tabIndex={draft.guideTab === tab ? 0 : -1}
-                    onKeyDown={(event) => {
-                      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-                        event.preventDefault();
-                        const next = tab === 'api' ? 'tunnel' : 'api';
-                        updateDraft({ guideTab: next });
-                        document.getElementById('webmcp-tab-' + next)?.focus();
-                      }
-                    }}
-                    onClick={() => updateDraft({ guideTab: tab })}
-                  >
-                    {tab === 'tunnel' ? <Link2 size={14} /> : <KeyRound size={14} />}
-                    {tab === 'tunnel' ? 'Tunnel video' : 'API key video'}
-                  </button>
-                ))}
-              </div>
-              <section
-                id="webmcp-guide"
-                role="tabpanel"
-                aria-labelledby={'webmcp-tab-' + draft.guideTab}
-                className="webmcp-guide"
-              >
-                <GuideVideo key={draft.guideTab} tab={draft.guideTab} />
-                <div className="webmcp-guide-caption">
-                  <span>
-                    {draft.guideTab === 'tunnel'
-                      ? 'Create a tunnel, then copy its ID.'
-                      : 'Choose Restricted → Tunnels Read + Use. The recorded secret is hidden.'}
-                  </span>
-                  {draft.guideTab === 'tunnel'
-                    ? link('open-tunnels', 'Open OpenAI Tunnels')
-                    : link('open-api-keys', 'Create runtime API key')}
-                </div>
-              </section>
-              {credentialStep ? (
-                <form
-                  className="webmcp-form"
-                  onSubmit={(event) => {
+          )}
+          <div className="webmcp-checks" aria-label="Connection checks">
+            <div data-verified={status?.connectionDetected && (status?.toolCount ?? 0) > 0}>
+              <Monitor size={16} aria-hidden="true" />
+              <span>
+                Local tools
+                <small>{status?.toolCount ? status.toolCount + ' available' : 'Not ready'}</small>
+              </span>
+            </div>
+            <ArrowRight size={13} aria-hidden="true" />
+            <div data-verified={status?.hasKey === true}>
+              <ShieldCheck size={16} aria-hidden="true" />
+              <span>
+                Secure key<small>{status?.hasKey ? 'Saved on this PC' : 'Not saved yet'}</small>
+              </span>
+            </div>
+            <ArrowRight size={13} aria-hidden="true" />
+            <div data-verified={ready}>
+              <Cloud size={16} aria-hidden="true" />
+              <span>
+                OpenAI tunnel
+                <small>
+                  {!statusAvailable
+                    ? 'Status unavailable'
+                    : ready
+                      ? 'Connected'
+                      : active
+                        ? 'Connecting…'
+                        : 'Not connected'}
+                </small>
+              </span>
+            </div>
+          </div>
+          <div className="webmcp-guide-tabs" role="tablist" aria-label="Setup tutorial">
+            {(['tunnel', 'api'] as const).map((tab) => (
+              <button
+                key={tab}
+                id={'webmcp-tab-' + tab}
+                role="tab"
+                type="button"
+                aria-selected={draft.guideTab === tab}
+                aria-controls="webmcp-guide"
+                tabIndex={draft.guideTab === tab ? 0 : -1}
+                onKeyDown={(event) => {
+                  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
                     event.preventDefault();
-                    void connect();
-                  }}
-                >
-                  <div className="webmcp-fields">
-                    <label>
-                      Tunnel ID
-                      <Input
-                        aria-label="Tunnel ID"
-                        placeholder="tunnel_…"
-                        spellCheck={false}
-                        autoComplete="off"
-                        value={draft.tunnelId}
+                    const next = tab === 'api' ? 'tunnel' : 'api';
+                    updateDraft({ guideTab: next });
+                    document.getElementById('webmcp-tab-' + next)?.focus();
+                  }
+                }}
+                onClick={() => updateDraft({ guideTab: tab })}
+              >
+                {tab === 'tunnel' ? <Link2 size={14} /> : <KeyRound size={14} />}
+                {tab === 'tunnel' ? 'Tunnel video' : 'API key video'}
+              </button>
+            ))}
+          </div>
+          <section
+            id="webmcp-guide"
+            role="tabpanel"
+            aria-labelledby={'webmcp-tab-' + draft.guideTab}
+            className="webmcp-guide"
+          >
+            <GuideVideo key={draft.guideTab} tab={draft.guideTab} />
+            <div className="webmcp-guide-caption">
+              <span>
+                {draft.guideTab === 'tunnel'
+                  ? 'Create a tunnel, then copy its ID.'
+                  : 'Choose Restricted → Tunnels Read + Use. The recorded secret is hidden.'}
+              </span>
+              {draft.guideTab === 'tunnel'
+                ? link('open-tunnels', 'Open OpenAI Tunnels')
+                : link('open-api-keys', 'Create runtime API key')}
+            </div>
+          </section>
+          {credentialStep ? (
+            <form
+              className="webmcp-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void connect();
+              }}
+            >
+              <div className="webmcp-fields">
+                <label>
+                  Tunnel ID
+                  <Input
+                    aria-label="Tunnel ID"
+                    placeholder="tunnel_…"
+                    spellCheck={false}
+                    autoComplete="off"
+                    value={draft.tunnelId}
+                    disabled={loading || busy || active}
+                    onChange={(event) => updateDraft({ tunnelId: event.target.value })}
+                  />
+                  {tunnelSaved && (
+                    <span
+                      className="webmcp-saved-chip"
+                      title={status?.tunnelId}
+                      data-testid="saved-tunnel"
+                    >
+                      <CheckCircle2 size={13} />
+                      Tunnel saved<span>{status?.tunnelId?.slice(-8)}</span>
+                    </span>
+                  )}
+                </label>
+                <div>
+                  <label htmlFor="webmcp-runtime-key">Runtime API key</label>
+                  {status?.hasKey && !replacingKey ? (
+                    <div className="webmcp-key-saved">
+                      <ShieldCheck size={16} />
+                      <span>Saved securely</span>
+                      <button
+                        type="button"
                         disabled={busy || active}
-                        onChange={(event) => updateDraft({ tunnelId: event.target.value })}
-                      />
-                      {tunnelSaved && (
-                        <span
-                          className="webmcp-saved-chip"
-                          title={status?.tunnelId}
-                          data-testid="saved-tunnel"
-                        >
-                          <CheckCircle2 size={13} />
-                          Tunnel saved<span>{status?.tunnelId?.slice(-8)}</span>
-                        </span>
-                      )}
-                    </label>
-                    <div>
-                      <label htmlFor="webmcp-runtime-key">Runtime API key</label>
-                      {status?.hasKey && !replacingKey ? (
-                        <div className="webmcp-key-saved">
-                          <ShieldCheck size={16} />
-                          <span>Saved securely</span>
-                          <button
-                            type="button"
-                            disabled={busy || active}
-                            onClick={() => setReplacingKey(true)}
-                          >
-                            Replace
-                          </button>
-                        </div>
-                      ) : (
-                        <Input
-                          id="webmcp-runtime-key"
-                          aria-label="Runtime API key"
-                          type="password"
-                          autoComplete="off"
-                          spellCheck={false}
-                          maxLength={4096}
-                          placeholder="Paste restricted runtime key"
-                          value={apiKey}
-                          disabled={busy || active}
-                          onChange={(event) => {
-                            revision.current++;
-                            keyRevision.current++;
-                            setError('');
-                            latestKey.current = event.target.value;
-                            setApiKey(event.target.value);
-                            scheduleSave();
-                          }}
-                        />
-                      )}
-                      <p className="webmcp-hint">
-                        Protected by Windows. Never saved in browser storage.
-                      </p>
+                        onClick={() => setReplacingKey(true)}
+                      >
+                        Replace
+                      </button>
                     </div>
-                  </div>
-                  <label className="webmcp-name webmcp-optional-name">
-                    <span>
-                      <MessageSquare size={13} aria-hidden="true" /> ChatGPT plugin name{' '}
-                      <small>optional</small>
-                    </span>
+                  ) : (
                     <Input
-                      aria-label="WebMCP app name"
-                      placeholder="VibeSpace Desktop"
-                      value={draft.displayName}
-                      maxLength={64}
-                      onChange={(event) => updateDraft({ displayName: event.target.value })}
-                      disabled={busy}
+                      id="webmcp-runtime-key"
+                      aria-label="Runtime API key"
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      maxLength={4096}
+                      placeholder="Paste restricted runtime key"
+                      value={apiKey}
+                      disabled={loading || busy || active}
+                      onChange={(event) => {
+                        revision.current++;
+                        keyRevision.current++;
+                        setError('');
+                        latestKey.current = event.target.value;
+                        setApiKey(event.target.value);
+                        scheduleSave();
+                      }}
                     />
-                    <span className="webmcp-hint">
-                      Only the label you use in ChatGPT. Leave blank to use VibeSpace Desktop.
-                    </span>
-                  </label>
+                  )}
                   <p className="webmcp-hint">
-                    The tunnel ID identifies the connection. The runtime key authenticates it.
+                    Protected by Windows. Never saved in browser storage.
                   </p>
-                  <button type="submit" hidden aria-hidden="true" tabIndex={-1}>
-                    Connect
-                  </button>
-                </form>
-              ) : (
-                <section className="webmcp-chatgpt">
-                  <h3>One last step in ChatGPT</h3>
+                </div>
+              </div>
+              <label className="webmcp-name webmcp-optional-name">
+                <span>
+                  <MessageSquare size={13} aria-hidden="true" /> ChatGPT plugin name{' '}
+                  <small>optional</small>
+                </span>
+                <Input
+                  aria-label="WebMCP app name"
+                  placeholder="VibeSpace Desktop"
+                  value={draft.displayName}
+                  maxLength={64}
+                  onChange={(event) => updateDraft({ displayName: event.target.value })}
+                  disabled={loading || busy}
+                />
+                <span className="webmcp-hint">
+                  Only the label you use in ChatGPT. Leave blank to use VibeSpace Desktop.
+                </span>
+              </label>
+              <p className="webmcp-hint">
+                The tunnel ID identifies the connection. The runtime key authenticates it.
+              </p>
+              <button type="submit" hidden aria-hidden="true" tabIndex={-1}>
+                Connect
+              </button>
+            </form>
+          ) : (
+            <section className="webmcp-chatgpt">
+              <h3>One last step in ChatGPT</h3>
+              <p>
+                Create an app named <strong>{pluginName(draft.displayName)}</strong>, choose{' '}
+                <strong>Connection: Tunnel</strong>, select your tunnel, and review its tools.
+              </p>
+              <div className="webmcp-connection-receipt">
+                <ShieldCheck size={18} />
+                <div>
+                  <strong>{ready ? 'Ready for ChatGPT' : 'Connect your tunnel first'}</strong>
                   <p>
-                    Create an app named <strong>{pluginName(draft.displayName)}</strong>, choose{' '}
-                    <strong>Connection: Tunnel</strong>, select your tunnel, and review its tools.
+                    {ready
+                      ? String(status?.toolCount) +
+                        ' tools available. Keep WebMCP enabled while you use them.'
+                      : 'Return to step 1 to save your credentials and connect.'}
                   </p>
-                  <div className="webmcp-connection-receipt">
-                    <ShieldCheck size={18} />
-                    <div>
-                      <strong>{ready ? 'Ready for ChatGPT' : 'Connect your tunnel first'}</strong>
-                      <p>
-                        {ready
-                          ? String(status?.toolCount) +
-                            ' tools available. Keep WebMCP enabled while you use them.'
-                          : 'Return to step 1 to save your credentials and connect.'}
-                      </p>
-                    </div>
-                  </div>
-                  {link('open-chatgpt', 'Open ChatGPT Apps')}
-                  <p className="webmcp-hint">
-                    Adding the app happens in your browser. Tunnel readiness does not mean the
-                    ChatGPT app has been added.
-                  </p>
-                </section>
+                </div>
+              </div>
+              {link('open-chatgpt', 'Open ChatGPT Apps')}
+              <p className="webmcp-hint">
+                Adding the app happens in your browser. Tunnel readiness does not mean the ChatGPT
+                app has been added.
+              </p>
+            </section>
+          )}
+          {displayedError && (
+            <div>
+              <p role="alert" className="webmcp-error">
+                <AlertTriangle size={16} aria-hidden="true" />
+                {displayedError}
+              </p>
+              {!loading && (
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void prepare(
+                      error === setupErrorMessages.CONNECTOR_LOCK_INVALID ? 'repair' : 'prepare',
+                    )
+                  }
+                >
+                  {error === setupErrorMessages.CONNECTOR_LOCK_INVALID
+                    ? 'Repair interrupted setup'
+                    : 'Retry preparation'}
+                </Button>
               )}
-              {displayedError && (
-                <p role="alert" className="webmcp-error">
-                  <AlertTriangle size={16} aria-hidden="true" />
-                  {displayedError}
-                </p>
-              )}
-            </>
+            </div>
           )}
         </div>
         <footer className="webmcp-footer">
           <div className="webmcp-footer-status" role="status">
             <span className={ready ? 'webmcp-dot ready' : 'webmcp-dot'} />
             <span>
-              {!statusAvailable ? 'Connection status unavailable' : ready ? 'Tunnel ready' : active ? 'Connecting…' : 'Not connected'}
+              {!statusAvailable
+                ? 'Connection status unavailable'
+                : ready
+                  ? 'Tunnel ready'
+                  : active
+                    ? 'Connecting…'
+                    : 'Not connected'}
               <small>
                 {saveState === 'saving'
                   ? 'Saving securely…'

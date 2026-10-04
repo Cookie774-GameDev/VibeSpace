@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { WebMcpSetupPanel } from './WebMcpSetupPanel';
-import { webMcpConnectionReady, type WebMcpStatus } from './webMcpSetupClient';
+import {
+  readWebMcpStatus,
+  setupAction,
+  webMcpConnectionReady,
+  type WebMcpStatus,
+} from './webMcpSetupClient';
 
 type Status = WebMcpStatus;
 export function DesktopConnectorSetup({
@@ -25,7 +29,7 @@ export function DesktopConnectorSetup({
       if (pending || changing.current) return;
       pending = true;
       const requested = revision.current;
-      void invoke<Status>('desktop_connector_status')
+      void readWebMcpStatus()
         .then((value) => {
           if (active && requested === revision.current) {
             setStatus(value);
@@ -55,9 +59,8 @@ export function DesktopConnectorSetup({
     setBusy(true);
     setError('');
     try {
-      if (action === 'setup') await invoke('desktop_connector_setup');
-      else await invoke('desktop_connector_setup', { action });
-      const confirmed = await invoke<Status>('desktop_connector_status');
+      await setupAction(action);
+      const confirmed = await readWebMcpStatus();
       setStatus(confirmed);
       setStatusAvailable(true);
       if (
@@ -84,7 +87,13 @@ export function DesktopConnectorSetup({
   useEffect(() => {
     if (statusAvailable && complete && status?.connectionDetected && status.connectionFile)
       onConnectionReady?.(status.connectionFile);
-  }, [complete, statusAvailable, status?.connectionDetected, status?.connectionFile, onConnectionReady]);
+  }, [
+    complete,
+    statusAvailable,
+    status?.connectionDetected,
+    status?.connectionFile,
+    onConnectionReady,
+  ]);
   return (
     <div
       className="my-4 rounded-xl border border-border bg-background p-4"
@@ -117,32 +126,36 @@ export function DesktopConnectorSetup({
             : !statusAvailable
               ? 'Connection status unavailable · checking again'
               : status.enabled === false
-              ? 'MCP is off · automatic recovery paused'
-              : webMcpConnectionReady(status, statusAvailable)
-                ? `Tunnel ready · ${status.toolCount} tools detected`
-                : status.status === 'connecting'
-                  ? 'Connecting tunnel…'
-                  : status.connectionDetected
-                    ? 'Connection file detected · tunnel disconnected'
-                    : 'Preloaded · ready to set up'}
+                ? 'MCP is off · automatic recovery paused'
+                : webMcpConnectionReady(status, statusAvailable)
+                  ? `Tunnel ready · ${status.toolCount} tools detected`
+                  : status.status === 'connecting'
+                    ? 'Connecting tunnel…'
+                    : status.connectionDetected
+                      ? 'Connection file detected · tunnel disconnected'
+                      : 'Preloaded · ready to set up'}
       </p>
-      {complete && (
+      {status?.packaged && (
         <div className="mt-3 divide-y divide-border">
-          <label className="flex items-center justify-between gap-4 py-3">
-            <span>Enable Desktop Link MCP</span>
-            <Switch
-              aria-label="Enable Desktop Link MCP"
-              checked={status?.enabled === true}
-              disabled={busy || typeof status?.enabled !== 'boolean'}
-              onCheckedChange={(enabled) => void act(enabled ? 'connect' : 'disconnect')}
-            />
-          </label>
-          <p className="py-3 text-sm text-muted-foreground">
-            {status?.watchdog
-              ? 'Automatic recovery checks every second and pauses when switched off. The connector can keep running after VibeSpace closes.'
-              : 'Automatic recovery status is unavailable.'}{' '}
-            Enabled connections start with VibeSpace.
-          </p>
+          {complete && (
+            <>
+              <label className="flex items-center justify-between gap-4 py-3">
+                <span>Enable Desktop Link MCP</span>
+                <Switch
+                  aria-label="Enable Desktop Link MCP"
+                  checked={status?.enabled === true}
+                  disabled={busy || typeof status?.enabled !== 'boolean'}
+                  onCheckedChange={(enabled) => void act(enabled ? 'connect' : 'disconnect')}
+                />
+              </label>
+              <p className="py-3 text-sm text-muted-foreground">
+                {status?.watchdog
+                  ? 'Automatic recovery checks every second and pauses when switched off. The connector can keep running after VibeSpace closes.'
+                  : 'Automatic recovery status is unavailable.'}{' '}
+                Enabled connections start with VibeSpace.
+              </p>
+            </>
+          )}
           <label className="flex items-center justify-between gap-4 py-3">
             <span>
               Start with computer{' '}
@@ -162,7 +175,10 @@ export function DesktopConnectorSetup({
       {setupOpen && (
         <WebMcpSetupPanel
           initialStatus={status}
-          onStatus={(value) => { setStatus(value); setStatusAvailable(true); }}
+          onStatus={(value) => {
+            setStatus(value);
+            setStatusAvailable(true);
+          }}
           onClose={() => setSetupOpen(false)}
         />
       )}

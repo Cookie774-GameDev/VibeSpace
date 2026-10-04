@@ -7,6 +7,30 @@ afterEach(() => {
   cleanup();
   invoke.mockReset();
 });
+it('offers Windows startup independently before tunnel setup is complete', async () => {
+  let startup = false;
+  invoke.mockImplementation(async (command, args) => {
+    if (command === 'desktop_connector_setup') {
+      startup = args.action === 'startup-on';
+      return;
+    }
+    return {
+      packaged: true,
+      connectionDetected: false,
+      status: 'disconnected',
+      toolCount: 0,
+      setupComplete: false,
+      startOnComputer: startup,
+    };
+  });
+  render(<DesktopConnectorSetup />);
+  const toggle = await screen.findByRole('switch', { name: 'Start with computer' });
+  expect((toggle as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+  expect(invoke).toHaveBeenCalledWith('desktop_connector_setup', { action: 'startup-on' });
+  expect(invoke).not.toHaveBeenCalledWith('desktop_connector_setup', { action: 'connect' });
+});
 it('opens in-app setup only on explicit action and displays verified tool status', async () => {
   invoke.mockImplementation(async (command) =>
     command === 'desktop_connector_status'

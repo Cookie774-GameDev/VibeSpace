@@ -1,12 +1,66 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DesktopConnectorSetup } from './DesktopConnectorSetup';
+import { WebMcpSetupPanel } from './WebMcpSetupPanel';
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 afterEach(() => {
   cleanup();
   invoke.mockReset();
   localStorage.clear();
+});
+it('shows both tutorials and ChatGPT instructions while native preparation is pending', async () => {
+  invoke.mockImplementation((command) =>
+    command === 'desktop_connector_status'
+      ? Promise.resolve({ packaged: true, status: 'disconnected', connectionDetected: false })
+      : new Promise(() => {}),
+  );
+  render(<WebMcpSetupPanel onStatus={vi.fn()} onClose={vi.fn()} />);
+  expect(screen.getByLabelText('Tunnel setup tutorial')).toBeTruthy();
+  expect((screen.getByRole('textbox', { name: 'Tunnel ID' }) as HTMLInputElement).disabled).toBe(
+    true,
+  );
+  fireEvent.click(screen.getByRole('tab', { name: 'API key video' }));
+  expect(screen.getByLabelText('Runtime API key tutorial')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /Add to ChatGPT/ }));
+  expect(screen.getByText('One last step in ChatGPT')).toBeTruthy();
+  expect(
+    (screen.getByRole('button', { name: 'Connect tunnel' }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+});
+it('ends a stuck preparation with a retryable error and ignores a late reply after closing', async () => {
+  vi.useFakeTimers();
+  let release!: () => void;
+  invoke.mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const onStatus = vi.fn();
+  const view = render(<WebMcpSetupPanel onStatus={onStatus} onClose={vi.fn()} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(90000);
+  });
+  expect(screen.getByRole('alert').textContent).toMatch(/timed out/i);
+  expect(screen.getByRole('button', { name: 'Retry preparation' })).toBeTruthy();
+  view.unmount();
+  await act(async () => release());
+  expect(onStatus).not.toHaveBeenCalled();
+  vi.useRealTimers();
+});
+it('reports an interrupted connector lock and offers an explicit repair without silently reconnecting', async () => {
+  invoke.mockImplementation(async (command, args) => {
+    if (command === 'desktop_connector_status') return { packaged: true, status: 'disconnected' };
+    if (args?.action === 'prepare') throw 'CONNECTOR_LOCK_INVALID';
+  });
+  render(<WebMcpSetupPanel onStatus={vi.fn()} onClose={vi.fn()} />);
+  expect((await screen.findByRole('alert')).textContent).toMatch(/interrupted.*startup/i);
+  fireEvent.click(screen.getByRole('button', { name: 'Repair interrupted setup' }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith('desktop_connector_setup', { action: 'repair' }),
+  );
+  expect(invoke).not.toHaveBeenCalledWith('desktop_connector_setup', { action: 'connect' });
 });
 it('opens a native mini panel with tutorial tabs instead of an external setup page', async () => {
   invoke.mockImplementation(async (command) =>

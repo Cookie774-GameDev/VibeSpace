@@ -230,9 +230,15 @@ fn unpack(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 const REQUIRED_CONNECTOR_FILES: &[&str] = &[
-    "runtime/node.exe", "runtime/tunnel-client.exe", "runtime/cloudflared.exe",
-    "gateway.mjs", "supervisor.mjs", "startup.mjs", "startup.ps1",
-    "startup.vbs", "setup/index.html",
+    "runtime/node.exe",
+    "runtime/tunnel-client.exe",
+    "runtime/cloudflared.exe",
+    "gateway.mjs",
+    "supervisor.mjs",
+    "startup.mjs",
+    "startup.ps1",
+    "startup.vbs",
+    "setup/index.html",
 ];
 
 // Refuse both symbolic links and Windows junction/reparse destinations before repair.
@@ -258,12 +264,14 @@ fn connector_path_is_unlinked(path: &Path) -> Result<(), String> {
 }
 
 fn connector_required_files_match(
-    archive: &mut zip::ZipArchive<fs::File>, root: &Path,
+    archive: &mut zip::ZipArchive<fs::File>,
+    root: &Path,
 ) -> Result<bool, String> {
     for required in REQUIRED_CONNECTOR_FILES {
         let path = root.join(required);
         connector_path_is_unlinked(&path)?;
-        let mut entry = archive.by_name(required)
+        let mut entry = archive
+            .by_name(required)
             .map_err(|_| "Connector package is incomplete.")?;
         if entry.is_dir() || entry.size() == 0 {
             return Err("Connector package is incomplete.".into());
@@ -273,68 +281,104 @@ fn connector_required_files_match(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(_) => return Err("Cannot inspect connector storage.".into()),
         };
-        if !metadata.is_file() || metadata.len() != entry.size() { return Ok(false); }
+        if !metadata.is_file() || metadata.len() != entry.size() {
+            return Ok(false);
+        }
         let mut installed = fs::File::open(path).map_err(|_| "Cannot inspect connector file.")?;
         let mut packaged_bytes = [0; 65536];
         let mut installed_bytes = [0; 65536];
         loop {
-            let n = entry.read(&mut packaged_bytes).map_err(|_| "Invalid connector entry.")?;
-            if n == 0 { break; }
-            installed.read_exact(&mut installed_bytes[..n])
+            let n = entry
+                .read(&mut packaged_bytes)
+                .map_err(|_| "Invalid connector entry.")?;
+            if n == 0 {
+                break;
+            }
+            installed
+                .read_exact(&mut installed_bytes[..n])
                 .map_err(|_| "Cannot inspect connector file.")?;
-            if packaged_bytes[..n] != installed_bytes[..n] { return Ok(false); }
+            if packaged_bytes[..n] != installed_bytes[..n] {
+                return Ok(false);
+            }
         }
     }
     Ok(true)
 }
 
-fn unpack_verified_bundle(archive_path: &Path, expected: &str, root: &Path) -> Result<PathBuf, String> {
+fn unpack_verified_bundle(
+    archive_path: &Path,
+    expected: &str,
+    root: &Path,
+) -> Result<PathBuf, String> {
     let mut input = fs::File::open(archive_path)
         .map_err(|_| "Connector package missing. Reinstall VibeSpace.")?;
     let mut hasher = Sha256::new();
     let mut buffer = [0; 65536];
     loop {
-        let n = input.read(&mut buffer).map_err(|_| "Cannot verify connector package.")?;
-        if n == 0 { break; }
+        let n = input
+            .read(&mut buffer)
+            .map_err(|_| "Cannot verify connector package.")?;
+        if n == 0 {
+            break;
+        }
         hasher.update(&buffer[..n]);
     }
     if format!("{:x}", hasher.finalize()) != expected {
         return Err("Connector package verification failed. Reinstall VibeSpace.".into());
     }
-    input.rewind().map_err(|_| "Connector package unavailable.")?;
+    input
+        .rewind()
+        .map_err(|_| "Connector package unavailable.")?;
     let mut archive = zip::ZipArchive::new(input).map_err(|_| "Invalid connector archive.")?;
     let marker = root.join(".installed");
     connector_path_is_unlinked(&marker)?;
     // Validate every archive destination before changing any installed bytes.
     for i in 0..archive.len() {
-        let entry = archive.by_index(i).map_err(|_| "Invalid connector entry.")?;
+        let entry = archive
+            .by_index(i)
+            .map_err(|_| "Invalid connector entry.")?;
         let relative = entry.enclosed_name().ok_or("Unsafe connector entry.")?;
-        if relative == Path::new(".installed") || entry.unix_mode()
-            .is_some_and(|mode| mode & 0o170000 == 0o120000) {
+        if relative == Path::new(".installed")
+            || entry
+                .unix_mode()
+                .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
             return Err("Unsafe connector entry.".into());
         }
         connector_path_is_unlinked(&root.join(relative))?;
     }
     // Validate the required archive closure even when installation is missing.
     for required in REQUIRED_CONNECTOR_FILES {
-        let entry = archive.by_name(required).map_err(|_| "Connector package is incomplete.")?;
-        if entry.is_dir() || entry.size() == 0 { return Err("Connector package is incomplete.".into()); }
+        let entry = archive
+            .by_name(required)
+            .map_err(|_| "Connector package is incomplete.")?;
+        if entry.is_dir() || entry.size() == 0 {
+            return Err("Connector package is incomplete.".into());
+        }
     }
     let stamped = match fs::symlink_metadata(&marker) {
-        Ok(metadata) if metadata.is_file() && metadata.len() == expected.len() as u64 =>
-            fs::read(&marker).map_err(|_| "Cannot inspect connector installation.")? == expected.as_bytes(),
-        Ok(metadata) if !metadata.is_file() => return Err("Invalid connector installation marker.".into()),
+        Ok(metadata) if metadata.is_file() && metadata.len() == expected.len() as u64 => {
+            fs::read(&marker).map_err(|_| "Cannot inspect connector installation.")?
+                == expected.as_bytes()
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err("Invalid connector installation marker.".into())
+        }
         Ok(_) => false,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(_) => return Err("Cannot inspect connector installation.".into()),
     };
-    if stamped && connector_required_files_match(&mut archive, root)? { return Ok(root.to_owned()); }
+    if stamped && connector_required_files_match(&mut archive, root)? {
+        return Ok(root.to_owned());
+    }
     fs::create_dir_all(root).map_err(|_| "Cannot prepare connector storage.")?;
     if marker.exists() {
         fs::remove_file(&marker).map_err(|_| "Cannot invalidate connector installation.")?;
     }
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|_| "Invalid connector entry.")?;
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|_| "Invalid connector entry.")?;
         let relative = entry.enclosed_name().ok_or("Unsafe connector entry.")?;
         let dest = root.join(relative);
         connector_path_is_unlinked(&dest)?;
@@ -357,9 +401,19 @@ fn unpack_verified_bundle(archive_path: &Path, expected: &str, root: &Path) -> R
 
 fn start_connector(app: &AppHandle, open_setup: bool) -> Result<(), String> {
     let state = app.state::<DesktopConnectorState>();
-    let _guard = state.0.lock().map_err(|_| "Connector setup is busy.")?;
+    let _guard = state.0.try_lock().map_err(|_| "CONNECTOR_LOCK_IN_USE")?;
     if read_status(app).is_err() {
-        let root = unpack(app)?;
+        if interrupted_gateway_lock(&state_dir(app)?)? {
+            return Err("CONNECTOR_LOCK_INVALID".into());
+        }
+        let root = unpack(app).map_err(|cause| {
+            if cause.contains("package") || cause.contains("manifest") || cause.contains("archive")
+            {
+                "CONNECTOR_PACKAGE_INVALID".to_owned()
+            } else {
+                "CONNECTOR_STORAGE_UNAVAILABLE".to_owned()
+            }
+        })?;
         let mut command = Command::new(root.join("runtime/node.exe"));
         command
             .arg(root.join("supervisor.mjs"))
@@ -397,7 +451,7 @@ fn start_connector(app: &AppHandle, open_setup: bool) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(250));
         }
         if !ready {
-            return Err("Connector is still starting. Try Setup again shortly.".into());
+            return Err("CONNECTOR_START_TIMEOUT".into());
         }
     }
     if !open_setup {
@@ -408,6 +462,198 @@ fn start_connector(app: &AppHandle, open_setup: bool) -> Result<(), String> {
     app.shell()
         .open(format!("{endpoint}/setup#token={token}"), None)
         .map_err(|_| "Could not open the setup page.".to_owned())
+}
+
+fn bounded_json(path: &Path) -> Result<Value, String> {
+    if fs::metadata(path)
+        .map_err(|_| "CONNECTOR_LOCK_IN_USE")?
+        .len()
+        > 16_384
+    {
+        return Err("CONNECTOR_LOCK_IN_USE".into());
+    }
+    serde_json::from_slice(&fs::read(path).map_err(|_| "CONNECTOR_LOCK_IN_USE")?)
+        .map_err(|_| "CONNECTOR_LOCK_IN_USE".into())
+}
+fn owner_pid(value: &Value) -> Option<u32> {
+    value["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid > 0)
+}
+fn interrupted_gateway_lock(state: &Path) -> Result<bool, String> {
+    let file = state.join("gateway.lock");
+    match fs::symlink_metadata(&file) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err("CONNECTOR_LOCK_IN_USE".into()),
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() && meta.len() <= 16_384 => {
+            Ok(bounded_json(&file)
+                .ok()
+                .and_then(|value| owner_pid(&value))
+                .is_none())
+        }
+        Ok(_) => Err("CONNECTOR_LOCK_IN_USE".into()),
+    }
+}
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    use windows::Win32::{
+        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0},
+        System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
+    };
+    match unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
+        Ok(handle) => {
+            let exited = unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0;
+            let _ = unsafe { CloseHandle(handle) };
+            !exited
+        }
+        Err(error) => error.code() != windows::core::HRESULT::from_win32(ERROR_INVALID_PARAMETER.0),
+    }
+}
+#[cfg(not(windows))]
+fn process_alive(_pid: u32) -> bool {
+    true
+}
+
+// Explicit repair preserves evidence and never takes over a live or unknown owner.
+fn repair_interrupted_gateway_lock(
+    state: &Path,
+    alive: impl Fn(u32) -> bool,
+) -> Result<(), String> {
+    if !interrupted_gateway_lock(state)? {
+        return Ok(());
+    }
+    let file = state.join("gateway.lock");
+    let old = fs::read(&file).map_err(|_| "CONNECTOR_LOCK_IN_USE")?;
+    let connection_file = state.join("connection.json");
+    let pid = owner_pid(&bounded_json(&connection_file)?).ok_or("CONNECTOR_LOCK_IN_USE")?;
+    if alive(pid) {
+        return Err("CONNECTOR_LOCK_IN_USE".into());
+    }
+    let supervisor = state.join("supervisor.lock");
+    if supervisor.exists() {
+        let pid = owner_pid(&bounded_json(&supervisor)?).ok_or("CONNECTOR_LOCK_IN_USE")?;
+        if alive(pid) {
+            return Err("CONNECTOR_LOCK_IN_USE".into());
+        }
+    }
+    let modified = fs::metadata(&file)
+        .and_then(|meta| meta.modified())
+        .map_err(|_| "CONNECTOR_LOCK_IN_USE")?;
+    let connected = fs::metadata(&connection_file)
+        .and_then(|meta| meta.modified())
+        .map_err(|_| "CONNECTOR_LOCK_IN_USE")?;
+    if modified > connected
+        || modified.elapsed().unwrap_or_default() < Duration::from_secs(60)
+        || fs::read(&file).map_err(|_| "CONNECTOR_LOCK_IN_USE")? != old
+    {
+        return Err("CONNECTOR_LOCK_IN_USE".into());
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "CONNECTOR_LOCK_IN_USE")?
+        .as_nanos();
+    fs::rename(
+        file,
+        state.join(format!("gateway.interrupted-{stamp}.lock")),
+    )
+    .map_err(|_| "CONNECTOR_LOCK_IN_USE".into())
+}
+
+fn startup_registration(root: &Path, state: &Path) -> Result<(String, String), String> {
+    if root.parent() != state.parent()
+        || [root, state].iter().any(|path| {
+            path.to_string_lossy()
+                .chars()
+                .any(|c| c == '"' || c.is_control())
+        })
+    {
+        return Err("WINDOWS_STARTUP_UNAVAILABLE".into());
+    }
+    let hash = format!(
+        "{:x}",
+        Sha256::digest(state.to_string_lossy().to_lowercase().as_bytes())
+    );
+    let name = format!("VibeSpaceDesktopLink-{}", &hash[..16]);
+    let launch = format!(
+        "wscript.exe //B //Nologo \"{}\" \"runtime\\node.exe\" \"supervisor.mjs\" \"..\\state\"",
+        root.join("startup.vbs").display()
+    );
+    if launch.len() > 260 {
+        return Err("WINDOWS_STARTUP_UNAVAILABLE".into());
+    }
+    Ok((name, launch))
+}
+fn startup_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
+    let manifest = bounded_json(&resources(app)?.join("manifest.json"))?;
+    let hash = manifest["sha256"]
+        .as_str()
+        .filter(|hash| hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_hexdigit()))
+        .ok_or("WINDOWS_STARTUP_UNAVAILABLE")?;
+    let state = state_dir(app)?;
+    let root = state
+        .parent()
+        .ok_or("WINDOWS_STARTUP_UNAVAILABLE")?
+        .join(hash);
+    Ok((root, state))
+}
+#[cfg(windows)]
+fn read_computer_startup(root: &Path, state: &Path) -> Result<bool, String> {
+    use winreg::{
+        enums::{HKEY_CURRENT_USER, KEY_READ},
+        RegKey,
+    };
+    let (name, launch) = startup_registration(root, state)?;
+    let key = match RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Run", KEY_READ)
+    {
+        Ok(key) => key,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err("WINDOWS_STARTUP_UNAVAILABLE".into()),
+    };
+    match key.get_value::<String, _>(&name) {
+        Ok(value) if value == launch => Ok(true),
+        Ok(_) => Err("WINDOWS_STARTUP_UNAVAILABLE".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err("WINDOWS_STARTUP_UNAVAILABLE".into()),
+    }
+}
+#[cfg(not(windows))]
+fn read_computer_startup(_root: &Path, _state: &Path) -> Result<bool, String> {
+    Err("WINDOWS_STARTUP_UNAVAILABLE".into())
+}
+#[cfg(windows)]
+fn change_computer_startup(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+    let (root, state) = startup_paths(app)?;
+    let (name, launch) = startup_registration(&root, &state)?;
+    if enabled {
+        let connector = app.state::<DesktopConnectorState>();
+        let _guard = connector
+            .0
+            .try_lock()
+            .map_err(|_| "CONNECTOR_LOCK_IN_USE")?;
+        unpack(app).map_err(|_| "WINDOWS_STARTUP_UNAVAILABLE")?;
+    }
+    let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run")
+        .map_err(|_| "WINDOWS_STARTUP_UNAVAILABLE")?;
+    if enabled {
+        key.set_value(&name, &launch)
+            .map_err(|_| "WINDOWS_STARTUP_UNAVAILABLE")?;
+    } else if let Err(error) = key.delete_value(&name) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err("WINDOWS_STARTUP_UNAVAILABLE".into());
+        }
+    }
+    if read_computer_startup(&root, &state)? != enabled {
+        return Err("WINDOWS_STARTUP_UNAVAILABLE".into());
+    }
+    Ok(())
+}
+#[cfg(not(windows))]
+fn change_computer_startup(_app: &AppHandle, _enabled: bool) -> Result<(), String> {
+    Err("WINDOWS_STARTUP_UNAVAILABLE".into())
 }
 fn saved_setup(app: &AppHandle) -> Option<Value> {
     let file = state_dir(app).ok()?.join("setup.json");
@@ -462,9 +708,25 @@ pub async fn desktop_connector_status(
     window: tauri::WebviewWindow,
 ) -> Result<Value, String> {
     guard(&window)?;
-    tauri::async_runtime::spawn_blocking(move || match read_status(&app) {
-        Ok(status) => status,
-        Err(_) => disconnected_status(packaged(&app), saved_setup(&app).unwrap_or(Value::Null)),
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut status = match read_status(&app) {
+            Ok(status) => status,
+            Err(_) => disconnected_status(packaged(&app), saved_setup(&app).unwrap_or(Value::Null)),
+        };
+        // Windows startup registration is independent of gateway/tunnel readiness.
+        status["startOnComputer"] = startup_paths(&app)
+            .and_then(|(root, state)| read_computer_startup(&root, &state))
+            .ok()
+            .map(Value::Bool)
+            .unwrap_or(Value::Null);
+        if status["connectionDetected"] != true
+            && state_dir(&app)
+                .ok()
+                .is_some_and(|state| interrupted_gateway_lock(&state).unwrap_or(false))
+        {
+            status["errorCode"] = Value::String("CONNECTOR_LOCK_INVALID".into());
+        }
+        status
     })
     .await
     .map_err(|_| "Connector status unavailable.".into())
@@ -492,6 +754,7 @@ pub async fn desktop_connector_setup(
         if ![
             "setup",
             "prepare",
+            "repair",
             "save",
             "connect",
             "disconnect",
@@ -502,13 +765,21 @@ pub async fn desktop_connector_setup(
         {
             return Err("Unknown connector action.".into());
         }
+        if action.starts_with("startup-") {
+            return change_computer_startup(&app, action == "startup-on");
+        }
+        if action == "repair" {
+            let state = app.state::<DesktopConnectorState>();
+            let _guard = state.0.try_lock().map_err(|_| "CONNECTOR_LOCK_IN_USE")?;
+            repair_interrupted_gateway_lock(&state_dir(&app)?, process_alive)?;
+        }
         let body = if action == "save" {
             setup_draft_body(draft)?
         } else {
             json!({"enabled": action == "startup-on"})
         };
         start_connector(&app, action == "setup")?;
-        if action == "setup" || action == "prepare" {
+        if action == "setup" || action == "prepare" || action == "repair" {
             return Ok(());
         }
         let (endpoint, token) = connection(&app)?;
@@ -545,6 +816,104 @@ pub async fn desktop_connector_setup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn interrupted_fixture() -> PathBuf {
+        let state = std::env::temp_dir().join(format!(
+            "vs-connector-repair-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&state).unwrap();
+        fs::write(state.join("gateway.lock"), b"").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(state.join("gateway.lock"))
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::SystemTime::now() - Duration::from_secs(120)),
+            )
+            .unwrap();
+        fs::write(
+            state.join("connection.json"),
+            br#"{"pid":12345,"token":"synthetic-private-marker"}"#,
+        )
+        .unwrap();
+        state
+    }
+    #[test]
+    fn explicit_repair_preserves_the_interrupted_marker_and_saved_credentials() {
+        let state = interrupted_fixture();
+        let original = fs::read(state.join("connection.json")).unwrap();
+        assert!(interrupted_gateway_lock(&state).unwrap());
+        repair_interrupted_gateway_lock(&state, |_| false).unwrap();
+        assert!(!state.join("gateway.lock").exists());
+        let archived: Vec<_> = fs::read_dir(&state)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("gateway.interrupted-")
+            })
+            .collect();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(fs::read(archived[0].path()).unwrap(), b"");
+        assert_eq!(fs::read(state.join("connection.json")).unwrap(), original);
+        fs::remove_dir_all(state).unwrap();
+    }
+    #[test]
+    fn repair_refuses_live_unknown_and_recent_owners_without_changing_the_marker() {
+        let state = interrupted_fixture();
+        assert!(repair_interrupted_gateway_lock(&state, |_| true).is_err());
+        fs::write(state.join("supervisor.lock"), br#"{"pid":23456}"#).unwrap();
+        assert!(repair_interrupted_gateway_lock(&state, |pid| pid == 23456).is_err());
+        fs::write(state.join("supervisor.lock"), b"").unwrap();
+        assert!(repair_interrupted_gateway_lock(&state, |_| false).is_err());
+        fs::remove_file(state.join("supervisor.lock")).unwrap();
+        fs::write(state.join("gateway.lock"), b"").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(state.join("gateway.lock"))
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::now()))
+            .unwrap();
+        assert!(repair_interrupted_gateway_lock(&state, |_| false).is_err());
+        assert_eq!(fs::read(state.join("gateway.lock")).unwrap(), b"");
+        fs::remove_dir_all(state).unwrap();
+    }
+    #[test]
+    fn valid_gateway_lock_is_never_archived_by_repair() {
+        let state = interrupted_fixture();
+        let original = br#"{"pid":12345}"#;
+        fs::write(state.join("gateway.lock"), original).unwrap();
+        assert!(!interrupted_gateway_lock(&state).unwrap());
+        repair_interrupted_gateway_lock(&state, |_| false).unwrap();
+        assert_eq!(fs::read(state.join("gateway.lock")).unwrap(), original);
+        fs::remove_dir_all(state).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn startup_registration_matches_the_packaged_launcher_without_a_gateway() {
+        let parent =
+            PathBuf::from(r"C:\Users\example\AppData\Local\ai.jarvis.desktop\desktop-connector");
+        let root = parent.join("a".repeat(64));
+        let state = parent.join("state");
+        let (name, launch) = startup_registration(&root, &state).unwrap();
+        assert!(name.starts_with("VibeSpaceDesktopLink-"));
+        assert!(launch.len() <= 260);
+        assert!(launch.ends_with(r#""runtime\node.exe" "supervisor.mjs" "..\state""#));
+        assert!(startup_registration(&root, Path::new(r"C:\other\state")).is_err());
+        assert!(startup_registration(&parent.join("x".repeat(300)), &state).is_err());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn process_liveness_preserves_a_live_owner() {
+        assert!(process_alive(std::process::id()));
+    }
     #[test]
     fn setup_error_codes_are_allowlisted_without_arbitrary_messages() {
         assert_eq!(
@@ -654,33 +1023,57 @@ mod tests {
             );
         }
     }
-    struct BundleFixture { temp: PathBuf, archive: PathBuf, root: PathBuf, expected: String }
+    struct BundleFixture {
+        temp: PathBuf,
+        archive: PathBuf,
+        root: PathBuf,
+        expected: String,
+    }
     impl BundleFixture {
         fn new(omit: Option<&str>) -> Self {
             use std::io::Write;
-            let temp = std::env::temp_dir().join(format!("vibespace-connector-repair-{}-{}",
-                std::process::id(), std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            let temp = std::env::temp_dir().join(format!(
+                "vibespace-connector-repair-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
             fs::create_dir_all(&temp).unwrap();
             let archive = temp.join("runtime.zip");
             let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
             for required in REQUIRED_CONNECTOR_FILES {
-                if omit == Some(*required) { continue; }
-                zip.start_file(*required, zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Stored)).unwrap();
-                zip.write_all(format!("synthetic-bundle:{required}").as_bytes()).unwrap();
+                if omit == Some(*required) {
+                    continue;
+                }
+                zip.start_file(
+                    *required,
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+                zip.write_all(format!("synthetic-bundle:{required}").as_bytes())
+                    .unwrap();
             }
             zip.finish().unwrap();
             let expected = format!("{:x}", Sha256::digest(fs::read(&archive).unwrap()));
             let root = temp.join("desktop-connector").join(&expected);
-            Self { temp, archive, root, expected }
+            Self {
+                temp,
+                archive,
+                root,
+                expected,
+            }
         }
         fn install(&self) -> Result<PathBuf, String> {
             unpack_verified_bundle(&self.archive, &self.expected, &self.root)
         }
     }
     impl Drop for BundleFixture {
-        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.temp); }
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.temp);
+        }
     }
 
     #[test]
@@ -692,9 +1085,14 @@ mod tests {
         fs::write(state.join("setup.json"), b"synthetic-saved-setup").unwrap();
         fs::remove_file(fixture.root.join("runtime/node.exe")).unwrap();
         assert_eq!(fixture.install().unwrap(), fixture.root);
-        assert_eq!(fs::read(fixture.root.join("runtime/node.exe")).unwrap(),
-            b"synthetic-bundle:runtime/node.exe");
-        assert_eq!(fs::read(state.join("setup.json")).unwrap(), b"synthetic-saved-setup");
+        assert_eq!(
+            fs::read(fixture.root.join("runtime/node.exe")).unwrap(),
+            b"synthetic-bundle:runtime/node.exe"
+        );
+        assert_eq!(
+            fs::read(state.join("setup.json")).unwrap(),
+            b"synthetic-saved-setup"
+        );
     }
 
     #[test]
@@ -703,12 +1101,22 @@ mod tests {
         fixture.install().unwrap();
         // Same length defeats a size-only installation check.
         let node = fixture.root.join("runtime/node.exe");
-        fs::write(&node, vec![b'x'; fs::metadata(&node).unwrap().len() as usize]).unwrap();
+        fs::write(
+            &node,
+            vec![b'x'; fs::metadata(&node).unwrap().len() as usize],
+        )
+        .unwrap();
         fixture.install().unwrap();
-        assert_eq!(fs::read(&node).unwrap(), b"synthetic-bundle:runtime/node.exe");
+        assert_eq!(
+            fs::read(&node).unwrap(),
+            b"synthetic-bundle:runtime/node.exe"
+        );
         fs::write(fixture.root.join(".installed"), "f".repeat(64)).unwrap();
         fixture.install().unwrap();
-        assert_eq!(fs::read(fixture.root.join(".installed")).unwrap(), fixture.expected.as_bytes());
+        assert_eq!(
+            fs::read(fixture.root.join(".installed")).unwrap(),
+            fixture.expected.as_bytes()
+        );
     }
 
     #[test]
@@ -720,7 +1128,10 @@ mod tests {
         fs::write(fixture.root.join("user-note.txt"), b"preserve").unwrap();
         fixture.install().unwrap();
         assert_eq!(fs::metadata(node).unwrap().modified().unwrap(), before);
-        assert_eq!(fs::read(fixture.root.join("user-note.txt")).unwrap(), b"preserve");
+        assert_eq!(
+            fs::read(fixture.root.join("user-note.txt")).unwrap(),
+            b"preserve"
+        );
     }
 
     #[test]
@@ -729,10 +1140,15 @@ mod tests {
         fixture.install().unwrap();
         let marker = fs::read(fixture.root.join(".installed")).unwrap();
         fs::write(&fixture.archive, b"not-the-pinned-archive").unwrap();
-        assert!(fixture.install().unwrap_err().contains("verification failed"));
+        assert!(fixture
+            .install()
+            .unwrap_err()
+            .contains("verification failed"));
         assert_eq!(fs::read(fixture.root.join(".installed")).unwrap(), marker);
-        assert_eq!(fs::read(fixture.root.join("runtime/node.exe")).unwrap(),
-            b"synthetic-bundle:runtime/node.exe");
+        assert_eq!(
+            fs::read(fixture.root.join("runtime/node.exe")).unwrap(),
+            b"synthetic-bundle:runtime/node.exe"
+        );
     }
 
     #[test]
@@ -759,8 +1175,10 @@ mod tests {
         fs::write(outside.join("node.exe"), b"outside-owned-file").unwrap();
         std::os::unix::fs::symlink(&outside, fixture.root.join("runtime")).unwrap();
         assert!(fixture.install().unwrap_err().contains("linked storage"));
-        assert_eq!(fs::read(outside.join("node.exe")).unwrap(), b"outside-owned-file");
+        assert_eq!(
+            fs::read(outside.join("node.exe")).unwrap(),
+            b"outside-owned-file"
+        );
         assert!(!fixture.root.join(".installed").exists());
     }
-
 }
