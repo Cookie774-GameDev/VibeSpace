@@ -74,6 +74,20 @@ describe('catalog browser sign-in and credential recovery', () => {
     expect(screen.getByTestId('selected-mcp').getAttribute('data-request')).toBe('0');
   });
 
+  it('does not label the Supabase MCP route as an unavailable authorization flow', () => {
+    open('supabase');
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.getAllByText(/hosted MCP.*OpenCode.*separate.*API/i).length).toBeGreaterThan(0);
+    expect(
+      dialog.getByRole('button', { name: /with browser sign-in/i }).hasAttribute('disabled'),
+    ).toBe(false);
+  });
+
+  it('shows the Figma client-approval prerequisite before opening its MCP route', () => {
+    open('figma');
+    expect(screen.getByText(/Figma.*approved.*MCP client/i)).toBeTruthy();
+  });
+
   it('offers Supabase project credentials separately and does not claim OAuth or accept a failed probe', async () => {
     open('supabase');
     const dialog = within(screen.getByRole('dialog'));

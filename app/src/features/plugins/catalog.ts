@@ -166,16 +166,16 @@ const IMPLEMENTED_BASE_DEFINITIONS: Array<Omit<PluginManifest, 'authorizationCap
     docsUrl: 'https://supabase.com/docs/guides/ai-tools/mcp',
     credentialUrl: 'https://supabase.com/docs/guides/ai-tools/mcp',
     providerAccessUrl: 'https://supabase.com/docs/guides/ai-tools/mcp',
-    help: 'Supabase supports provider-hosted browser sign-in for its remote MCP server. VibeSpace keeps this connector blocked until its OAuth discovery, callback, and token lifecycle are implemented and verified; the legacy project-key fields are not presented as an OAuth substitute.',
+    help: 'Supabase hosted MCP browser sign-in runs through OpenCode. Its connected status is shown in the MCP panel. This separate API connector uses a project publishable or anon key.',
     tags: ['database', 'auth', 'storage', 'api_key'],
     setupSteps: [
       'Review the official Supabase remote MCP setup and OAuth security guidance.',
-      'Wait for VibeSpace to provide a verified MCP OAuth callback and secure token lifecycle.',
-      'Do not enter a service-role key or treat a project API key as provider-hosted authorization.',
+      'Use the OpenCode MCP panel for browser sign-in and confirm its Connected status.',
+      'Do not enter a service-role key or treat a project API key as hosted MCP authorization.',
     ],
     supportedFeatures: ['database', 'auth', 'storage', 'edge functions'],
     limitations:
-      'The existing bounded REST probe can validate a publishable project key, but it does not satisfy provider-hosted authorization and is not exposed as a replacement for Supabase MCP OAuth.',
+      'The bounded REST probe validates only a publishable project key. It does not authorize the separate hosted MCP connection.',
     tools: [
       {
         name: 'connection_info',

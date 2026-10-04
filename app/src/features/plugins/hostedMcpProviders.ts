@@ -11,6 +11,8 @@ export const HOSTED_MCP_PROVIDERS = [
     name: 'Figma',
     url: 'https://mcp.figma.com/mcp',
     docs: 'https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/',
+    setup:
+      'Figma currently permits approved MCP clients only; VibeSpace must be approved before browser sign-in can complete.',
   },
   {
     id: 'notion',
@@ -40,14 +42,14 @@ export const HOSTED_MCP_PROVIDERS = [
     id: 'canva',
     name: 'Canva',
     url: 'https://mcp.canva.com/mcp',
-    docs: 'https://www.canva.dev/docs/mcp/',
-    setup: 'Canva requires approval of your client redirect URI before sign-in can complete.',
+    docs: 'https://www.canva.dev/docs/apps/mcp/access/',
+    setup: 'Canva requires an approved OAuth client and redirect URI before sign-in can complete.',
   },
   {
     id: 'neon',
     name: 'Neon',
     url: 'https://mcp.neon.tech/mcp',
-    docs: 'https://neon.com/docs/ai/neon-mcp-server',
+    docs: 'https://neon.com/guides/neon-mcp-server-github-copilot-vs-code',
   },
   {
     id: 'asana',

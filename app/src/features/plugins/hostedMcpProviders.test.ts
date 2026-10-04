@@ -44,4 +44,11 @@ describe('hosted provider routes and credential recovery', () => {
     expect(hostedMcpProvider('unknown-provider')).toBeUndefined();
     expect(hostedMcpProvider('confluence')).toBe(hostedMcpProvider('jira'));
   });
+
+  it('identifies providers that require an approved or registered MCP client', () => {
+    for (const id of ['figma', 'canva', 'asana']) {
+      expect(hostedMcpProvider(id)).toHaveProperty('setup', expect.any(String));
+    }
+    expect(hostedMcpProvider('supabase')).not.toHaveProperty('setup');
+  });
 });

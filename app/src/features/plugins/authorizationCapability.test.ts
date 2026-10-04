@@ -45,7 +45,7 @@ describe('plugin authorization capability', () => {
     ).toThrow(/not available/i);
   });
 
-  it('fails Supabase closed until its official hosted MCP OAuth lifecycle is integrated', () => {
+  it('describes Supabase hosted MCP as a separate OpenCode connection', () => {
     const supabase = getClassifiedPluginManifest('supabase');
     expect(supabase?.authorizationCapability).toMatchObject({
       kind: 'external_blocker',
@@ -53,10 +53,10 @@ describe('plugin authorization capability', () => {
     });
     expect(supabase?.authorizationCapability).toHaveProperty(
       'reason',
-      expect.stringMatching(/provider-hosted browser sign-in.*MCP.*not implemented/i),
+      expect.stringMatching(/hosted MCP.*OpenCode.*separate.*API/i),
     );
     expect(JSON.stringify(supabase?.authorizationCapability)).toMatch(
-      /OAuth discovery.*callback.*token lifecycle/i,
+      /project API key.*does not authorize the hosted MCP/i,
     );
   });
 

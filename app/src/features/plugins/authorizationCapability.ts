@@ -34,7 +34,7 @@ const MANUAL_OAUTH_PREREQUISITES: Readonly<Record<string, readonly string[]>> = 
   ]),
 });
 
-const HOSTED_OAUTH_INTEGRATION_BLOCKERS: Readonly<
+const SEPARATE_HOSTED_MCP_API_CONNECTORS: Readonly<
   Record<
     string,
     Readonly<{
@@ -45,11 +45,10 @@ const HOSTED_OAUTH_INTEGRATION_BLOCKERS: Readonly<
 > = Object.freeze({
   supabase: Object.freeze({
     reason:
-      'Supabase offers provider-hosted browser sign-in for its remote MCP server, but VibeSpace has not implemented the MCP OAuth discovery, callback, or token lifecycle required to connect it safely.',
+      'Supabase hosted MCP browser sign-in is available through OpenCode. That connection is separate from this catalog API connector and does not authorize its project API features.',
     externalPrerequisites: Object.freeze([
-      'Integrate the official hosted Supabase MCP endpoint through OAuth discovery; never substitute a project API-key page for sign-in.',
-      'Implement and verify the exact redirect callback, PKCE/state validation, secure token storage and refresh, cancellation, reconnect, revocation, and error recovery.',
-      'Complete native provider-owned login and consent verification without exposing project credentials.',
+      'Use the hosted MCP browser sign-in above for OpenCode tools; confirm Connected in its server status.',
+      'A project API key does not authorize the hosted MCP. Use it only for this separate bounded REST connector.',
     ]),
   }),
 });
@@ -110,14 +109,14 @@ export function classifyPluginAuthorization(
     });
   }
 
-  const hostedOAuthBlocker = HOSTED_OAUTH_INTEGRATION_BLOCKERS[input.id];
-  if (hostedOAuthBlocker) {
+  const separateMcpApi = SEPARATE_HOSTED_MCP_API_CONNECTORS[input.id];
+  if (separateMcpApi) {
     const providerAccessUrl = parseOfficialHttpsPage(input.providerAccessUrl ?? input.docsUrl);
     return Object.freeze({
       kind: 'external_blocker',
-      reason: hostedOAuthBlocker.reason,
+      reason: separateMcpApi.reason,
       ...(providerAccessUrl ? { providerAccessUrl } : {}),
-      externalPrerequisites: hostedOAuthBlocker.externalPrerequisites,
+      externalPrerequisites: separateMcpApi.externalPrerequisites,
     });
   }
 

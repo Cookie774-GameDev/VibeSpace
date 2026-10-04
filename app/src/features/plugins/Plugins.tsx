@@ -86,9 +86,10 @@ function statusBadgeLabel(
   connectionState: PluginConnection['state'],
 ): string {
   if (connectionState === 'connected') return STATUS_LABELS.connected;
+  if (connectionState === 'error') return STATUS_LABELS.error;
+  if (plugin.id === 'supabase') return 'MCP setup available';
   if (plugin.authorizationCapability.kind === 'external_blocker') return 'External blocker';
   if (plugin.status === 'needs_credentials' || plugin.status === 'blocked') {
-    if (connectionState === 'error') return STATUS_LABELS.error;
     return 'Manual Setup Required';
   }
   if (plugin.status === 'configurable' && connectionState === 'needs_setup') {
@@ -293,8 +294,9 @@ export function Plugins() {
           <h2 className="text-page-title text-foreground">Plugins</h2>
           <p className="mt-1 max-w-2xl text-secondary text-muted-foreground">
             Connect external services and expose controlled capabilities to Jarvis agents working in
-            terminals. Credentials stay in the operating-system keychain on desktop (browser preview
-            keeps them in memory for the session only).
+            terminals. Catalog API credentials stay in the operating-system keychain on desktop
+            (browser preview keeps them in memory for the session only). OpenCode manages hosted MCP
+            grants separately.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -498,10 +500,12 @@ export function Plugins() {
                         <>
                           <Settings2 className="h-3.5 w-3.5" /> Manage
                         </>
-                      ) : isExternallyBlocked ? (
+                      ) : isExternallyBlocked && plugin.id !== 'supabase' ? (
                         <>
                           <ExternalLink className="h-3.5 w-3.5" /> View requirements
                         </>
+                      ) : plugin.id === 'supabase' ? (
+                        'Connect'
                       ) : !isInstalled ? (
                         <>
                           <Download className="h-3.5 w-3.5" /> Install
@@ -942,8 +946,12 @@ function PluginSetupDialog({
   }, [accountId, plugin?.id]);
 
   React.useEffect(() => {
-    if (connection?.state === 'connected' || connection?.state === 'error' ||
-        connection?.state === 'expired' || connection?.state === 'reauthorize') {
+    if (
+      connection?.state === 'connected' ||
+      connection?.state === 'error' ||
+      connection?.state === 'expired' ||
+      connection?.state === 'reauthorize'
+    ) {
       setAuthorizationUserCode('');
     }
   }, [connection?.state, connection?.updatedAt]);
@@ -951,6 +959,7 @@ function PluginSetupDialog({
   if (!plugin) return null;
 
   const activePlugin = plugin;
+  const hostedProvider = hostedMcpProvider(plugin.id);
   const compatibility = PLUGIN_COMPATIBILITY_BY_ID[activePlugin.id];
   const authorizationCapability = activePlugin.authorizationCapability;
   const usesProviderAuthorization = isProviderHostedAuthorization(authorizationCapability);
@@ -997,7 +1006,7 @@ function PluginSetupDialog({
         setSetupUrl(result.setupUrl ?? '');
         return;
       }
-      setAuthorizationUserCode(result.state === 'connected' ? '' : result.userCode ?? '');
+      setAuthorizationUserCode(result.state === 'connected' ? '' : (result.userCode ?? ''));
       if (result.authorizationUrl) {
         await openExternal(result.authorizationUrl);
       }
@@ -1131,11 +1140,15 @@ function PluginSetupDialog({
             </p>
             <p className="mt-1 text-metadata text-muted-foreground">
               Connection method:{' '}
-              {useProjectKey ? 'Project API key' : authorizationCapability.kind.replace(/_/g, ' ')}
+              {useProjectKey
+                ? 'Project API key'
+                : activePlugin.id === 'supabase'
+                  ? 'Hosted MCP through OpenCode; project API key separate'
+                  : authorizationCapability.kind.replace(/_/g, ' ')}
             </p>
           </div>
 
-          {hostedMcpProvider(plugin.id) && (
+          {hostedProvider && (
             <div className="space-y-2 rounded-xl border border-border bg-panel p-3">
               <p className="text-secondary font-medium">Browser sign-in with {plugin.name}</p>
               <p className="text-metadata text-muted-foreground">
@@ -1143,7 +1156,12 @@ function PluginSetupDialog({
                 separately from this catalog’s API connection. Existing key or token fields below
                 remain available for the API features they support.
               </p>
-              <Button type="button" onClick={() => onOpenHosted(hostedMcpProvider(plugin.id)!)}>
+              {'setup' in hostedProvider && (
+                <p role="note" className="text-metadata text-warning">
+                  {hostedProvider.setup}
+                </p>
+              )}
+              <Button type="button" onClick={() => onOpenHosted(hostedProvider)}>
                 Connect {plugin.name} with browser sign-in
               </Button>
             </div>
@@ -1194,12 +1212,20 @@ function PluginSetupDialog({
                 </Button>
               </div>
               {authorizationUserCode && (
-                <div role="status" className="relative mt-3 rounded-md border border-border bg-panel p-3 text-secondary">
+                <div
+                  role="status"
+                  className="relative mt-3 rounded-md border border-border bg-panel p-3 text-secondary"
+                >
                   <p>Enter this code on the {activePlugin.provider} authorization page:</p>
                   <p className="mt-1">
-                    Provider code: <strong className="select-all font-mono text-foreground">{authorizationUserCode}</strong>
+                    Provider code:{' '}
+                    <strong className="select-all font-mono text-foreground">
+                      {authorizationUserCode}
+                    </strong>
                   </p>
-                  <p className="mt-1 text-metadata text-muted-foreground">Keep this dialog open until authorization completes.</p>
+                  <p className="mt-1 text-metadata text-muted-foreground">
+                    Keep this dialog open until authorization completes.
+                  </p>
                 </div>
               )}
             </div>
@@ -1230,7 +1256,7 @@ function PluginSetupDialog({
             </div>
           )}
 
-          {isExternallyBlocked && (
+          {isExternallyBlocked && activePlugin.id !== 'supabase' && (
             <div
               role="alert"
               className="rounded-xl border border-destructive/30 bg-destructive/5 p-3"
