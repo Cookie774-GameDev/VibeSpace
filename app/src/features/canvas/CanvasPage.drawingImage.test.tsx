@@ -50,6 +50,9 @@ describe('CanvasPage drawing and image entry points', () => {
     fireEvent.pointerMove(workspace, { pointerId: 7, clientX: 80, clientY: 72 });
     fireEvent.pointerUp(workspace, { pointerId: 7, clientX: 80, clientY: 72 });
     expect(await screen.findByRole('article', { name: 'Canvas stroke' })).toBeTruthy();
+    expect(screen.getByRole('article', { name: 'Canvas stroke' }).className).toContain(
+      'canvas-ink-object',
+    );
     expect(screen.getByRole('button', { name: 'Marker tool' })).toBeTruthy();
     await waitFor(() => expect(persistence.save).toHaveBeenCalled());
     const latest = vi.mocked(persistence.save).mock.lastCall?.[1];

@@ -1444,6 +1444,37 @@ describe('CanvasPage', () => {
     expect(notes[1].dataset.selected).toBe('false');
   });
 
+  it('starts a marquee from the nested blank canvas surface', () => {
+    render(<CanvasPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edgeless layout' }));
+    const workspace = screen.getByRole('region', { name: 'Canvas workspace' });
+    const world = workspace.querySelector('[data-canvas-world-surface]');
+    expect(world).toBeTruthy();
+    fireEvent.pointerDown(world!, { pointerId: 71, button: 0, clientX: 590, clientY: 390 });
+    fireEvent.pointerMove(workspace, { pointerId: 71, clientX: 890, clientY: 600 });
+    expect(workspace.querySelector('[data-selection-marquee]')).toBeTruthy();
+    fireEvent.pointerUp(workspace, { pointerId: 71, clientX: 890, clientY: 600 });
+    expect(screen.getByLabelText('Canvas note').dataset.selected).toBe('true');
+  });
+
+  it('places a note at a blank canvas click and focuses it', () => {
+    render(<CanvasPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edgeless layout' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Note tool' }));
+    const workspace = screen.getByRole('region', { name: 'Canvas workspace' });
+    const world = workspace.querySelector('[data-canvas-world-surface]');
+    expect(world).toBeTruthy();
+    fireEvent.pointerDown(world!, { pointerId: 72, button: 0, clientX: 600, clientY: 400 });
+    fireEvent.pointerUp(workspace, { pointerId: 72, clientX: 600, clientY: 400 });
+    fireEvent.click(workspace);
+    expect(screen.getByLabelText('Canvas note').dataset.selected).toBe('true');
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Edit note block' }));
+    expect(screen.getByRole('button', { name: 'Select tool' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+  });
+
   it('opens the accessible outline and activates its canonical canvas object', () => {
     render(<CanvasPage />);
     fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
@@ -1844,6 +1875,42 @@ describe('CanvasPage', () => {
     expect(document.activeElement).toBe(editor);
     fireEvent.change(editor, { target: { value: 'My first idea' } });
     expect(editor.value).toBe('My first idea');
+  });
+
+  it('starts sketching from the empty canvas without covering the drawing surface', () => {
+    render(<CanvasPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Start sketching' }));
+    const workspace = screen.getByRole('region', { name: 'Canvas workspace' });
+    expect(workspace.dataset.layout).toBe('edgeless');
+    expect(workspace.querySelector('[data-canvas-world-surface]')).toBeTruthy();
+    expect(screen.getByText('Drag anywhere to sketch')).toBeTruthy();
+  });
+
+  it('switches from drawing to editing when a text block is inserted', () => {
+    render(<CanvasPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edgeless layout' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pencil tool' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add text' }));
+    const editor = screen.getByRole('textbox', { name: 'Edit text block' });
+    expect(document.activeElement).toBe(editor);
+    expect(screen.getByLabelText('Canvas text').dataset.selected).toBe('true');
+    expect(screen.getByRole('button', { name: 'Select tool' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+  });
+
+  it('keeps repeated text insertions in view and focuses the newest editor', () => {
+    render(<CanvasPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edgeless layout' }));
+    const addText = screen.getByRole('button', { name: 'Add text' });
+    for (let index = 0; index < 5; index += 1) fireEvent.click(addText);
+    const newest = screen.getByDisplayValue('New text 5');
+    expect(document.activeElement).toBe(newest);
+    const selected = screen
+      .getAllByLabelText('Canvas text')
+      .find((article) => article.dataset.selected === 'true');
+    expect(selected).toBeTruthy();
+    expect(Math.abs(Number.parseFloat(selected!.style.left))).toBeLessThan(500);
   });
 
   it('creates and edits shared text, heading, note, and code content across layouts', () => {

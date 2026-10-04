@@ -108,6 +108,15 @@
   flex-shrink: 0;
 }
 
+/* Pencil content remains dark in exports, but needs light ink on the dark plain workspace. */
+.mc7d-canvas
+  [aria-label='Canvas workspace'][data-layout='edgeless'][data-background-kind='plain']
+  .canvas-ink-object
+  [data-canvas-ink-tool='pencil']
+  polyline[stroke='#262626'] {
+  stroke: hsl(36 45% 93%);
+}
+
 @media (max-width: 1400px) {
   .mc7d-canvas [data-monochrome-surface='canvas-minimap'] {
     bottom: 5.25rem;

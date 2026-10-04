@@ -6,6 +6,7 @@ import {
   Download,
   FileDown,
   FileUp,
+  GripVertical,
   Hand,
   Heading,
   LassoSelect,
@@ -615,7 +616,9 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   const documentRef = React.useRef<CanvasDocument>(INITIAL_DOCUMENT);
   const fullscreenSupported = supportsPresentationFullscreen();
   const [presentation, setPresentation] = React.useState<PresentationState>(() =>
-    presentationFromDocument(INITIAL_DOCUMENT, { fullscreen: fullscreenSupported }),
+    presentationFromDocument(INITIAL_DOCUMENT, {
+      fullscreen: fullscreenSupported,
+    }),
   );
   const [presentationFullscreen, setPresentationFullscreen] = React.useState(false);
   const [presentationFullscreenMessage, setPresentationFullscreenMessage] = React.useState('');
@@ -718,7 +721,11 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   const cursorScreenPoint = React.useRef<{ x: number; y: number } | null>(null);
   const clock = React.useRef(INITIAL_DOCUMENT.updatedAt);
   const spaceHeld = React.useRef(false);
-  const panPointer = React.useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const panPointer = React.useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
   const activePointers = React.useRef(new Map<number, { x: number; y: number }>());
   const pinch = React.useRef<{
     distance: number;
@@ -740,12 +747,17 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   } | null>(null);
   const directGeometryGesture = React.useRef<CanvasDirectGeometryGesture | null>(null);
   const blockElements = React.useRef(new Map<string, HTMLElement>());
+  const suppressPlacementClick = React.useRef(false);
   const workspaceRef = React.useRef<HTMLElement>(null);
-  const pendingNewNoteFocusBlockId = React.useRef<string | null>(null);
-  const [CAMERA_VIEWPORT, setViewport] = React.useState<{ width: number; height: number }>(
-    DEFAULT_CAMERA_VIEWPORT,
-  );
-  const CAMERA_CENTER = { x: CAMERA_VIEWPORT.width / 2, y: CAMERA_VIEWPORT.height / 2 };
+  const pendingNewEditorFocusBlockId = React.useRef<string | null>(null);
+  const [CAMERA_VIEWPORT, setViewport] = React.useState<{
+    width: number;
+    height: number;
+  }>(DEFAULT_CAMERA_VIEWPORT);
+  const CAMERA_CENTER = {
+    x: CAMERA_VIEWPORT.width / 2,
+    y: CAMERA_VIEWPORT.height / 2,
+  };
   React.useLayoutEffect(() => {
     const element = workspaceRef.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
@@ -825,14 +837,12 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   ]);
 
   React.useEffect(() => {
-    const newNoteBlockId = pendingNewNoteFocusBlockId.current;
-    if (newNoteBlockId) {
-      const article = blockElements.current.get(newNoteBlockId);
-      const editor = article?.querySelector<HTMLTextAreaElement>(
-        'textarea[aria-label="Edit note block"]',
-      );
+    const newBlockId = pendingNewEditorFocusBlockId.current;
+    if (newBlockId) {
+      const article = blockElements.current.get(newBlockId);
+      const editor = article?.querySelector<HTMLTextAreaElement>('textarea');
       if (!editor) return;
-      pendingNewNoteFocusBlockId.current = null;
+      pendingNewEditorFocusBlockId.current = null;
       editor.focus();
       editor.select();
       return;
@@ -1575,6 +1585,15 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
       return;
     const point = pointerPoint(event);
     cursorScreenPoint.current = point;
+    const blankSurface =
+      event.target === event.currentTarget ||
+      (event.target instanceof Element && event.target.hasAttribute('data-canvas-world-surface'));
+    if (tool === 'note' && blankSurface && event.button === 0 && event.pointerType !== 'touch') {
+      event.preventDefault();
+      suppressPlacementClick.current = true;
+      addBlock('note', screenToWorld(cameraRef.current, CAMERA_VIEWPORT, point));
+      return;
+    }
     activePointers.current.set(event.pointerId, point);
     event.currentTarget.setPointerCapture?.(event.pointerId);
 
@@ -1608,7 +1627,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
 
     if (
       activePointers.current.size === 1 &&
-      event.target === event.currentTarget &&
+      blankSurface &&
       tool === 'lasso' &&
       event.button === 0 &&
       event.pointerType !== 'touch'
@@ -1629,7 +1648,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
 
     if (
       activePointers.current.size === 1 &&
-      event.target === event.currentTarget &&
+      blankSurface &&
       tool === 'select' &&
       event.button === 0 &&
       event.pointerType !== 'touch'
@@ -1731,7 +1750,10 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
     event.preventDefault();
     setCamera(
       (current) =>
-        panCameraByScreenDelta(current, { x: point.x - previous.x, y: point.y - previous.y }),
+        panCameraByScreenDelta(current, {
+          x: point.x - previous.x,
+          y: point.y - previous.y,
+        }),
       false,
     );
     panPointer.current = { pointerId: event.pointerId, ...point };
@@ -1768,7 +1790,10 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
         const pad = ink.tool === 'marker' ? 14 : 8;
         const width = Math.max(24, maxX - minX + pad * 2);
         const height = Math.max(24, maxY - minY + pad * 2);
-        const points = world.map((point) => ({ x: point.x - minX + pad, y: point.y - minY + pad }));
+        const points = world.map((point) => ({
+          x: point.x - minX + pad,
+          y: point.y - minY + pad,
+        }));
         let blockId: string;
         do {
           sequence.current += 1;
@@ -1866,7 +1891,10 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
     if (document.layoutMode !== 'edgeless') return;
     event.preventDefault();
     const bounds = event.currentTarget.getBoundingClientRect();
-    const point = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+    const point = {
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
+    };
     const factor = Math.exp(-event.deltaY * 0.001);
     setCamera((current) =>
       zoomCameraAtScreenPoint(current, CAMERA_VIEWPORT, point, current.zoom * factor),
@@ -2196,7 +2224,10 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
     commitDirectGeometry('object-rotate', 'Rotate canvas object', placement.blockId, next);
   };
 
-  const addBlock = (kind: Extract<CanvasBlockKind, 'heading' | 'text' | 'note' | 'code'>) => {
+  const addBlock = (
+    kind: Extract<CanvasBlockKind, 'heading' | 'text' | 'note' | 'code'>,
+    worldPosition?: { x: number; y: number },
+  ) => {
     let blockNumber: number;
     let blockId: string;
     do {
@@ -2204,15 +2235,19 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
       blockNumber = sequence.current;
       blockId = `${documentRef.current.id}-${kind}-${blockNumber}`;
     } while (blockById(documentRef.current, blockId));
-    if (kind === 'note') pendingNewNoteFocusBlockId.current = blockId;
+    pendingNewEditorFocusBlockId.current = blockId;
     const content =
       kind === 'heading'
         ? ({ kind, level: 2, text: `New heading ${blockNumber}` } as const)
         : kind === 'code'
-          ? ({ kind, language: 'typescript', text: `// New code block ${blockNumber}` } as const)
+          ? ({
+              kind,
+              language: 'typescript',
+              text: `// New code block ${blockNumber}`,
+            } as const)
           : ({ kind, text: `New ${kind} ${blockNumber}` } as const);
-    commit('object-create', `Add ${kind} ${blockNumber}`, (current, now) =>
-      withBlockAdded(
+    commit('object-create', `Add ${kind} ${blockNumber}`, (current, now) => {
+      const withBlock = withBlockAdded(
         current,
         createCanvasBlock({
           id: blockId,
@@ -2220,8 +2255,44 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
           now,
         }),
         now,
-      ),
-    );
+      );
+      if (current.layoutMode !== 'edgeless') return withBlock;
+      const placement = resolveEdgelessLayout(withBlock).get(parseCanvasBlockId(blockId));
+      if (!placement) return withBlock;
+      if (!worldPosition && current.blocks.length < 2) return withBlock;
+      if (!worldPosition) {
+        const topLeft = screenToWorld(cameraRef.current, CAMERA_VIEWPORT, { x: 0, y: 0 });
+        const bottomRight = screenToWorld(cameraRef.current, CAMERA_VIEWPORT, {
+          x: CAMERA_VIEWPORT.width,
+          y: CAMERA_VIEWPORT.height,
+        });
+        if (
+          placement.x >= topLeft.x &&
+          placement.y >= topLeft.y &&
+          placement.x + placement.width <= bottomRight.x &&
+          placement.y + placement.height <= bottomRight.y
+        ) {
+          return withBlock;
+        }
+      }
+      const position =
+        worldPosition ??
+        screenToWorld(cameraRef.current, CAMERA_VIEWPORT, {
+          x: CAMERA_VIEWPORT.width / 2,
+          y: CAMERA_VIEWPORT.height / 2,
+        });
+      return withPlacement(
+        withBlock,
+        {
+          ...placement,
+          x: position.x - (worldPosition ? 0 : placement.width / 2),
+          y: position.y - (worldPosition ? 0 : placement.height / 2),
+        },
+        now,
+      );
+    });
+    setTool('select');
+    setSelected(createCanvasSelection([blockId]));
   };
 
   const addNote = () => addBlock('note');
@@ -3317,6 +3388,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
         <svg
           role="img"
           aria-label={`${content.tool} stroke`}
+          data-canvas-ink-tool={content.tool}
           className="h-full w-full overflow-visible"
           viewBox={`0 0 ${Math.max(1, right)} ${Math.max(1, bottom)}`}
         >
@@ -4378,7 +4450,14 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
             <ToolButton active={tool === 'hand'} label="Hand tool" onClick={() => setTool('hand')}>
               <Hand aria-hidden size={17} />
             </ToolButton>
-            <ToolButton active={tool === 'note'} label="Note tool" onClick={() => setTool('note')}>
+            <ToolButton
+              active={tool === 'note'}
+              label="Note tool"
+              onClick={() => {
+                setLayout('edgeless');
+                setTool('note');
+              }}
+            >
               <StickyNote aria-hidden size={17} />
             </ToolButton>
           </div>
@@ -4488,6 +4567,10 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
           onPointerCancel={onPointerEnd}
           onWheel={onWheel}
           onClick={(event) => {
+            if (suppressPlacementClick.current) {
+              suppressPlacementClick.current = false;
+              return;
+            }
             if (event.target === event.currentTarget) {
               setSelected(clearCanvasSelection);
             }
@@ -4501,25 +4584,52 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
           }}
         >
           <WallpaperHost config={document.background.wallpaper} />
-          {blocks.length === 0 ? (
+          {blocks.length === 0 && ['note', 'pencil', 'marker'].includes(tool) ? (
+            <p
+              data-canvas-tool-hint
+              className="pointer-events-none absolute left-1/2 top-6 z-10 -translate-x-1/2 rounded-full border border-border bg-background/85 px-4 py-2 text-xs text-muted-foreground shadow-sm"
+            >
+              {tool === 'note' ? 'Click anywhere to place a note' : 'Drag anywhere to sketch'}
+            </p>
+          ) : null}
+          {blocks.length === 0 && !['note', 'pencil', 'marker'].includes(tool) ? (
             <div className="absolute inset-0 flex items-center justify-center p-8">
               <div
                 data-monochrome-surface="canvas-empty-state"
                 data-sakura-surface="canvas-empty-state"
                 className="max-w-sm rounded-xl border border-dashed border-border bg-background/90 p-8 text-center shadow-sm [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-solid [html[data-theme=monochrome]_&]:bg-panel [html[data-theme=monochrome]_&]:shadow-none"
               >
-                <StickyNote aria-hidden className="mx-auto mb-3 text-muted-foreground" />
-                <h2 className="font-medium">Start with an idea</h2>
+                <Pencil aria-hidden className="mx-auto mb-3 text-muted-foreground" />
+                <h2 className="font-medium">Make this canvas yours</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Add a note, then arrange the same content in page or edgeless mode.
+                  Sketch freely, write a thought, or place a note anywhere.
                 </p>
-                <button
-                  type="button"
-                  onClick={addNote}
-                  className="mt-4 rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background"
-                >
-                  Add first note
-                </button>
+                <div className="mt-5 flex flex-wrap justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLayout('edgeless');
+                      setTool('pencil');
+                    }}
+                    className="rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background"
+                  >
+                    Start sketching
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addBlock('text')}
+                    className="rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted"
+                  >
+                    Write a thought
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addNote}
+                    className="rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted"
+                  >
+                    Add first note
+                  </button>
+                </div>
               </div>
             </div>
           ) : document.layoutMode === 'page' ? (
@@ -4562,6 +4672,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
             </div>
           ) : (
             <div
+              data-canvas-world-surface
               className="relative min-h-full min-w-full"
               style={{
                 width: CAMERA_VIEWPORT.width,
@@ -4609,7 +4720,9 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
                       );
                     }}
                     className={[
-                      'absolute overflow-auto rounded-lg border border-border bg-background p-4 shadow-sm outline-none',
+                      block.content.kind === 'stroke'
+                        ? 'canvas-ink-object absolute overflow-visible bg-transparent p-0 outline-none'
+                        : 'absolute overflow-auto rounded-lg border border-border bg-background p-4 shadow-sm outline-none',
                       selectionHas(selected, block.id)
                         ? 'ring-2 ring-ring ring-offset-2 ring-offset-background'
                         : 'focus-visible:ring-2 focus-visible:ring-ring',
@@ -4626,6 +4739,18 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
                     <fieldset disabled={placement?.locked} className="contents">
                       {renderBlockEditor(block)}
                     </fieldset>
+                    {['heading', 'text', 'note', 'code'].includes(block.content.kind) &&
+                    !placement?.locked ? (
+                      <button
+                        type="button"
+                        aria-label={`Move ${block.content.kind} block`}
+                        title="Drag to move"
+                        onClick={(event) => event.stopPropagation()}
+                        className="absolute right-1 top-1 z-10 flex h-6 w-6 cursor-grab items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
+                      >
+                        <GripVertical aria-hidden size={14} />
+                      </button>
+                    ) : null}
                   </article>
                 );
               })}
@@ -5038,7 +5163,9 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
                           rows={3}
                           disabled={selectedPlacement?.locked}
                           onChange={(event) =>
-                            updateShape(selectedBlock.id, { text: event.currentTarget.value })
+                            updateShape(selectedBlock.id, {
+                              text: event.currentTarget.value,
+                            })
                           }
                           className="w-full resize-y rounded-md border border-border bg-background p-2 text-sm text-foreground outline-none focus:border-ring"
                         />
@@ -5052,7 +5179,10 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
                           disabled={selectedPlacement?.locked}
                           onChange={(event) =>
                             updateShape(selectedBlock.id, {
-                              fill: { kind: 'solid', color: event.currentTarget.value },
+                              fill: {
+                                kind: 'solid',
+                                color: event.currentTarget.value,
+                              },
                             })
                           }
                           className="h-9 w-full cursor-pointer rounded-md border border-border bg-background p-1"
