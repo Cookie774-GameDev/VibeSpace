@@ -61,6 +61,8 @@ The CLI prints one JSON result to stdout and returns a nonzero exit on failure.
 
 Use an inference request in the same private job directory, referencing the
 verified artifact and base model. Choose a fresh response file in that directory.
+Its filename must follow `inference-<id>.response.json`; existing files and other
+filename patterns are rejected before the worker starts.
 
 ```powershell
 & $foundryExe infer `
