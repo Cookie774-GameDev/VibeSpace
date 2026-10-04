@@ -108,7 +108,6 @@ export function MusicStudio({
 }) {
   const clips = useMusicProjectStore((state) => state.clips);
   const loop = useMusicProjectStore((state) => state.loop);
-  const enabledForAmbient = useMusicProjectStore((state) => state.enabledForAmbient);
   const savedAt = useMusicProjectStore((state) => state.savedAt);
   const [query, setQuery] = React.useState('');
   const [previewingId, setPreviewingId] = React.useState<string | null>(null);
@@ -428,19 +427,6 @@ export function MusicStudio({
               </Button>
               <Button
                 type="button"
-                size="sm"
-                onClick={previewingId === 'mix' ? pauseMix : playMix}
-                disabled={clips.length === 0}
-              >
-                {previewingId === 'mix' ? (
-                  <Pause className="h-4 w-4" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}{' '}
-                {previewingId === 'mix' ? 'Pause mix' : mixPaused ? 'Resume mix' : 'Play mix'}
-              </Button>
-              <Button
-                type="button"
                 size="icon"
                 variant="secondary"
                 aria-label="Next mix track"
@@ -468,17 +454,6 @@ export function MusicStudio({
                   id="music-loop"
                   checked={loop}
                   onCheckedChange={(value) => useMusicProjectStore.getState().setLoop(value)}
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <Label htmlFor="music-ambient">Use in ambience</Label>
-                <Switch
-                  id="music-ambient"
-                  checked={enabledForAmbient}
-                  onCheckedChange={(value) => {
-                    useMusicProjectStore.getState().setEnabledForAmbient(value);
-                    useMusicProjectStore.getState().save();
-                  }}
                 />
               </div>
             </div>
@@ -522,10 +497,30 @@ export function MusicStudio({
                       />
                     ) : null}
                     <div className="min-w-0 flex-1">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-accent-copper">
-                        Program monitor · {String(transportIndex + 1).padStart(2, '0')} /{' '}
-                        {clips.length}
-                      </p>
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-accent-copper">
+                          Program monitor · {String(transportIndex + 1).padStart(2, '0')} /{' '}
+                          {clips.length}
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="shrink-0 border border-white/20 bg-white/10 text-white hover:bg-white/20"
+                          onClick={previewingId === 'mix' ? pauseMix : playMix}
+                        >
+                          {previewingId === 'mix' ? (
+                            <Pause className="h-4 w-4" />
+                          ) : (
+                            <Play className="h-4 w-4" />
+                          )}
+                          {previewingId === 'mix'
+                            ? 'Pause preview'
+                            : mixPaused
+                              ? 'Resume preview'
+                              : 'Preview mix'}
+                        </Button>
+                      </div>
                       <p className="mt-2 truncate text-lg font-semibold sm:text-xl">
                         {transportClip?.name}
                       </p>

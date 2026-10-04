@@ -69,7 +69,7 @@ describe('MusicStudio', () => {
       useMusicProjectStore.setState({ clips: createDefaultMusicMix().slice(0, 2) });
       render(<MusicStudio open onOpenChange={vi.fn()} />);
       fireEvent.click(screen.getByRole('button', { name: /Edit Ain't No Time Like Now/ }));
-      fireEvent.click(screen.getByRole('button', { name: 'Play mix' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Preview mix' }));
       expect(audio.playProject).toHaveBeenLastCalledWith(
         useMusicProjectStore.getState().clips,
         true,
@@ -82,27 +82,27 @@ describe('MusicStudio', () => {
     }
   });
 
-  it('shows a playback failure and returns the transport to Play mix', () => {
+  it('shows a playback failure and returns the monitor to Preview mix', () => {
     useMusicProjectStore.setState({ clips: createDefaultMusicMix().slice(0, 1) });
     render(<MusicStudio open onOpenChange={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Play mix' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview mix' }));
     act(() => {
       audio.statusListener?.({ state: 'error', url: 'track.mp3', message: 'File missing' });
     });
     expect(screen.getByRole('alert').textContent).toContain('File missing');
-    expect(screen.getByRole('button', { name: 'Play mix' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Preview mix' })).toBeTruthy();
   });
 
   it('skips through the saved mix and pauses or resumes its current clip', () => {
     const pair = createDefaultMusicMix().slice(0, 2);
     useMusicProjectStore.setState({ clips: pair, loop: true });
     render(<MusicStudio open onOpenChange={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Play mix' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview mix' }));
     fireEvent.click(screen.getByRole('button', { name: 'Next mix track' }));
     expect(audio.playProjectAt).toHaveBeenLastCalledWith(pair, true, expect.any(Number), 1);
-    fireEvent.click(screen.getByRole('button', { name: 'Pause mix' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause preview' }));
     expect(audio.pause).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Resume mix' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume preview' }));
     expect(audio.playProject).toHaveBeenLastCalledWith(pair, true, expect.any(Number));
     fireEvent.click(screen.getByRole('button', { name: 'Previous mix track' }));
     expect(audio.playProjectAt).toHaveBeenLastCalledWith(pair, true, expect.any(Number), 0);
@@ -170,7 +170,7 @@ describe('MusicStudio', () => {
     useMusicProjectStore.setState({ clips: createDefaultMusicMix().slice(0, 2), savedAt: null });
     render(<MusicStudio open onOpenChange={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Play mix' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview mix' }));
     const first = useMusicProjectStore.getState().clips[0]!;
     act(() => {
       audio.progressListener?.({ clipId: first.id, currentTime: 30, duration: 120 });
@@ -198,7 +198,21 @@ describe('MusicStudio', () => {
     fireEvent.change(timeline, { target: { value: '75' } });
     expect(audio.seek).toHaveBeenCalledWith(75);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Play mix' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview mix' }));
     expect(screen.queryByLabelText(`Preview position for ${first.name}`)).toBeNull();
+  });
+
+  it('keeps Loop mix and Save while ambience selection stays outside the studio', () => {
+    useMusicProjectStore.setState({ clips: createDefaultMusicMix().slice(0, 1) });
+    render(<MusicStudio open onOpenChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Loop mix' }));
+    expect(useMusicProjectStore.getState().loop).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(useMusicProjectStore.getState().savedAt).toEqual(expect.any(Number));
+    expect(useMusicProjectStore.getState().enabledForAmbient).toBe(false);
+    expect(screen.getByRole('button', { name: 'Preview mix' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Play mix' })).toBeNull();
+    expect(screen.queryByText('Use in ambience')).toBeNull();
   });
 });
