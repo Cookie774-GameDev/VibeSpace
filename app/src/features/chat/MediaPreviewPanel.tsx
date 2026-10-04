@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Download,
   FileText,
@@ -81,9 +82,9 @@ export function MediaPreviewPanel({
   onClose: () => void;
   onSaveEditedCopy?: (pngDataUrl: string) => Promise<void>;
 }) {
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 p-3 sm:p-6"
+      className="fixed inset-0 z-[1300] flex items-center justify-center bg-black/70 p-3 sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-label={target.kind === 'file' ? `Edit ${target.path}` : `Preview ${target.name}`}
@@ -104,7 +105,8 @@ export function MediaPreviewPanel({
           <FileEditor target={target} onClose={onClose} />
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -122,9 +124,8 @@ function MediaViewer({
     null,
   );
   const [imageStatus, setImageStatus] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [annotationHistory, setAnnotationHistory] = useState<ImageEditHistory>(
-    createImageEditHistory,
-  );
+  const [annotationHistory, setAnnotationHistory] =
+    useState<ImageEditHistory>(createImageEditHistory);
   const [draftPoints, setDraftPoints] = useState<ImagePoint[] | null>(null);
   const [annotating, setAnnotating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -217,7 +218,9 @@ function MediaViewer({
   const exportPng = useCallback(() => {
     try {
       const dataUrl = makePngDataUrl();
-      const basename = target.name.replace(/\.[^.\\/]+$/u, '').replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '-');
+      const basename = target.name
+        .replace(/\.[^.\\/]+$/u, '')
+        .replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '-');
       const link = document.createElement('a');
       link.href = dataUrl;
       link.download = `${basename || 'annotated-image'}.png`;
@@ -250,13 +253,7 @@ function MediaViewer({
     if (stroke.points.length === 1) {
       const point = stroke.points[0]!;
       return (
-        <circle
-          key={key}
-          cx={point.x}
-          cy={point.y}
-          r={stroke.width / 2}
-          fill={stroke.color}
-        />
+        <circle key={key} cx={point.x} cy={point.y} r={stroke.width / 2} fill={stroke.color} />
       );
     }
     const path = stroke.points
@@ -568,7 +565,10 @@ function MediaViewer({
           </div>
         )}
         {target.mediaKind === 'image' && imageStatus === 'error' && (
-          <p className="absolute inset-x-3 top-3 rounded bg-destructive/90 px-3 py-2 text-sm text-white" role="alert">
+          <p
+            className="absolute inset-x-3 top-3 rounded bg-destructive/90 px-3 py-2 text-sm text-white"
+            role="alert"
+          >
             The saved image could not be loaded. Verify its source or choose another image.
           </p>
         )}
@@ -581,7 +581,9 @@ function MediaViewer({
           </p>
         )}
         <p className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded bg-black/60 px-2 py-1 text-metadata text-white">
-          {annotating ? 'Draw with pointer · Undo/redo from toolbar · Esc to close' : 'Scroll to zoom · drag to pan · Esc to close'}
+          {annotating
+            ? 'Draw with pointer · Undo/redo from toolbar · Esc to close'
+            : 'Scroll to zoom · drag to pan · Esc to close'}
         </p>
       </div>
     </>

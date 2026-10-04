@@ -70,6 +70,9 @@ describe('MessagePart image preview and edit persistence', () => {
 
     render(<MessagePart part={source} allParts={parts} messageId={message.id} />);
     fireEvent.click(screen.getByRole('button', { name: 'Open image editor for diagram.png' }));
+    expect(screen.getByRole('dialog', { name: 'Preview diagram.png' }).parentElement).toBe(
+      document.body,
+    );
     const images = screen.getAllByRole('img', { name: 'diagram.png' }) as HTMLImageElement[];
     const editorImage = images[images.length - 1]!;
     Object.defineProperty(editorImage, 'naturalWidth', { configurable: true, value: 100 });

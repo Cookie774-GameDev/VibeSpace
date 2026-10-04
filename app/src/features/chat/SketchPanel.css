@@ -53,6 +53,7 @@ html[data-theme='warm'] .sketch-panel {
 }
 .sketch-layer--expanded .sketch-panel {
   width: min(1380px, calc(100vw - 42px));
+  height: calc(100dvh - 42px);
   max-height: calc(100dvh - 42px);
 }
 .sketch-backdrop {
@@ -393,15 +394,22 @@ html[data-theme='warm'] .sketch-panel {
   flex: 1;
   align-items: center;
   justify-content: center;
+  min-height: 0;
   padding: 0 20px;
+}
+.sketch-layer--expanded .sketch-workspace {
+  flex: 1;
 }
 .sketch-layer--expanded .sketch-paper-wrap {
   flex: 0 1 auto;
-  width: min(100%, calc((100dvh - 200px) * 1.6));
-  max-height: calc(100dvh - 200px);
+  width: auto;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 8 / 5;
 }
 .sketch-layer--expanded .sketch-paper {
-  max-height: calc(100dvh - 200px);
+  height: 100%;
 }
 .sketch-layer--expanded .sketch-size input[type='range'] {
   height: min(260px, 42vh);
