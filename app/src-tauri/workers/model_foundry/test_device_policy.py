@@ -1,5 +1,9 @@
 """Portable text-format and explicit device-policy regressions (no GPU needed)."""
 import unittest
+import json
+import shutil
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import worker
@@ -128,6 +132,80 @@ class TrainingEvidenceTests(unittest.TestCase):
 
     def test_finite_measured_losses_are_accepted(self):
         worker._validate_training_metrics({"train_loss": 1.2}, {"eval_loss": 1.1})
+
+
+class ArtifactPortabilityTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.original = self.root / "original"
+        self.original.mkdir()
+        (self.original / "config.json").write_text("{}")
+        (self.original / "model.safetensors").write_bytes(b"original weights")
+        self.relocated = self.root / "relocated model"
+        shutil.copytree(self.original, self.relocated)
+        self.artifact = self.root / "weight-artifact"
+        self.artifact.mkdir()
+
+    def request(self, model, fingerprint=None):
+        metadata = {"protocol": 1, "localOnly": True, "valid": True,
+                    "method": "lora", "baseModelPath": str(self.original)}
+        if fingerprint is not None:
+            metadata["baseModelFingerprint"] = fingerprint
+        (self.artifact / "vibespace-training.json").write_text(json.dumps(metadata))
+        request = {"protocol": 1, "localOnly": True, "method": "lora",
+                   "baseModelPath": str(model), "artifactPath": str(self.artifact),
+                   "responsePath": str(self.root / "inference-test.response.json"),
+                   "messages": [{"role": "user", "content": "Debate a proposal."}],
+                   "maxOutputTokens": 64}
+        path = self.root / "request.json"
+        path.write_text(json.dumps(request))
+        return worker._read_inference_request(str(path))
+
+    def test_identical_model_can_relocate_after_original_path_disappears(self):
+        fingerprint = worker._base_model_fingerprint(self.original)
+        for path in self.original.iterdir():
+            path.unlink()
+        self.original.rmdir()
+        self.assertEqual(self.request(self.relocated, fingerprint)["baseModelPath"], str(self.relocated.resolve()))
+
+    def test_relocated_weights_must_match_training_content(self):
+        fingerprint = worker._base_model_fingerprint(self.original)
+        (self.relocated / "model.safetensors").write_bytes(b"different weights")
+        with self.assertRaisesRegex(ValueError, "fingerprint"):
+            self.request(self.relocated, fingerprint)
+
+    def test_same_path_model_replacement_is_rejected(self):
+        fingerprint = worker._base_model_fingerprint(self.original)
+        (self.original / "config.json").write_text('{"changed":true}')
+        with self.assertRaisesRegex(ValueError, "fingerprint"):
+            self.request(self.original, fingerprint)
+
+    def test_extra_or_missing_model_file_is_rejected(self):
+        fingerprint = worker._base_model_fingerprint(self.original)
+        extra = self.relocated / "tokenizer.json"
+        extra.write_text("{}")
+        with self.assertRaisesRegex(ValueError, "fingerprint"):
+            self.request(self.relocated, fingerprint)
+        extra.unlink()
+        (self.relocated / "model.safetensors").unlink()
+        with self.assertRaisesRegex(ValueError, "fingerprint"):
+            self.request(self.relocated, fingerprint)
+
+    def test_catalog_marker_location_metadata_is_not_model_content(self):
+        (self.original / ".vibespace-model.json").write_text('{"location":"old"}')
+        (self.relocated / ".vibespace-model.json").write_text('{"location":"new"}')
+        self.assertEqual(worker._base_model_fingerprint(self.original), worker._base_model_fingerprint(self.relocated))
+
+    def test_invalid_fingerprint_never_falls_back_to_matching_path(self):
+        with self.assertRaisesRegex(ValueError, "fingerprint"):
+            self.request(self.original, {"algorithm": "sha256", "fileCount": True, "sha256": "0" * 64})
+
+    def test_legacy_artifact_keeps_original_path_requirement(self):
+        self.assertEqual(self.request(self.original)["baseModelPath"], str(self.original.resolve()))
+        with self.assertRaisesRegex(ValueError, "metadata.*match"):
+            self.request(self.relocated)
 
 
 if __name__ == "__main__":

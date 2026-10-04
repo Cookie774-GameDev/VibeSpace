@@ -1092,6 +1092,7 @@ def _load_media_frames(record: dict[str, Any]) -> list[Any]:
 
 def train(request_path: str) -> int:
     request, summary = _read_request(request_path)
+    base_model_fingerprint = _base_model_fingerprint(Path(str(request["baseModelPath"])))
 
     # Force the model/runtime libraries into offline mode. The parent process
     # must prepare a verified local model directory before this command runs.
@@ -1369,6 +1370,7 @@ def train(request_path: str) -> int:
                 **summary,
                 "artifactType": "adapter" if method in ("lora", "qlora") else "full-model",
                 "baseModelPath": model_path,
+                "baseModelFingerprint": base_model_fingerprint,
                 "schemaVersion": request.get("schemaVersion", 1),
                 "requestedConfig": config,
                 "effectiveConfig": {
@@ -1458,6 +1460,49 @@ def _validate_training_metrics(training: dict[str, Any], evaluation: dict[str, A
             _fail(f"Training requires a finite measured {key}; no completed artifact was saved.")
 
 
+def _base_model_fingerprint(model: Path) -> dict[str, Any]:
+    """Bind an artifact to model content without a machine-specific location."""
+    digest = hashlib.sha256()
+    file_count = 0
+    for path in sorted(model.rglob("*"), key=lambda item: item.relative_to(model).as_posix()):
+        if path.is_symlink():
+            _fail("Base model fingerprint cannot include symbolic links.")
+        if not path.is_file() or path.relative_to(model).as_posix() == ".vibespace-model.json":
+            continue
+        record = {
+            "path": path.relative_to(model).as_posix(),
+            "bytes": path.stat().st_size,
+            "sha256": _sha256_file(path),
+        }
+        digest.update(json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        digest.update(b"\n")
+        file_count += 1
+    if not file_count:
+        _fail("Base model fingerprint requires local model files.")
+    return {"algorithm": "sha256", "fileCount": file_count, "sha256": digest.hexdigest()}
+
+
+def _verify_inference_base_model(metadata: dict[str, Any], model: Path) -> None:
+    if "baseModelFingerprint" not in metadata:
+        if Path(str(metadata.get("baseModelPath", ""))).resolve(strict=False) != model:
+            _fail("Training artifact metadata does not match the inference request.")
+        return
+    fingerprint = metadata["baseModelFingerprint"]
+    if (
+        not isinstance(fingerprint, dict)
+        or set(fingerprint) != {"algorithm", "fileCount", "sha256"}
+        or fingerprint.get("algorithm") != "sha256"
+        or isinstance(fingerprint.get("fileCount"), bool)
+        or not isinstance(fingerprint.get("fileCount"), int)
+        or fingerprint["fileCount"] < 1
+        or not isinstance(fingerprint.get("sha256"), str)
+        or len(fingerprint["sha256"]) != 64
+        or any(character not in "0123456789abcdef" for character in fingerprint["sha256"])
+        or fingerprint != _base_model_fingerprint(model)
+    ):
+        _fail("Base model fingerprint does not match the training artifact.")
+
+
 def _read_inference_request(request_path: str) -> dict[str, Any]:
     path = _absolute_path(request_path, "requestPath")
     if not path.is_file() or path.stat().st_size > MAX_REQUEST_BYTES:
@@ -1488,9 +1533,9 @@ def _read_inference_request(request_path: str) -> dict[str, Any]:
         or metadata.get("localOnly") is not True
         or metadata.get("valid") is not True
         or metadata.get("method") != method
-        or Path(str(metadata.get("baseModelPath", ""))).resolve(strict=False) != model
     ):
         _fail("Training artifact metadata does not match the inference request.")
+    _verify_inference_base_model(metadata, model)
     messages = payload.get("messages")
     if (
         not isinstance(messages, list)
