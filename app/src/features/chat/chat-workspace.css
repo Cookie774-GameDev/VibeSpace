@@ -5,8 +5,16 @@
 }
 
 html .chat-workspace-pane[data-multi-pane='true'] .chat-pane-conversation {
-  overflow: auto;
+  /* ChatThread owns message scrolling. Scrolling this wrapper can move the
+     entire thread out of view while the composer stays fixed below it. */
+  overflow: clip;
   overscroll-behavior: contain;
+}
+
+html
+  .chat-workspace-pane[data-multi-pane='true']
+  .chat-pane-conversation:has(> .warm-chat-welcome) {
+  overflow-y: auto;
 }
 
 html .chat-workspace-pane[data-multi-pane='true'] .warm-chat-welcome {
