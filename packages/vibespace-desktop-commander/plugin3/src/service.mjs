@@ -1,19 +1,16 @@
 import fs from 'node:fs/promises';
+import {createReadStream} from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
 import {spawn,execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {createStore} from './store.mjs';
 import {sharedFileOperation} from './shared-file.mjs';
-const require=createRequire(new URL('../runtime/desktop-commander-v3/package.json',import.meta.url));
-const bundledPython=process.env.PLUGIN3_PYTHON||fileURLToPath(new URL('../../runtime/python/python.exe',import.meta.url));
-const bundledRipgrep=process.env.PLUGIN3_RIPGREP||require('@vscode/ripgrep').rgPath;
-const repoScript=fileURLToPath(new URL('../extensions/codex-kit/broker_repo.py',import.meta.url));
-const pythonBootstrap="import os,runpy,sys;script=sys.argv[1];sys.path.insert(0,os.path.dirname(script));sys.argv=[script,*sys.argv[2:]];runpy.run_path(script,run_name='__main__')";
+import {createCodexReader} from './codex-reader.mjs';
+import {nativePatchPaths,applyNativePatch} from './native-patch.mjs';
 const run=promisify(execFile),digest=x=>crypto.createHash('sha256').update(x).digest('hex');
 export const fail=(code,message)=>{throw Object.assign(Error(`${code}: ${message}`),{code});};
 const uid=prefix=>prefix+'-'+crypto.randomUUID();
@@ -21,14 +18,15 @@ const bounded=(v,d,min,max)=>Number.isInteger(v)&&v>=min&&v<=max?v:d;
 const checkId=v=>{if(typeof v!=='string'||!/^[\w.-]{1,120}$/.test(v))fail('INVALID_ARGUMENT','Invalid ID');return v;};
 const keyPath=p=>process.platform==='win32'?p.toLowerCase():p;
 const within=(root,p)=>{const r=path.relative(root,p);return !r.startsWith('..'+path.sep)&&r!=='..'&&!path.isAbsolute(r);};
-const stateMutations=new Set(['workspace_open','agent_register','agent_start','agent_send','agent_ack','agent_update','lease_claim','lease_release','job_start','job_cancel','edit_plan','edit_apply','edit_rollback']);
+const stateMutations=new Set(['workspace_open','agent_register','agent_start','agent_send','agent_ack','agent_update','lease_claim','lease_release','job_start','job_cancel','edit_plan','edit_apply','edit_rollback','native_patch']);
+const capacity=Object.freeze({agents:8,jobs:8,edits:8,readers:8,edits_per_workspace:1});
 
-export async function createService(dir){
+export async function createService(dir,{nativePatchExecutor=applyNativePatch}={}){
  await fs.mkdir(dir,{recursive:true});dir=await fs.realpath(dir);
  const ownerKey=digest(keyPath(dir)+os.userInfo().username).slice(0,24),owner=net.createServer(s=>s.destroy());
  const ownerEndpoint=process.platform==='win32'?`\\\\.\\pipe\\plugin3-store-${ownerKey}`:path.join(os.tmpdir(),`p3-store-${ownerKey}.sock`);
  await new Promise((resolve,reject)=>{owner.once('error',e=>reject(Object.assign(Error('SERVICE_IN_USE: a service already owns this state directory'),{code:e.code==='EADDRINUSE'?'SERVICE_IN_USE':e.code})));owner.listen(ownerEndpoint,resolve);});
- const store=createStore(path.join(dir,'service.sqlite')),children=new Map(),activeEdits=new Map();let serial=Promise.resolve(),closing=false;
+ const store=createStore(path.join(dir,'service.sqlite')),children=new Map(),activeEdits=new Map(),codexReader=createCodexReader();let serial=Promise.resolve(),closing=false;
  const communicationDir=path.join(dir,'communication'),communicationFile=path.join(communicationDir,'AGENT-MESSAGES.jsonl');
  await fs.mkdir(communicationDir,{recursive:true});const sharedHandle=await fs.open(communicationFile,'a');await sharedHandle.close();
  await fs.writeFile(path.join(communicationDir,'README.md'),'# Shared agent communication\n\nRead AGENT-MESSAGES.jsonl to see new messages and acknowledgements from cooperating Plugin 3 agents. One JSON object per line; filter the `to` identity. Use agent_register, then agent_send to write; the broker serializes and flushes whole records. Do not overwrite, truncate, or concurrently edit this file. Existing messages from before this feature are not imported. SQLite remains the canonical mailbox and idempotency store. Check shared_file_written in send/ack receipts. The file does not wake a model, force a host to read it, or override a denied tool call. Maximum file size 64 MiB; full or damaged files are reported without silently deleting history.\n');
@@ -40,12 +38,33 @@ export async function createService(dir){
   const requested=path.resolve(w.root,p);if(!within(w.root,requested))fail('OUTSIDE_WORKSPACE','Path leaves registered root');
   const rel=path.relative(w.root,requested);if(rel.split(/[\\/]/).some(s=>s.toLowerCase()==='.git'))fail('PROTECTED_PATH','.git internals are excluded');
   let real;try{real=await fs.realpath(requested);}catch(e){if(!missing||e.code!=='ENOENT')throw e;real=path.join(await fs.realpath(path.dirname(requested)),path.basename(requested));}
-  if(!within(w.root,real))fail('OUTSIDE_WORKSPACE','Resolved path leaves registered root');return real;
+  if(!within(w.root,real))fail('OUTSIDE_WORKSPACE','Resolved path leaves registered root');if(path.relative(w.root,real).split(/[\\/]/).some(segment=>segment.toLowerCase()==='.git'))fail('PROTECTED_PATH','.git internals are excluded');return real;
  }
  async function agent(id){const a=await store.get('agents',checkId(id));if(!a)fail('AGENT_NOT_FOUND','Register the agent first');return a;}
- async function gitInfo(root){try{const [h,b,s]=await Promise.all(['rev-parse HEAD','branch --show-current','status --porcelain=v1 -uno'].map(cmd=>run('git',cmd.split(' '),{cwd:root,windowsHide:true,timeout:8000,maxBuffer:262144})));return {head:h.stdout.trim(),branch:b.stdout.trim(),status:s.stdout.slice(0,8000),status_truncated:s.stdout.length>8000};}catch{return {git:false};}}
+ async function gitInfo(root){const results=await Promise.allSettled(['rev-parse HEAD','branch --show-current','status --porcelain=v1 -uno'].map(cmd=>run('git',cmd.split(' '),{cwd:root,windowsHide:true,timeout:8000,maxBuffer:262144})));if(results.some(result=>result.status==='rejected'))return {git:false};const [head,branch,status]=results.map(result=>result.value);return {head:head.stdout.trim(),branch:branch.stdout.trim(),status:status.stdout.slice(0,8000),status_truncated:status.stdout.length>8000};}
  async function apply(method,a){
-  if(method==='health')return {version:'0.4.0',pid:process.pid,uptime_s:process.uptime(),active_jobs:children.size,active_edits:activeEdits.size,communication_file:communicationFile,state:'ready',storage:'SQLite WAL/FULL worker',browser_persistence:'MCP reconnects survive; broker restart requires explicit attachment',capabilities:{mailboxes:true,leases:true,jobs:true,read_batch:true,query_repo:true,semantic_refactor:false,desktop_uia:false,chatgpt_host_access:'must verify in caller'}};
+  if(method==='codex_threads')return codexReader.call(a);
+  if(method==='native_patch'){
+   const w=await workspace(a.workspace);await requireSettledWorkspace(w.workspace);
+   if([...activeEdits.values()].some(edit=>edit.workspace===w.workspace))fail('EDIT_ACTIVE','A staged edit is active in this workspace.');
+   const targets=await Promise.all(nativePatchPaths(a.patch).map(file=>resolvePath(w,file,true)));
+   for(const target of targets){if(within(dir,target))fail('PROTECTED_PATH','Service state is excluded');try{const stat=await fs.stat(target);if(!stat.isFile())fail('INVALID_ARGUMENT','Existing patch targets must be regular files');if(stat.size>16*1024*1024)fail('INPUT_LIMIT','Use staged edits for targets over 16 MiB');}catch(error){if(error.code!=='ENOENT')throw error;}}
+   await requireLease(a.agent,a.lease,targets);
+   if(activeEdits.size>=capacity.edits)fail('EDIT_LIMIT',`${capacity.edits} active edit workers maximum`);
+   const plan=uid('patch'),entry={plan,kind:'native_patch',workspace:w.workspace,agent:a.agent,lease:a.lease,targets,state:'applying',created_at:new Date().toISOString(),patch_sha256:digest(a.patch),before_hashes:await fileHashes(targets)};
+   await store.put('edits',plan,entry);activeEdits.set(plan,entry);
+   const task=(async()=>{try{
+    const result=await nativePatchExecutor(w.root,a.patch);entry.after_hashes=await fileHashes(targets);entry.result=result;
+    entry.state=result.success?'applied':result.timed_out||JSON.stringify(entry.before_hashes)!==JSON.stringify(entry.after_hashes)?'uncertain':'failed';
+    if(entry.state==='uncertain')entry.error='Native patch failed/interrupted with uncertain target changes; inspect hashes and files before another mutation.';
+    entry.finished_at=new Date().toISOString();await store.put('edits',plan,entry);
+   }catch(error){entry.state='uncertain';entry.error=error.message;entry.result={success:false,code:error.code||'NATIVE_PATCH_ERROR',error:error.message};await store.put('edits',plan,entry);}
+   finally{activeEdits.delete(plan);}
+   })();task.catch(()=>{activeEdits.delete(plan);});
+   let timer;await Promise.race([task,new Promise(resolve=>{timer=setTimeout(resolve,bounded(a.wait_ms,1000,0,25000));})]).finally(()=>clearTimeout(timer));
+   const receipt=await store.get('edits',plan);return {...receipt.result,workspace:w.workspace,paths:targets,plan,state:receipt.state,before_hashes:receipt.before_hashes,...(receipt.after_hashes?{after_hashes:receipt.after_hashes}:{}),atomic:false,replay_safe:false,...(!receipt.result?{notice:'Patch is still applying. Poll edit_status with this plan; do not resubmit the mutation.'}:{})};
+  }
+  if(method==='health')return {version:'0.4.5',pid:process.pid,uptime_s:process.uptime(),active_jobs:children.size,active_edits:activeEdits.size,capacity:{...capacity},communication_file:communicationFile,state:'ready',storage:'SQLite WAL/FULL worker',browser_persistence:'MCP reconnects survive; broker restart requires explicit attachment',capabilities:{mailboxes:true,leases:true,jobs:true,read_batch:true,query_repo:true,native_patch:'official local CLI engine; leased, bounded, non-atomic with uncertainty quarantine',codex_threads:'official local CLI read-only; requires installed protocol',semantic_refactor:false,desktop_uia:false,chatgpt_host_access:'must verify in caller'}};
   if(method==='workspace_open'){
    if(!path.isAbsolute(a.root||''))fail('INVALID_ARGUMENT','Absolute root required');const root=await fs.realpath(a.root);if(!(await fs.stat(root)).isDirectory())fail('INVALID_ARGUMENT','Root must be a directory');
    const id='ws-'+digest(keyPath(root)).slice(0,20),w={workspace:id,root,created_at:new Date().toISOString()};await store.put('workspaces',id,w);return {...w,...await gitInfo(root)};
@@ -53,25 +72,33 @@ export async function createService(dir){
   if(method==='workspace_status'){const w=await workspace(a.workspace);return {...w,...await gitInfo(w.root),leases:(await store.list('leases')).filter(l=>l.workspace===w.workspace&&l.active)};}
   if(method==='read_batch'){
    const w=await workspace(a.workspace);if(!Array.isArray(a.files)||a.files.length<1||a.files.length>64)fail('INVALID_ARGUMENT','1-64 file requests required');
-   const max=bounded(a.max_bytes,262144,100,1048576),per=Math.max(1,Math.floor(max/a.files.length)),results=new Array(a.files.length);let cursor=0;
-   async function readOne(f){let h;try{
-    const real=await resolvePath(w,f.path);h=await fs.open(real,'r');const before=await h.stat({bigint:true});if(!before.isFile())fail('INVALID_ARGUMENT','Regular file required');
-    const offset=bounded(f.offset,0,0,Number.MAX_SAFE_INTEGER),limit=bounded(f.length,per,1,1048576),length=Math.min(per,limit,Math.max(0,Number(before.size)-offset)),buf=Buffer.alloc(length);
+   const max=bounded(a.max_bytes,262144,100,1048576),results=new Array(a.files.length),prepared=new Array(a.files.length);let cursor=0;
+   async function prepare(index){const file=a.files[index];try{
+    const real=await resolvePath(w,file.path),stat=await fs.stat(real,{bigint:true});if(!stat.isFile())fail('INVALID_ARGUMENT','Regular file required');
+    const offset=bounded(file.offset,0,0,Number.MAX_SAFE_INTEGER),limit=bounded(file.length,max,1,1048576);
+    return {real,offset,demand:Math.min(limit,Math.max(0,Number(stat.size)-offset))};
+   }catch(error){return {code:error.code||'READ_ERROR',error:error.message};}}
+   await Promise.all(Array.from({length:Math.min(capacity.readers,a.files.length)},async()=>{while(cursor<a.files.length){const index=cursor++;prepared[index]=await prepare(index);}}));
+   const allocations=prepared.map(()=>0);let remaining=max,active=prepared.map((file,index)=>file.demand>0?index:null).filter(index=>index!==null);
+   while(active.length&&remaining){const share=Math.max(1,Math.floor(remaining/active.length));for(const index of active){const amount=Math.min(share,prepared[index].demand-allocations[index],remaining);allocations[index]+=amount;remaining-=amount;}active=active.filter(index=>allocations[index]<prepared[index].demand);}
+   async function readOne(index){const f=a.files[index],item=prepared[index];if(item.code)return {path:f.path,code:item.code,error:item.error};let h;try{
+    h=await fs.open(item.real,'r');const before=await h.stat({bigint:true});if(!before.isFile())fail('INVALID_ARGUMENT','Regular file required');
+    const offset=item.offset,length=Math.min(allocations[index],Math.max(0,Number(before.size)-offset)),buf=Buffer.alloc(length);
     const {bytesRead}=await h.read(buf,0,length,offset),bytes=buf.subarray(0,bytesRead),after=await h.stat({bigint:true});
     if(before.size!==after.size||before.mtimeNs!==after.mtimeNs||before.ctimeNs!==after.ctimeNs)fail('CONCURRENT_CHANGE','File changed during read');
     let text;try{text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);}catch{fail('INVALID_UTF8_RANGE','Range splits UTF-8 or file is not UTF-8; use byte reader for binary data');}
     const complete=offset===0&&BigInt(bytesRead)===before.size;return {path:f.path,text,offset,bytes:bytesRead,size:Number(before.size),range_sha256:digest(bytes),...(complete?{sha256:digest(bytes)}:{}),complete,truncated:!complete,next_offset:offset+bytesRead,version:`${before.dev}:${before.ino}:${before.size}:${before.mtimeNs}:${before.ctimeNs}`,freshness:'live handle checked before/after'};
    }catch(e){return {path:f.path,code:e.code||'READ_ERROR',error:e.message};}finally{await h?.close();}}
-   await Promise.all(Array.from({length:Math.min(8,a.files.length)},async()=>{while(cursor<a.files.length){const i=cursor++;results[i]=await readOne(a.files[i]);}}));return {workspace:w.workspace,results,max_bytes:max,all_succeeded:results.every(r=>!r.code)};
+   cursor=0;await Promise.all(Array.from({length:Math.min(capacity.readers,a.files.length)},async()=>{while(cursor<a.files.length){const index=cursor++;results[index]=await readOne(index);}}));return {workspace:w.workspace,results,max_bytes:max,all_succeeded:results.every(r=>!r.code)};
   }
   if(method==='query_repo'){
    const w=await workspace(a.workspace),max=bounded(a.max_chars,16000,100,65536),query=a.query||'';if(typeof query!=='string'||query.length>2000)fail('INVALID_ARGUMENT','Query too long');
    const args=a.mode==='files'?['--files','--hidden','-g','!.git','-g','!node_modules','-g','!target']:['--line-number','--no-heading','--fixed-strings','--hidden','-g','!.git','-g','!node_modules','-g','!target','--',query,'.'];
-   try{const r=await run(bundledRipgrep,args,{cwd:w.root,windowsHide:true,timeout:10000,maxBuffer:2097152});const output=a.mode==='files'&&query?r.stdout.split(/\r?\n/).filter(x=>x.includes(query)).join('\n'):r.stdout;return {workspace:w.workspace,mode:a.mode||'text',text:output.slice(0,max),truncated:output.length>max,source:'live ripgrep; no semantic index'};}catch(e){if(e.code===1)return {workspace:w.workspace,text:'',truncated:false};if(e.code==='ERR_CHILD_PROCESS_STDIO_MAXBUFFER')return {workspace:w.workspace,text:String(e.stdout||'').slice(0,max),truncated:true,code:'OUTPUT_LIMIT'};throw e;}
+   try{const r=await run('rg',args,{cwd:w.root,windowsHide:true,timeout:10000,maxBuffer:2097152});const output=a.mode==='files'&&query?r.stdout.split(/\r?\n/).filter(x=>x.includes(query)).join('\n'):r.stdout;return {workspace:w.workspace,mode:a.mode||'text',text:output.slice(0,max),truncated:output.length>max,source:'live ripgrep; no semantic index'};}catch(e){if(e.code===1)return {workspace:w.workspace,text:'',truncated:false};if(e.code==='ERR_CHILD_PROCESS_STDIO_MAXBUFFER')return {workspace:w.workspace,text:String(e.stdout||'').slice(0,max),truncated:true,code:'OUTPUT_LIMIT'};throw e;}
   }
   if(method==='agent_register'||method==='agent_start'){
    const id=checkId(a.agent),existing=await store.get('agents',id);if(existing)fail('AGENT_EXISTS','Use existing identity or a fresh unique ID');const all=await store.list('agents');
-   if(all.filter(x=>!['complete','stopped'].includes(x.state)).length>=3)fail('AGENT_LIMIT','Three active agents maximum');if(a.parent){const parent=await agent(a.parent);if(parent.parent)fail('DELEGATION_LIMIT','Recursive delegation disabled');}
+   if(all.filter(x=>!['complete','stopped'].includes(x.state)).length>=capacity.agents)fail('AGENT_LIMIT',`${capacity.agents} active agents maximum`);if(a.parent){const parent=await agent(a.parent);if(parent.parent)fail('DELEGATION_LIMIT','Recursive delegation disabled');}
    const entry={agent:id,task:String(a.task||'').slice(0,8000),model_requested:String(a.model||'').slice(0,120),model_observed:null,model_verification:'not observed',parent:a.parent||null,state:'registered',created_at:new Date().toISOString()};
    if(method==='agent_start')entry.launch={state:'awaiting_host_controller',launched:false,url:'https://chatgpt.com/',prompt:`Use Plugin 3. Read plugin3_guide. Your registered identity is ${id}; do not register again. Requested model: ${entry.model_requested}. Task: ${entry.task}. Follow repository ownership, verify actual results, and report through agent_send to your parent ${entry.parent||'(coordinator)'} when needed. Do not spawn further agents without explicit task authorization.`,instructions:'Use an authorized host browser controller, verify model and Plugin 3 selection, submit exactly once, then record actual conversation URL/model with agent_update. An uncertain send must be inspected, never automatically replayed.'};
    await store.put('agents',id,entry);return entry;
@@ -119,16 +146,19 @@ export async function createService(dir){
   }
   if(method==='edit_status'){const p=await store.get('edits',checkId(a.plan));if(!p)fail('PLAN_NOT_FOUND','Unknown plan');return p;}
   if(method==='edit_apply'||method==='edit_rollback'){
-   const p=await store.get('edits',checkId(a.plan));if(!p||p.agent!==a.agent)fail('PLAN_NOT_OWNED','Plan must belong to this agent');await requireSettledWorkspace(p.workspace);await requireLease(a.agent,p.lease,p.targets);
+   const p=await store.get('edits',checkId(a.plan));if(!p||p.agent!==a.agent)fail('PLAN_NOT_OWNED','Plan must belong to this agent');if(p.kind==='native_patch')fail('NO_STAGED_BACKUP','Native patch receipts have no staged apply/rollback backup; inspect their hashes and target files.');await requireSettledWorkspace(p.workspace);await requireLease(a.agent,p.lease,p.targets);
    if(method==='edit_apply'&&p.state!=='planned')fail('PLAN_STATE','Inspect plan before retrying; only planned edits can apply');
    if(method==='edit_rollback'&&(p.state!=='applied'||!p.result?.receipt))fail('PLAN_STATE','Rollback requires an applied receipt; inspect interrupted journal explicitly');
    p.state=method==='edit_apply'?'applying':'rolling_back';return launchEdit(p,method==='edit_apply'?'apply':'rollback',method==='edit_apply'?p.frozen:p.result.receipt,a.wait_ms);
   }
   if(method==='job_start'){
-   if(children.size>=4)fail('JOB_LIMIT','Four active jobs maximum');const w=await workspace(a.workspace);if(typeof a.executable!=='string'||!a.executable.length||a.executable.length>4000||!Array.isArray(a.args)||a.args.length>100||a.args.some(v=>typeof v!=='string'||v.length>32000))fail('INVALID_ARGUMENT','Executable and bounded argument array required');
-   const job=uid('job'),j={job,workspace:w.workspace,state:'starting',created_at:new Date().toISOString(),stdout_bytes:0,stderr_bytes:0,output_truncated:false,exit_code:null};
+   if(children.size>=capacity.jobs)fail('JOB_LIMIT',`${capacity.jobs} active jobs maximum`);const w=await workspace(a.workspace);if(typeof a.executable!=='string'||!a.executable.length||a.executable.length>4000||!Array.isArray(a.args)||a.args.length>100||a.args.some(v=>typeof v!=='string'||v.length>32000))fail('INVALID_ARGUMENT','Executable and bounded argument array required');
+   const args=[...a.args],powershell=process.platform==='win32'&&/^(pwsh|powershell)(\.exe)?$/i.test(path.win32.basename(a.executable)),commandIndex=powershell?args.findIndex(value=>/^-(?:command|c)$/i.test(value)):-1;
+   const utf8Console=commandIndex>=0&&commandIndex+1<args.length&&a.preserve_console_encoding!==true;
+   if(utf8Console)args[commandIndex+1]='[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [Console]::OutputEncoding; '+args[commandIndex+1];
+   const job=uid('job'),j={job,workspace:w.workspace,state:'starting',created_at:new Date().toISOString(),stdout_bytes:0,stderr_bytes:0,output_truncated:false,exit_code:null,console_encoding:utf8Console?'utf8-powershell-command':'process-default'};
    await fs.mkdir(path.join(dir,'jobs'),{recursive:true});const out=await fs.open(path.join(dir,'jobs',job+'.out'),'wx'),err=await fs.open(path.join(dir,'jobs',job+'.err'),'wx');await store.put('jobs',job,j);
-   let cp;try{cp=spawn(a.executable,a.args,{cwd:w.root,windowsHide:true,stdio:['ignore','pipe','pipe'],shell:false});}catch(e){await out.close();await err.close();j.state='failed';j.error=e.message;await store.put('jobs',job,j);return j;}
+   let cp;try{cp=spawn(a.executable,args,{cwd:w.root,windowsHide:true,stdio:['ignore','pipe','pipe'],shell:false});}catch(e){await out.close();await err.close();j.state='failed';j.error=e.message;await store.put('jobs',job,j);return j;}
    children.set(job,cp);j.state='running';j.pid=cp.pid??null;let writing=Promise.resolve();const cap=8*1024*1024;
    const collect=(h,field,b)=>{const remain=Math.max(0,cap-j[field]),chunk=b.subarray(0,remain);j[field]+=chunk.length;if(chunk.length<b.length)j.output_truncated=true;writing=writing.then(()=>h.write(chunk)).catch(()=>{j.output_truncated=true;});};
    cp.stdout.on('data',b=>collect(out,'stdout_bytes',b));cp.stderr.on('data',b=>collect(err,'stderr_bytes',b));cp.on('error',e=>{j.error=e.message;});
@@ -152,10 +182,11 @@ export async function createService(dir){
  }
  async function publishShared(record){try{const r=await sharedFileOperation(communicationFile,'send',{record});return {shared_file:r.file,shared_file_written:r.written};}
  catch(e){return {shared_file:communicationFile,shared_file_written:false,shared_file_error:e.code||'SHARED_FILE_WRITE_FAILED',shared_file_detail:e.message};}}
+ async function fileHashes(targets){const entries=[];for(const target of targets){try{const hash=crypto.createHash('sha256');for await(const bytes of createReadStream(target))hash.update(bytes);entries.push([target,hash.digest('hex')]);}catch(error){if(error.code!=='ENOENT')throw error;entries.push([target,null]);}}return Object.fromEntries(entries);}
  async function requireSettledWorkspace(id){const uncertain=(await store.list('edits')).find(p=>p.workspace===id&&p.state==='uncertain');if(uncertain)fail('WORKSPACE_UNCERTAIN',`Edit ${uncertain.plan} requires explicit reconciliation: verify its old worker stopped and inspect transaction journals/target hashes. Do not admit a new edit or clear its lease automatically.`);}
  async function requireLease(owner,id,targets){const lease=await store.get('leases',checkId(id));if(!lease||!lease.active||lease.agent!==owner||targets.some(t=>!lease.paths.some(p=>within(keyPath(p),keyPath(t)))))fail('LEASE_REQUIRED','Active owning lease must cover every target');}
  async function launchEdit(p,op,input,wait){
-  if(activeEdits.size>=2)fail('EDIT_LIMIT','Two active edit workers maximum');
+  if(activeEdits.size>=capacity.edits)fail('EDIT_LIMIT',`${capacity.edits} active edit workers maximum`);
   if([...activeEdits.values()].some(e=>e.workspace===p.workspace))fail('EDIT_ACTIVE','Another edit is active in this workspace; inspect its status');
   await store.put('edits',p.plan,p);activeEdits.set(p.plan,p);
   const task=(async()=>{try{const result=await repoEngine(op,input);if(op==='plan')p.validation=result;else p.result=result;p.state=op==='plan'?'planned':op==='apply'?'applied':'rolled_back';}
@@ -165,7 +196,7 @@ export async function createService(dir){
   let timer;await Promise.race([task,new Promise(r=>{timer=setTimeout(r,bounded(wait,1000,0,25000));})]).finally(()=>clearTimeout(timer));
   const result=await store.get('edits',p.plan);if(result.code)fail(result.code,result.error);return result;
  }
- async function repoEngine(op,input){const state=path.join(dir,'repo-transactions');await fs.mkdir(state,{recursive:true});try{const r=await run(bundledPython,['-B','-X','utf8','-c',pythonBootstrap,repoScript,op,input,state],{windowsHide:true,timeout:1800000,maxBuffer:1048576});return JSON.parse(r.stdout);}catch(e){fail(e.killed?'UNCERTAIN_TIMEOUT':'EDIT_FAILED',String(e.stdout||e.message).slice(0,2000));}}
+ async function repoEngine(op,input){const state=path.join(dir,'repo-transactions');await fs.mkdir(state,{recursive:true});try{const r=await run(process.env.PLUGIN3_PYTHON||'python',['-B','-X','utf8',fileURLToPath(new URL('../extensions/codex-kit/broker_repo.py',import.meta.url)),op,input,state],{windowsHide:true,timeout:1800000,maxBuffer:1048576});return JSON.parse(r.stdout);}catch(e){fail(e.killed?'UNCERTAIN_TIMEOUT':'EDIT_FAILED',String(e.stdout||e.message).slice(0,2000));}}
  async function cancel(id){const j=await store.get('jobs',checkId(id)),cp=children.get(id);if(!j)fail('JOB_NOT_FOUND','Unknown job');if(!cp)return {job:id,state:j.state,cancelled:false};j.cancelled=true;j.state='cancelling';await store.put('jobs',id,j);cp.__cancelled=true;
   // Only terminate a child process object created and still held by this service.
   if(process.platform==='win32'){await run('taskkill.exe',['/PID',String(cp.pid),'/T','/F'],{windowsHide:true,timeout:10000}).catch(e=>{if(cp.exitCode===null)throw e;});}else cp.kill('SIGTERM');return {job:id,state:'cancelling'};
@@ -185,5 +216,5 @@ export async function createService(dir){
   if(method==='agent_wait'||method==='job_wait'||method==='edit_status'){const end=Date.now()+bounded(a.wait_ms,method==='edit_status'?0:1000,0,25000);let r;do{r=await perform();if(method==='agent_wait'?r.messages.length:!['running','starting','cancelling','validating','applying','rolling_back'].includes(r.state))return r;if(Date.now()>=end)return r;await new Promise(r=>setTimeout(r,150));}while(true);}
   return perform();
  }
- return {call,store,async close(){if(children.size||activeEdits.size)fail('ACTIVE_JOBS','Do not close a service with active jobs/edits');closing=true;await serial.catch(()=>{});await store.close();await new Promise(r=>owner.close(r));}};
+ return {call,store,async close(){if(children.size||activeEdits.size)fail('ACTIVE_JOBS','Do not close a service with active jobs/edits');closing=true;await serial.catch(()=>{});await codexReader.close();await store.close();await new Promise(r=>owner.close(r));}};
 }

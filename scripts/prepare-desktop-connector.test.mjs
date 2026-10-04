@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { tmpdir } from 'node:os';
@@ -15,9 +16,13 @@ import {
 import { plugin3TransportOptions } from '../packages/vibespace-desktop-commander/gateway.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
-const packageRoot = path.join(repoRoot, 'packages', 'vibespace-desktop-commander');
+const packageRoot = process.env.VIBESPACE_CONNECTOR_TEST_ROOT
+  ? path.resolve(process.env.VIBESPACE_CONNECTOR_TEST_ROOT)
+  : path.join(repoRoot, 'packages', 'vibespace-desktop-commander');
 const plugin3Root = path.join(packageRoot, 'plugin3');
 const plugin3Entry = path.join(plugin3Root, 'runtime', 'desktop-commander-v3', 'dist', 'index.js');
+const plugin3Node = process.env.VIBESPACE_CONNECTOR_TEST_NODE || process.execPath;
+const testStateRoot = process.env.VIBESPACE_CONNECTOR_TEST_STATE_ROOT || tmpdir();
 
 async function copyPlugin3(destination) {
   await cp(plugin3Root, destination, { recursive: true });
@@ -25,11 +30,24 @@ async function copyPlugin3(destination) {
 }
 
 function cleanEnv() {
-  return Object.fromEntries(Object.entries(process.env).filter(([, value]) => value !== undefined));
+  const allowed = ['ComSpec', 'PATHEXT', 'TMP', 'TEMP', 'windir', 'SystemRoot', 'PATH'];
+  return Object.fromEntries(allowed.filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
 }
 
 test('Plugin3 production source is allowlisted and relocatable', async () => {
   assert.ok(plugin3SourceFiles.includes('runtime/desktop-commander-v3/dist'));
+  for (const file of ['src/codex-reader.mjs', 'src/native-patch.mjs']) {
+    assert.ok(plugin3SourceFiles.includes(file), `missing Plugin3 source allowlist entry: ${file}`);
+    assert.ok(requiredPlugin3Files.includes(file), `missing required Plugin3 source entry: ${file}`);
+  }
+  for (const file of [
+    'runtime/desktop-commander-v3/dist/tools/process-lifecycle.js',
+    'runtime/desktop-commander-v3/dist/utils/process-output.js',
+    'runtime/desktop-commander-v3/dist/config.js',
+    'runtime/desktop-commander-v3/dist/version.js',
+  ]) {
+    assert.ok(requiredPlugin3Files.includes(file), `missing required Plugin3 source entry: ${file}`);
+  }
   assert.ok(
     requiredPlugin3Files.includes('runtime/desktop-commander-v3/dist/tools/browser-session.js'),
   );
@@ -44,10 +62,11 @@ test('Plugin3 production source is allowlisted and relocatable', async () => {
   const result = await validatePlugin3Tree(plugin3Root);
   assert.ok(result.files >= requiredPlugin3Files.length);
   const serviceSource = await readFile(path.join(plugin3Root, 'src', 'service.mjs'), 'utf8');
-  assert.match(serviceSource, /const bundledPython=/);
-  assert.match(serviceSource, /runpy\.run_path/);
+  assert.match(serviceSource, /createCodexReader/);
+  assert.match(serviceSource, /applyNativePatch/);
+  assert.match(serviceSource, /native_patch/);
+  assert.match(serviceSource, /run\(process\.env\.PLUGIN3_PYTHON\|\|'python',\['-B','-X','utf8'/);
   assert.doesNotMatch(serviceSource, /run\('python'/);
-  assert.doesNotMatch(serviceSource, /run\('rg'/);
   const guide = await readFile(
     path.join(plugin3Root, '3', 'skills', 'plugin3-native-work', 'SKILL.md'),
     'utf8',
@@ -105,7 +124,10 @@ test('Plugin3 production scanner rejects developer paths and state payloads', as
 });
 
 test('gateway launches the staged Plugin3 shared service with isolated state', () => {
-  const options = plugin3TransportOptions('C:\\app\\connector', 'C:\\app\\state');
+  const options = plugin3TransportOptions('C:\\app\\connector', 'C:\\app\\state', {
+    ripgrepPath:
+      'C:\\app\\connector\\node_modules\\@vscode\\ripgrep-win32-x64\\bin\\rg.exe',
+  });
   assert.equal(options.command, process.execPath);
   assert.deepEqual(options.args, [
     'C:\\app\\connector\\plugin3\\runtime\\desktop-commander-v3\\dist\\index.js',
@@ -115,19 +137,40 @@ test('gateway launches the staged Plugin3 shared service with isolated state', (
   assert.equal(options.cwd, 'C:\\app\\connector');
   assert.equal(options.env.PLUGIN3_DATA_DIR, 'C:\\app\\state\\plugin3');
   assert.equal(options.env.PLUGIN3_PYTHON, 'C:\\app\\connector\\runtime\\python\\python.exe');
+  assert.ok(options.env.PATH, 'shared service receives the bundled runtime executable search path');
+  const runtimePath = options.env.PATH.split(path.delimiter);
+  assert.ok(runtimePath.includes('C:\\app\\connector\\runtime\\python'));
+  assert.ok(
+    runtimePath.includes(
+      'C:\\app\\connector\\node_modules\\@vscode\\ripgrep-win32-x64\\bin',
+    ),
+  );
   assert.equal(options.env.PLUGIN3_SHARED_SERVICE, '1');
   assert.equal(options.env.OPENAI_API_KEY, undefined);
 });
 
 test('staged Plugin3 advertises shared-service and browser MCP tools', async () => {
-  const stateDir = await mkdtemp(path.join(tmpdir(), 'vibespace-plugin3-tools-'));
+  await mkdir(testStateRoot, { recursive: true });
+  const stateDir = await mkdtemp(path.join(testStateRoot, 'vibespace-plugin3-tools-'));
   const transport = new StdioClientTransport({
-    command: process.execPath,
+    command: plugin3Node,
     args: [plugin3Entry, '--no-onboarding', '--shared-service'],
     cwd: packageRoot,
     env: {
       ...cleanEnv(),
       PLUGIN3_DATA_DIR: path.join(stateDir, 'plugin3'),
+      PLUGIN3_PYTHON:
+        process.env.VIBESPACE_CONNECTOR_TEST_PYTHON ||
+        path.join(packageRoot, 'runtime', 'python', 'python.exe'),
+      PATH:
+        process.env.VIBESPACE_CONNECTOR_TEST_PATH ||
+        [
+          path.join(packageRoot, 'runtime', 'python'),
+          path.join(packageRoot, 'node_modules', '@vscode', 'ripgrep', 'bin'),
+          cleanEnv().PATH,
+        ]
+          .filter(Boolean)
+          .join(path.delimiter),
       PLUGIN3_SHARED_SERVICE: '1',
       DESKTOP_COMMANDER_DISABLE_TELEMETRY: '1',
     },
@@ -147,6 +190,10 @@ test('staged Plugin3 advertises shared-service and browser MCP tools', async () 
       'job_start',
       'browser_session',
       'browser_observe',
+      'plugin3_guide',
+      'native_patch',
+      'codex_threads',
+      'force_terminate',
     ]) {
       assert.ok(names.has(name), `missing staged Plugin3 tool: ${name}`);
     }
@@ -174,6 +221,62 @@ test('relocated broker path honors caller-provided data directory', async () => 
     await rm(temp, { recursive: true, force: true });
   }
 });
+
+test('Plugin3 runtime state follows the connector data directory', async () => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'vibespace-plugin3-state-root-'));
+  const prior = process.env.PLUGIN3_DATA_DIR;
+  try {
+    const relocated = await copyPlugin3(path.join(temp, 'plugin3'));
+    const dataDir = path.join(temp, 'isolated-state');
+    process.env.PLUGIN3_DATA_DIR = dataDir;
+    const config = await import(
+      `${pathToFileURL(path.join(relocated, 'runtime', 'desktop-commander-v3', 'dist', 'config.js')).href}?state=${Date.now()}`
+    );
+    assert.equal(path.dirname(config.CONFIG_FILE), path.join(dataDir, 'desktop-commander'));
+
+    const processOutput = await import(
+      `${pathToFileURL(path.join(relocated, 'runtime', 'desktop-commander-v3', 'dist', 'utils', 'process-output.js')).href}?state=${Date.now()}`
+    );
+    const log = new processOutput.ProcessOutputLog({ pid: 41 });
+    assert.equal(path.dirname(log.status().path), path.join(dataDir, 'process-output'));
+    await log.finish();
+
+    const browser = await import(
+      `${pathToFileURL(path.join(plugin3Root, 'runtime', 'desktop-commander-v3', 'dist', 'tools', 'browser-session.js')).href}?state=${Date.now()}`
+    );
+    assert.equal(browser.browserArtifactsDirectory, path.join(dataDir, 'browser-artifacts'));
+  } finally {
+    if (prior === undefined) delete process.env.PLUGIN3_DATA_DIR;
+    else process.env.PLUGIN3_DATA_DIR = prior;
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test(
+  'bundled Python repo helper imports its sibling module',
+  { skip: !process.env.VIBESPACE_CONNECTOR_TEST_PYTHON },
+  async () => {
+    await mkdir(testStateRoot, { recursive: true });
+    const temp = await mkdtemp(path.join(testStateRoot, 'plugin3-python-helper-'));
+    try {
+      const workspace = path.join(temp, 'workspace');
+      await mkdir(workspace);
+      const manifest = path.join(workspace, 'manifest.json');
+      await writeFile(manifest, JSON.stringify({ root: workspace, changes: [] }), 'utf8');
+      const helper = path.join(plugin3Root, 'extensions', 'codex-kit', 'broker_repo.py');
+      const result = spawnSync(
+        process.env.VIBESPACE_CONNECTOR_TEST_PYTHON,
+        ['-B', '-X', 'utf8', helper, 'plan', manifest, path.join(temp, 'state')],
+        { encoding: 'utf8', timeout: 10000, windowsHide: true },
+      );
+      assert.equal(result.status, 1);
+      assert.match(result.stdout, /Provide between 1 and 500 changes/u);
+      assert.doesNotMatch(result.stderr, /ModuleNotFoundError/u);
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  },
+);
 
 test('native and release entry points preflight the connector resource', async () => {
   const appPackage = JSON.parse(await readFile(path.join(repoRoot, 'app', 'package.json'), 'utf8'));

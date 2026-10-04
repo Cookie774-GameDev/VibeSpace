@@ -3,6 +3,7 @@ import {serviceTools,schemas as sharedSchemas} from '../../../src/contracts.mjs'
 import {serviceTool} from '../../../src/broker-client.mjs';
 const sharedBrowser=process.argv.includes('--shared-service')||process.env.PLUGIN3_SHARED_SERVICE==='1';
 import { batchEdit, BatchEditSchema } from './tools/batch-edit.js';
+import {terminateOwnedSession,listProcessDetails,ProcessInventorySchema} from './tools/process-lifecycle.js';
 import { browserSession, BrowserSessionSchema, browserObserve, BrowserObserveSchema } from './tools/browser-session.js';
 import { GUIDE_URI, GUIDE_PROMPT, GUIDE_INSTRUCTIONS, guideText, pluginGuide } from './tools/agent-guide.js';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -235,8 +236,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             ...serviceTools,
             {name:'batch_edit',description:'Apply up to 100 exact edits per file across 64 absolute paths (4 MiB request cap). Preflight validates ALL files before any target writes; failure there changes none. Use concurrency=4 for independent files; default1 commits sequentially. Commit rechecks preflight hashes under per-file locks, stages, flushes and SHA256-verifies. expected_sha256 also guards caller snapshots. Commit-time races can leave partial results; response includes phase, verified receipts, failures and skipped paths. Never blindly retry; not a cross-file atomic transaction.',inputSchema:zodToJsonSchema(BatchEditSchema),annotations:{readOnlyHint:false,destructiveHint:true}},
             {name:'plugin3_guide',description:'Read once before Plugin 3 work: operating skill, exact native VibeSpace launch/cache paths, structured locators, partial-success recovery, error classification, ownership and commits. Guidance does not grant host permissions.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false}},
-            {name:'browser_observe',description:'Read-only Playwright observations in existing sessions; operation:list discovers actual session IDs; targets with a loopback endpoint lists target_id/title/url without attaching. Supports status, snapshots, text, input values, exact/contains assertions and waits. Cannot click, fill, navigate, attach, close or write screenshot files. Read plugin3_guide once; use structured locators and inspect partial results.',inputSchema:zodToJsonSchema(BrowserObserveSchema),annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}},
-            {name:'browser_session',description:'Persistent Playwright lifecycle and interactions. Read plugin3_guide once; use browser_observe for reads/list. Structured locator examples: {role:"button",name:"Create chat",exact:true}, {label:"Message",exact:true}. Never put [exact=true] in raw selectors. assert_text is exact; assert_text_contains is substring. open creates isolated Edge; attach requires authorized loopback CDP and current page identity: use target_id from read-only targets discovery, or an explicitly verified page_index. Multiple windows without a selection are rejected. Attached sessions cannot navigate/close app. Failures preserve completed actions and failedActionIndex; inspect before retrying unfinished work. No automatic mutation replay.',inputSchema:zodToJsonSchema(BrowserSessionSchema),annotations:{readOnlyHint:false,destructiveHint:true,openWorldHint:true}},
+            {name:'browser_observe',description:'Read-only Playwright observations in existing sessions; operation:list discovers actual session IDs; targets with a loopback endpoint lists target_id/title/url without attaching. Supports status, snapshots, text, input values, assertions, waits and screenshot_inline (one bounded JPEG image returned directly; no file write). Cannot click, fill, navigate, attach or close. Read plugin3_guide once; inspect partial results.',inputSchema:zodToJsonSchema(BrowserObserveSchema),annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:true}},
+            {name:'browser_session',description:'Persistent Playwright browser/native-WebView interactions. Read plugin3_guide once; use browser_observe for reads/list. Supports locators plus viewport mouse_click/mouse_move/mouse_drag/mouse_wheel and keyboard_type/keyboard_press. Coordinates are CSS viewport pixels, not desktop screen pixels. open creates isolated Edge; attach requires authorized loopback CDP and verified target_id or page_index. Attached sessions cannot navigate/close the native app. Completed actions and inline screenshots survive later action failure; inspect failedActionIndex before retrying. No automatic mutation replay.',inputSchema:zodToJsonSchema(BrowserSessionSchema),annotations:{readOnlyHint:false,destructiveHint:true,openWorldHint:true}},
             // Configuration tools
             {
                 name: "get_config",
@@ -976,7 +977,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             {
                 name: "force_terminate",
                 description: `
-                        Force terminate a running terminal session.
+                        Terminate an owned terminal session. Windows stops its held process tree and waits for output/session cleanup. Completion is explicit; unknown PIDs are not globally killed. Verify task ownership first. Windows pipe Ctrl-C input is not a reliable process-tree stop.
 
                         ${CMD_PREFIX_DESCRIPTION}`,
                 inputSchema: zodToJsonSchema(ForceTerminateArgsSchema),
@@ -1014,10 +1015,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 description: `
                         List all running processes.
 
-                        Returns process information including PID, command name, CPU usage, and memory usage.
+                        Windows returns bounded live CIM records: PID, parent PID, executable name/path and working_set_bytes. Optional pid filter or offset/limit pagination; follow next_offset when has_more. Command arguments/credentials are omitted. No CPU value is guessed from tasklist columns.
 
                         ${CMD_PREFIX_DESCRIPTION}`,
-                inputSchema: zodToJsonSchema(ListProcessesArgsSchema),
+                inputSchema: zodToJsonSchema(ProcessInventorySchema),
                 annotations: {
                     title: "List Running Processes",
                     readOnlyHint: true,
@@ -1374,14 +1375,14 @@ async function handleCallToolRequest(request) {
                 result = await handlers.handleInteractWithProcess(args);
                 break;
             case "force_terminate":
-                result = await handlers.handleForceTerminate(args);
+                result = await terminateOwnedSession(args,handlers.handleForceTerminate);
                 break;
             case "list_sessions":
                 result = await handlers.handleListSessions();
                 break;
             // Process tools
             case "list_processes":
-                result = await handlers.handleListProcesses();
+                result = await listProcessDetails(args,handlers.handleListProcesses);
                 break;
             case "kill_process":
                 result = await handlers.handleKillProcess(args);
@@ -1531,7 +1532,7 @@ async function handleCallToolRequest(request) {
         // strips them. Prepend a corrective warning so the model knows they were
         // ignored and which parameters are actually supported.
         try {
-            const argSchema = toolArgSchemas[name];
+            const argSchema = name==='list_processes'?ProcessInventorySchema:toolArgSchemas[name];
             if (argSchema && result && Array.isArray(result.content)) {
                 const unsupported = detectUnsupportedParams(args, argSchema);
                 if (unsupported.length > 0) {

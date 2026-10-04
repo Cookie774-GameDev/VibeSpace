@@ -1,10 +1,9 @@
 // Bounded, on-disk process transcripts. Never executes or retries a command.
 import fs from 'node:fs';
-import path from 'node:path';
 import os from 'node:os';
+import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-const defaultDirectory=process.env.PLUGIN3_DATA_DIR?path.join(process.env.PLUGIN3_DATA_DIR,'process-output'):path.join(os.homedir(),'.vibespace','desktop-link','plugin3','process-output');
 const budgets=new Map();
 const activeLogs=new Set();
 const alive=pid=>{try{process.kill(pid,0);return true;}catch(e){return e.code!=='ESRCH';}};
@@ -21,7 +20,7 @@ function budgetFor(directory,retentionMs){
  return budget;
 }
 export class ProcessOutputLog extends EventEmitter{
- constructor({directory=defaultDirectory,pid=0,maxBytes=64*1024*1024,maxTotalBytes=512*1024*1024,retentionMs=86400000}={}){
+ constructor({directory=path.join(process.env.PLUGIN3_DATA_DIR||path.join(os.homedir(),'.plugin3-data'),'process-output'),pid=0,maxBytes=64*1024*1024,maxTotalBytes=512*1024*1024,retentionMs=86400000}={}){
   super();this.bytes=0;this.droppedBytes=0;this.error=null;this.maxBytes=maxBytes;this.maxTotalBytes=maxTotalBytes;this.ended=false;
   try{
    this.budget=budgetFor(directory,retentionMs);

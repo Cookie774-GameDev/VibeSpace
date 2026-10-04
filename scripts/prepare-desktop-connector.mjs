@@ -32,6 +32,8 @@ export const plugin3SourceFiles = [
   'src/broker.mjs',
   'src/contracts.mjs',
   'src/service.mjs',
+  'src/codex-reader.mjs',
+  'src/native-patch.mjs',
   'src/shared-file.mjs',
   'src/storage-worker.mjs',
   'src/store.mjs',
@@ -48,6 +50,8 @@ export const requiredPlugin3Files = [
   'src/broker.mjs',
   'src/contracts.mjs',
   'src/service.mjs',
+  'src/codex-reader.mjs',
+  'src/native-patch.mjs',
   'src/shared-file.mjs',
   'src/storage-worker.mjs',
   'src/store.mjs',
@@ -59,6 +63,10 @@ export const requiredPlugin3Files = [
   'runtime/desktop-commander-v3/dist/server.js',
   'runtime/desktop-commander-v3/dist/tools/agent-guide.js',
   'runtime/desktop-commander-v3/dist/tools/browser-session.js',
+  'runtime/desktop-commander-v3/dist/tools/process-lifecycle.js',
+  'runtime/desktop-commander-v3/dist/utils/process-output.js',
+  'runtime/desktop-commander-v3/dist/config.js',
+  'runtime/desktop-commander-v3/dist/version.js',
 ];
 const forbiddenPlugin3Text = [
   /C:\\Users\\/i,
@@ -231,6 +239,12 @@ async function prepare() {
     console.log('Desktop connector is unavailable on this platform; app packaging continues.');
     return;
   }
+  const { buildDesktopCommanderDownload } = await import('./build-desktop-commander-download.mjs');
+  const download = await buildDesktopCommanderDownload({
+    packageFiles: sourceFiles,
+    validatePlugin3Tree,
+  });
+  console.log('Desktop Commander download refreshed (' + download.sha256 + ').');
   const sourceHash = await fingerprint();
   try {
     const manifest = JSON.parse(await readFile(path.join(output, 'manifest.json'), 'utf8'));

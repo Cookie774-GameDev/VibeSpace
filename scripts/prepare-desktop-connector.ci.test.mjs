@@ -23,6 +23,10 @@ test('Rust CI prepares connector resources before Cargo on a clean checkout', as
     appPackage.scripts['prepare:desktop-connector'],
     'node scripts/prepare-desktop-connector.mjs',
   );
+  assert.equal(
+    appPackage.scripts['build:desktop-commander-download'],
+    'node scripts/build-desktop-commander-download.mjs',
+  );
 });
 
 test('Linux preparation creates the real unsupported-platform manifest without a developer runtime', async () => {

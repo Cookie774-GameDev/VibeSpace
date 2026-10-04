@@ -1,9 +1,11 @@
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
 // Use user's home directory for configuration files
 export const USER_HOME = os.homedir();
-const CONFIG_DIR = path.resolve(
-    process.env.PLUGIN3_DATA_DIR || path.join(USER_HOME, '.vibespace', 'desktop-link', 'plugin3'),
+const CONFIG_DIR = path.join(
+  process.env.PLUGIN3_DATA_DIR || path.join(os.homedir(), '.plugin3-data'),
+  'desktop-commander',
 );
 // Paths relative to the config directory
 export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');

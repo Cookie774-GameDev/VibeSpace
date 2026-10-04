@@ -20,7 +20,7 @@ const server=net.createServer(socket=>{
 server.once('error',e=>{if(e.code!=='EADDRINUSE')console.error('Plugin3 broker failed:',e.code);process.exit(e.code==='EADDRINUSE'?0:1);});
 await fs.mkdir(dataDir,{recursive:true});
 server.listen(endpoint,async()=>{
- try{service=await createService(dataDir);ready=true;await fs.writeFile(path.join(dataDir,'broker.json'),JSON.stringify({pid:process.pid,endpoint,version:'0.4.0',started_at:new Date().toISOString()},null,2));}
+ try{service=await createService(dataDir);ready=true;await fs.writeFile(path.join(dataDir,'broker.json'),JSON.stringify({pid:process.pid,endpoint,version:'0.4.5',started_at:new Date().toISOString()},null,2));}
  catch(e){console.error('Plugin3 broker initialization failed:',e.message);process.exit(1);}
 });
 // A pipe socket is local. Existing No Auth cloud configuration is unchanged.

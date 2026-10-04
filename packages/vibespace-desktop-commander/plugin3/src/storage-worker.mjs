@@ -7,6 +7,7 @@ const put=db.prepare('INSERT INTO records VALUES(?,?,?) ON CONFLICT(ns,id) DO UP
 parentPort.on('message',({id,op,ns,key,value})=>{
  try{
   let result;
+  if(op==='close'){db.close();parentPort.postMessage({id,result:true});parentPort.close();return;}
   if(op==='get'){const r=get.get(ns,key);result=r?JSON.parse(r.value):null;}
   else if(op==='put'){put.run(ns,key,JSON.stringify(value));result=true;}
   else if(op==='list')result=db.prepare('SELECT value FROM records WHERE ns=? ORDER BY id LIMIT 10000').all(ns).map(r=>JSON.parse(r.value));

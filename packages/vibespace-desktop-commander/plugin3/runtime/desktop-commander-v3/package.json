@@ -1,6 +1,6 @@
 {
   "name": "@wonderwhy-er/desktop-commander",
-  "version": "0.4.0-local.1",
+  "version": "0.4.5-local.1",
   "description": "Plugin 3: guarded batch edits, Unicode terminals, persistent Playwright",
   "mcpName": "io.github.wonderwhy-er/desktop-commander",
   "license": "MIT",
@@ -53,7 +53,6 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.9.0",
-    "@puppeteer/browsers": "3.2.2",
     "@opendocsg/pdf2md": "^0.2.2",
     "@supabase/supabase-js": "^2.89.0",
     "@tiptap/core": "^3.22.3",

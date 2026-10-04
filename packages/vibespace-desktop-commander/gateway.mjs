@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -18,8 +19,16 @@ import { createSetupRuntime, publicSetupError } from './setup-runtime.mjs';
 import { computerStartup } from './startup.mjs';
 
 const base = path.dirname(fileURLToPath(import.meta.url));
-export function plugin3TransportOptions(baseDir = base, stateDir = path.join(baseDir, 'state')) {
+export function plugin3TransportOptions(
+  baseDir = base,
+  stateDir = path.join(baseDir, 'state'),
+  { ripgrepPath } = {},
+) {
   const plugin3StateDir = path.resolve(stateDir, 'plugin3');
+  const bundledRipgrepPath =
+    ripgrepPath ?? createRequire(path.join(baseDir, 'package.json'))('@vscode/ripgrep').rgPath;
+  if (typeof bundledRipgrepPath !== 'string')
+    throw Error('The packaged ripgrep executable is unavailable.');
   return {
     command: process.execPath,
     args: [
@@ -28,14 +37,20 @@ export function plugin3TransportOptions(baseDir = base, stateDir = path.join(bas
       '--shared-service',
     ],
     cwd: baseDir,
-    // The SDK's minimal environment omits Windows runtime variables required by this package.
-    // Preserve these OS settings without forwarding unrelated provider credentials.
+    // Keep the child environment narrow while resolving only the bundled Python and ripgrep tools.
     env: {
       ...Object.fromEntries(
         ['ComSpec', 'PATHEXT', 'TMP', 'windir']
           .filter((key) => process.env[key])
           .map((key) => [key, process.env[key]]),
       ),
+      PATH: [
+        path.join(baseDir, 'runtime', 'python'),
+        path.dirname(bundledRipgrepPath),
+        process.env.PATH,
+      ]
+        .filter(Boolean)
+        .join(path.delimiter),
       PLUGIN3_DATA_DIR: plugin3StateDir,
       PLUGIN3_PYTHON: path.join(baseDir, 'runtime', 'python', 'python.exe'),
       PLUGIN3_SHARED_SERVICE: '1',

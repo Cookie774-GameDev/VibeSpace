@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import os from 'node:os';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -11,13 +11,17 @@ const locator=z.union([
  z.object({label:short,exact}).strict(),z.object({text:short,exact}).strict(),
  z.object({testId:short}).strict(),z.object({css:short}).strict()
 ]);
-const readTypes=['snapshot','text','input_value','assert_text','assert_text_contains','assert_value','wait','count'];
-function actionSchema(types){return z.object({type:z.enum(types),selector:short.optional(),locator:locator.optional(),frame_selector:short.optional(),value:z.string().max(100000).optional(),state:z.enum(['visible','hidden','attached','detached']).optional()}).strict().superRefine((a,c)=>{
+const readTypes=['snapshot','text','input_value','assert_text','assert_text_contains','assert_value','wait','count','screenshot_inline'];
+function actionSchema(types){return z.object({type:z.enum(types),selector:short.optional(),locator:locator.optional(),frame_selector:short.optional(),value:z.string().max(100000).optional(),state:z.enum(['visible','hidden','attached','detached']).optional(),x:z.number().int().min(0).max(10000).optional(),y:z.number().int().min(0).max(10000).optional(),to_x:z.number().int().min(0).max(10000).optional(),to_y:z.number().int().min(0).max(10000).optional(),delta_x:z.number().int().min(-10000).max(10000).optional(),delta_y:z.number().int().min(-10000).max(10000).optional(),steps:z.number().int().min(1).max(100).optional()}).strict().superRefine((a,c)=>{
  if(a.selector!==undefined&&a.locator!==undefined)c.addIssue({code:'custom',message:'Choose selector OR locator'});
  if(/\[exact\s*=/.test(a.selector||a.locator?.css||''))c.addIssue({code:'custom',message:'Raw [exact=true] is invalid. Use locator: {role:"button",name:"Create chat",exact:true}.'});
+ if(['mouse_click','mouse_move','mouse_drag'].includes(a.type)&&(a.x===undefined||a.y===undefined))c.addIssue({code:'custom',message:a.type+' requires x and y viewport coordinates'});
+ if(a.type==='mouse_drag'&&(a.to_x===undefined||a.to_y===undefined))c.addIssue({code:'custom',message:'mouse_drag requires to_x and to_y viewport coordinates'});
+ if(a.type==='mouse_wheel'&&a.delta_y===undefined)c.addIssue({code:'custom',message:'mouse_wheel requires delta_y'});
+ if(['keyboard_type','keyboard_press'].includes(a.type)&&a.value===undefined)c.addIssue({code:'custom',message:a.type+' requires value'});
 });}
 const common={session:z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/),owner:z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/).optional(),max_chars:z.number().int().min(100).max(65536).default(12000),timeout_ms:z.number().int().min(100).max(30000).default(10000)};
-export const BrowserSessionSchema=z.object({...common,operation:z.enum(['open','attach','status','snapshot','actions','navigate','close','detach','pages','new_page','select_page']),url:z.string().max(4000).optional(),endpoint:z.string().max(4000).optional(),page_index:z.number().int().min(0).max(100).optional(),target_id:z.string().min(1).max(200).optional(),headed:z.boolean().default(false),actions:z.array(actionSchema([...readTypes,'click','fill','press','screenshot','hover','check','uncheck','select_option','scroll_into_view'])).max(32).optional()}).strict();
+export const BrowserSessionSchema=z.object({...common,operation:z.enum(['open','attach','status','snapshot','actions','navigate','close','detach','pages','new_page','select_page']),url:z.string().max(4000).optional(),endpoint:z.string().max(4000).optional(),page_index:z.number().int().min(0).max(100).optional(),target_id:z.string().min(1).max(200).optional(),headed:z.boolean().default(false),actions:z.array(actionSchema([...readTypes,'click','fill','press','screenshot','hover','check','uncheck','select_option','scroll_into_view','mouse_click','mouse_move','mouse_drag','mouse_wheel','keyboard_type','keyboard_press'])).max(32).optional()}).strict();
 export const BrowserObserveSchema=z.object({...common,session:common.session.optional(),operation:z.enum(['list','targets','status','snapshot','actions','pages']),endpoint:z.string().max(4000).optional(),actions:z.array(actionSchema(readTypes)).max(32).optional()}).strict().superRefine((a,c)=>{if(!['list','targets'].includes(a.operation)&&!a.session)c.addIssue({code:'custom',message:'session required except for list'});});
 function endpointURL(value){let u;try{u=new URL(value);}catch{throw fault('INVALID_ARGUMENT','Valid loopback endpoint required');}if(!['http:','https:'].includes(u.protocol)||!['127.0.0.1','localhost','[::1]'].includes(u.hostname)||u.username||u.password)throw fault('INVALID_ARGUMENT','An authorized loopback HTTP CDP endpoint is required');return u;}
 export async function discoverTargets(endpoint,timeout=10000){
@@ -37,8 +41,8 @@ export async function discoverTargets(endpoint,timeout=10000){
 async function pageTargetId(page){const cdp=await page.context().newCDPSession(page);try{return (await cdp.send('Target.getTargetInfo')).targetInfo.targetId;}finally{await cdp.detach();}}
 const sessions=new Map(),queues=new Map(),targetOwners=new Map();
 let playwright,opening=0;
-const artifacts=path.join(process.env.PLUGIN3_DATA_DIR||path.join(os.homedir(),'.vibespace','desktop-link','plugin3'),'browser-artifacts');
-const response=(value,error=false)=>({isError:error,content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value});
+export const browserArtifactsDirectory=path.join(process.env.PLUGIN3_DATA_DIR||path.join(os.homedir(),'.plugin3-data'),'browser-artifacts');
+const response=(value,error=false,images=[])=>({isError:error,content:[{type:'text',text:JSON.stringify(value)},...images],structuredContent:value});
 const fault=(code,message,extra={})=>Object.assign(new Error(message),{code,...extra});
 function safeURL(value){const u=new URL(value);if(!['http:','https:'].includes(u.protocol))throw fault('INVALID_ARGUMENT','Only HTTP(S) navigation supported');return u.href;}
 function target(page,s){const l=s.locator;if(s.frame_selector)page=page.frameLocator(s.frame_selector);if(!l)return page.locator(s.selector||'body');if(l.role!==undefined)return page.getByRole(l.role,{name:l.name,exact:l.exact});if(l.label!==undefined)return page.getByLabel(l.label,{exact:l.exact});if(l.text!==undefined)return page.getByText(l.text,{exact:l.exact});if(l.testId!==undefined)return page.getByTestId(l.testId);return page.locator(l.css);}
@@ -53,7 +57,7 @@ async function dispatch(input,readOnly){
 export const browserSession=input=>dispatch(input,false);
 export const browserObserve=input=>dispatch(input,true);
 async function execute(a,readOnly){
- const started=performance.now(),results=[];let failedActionIndex=null,remaining=a.max_chars;
+ const started=performance.now(),results=[],images=[];let failedActionIndex=null,remaining=a.max_chars;
  const clip=text=>{const n=remaining,v={text:text.slice(0,n),truncated:text.length>n,totalChars:text.length};remaining-=v.text.length;return v;};
  const deadline=()=>{const n=Math.floor(a.timeout_ms-(performance.now()-started));if(n<=0)throw fault('TIMEOUT','Action batch deadline reached');return n;};
  try{
@@ -64,11 +68,7 @@ async function execute(a,readOnly){
    if(sessions.size+opening>=8)throw fault('SESSION_LIMIT','Eight sessions already open or opening');
    opening++;
    try{
-    const bundledPlaywright=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../../../browser/node_modules/playwright-core/index.js');
-    playwright??=await import(process.env.PLUGIN3_PLAYWRIGHT_MODULE||bundledPlaywright).catch(async error=>{
-     if(process.env.PLUGIN3_PLAYWRIGHT_MODULE)throw error;
-     return import('playwright-core');
-    });
+    playwright??=await import('playwright-core');
     if(a.operation==='attach'){
      if(a.target_id!==undefined&&a.page_index!==undefined)throw fault('INVALID_ARGUMENT','Choose target_id OR page_index, not both');
      const u=endpointURL(a.endpoint),browser=await playwright.chromium.connectOverCDP(u.href,{timeout:deadline()});
@@ -127,6 +127,12 @@ async function execute(a,readOnly){
    else if(step.type==='text')data={...data,...clip(await loc.innerText({timeout}))};
    else if(step.type==='input_value')data={...data,...clip(await loc.inputValue({timeout}))};
    else if(step.type==='count')data.count=await loc.count();
+   else if(step.type==='screenshot_inline'){
+    if(images.length)throw fault('IMAGE_LIMIT','Only one inline screenshot per action batch');
+    const bytes=await page.screenshot({type:'jpeg',quality:75,fullPage:false,timeout});
+    if(bytes.length>1024*1024)throw fault('IMAGE_TOO_LARGE','Inline screenshot exceeds 1 MiB; use a smaller viewport or the file-backed screenshot action');
+    images.push({type:'image',mimeType:'image/jpeg',data:bytes.toString('base64')});data.bytes=bytes.length;
+   }
    else if(['assert_value','assert_text','assert_text_contains'].includes(step.type)){
     const actual=step.type==='assert_value'?await loc.inputValue({timeout}):await loc.innerText({timeout}),expected=step.value??'';
     if(!(step.type==='assert_text_contains'?actual.includes(expected):actual===expected)){
@@ -134,22 +140,31 @@ async function execute(a,readOnly){
      throw fault('ASSERTION_MISMATCH',step.type+' failed: '+(step.type==='assert_text_contains'?'substring':'exact')+' mismatch',{diagnostic:{actual:av,expected:clip(expected)}});
     }data.matched=true;
    }else if(step.type==='click')await loc.click({timeout});
+   else if(step.type==='mouse_click')await page.mouse.click(step.x,step.y);
+   else if(step.type==='mouse_move')await page.mouse.move(step.x,step.y);
+   else if(step.type==='mouse_wheel')await page.mouse.wheel(step.delta_x??0,step.delta_y);
+   else if(step.type==='mouse_drag'){
+    await page.mouse.move(step.x,step.y);await page.mouse.down();
+    try{await page.mouse.move(step.to_x,step.to_y,{steps:step.steps??10});}finally{await page.mouse.up();}
+   }
    else if(step.type==='fill')await loc.fill(step.value??'',{timeout});
    else if(step.type==='press')await loc.press(step.value??'',{timeout});
+   else if(step.type==='keyboard_type')await page.keyboard.insertText(step.value);
+   else if(step.type==='keyboard_press')await page.keyboard.press(step.value);
    else if(step.type==='hover')await loc.hover({timeout});
    else if(step.type==='check')await loc.check({timeout});
    else if(step.type==='uncheck')await loc.uncheck({timeout});
    else if(step.type==='select_option')await loc.selectOption(step.value??'',{timeout});
    else if(step.type==='scroll_into_view')await loc.scrollIntoViewIfNeeded({timeout});
    else if(step.type==='wait')await loc.waitFor({state:step.state||'visible',timeout});
-   else if(step.type==='screenshot'){await fs.mkdir(artifacts,{recursive:true});data.path=path.join(artifacts,a.session+'-'+randomUUID()+'.png');await page.screenshot({path:data.path,timeout:deadline()});}
+   else if(step.type==='screenshot'){await fs.mkdir(browserArtifactsDirectory,{recursive:true});data.path=path.join(browserArtifactsDirectory,a.session+'-'+randomUUID()+'.png');await page.screenshot({path:data.path,timeout:deadline()});}
    results.push(data);failedActionIndex=null;
   }
   let timer;const title=await Promise.race([page.title(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(fault('TIMEOUT','Title metadata deadline reached')),deadline());})]).finally(()=>clearTimeout(timer));
   const titleView=clip(title);
-  return response({session:a.session,owned:s.owned,target_id:s.targetId??null,page_index:s.browser.contexts().flatMap(c=>c.pages()).indexOf(page),url:page.url(),title:titleView.text,titleTruncated:titleView.truncated,titleTotalChars:titleView.totalChars,results,completed:results.length,elapsedMs:Math.round((performance.now()-started)*100)/100});
+  return response({session:a.session,owned:s.owned,target_id:s.targetId??null,page_index:s.browser.contexts().flatMap(c=>c.pages()).indexOf(page),url:page.url(),title:titleView.text,titleTruncated:titleView.truncated,titleTotalChars:titleView.totalChars,results,completed:results.length,elapsedMs:Math.round((performance.now()-started)*100)/100},false,images);
  }catch(e){
   const code=e.code||(e.name==='TimeoutError'?'TIMEOUT':/strict mode violation|Unknown attribute|Unexpected token/.test(e.message)?'LOCATOR_ERROR':/ECONNREFUSED|ECONNRESET|WebSocket/.test(e.message)?'CONNECTION_ERROR':'BROWSER_ERROR');
-  return response({session:a.session,code,layer:code==='INVALID_ARGUMENT'?'input':'browser',error:e.message.slice(0,2000),...(e.diagnostic?{diagnostic:e.diagnostic}:{}),results,completed:results.length,failedActionIndex,replaySafe:false,notice:'Completed actions remain completed. Inspect the page before retrying only unfinished work. Technical errors are not host-policy denials.',elapsedMs:Math.round((performance.now()-started)*100)/100},true);
+  return response({session:a.session,code,layer:code==='INVALID_ARGUMENT'?'input':'browser',error:e.message.slice(0,2000),...(e.diagnostic?{diagnostic:e.diagnostic}:{}),results,completed:results.length,failedActionIndex,replaySafe:false,notice:'Completed actions remain completed. Inspect the page before retrying only unfinished work. Technical errors are not host-policy denials.',elapsedMs:Math.round((performance.now()-started)*100)/100},true,images);
  }
 }
