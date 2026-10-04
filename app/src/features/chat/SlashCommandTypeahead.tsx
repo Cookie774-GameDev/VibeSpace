@@ -311,6 +311,12 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     argPlaceholder: '<image prompt>',
   },
   {
+    cmd: 'sketch',
+    description: 'Open Sketchbook and attach a drawing',
+    icon: Palette,
+    category: 'chat',
+  },
+  {
     cmd: 'effort',
     description: 'Set reasoning effort for the current model',
     icon: SlidersHorizontal,

@@ -35,7 +35,10 @@ describe('Composer selected-STT field transactions', () => {
     finalText='safe fixed phrase';await c.finish();
     expect(c.getSnapshot()).toMatchObject({phase:'preview',text:finalText,partial:false});
     expect(commit).not.toHaveBeenCalled();
-    await Promise.all([c.accept(),c.accept()]);
+    expect(await Promise.all([c.accept(),c.accept()])).toEqual([
+      'alpha safe fixed phrase omega',
+      'alpha safe fixed phrase omega',
+    ]);
     expect(field.value).toBe('alpha safe fixed phrase omega');
     expect(field.selectionStart).toBe(23);
     expect(commit).toHaveBeenCalledOnce();
@@ -69,8 +72,8 @@ describe('Composer selected-STT field transactions', () => {
   it('cancels transcription immediately and cannot accept its delayed result', async () => {
     let done!:()=>void;stop.mockImplementation(()=>new Promise<void>(resolve=>{done=resolve;}));
     const c=make();await c.start();const accepting=c.accept();
-    expect(c.getSnapshot().phase).toBe('transcribing');c.cancel();
-    finalText='discard';events.onFinal?.(finalText);done();await accepting;
+    await Promise.resolve();expect(c.getSnapshot().phase).toBe('transcribing');c.cancel();
+    finalText='discard';events.onFinal?.(finalText);done();expect(await accepting).toBeNull();
     expect(commit).not.toHaveBeenCalled();expect(c.getSnapshot().phase).toBe('idle');c.dispose();
   });
 

@@ -1671,6 +1671,7 @@ export function Composer({
   const themePickerRef = useRef<ThemeSlashPickerRef>(null);
   const volumeRef = sttVolumeRef;
   const voiceReplyRequestedRef = useRef(false);
+  const dictationSendInFlightRef = useRef(false);
   const sttController = useMemo(
     () =>
       createComposerDictationController({
@@ -2998,6 +2999,12 @@ export function Composer({
     }
 
     const canonicalCmd = normalizeSlashCmd(cmd.cmd);
+    if (canonicalCmd === 'sketch') {
+      setText(before + after);
+      setSlashCtx(null);
+      setSketchOpen(true);
+      return;
+    }
     if (canonicalCmd === 'notes') {
       setText(before + '/notes' + after);
       dismissedNotesRef.current = null;
@@ -4462,7 +4469,25 @@ export function Composer({
       handoffPayload?: ReturnType<typeof buildComposerChatHandoffPayload> | null;
       submittedVisibleHandoffKey?: string | null;
     } = {},
+    acceptedDictationText?: string,
   ): Promise<boolean> => {
+    const dictationPhase = sttController.getSnapshot().phase;
+    if (
+      overrideText === undefined &&
+      acceptedDictationText === undefined &&
+      !options.attachments &&
+      !questionDictationTargetRef.current &&
+      (dictationPhase === 'listening' || dictationPhase === 'transcribing' || dictationPhase === 'preview')
+    ) {
+      if (dictationSendInFlightRef.current) return false;
+      dictationSendInFlightRef.current = true;
+      try {
+        const accepted = await sttController.accept();
+        return accepted === null ? false : handleSend(undefined, options, accepted);
+      } finally {
+        dictationSendInFlightRef.current = false;
+      }
+    }
     // Persisting the message can yield while the user selects another project.
     const toolGatewayAuthority = captureToolGatewayAuthorityClaim();
     const {
@@ -4487,7 +4512,7 @@ export function Composer({
       return false;
     }
     const submittedAnnotations = !overrideText && !options.attachments ? chatAnnotations : [];
-    const draftText = overrideText ?? text;
+    const draftText = overrideText ?? acceptedDictationText ?? text;
     const directlySubmittedDraftEditRevision = handoffDraftEditRevisionRef.current;
     const directlySubmittedVisibleHandoffKey =
       options.handoffPayload === undefined && pendingHandoff
@@ -6398,8 +6423,14 @@ export function Composer({
     confirmedAgentMentions.length > 0 ||
     confirmedCatalogReferences.length > 0 ||
     pendingHandoff !== null;
+  const canFinalizeDictation =
+    !questionDictationTargetRef.current &&
+    (sttView.phase === 'listening' || sttView.phase === 'transcribing' || sttView.phase === 'preview');
   const canSend =
-    hasDraft && !sending && (!backendRuntimeBlocked || canAttemptSlashWhileBackendBlocked);
+    (hasDraft || canFinalizeDictation) &&
+    !sending &&
+    !dictationSendInFlightRef.current &&
+    (!backendRuntimeBlocked || canAttemptSlashWhileBackendBlocked);
   const kernelSmokeHiveBound = KERNEL_SMOKE_ENABLED && isKernelSmokeBindingActive();
   const kernelSmokeHivePrepared =
     kernelSmokeHiveBound &&
@@ -7422,12 +7453,6 @@ export function Composer({
                 rows={1}
                 onChange={(e) => {
                   const nextDraft = e.target.value;
-                  if (nextDraft.trim().toLowerCase() === '/sketch') {
-                    setText('');
-                    setSlashCtx(null);
-                    setSketchOpen(true);
-                    return;
-                  }
                   if (selectedHarnessCommandRef.current &&
                       !nextDraft.startsWith(`/${selectedHarnessCommandRef.current.commandIdentifier}`)) {
                     selectedHarnessCommandRef.current = null;

@@ -34,6 +34,7 @@ export function createComposerDictationController(ports: FieldPorts) {
   let committedText = '';
   let ending = false;
   let finalizing: Promise<void> | null = null;
+  let accepting: { generation: number; promise: Promise<string | null> } | null = null;
   const publish = (next: Partial<ComposerDictationSnapshot>) => {
     if (disposed) return;
     state = Object.freeze({...state,...next});
@@ -107,18 +108,27 @@ export function createComposerDictationController(ports: FieldPorts) {
     })();
     return finalizing;
   };
-  const accept = async () => {
+  const accept = (): Promise<string | null> => {
     const id=generation;
-    if(state.phase!=='preview')await finish();
-    if(!current(id)||state.phase!=='preview'||!snapshot||!target)return;
-    if(ports.field()!==target||target.value!==original){
-      fail('The draft changed during dictation. Nothing was inserted. Review the draft and retry.');return;
-    }
-    const text=state.text.trim();const value=buildSttCommittedValue(snapshot,text);
-    if(value===null)return;
-    const caret=value.length-snapshot.after.length;
-    // Invalidate callbacks before publishing the one accepted edit.
-    cancel();ports.commit(value,caret);
+    if(accepting?.generation===id)return accepting.promise;
+    const promise=Promise.resolve().then(async()=>{
+      if(!current(id))return null;
+      if(state.phase!=='preview')await finish();
+      if(!current(id)||state.phase!=='preview'||!snapshot||!target)return null;
+      if(ports.field()!==target||target.value!==original){
+        fail('The draft changed during dictation. Nothing was inserted. Review the draft and retry.');return null;
+      }
+      const text=state.text.trim();const value=buildSttCommittedValue(snapshot,text);
+      if(value===null)return null;
+      const caret=value.length-snapshot.after.length;
+      // Invalidate callbacks before publishing the one accepted edit.
+      cancel();ports.commit(value,caret);
+      return value;
+    });
+    accepting={generation:id,promise};
+    const clearAccepting=()=>{if(accepting?.promise===promise)accepting=null;};
+    void promise.then(clearAccepting,clearAccepting);
+    return promise;
   };
   return {
     getSnapshot:()=>state,
