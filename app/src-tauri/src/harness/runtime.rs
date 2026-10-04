@@ -820,11 +820,34 @@ fn candidate_paths(context: &DiscoveryContext) -> Vec<RuntimeCandidate> {
     }
 
     if let Some(root) = environment_path(context, "APPDATA") {
+        let npm_modules = root.join("npm").join("node_modules");
+        if context.windows {
+            let native_packages: &[&str] = match std::env::consts::ARCH {
+                "x86_64" => &["opencode-windows-x64", "opencode-windows-x64-baseline"],
+                "aarch64" => &["opencode-windows-arm64"],
+                _ => &[],
+            };
+            // Optional packages hold the native executable even when npm's postinstall
+            // has not replaced the wrapper. Keep these inside the normal verified probe.
+            for package in native_packages {
+                for modules in [
+                    npm_modules.join("opencode-ai").join("node_modules"),
+                    npm_modules.clone(),
+                ] {
+                    push_candidate(
+                        &mut output,
+                        &mut seen,
+                        modules.join(package).join("bin").join(native_name),
+                        CandidateOrigin::NpmNative,
+                        RuntimeSource::System,
+                    );
+                }
+            }
+        }
         push_candidate(
             &mut output,
             &mut seen,
-            root.join("npm")
-                .join("node_modules")
+            npm_modules
                 .join("opencode-ai")
                 .join("bin")
                 .join(native_name),
@@ -1015,6 +1038,38 @@ mod tests {
             assert_eq!(candidate.origin, origin);
             assert_eq!(candidate.source, source);
         }
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn candidate_discovery_finds_npm_optional_native_binaries_before_wrapper() {
+        let fixture = FixtureRoot::new("npm-optional-native");
+        let nested = fixture.native(
+            "roaming/npm/node_modules/opencode-ai/node_modules/opencode-windows-x64/bin/opencode.exe",
+        );
+        let hoisted = fixture
+            .native("roaming/npm/node_modules/opencode-windows-x64-baseline/bin/opencode.exe");
+        let wrapper = fixture.native("roaming/npm/node_modules/opencode-ai/bin/opencode.exe");
+        fs::write(&wrapper, b"echo postinstall was not run\nexit 1").unwrap();
+        let managed = fixture.native("managed/1.18.16/opencode.exe");
+        let candidates = candidate_paths(&context(
+            Vec::new(),
+            BTreeMap::from([(
+                "APPDATA".to_string(),
+                fixture
+                    .path()
+                    .join("roaming")
+                    .to_string_lossy()
+                    .into_owned(),
+            )]),
+            fixture.path().join("managed"),
+        ));
+        assert_eq!(candidates.len(), 4);
+        for (candidate, expected) in candidates.iter().zip([nested, hoisted, wrapper, managed]) {
+            assert_eq!(candidate.path, fs::canonicalize(expected).unwrap());
+        }
+        assert_eq!(candidates[0].origin, CandidateOrigin::NpmNative);
+        assert_eq!(candidates[0].source, RuntimeSource::System);
     }
 
     #[test]
