@@ -1158,6 +1158,7 @@ async function* sendCodexRequest(
   let threadId: string | undefined;
   let turnId: string | undefined;
   let turnStartSubmitted = false;
+  let priorThreadUsage: NativeFrame | undefined;
   let interruptedBeforeBinding = false;
   let terminal = false;
   let releaseRlmParent: (() => void) | undefined;
@@ -1276,6 +1277,17 @@ async function* sendCodexRequest(
       activeIterator,
       firstFrame,
       (frame) => {
+        // Preparation reads RPC responses and discards other notifications.
+        // Capture resume's baseline at ingress, before turn/start, so a usage
+        // notification preceding resume/policy acknowledgement is not lost.
+        if (
+          !turnStartSubmitted &&
+          request.sessionId &&
+          frame.method === 'thread/tokenUsage/updated' &&
+          recordOf(frame.params)?.threadId === request.sessionId
+        ) {
+          priorThreadUsage = frame;
+        }
         if (frame.method === 'account/updated' || frame.method === 'account/login/completed') {
           providerAccountEpoch += 1;
           recordCodexProviderAccountInvalidation(generation, providerAccountEpoch, frame);
@@ -1624,6 +1636,7 @@ async function* sendCodexRequest(
     }
 
     const turnUsage = createTurnUsageAccumulator(resumed);
+    if (resumed && priorThreadUsage) turnUsage.observePriorUsage(priorThreadUsage);
     let priorProviderFailure: Readonly<ReturnType<typeof providerErrorDetails>> | undefined;
     const providerFailureFallback = {
       providerId: request.connection.providerId,

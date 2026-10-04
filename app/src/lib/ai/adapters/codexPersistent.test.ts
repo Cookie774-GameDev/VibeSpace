@@ -44,9 +44,13 @@ const codexRoute = Object.freeze({
   modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
 });
 
-it.each([false, true])(
-  'counts only the active turn across multiple provider responses (resumed=%s)',
-  async (resumed) => {
+it.each([
+  { resumed: false, earlyUsage: false },
+  { resumed: true, earlyUsage: false },
+  { resumed: true, earlyUsage: true },
+])(
+  'counts only the active turn across multiple provider responses (%j)',
+  async ({ resumed, earlyUsage }) => {
     const staleUsage = {
       method: 'thread/tokenUsage/updated',
       params: {
@@ -117,10 +121,13 @@ it.each([false, true])(
         stream: (async function* () {
           for await (const frame of frames()) {
             if (frame.id === 'request_1_thread' && resumed) {
+              // Resume may publish its cumulative baseline before its RPC
+              // response, while preparation is still reading that response.
+              if (earlyUsage) yield staleUsage;
               yield { ...frame, id: 'request_1_resume' };
               // Real app-server resume can emit the previous turn's usage
               // after turn/start is written but before the new turn binds.
-              yield staleUsage;
+              if (!earlyUsage) yield staleUsage;
             } else if (frame.method === 'turn/completed') {
               yield first;
               yield staleUsage;
