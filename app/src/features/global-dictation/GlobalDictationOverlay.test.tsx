@@ -6,7 +6,7 @@ const tauriMocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   windowApi: {
     show: vi.fn(async () => undefined),
-    hide: vi.fn(async () => undefined),
+    hide: vi.fn(async (): Promise<void> => undefined),
     setFocus: vi.fn(async () => undefined),
   },
   tauriListeners: new Map<string, (event: { payload: unknown }) => void>(),
