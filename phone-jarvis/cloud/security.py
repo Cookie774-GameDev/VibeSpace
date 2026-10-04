@@ -12,7 +12,9 @@ import threading
 import time
 from typing import Any, Mapping
 from uuid import UUID
+from urllib.parse import urlsplit, urlunsplit
 
+from fastapi import HTTPException, Request
 from twilio.request_validator import RequestValidator
 
 from .config import get_settings
@@ -76,6 +78,29 @@ def canonical_request_url(path: str, query: str = "") -> str:
     base = get_settings().PHONE_JARVIS_PUBLIC_BASE_URL.rstrip("/")
     suffix = f"?{query}" if query else ""
     return f"{base}{path}{suffix}"
+
+
+async def require_twilio_signature(request: Request) -> None:
+    """Authenticate the complete form against the operator's public callback URL."""
+    params = await request.form()
+    if not validate_twilio_signature(
+        get_settings().TWILIO_AUTH_TOKEN,
+        request.headers.get("x-twilio-signature"),
+        canonical_request_url(request.url.path, request.url.query),
+        params,
+    ):
+        raise HTTPException(403, "invalid signature")
+
+
+def validate_twilio_media_signature(signature: str | None, path: str, query: str = "") -> bool:
+    """Validate only canonical upgrade URLs, including Twilio's trailing-slash form."""
+    url = urlsplit(canonical_request_url(path, query))
+    for scheme in ("https", "wss"):
+        for candidate_path in (url.path, url.path.rstrip("/") + "/"):
+            candidate = urlunsplit((scheme, url.netloc, candidate_path, url.query, ""))
+            if validate_twilio_signature(get_settings().TWILIO_AUTH_TOKEN, signature, candidate, {}):
+                return True
+    return False
 
 
 def _encode(data: bytes) -> str:

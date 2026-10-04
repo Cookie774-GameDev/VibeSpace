@@ -38,6 +38,13 @@ from .auth import (
 from .bridge import get_bridge_registry
 from .config import get_settings
 from .pipeline import CallContext, ProviderKeys, build_pipeline_task
+from .security import (
+    canonical_request_url,
+    mint_one_time_token,
+    require_twilio_signature,
+    validate_twilio_media_signature,
+    verify_one_time_token,
+)
 from .supabase_client import get_supabase
 
 log = logging.getLogger(__name__)
@@ -57,7 +64,8 @@ async def twiml_webhook(
     2. If From is on their allowlist, fast-path skip the PIN later.
     3. Return TwiML telling Twilio to open a Media Stream to our WS endpoint.
     """
-    log.info("inbound call %s from=%s to=%s", CallSid, From, To)
+    await require_twilio_signature(request)
+    log.info("inbound call %s", CallSid)
 
     user_id = await _user_for_phone_number(To)
     if not user_id:
@@ -80,10 +88,7 @@ async def twiml_webhook(
         vr.hangup()
         return Response(content=str(vr), media_type="application/xml")
 
-    # Build the WS URL from the request host so it works on Fly + ngrok dev
-    host = request.headers.get("host", "")
-    proto = "wss"
-    ws_url = f"{proto}://{host}/twilio/{CallSid}"
+    ws_url = canonical_request_url(f"/twilio/{CallSid}").replace("https://", "wss://", 1)
     log.info("twiml -> stream %s", ws_url)
 
     vr = VoiceResponse()
@@ -94,6 +99,10 @@ async def twiml_webhook(
     stream.parameter(name="user_id", value=user_id)
     stream.parameter(name="from_number", value=From)
     stream.parameter(name="caller_preauth", value="true" if is_allowed else "false")
+    stream.parameter(name="session_token", value=mint_one_time_token(
+        purpose="twilio_media", subject=user_id, call_sid=CallSid,
+        claims={"from_number": From, "caller_preauth": bool(is_allowed)},
+    ))
     connect.append(stream)
     vr.append(connect)
 
@@ -105,12 +114,13 @@ async def twilio_ws(websocket: WebSocket, call_sid: str):
     """
     Twilio Media Stream endpoint. Runs the Pipecat pipeline for this call.
     """
+    if not validate_twilio_media_signature(
+        websocket.headers.get("x-twilio-signature"), websocket.url.path, websocket.url.query,
+    ):
+        await websocket.close(code=1008, reason="invalid signature")
+        return
     await websocket.accept()
     log.info("[%s] twilio ws connected", call_sid)
-
-    settings = get_settings()
-    bridge = get_bridge_registry()
-    audit = get_audit_logger()
 
     # We need the first 'start' event to learn user_id + caller pre-auth flag
     user_id: Optional[str] = None
@@ -118,37 +128,47 @@ async def twilio_ws(websocket: WebSocket, call_sid: str):
     caller_preauth = False
 
     try:
-        # Pipecat's Twilio transport handles the Media Stream framing for us.
-        # It expects a websocket and the call_sid; the start_event hook lets
-        # us read custom parameters before the pipeline boots.
-        from pipecat.serializers.twilio import TwilioFrameSerializer
-        from pipecat.transports.network.fastapi_websocket import (
-            FastAPIWebsocketParams,
-            FastAPIWebsocketTransport,
-        )
-
         # Read the Twilio "connected" + "start" events to pull custom params
-        first_message = await websocket.receive_json()
+        first_message = await asyncio.wait_for(websocket.receive_json(), timeout=10)
         if first_message.get("event") == "connected":
-            first_message = await websocket.receive_json()
+            first_message = await asyncio.wait_for(websocket.receive_json(), timeout=10)
 
         if first_message.get("event") == "start":
             start_data = first_message.get("start", {})
             params = start_data.get("customParameters", {}) or {}
-            user_id = params.get("user_id")
-            from_number = params.get("from_number")
-            caller_preauth = params.get("caller_preauth") == "true"
+            try:
+                claims = verify_one_time_token(
+                    str(params.get("session_token") or ""),
+                    purpose="twilio_media", call_sid=call_sid,
+                )
+                if start_data.get("callSid") != call_sid:
+                    raise PermissionError("token_scope_invalid")
+            except PermissionError:
+                await websocket.close(code=1008, reason="invalid media session")
+                return
+            user_id = claims["sub"]
+            from_number = claims.get("from_number")
+            caller_preauth = claims.get("caller_preauth") is True
             stream_sid = start_data.get("streamSid")
         else:
             log.warning("[%s] expected 'start' event, got %s", call_sid, first_message.get("event"))
             await websocket.close()
             return
 
+        # Load the media stack only after the provider and user binding pass.
+        from pipecat.serializers.twilio import TwilioFrameSerializer
+        from pipecat.transports.network.fastapi_websocket import (
+            FastAPIWebsocketParams,
+            FastAPIWebsocketTransport,
+        )
+
         if not user_id:
             log.error("[%s] no user_id in start event; closing", call_sid)
             await websocket.close()
             return
 
+        bridge = get_bridge_registry()
+        audit = get_audit_logger()
         call_id = mint_call_token()
         persona_settings = await _phone_settings_for_user(user_id)
         persona = (persona_settings or {}).get("persona", "sage")
@@ -192,7 +212,7 @@ async def twilio_ws(websocket: WebSocket, call_sid: str):
         if not caller_preauth and persona_settings:
             ctx.persona = persona  # PIN flow handled in prompt; pass through
 
-        tools_schema = bridge.get_tools_schema(user_id)
+        tools_schema = bridge.get_tools_schema(user_id) if caller_preauth else []
         task = build_pipeline_task(transport, ctx, bridge, tools_schema)
 
         from pipecat.pipeline.runner import PipelineRunner

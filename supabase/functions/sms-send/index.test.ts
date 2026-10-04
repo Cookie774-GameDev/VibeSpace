@@ -144,9 +144,10 @@ test('rejects non-POST methods with 405', async () => {
   }
 });
 
-test('answers OPTIONS preflight with 200 and restrictive CORS', async () => {
+test('answers OPTIONS preflight with 204 and restrictive CORS', async () => {
   const { res } = await callHandler(makeDeps(), { method: 'OPTIONS' });
-  assert.equal(res.status, 200);
+  assert.equal(res.status, 204);
+  assert.equal(await res.text(), '');
   assert.equal(res.headers.get('access-control-allow-origin'), 'tauri://localhost');
 });
 

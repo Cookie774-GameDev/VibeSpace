@@ -88,7 +88,7 @@ describe('third-party call orchestration', () => {
       call_job_id: job.id,
       user_id: user.id,
       status: 'scheduled',
-      scheduled_for: '2026-09-01T15:00:00.000Z',
+      scheduled_for: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       revision: 1,
       destination_display_name: 'Clinic',
       destination_phone_e164: '+13125550110',

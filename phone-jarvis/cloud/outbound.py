@@ -1,15 +1,11 @@
 """
 Outbound calling — Jarvis dials the user.
 
-Triggered by:
-- Manual: user says "Sage, call me at 3pm" via the Assistant (Mod+J)
-- Error-driven: a Jarvis runtime event posts to /outbound/event with
-  category="error" and the user has error_calls=true in their settings
-- Schedule: a daily cron evaluates phone_settings.scheduled_outbound
+Triggered by the desktop's outbound-call event listener. Category opt-ins
+are checked server-side; assistant scheduling uses the running desktop's timer.
 
 POST /outbound/call body:
   {
-    "user_id": "uuid",      # whose number to call
     "reason": "build_failed",
     "context": {            # passed to the LLM as system prompt prefix
       "title": "Build failed",
@@ -19,7 +15,8 @@ POST /outbound/call body:
 
 Returns: { call_sid: "CA...", status: "queued" }
 
-Twilio dials the user. When they answer, Twilio hits /twiml-outbound which
+Twilio dials the authenticated user's saved number. When they answer,
+Twilio hits /outbound/twiml which
 returns TwiML connecting them to the same Media Stream / Pipecat flow as
 inbound, but with `outbound_context` injected into the persona prompt so
 Sage greets with the reason instead of "what's up?"
@@ -39,6 +36,12 @@ from twilio.twiml.voice_response import Connect, Stream, VoiceResponse
 
 from .auth import get_jwt_verifier
 from .config import get_settings
+from .security import (
+    canonical_request_url,
+    mint_one_time_token,
+    require_twilio_signature,
+    sanitize_context,
+)
 from .supabase_client import get_supabase
 
 log = logging.getLogger(__name__)
@@ -104,9 +107,9 @@ async def outbound_call(
         raise HTTPException(403, f"outbound trigger '{category}' is disabled in settings")
 
     # Stash the outbound context in a short-lived row keyed by call_sid; the
-    # /twiml-outbound endpoint reads it back when Twilio's side connects.
+    # /outbound/twiml endpoint reads it back when Twilio's side connects.
     sb = get_supabase()
-    twiml_url = f"{request.url.scheme}://{request.url.netloc}/outbound/twiml"
+    twiml_url = canonical_request_url("/outbound/twiml")
 
     twilio = TwilioClient(s.TWILIO_ACCOUNT_SID, s.TWILIO_AUTH_TOKEN)
     call = twilio.calls.create(
@@ -125,7 +128,7 @@ async def outbound_call(
             "call_sid": call_sid,
             "user_id": user_id,
             "reason": body.reason,
-            "context": body.context,
+            "context": sanitize_context(body.context),
         }).execute()
     except Exception as e:
         log.warning("could not stash outbound context: %s", e)
@@ -138,48 +141,8 @@ async def outbound_message(
     body: MessageRequest,
     authorization: str = Header(...),
 ):
-    """Send an SMS to the authenticated user's stored phone number."""
-    s = get_settings()
-    if not s.has_twilio:
-        raise HTTPException(503, "Twilio not configured")
-
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(401, "missing bearer token")
-    try:
-        claims = await get_jwt_verifier().verify(authorization[7:])
-    except PermissionError as e:
-        raise HTTPException(401, str(e))
-    user_id = claims.get("sub")
-    if not user_id:
-        raise HTTPException(401, "no sub claim")
-
-    settings_row = await _phone_settings(user_id)
-    if not settings_row:
-        raise HTTPException(404, "phone_settings not configured for this user")
-
-    user_number = settings_row.get("user_phone_number")
-    if not user_number:
-        raise HTTPException(400, "user has not stored a phone number")
-
-    triggers = settings_row.get("outbound_triggers", {}) or {}
-    category = body.reason or "manual"
-    cat_enabled = triggers.get(category, category == "manual")
-    if not cat_enabled:
-        raise HTTPException(403, f"outbound trigger '{category}' is disabled in settings")
-
-    text = body.message.strip()
-    if not text:
-        raise HTTPException(400, "message is empty")
-    if len(text) > 1200:
-        text = text[:1197] + "..."
-
-    twilio = TwilioClient(s.TWILIO_ACCOUNT_SID, s.TWILIO_AUTH_TOKEN)
-    msg = twilio.messages.create(
-        to=user_number,
-        from_=s.TWILIO_PHONE_NUMBER,
-        body=text,
-    )
-    return MessageResponse(message_sid=msg.sid, status=msg.status or "queued")
+    """Legacy endpoint: all sends must use the existing metered sms-send path."""
+    raise HTTPException(410, "Use the authenticated sms-send Edge Function for metered SMS")
 
 
 @router.post("/twiml")
@@ -194,8 +157,9 @@ async def outbound_twiml(
     to a Media Stream like the inbound path, but with `outbound_context`
     injected as a custom parameter.
     """
+    await require_twilio_signature(request)
     sb = get_supabase()
-    user_id = "unknown"
+    user_id = None
     reason = "manual"
     context: dict = {}
 
@@ -208,14 +172,15 @@ async def outbound_twiml(
             .execute()
         )
         row = resp.data or {}
-        user_id = row.get("user_id", "unknown")
+        user_id = row.get("user_id")
         reason = row.get("reason", "manual")
-        context = row.get("context", {}) or {}
+        context = sanitize_context(row.get("context", {}) or {})
     except Exception as e:
         log.warning("[%s] outbound context lookup failed: %s", CallSid, e)
 
-    host = request.headers.get("host", "")
-    ws_url = f"wss://{host}/twilio/{CallSid}"
+    if not user_id:
+        raise HTTPException(404, "outbound call not found")
+    ws_url = canonical_request_url(f"/twilio/{CallSid}").replace("https://", "wss://", 1)
 
     vr = VoiceResponse()
     connect = Connect()
@@ -225,6 +190,11 @@ async def outbound_twiml(
     stream.parameter(name="caller_preauth", value="true")
     stream.parameter(name="outbound_reason", value=reason)
     stream.parameter(name="outbound_context", value=json.dumps(context))
+    stream.parameter(name="session_token", value=mint_one_time_token(
+        purpose="twilio_media", subject=user_id, call_sid=CallSid,
+        claims={"from_number": To, "caller_preauth": True,
+                "outbound_reason": reason, "outbound_context": context},
+    ))
     connect.append(stream)
     vr.append(connect)
     return Response(content=str(vr), media_type="application/xml")

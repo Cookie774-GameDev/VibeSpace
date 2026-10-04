@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
@@ -98,7 +99,7 @@ async def livekit_token(
             can_subscribe=True,
         )
     )
-    at.with_ttl(3600)
+    at.with_ttl(timedelta(hours=1))
     user_token = at.to_jwt()
 
     # Audit log: call_start (we mark transport=livekit; caller_number is None)
@@ -169,7 +170,7 @@ async def _spawn_agent(room_name: str, user_id: str, call_id: str, persona: str)
                     can_subscribe=True,
                 )
             )
-            .with_ttl(3600)
+            .with_ttl(timedelta(hours=1))
             .to_jwt()
         )
 

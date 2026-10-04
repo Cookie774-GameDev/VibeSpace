@@ -1,7 +1,8 @@
 // Shared budget/plan/Twilio helpers for messaging + calling + SMS Edge Functions.
 // Deno runtime. Server-side only. Never bundled into the desktop app.
 
-import { json } from './voice';
+// @ts-ignore -- Edge runtimes require .ts; the desktop typechecks this helper with extension imports disabled.
+import { json } from './voice.ts';
 
 export { json };
 

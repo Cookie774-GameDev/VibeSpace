@@ -111,7 +111,8 @@ describe('call-start handler', () => {
         headers: { origin: 'tauri://localhost' },
       });
       const res = await handleCallStart(makeDeps({}, log), req);
-      assert.equal(res.status, 200);
+      assert.equal(res.status, 204);
+      assert.equal(await res.text(), '');
       assert.ok(res.headers.get('access-control-allow-origin'));
     });
 

@@ -32,6 +32,7 @@ from .browser_chat_bridge_endpoint import router as browser_chat_bridge_router
 from .config import get_settings
 from .livekit_handler import router as livekit_router
 from .outbound import router as outbound_router
+from .security import KillSwitchMiddleware
 from .telnyx_gateway import router as telnyx_router
 from .twilio_handler import router as twilio_router
 
@@ -49,6 +50,7 @@ app = FastAPI(
 
 # CORS: the Jarvis app calls /livekit/token from within the WebView. Allow
 # tauri:// and http://localhost. Production uses HTTPS only.
+app.add_middleware(KillSwitchMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -76,14 +78,15 @@ async def health():
     s = get_settings()
     return {
         "ok": True,
+        "enabled": s.PHONE_JARVIS_ENABLED,
         "version": "0.1.0",
         "transports": {
-            "twilio": s.has_twilio,
-            "telnyx": s.has_telnyx,
-            "call_anyone": s.has_call_anyone_pipeline,
-            "livekit": s.has_livekit,
-            "supabase": s.has_supabase,
-            "browser_chat_mcp": s.has_browser_chat_mcp,
+            "twilio": s.PHONE_JARVIS_ENABLED and s.has_twilio,
+            "telnyx": s.PHONE_JARVIS_ENABLED and s.has_telnyx,
+            "call_anyone": s.PHONE_JARVIS_ENABLED and s.has_call_anyone_pipeline,
+            "livekit": s.PHONE_JARVIS_ENABLED and s.has_livekit,
+            "supabase": s.PHONE_JARVIS_ENABLED and s.has_supabase,
+            "browser_chat_mcp": s.PHONE_JARVIS_ENABLED and s.has_browser_chat_mcp,
         },
     }
 
