@@ -14,8 +14,22 @@ html[data-theme='sakura'] [data-vibespace-owned-chrome='command-palette'][role='
 }
 
 html[data-theme='sakura'] [data-vibespace-owned-chrome='command-palette'] [cmdk-input] {
-  min-height: 3rem;
   caret-color: var(--sakura-pink);
+}
+
+[data-vibespace-owned-chrome='command-palette'] [data-command-search] [cmdk-input]:focus-visible {
+  outline: none;
+}
+
+html[data-theme='sakura'] [data-vibespace-owned-chrome='command-palette'] [data-command-search] {
+  background: hsl(var(--sakura-night-hsl) / 0.28);
+}
+
+html[data-theme='sakura']
+  [data-vibespace-owned-chrome='command-palette']
+  [data-command-search]:focus-within {
+  border-color: hsl(var(--sakura-pink-hsl) / 0.62);
+  box-shadow: 0 0 0 2px hsl(var(--sakura-pink-hsl) / 0.18);
 }
 
 html[data-theme='sakura'] [data-vibespace-owned-chrome='command-palette'] [cmdk-list] {
@@ -30,7 +44,9 @@ html[data-theme='sakura']
   box-shadow: inset 3px 0 0 hsl(var(--sakura-pink-hsl));
 }
 
-html[data-theme='sakura'] [data-vibespace-owned-chrome='command-palette'] :focus-visible {
+html[data-theme='sakura']
+  [data-vibespace-owned-chrome='command-palette']
+  :focus-visible:not([cmdk-input]) {
   outline: 2px solid hsl(var(--sakura-pink-hsl));
   outline-offset: -2px;
 }

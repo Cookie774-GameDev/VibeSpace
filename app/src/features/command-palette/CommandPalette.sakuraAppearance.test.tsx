@@ -56,5 +56,6 @@ describe('CommandPalette Sakura appearance', () => {
 
     const input = screen.getByRole('combobox', { name: 'Command palette' });
     await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(input.closest('[data-command-search]')).toBeTruthy();
   });
 });

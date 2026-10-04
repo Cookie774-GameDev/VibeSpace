@@ -249,18 +249,23 @@ export function CommandPalette() {
           >
             <Breadcrumb pageStack={pageStack} onJump={popToIndex} />
 
-            <div className="flex items-center gap-2 px-3 border-b border-border">
-              <Search className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden />
-              <Command.Input
-                ref={inputRef}
-                value={search}
-                onValueChange={setSearch}
-                placeholder={PLACEHOLDERS[currentPage]}
-                className={cn(
-                  'flex-1 h-11 bg-transparent text-body text-foreground',
-                  'placeholder:text-muted-foreground outline-none border-0',
-                )}
-              />
+            <div className="border-b border-border px-3 py-2">
+              <div
+                data-command-search
+                className="flex min-h-11 items-center gap-2 rounded-xl border border-border/80 bg-background/75 px-3 transition-colors focus-within:border-accent-copper/70 focus-within:ring-2 focus-within:ring-accent-copper/20"
+              >
+                <Search className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                <Command.Input
+                  ref={inputRef}
+                  value={search}
+                  onValueChange={setSearch}
+                  placeholder={PLACEHOLDERS[currentPage]}
+                  className={cn(
+                    'h-10 min-w-0 flex-1 border-0 bg-transparent text-body text-foreground',
+                    'placeholder:text-muted-foreground outline-none',
+                  )}
+                />
+              </div>
             </div>
 
             <Command.List className="max-h-[420px] overflow-y-auto p-1.5 [[data-theme=monochrome]_&]:bg-background [&_[cmdk-list-sizer]]:w-full">
