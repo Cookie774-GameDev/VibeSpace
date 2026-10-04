@@ -204,7 +204,7 @@ describe('ChatListActivityIndicator', () => {
       /\.chat-activity-indicator\[data-state='complete'\]\s*\{[^}]*color:\s*var\(--chat-activity-complete\)/s,
     );
     expect(stylesheet).toMatch(
-      /\.chat-activity-completion-dot\s*\{[^}]*animation:\s*chat-activity-completion-dot\s+4\.2s/s,
+      /\.chat-activity-completion-dot\s*\{[^}]*animation:\s*chat-activity-completion-dot\s+2\.8s/s,
     );
     expect(stylesheet).toMatch(/prefers-reduced-motion: reduce[\s\S]*animation:\s*none !important/);
   });

@@ -73,7 +73,7 @@
   border-radius: 999px;
   background: var(--chat-activity-complete);
   box-shadow: 0 0 0 0 var(--chat-activity-glow);
-  animation: chat-activity-completion-dot 4.2s ease-in-out infinite;
+  animation: chat-activity-completion-dot 2.8s ease-in-out infinite;
 }
 
 .chat-activity-terminal {

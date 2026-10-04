@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { MessageSquare, Pin, PinOff } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { MessageSquare, MoreHorizontal, Pin, PinOff } from 'lucide-react';
 import type { Chat } from '@/types/chat';
 import { cn } from '@/lib/utils';
 import { isChatPinned } from '@/features/chat/chatPin';
@@ -76,6 +77,10 @@ export function ChatNavRow({
 }: ChatNavRowProps) {
   const [actionsOpen, setActionsOpen] = React.useState(false);
   const menuRef = React.useRef<HTMLDivElement>(null);
+  const popupRef = React.useRef<HTMLDivElement>(null);
+  const menuTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const [menuOrigin, setMenuOrigin] = React.useState({ x: 8, y: 8 });
+  const [menuPosition, setMenuPosition] = React.useState({ left: 8, top: 8 });
   const storageKey = `vibespace:chat-read:${readScope}:${String(chat.id)}`;
   const [read, setRead] = React.useState<ReadState>(() => readState(storageKey));
   React.useEffect(() => setRead(readState(storageKey)), [storageKey]);
@@ -163,10 +168,17 @@ export function ChatNavRow({
   React.useEffect(() => {
     if (!actionsOpen) return;
     const close = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setActionsOpen(false);
+      if (
+        !menuRef.current?.contains(event.target as Node) &&
+        !popupRef.current?.contains(event.target as Node)
+      )
+        setActionsOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setActionsOpen(false);
+      if (event.key === 'Escape') {
+        setActionsOpen(false);
+        (menuTriggerRef.current ?? menuRef.current?.querySelector('button'))?.focus();
+      }
     };
     document.addEventListener('pointerdown', close);
     document.addEventListener('keydown', escape);
@@ -175,6 +187,16 @@ export function ChatNavRow({
       document.removeEventListener('keydown', escape);
     };
   }, [actionsOpen]);
+  React.useLayoutEffect(() => {
+    if (!actionsOpen) return;
+    const popup = popupRef.current;
+    if (!popup) return;
+    const { width, height } = popup.getBoundingClientRect();
+    const left = Math.max(8, Math.min(menuOrigin.x, window.innerWidth - width - 8));
+    const top = Math.max(8, Math.min(menuOrigin.y, window.innerHeight - height - 8));
+    setMenuPosition({ left, top });
+    popup.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+  }, [actionsOpen, menuOrigin]);
   const openChat = () => {
     updateRead({
       acknowledgedThrough: Math.max(
@@ -204,14 +226,19 @@ export function ChatNavRow({
     );
     setActionsOpen(false);
   };
+  const openMenuAt = (x: number, y: number) => {
+    setMenuOrigin({ x, y });
+    setActionsOpen(true);
+  };
   const showMenu = (event: React.MouseEvent<HTMLElement>) => {
     event.preventDefault();
-    setActionsOpen(true);
+    openMenuAt(event.clientX, event.clientY);
   };
   const keyboardMenu = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
       event.preventDefault();
-      setActionsOpen(true);
+      const anchor = event.currentTarget.getBoundingClientRect();
+      openMenuAt(anchor.left + 8, anchor.bottom + 4);
     }
   };
   const activityIndicator = (
@@ -241,87 +268,108 @@ export function ChatNavRow({
     style: { userSelect: 'none' as const },
   };
 
-  const actionsMenu = actionsOpen ? (
-    <div
-      role="menu"
-      aria-label={`Actions for ${label}`}
-      className="absolute right-0 top-full z-40 mt-1 w-52 rounded-md border border-border bg-panel p-1 shadow-soft"
-    >
-      <button
-        type="button"
-        role="menuitem"
-        className="w-full rounded-sm px-2 py-1.5 text-left text-secondary hover:bg-muted"
-        onClick={toggleRead}
-      >
-        {read.manualUnread || latestActivityAt > read.acknowledgedThrough
-          ? 'Mark as read'
-          : 'Mark as unread'}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="w-full rounded-sm px-2 py-1.5 text-left text-secondary hover:bg-muted"
-        onClick={() => {
-          onTogglePin();
-          setActionsOpen(false);
-        }}
-      >
-        {pinned ? 'Unpin chat' : 'Pin chat'}
-      </button>
-      {onFork ? (
-        <button
-          type="button"
-          role="menuitem"
-          className="w-full rounded-sm px-2 py-1.5 text-left text-secondary hover:bg-muted"
-          onClick={() => {
-            onFork();
-            setActionsOpen(false);
+  const actionsMenu = actionsOpen
+    ? createPortal(
+        <div
+          ref={popupRef}
+          role="menu"
+          aria-label={`Actions for ${label}`}
+          data-testid="chat-row-menu"
+          style={{ left: menuPosition.left, top: menuPosition.top }}
+          className="fixed z-[100] max-h-[calc(100dvh-16px)] w-56 overflow-y-auto rounded-lg border border-border bg-elevated p-1.5 text-foreground shadow-2xl"
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+            const items = Array.from(
+              popupRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+            );
+            if (!items.length) return;
+            event.preventDefault();
+            const current = items.indexOf(document.activeElement as HTMLButtonElement);
+            items[
+              (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+            ].focus();
           }}
         >
-          Fork chat
-        </button>
-      ) : null}
-      <button
-        type="button"
-        role="menuitem"
-        className="w-full rounded-sm px-2 py-1.5 text-left text-secondary hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        onClick={() => {
-          window.dispatchEvent(
-            new CustomEvent(CHAT_SEND_CONTEXT_EVENT, { detail: actionDetail(chat) }),
-          );
-          setActionsOpen(false);
-        }}
-      >
-        Send context to current chat
-      </button>
-      {onDelete ? (
-        <button
-          type="button"
-          role="menuitem"
-          className="w-full rounded-sm px-2 py-1.5 text-left text-destructive hover:bg-muted"
-          onClick={() => {
-            onDelete();
-            setActionsOpen(false);
-          }}
-        >
-          Delete chat…
-        </button>
-      ) : null}
-      <button
-        type="button"
-        role="menuitem"
-        className="w-full rounded-sm px-2 py-1.5 text-left text-secondary hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        onClick={() => {
-          window.dispatchEvent(
-            new CustomEvent(CHAT_OPEN_BESIDE_EVENT, { detail: actionDetail(chat) }),
-          );
-          setActionsOpen(false);
-        }}
-      >
-        Open beside current chat
-      </button>
-    </div>
-  ) : null;
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted"
+            onClick={toggleRead}
+          >
+            {read.manualUnread || latestActivityAt > read.acknowledgedThrough
+              ? 'Mark as read'
+              : 'Mark as unread'}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted"
+            onClick={() => {
+              onTogglePin();
+              setActionsOpen(false);
+            }}
+          >
+            {pinned ? 'Unpin chat' : 'Pin chat'}
+          </button>
+          {onFork ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted"
+              onClick={() => {
+                onFork();
+                setActionsOpen(false);
+              }}
+            >
+              Fork chat
+            </button>
+          ) : null}
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            onClick={() => {
+              window.dispatchEvent(
+                new CustomEvent(CHAT_SEND_CONTEXT_EVENT, { detail: actionDetail(chat) }),
+              );
+              setActionsOpen(false);
+            }}
+          >
+            Send context to current chat
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            onClick={() => {
+              window.dispatchEvent(
+                new CustomEvent(CHAT_OPEN_BESIDE_EVENT, { detail: actionDetail(chat) }),
+              );
+              setActionsOpen(false);
+            }}
+          >
+            Open beside current chat
+          </button>
+          {onDelete ? (
+            <>
+              <div role="separator" className="my-1 border-t border-border" />
+              <button
+                type="button"
+                role="menuitem"
+                className="w-full rounded-sm px-2 py-1.5 text-left text-destructive hover:bg-muted"
+                onClick={() => {
+                  onDelete();
+                  setActionsOpen(false);
+                }}
+              >
+                Delete chat…
+              </button>
+            </>
+          ) : null}
+        </div>,
+        document.body,
+      )
+    : null;
 
   if (!navOpen) {
     return (
@@ -334,6 +382,7 @@ export function ChatNavRow({
           aria-label={pinned ? `${label}, pinned` : label}
           aria-current={active ? 'page' : undefined}
           aria-haspopup="menu"
+          aria-expanded={actionsOpen}
           className={cn(
             'relative flex h-7 w-full items-center justify-center rounded-md text-foreground transition-colors',
             'hover:bg-muted focus-visible:outline-none focus-visible:ring-inset focus-visible:ring-1 focus-visible:ring-ring',
@@ -388,6 +437,25 @@ export function ChatNavRow({
         )}
       >
         {pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+      </button>
+      <button
+        ref={menuTriggerRef}
+        type="button"
+        aria-label={`Chat actions for ${label}`}
+        aria-haspopup="menu"
+        aria-expanded={actionsOpen}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (actionsOpen) {
+            setActionsOpen(false);
+            return;
+          }
+          const anchor = event.currentTarget.getBoundingClientRect();
+          openMenuAt(anchor.right - 224, anchor.bottom + 4);
+        }}
+        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground/70 transition-colors hover:bg-background/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
       {actionsMenu}
     </div>

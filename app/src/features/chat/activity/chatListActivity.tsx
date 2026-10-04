@@ -129,7 +129,7 @@ export function resolveChatListActivity({
   if (COMPLETE_STATUSES.has(status)) {
     const changedAt = timestamp(latestRun?.updatedAt);
     return changedAt > 0
-      ? resolution('complete', 4_200, 0.72, undefined, changedAt)
+      ? resolution('complete', 2_800, 0.72, undefined, changedAt)
       : resolution('idle', 0, 0);
   }
 
@@ -171,7 +171,7 @@ export function resolveChatListActivity({
   }
   // Only the top-level agent finishing can stand in for a missing run signal.
   if (latestEvent?.kind === 'agent' && latestEvent.status === 'done') {
-    return resolution('complete', 4_200, 0.72, undefined, latestEvent.ts);
+    return resolution('complete', 2_800, 0.72, undefined, latestEvent.ts);
   }
   return resolution('idle', 0, 0);
 }
@@ -202,9 +202,9 @@ export function ChatListActivityIndicator({
       events: chatId ? events.filter((event) => String(event.chatId) === chatId) : events,
       nowMs,
     });
-    if (forceUnread && result.state === 'idle') return resolution('complete', 4_200, 0.72);
+    if (forceUnread && result.state === 'idle') return resolution('complete', 2_800, 0.72);
     if (result.terminalAt && result.terminalAt <= acknowledgedThrough)
-      return forceUnread ? resolution('complete', 4_200, 0.72) : resolution('idle', 0, 0);
+      return forceUnread ? resolution('complete', 2_800, 0.72) : resolution('idle', 0, 0);
     return result;
   }, [acknowledgedThrough, chatId, events, forceUnread, nowMs, runs]);
 

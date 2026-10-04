@@ -13,10 +13,10 @@ const chat = {
   active_agent_ids: [],
   created_at: 1,
   updated_at: 2,
-} as Chat;
+} as unknown as Chat;
 
 describe('ChatNavRow context actions', () => {
-  it('opens from right click and keyboard without an ellipsis, and calls fork/delete handlers', () => {
+  it('opens the same viewport menu from right click, three dots, and keyboard', () => {
     const onFork = vi.fn();
     const onDelete = vi.fn();
     const onTogglePin = vi.fn();
@@ -30,14 +30,18 @@ describe('ChatNavRow context actions', () => {
         onDelete={onDelete}
       />,
     );
-    expect(screen.queryByRole('button', { name: 'Chat actions for Menu chat' })).toBeNull();
+    const actions = screen.getByRole('button', { name: 'Chat actions for Menu chat' });
     fireEvent.contextMenu(screen.getByTestId('chat-nav-row-chat-menu'));
+    const menu = screen.getByTestId('chat-row-menu');
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.className).toContain('fixed');
+    expect(menu.className).toContain('text-foreground');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Pin chat' }));
     expect(onTogglePin).toHaveBeenCalledOnce();
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Menu chat' }), { key: 'ContextMenu' });
+    fireEvent.click(actions);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Fork chat' }));
     expect(onFork).toHaveBeenCalledOnce();
-    fireEvent.contextMenu(screen.getByTestId('chat-nav-row-chat-menu'));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Menu chat' }), { key: 'ContextMenu' });
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete chat…' }));
     expect(onDelete).toHaveBeenCalledOnce();
   });
