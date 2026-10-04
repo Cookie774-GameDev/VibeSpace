@@ -26,8 +26,12 @@ const mocks = vi.hoisted(() => ({
       async (
         _onVolume: (level: number) => void,
         _onInactivity: () => void,
-        _options?: { retainAudio?: boolean },
-      ) => ({
+        _options?: { retainAudio?: boolean; maxBufferedSeconds?: number },
+      ): Promise<{
+        captureWav: () => Blob | null;
+        captureWavAndReset?: () => Blob | null;
+        stop: () => void;
+      }> => ({
         captureWav: (): Blob | null => new Blob(['x'], { type: 'audio/wav' }),
         stop: vi.fn(),
       }),
@@ -133,6 +137,20 @@ describe('createGlobalDictationSession engine resolution', () => {
       status: 'interrupted',
     });
   });
+  it('clears earlier recovery words when the active desktop take is cleared', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    const session = await createGlobalDictationSession();
+    try {
+      mocks.voiceHandlers.get('voice:final')?.({ text: 'discard first phrase' } as never);
+      expect(readSpeechHistory()[0].text).toBe('discard first phrase');
+      session.clearRecoveryText?.();
+      expect(readSpeechHistory()).toEqual([]);
+      mocks.voiceHandlers.get('voice:final')?.({ text: 'keep second phrase' } as never);
+      expect(readSpeechHistory()[0].text).toBe('keep second phrase');
+    } finally {
+      session.cancel();
+    }
+  });
 
   it('saves completed local transcription through the shared pipeline', async () => {
     mocks.composer.provider = 'faster-whisper';
@@ -187,6 +205,41 @@ describe('createGlobalDictationSession engine resolution', () => {
     await session.stop();
     expect(mocks.composer.transcribeFasterWhisper).toHaveBeenCalled();
     expect(session.getFinalText()).toBe('local text');
+  });
+
+  it('keeps desktop dictation alive through silence and drains long takes in segments', async () => {
+    mocks.composer.provider = 'faster-whisper';
+    mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);
+    let onInactivity!: () => void;
+    const segments = [
+      new Blob(['first'], { type: 'audio/wav' }),
+      new Blob(['second'], { type: 'audio/wav' }),
+    ];
+    const recorder = {
+      captureWav: vi.fn(() => null),
+      captureWavAndReset: vi.fn(() => segments.shift() ?? null),
+      stop: vi.fn(),
+    };
+    mocks.composer.startBatchAudioRecorder.mockImplementationOnce(async (_onLevel, idle) => {
+      onInactivity = idle;
+      return recorder;
+    });
+    mocks.composer.transcribeFasterWhisper
+      .mockResolvedValueOnce('first words')
+      .mockResolvedValueOnce('later words');
+    const onError = vi.fn();
+    const session = await createGlobalDictationSession({ onError });
+    onInactivity();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onError).not.toHaveBeenCalled();
+    expect(recorder.stop).not.toHaveBeenCalled();
+    await session.stop();
+    expect(session.getFinalText()).toBe('first words later words');
+    expect(readSpeechHistory()[0]).toMatchObject({
+      text: 'first words later words',
+      status: 'completed',
+    });
   });
 
   it('reports a safe shared batch-transcription failure without provider details', async () => {
@@ -261,7 +314,7 @@ describe('createGlobalDictationSession engine resolution', () => {
       expect(mocks.composer.startBatchAudioRecorder).toHaveBeenLastCalledWith(
         expect.any(Function),
         expect.any(Function),
-        { retainAudio: true },
+        { retainAudio: true, maxBufferedSeconds: 60 },
       );
       expect(onError).not.toHaveBeenCalled();
 
@@ -275,6 +328,68 @@ describe('createGlobalDictationSession engine resolution', () => {
       expect(readSpeechHistory()[0]).toMatchObject({ text: 'local text', status: 'completed' });
     } finally {
       session.cancel();
+    }
+  });
+
+  it('keeps earlier confirmed words and stays open through a quiet desktop fallback', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);
+    let onInactivity!: () => void;
+    mocks.composer.startBatchAudioRecorder.mockImplementationOnce(async (_level, idle) => {
+      onInactivity = idle;
+      return {
+        captureWav: () => new Blob(['recent audio'], { type: 'audio/wav' }),
+        stop: vi.fn(),
+      };
+    });
+    const onError = vi.fn();
+    const session = await createGlobalDictationSession({ onError });
+    mocks.voiceHandlers.get('voice:final')?.({ text: 'earlier confirmed words' } as never);
+    mocks.voiceHandlers.get('voice:error')?.({
+      kind: 'network',
+      message: formatVoiceFailure('network'),
+    } as never);
+    await vi.waitFor(() => expect(mocks.voiceService.stopListening).toHaveBeenCalled());
+    onInactivity();
+    expect(onError).not.toHaveBeenCalled();
+    await session.stop();
+    expect(session.getFinalText()).toBe('earlier confirmed words local text');
+    expect(readSpeechHistory()[0].text).toBe('earlier confirmed words local text');
+  });
+
+  it('transcribes fallback audio periodically throughout a long desktop take', async () => {
+    vi.useFakeTimers();
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    mocks.fasterWhisper.checkInstalled.mockResolvedValue(true);
+    const chunks = [
+      new Blob(['first'], { type: 'audio/wav' }),
+      new Blob(['second'], { type: 'audio/wav' }),
+    ];
+    mocks.composer.startBatchAudioRecorder.mockResolvedValueOnce({
+      captureWav: () => null,
+      captureWavAndReset: () => chunks.shift() ?? null,
+      stop: vi.fn(),
+    });
+    mocks.composer.transcribeFasterWhisper
+      .mockResolvedValueOnce('first local minute')
+      .mockResolvedValueOnce('second local minute');
+    const onFinal = vi.fn();
+    const session = await createGlobalDictationSession({ onFinal });
+    try {
+      mocks.voiceHandlers.get('voice:error')?.({
+        kind: 'network',
+        message: formatVoiceFailure('network'),
+      } as never);
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(55_000);
+      expect(onFinal).toHaveBeenCalledWith('first local minute');
+      await session.stop();
+      expect(session.getFinalText()).toBe('first local minute second local minute');
+      expect(readSpeechHistory()[0].text).toBe('first local minute second local minute');
+    } finally {
+      session.cancel();
+      vi.useRealTimers();
     }
   });
 

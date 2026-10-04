@@ -48,6 +48,9 @@ export interface GlobalDictationSession {
   /** Discard everything without transcribing. */
   cancel: () => void;
   getFinalText: () => string;
+  /** Keep a completed take recoverable when native delivery fails. */
+  markDeliveryFailed?: () => void;
+  clearRecoveryText?: () => void;
 }
 
 export const NO_ENGINE_MESSAGE = NO_DICTATION_ENGINE_REASON;
@@ -57,7 +60,7 @@ export const SELECTED_STT_SESSION_SUPERSEDED_MESSAGE =
 
 export interface SelectedSttSessionClaimOptions {
   readonly supersedeActive?: boolean;
-  readonly requester?: 'jarvis-voice';
+  readonly requester?: 'jarvis-voice' | 'global-dictation';
 }
 
 interface ActiveSelectedSttClaim {
@@ -89,6 +92,7 @@ function createBatchSession(
   transcribe: (blob: Blob) => Promise<string>,
   events: DictationEvents,
   autoFinishVoiceTurn = false,
+  longSession = false,
 ): Promise<GlobalDictationSession> {
   let finalText = '';
   let recorder: FasterWhisperRecorder | null = null;
@@ -97,11 +101,31 @@ function createBatchSession(
   let closed = false;
   let lastVoiceAt = 0;
   let silenceTimer: ReturnType<typeof setInterval> | null = null;
+  let segmentTimer: ReturnType<typeof setInterval> | null = null;
+  let segmentTask: Promise<void> = Promise.resolve();
+  let segmentFailed = false;
+  const queueSegment = () => {
+    const wav = recorder?.captureWavAndReset?.();
+    if (!wav?.size) return;
+    segmentTask = segmentTask
+      .then(async () => {
+        const text = (await transcribe(wav)).trim();
+        if (cancelled || !text) return;
+        finalText = [finalText, text].filter(Boolean).join(' ');
+        events.onFinal?.(finalText);
+      })
+      .catch(() => {
+        segmentFailed = true;
+        if (!cancelled) events.onError?.(formatGlobalDictationTranscriptionFailure(engine));
+      });
+  };
   const close = () => {
     if (closed) return;
     closed = true;
     if (silenceTimer !== null) clearInterval(silenceTimer);
+    if (segmentTimer !== null) clearInterval(segmentTimer);
     silenceTimer = null;
+    segmentTimer = null;
     events.onLevel?.(0);
     events.onClose?.();
   };
@@ -111,10 +135,14 @@ function createBatchSession(
       if (autoFinishVoiceTurn && level >= 0.12) lastVoiceAt = Date.now();
       events.onLevel?.(level);
     },
-    () => events.onError?.('No speech detected for a while — press Retry to keep listening.'),
+    () => {
+      if (longSession) queueSegment();
+      else events.onError?.('No speech detected for a while — press Retry to keep listening.');
+    },
   ).then((started) => {
     recorder = started;
     events.onOpen?.();
+    if (longSession) segmentTimer = setInterval(queueSegment, 90_000);
     const session: GlobalDictationSession = {
       engine,
       engineLabel,
@@ -124,9 +152,16 @@ function createBatchSession(
         done = true;
         if (silenceTimer !== null) clearInterval(silenceTimer);
         silenceTimer = null;
-        const wav = recorder?.captureWav() ?? null;
+        if (longSession) queueSegment();
+        const wav =
+          longSession && recorder?.captureWavAndReset ? null : (recorder?.captureWav() ?? null);
         recorder?.stop();
         recorder = null;
+        if (longSession) await segmentTask;
+        if (segmentFailed) {
+          close();
+          throw new Error(formatGlobalDictationTranscriptionFailure(engine));
+        }
         if (!wav || wav.size === 0) {
           close();
           return;
@@ -184,32 +219,42 @@ async function createWebSpeechSession(
   let fallbackTranscription: Promise<void> | null = null;
   let fallbackModel: ReturnType<typeof getFasterWhisperModel> | null = null;
   let fallbackSilenceTimer: ReturnType<typeof setInterval> | null = null;
+  let fallbackSegmentTimer: ReturnType<typeof setInterval> | null = null;
+  let fallbackSegments: Promise<void> = Promise.resolve();
   let lastVoiceAt = 0;
   let autoStopFallback: (() => void) | null = null;
 
+  const transcribeFallbackWav = async (wav: Blob) => {
+    const text = (
+      await transcribeFasterWhisper(wav, fallbackModel ?? getFasterWhisperModel())
+    ).trim();
+    if (done || !text) return;
+    finalText = finalText && !finalText.endsWith(text) ? `${finalText} ${text}` : finalText || text;
+    events.onFinal?.(finalText);
+  };
+  const queueFallbackSegment = () => {
+    const wav = meter?.captureWavAndReset?.();
+    if (!wav?.size) return;
+    fallbackSegments = fallbackSegments
+      .then(() => transcribeFallbackWav(wav))
+      .catch(() => {
+        if (!done) events.onError?.(formatGlobalDictationTranscriptionFailure('faster-whisper'));
+      });
+  };
   const transcribeLocalFallback = (): Promise<void> => {
     if (fallbackTranscription) return fallbackTranscription;
-    const wav = meter?.captureWav() ?? null;
+    queueFallbackSegment();
+    const wav = meter?.captureWavAndReset ? null : (meter?.captureWav() ?? null);
     meter?.stop();
     meter = null;
     fallbackTranscription = (async () => {
-      if (!wav || wav.size === 0) {
-        if (!done) events.onError?.(formatGlobalDictationSessionFailure('No speech detected'));
-        teardown();
-        return;
-      }
       try {
-        const text = (
-          await transcribeFasterWhisper(wav, fallbackModel ?? getFasterWhisperModel())
-        ).trim();
-        if (done) return;
-        if (text) {
-          finalText = text;
-          events.onFinal?.(text);
-          if (autoFinishLocalFallback) events.onTurnEnd?.({ forceCommit: true });
-        } else {
+        await fallbackSegments;
+        if (wav?.size) await transcribeFallbackWav(wav);
+        if (!done && !finalText)
           events.onError?.(formatGlobalDictationSessionFailure('No speech detected'));
-        }
+        if (!done && finalText && autoFinishLocalFallback)
+          events.onTurnEnd?.({ forceCommit: true });
       } catch {
         if (!done) events.onError?.(formatGlobalDictationTranscriptionFailure('faster-whisper'));
       } finally {
@@ -247,6 +292,8 @@ async function createWebSpeechSession(
 
       fallbackModel = model;
       usingLocalFallback = true;
+      if (!autoFinishLocalFallback)
+        fallbackSegmentTimer = setInterval(queueFallbackSegment, 55_000);
       if (!opened) {
         opened = true;
         events.onOpen?.();
@@ -312,6 +359,8 @@ async function createWebSpeechSession(
     stopTimer = null;
     if (fallbackSilenceTimer !== null) clearInterval(fallbackSilenceTimer);
     fallbackSilenceTimer = null;
+    if (fallbackSegmentTimer !== null) clearInterval(fallbackSegmentTimer);
+    fallbackSegmentTimer = null;
     offs.forEach((off) => off());
     meter?.stop();
     meter = null;
@@ -333,12 +382,14 @@ async function createWebSpeechSession(
         }
       },
       () => {
-        if (!done && usingLocalFallback) {
+        if (!done && usingLocalFallback && autoFinishLocalFallback) {
           events.onError?.(formatGlobalDictationSessionFailure('No speech detected'));
           teardown();
         }
       },
-      { retainAudio: true },
+      // Keep a recent recovery window instead of buffering hours of PCM in
+      // the hidden WebView. Confirmed words are already checkpointed as text.
+      { retainAudio: true, maxBufferedSeconds: 60 },
     );
     assertCurrent();
     VoiceService.setInactivityTimeoutMs(null);
@@ -429,7 +480,9 @@ export async function createSelectedSttSession(
     released = true;
     if (activeSelectedSttClaim?.token === token) activeSelectedSttClaim = null;
   };
-  const history = createSpeechHistorySession(getComposerSttProvider());
+  const provider = getComposerSttProvider();
+  const history = createSpeechHistorySession(provider);
+  let historyClearPrefix = '';
   let finishing = false;
   let hasFinal = false;
   const scopedEvents: DictationEvents = {
@@ -447,8 +500,12 @@ export async function createSelectedSttSession(
     },
     onFinal: (text) => {
       if (isCurrent()) {
-        hasFinal = hasFinal || Boolean(text.trim());
-        history.final(text);
+        const recoveryText =
+          historyClearPrefix && provider !== 'deepgram' && text.startsWith(historyClearPrefix)
+            ? text.slice(historyClearPrefix.length).trim()
+            : text;
+        hasFinal = hasFinal || Boolean(recoveryText.trim());
+        history.final(recoveryText);
         events.onFinal?.(text);
       }
     },
@@ -502,6 +559,12 @@ export async function createSelectedSttSession(
         }
       },
       getFinalText: () => (cancelled || claim.superseded ? '' : session.getFinalText()),
+      markDeliveryFailed: () => history.markInterrupted(),
+      clearRecoveryText: () => {
+        historyClearPrefix = provider === 'deepgram' ? '' : session.getFinalText();
+        hasFinal = false;
+        history.clear();
+      },
     };
     if (!isCurrent()) {
       try {
@@ -516,7 +579,6 @@ export async function createSelectedSttSession(
   };
 
   try {
-    const provider = getComposerSttProvider();
     if (provider === 'faster-whisper') {
       const model = getFasterWhisperModel();
       const ready = await fasterWhisperReady();
@@ -533,6 +595,7 @@ export async function createSelectedSttSession(
           (blob) => transcribeFasterWhisper(blob, model),
           scopedEvents,
           options.requester === 'jarvis-voice',
+          options.requester === 'global-dictation',
         ),
       );
     }
@@ -577,5 +640,6 @@ export async function createSelectedSttSession(
   }
 }
 
-/** Backwards-compatible name for the Ctrl+Space mini-module. */
-export const createGlobalDictationSession = createSelectedSttSession;
+/** Desktop overlay uses the saved provider with long-take recording rules. */
+export const createGlobalDictationSession = (events: DictationEvents = {}) =>
+  createSelectedSttSession(events, { requester: 'global-dictation' });

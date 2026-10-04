@@ -64,7 +64,9 @@ export function requestComposerSttFromToolbar(): boolean {
       document.querySelectorAll(
         '[data-chat-id][data-focused="true"] [data-tour="chat-composer"] [aria-label="Message"]',
       ),
-    ).filter(isComposerSttTextarea).filter(field => !field.disabled && !field.readOnly);
+    )
+      .filter(isComposerSttTextarea)
+      .filter((field) => !field.disabled && !field.readOnly);
     if (candidates.length === 1) {
       candidates[0]!.focus();
       rememberSttEditableFromFocus(candidates[0]!);
@@ -135,6 +137,8 @@ export async function transcribeFasterWhisper(
 
 export interface FasterWhisperRecorder {
   captureWav: () => Blob | null;
+  /** Take one segment without stopping the microphone. */
+  captureWavAndReset: () => Blob | null;
   stop: () => void;
 }
 
@@ -142,10 +146,11 @@ export interface FasterWhisperRecorder {
 export async function startBatchAudioRecorder(
   onVolume: (rms: number) => void,
   onInactivity: () => void,
-  options: { retainAudio?: boolean } = {},
+  options: { retainAudio?: boolean; maxBufferedSeconds?: number } = {},
 ): Promise<FasterWhisperRecorder> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const chunks: Float32Array[] = [];
+  let bufferedSamples = 0;
   let context: AudioContext | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
   let processor: ScriptProcessorNode | null = null;
@@ -158,6 +163,7 @@ export async function startBatchAudioRecorder(
     if (inactivityTimer !== null) window.clearInterval(inactivityTimer);
     if (processor) processor.onaudioprocess = null;
     chunks.length = 0;
+    bufferedSamples = 0;
     cleanupAudioRecorder(processor, source, context, stream);
     onVolume(0);
   };
@@ -182,7 +188,16 @@ export async function startBatchAudioRecorder(
       const rms = Math.sqrt(sum / Math.max(1, channel.length));
       if (rms > STT_ACTIVITY_RMS) lastActivity = Date.now();
       onVolume(Math.min(1, rms * 8));
-      if (!stopped && options.retainAudio !== false) chunks.push(new Float32Array(channel));
+      if (!stopped && options.retainAudio !== false) {
+        chunks.push(new Float32Array(channel));
+        bufferedSamples += channel.length;
+        const maxSamples = options.maxBufferedSeconds
+          ? Math.max(channel.length, Math.floor(options.maxBufferedSeconds * sampleRate))
+          : Infinity;
+        while (bufferedSamples > maxSamples && chunks.length > 1) {
+          bufferedSamples -= chunks.shift()!.length;
+        }
+      }
     };
     source.connect(processor);
     processor.connect(context.destination);
@@ -194,6 +209,13 @@ export async function startBatchAudioRecorder(
       captureWav() {
         if (stopped || chunks.length === 0) return null;
         return encodeWav(chunks, sampleRate);
+      },
+      captureWavAndReset() {
+        if (stopped || chunks.length === 0) return null;
+        const wav = encodeWav(chunks, sampleRate);
+        chunks.length = 0;
+        bufferedSamples = 0;
+        return wav;
       },
       stop: teardown,
     };

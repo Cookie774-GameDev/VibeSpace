@@ -3,6 +3,7 @@ import {
   createSpeechHistorySession,
   readSpeechHistory,
   deleteSpeechHistoryEntry,
+  restoreSpeechHistoryEntry,
 } from './speechHistory';
 
 describe('speech recovery history', () => {
@@ -53,6 +54,25 @@ describe('speech recovery history', () => {
     expect(rows[0].text).toBe('talk 52');
     expect(rows.at(-1)?.text).toBe('talk 3');
   });
+  it('keeps a long running active take among the newest 50 by its latest checkpoint', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(100);
+    const active = createSpeechHistorySession('system');
+    active.partial('opening words');
+    for (let i = 0; i < 49; i++) {
+      vi.spyOn(Date, 'now').mockReturnValue(200 + i);
+      createSpeechHistorySession('system').final(`other ${i}`);
+    }
+    vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    active.final('opening words many hours later');
+    for (let i = 0; i < 2; i++) {
+      vi.spyOn(Date, 'now').mockReturnValue(10_001 + i);
+      createSpeechHistorySession('system').final(`new ${i}`);
+    }
+    expect(readSpeechHistory()).toHaveLength(50);
+    expect(readSpeechHistory().some((row) => row.text === 'opening words many hours later')).toBe(
+      true,
+    );
+  });
   it('does not resurrect an entry deleted while its speaker is still active', () => {
     const session = createSpeechHistorySession('system');
     session.partial('private');
@@ -79,5 +99,60 @@ describe('speech recovery history', () => {
     expect(() =>
       createSpeechHistorySession('system').partial('recoverable in memory'),
     ).not.toThrow();
+  });
+  it('keeps a completed transcript recoverable when native paste fails', () => {
+    const session = createSpeechHistorySession('system');
+    session.final('do not lose these words');
+    session.finish('completed');
+    session.markInterrupted();
+    expect(readSpeechHistory()[0]).toMatchObject({
+      text: 'do not lose these words',
+      status: 'interrupted',
+    });
+  });
+  it('clears only the active take and saves later words as a new recovery entry', () => {
+    const session = createSpeechHistorySession('system');
+    session.final('discard these words');
+    expect(readSpeechHistory()).toHaveLength(1);
+    session.clear();
+    expect(readSpeechHistory()).toEqual([]);
+    session.final('keep these words');
+    expect(readSpeechHistory()[0].text).toBe('keep these words');
+  });
+  it('does not prune any transcript when the retention scan fails', () => {
+    for (let i = 0; i < 50; i++) {
+      vi.spyOn(Date, 'now').mockReturnValue(1000 + i);
+      createSpeechHistorySession('system').final(`saved ${i}`);
+    }
+    const originalKey = Storage.prototype.key;
+    let failed = false;
+    vi.spyOn(Storage.prototype, 'key').mockImplementation(function (this: Storage, index) {
+      if (!failed) {
+        failed = true;
+        throw new Error('temporary storage read failure');
+      }
+      return originalKey.call(this, index);
+    });
+    createSpeechHistorySession('system').final('newest');
+    expect(localStorage.length).toBe(51);
+    expect(readSpeechHistory()).toHaveLength(50);
+  });
+  it('retains only the newest 50 after restoring an older transcript', () => {
+    for (let i = 0; i < 50; i++) {
+      vi.spyOn(Date, 'now').mockReturnValue(1000 + i);
+      createSpeechHistorySession('system').final(`take ${i}`);
+    }
+    vi.spyOn(Date, 'now').mockReturnValue(2000);
+    restoreSpeechHistoryEntry({
+      id: 'old',
+      startedAt: 1,
+      text: 'restored take',
+      provider: 'system',
+      status: 'saved',
+    });
+    const rows = readSpeechHistory();
+    expect(rows).toHaveLength(50);
+    expect(rows[0]).toMatchObject({ text: 'restored take', status: 'interrupted' });
+    expect(rows.some((row) => row.text === 'take 0')).toBe(false);
   });
 });

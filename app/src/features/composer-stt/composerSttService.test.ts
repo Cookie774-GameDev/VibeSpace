@@ -22,12 +22,15 @@ describe('composerSttService toolbar routing', () => {
   it('starts in the active chat pane before any field has been focused', () => {
     useUIStore.setState({ route: 'chat' });
     const workspace = document.createElement('div');
-    workspace.innerHTML = '<section data-chat-id="a" data-focused="false"><div data-tour="chat-composer"><textarea aria-label="Message"></textarea></div></section><section data-chat-id="b" data-focused="true"><div data-tour="chat-composer"><textarea aria-label="Message"></textarea></div></section>';
+    workspace.innerHTML =
+      '<section data-chat-id="a" data-focused="false"><div data-tour="chat-composer"><textarea aria-label="Message"></textarea></div></section><section data-chat-id="b" data-focused="true"><div data-tour="chat-composer"><textarea aria-label="Message"></textarea></div></section>';
     document.body.append(workspace);
     try {
       resetSttFocusMemoryForTests();
       expect(requestComposerSttFromToolbar()).toBe(true);
-      expect(resolveComposerSttTextarea()).toBe(workspace.querySelector('[data-chat-id="b"] textarea'));
+      expect(resolveComposerSttTextarea()).toBe(
+        workspace.querySelector('[data-chat-id="b"] textarea'),
+      );
     } finally {
       workspace.remove();
     }
@@ -179,5 +182,48 @@ describe('batch microphone resource lifetime', () => {
     expect(onLevel).toHaveBeenCalledTimes(updatesAtStop);
     expect(stopTrack).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
+  });
+  it('bounds fallback PCM and drains a segment without stopping the microphone', async () => {
+    const processor = {
+      onaudioprocess: null as ((event: unknown) => void) | null,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    vi.stubGlobal('navigator', {
+      mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: vi.fn() }] }) },
+    });
+    vi.stubGlobal(
+      'AudioContext',
+      class {
+        sampleRate = 2;
+        destination = {};
+        createMediaStreamSource() {
+          return { connect: vi.fn(), disconnect: vi.fn() };
+        }
+        createScriptProcessor() {
+          return processor;
+        }
+        close = async () => undefined;
+      },
+    );
+    const recorder = await startBatchAudioRecorder(vi.fn(), vi.fn(), { maxBufferedSeconds: 2 });
+    try {
+      // Simulate one chunk per second for two hours without retaining two hours of PCM.
+      for (let i = 0; i < 7_200; i++) {
+        processor.onaudioprocess!({
+          inputBuffer: { getChannelData: () => new Float32Array([i, i]) },
+        });
+      }
+      // Two 2-sample chunks remain: 4 PCM samples + 44-byte WAV header.
+      expect(recorder.captureWav()?.size).toBe(52);
+      expect(recorder.captureWavAndReset()?.size).toBe(52);
+      expect(recorder.captureWav()).toBeNull();
+      processor.onaudioprocess!({
+        inputBuffer: { getChannelData: () => new Float32Array([1, 1]) },
+      });
+      expect(recorder.captureWav()?.size).toBe(48);
+    } finally {
+      recorder.stop();
+    }
   });
 });

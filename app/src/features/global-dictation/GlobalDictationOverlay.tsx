@@ -231,6 +231,7 @@ export function GlobalDictationOverlay({
       }
     } catch (err) {
       if (generationRef.current === generation) {
+        session?.markDeliveryFailed?.();
         updateState('error');
         setErrorMessage(
           `${formatGlobalDictationPasteFailure(err)} Your transcript is kept. Return to the original text box and press your dictation shortcut to retry.`,
@@ -268,6 +269,7 @@ export function GlobalDictationOverlay({
   /** Clear the transcript but keep dictating. */
   const clearTranscript = React.useCallback(() => {
     clearedTextRef.current = sessionRef.current?.getFinalText() ?? '';
+    sessionRef.current?.clearRecoveryText?.();
     resetTranscript();
     const session = sessionRef.current;
     if (session && !session.streaming) {

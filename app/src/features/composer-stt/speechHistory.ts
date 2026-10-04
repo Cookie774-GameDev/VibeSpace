@@ -6,6 +6,7 @@ export type SpeechHistoryStatus = 'saved' | 'completed' | 'interrupted';
 export interface SpeechHistoryEntry {
   id: string;
   startedAt: number;
+  updatedAt?: number;
   text: string;
   provider: string;
   status: SpeechHistoryStatus;
@@ -15,7 +16,7 @@ let storageFailed = false;
 const notify = () => window.dispatchEvent(new Event(CHANGED));
 export const speechHistoryStorageFailed = () => storageFailed;
 
-export function readSpeechHistory(): SpeechHistoryEntry[] {
+function scanSpeechHistory(): SpeechHistoryEntry[] | null {
   const rows: SpeechHistoryEntry[] = [];
   try {
     for (let i = 0; i < localStorage.length; i++) {
@@ -28,6 +29,7 @@ export function readSpeechHistory(): SpeechHistoryEntry[] {
           typeof row.id === 'string' &&
           key === PREFIX + row.id &&
           Number.isFinite(row.startedAt) &&
+          (row.updatedAt === undefined || Number.isFinite(row.updatedAt)) &&
           typeof row.text === 'string' &&
           row.text.trim() &&
           typeof row.provider === 'string' &&
@@ -40,8 +42,16 @@ export function readSpeechHistory(): SpeechHistoryEntry[] {
     }
   } catch {
     storageFailed = true;
+    return null;
   }
-  return rows.sort((a, b) => b.startedAt - a.startedAt || b.id.localeCompare(a.id)).slice(0, 50);
+  return rows.sort(
+    (a, b) =>
+      (b.updatedAt ?? b.startedAt) - (a.updatedAt ?? a.startedAt) || b.id.localeCompare(a.id),
+  );
+}
+
+export function readSpeechHistory(): SpeechHistoryEntry[] {
+  return scanSpeechHistory()?.slice(0, 50) ?? [];
 }
 
 export function subscribeSpeechHistory(listener: () => void) {
@@ -72,6 +82,21 @@ export function deleteSpeechHistoryEntry(id: string): boolean {
   }
 }
 
+function pruneSpeechHistory() {
+  const scanned = scanSpeechHistory();
+  if (!scanned) throw new Error('Could not read speech history for retention');
+  const retained = new Set(scanned.slice(0, 50).map((row) => PREFIX + row.id));
+  const remove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(PREFIX) && !retained.has(key)) remove.push(key);
+  }
+  for (const key of remove) {
+    if (!deleteSpeechHistoryEntry(key.slice(PREFIX.length)))
+      throw new Error('Could not archive older speech');
+  }
+}
+
 export function createSpeechHistorySession(provider: string) {
   const entry: SpeechHistoryEntry = {
     id: crypto.randomUUID(),
@@ -88,6 +113,7 @@ export function createSpeechHistorySession(provider: string) {
   const save = () => {
     entry.text = [confirmed, partial].filter(Boolean).join(' ').trim();
     if (!entry.text || deleted) return;
+    entry.updatedAt = Date.now();
     try {
       // Individual keys prevent stale WebViews from overwriting each other's sessions.
       // A missing previously saved key also respects deletion in another window.
@@ -97,16 +123,7 @@ export function createSpeechHistorySession(provider: string) {
       }
       localStorage.setItem(PREFIX + entry.id, JSON.stringify(entry));
       persisted = true;
-      const retained = new Set(readSpeechHistory().map((row) => PREFIX + row.id));
-      const remove: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key?.startsWith(PREFIX) && !retained.has(key)) remove.push(key);
-      }
-      for (const key of remove) {
-        if (!deleteSpeechHistoryEntry(key.slice(PREFIX.length)))
-          throw new Error('Could not archive older speech');
-      }
+      pruneSpeechHistory();
       storageFailed = false;
     } catch {
       storageFailed = true;
@@ -133,6 +150,31 @@ export function createSpeechHistorySession(provider: string) {
       entry.status = status;
       save();
     },
+    markInterrupted() {
+      if (deleted) return;
+      finished = true;
+      entry.status = 'interrupted';
+      save();
+    },
+    clear() {
+      confirmed = '';
+      partial = '';
+      entry.text = '';
+      try {
+        if (persisted) {
+          if (localStorage.getItem(PREFIX + entry.id) === null) {
+            deleted = true;
+            return;
+          }
+          localStorage.removeItem(PREFIX + entry.id);
+          persisted = false;
+        }
+        storageFailed = false;
+      } catch {
+        storageFailed = true;
+      }
+      notify();
+    },
   };
 }
 
@@ -142,9 +184,16 @@ export function restoreSpeechHistoryEntry(entry: SpeechHistoryEntry): string {
     ...entry,
     id: crypto.randomUUID(),
     startedAt: Date.now(),
+    updatedAt: Date.now(),
     status: entry.status === 'saved' ? 'interrupted' : entry.status,
   };
   localStorage.setItem(PREFIX + restored.id, JSON.stringify(restored));
+  try {
+    pruneSpeechHistory();
+    storageFailed = false;
+  } catch {
+    storageFailed = true;
+  }
   notify();
   return restored.id;
 }

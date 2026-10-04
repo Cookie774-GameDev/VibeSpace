@@ -359,6 +359,23 @@ fn dictation_route(editable_or_visible: bool) -> DictationRoute {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum DictationShortcutAction {
+    FinishVisibleTake,
+    CaptureNewTarget,
+    IgnoreBusyProbe,
+}
+
+fn dictation_shortcut_action(visible: bool, probe_busy: bool) -> DictationShortcutAction {
+    if visible {
+        DictationShortcutAction::FinishVisibleTake
+    } else if probe_busy {
+        DictationShortcutAction::IgnoreBusyProbe
+    } else {
+        DictationShortcutAction::CaptureNewTarget
+    }
+}
+
 fn handle_global_dictation_shortcut(app: &tauri::AppHandle) {
     let enabled = app
         .state::<GlobalDictationShortcutState>()
@@ -369,24 +386,32 @@ fn handle_global_dictation_shortcut(app: &tauri::AppHandle) {
     if !enabled {
         return;
     }
-    // UI Automation can cross process boundaries: never block the shortcut/UI
-    // thread or queue multiple probes while a provider is responding.
+    // A visible take must finish immediately even while a previous UIA probe
+    // is still unwinding. Never drop its second shortcut at the probe guard.
+    let visible_window = app
+        .get_webview_window("dictation")
+        .filter(|window| window.is_visible().unwrap_or(false));
     static PROBING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    match dictation_shortcut_action(
+        visible_window.is_some(),
+        PROBING.load(std::sync::atomic::Ordering::SeqCst),
+    ) {
+        DictationShortcutAction::FinishVisibleTake => {
+            if let Some(window) = visible_window {
+                let _ = window.emit("jarvis:global-dictation-toggle", ());
+            }
+            return;
+        }
+        DictationShortcutAction::IgnoreBusyProbe => return,
+        DictationShortcutAction::CaptureNewTarget => {}
+    }
+    // UI Automation can cross process boundaries: never block the shortcut/UI
+    // thread or queue multiple target probes while a provider is responding.
     if PROBING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Some(window) = app
-            .get_webview_window("dictation")
-            .filter(|window| window.is_visible().unwrap_or(false))
-        {
-            // The take owns its ORIGINAL field. Finishing never recaptures or
-            // clears it when the user has moved to another page/application.
-            let _ = window.emit("jarvis:global-dictation-toggle", ());
-            PROBING.store(false, std::sync::atomic::Ordering::SeqCst);
-            return;
-        }
         match dictation_route(dictation::capture_target()) {
             DictationRoute::Overlay => show_dictation_window(&app),
             DictationRoute::Ignore => {}
@@ -1706,5 +1731,17 @@ wallpaper_master::wallpaper_full_cache_path";
         // Only an editable target or an already-visible take can use the overlay.
         assert_eq!(dictation_route(true), DictationRoute::Overlay);
         assert_eq!(dictation_route(false), DictationRoute::Ignore);
+    }
+
+    #[test]
+    fn visible_dictation_take_finishes_even_while_target_probe_is_busy() {
+        assert_eq!(
+            dictation_shortcut_action(true, true),
+            DictationShortcutAction::FinishVisibleTake
+        );
+        assert_eq!(
+            dictation_shortcut_action(false, true),
+            DictationShortcutAction::IgnoreBusyProbe
+        );
     }
 }

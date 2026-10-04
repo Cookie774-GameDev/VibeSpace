@@ -321,7 +321,7 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
   });
 
   it('keeps recording across focus changes and retries the same transcript after a failed paste', async () => {
-    const session = fakeSession('words across four pages');
+    const session = { ...fakeSession('words across four pages'), markDeliveryFailed: vi.fn() };
     sessionMocks.createSession.mockImplementation(async (cb: SessionCallbacks) => {
       cb.onOpen?.();
       return session;
@@ -340,6 +340,7 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     expect(session.stop).not.toHaveBeenCalled();
     await openOverlay();
     expect(screen.getByText(/Your transcript is kept/)).toBeTruthy();
+    expect(session.markDeliveryFailed).toHaveBeenCalledOnce();
     await openOverlay();
     expect(sessionMocks.createSession).toHaveBeenCalledOnce();
     expect(session.stop).toHaveBeenCalledOnce();
@@ -355,6 +356,27 @@ describe('GlobalDictationOverlay (VibeSpace shared STT pipeline)', () => {
     expect(session.cancel).not.toHaveBeenCalled();
     await openOverlay();
     expect(sessionMocks.createSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('finishes the same take when the second shortcut arrives during startup', async () => {
+    let resolveSession!: (session: ReturnType<typeof fakeSession>) => void;
+    const session = fakeSession('a quick take');
+    sessionMocks.createSession.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSession = resolve;
+        }),
+    );
+    render(<GlobalDictationOverlay />);
+    await openOverlay();
+    await openOverlay();
+    await act(async () => {
+      resolveSession(session);
+    });
+    expect(session.stop).toHaveBeenCalledOnce();
+    expect(tauriMocks.invoke).toHaveBeenCalledWith('dictation_paste_text', {
+      text: 'a quick take',
+    });
   });
 
   it('preserves finalized words when hiding fails and Escape discards only the pending delivery', async () => {
