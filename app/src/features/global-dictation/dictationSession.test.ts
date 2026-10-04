@@ -521,6 +521,34 @@ describe('createGlobalDictationSession engine resolution', () => {
     expect(session.getFinalText()).toBe('last spoken words');
   });
 
+  it('keeps the last live words when Web Speech ends without a final result', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    const onFinal = vi.fn();
+    const session = await createSelectedSttSession({ onFinal });
+    mocks.voiceHandlers.get('voice:partial')?.({ text: 'last spoken words' } as never);
+
+    const stopping = session.stop();
+    mocks.voiceHandlers.get('voice:end')?.(undefined as never);
+    await stopping;
+
+    expect(session.getFinalText()).toBe('last spoken words');
+    expect(onFinal).toHaveBeenLastCalledWith('last spoken words');
+  });
+
+  it('joins confirmed and pending Web Speech words once on stop', async () => {
+    mocks.voiceService.isSupported.mockReturnValue(true);
+    const session = await createSelectedSttSession();
+    mocks.voiceHandlers.get('voice:partial')?.({ text: 'hello' } as never);
+    mocks.voiceHandlers.get('voice:final')?.({ text: 'hello' } as never);
+    mocks.voiceHandlers.get('voice:partial')?.({ text: 'world' } as never);
+
+    const stopping = session.stop();
+    mocks.voiceHandlers.get('voice:end')?.(undefined as never);
+    await stopping;
+
+    expect(session.getFinalText()).toBe('hello world');
+  });
+
   it('preserves the closed browser-recognition startup diagnostic', async () => {
     mocks.voiceService.isSupported.mockReturnValue(true);
     const onError = vi.fn();

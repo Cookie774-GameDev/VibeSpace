@@ -59,6 +59,34 @@ describe('Composer selected-STT field transactions', () => {
     expect(commit).toHaveBeenCalledOnce();c.dispose();
   });
 
+  it('shows confirmed words with the current partial before finalizing', async () => {
+    const c=make();await c.start();
+    events.onPartial?.('hello');
+    expect(c.getSnapshot()).toMatchObject({phase:'listening',text:'hello',partial:true});
+    events.onFinal?.('hello');
+    events.onPartial?.('world');
+    expect(c.getSnapshot()).toMatchObject({phase:'listening',text:'hello world',partial:true});
+    finalText='hello world';
+    await c.finish();await c.accept();
+    expect(field.value).toBe('alpha hello world omega');
+    expect(commit).toHaveBeenCalledOnce();c.dispose();
+  });
+
+  it('uses Enter to finish into the draft without triggering composer send', async () => {
+    const send=vi.fn();field.addEventListener('keydown',send);
+    const c=make();await c.start();
+    events.onPartial?.('spoken');finalText='spoken words';
+    const enter=new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true});
+    field.dispatchEvent(enter);
+    await vi.waitFor(()=>expect(commit).toHaveBeenCalledOnce());
+    expect(enter.defaultPrevented).toBe(true);
+    expect(send).not.toHaveBeenCalled();
+    expect(field.value).toBe('alpha spoken words omega');
+    field.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
+    expect(send).toHaveBeenCalledOnce();
+    c.dispose();
+  });
+
   it('cancel leaves selected text intact and ignores late final and energy callbacks', async () => {
     const level=vi.fn();const c=createComposerDictationController({field:()=>field,commit,onLevel:level});
     await c.start();events.onPartial?.('do not insert');const late=events;

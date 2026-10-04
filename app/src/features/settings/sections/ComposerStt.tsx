@@ -6,7 +6,7 @@ import {
   HardDrive,
   Mic,
   RefreshCw,
-  Sparkles,
+  AudioLines,
   Trash2,
   AlertCircle,
 } from 'lucide-react';
@@ -218,7 +218,7 @@ export function ComposerStt() {
                 ? 'Web Speech available'
                 : 'Web Speech unavailable in this runtime'
             }
-            icon={<Sparkles className="h-4 w-4" />}
+            icon={<AudioLines className="h-4 w-4" />}
             onSelect={() => chooseProvider('system')}
           />
           <ProviderRow

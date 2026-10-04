@@ -35,7 +35,10 @@ describe('ComposerStt settings', () => {
 
   it('renders Free System, Local, and Deepgram choices', () => {
     render(<ComposerStt />);
-    expect(screen.getByRole('radio', { name: /Free System/i })).toBeTruthy();
+    const freeSystem = screen.getByRole('radio', { name: /Free System/i });
+    expect(freeSystem).toBeTruthy();
+    expect(freeSystem.querySelector('.lucide-audio-lines')).toBeTruthy();
+    expect(freeSystem.querySelector('.lucide-sparkles')).toBeNull();
     expect(screen.getByRole('radio', { name: /^Local/i })).toBeTruthy();
     expect(screen.getByRole('radio', { name: /Deepgram/i })).toBeTruthy();
   });

@@ -207,6 +207,7 @@ async function createWebSpeechSession(
   autoFinishLocalFallback = false,
 ): Promise<GlobalDictationSession> {
   let finalText = '';
+  let pendingPartial = '';
   let done = false;
   let opened = false;
   let stopping: Promise<void> | null = null;
@@ -223,6 +224,14 @@ async function createWebSpeechSession(
   let fallbackSegments: Promise<void> = Promise.resolve();
   let lastVoiceAt = 0;
   let autoStopFallback: (() => void) | null = null;
+
+  const finalizePendingPartial = () => {
+    const text = pendingPartial.trim();
+    pendingPartial = '';
+    if (!text || done || usingLocalFallback) return;
+    finalText = [finalText, text].filter(Boolean).join(' ');
+    events.onFinal?.(finalText);
+  };
 
   const transcribeFallbackWav = async (wav: Blob) => {
     const text = (
@@ -327,11 +336,15 @@ async function createWebSpeechSession(
     }),
     VoiceService.on('voice:partial', (payload) => {
       const text = (payload as { text?: string })?.text ?? '';
-      if (text) events.onPartial?.(text);
+      if (text) {
+        pendingPartial = text;
+        events.onPartial?.(text);
+      }
     }),
     VoiceService.on('voice:final', (payload) => {
       const text = ((payload as { text?: string })?.text ?? '').trim();
       if (!text) return;
+      pendingPartial = '';
       finalText = `${finalText} ${text}`.trim();
       events.onFinal?.(finalText);
     }),
@@ -348,6 +361,7 @@ async function createWebSpeechSession(
     }),
     VoiceService.on('voice:end', () => {
       if (checkingLocalFallback || usingLocalFallback) return;
+      if (stopping) finalizePendingPartial();
       if (stopping || (!VoiceService.isListening() && !VoiceService.wantsListening())) teardown();
     }),
   ];
@@ -418,7 +432,10 @@ async function createWebSpeechSession(
       if (checkingLocalFallback) return stopping;
       // Keep result listeners alive until recognition's final result/end event.
       // A bounded wait also handles engines that never send an end notification.
-      stopTimer = setTimeout(teardown, 1_200);
+      stopTimer = setTimeout(() => {
+        finalizePendingPartial();
+        teardown();
+      }, 1_200);
       VoiceService.stopListening();
       return stopping;
     },

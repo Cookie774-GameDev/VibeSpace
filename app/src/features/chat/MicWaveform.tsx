@@ -41,19 +41,19 @@ export function MicWaveform({ volumeRef }: MicWaveformProps) {
     <div className="flex items-center justify-center gap-[2.5px] h-3.5 w-3.5" aria-label="Microphone volume level indicator">
       <div
         ref={bar1}
-        className="w-[2px] h-full bg-accent-copper rounded-full origin-center transition-transform duration-75 ease-out scale-y-[0.2]"
+        className="w-[2px] h-full bg-current rounded-full origin-center transition-transform duration-75 ease-out scale-y-[0.2]"
       />
       <div
         ref={bar2}
-        className="w-[2px] h-full bg-accent-copper rounded-full origin-center transition-transform duration-75 ease-out scale-y-[0.2]"
+        className="w-[2px] h-full bg-current rounded-full origin-center transition-transform duration-75 ease-out scale-y-[0.2]"
       />
       <div
         ref={bar3}
-        className="w-[2px] h-full bg-accent-copper rounded-full origin-center transition-transform duration-75 ease-out scale-y-[0.2]"
+        className="w-[2px] h-full bg-current rounded-full origin-center transition-transform duration-75 ease-out scale-y-[0.2]"
       />
       <div
         ref={bar4}
-        className="w-[2px] h-full bg-accent-copper rounded-full origin-center transition-transform duration-75 ease-out scale-y-[0.2]"
+        className="w-[2px] h-full bg-current rounded-full origin-center transition-transform duration-75 ease-out scale-y-[0.2]"
       />
     </div>
   );

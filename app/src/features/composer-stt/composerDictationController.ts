@@ -35,6 +35,15 @@ export function createComposerDictationController(ports: FieldPorts) {
   let ending = false;
   let finalizing: Promise<void> | null = null;
   let accepting: { generation: number; promise: Promise<string | null> } | null = null;
+  const onDictationKeyDown = (event: Event) => {
+    if (!(event instanceof KeyboardEvent)) return;
+    if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.metaKey ||
+        event.altKey || event.isComposing || event.keyCode === 229) return;
+    // The active field owns Enter until the transcript is in the draft.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void accept();
+  };
   const publish = (next: Partial<ComposerDictationSnapshot>) => {
     if (disposed) return;
     state = Object.freeze({...state,...next});
@@ -44,6 +53,7 @@ export function createComposerDictationController(ports: FieldPorts) {
   const cancel = () => {
     generation += 1;
     const previous = session;
+    target?.removeEventListener('keydown', onDictationKeyDown, true);
     session = null;target = null;snapshot = null;original = '';committedText = '';
     ending = false;finalizing = null;
     previous?.cancel();ports.onLevel(0);
@@ -58,6 +68,7 @@ export function createComposerDictationController(ports: FieldPorts) {
     cancel();
     target = ports.field();
     if (!target) {fail('Focus an editable field before starting dictation.');return;}
+    target.addEventListener('keydown', onDictationKeyDown, true);
     original = target.value;snapshot = captureSttFieldSnapshot(target);scope = ports.scope?.() ?? '';
     const id = generation;
     publish({phase:'starting'});
