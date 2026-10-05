@@ -3644,7 +3644,7 @@ export function Composer({
             'Invalid command',
             instantCommandResult.handled ? instantCommandResult.message : 'Unknown command.',
           );
-          setText('');
+          // Preserve a failed local request and its attachments for correction.
         }
       } finally {
         instantCommandInFlightRef.current = false;
@@ -4648,6 +4648,8 @@ export function Composer({
 
     // Model readiness must not disable commands that need no model. This
     // preflight is pure; the normal bridge below still owns execution.
+    const localCommandOnly = canRunLocalCommandWithoutModel(rawSendText) &&
+      !pendingHandoff && !options.handoffPayload && attachedNotes.length === 0;
     if (backendRuntimeBlocked && !canRunLocalCommandWithoutModel(rawSendText)) return false;
     if (!options.attachments && nativeSelection.entries.length > 0 && !nativeSelection.canDispatch &&
         !canRunLocalCommandWithoutModel(rawSendText)) {
@@ -4668,6 +4670,7 @@ export function Composer({
     }
     if (
       !caoDecision?.control &&
+      !localCommandOnly &&
       (jarvisRunning || getChatRunState(String(chatId))?.status === 'running') &&
       !options.bypassQueue &&
       (!overrideText || options.promptForgeApproved)
@@ -4717,34 +4720,36 @@ export function Composer({
       return true;
     }
 
-    // The deterministic local bridge runs only after slash handling and the
-    // queue/CAO control exits above. Queue activation passes its stable item
-    // id through options, so enqueue itself has no local side effects.
+    // Ordinary text has no local authority dependency. Actual local actions
+    // and ambiguous requests retain the fail-closed bridge below. Mixed
+    // queued requests reach it only on activation, with their stable item id.
     const localCommandInteractionId =
       options.localCommandInteractionId ?? `composer-${crypto.randomUUID()}`;
     let localCommandResult: LocalBridgeResult | null = null;
     let localCommandModelText = rawSendText;
-    try {
-      const localAuth = useAuthStore.getState();
-      localCommandResult = await sharedLocalCommandPreModelBridge.process({
-        text: rawSendText,
-        interactionId: localCommandInteractionId,
-        context: {
-          correlationId: localCommandInteractionId,
-          accountId: resolveAccountIdentity(localAuth)?.accountId ?? '',
-          workspaceId: String(workspaceId ?? ''),
-          projectId: String(projectId ?? ''),
-        },
-      });
-    } catch {
-      // A bridge failure is held closed. The bridge may have completed an
-      // action before a later bookkeeping step failed, so falling through
-      // would resend the original action to the model.
-      toast.warning(
-        'Local action unavailable',
-        'The request was held safely. Review the local action and retry.',
-      );
-      return false;
+    if (requiresLocalCommandPreflight(rawSendText)) {
+      try {
+        const localAuth = useAuthStore.getState();
+        localCommandResult = await sharedLocalCommandPreModelBridge.process({
+          text: rawSendText,
+          interactionId: localCommandInteractionId,
+          context: {
+            correlationId: localCommandInteractionId,
+            accountId: resolveAccountIdentity(localAuth)?.accountId ?? '',
+            workspaceId: String(workspaceId ?? ''),
+            projectId: String(projectId ?? ''),
+          },
+        });
+      } catch {
+        // A bridge failure is held closed. The bridge may have completed an
+        // action before a later bookkeeping step failed, so falling through
+        // would resend the original action to the model.
+        toast.warning(
+          'Local action unavailable',
+          'The request was held safely. Review the local action and retry.',
+        );
+        return false;
+      }
     }
     if (localCommandResult?.holdModel) {
       const heldReceipt = localCommandResult.receipts.find(
@@ -5496,7 +5501,9 @@ export function Composer({
       async (nextPayload) => {
         // A terminal kernel checkpoint can precede native cancellation cleanup.
         // Retain the FIFO item until its predecessor releases the provider slot.
-        if (payload === queued.text) {
+        const localOnly = !queuedHandoffsRef.current.has(queued.id) &&
+          (isComposerInstantCommandSource(nextPayload) || canRunLocalCommandWithoutModel(nextPayload));
+        if (payload === queued.text && !localOnly) {
           if (!shouldDispatchNextQueuedMessage(sendingRef.current,
             queuedInterruptInFlightRef.current !== null, getChatRunState(String(chatId))?.status)) return false;
           await waitForPersistentOpenCodeChatRelease(String(chatId));
@@ -5541,6 +5548,13 @@ export function Composer({
         'Handoff remains queued',
         'A handoff keeps its accepted snapshot and structured receipt, so it will send after this reply finishes.',
       );
+      return;
+    }
+    // Older queue entries can contain a pure local action. Dispatch through
+    // the existing authority without cancelling or steering the active run.
+    if (!queuedHandoffsRef.current.has(id) &&
+        (isComposerInstantCommandSource(queued.text) || canRunLocalCommandWithoutModel(queued.text))) {
+      dispatchQueuedMessage(queued);
       return;
     }
     if (!jarvisRunning || !activeCancellationKeyRef.current) {
@@ -5955,6 +5969,11 @@ export function Composer({
       !mentionCtx
     ) {
       e.preventDefault();
+      if (isComposerInstantCommandSource(text) ||
+          canRunLocalCommandWithoutModel(appendChatAnnotations(text, chatAnnotations))) {
+        void handleSend(undefined, { flushMode: 'after-run' });
+        return;
+      }
       if (enqueueCurrentMessage(appendChatAnnotations(text, chatAnnotations), 'after-run')) {
         setChatAnnotations([]);
       }
@@ -5968,7 +5987,9 @@ export function Composer({
         text,
         confirmedReferenceKeys: confirmedCatalogReferences.map((reference) => reference.key),
       })?.control;
-      if (jarvisRunning && text.trim() && !caoControl) {
+      if (jarvisRunning && text.trim() && !caoControl &&
+          !isComposerInstantCommandSource(text) &&
+          !canRunLocalCommandWithoutModel(appendChatAnnotations(text, chatAnnotations))) {
         if (enqueueCurrentMessage(appendChatAnnotations(text, chatAnnotations), 'after-tool')) {
           setChatAnnotations([]);
         }

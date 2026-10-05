@@ -25,6 +25,15 @@ const SAFE_IDENTITY = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/u;
 const SUCCESS_STATUSES = new Set(['completed', 'queued']);
 const MAX_CACHE_ENTRIES = 256;
 
+function needsLocalClarification(route: LocalRouteResult): boolean {
+  return (
+    route.classification === 'ambiguous' ||
+    route.ambiguous.some(
+      ({ reason }) => reason === 'typo-intent-conflict' || reason === 'provider-conflict',
+    )
+  );
+}
+
 export type LocalCommandExecutor = (
   command: InstantCommand,
   context: InstantCommandExecutionContext,
@@ -227,12 +236,7 @@ export class LocalCommandPreModelBridge {
     }
 
     const route = this.#dependencies.route(boundInput.text);
-    if (
-      route.classification === 'ambiguous' ||
-      route.ambiguous.some(
-        ({ reason }) => reason === 'typo-intent-conflict' || reason === 'provider-conflict',
-      )
-    ) {
+    if (needsLocalClarification(route)) {
       return freezeResult({
         ...baseResult(boundInput, route),
         holdModel: true,
@@ -367,11 +371,13 @@ export class LocalCommandPreModelBridge {
   }
 }
 
-/** Raw provider steering must not skip executable local actions. */
+/** Model dispatch and raw steering must not skip local actions or clarification. */
 export function requiresLocalCommandPreflight(text: string): boolean {
   try {
-    return routeLocalCommand(text).commands.some(
-      (command) => adaptLocalCommand(command).status === 'mapped',
+    const route = routeLocalCommand(text);
+    return (
+      needsLocalClarification(route) ||
+      route.commands.some((command) => adaptLocalCommand(command).status === 'mapped')
     );
   } catch {
     // A parsing failure must use the normal fail-closed bridge, not raw steering.
