@@ -67,6 +67,33 @@ describe('Telemetry settings', () => {
     ).toBe('unchecked');
   });
 
+  it('explains a server configuration failure for a signed-in account and keeps enrollment off', async () => {
+    account.cloudSession = { user_id: 'telemetry-ui-test' };
+    vi.mocked(getAccountTelemetryConsent).mockResolvedValue({
+      ok: false,
+      error: 'telemetry_reward_unconfigured',
+    });
+    render(<Telemetry />);
+    await screen.findByText(
+      /Telemetry rewards are unavailable because the service is not configured/i,
+    );
+    expect(screen.queryByText(/Sign in to a configured VibeSpace account/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Enable 10% reward' })).toBeNull();
+    expect(telemetryConsentStore.getSnapshot().consent).toEqual({
+      productUsage: false,
+      diagnostics: false,
+      toolOutcomes: false,
+    });
+  });
+
+  it('does not ask a signed-in account to sign in again after a request failure', async () => {
+    account.cloudSession = { user_id: 'telemetry-ui-test' };
+    vi.mocked(getAccountTelemetryConsent).mockResolvedValue({ ok: false, error: 'request_failed' });
+    render(<Telemetry />);
+    await screen.findByText(/Unable to check account eligibility/i);
+    expect(screen.queryByText(/Sign in to a configured VibeSpace account/i)).toBeNull();
+  });
+
   it('stops sharing immediately and shows pending withdrawal when offline', async () => {
     account.cloudSession = { user_id: 'telemetry-ui-test' };
     const state = {

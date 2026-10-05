@@ -21,8 +21,7 @@ export type AccountTelemetryConsent = Readonly<{
 }>;
 
 export type AccountTelemetryResult =
-  | { ok: true; state: AccountTelemetryConsent }
-  | { ok: false; error: string };
+  { ok: true; state: AccountTelemetryConsent } | { ok: false; error: string };
 
 function parseState(value: unknown): AccountTelemetryConsent | null {
   if (!value || typeof value !== 'object') return null;
@@ -90,7 +89,26 @@ async function invoke(
         ...options,
         signal: controller.signal,
       });
-      if (error) return { ok: false, error: 'request_failed' };
+      if (error) {
+        // Preserve only the public, known configuration failure. Other server
+        // details remain private and must never become UI error strings.
+        const response = error.context;
+        if (response instanceof Response && response.status === 503) {
+          const body: unknown = await response
+            .clone()
+            .json()
+            .catch(() => null);
+          if (
+            body &&
+            typeof body === 'object' &&
+            'error' in body &&
+            body.error === 'telemetry_reward_unconfigured'
+          ) {
+            return { ok: false, error: 'telemetry_reward_unconfigured' };
+          }
+        }
+        return { ok: false, error: 'request_failed' };
+      }
       const state = parseState(data);
       return state ? { ok: true, state } : { ok: false, error: 'invalid_server_response' };
     } catch {

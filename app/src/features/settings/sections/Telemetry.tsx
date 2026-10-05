@@ -61,6 +61,7 @@ export function Telemetry() {
   useEffect(() => {
     let active = true;
     setAccountConsent(null);
+    setAccountError(null);
     void getAccountTelemetryConsent(accountId ?? undefined).then((result) => {
       if (!active) return;
       if (result.ok) {
@@ -305,7 +306,11 @@ export function Telemetry() {
             ) : (
               <p className="mt-2 text-metadata text-muted-foreground" aria-live="polite">
                 {accountError
-                  ? 'Sign in to a configured VibeSpace account to enroll. Local consent remains off unless you choose it.'
+                  ? accountError === 'telemetry_reward_unconfigured'
+                    ? 'Telemetry rewards are unavailable because the service is not configured. Local consent remains off unless you choose it.'
+                    : accountId
+                      ? 'Unable to check account eligibility. Try reopening these settings. Local consent remains off unless you choose it.'
+                      : 'Sign in to a configured VibeSpace account to enroll. Local consent remains off unless you choose it.'
                   : 'Checking account eligibility…'}
               </p>
             )}

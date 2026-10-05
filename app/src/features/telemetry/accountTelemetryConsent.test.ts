@@ -68,6 +68,37 @@ describe('account telemetry consent', () => {
     });
   });
 
+  it('preserves the known service configuration error without exposing response details', async () => {
+    invoke.mockResolvedValue({
+      data: null,
+      error: {
+        context: new Response(
+          JSON.stringify({
+            error: 'telemetry_reward_unconfigured',
+            internal: 'must never be returned',
+          }),
+          { status: 503 },
+        ),
+      },
+    });
+    await expect(getAccountTelemetryConsent()).resolves.toEqual({
+      ok: false,
+      error: 'telemetry_reward_unconfigured',
+    });
+  });
+
+  it.each([
+    [503, '{invalid json'],
+    [503, JSON.stringify({ error: 'private_server_detail' })],
+    [401, JSON.stringify({ error: 'telemetry_reward_unconfigured' })],
+  ])('keeps other HTTP errors generic (%s)', async (status, body) => {
+    invoke.mockResolvedValue({ data: null, error: { context: new Response(body, { status }) } });
+    await expect(getAccountTelemetryConsent()).resolves.toEqual({
+      ok: false,
+      error: 'request_failed',
+    });
+  });
+
   it('sends the exact disclosed classes only when enrolling', async () => {
     invoke.mockResolvedValue({ data: { ...response, enabled: true, eligible: true }, error: null });
     await updateAccountTelemetryConsent(true, response);
