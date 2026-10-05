@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
@@ -24,6 +24,8 @@ type MockVoiceChatTarget = {
   agentId?: string;
   mentionedAgentIds: string[];
 };
+
+let fetchSpy: MockInstance<typeof fetch>;
 
 const voiceListeners = vi.hoisted(() => ({
   handlers: new Map<string, Set<VoiceHandler>>(),
@@ -102,6 +104,11 @@ vi.mock('motion/react', () => ({
 
 vi.mock('@/features/chat/hooks', () => ({
   useChatMessages: chatHookMocks.useChatMessages,
+}));
+
+// Turn/lifecycle fixtures do not exercise authenticated provider discovery.
+vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
+  useAccessibleChatModels: () => ({ groups: [], flatOptions: [], hasAny: false }),
 }));
 
 vi.mock('@/components/ui/toast', () => ({
@@ -282,6 +289,7 @@ function voiceMiniBar() {
 describe('VoiceModal hands-free turn-taking', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fetchSpy = vi.spyOn(globalThis, 'fetch');
     setReducedMotion(false);
     chatHookMocks.useChatMessages.mockReset().mockReturnValue([]);
     chatRoutingMocks.ensureJarvisChatForVoice.mockReset().mockResolvedValue('chat_voice');
@@ -324,6 +332,8 @@ describe('VoiceModal hands-free turn-taking', () => {
   });
 
   afterEach(() => {
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
     clearContextGalaxySnapshotsForTests();
     vi.useRealTimers();
     vi.unstubAllGlobals();

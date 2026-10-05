@@ -73,6 +73,7 @@ export function TerminalCliRuntimeHost({ runtime: suppliedRuntime }: TerminalCli
     const queues = new Map<string, Promise<void>>();
 
     const dispatch = async (request: TerminalCliFrontendRequest): Promise<void> => {
+      if (disposed) return;
       const response = await appActivityLog.trace('terminal-command', request, () =>
         runtime.execute(request),
       );

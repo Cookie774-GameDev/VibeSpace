@@ -373,6 +373,8 @@ def _read_request(request_path: str) -> tuple[dict[str, Any], dict[str, Any]]:
         _fail("Validation dataset must be a local JSONL file.")
     if dataset.stat().st_size > MAX_DATASET_BYTES:
         _fail("Dataset exceeds the safe local size limit.")
+    if validation_dataset.stat().st_size > MAX_DATASET_BYTES:
+        _fail("Validation dataset exceeds the safe local size limit.")
     if output == model or output == dataset or model in output.parents:
         _fail("Output directory must be separate from source and base-model paths.")
     if schema_version == 2:

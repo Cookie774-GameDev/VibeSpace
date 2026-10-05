@@ -357,19 +357,32 @@ describe('Plugins settings page', () => {
     15_000,
   );
 
-  it('shows Supabase as an explicit hosted-MCP OAuth integration blocker', async () => {
+  it('separates the Supabase hosted-MCP browser route from its project API-key fallback', async () => {
     renderPlugins();
     fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'Supabase' } });
     const card = screen.getByTestId('plugin-card-supabase');
 
-    expect(within(card).getByText(/external blocker/i)).toBeTruthy();
-    fireEvent.click(within(card).getByRole('button', { name: /view requirements/i }));
+    expect(within(card).getByText('MCP setup available')).toBeTruthy();
+    fireEvent.click(within(card).getByRole('button', { name: /^connect$/i }));
 
-    expect(await screen.findByText(/external authorization prerequisite/i)).toBeTruthy();
-    expect(screen.getAllByText(/provider-hosted browser sign-in.*remote MCP/i)).toHaveLength(2);
-    fireEvent.click(screen.getByRole('button', { name: /open supabase configuration/i }));
-    expect(openExternal).toHaveBeenCalledWith('https://supabase.com/docs/guides/ai-tools/mcp');
-    expect(screen.queryByRole('button', { name: /save and verify key/i })).toBeNull();
+    expect(
+      await screen.findByText(/hosted MCP through OpenCode; project API key separate/i),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole('button', { name: /connect supabase with browser sign-in/i })
+        .hasAttribute('disabled'),
+    ).toBe(false);
+    expect(screen.getByText(/does not authorize the hosted MCP server/i)).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'Open connection documentation' }).getAttribute('href'),
+    ).toBe('https://supabase.com/docs/guides/ai-tools/mcp');
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Project API key')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use a project API key instead' }));
+    expect(screen.getByLabelText('Project API key')).toBeTruthy();
+    expect(management.saveCredential).not.toHaveBeenCalled();
+    expect(management.testConnection).not.toHaveBeenCalled();
     expect(management.beginAuthorization).not.toHaveBeenCalledWith({
       accountId: 'account-a',
       pluginId: 'supabase',

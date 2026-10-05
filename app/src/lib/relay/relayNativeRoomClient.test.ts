@@ -7,7 +7,7 @@ const context = {
 };
 
 function fixture(workspaceId: string | null = 'workspace-1') {
-  const nativeContext = { ...context, workspaceId };
+  let nativeContext = { ...context, workspaceId };
   let settings: RelaySettings = {
     scope: 'project', automaticParticipation: false, excludedParticipants: [],
   };
@@ -40,6 +40,7 @@ function fixture(workspaceId: string | null = 'workspace-1') {
   return { client, invoke,
     setSettings(value: RelaySettings) { settings = value; },
     setGeneration(value: number) { generation = value; },
+    setContext(value: typeof nativeContext) { nativeContext = value; },
   };
 }
 
@@ -135,6 +136,143 @@ describe('native Relay human room', () => {
     });
     f.client.dispose();
   });
+
+  it.each(['generation', 'chat', 'account', 'project'] as const)(
+    'does not send an old-room draft after the native %s changes', async (change) => {
+      const f = fixture();
+      await f.client.refresh();
+      if (change === 'generation') f.setGeneration(3);
+      else f.setContext({ ...context, [`${change}Id`]: `${change}-2` });
+
+      await expect(f.client.send('Draft for the original room', 'parent-1')).rejects.toThrow();
+      expect(f.invoke.mock.calls.some(([command]) => command === 'relay_human_message')).toBe(false);
+      f.client.dispose();
+    },
+  );
+
+  it.each(['project-1', 'vibespace-human-ui:chat-1'])(
+    'discards an in-flight room snapshot after excluding %s', async (excludedId) => {
+      const f = fixture();
+      await f.client.refresh();
+      const original = f.invoke.getMockImplementation()!;
+      let releaseSnapshot!: () => void;
+      const snapshotGate = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
+      let snapshotStarted = false;
+      f.invoke.mockImplementation(async (command) => {
+        const value = await original(command);
+        if (command === 'relay_human_room_snapshot') {
+          snapshotStarted = true;
+          await snapshotGate;
+        }
+        return value;
+      });
+      const refresh = f.client.refresh();
+      await vi.waitFor(() => expect(snapshotStarted).toBe(true));
+      f.setSettings({ scope: 'project', automaticParticipation: false,
+        excludedParticipants: [excludedId] });
+      releaseSnapshot();
+      await refresh;
+
+      expect(f.client.getSnapshot()).toMatchObject({
+        humanAuthorized: false, room: { connection: 'offline', participants: [], messages: [] },
+      });
+      expect(f.invoke).toHaveBeenCalledWith('relay_participant_unbind', {
+        bindingId: 'human-binding', generation: 2,
+      });
+      f.client.dispose();
+    },
+  );
+
+  it('rechecks exclusions changed while send validates the native context', async () => {
+    const f = fixture();
+    await f.client.refresh();
+    const original = f.invoke.getMockImplementation()!;
+    let releaseContext!: () => void;
+    const contextGate = new Promise<void>((resolve) => { releaseContext = resolve; });
+    f.invoke.mockImplementation(async (command) => {
+      if (command === 'relay_active_context_snapshot') await contextGate;
+      return original(command);
+    });
+    const send = f.client.send('Must not send after exclusion');
+    const denied = expect(send).rejects.toThrow();
+    f.setSettings({ scope: 'project', automaticParticipation: false,
+      excludedParticipants: ['project-1'] });
+    releaseContext();
+    await denied;
+    expect(f.invoke.mock.calls.some(([command]) => command === 'relay_human_message')).toBe(false);
+    f.client.dispose();
+  });
+
+  it.each([undefined, 'parent-1'])(
+    'rejects an old visible-room draft during rebind and permits a deliberate fresh send (parent %s)',
+    async (parentMessageId) => {
+      const f = fixture();
+      await f.client.refresh();
+      const original = f.invoke.getMockImplementation()!;
+      let releaseSnapshot!: () => void;
+      const snapshotGate = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
+      let snapshotStarted = false;
+      f.invoke.mockImplementation(async (command) => {
+        const value = await original(command);
+        if (command === 'relay_human_room_snapshot') {
+          snapshotStarted = true;
+          await snapshotGate;
+        }
+        return value;
+      });
+      f.setContext({ ...context, chatId: 'chat-2' });
+      const refresh = f.client.refresh();
+      await vi.waitFor(() => expect(snapshotStarted).toBe(true));
+      const outcome = f.client.send('Draft authored in chat-1', parentMessageId)
+        .then(() => 'sent', () => 'rejected');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const attempted = f.invoke.mock.calls.filter(([command]) => command === 'relay_human_message').length;
+      releaseSnapshot();
+      await refresh;
+      expect(await outcome).toBe('rejected');
+      expect(attempted).toBe(0);
+
+      expect(f.client.getSnapshot().room.roomId).toContain('chat-2');
+      await f.client.send('Deliberate new chat-2 message');
+      expect(f.invoke.mock.calls.filter(([command]) => command === 'relay_human_message')).toHaveLength(1);
+      f.client.dispose();
+    },
+  );
+
+  it.each(['project-excluded', 'session-excluded', 'off', 'generation', 'chat', 'account', 'project'] as const)(
+    'revokes late optional profile enrichment after %s changes', async (change) => {
+      const f = fixture();
+      let settings: RelaySettings = { scope: 'project', automaticParticipation: false, excludedParticipants: [] };
+      let finishProfiles!: (profiles: { relayAgentId: string; latestPrompt: string }[]) => void;
+      const client = createRelayNativeRoomClient({
+        invoke: f.invoke, readSettings: () => settings,
+        readLocalProfiles: () => new Promise((resolve) => { finishProfiles = resolve; }),
+      });
+      await client.refresh();
+      const leakedPrompts: string[] = [];
+      const unsubscribe = client.subscribe(() => {
+        leakedPrompts.push(...client.getSnapshot().room.participants.flatMap((participant) =>
+          participant.latestPrompt ? [participant.latestPrompt] : []));
+      });
+      if (change === 'project-excluded') settings = { ...settings, excludedParticipants: ['project-1'] };
+      else if (change === 'session-excluded') settings = { ...settings, excludedParticipants: ['vibespace-human-ui:chat-1'] };
+      else if (change === 'off') settings = { ...settings, scope: 'off' };
+      else if (change === 'generation') f.setGeneration(3);
+      else f.setContext({ ...context, [`${change}Id`]: `${change}-2` });
+      finishProfiles([{ relayAgentId: 'peer-1', latestPrompt: 'Synthetic old-room task' }]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(leakedPrompts).toEqual([]);
+      expect(client.getSnapshot()).toMatchObject({
+        humanAuthorized: false, room: { connection: 'offline', participants: [], messages: [] },
+      });
+      expect(f.invoke).toHaveBeenCalledWith('relay_participant_unbind', {
+        bindingId: 'human-binding', generation: 2,
+      });
+      unsubscribe();
+      client.dispose();
+    },
+  );
 
   it('reads the posted message after an older room refresh finishes', async () => {
     const f = fixture();

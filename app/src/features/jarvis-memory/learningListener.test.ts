@@ -626,6 +626,98 @@ describe('Jarvis learning event listener', () => {
     expect(load).toHaveBeenCalledWith('account-b');
   });
 
+  it.each(['old-first', 'current-first'] as const)(
+    'keeps only current account hydration after returning to an account (%s)',
+    async (order) => {
+      const store = useJarvisLearningStore;
+      const markdown = (value: string) => {
+        store.getState().clearForTests();
+        store.getState().setAccount('account-a');
+        store.getState().remember({ category: 'workflow', value, source: { kind: 'explicit' } });
+        return store.getState().exportMarkdown();
+      };
+      const oldMarkdown = markdown('Obsolete account memory');
+      const currentMarkdown = markdown('Current account memory');
+      store.getState().clearForTests();
+      const oldLoad = deferred<string | null>();
+      const currentLoad = deferred<string | null>();
+      let accountId = 'account-a';
+      let accountChanged: () => void = () => undefined;
+      let accountALoads = 0;
+      const load = vi.fn((id: string) => {
+        if (id !== 'account-a') return Promise.resolve(null);
+        accountALoads += 1;
+        return accountALoads === 1 ? oldLoad.promise : currentLoad.promise;
+      });
+      const save = vi.fn(async () => undefined);
+      stop = startJarvisLearningListener({
+        getAccountId: () => accountId,
+        subscribeAccount: (listener) => {
+          accountChanged = listener;
+          return () => undefined;
+        },
+        load,
+        save,
+      });
+      accountId = 'account-b';
+      accountChanged();
+      await vi.waitFor(() => expect(store.getState().activeAccountId).toBe('account-b'));
+      accountId = 'account-a';
+      accountChanged();
+      await vi.waitFor(() => expect(accountALoads).toBe(2));
+      if (order === 'old-first') {
+        oldLoad.resolve(oldMarkdown);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        expect(store.getState().currentProfile().items).toEqual([]);
+      }
+      currentLoad.resolve(currentMarkdown);
+      await vi.waitFor(() =>
+        expect(
+          store
+            .getState()
+            .currentProfile()
+            .items.map((item) => item.value),
+        ).toEqual(['Current account memory']),
+      );
+      oldLoad.resolve(oldMarkdown);
+      // A new event-loop turn lets the completed hydration's promise reactions settle.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(
+        store
+          .getState()
+          .currentProfile()
+          .items.map((item) => item.value),
+      ).toEqual(['Current account memory']);
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
+
+  it('starts fresh hydration when an account switch is reversed before the queued load begins', async () => {
+    const initial = deferred<string | null>();
+    const load = vi
+      .fn<(_id: string) => Promise<string | null>>(async () => null)
+      .mockImplementationOnce(() => initial.promise);
+    let accountId = 'account-a';
+    let accountChanged: () => void = () => undefined;
+    stop = startJarvisLearningListener({
+      getAccountId: () => accountId,
+      subscribeAccount: (listener) => {
+        accountChanged = listener;
+        return () => undefined;
+      },
+      load,
+      save: async () => undefined,
+    });
+    accountId = 'account-b';
+    accountChanged();
+    accountId = 'account-a';
+    accountChanged();
+    await vi.waitFor(() =>
+      expect(load.mock.calls.map(([id]) => id)).toEqual(['account-a', 'account-a']),
+    );
+    initial.resolve(null);
+  });
+
   it('flushes pre-review progress only to its original account when switching accounts', async () => {
     let accountId = 'account-a';
     let accountChanged: () => void = () => undefined;

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import {
@@ -11,6 +11,8 @@ import {
 } from './speechSynthesis';
 
 type VoiceHandler = (payload?: unknown) => void;
+
+let fetchSpy: MockInstance<typeof fetch>;
 
 const voiceMockState = vi.hoisted(() => ({
   handlers: new Map<string, Set<VoiceHandler>>(),
@@ -72,6 +74,11 @@ vi.mock('@/features/chat/hooks', () => ({
   useChatMessages: () => [],
 }));
 
+// Mic/cancellation fixtures do not exercise authenticated provider discovery.
+vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
+  useAccessibleChatModels: () => ({ groups: [], flatOptions: [], hasAny: false }),
+}));
+
 vi.mock('@/lib/db', () => ({
   messageRepo: {
     create: vi.fn(async () => ({})),
@@ -128,6 +135,7 @@ function setupAuth(handsFree: boolean) {
 describe('VoiceModal stop control and mic recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fetchSpy = vi.spyOn(globalThis, 'fetch');
     voiceMockState.handlers.clear();
     voiceMockState.listening = false;
     useUIStore.setState({
@@ -139,6 +147,8 @@ describe('VoiceModal stop control and mic recovery', () => {
   });
 
   afterEach(() => {
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
     vi.useRealTimers();
   });
 

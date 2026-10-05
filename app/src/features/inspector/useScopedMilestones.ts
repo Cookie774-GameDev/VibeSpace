@@ -129,11 +129,15 @@ export function useScopedMilestones() {
   const ready = !verification.current.pending && admission === verification.current.result &&
     admission?.key === key && admission.epoch === epoch && admission.revision === revision &&
     admission.sequence === verification.current.sequence && admission.allowed === true;
+  const unavailable = !verification.current.pending && admission === verification.current.result &&
+    admission?.key === key && admission.epoch === epoch && admission.revision === revision &&
+    admission.sequence === verification.current.sequence && admission.allowed === false;
   const items = useMemo(() => port.list(), [port, storedItems, admission, ready]);
   return {
     scopeKey: key,
     scope: ready ? scope : null,
     ready,
+    unavailable,
     items,
     completedMilestones: items.filter((item) => item.status === 'done').length,
     addMilestone(title: string, kind: MilestoneKind = 'todo', description?: string, deadlineAt?: number) {

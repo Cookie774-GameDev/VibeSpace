@@ -118,8 +118,10 @@ describe('HarnessReadinessGate', () => {
 
     const parsed = ts.createSourceFile('Composer.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     let slashDeclaration: ts.VariableDeclaration | undefined;
+    let canSendDeclaration: ts.VariableDeclaration | undefined;
     const visit = (node: ts.Node) => {
       if (ts.isVariableDeclaration(node) && node.name.getText(parsed) === 'slashResult') slashDeclaration = node;
+      if (ts.isVariableDeclaration(node) && node.name.getText(parsed) === 'canSend') canSendDeclaration = node;
       ts.forEachChild(node, visit);
     };
     visit(parsed);
@@ -138,8 +140,21 @@ describe('HarnessReadinessGate', () => {
     expect(slashDispatch).toBeGreaterThan(-1);
     expect(providerReadinessGate).toBeGreaterThan(slashDispatch);
     expect(source).toContain('const canAttemptSlashWhileBackendBlocked =');
-    expect(source).toMatch(
-      /const canSend =[\s\S]*!sending &&\s*\(!backendRuntimeBlocked \|\| canAttemptSlashWhileBackendBlocked\);/,
-    );
+    expect(canSendDeclaration?.initializer).toBeDefined();
+    const sendGuards: string[] = [];
+    const collectSendGuards = (expression: ts.Expression): void => {
+      if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+        collectSendGuards(expression.left);
+        collectSendGuards(expression.right);
+      } else {
+        sendGuards.push(expression.getText(parsed).replace(/\s+/gu, ' '));
+      }
+    };
+    collectSendGuards(canSendDeclaration!.initializer!);
+    // Additional safety guards may sit between these independent requirements.
+    expect(sendGuards).toContain('(hasDraft || canFinalizeDictation)');
+    expect(sendGuards).toContain('!sending');
+    expect(sendGuards).toContain('!dictationSendInFlightRef.current');
+    expect(sendGuards).toContain('(!backendRuntimeBlocked || canAttemptSlashWhileBackendBlocked)');
   });
 });

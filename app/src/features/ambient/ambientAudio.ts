@@ -65,6 +65,7 @@ export class AmbientAudioEngine {
   private projectLoop = true;
   private projectSignature = '';
   private playbackAttempt = 0;
+  private pendingMetadataSeek: (() => void) | null = null;
 
   private constructor() {}
 
@@ -184,6 +185,7 @@ export class AmbientAudioEngine {
 
   private startPlayback(): void {
     if (!this.isEngineRunning) return;
+    this.clearPendingMetadataSeek();
     this.loadCurrentTrack();
     this.setLoadStatus({ state: 'idle' });
     const attempt = ++this.playbackAttempt;
@@ -206,6 +208,12 @@ export class AmbientAudioEngine {
     return this.projectClips?.[this.projectIndex] ?? null;
   }
 
+  private clearPendingMetadataSeek(): void {
+    if (!this.pendingMetadataSeek) return;
+    this.audio?.removeEventListener('loadedmetadata', this.pendingMetadataSeek);
+    this.pendingMetadataSeek = null;
+  }
+
   private startProjectClip(): void {
     if (!this.isEngineRunning || !this.projectClips?.length) return;
     let attempts = 0;
@@ -224,11 +232,13 @@ export class AmbientAudioEngine {
     }
     this.setLoadStatus({ state: 'idle' });
     const audio = this.getAudio();
+    this.clearPendingMetadataSeek();
     audio.loop = false;
     audio.playbackRate = clip.speed;
     audio.src = url;
     audio.load();
     const seek = () => {
+      this.clearPendingMetadataSeek();
       try {
         audio.currentTime = clip!.trimStart;
         this.notifyProgress();
@@ -237,7 +247,10 @@ export class AmbientAudioEngine {
       }
     };
     if (audio.readyState >= 1) seek();
-    else audio.addEventListener('loadedmetadata', seek, { once: true });
+    else {
+      this.pendingMetadataSeek = seek;
+      audio.addEventListener('loadedmetadata', seek, { once: true });
+    }
     const attempt = ++this.playbackAttempt;
     void audio
       .play()
@@ -253,7 +266,7 @@ export class AmbientAudioEngine {
   }
 
   private advanceProject(): void {
-    if (!this.projectClips?.length) return;
+    if (!this.isEngineRunning || !this.projectClips?.length) return;
     const next = this.projectIndex + 1;
     if (next >= this.projectClips.length && !this.projectLoop) {
       this.stop();
@@ -394,6 +407,7 @@ export class AmbientAudioEngine {
   }
 
   public setTrack(track: AmbientTrack): void {
+    this.clearPendingMetadataSeek();
     this.projectClips = null;
     this.projectSignature = '';
     this.currentTrackIndex = getAmbientTrackIndex(track);
@@ -429,6 +443,7 @@ export class AmbientAudioEngine {
 
   public dispose(): void {
     this.stop();
+    this.clearPendingMetadataSeek();
     this.projectClips = null;
     this.projectSignature = '';
     this.projectIndex = 0;

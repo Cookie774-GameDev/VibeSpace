@@ -350,7 +350,7 @@ describe('Warm theme presentation contract', () => {
     expect(filesPage).toContain("data-warm-state={selectedPath ? 'populated' : 'empty'}");
     expect(kanbanPage).toContain("data-warm-state={items.length === 0 ? 'empty' : 'populated'}");
     expect(schedulePage).toContain('data-warm-state=');
-    expect(historyPage).toContain("data-warm-state={selectedChatId ? 'selected' : 'empty'}");
+    expect(historyPage).toContain("data-warm-state={visibleChatId ? 'selected' : 'empty'}");
     expect(historyPage).toContain('data-warm-surface="history-replay"');
     expect(schedulePage).toContain("timelineView === 'jarvis'");
     expect(css).toContain("[data-monochrome-surface='files-editor'][data-warm-state='empty']");

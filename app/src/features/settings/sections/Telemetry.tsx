@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Download, Eraser, Gift, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -55,15 +55,35 @@ export function Telemetry() {
   const [accountConsent, setAccountConsent] = useState<AccountTelemetryConsent | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
+  const accountLifetime = useRef(0);
+  const mutationSequence = useRef(0);
   const allOptionalClassesEnabled =
     snapshot.consent.productUsage && snapshot.consent.diagnostics && snapshot.consent.toolOutcomes;
 
   useEffect(() => {
+    accountLifetime.current += 1;
+    setAccountBusy(false);
+    return () => {
+      accountLifetime.current += 1;
+    };
+  }, [accountId]);
+
+  const beginAccountMutation = () => {
+    const lifetime = accountLifetime.current;
+    const sequence = ++mutationSequence.current;
+    return () =>
+      lifetime === accountLifetime.current &&
+      sequence === mutationSequence.current &&
+      (useAuthStore.getState().cloudSession?.user_id ?? null) === accountId;
+  };
+
+  useEffect(() => {
     let active = true;
+    const sequence = mutationSequence.current;
     setAccountConsent(null);
     setAccountError(null);
     void getAccountTelemetryConsent(accountId ?? undefined).then((result) => {
-      if (!active) return;
+      if (!active || sequence !== mutationSequence.current) return;
       if (result.ok) {
         setAccountConsent(result.state);
         setAccountError(null);
@@ -78,15 +98,19 @@ export function Telemetry() {
 
   const setRewardEnrollment = async (enabled: boolean) => {
     if (!enabled) {
+      const isCurrentMutation = beginAccountMutation();
       telemetryConsentStore.revoke();
       if (!accountId || !telemetryWithdrawalQueue.enqueue(accountId)) {
+        setAccountBusy(false);
         setAccountError('Local sharing stopped. Sign in to synchronize reward withdrawal.');
         return;
       }
       setAccountBusy(true);
       const result = await telemetryWithdrawalQueue.flush(accountId);
+      if (!isCurrentMutation()) return;
+      // An eligibility read begun before this acknowledgement is now stale.
+      mutationSequence.current += 1;
       setAccountBusy(false);
-      if (useAuthStore.getState().cloudSession?.user_id !== accountId) return;
       if (result?.ok) {
         setAccountConsent(result.state);
         setAccountError(null);
@@ -95,22 +119,30 @@ export function Telemetry() {
     }
     if (!accountConsent || !accountId) return;
     if (withdrawalPending) return;
+    const isCurrentMutation = beginAccountMutation();
     setAccountBusy(true);
     const result = await updateAccountTelemetryConsent(
       enabled,
       accountConsent,
       accountId ?? undefined,
     );
-    setAccountBusy(false);
     if (useAuthStore.getState().cloudSession?.user_id !== accountId) return;
     const current = telemetryConsentStore.getSnapshot().consent;
     if (!(current.productUsage && current.diagnostics && current.toolOutcomes)) {
+      // Withdrawal compensation must survive a superseded UI mutation.
       if (accountId) {
         telemetryWithdrawalQueue.enqueue(accountId);
         void telemetryWithdrawalQueue.flush(accountId);
       }
+      if (isCurrentMutation()) {
+        mutationSequence.current += 1;
+        setAccountBusy(false);
+      }
       return;
     }
+    if (!isCurrentMutation()) return;
+    mutationSequence.current += 1;
+    setAccountBusy(false);
     if (!result.ok) {
       setAccountError(result.error);
       toast.error('Could not update reward consent', result.error);

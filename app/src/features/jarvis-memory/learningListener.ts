@@ -87,7 +87,8 @@ export function startJarvisLearningListener(
   const load = bindings.load ?? defaultAccountLoad;
   const evidenceRepository = bindings.evidenceRepository;
   const debounceMs = bindings.debounceMs ?? 300;
-  const loadingAccounts = new Set<string>();
+  const loadingAccounts = new Map<string, number>();
+  let accountScopeEpoch = 0;
   const evidenceWriteAuthority = createMemoryEvidenceWriteAuthority();
   const profileWriteAuthority = createMemoryEvidenceWriteAuthority();
   let suppressAutomaticProfilePersistence = 0;
@@ -114,15 +115,18 @@ export function startJarvisLearningListener(
   };
 
   const loadAccount = (accountId: string) => {
+    const scopeEpoch = accountScopeEpoch;
+    const isCurrent = () =>
+      !disposed && accountScopeEpoch === scopeEpoch && bindings.getAccountId().trim() === accountId;
     clearJarvisMemoryStatus();
-    loadingAccounts.add(accountId);
+    loadingAccounts.set(accountId, scopeEpoch);
     store.getState().setAccount(accountId);
     const pending = Promise.all([
       load(accountId),
       evidenceRepository?.list(accountId) ?? Promise.resolve([]),
     ])
       .then(([loaded, evidence]) => {
-        if (disposed || bindings.getAccountId().trim() !== accountId) return;
+        if (!isCurrent()) return;
         store.getState().setAccount(accountId);
         const markdown = typeof loaded === 'string' ? loaded : loaded?.markdown;
         if (markdown) store.getState().importMarkdown(markdown);
@@ -132,18 +136,21 @@ export function startJarvisLearningListener(
         }
       })
       .catch((error) => {
-        publishStatus(undefined, 'error');
-        report(bindings, error);
+        if (isCurrent()) {
+          publishStatus(undefined, 'error');
+          report(bindings, error);
+        }
         throw error;
       })
       .finally(() => {
-        loadingAccounts.delete(accountId);
+        if (loadingAccounts.get(accountId) === scopeEpoch) loadingAccounts.delete(accountId);
       });
     return pending;
   };
 
   const hydrationAuthority = createAccountHydrationAuthority(loadAccount);
   const accountId = requireAccountId(bindings.getAccountId());
+  let activeAccountId = accountId;
   void hydrationAuthority.ready(accountId);
 
   const writeProfile = (
@@ -279,8 +286,10 @@ export function startJarvisLearningListener(
 
   const unsubscribeAccount = bindings.subscribeAccount?.(() => {
     const next = bindings.getAccountId().trim();
-    const previous = store.getState().activeAccountId;
+    const previous = activeAccountId;
     if (next === previous) return;
+    activeAccountId = next;
+    accountScopeEpoch += 1;
     evidenceWriteAuthority.invalidate(previous);
     hydrationAuthority.invalidate();
     const pendingFlush = flushScheduled(previous).finally(() => {

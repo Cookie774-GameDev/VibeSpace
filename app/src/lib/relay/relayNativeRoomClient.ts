@@ -130,6 +130,7 @@ function projectRoom(
 export function createRelayNativeRoomClient(options: RelayNativeRoomClientOptions) {
   let disposed = false;
   let binding: Binding | null = null;
+  let publishedBinding: Binding | null = null;
   let activeRefresh: Promise<void> | null = null;
   let state: RelayNativeRoomState = {
     room: emptyRoom(options.readSettings()), humanAuthorized: false, error: null,
@@ -155,9 +156,9 @@ export function createRelayNativeRoomClient(options: RelayNativeRoomClientOption
   }
 
   async function ensureBinding(): Promise<Binding> {
-    const settings = options.readSettings();
     const snapshot = await readContext();
     if (!snapshot?.context) throw new Error('No active Relay chat');
+    const settings = options.readSettings();
     const context = snapshot.context;
     const sessionId = `vibespace-human-ui:${context.chatId}`;
     if (!canParticipateInRelay(settings, { projectId: context.projectId, sessionId }, context.projectId))
@@ -192,6 +193,7 @@ export function createRelayNativeRoomClient(options: RelayNativeRoomClientOption
     if (settings.scope === 'off') {
       if (binding) unbind(binding);
       binding = null;
+      publishedBinding = null;
       publish({ room: emptyRoom(settings), humanAuthorized: false, error: null });
       return;
     }
@@ -203,16 +205,37 @@ export function createRelayNativeRoomClient(options: RelayNativeRoomClientOption
         bindingId: human.bindingId, generation: human.generation, limit: ROOM_LIMIT,
       });
       const current = await readContext();
-      if (!current?.context || current.generation !== human.generation ||
+      if (disposed || binding !== human || !current?.context || current.generation !== human.generation ||
           !sameContext(current.context, human.context)) throw new Error('Relay chat changed');
-      if (options.readSettings().scope === 'off') throw new Error('Relay collaboration is off');
+      const currentSettings = options.readSettings();
+      if (!canParticipateInRelay(currentSettings, {
+        projectId: human.context.projectId, sessionId: human.sessionId,
+      }, human.context.projectId))
+        throw new Error('Relay collaboration is off or excluded');
       // Room visibility and owner messaging must not wait on optional Dexie profile enrichment.
-      publish({ room: projectRoom(result, human, options.readSettings(), new Map()),
+      publishedBinding = human;
+      publish({ room: projectRoom(result, human, currentSettings, new Map()),
         humanAuthorized: true, error: null });
       if (options.readLocalProfiles) {
-        void options.readLocalProfiles().then((profiles) => {
-          if (disposed || binding !== human || !state.humanAuthorized ||
+        void options.readLocalProfiles().then(async (profiles) => {
+          if (disposed || binding !== human || publishedBinding !== human || !state.humanAuthorized ||
               state.room.connection !== 'connected') return;
+          const current = await readContext().catch(() => null);
+          if (disposed || binding !== human || publishedBinding !== human || !state.humanAuthorized ||
+              state.room.connection !== 'connected') return;
+          const settings = options.readSettings();
+          if (!current?.context || current.generation !== human.generation ||
+              !sameContext(current.context, human.context) ||
+              !canParticipateInRelay(settings, {
+                projectId: human.context.projectId, sessionId: human.sessionId,
+              }, human.context.projectId)) {
+            unbind(human);
+            binding = null;
+            publishedBinding = null;
+            publish({ room: emptyRoom(settings), humanAuthorized: false,
+              error: 'Relay room unavailable for this chat.' });
+            return;
+          }
           const local = new Map(profiles.map((profile) => [profile.relayAgentId, profile]));
           publish({ ...state, room: { ...state.room, participants: state.room.participants.map((participant) => {
             const profile = local.get(participant.id);
@@ -224,6 +247,7 @@ export function createRelayNativeRoomClient(options: RelayNativeRoomClientOption
     } catch {
       if (binding) unbind(binding);
       binding = null;
+      publishedBinding = null;
       publish({ room: emptyRoom(options.readSettings()),
         humanAuthorized: false, error: 'Relay room unavailable for this chat.' });
     }
@@ -241,15 +265,23 @@ export function createRelayNativeRoomClient(options: RelayNativeRoomClientOption
       return activeRefresh;
     },
     async send(text: string, parentMessageId?: string): Promise<void> {
-      if (disposed || !binding || !state.humanAuthorized || state.room.connection !== 'connected' ||
+      if (disposed || !binding || binding !== publishedBinding ||
+          !state.humanAuthorized || state.room.connection !== 'connected' ||
           typeof text !== 'string' || !text.trim() || text.length > 8192) {
         throw new Error('Relay room is not authorized');
       }
       if (parentMessageId && !state.room.messages.some((message) => message.id === parentMessageId)) {
         throw new Error('Relay reply target is no longer in this room');
       }
-      const human = await ensureBinding();
-      if (binding?.bindingId !== human.bindingId) throw new Error('Relay room changed');
+      // A draft/reply belongs to the visible room. Never rebind a pending send
+      // to a newer native context, even if the backend reuses a binding ID.
+      const human = binding;
+      const current = await readContext();
+      if (disposed || binding !== human || publishedBinding !== human || !current?.context ||
+          current.generation !== human.generation || !sameContext(current.context, human.context) ||
+          !canParticipateInRelay(options.readSettings(), {
+            projectId: human.context.projectId, sessionId: human.sessionId,
+          }, human.context.projectId)) throw new Error('Relay room changed');
       await options.invoke('relay_human_message', {
         bindingId: human.bindingId, generation: human.generation, text: text.trim(),
         ...(parentMessageId ? { parentMessageId } : {}),
@@ -263,6 +295,7 @@ export function createRelayNativeRoomClient(options: RelayNativeRoomClientOption
       disposed = true;
       if (binding) unbind(binding);
       binding = null;
+      publishedBinding = null;
       listeners.clear();
     },
   };

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { createServer, request as requestHttp } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -235,12 +235,19 @@ describe('Agent Relay discovery through existing provider gateways', () => {
     );
     const runtime = createToolGatewayRuntime(createProductionToolGatewayDependencies());
     const received: unknown[] = [];
+    let fixtureRequestCount = 0;
+    let redirectNextRequest = false;
     const server = createServer(async (request, response) => {
+      fixtureRequestCount += 1;
       if (
         request.url !== '/v1/tool' ||
         request.headers.authorization !== 'Bearer fixture-only-token'
       ) {
         response.writeHead(401).end();
+        return;
+      }
+      if (redirectNextRequest) {
+        response.writeHead(302, { location: 'https://example.invalid/never-follow' }).end();
         return;
       }
       try {
@@ -257,18 +264,58 @@ describe('Agent Relay discovery through existing provider gateways', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Local test server unavailable');
+    const fixtureEndpoint = `http://127.0.0.1:${address.port}/v1/tool`;
+    // Inject only into this VM. Never replace global fetch or authorize other localhost ports.
+    const fixtureFetch: typeof fetch = async (input, init) => {
+      if (String(input) !== fixtureEndpoint) {
+        throw new Error('Fixture transport rejects unowned endpoints');
+      }
+      if (init?.method !== 'POST' || typeof init.body !== 'string') {
+        throw new Error('Fixture transport requires the plugin JSON POST');
+      }
+      return new Promise<Response>((resolve, reject) => {
+        // The destination is captured from our server, never taken from the request input.
+        const request = requestHttp(
+          fixtureEndpoint,
+          {
+            method: 'POST',
+            headers: Object.fromEntries(new Headers(init.headers).entries()),
+            signal: init.signal ?? undefined,
+            agent: false,
+          },
+          async (response) => {
+            const status = response.statusCode ?? 500;
+            if (status >= 300 && status < 400) {
+              response.resume();
+              reject(new Error('Fixture transport rejects redirects'));
+              return;
+            }
+            try {
+              const chunks: Buffer[] = [];
+              for await (const chunk of response) chunks.push(Buffer.from(chunk));
+              resolve(new Response(Buffer.concat(chunks).toString('utf8'), { status }));
+            } catch (error) {
+              reject(error);
+            }
+          },
+        );
+        request.once('error', reject);
+        request.end(init.body);
+      });
+    };
+    const guardedGlobalFetch = globalThis.fetch;
     const ask = vi.fn(async () => undefined);
     const call = runInNewContext(`(${callSource})`, {
       process: {
         env: {
-          VIBESPACE_TOOL_GATEWAY_URL: `http://127.0.0.1:${address.port}/v1/tool`,
+          VIBESPACE_TOOL_GATEWAY_URL: fixtureEndpoint,
           VIBESPACE_TOOL_GATEWAY_TOKEN: 'fixture-only-token',
         },
       },
       URL,
       TextEncoder,
       crypto: { randomUUID },
-      fetch,
+      fetch: fixtureFetch,
       AbortSignal,
     });
     const context = {
@@ -280,6 +327,26 @@ describe('Agent Relay discovery through existing provider gateways', () => {
       ask,
     };
     try {
+      for (const unownedEndpoint of [
+        'https://example.invalid/never-request',
+        `http://127.0.0.1:${address.port + 1}/v1/tool`,
+        `http://localhost:${address.port}/v1/tool`,
+        `${fixtureEndpoint}/other`,
+        `${fixtureEndpoint}?other=1`,
+      ]) {
+        await expect(fixtureFetch(unownedEndpoint, { method: 'POST', body: '{}' })).rejects.toThrow(
+          'Fixture transport rejects unowned endpoints',
+        );
+      }
+      expect(fixtureRequestCount).toBe(0);
+      // Use our own URL to verify global denial safely, even if the guard regresses.
+      // offlineNetwork.test separately proves external denial over an offline sentinel.
+      await expect(fetch(fixtureEndpoint)).rejects.toThrow('Unmocked fetch is blocked');
+      expect(fixtureRequestCount).toBe(0);
+      const unauthorized = await fixtureFetch(fixtureEndpoint, { method: 'POST', body: '{}' });
+      expect(unauthorized.status).toBe(401);
+      expect(received).toHaveLength(0);
+
       const catalog = JSON.parse(await call('mcp.list', {}, context));
       expect(catalog.ok).toBe(true);
       expect(catalog.data[0].connectionId).toBe('agent-relay');
@@ -316,6 +383,15 @@ describe('Agent Relay discovery through existing provider gateways', () => {
         messageId: 'message-test',
         text: 'test reply',
       });
+      expect(fixtureRequestCount).toBe(5);
+      redirectNextRequest = true;
+      await expect(call('mcp.list', {}, context)).rejects.toThrow(
+        'Fixture transport rejects redirects',
+      );
+      expect(fixtureRequestCount).toBe(6);
+      expect(received).toHaveLength(4);
+      expect(globalThis.fetch).toBe(guardedGlobalFetch);
+      await expect(fetch(fixtureEndpoint)).rejects.toThrow('Unmocked fetch is blocked');
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),

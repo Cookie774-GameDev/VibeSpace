@@ -30,4 +30,47 @@ describe('Jarvis account hydration authority', () => {
     await authority.ready('account-a');
     expect(hydrate).toHaveBeenCalledTimes(2);
   });
+
+  it('does not authorize a pending hydration invalidated by an account boundary', async () => {
+    let finish: () => void = () => undefined;
+    const authority = createAccountHydrationAuthority(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = authority.ready('account-a');
+    authority.invalidate();
+    finish();
+    await expect(pending).resolves.toBe(false);
+  });
+
+  it('does not let an older failure evict a replacement hydration attempt', async () => {
+    let rejectOld: (error: Error) => void = () => undefined;
+    let finishCurrent: () => void = () => undefined;
+    const hydrate = vi
+      .fn<(_accountId: string) => Promise<void>>(async () => undefined)
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectOld = reject;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishCurrent = resolve;
+          }),
+      );
+    const authority = createAccountHydrationAuthority(hydrate);
+    const oldAttempt = authority.ready('account-a');
+    authority.invalidate();
+    const currentAttempt = authority.ready('account-a');
+    rejectOld(new Error('old load unavailable'));
+    await expect(oldAttempt).resolves.toBe(false);
+    expect(authority.ready('account-a')).toBe(currentAttempt);
+    finishCurrent();
+    await expect(currentAttempt).resolves.toBe(true);
+    expect(hydrate).toHaveBeenCalledTimes(2);
+  });
 });

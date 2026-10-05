@@ -6,14 +6,17 @@ import {
   createGitHubDeviceAuthorizationAuthority,
   VIBESPACE_GITHUB_OAUTH_CLIENT_ID,
 } from '@/features/plugins/githubDeviceAuthorization';
-import type {
-  JarvisExistingCredentialAuthorization,
-  JarvisExistingCredentialAuthorizationAuthority,
-  PluginCredentialAccountGrantRepository,
+import {
+  withPluginCredentialLocatorLocks,
+  type JarvisExistingCredentialAuthorization,
+  type JarvisExistingCredentialAuthorizationAuthority,
+  type PluginCredentialAccountGrantRepository,
+  type PluginCredentialAccountGrantV1,
 } from '@/features/plugins/credentialAuthorization';
 import {
   createAccountScopedPluginRuntime,
   type CanonicalPluginArtifactCapability,
+  type PluginAuthorizationAuthority,
   type PluginManagementCapability,
 } from '@/features/plugins/runtime';
 import type { PluginStore } from '@/features/plugins/store';
@@ -95,6 +98,7 @@ export function createJarvisSecurityRuntime(
   input: CreateJarvisSecurityRuntimeInput,
 ): JarvisSecurityRuntime {
   const boundRevocations = new Map<string, Set<AbortController>>();
+  let invalidatedAll = false;
   const credentialAdapter = createExistingPluginCredentialAdapter();
   const secretAuthority = createJarvisSecretHandleAuthority({
     credentials: credentialAdapter,
@@ -103,23 +107,132 @@ export function createJarvisSecurityRuntime(
     randomUUID: input.randomUUID,
   });
   let pluginRuntime!: ReturnType<typeof createAccountScopedPluginRuntime>;
+  type DeviceLifetime = {
+    accountId: string;
+    pluginId: string;
+    active: boolean;
+    grant?: PluginCredentialAccountGrantV1;
+  };
+  const deviceLifetimes = new Map<string, DeviceLifetime>();
+  const deviceKey = (accountId: string, pluginId: string) => JSON.stringify([accountId, pluginId]);
+  const deviceIsCurrent = (lifetime: DeviceLifetime) =>
+    lifetime.active &&
+    !invalidatedAll &&
+    input.activeAccountId() === lifetime.accountId &&
+    deviceLifetimes.get(deviceKey(lifetime.accountId, lifetime.pluginId)) === lifetime;
+  const retireDevice = (lifetime: DeviceLifetime) => {
+    const key = deviceKey(lifetime.accountId, lifetime.pluginId);
+    if (deviceLifetimes.get(key) === lifetime) deviceLifetimes.delete(key);
+  };
+  const cleanRevokedDeviceGrant = async (lifetime: DeviceLifetime) => {
+    const locator = { pluginId: 'github', fieldId: 'token' };
+    await withPluginCredentialLocatorLocks([locator], async (locks) => {
+      const grant = await input.credentialGrants.getLocked({ locks, locator });
+      const owned = lifetime.grant;
+      // A newer/manual grant may already own this locator. Never remove it.
+      if (
+        !grant ||
+        !owned ||
+        grant.accountId !== owned.accountId ||
+        grant.grantId !== owned.grantId ||
+        grant.revision !== owned.revision
+      )
+        return;
+      await input.credentialGrants.removeExact({
+        locks,
+        locator,
+        expected: {
+          accountId: owned.accountId,
+          pluginId: owned.pluginId,
+          fieldId: owned.fieldId,
+          grantId: owned.grantId,
+          revision: owned.revision,
+        },
+      });
+      await credentialAdapter.deleteExistingCredential(locator);
+    });
+  };
+  const revokeDevice = (lifetime: DeviceLifetime) => {
+    lifetime.active = false;
+    retireDevice(lifetime);
+    // Do not wait on an uninterruptible keychain write while canceling. Its
+    // guarded adapter rolls back under the same lock; exact grants are cleaned
+    // independently without ever deleting a replacement attempt's credential.
+    void cleanRevokedDeviceGrant(lifetime).catch(() => {
+      console.warn('[plugins] Canceled device credential cleanup failed.');
+    });
+    return providerAuthorization.cancel({
+      accountId: lifetime.accountId,
+      pluginId: lifetime.pluginId,
+    });
+  };
   const providerAuthorization = createGitHubDeviceAuthorizationAuthority({
     clientId:
       input.githubOAuthClientId ??
       import.meta.env.VITE_GITHUB_OAUTH_CLIENT_ID ??
       VIBESPACE_GITHUB_OAUTH_CLIENT_ID,
     async onConnected({ accountId, credential }) {
-      if (input.activeAccountId() !== accountId) return;
-      await pluginRuntime.management.saveCredential({
-        accountId,
-        pluginId: 'github',
-        fieldId: 'token',
-        value: credential,
+      const lifetime = deviceLifetimes.get(deviceKey(accountId, 'github'));
+      if (!lifetime || !deviceIsCurrent(lifetime)) return;
+      // Reuse the existing credential/grant implementation with this one
+      // callback's lifetime, rather than borrowing the current account string.
+      const callbackRuntime = createAccountScopedPluginRuntime({
+        activeAccountId: () => (deviceIsCurrent(lifetime) ? accountId : undefined),
+        grants: {
+          ...input.credentialGrants,
+          replaceExact(request) {
+            lifetime.grant = Object.freeze({ ...request.grant });
+            return input.credentialGrants.replaceExact(request);
+          },
+        },
+        credentialAuthorization: input.credentialAuthorization,
+        credentialAdapter: {
+          ...credentialAdapter,
+          async writeExistingCredential(locator, value) {
+            if (!deviceIsCurrent(lifetime)) authorityRevoked();
+            await credentialAdapter.writeExistingCredential(locator, value);
+            if (!deviceIsCurrent(lifetime)) {
+              // saveCredential still holds the exact locator lock here, so
+              // this is our write, never a newer attempt's replacement.
+              await credentialAdapter.deleteExistingCredential(locator);
+              authorityRevoked();
+            }
+          },
+        },
+        connections: {
+          upsertConnection(connection) {
+            if (deviceIsCurrent(lifetime)) input.pluginConnections.upsertConnection(connection);
+          },
+          removeConnection(owner, pluginId) {
+            if (deviceIsCurrent(lifetime))
+              input.pluginConnections.removeConnection(owner, pluginId);
+          },
+        },
+        randomUUID: input.randomUUID,
+        now: input.now,
       });
-      await pluginRuntime.management.testConnection({ accountId, pluginId: 'github' });
+      let completed = false;
+      try {
+        await callbackRuntime.management.saveCredential({
+          accountId,
+          pluginId: 'github',
+          fieldId: 'token',
+          value: credential,
+        });
+        if (!deviceIsCurrent(lifetime)) return;
+        await callbackRuntime.management.testConnection({ accountId, pluginId: 'github' });
+        completed = true;
+      } finally {
+        callbackRuntime.canonicalArtifacts.invalidateAll();
+        if (!deviceIsCurrent(lifetime)) await cleanRevokedDeviceGrant(lifetime);
+        // A current storage failure still belongs to this lifetime: retain it
+        // for the provider's bounded onFailed receipt instead of hiding it.
+        if (completed || !deviceIsCurrent(lifetime)) retireDevice(lifetime);
+      }
     },
     async onFailed({ accountId, error }) {
-      if (input.activeAccountId() !== accountId) return;
+      const lifetime = deviceLifetimes.get(deviceKey(accountId, 'github'));
+      if (!lifetime || !deviceIsCurrent(lifetime)) return;
       input.pluginConnections.upsertConnection({
         accountId,
         pluginId: 'github',
@@ -130,15 +243,40 @@ export function createJarvisSecurityRuntime(
         configuredFields: [],
         updatedAt: input.now(),
       });
+      retireDevice(lifetime);
     },
   });
+  const deviceAuthorization: PluginAuthorizationAuthority = {
+    async begin(request) {
+      const key = deviceKey(request.accountId, request.pluginId);
+      const previous = deviceLifetimes.get(key);
+      const cancellation = previous ? revokeDevice(previous) : undefined;
+      const lifetime: DeviceLifetime = {
+        accountId: request.accountId,
+        pluginId: request.pluginId,
+        active: true,
+      };
+      deviceLifetimes.set(key, lifetime);
+      if (cancellation) await cancellation;
+      if (!deviceIsCurrent(lifetime))
+        return { ok: false, error: 'Plugin authorization was cancelled.' };
+      const result = await providerAuthorization.begin(request);
+      if (!result.ok) retireDevice(lifetime);
+      return result;
+    },
+    async cancel(request) {
+      const lifetime = deviceLifetimes.get(deviceKey(request.accountId, request.pluginId));
+      if (lifetime) await revokeDevice(lifetime);
+      else await providerAuthorization.cancel(request);
+    },
+  };
   pluginRuntime = createAccountScopedPluginRuntime({
     activeAccountId: input.activeAccountId,
     grants: input.credentialGrants,
     credentialAuthorization: input.credentialAuthorization,
     credentialAdapter,
     connections: input.pluginConnections,
-    authorization: providerAuthorization,
+    authorization: deviceAuthorization,
     randomUUID: input.randomUUID,
     now: input.now,
   });
@@ -329,7 +467,6 @@ export function createJarvisSecurityRuntime(
     return Object.freeze(wrapped);
   }
 
-  let invalidatedAll = false;
   const runtime: JarvisSecurityRuntime = Object.freeze({
     recoveryVerifier: approvalEngine.recoveryVerifier,
     bindKernelActions(lifecycle) {
@@ -381,6 +518,9 @@ export function createJarvisSecurityRuntime(
     },
     invalidateAccount(accountId) {
       if (!accountId.trim()) return;
+      for (const lifetime of deviceLifetimes.values()) {
+        if (lifetime.accountId === accountId) void revokeDevice(lifetime);
+      }
       for (const revocation of boundRevocations.get(accountId) ?? []) revocation.abort();
       boundRevocations.delete(accountId);
       secretAuthority.invalidateAccount(accountId);
@@ -389,6 +529,7 @@ export function createJarvisSecurityRuntime(
     invalidateAll() {
       if (invalidatedAll) return;
       invalidatedAll = true;
+      for (const lifetime of deviceLifetimes.values()) void revokeDevice(lifetime);
       for (const revocations of boundRevocations.values()) {
         for (const revocation of revocations) revocation.abort();
       }

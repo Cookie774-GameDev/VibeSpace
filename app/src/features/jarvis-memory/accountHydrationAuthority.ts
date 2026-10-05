@@ -6,10 +6,10 @@ export function createAccountHydrationAuthority(hydrate: (accountId: string) => 
   const ready = (accountId: string): Promise<boolean> => {
     const existing = attempts.get(accountId);
     if (existing) return existing;
-    const pending = hydrate(accountId).then(
-      () => true,
+    const pending: Promise<boolean> = hydrate(accountId).then(
+      () => attempts.get(accountId) === pending,
       () => {
-        attempts.delete(accountId);
+        if (attempts.get(accountId) === pending) attempts.delete(accountId);
         return false;
       },
     );

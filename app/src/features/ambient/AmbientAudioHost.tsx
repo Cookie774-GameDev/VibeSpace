@@ -42,26 +42,32 @@ export function AmbientAudioHost() {
     const engine = AmbientAudioEngine.getInstance();
 
     if (shouldPlay) {
+      const volume = useUIStore.getState().ambientVolume;
       if (musicProjectEnabled && musicClips.length > 0) {
-        engine.playProject(musicClips, musicLoop, ambientVolume);
+        engine.playProject(musicClips, musicLoop, volume);
       } else {
-        engine.play(playableTrack, ambientVolume);
+        engine.play(playableTrack, volume);
       }
     } else {
       engine.stop();
     }
-  }, [shouldPlay, playableTrack, ambientVolume, musicClips, musicLoop, musicProjectEnabled]);
+  }, [shouldPlay, playableTrack, musicClips, musicLoop, musicProjectEnabled]);
+
+  React.useEffect(() => {
+    AmbientAudioEngine.getInstance().setVolume(ambientVolume);
+  }, [ambientVolume]);
 
   React.useEffect(() => {
     if (!shouldPlay) return;
     const unlock = () => {
       const engine = AmbientAudioEngine.getInstance();
+      if (engine.getLoadStatus().state !== 'error') return;
+      const volume = useUIStore.getState().ambientVolume;
       if (musicProjectEnabled && musicClips.length > 0) {
-        engine.playProject(musicClips, musicLoop, ambientVolume);
+        engine.playProject(musicClips, musicLoop, volume);
       } else {
-        engine.play(playableTrack, ambientVolume);
+        engine.play(playableTrack, volume);
       }
-      void engine.resume();
     };
 
     window.addEventListener('pointerdown', unlock, { capture: true });
@@ -70,7 +76,7 @@ export function AmbientAudioHost() {
       window.removeEventListener('pointerdown', unlock, { capture: true });
       window.removeEventListener('keydown', unlock, { capture: true });
     };
-  }, [shouldPlay, playableTrack, ambientVolume, musicClips, musicLoop, musicProjectEnabled]);
+  }, [shouldPlay, playableTrack, musicClips, musicLoop, musicProjectEnabled]);
 
   // Clean up on component unmount
   React.useEffect(() => {

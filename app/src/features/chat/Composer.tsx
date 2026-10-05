@@ -1763,6 +1763,8 @@ export function Composer({
   const interruptQueuedRef = useRef<(id: string) => void>(() => {});
   /** Latest auto-flush implementation (set after handleSend exists). */
   const flushNextQueuedRef = useRef<() => void>(() => {});
+  /** Only a restored view may drain without receiving a new run-state event. */
+  const queueRestorePendingRef = useRef(false);
   /**
    * Prompt Forge upgrade-for-send (wired after the hook mounts). Used so
    * handleSend can await upgrades without reordering the huge send path.
@@ -1819,6 +1821,8 @@ export function Composer({
     const account = resolveAccountIdentity(useAuthStore.getState());
     if (account) hydrateLatestTurn(account.accountId, String(chatId));
     const retained = getChatRunState(String(chatId));
+    queueRestorePendingRef.current =
+      retained?.status !== 'running' && retained?.status !== 'cancelled';
     setJarvisRunning(retained?.status === 'running');
     setStoppedRequest(retained?.status === 'cancelled');
     activeCancellationKeyRef.current =
@@ -1826,6 +1830,8 @@ export function Composer({
     const onRunState = (event: Event) => {
       const detail = (event as CustomEvent<{ chatId?: string; status?: string; cancellationKey?: string }>).detail;
       if (String(detail?.chatId) !== String(chatId)) return;
+      // This listener owns live terminal scheduling; do not also restore-drain.
+      queueRestorePendingRef.current = false;
       const status = detail?.status;
       if (status === 'running') {
         if (detail.cancellationKey) activeCancellationKeyRef.current = detail.cancellationKey;
@@ -5716,15 +5722,22 @@ export function Composer({
   // A reply can finish while this view is unmounted. Once its exact model is
   // restored, drain the retained queue; an explicitly paused run stays paused.
   useEffect(() => {
+    const retainedStatus = getChatRunState(String(chatId))?.status;
     if (
+      !queueRestorePendingRef.current ||
       modelSelectionReadyChatId !== String(chatId) ||
       jarvisRunning ||
       stoppedRequest ||
       queuedMessages.length === 0 ||
-      getChatRunState(String(chatId))
+      retainedStatus === 'running' ||
+      retainedStatus === 'cancelled'
     )
       return;
-    const timer = setTimeout(() => flushNextQueuedRef.current(), 60);
+    const timer = setTimeout(() => {
+      if (!queueRestorePendingRef.current) return;
+      queueRestorePendingRef.current = false;
+      flushNextQueuedRef.current();
+    }, 60);
     return () => clearTimeout(timer);
   }, [
     chatId,

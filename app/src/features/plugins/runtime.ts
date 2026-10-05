@@ -1293,6 +1293,18 @@ export function createAccountScopedPluginRuntime(input: {
     generation: ArtifactGeneration;
   }>;
   type ArtifactGeneration = Readonly<{ runtime: object; account: object }>;
+  type PendingAuthorization = Readonly<{
+    generation: ArtifactGeneration;
+    result: Promise<PluginAuthorizationStartResult>;
+  }>;
+  const pendingAuthorizations = new Map<string, PendingAuthorization>();
+  const pendingAuthorizationCancellations = new Map<string, Promise<void>>();
+  const authorizationKey = (accountId: string, pluginId: string) =>
+    JSON.stringify([accountId, pluginId]);
+  const invalidatedAuthorization = (): PluginAuthorizationStartResult => ({
+    ok: false,
+    error: 'Plugin authorization was cancelled or its account changed.',
+  });
   const pendingCanonicalResults = new Map<object, PendingCanonicalPluginResult>();
   const canonicalResults = new Map<string, CanonicalPluginResultRecord>();
   const accountGenerations = new Map<string, object>();
@@ -1505,104 +1517,147 @@ export function createAccountScopedPluginRuntime(input: {
           setupUrl: adapter.documentationUrl,
         };
       }
-      input.connections.upsertConnection({
-        accountId,
-        pluginId: manifest.id,
-        state: 'connecting',
-        enabled: false,
-        enabledProjectIds: [],
-        configuredFields: [],
-        updatedAt: input.now(),
-      });
-      try {
-        const result = await input.authorization.begin({
-          accountId,
-          pluginId: manifest.id,
-          path: adapter.path as Parameters<PluginAuthorizationAuthority['begin']>[0]['path'],
-          scopes: adapter.scopes,
-        });
-        assertActiveAccount(accountId, input.activeAccountId);
-        if (!result.ok) {
-          input.connections.upsertConnection({
-            accountId,
-            pluginId: manifest.id,
-            state: 'error',
-            enabled: false,
-            enabledProjectIds: [],
-            error: result.error,
-            configuredFields: [],
-            updatedAt: input.now(),
-          });
-          return result;
-        }
-        let authorizationUrl: string | undefined;
-        if (result.authorizationUrl) {
-          const url = new URL(result.authorizationUrl);
-          if (
-            url.protocol !== 'https:' ||
-            url.username ||
-            url.password ||
-            url.hash ||
-            result.authorizationUrl.length > 8192 ||
-            ['access_token', 'refresh_token', 'id_token', 'client_secret'].some((key) =>
-              url.searchParams.has(key),
-            )
-          ) {
-            throw safeFailure('oauth_authorization_url_invalid');
-          }
-          authorizationUrl = url.toString();
-        }
-        const userCode =
-          result.userCode &&
-          result.userCode.trim() === result.userCode &&
-          result.userCode.length <= 128
-            ? result.userCode
-            : undefined;
-        if (result.userCode && !userCode) throw safeFailure('oauth_user_code_invalid');
-        const accountLabel =
-          result.accountLabel && result.accountLabel.length <= 256
-            ? result.accountLabel
-            : undefined;
-        const safeResult: PluginAuthorizationStartResult = Object.freeze({
-          ok: true,
-          state: result.state,
-          ...(authorizationUrl ? { authorizationUrl } : {}),
-          ...(userCode ? { userCode } : {}),
-          ...(accountLabel ? { accountLabel } : {}),
-        });
-        input.connections.upsertConnection({
-          accountId,
-          pluginId: manifest.id,
-          state: result.state,
-          enabled: result.state === 'connected',
-          enabledProjectIds: [],
-          accountLabel,
-          configuredFields: manifest.fields.map((field) => field.id),
-          updatedAt: input.now(),
-        });
-        return safeResult;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Provider authorization failed.';
-        input.connections.upsertConnection({
-          accountId,
-          pluginId: manifest.id,
-          state: 'error',
-          enabled: false,
-          enabledProjectIds: [],
-          error: message,
-          configuredFields: [],
-          updatedAt: input.now(),
-        });
-        return { ok: false, error: message, setupUrl: adapter.documentationUrl };
+      const authorization = input.authorization;
+      const key = authorizationKey(accountId, manifest.id);
+      const generation = captureArtifactGeneration(accountId);
+      if (!generation) return invalidatedAuthorization();
+      const existing = pendingAuthorizations.get(key);
+      if (existing && artifactGenerationIsCurrent(accountId, existing.generation)) {
+        return existing.result;
       }
+      const cancellation = pendingAuthorizationCancellations.get(key);
+      const isCurrent = () =>
+        pendingAuthorizations.get(key)?.result === resultPromise &&
+        artifactGenerationIsCurrent(accountId, generation);
+      const resultPromise: Promise<PluginAuthorizationStartResult> = Promise.resolve()
+        .then(async (): Promise<PluginAuthorizationStartResult> => {
+          try {
+            if (cancellation) await cancellation;
+            if (!isCurrent()) return invalidatedAuthorization();
+            input.connections.upsertConnection({
+              accountId,
+              pluginId: manifest.id,
+              state: 'connecting',
+              enabled: false,
+              enabledProjectIds: [],
+              configuredFields: [],
+              updatedAt: input.now(),
+            });
+            const result = await authorization.begin({
+              accountId,
+              pluginId: manifest.id,
+              path: adapter.path as Parameters<PluginAuthorizationAuthority['begin']>[0]['path'],
+              scopes: adapter.scopes,
+            });
+            if (!isCurrent()) return invalidatedAuthorization();
+            assertActiveAccount(accountId, input.activeAccountId);
+            if (!result.ok) {
+              input.connections.upsertConnection({
+                accountId,
+                pluginId: manifest.id,
+                state: 'error',
+                enabled: false,
+                enabledProjectIds: [],
+                error: result.error,
+                configuredFields: [],
+                updatedAt: input.now(),
+              });
+              return result;
+            }
+            let authorizationUrl: string | undefined;
+            if (result.authorizationUrl) {
+              const url = new URL(result.authorizationUrl);
+              if (
+                url.protocol !== 'https:' ||
+                url.username ||
+                url.password ||
+                url.hash ||
+                result.authorizationUrl.length > 8192 ||
+                ['access_token', 'refresh_token', 'id_token', 'client_secret'].some((key) =>
+                  url.searchParams.has(key),
+                )
+              ) {
+                throw safeFailure('oauth_authorization_url_invalid');
+              }
+              authorizationUrl = url.toString();
+            }
+            const userCode =
+              result.userCode &&
+              result.userCode.trim() === result.userCode &&
+              result.userCode.length <= 128
+                ? result.userCode
+                : undefined;
+            if (result.userCode && !userCode) throw safeFailure('oauth_user_code_invalid');
+            const accountLabel =
+              result.accountLabel && result.accountLabel.length <= 256
+                ? result.accountLabel
+                : undefined;
+            const safeResult: PluginAuthorizationStartResult = Object.freeze({
+              ok: true,
+              state: result.state,
+              ...(authorizationUrl ? { authorizationUrl } : {}),
+              ...(userCode ? { userCode } : {}),
+              ...(accountLabel ? { accountLabel } : {}),
+            });
+            input.connections.upsertConnection({
+              accountId,
+              pluginId: manifest.id,
+              state: result.state,
+              enabled: result.state === 'connected',
+              enabledProjectIds: [],
+              accountLabel,
+              configuredFields: manifest.fields.map((field) => field.id),
+              updatedAt: input.now(),
+            });
+            return safeResult;
+          } catch (error) {
+            if (!isCurrent()) return invalidatedAuthorization();
+            const message =
+              error instanceof Error ? error.message : 'Provider authorization failed.';
+            input.connections.upsertConnection({
+              accountId,
+              pluginId: manifest.id,
+              state: 'error',
+              enabled: false,
+              enabledProjectIds: [],
+              error: message,
+              configuredFields: [],
+              updatedAt: input.now(),
+            });
+            return { ok: false, error: message, setupUrl: adapter.documentationUrl };
+          }
+        })
+        .finally(() => {
+          if (pendingAuthorizations.get(key)?.result === resultPromise)
+            pendingAuthorizations.delete(key);
+        });
+      pendingAuthorizations.set(key, { generation, result: resultPromise });
+      return resultPromise;
     },
     async cancelAuthorization({ accountId, pluginId }: { accountId: string; pluginId: string }) {
       assertActiveAccount(accountId, input.activeAccountId);
-      if (input.authorization) {
-        await input.authorization.cancel({ accountId, pluginId });
-      }
-      assertActiveAccount(accountId, input.activeAccountId);
-      input.connections.removeConnection(accountId, pluginId);
+      const key = authorizationKey(accountId, pluginId);
+      // Invalidate before awaiting provider cancellation so a late receipt
+      // cannot reconnect or replace a newer request's state.
+      pendingAuthorizations.delete(key);
+      const existing = pendingAuthorizationCancellations.get(key);
+      if (existing) return existing;
+      const generation = captureArtifactGeneration(accountId);
+      const cancellation = Promise.resolve()
+        .then(async () => {
+          if (input.authorization) await input.authorization.cancel({ accountId, pluginId });
+          if (!generation || !artifactGenerationIsCurrent(accountId, generation)) {
+            throw safeFailure('plugin_authorization_invalidated');
+          }
+          input.connections.removeConnection(accountId, pluginId);
+        })
+        .finally(() => {
+          if (pendingAuthorizationCancellations.get(key) === cancellation) {
+            pendingAuthorizationCancellations.delete(key);
+          }
+        });
+      pendingAuthorizationCancellations.set(key, cancellation);
+      return cancellation;
     },
     async saveCredential({
       accountId,
@@ -1772,6 +1827,9 @@ export function createAccountScopedPluginRuntime(input: {
           authority: input.credentialAuthorization,
           adapter: input.credentialAdapter,
         });
+        // The caller's account authority may represent a shorter device-flow
+        // lifetime than the grant itself. Recheck after every credential await.
+        assertActiveAccount(accountId, input.activeAccountId);
         result = await testManifestConnection(
           manifest,
           credentialRead.values,

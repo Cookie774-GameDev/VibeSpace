@@ -105,7 +105,9 @@ it('sends a saved sketch as a persisted image part and re-renders it from histor
     );
     const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: '/sketch' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Complete sketch' }));
+    fireEvent.keyUp(input, { key: 'h' });
+    fireEvent.click(await screen.findByRole('option', { name: /sketch/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Complete sketch' }));
     await waitFor(() =>
       expect(document.querySelectorAll('[data-composer-media-preview="image"]')).toHaveLength(1),
     );

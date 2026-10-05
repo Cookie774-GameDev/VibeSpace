@@ -26,7 +26,7 @@ import type { CanonicalPluginEvidence } from '@/lib/jarvis/artifactProducerAdapt
 import { createJarvisPluginCapabilityProjection } from '@/lib/jarvis/pluginCapabilityProducer';
 import type { ZapierGatewayFactory } from './zapierProvider';
 import type { CanonicalMcpToolDescriptor } from '@/lib/mcp/serverManager';
-import type { PluginAuthorizationAuthority } from './runtime';
+import type { PluginAuthorizationAuthority, PluginAuthorizationStartResult } from './runtime';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -57,6 +57,7 @@ function fixture(
     times?: number[];
     zapierGatewayFactory?: ZapierGatewayFactory;
     authorization?: PluginAuthorizationAuthority;
+    runtimeActiveAccountId?: () => string | undefined;
   } = {},
 ) {
   let activeAccountId: string | undefined = 'account-a';
@@ -94,7 +95,7 @@ function fixture(
   const randomIds = [...(options.randomIds ?? ['grant-1', 'grant-2', 'grant-3'])];
   const times = [...(options.times ?? [100, 200, 300])];
   const runtime = createAccountScopedPluginRuntime({
-    activeAccountId: () => activeAccountId,
+    activeAccountId: options.runtimeActiveAccountId ?? (() => activeAccountId),
     grants,
     credentialAuthorization,
     credentialAdapter,
@@ -130,6 +131,140 @@ function fixture(
 }
 
 describe('account-scoped plugin runtime', () => {
+  it.each(['connected', 'failed', 'rejected'] as const)(
+    'does not restore a canceled authorization after its late %s result',
+    async (outcome) => {
+      let finish!: (result: PluginAuthorizationStartResult) => void;
+      let fail!: (error: Error) => void;
+      const result = new Promise<PluginAuthorizationStartResult>((resolve, reject) => {
+        finish = resolve;
+        fail = reject;
+      });
+      const state = fixture({
+        authorization: {
+          begin: vi.fn(() => result),
+          cancel: vi.fn(async () => undefined),
+        },
+      });
+      const pending = state.runtime.management.beginAuthorization({
+        accountId: 'account-a',
+        pluginId: 'gmail',
+      });
+      await Promise.resolve();
+      await state.runtime.management.cancelAuthorization({
+        accountId: 'account-a',
+        pluginId: 'gmail',
+      });
+      if (outcome === 'rejected') fail(new Error('late provider failure'));
+      else
+        finish(
+          outcome === 'connected'
+            ? { ok: true, state: 'connected', accountLabel: 'Old account' }
+            : { ok: false, error: 'late denied consent' },
+        );
+
+      await expect(pending).resolves.toMatchObject({ ok: false });
+      expect(state.connectionRows.has('account-a\u0000gmail')).toBe(false);
+    },
+  );
+
+  it('coalesces repeated authorization starts for the same account and plugin', async () => {
+    let finish!: (result: PluginAuthorizationStartResult) => void;
+    const pendingResult = new Promise<PluginAuthorizationStartResult>((resolve) => {
+      finish = resolve;
+    });
+    const authorization = {
+      begin: vi.fn(() => pendingResult),
+      cancel: vi.fn(async () => undefined),
+    };
+    const state = fixture({ authorization });
+    const first = state.runtime.management.beginAuthorization({
+      accountId: 'account-a',
+      pluginId: 'gmail',
+    });
+    const second = state.runtime.management.beginAuthorization({
+      accountId: 'account-a',
+      pluginId: 'gmail',
+    });
+    await Promise.resolve();
+    expect(authorization.begin).toHaveBeenCalledTimes(1);
+    finish({ ok: true, state: 'awaiting_approval' });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { ok: true, state: 'awaiting_approval' },
+      { ok: true, state: 'awaiting_approval' },
+    ]);
+  });
+
+  it('finishes cancellation before beginning a replacement authorization', async () => {
+    let finishOld!: (result: PluginAuthorizationStartResult) => void;
+    let finishNew!: (result: PluginAuthorizationStartResult) => void;
+    let finishCancel!: () => void;
+    const oldResult = new Promise<PluginAuthorizationStartResult>((resolve) => {
+      finishOld = resolve;
+    });
+    const newResult = new Promise<PluginAuthorizationStartResult>((resolve) => {
+      finishNew = resolve;
+    });
+    const cancellation = new Promise<void>((resolve) => {
+      finishCancel = resolve;
+    });
+    const authorization = {
+      begin: vi.fn().mockReturnValueOnce(oldResult).mockReturnValueOnce(newResult),
+      cancel: vi.fn(() => cancellation),
+    };
+    const state = fixture({ authorization });
+    const request = { accountId: 'account-a', pluginId: 'gmail' };
+    const old = state.runtime.management.beginAuthorization(request);
+    await Promise.resolve();
+    const cancel = state.runtime.management.cancelAuthorization(request);
+    const replacement = state.runtime.management.beginAuthorization(request);
+    await Promise.resolve();
+    expect(authorization.begin).toHaveBeenCalledTimes(1);
+    finishCancel();
+    await cancel;
+    await Promise.resolve();
+    expect(authorization.begin).toHaveBeenCalledTimes(2);
+    finishNew({ ok: true, state: 'connected', accountLabel: 'Current account' });
+    await expect(replacement).resolves.toMatchObject({ ok: true });
+    finishOld({ ok: true, state: 'connected', accountLabel: 'Old account' });
+    await expect(old).resolves.toMatchObject({ ok: false });
+    expect(state.connectionRows.get('account-a\u0000gmail')).toMatchObject({
+      state: 'connected',
+      accountLabel: 'Current account',
+    });
+  });
+
+  it.each(['account-switch', 'account-ABA', 'runtime'] as const)(
+    'does not publish a late authorization after %s invalidation',
+    async (scopeChange) => {
+      let finish!: (result: PluginAuthorizationStartResult) => void;
+      const result = new Promise<PluginAuthorizationStartResult>((resolve) => {
+        finish = resolve;
+      });
+      const state = fixture({
+        authorization: { begin: vi.fn(() => result), cancel: vi.fn(async () => undefined) },
+      });
+      const pending = state.runtime.management.beginAuthorization({
+        accountId: 'account-a',
+        pluginId: 'gmail',
+      });
+      await Promise.resolve();
+      const writes = state.connections.length;
+      if (scopeChange === 'runtime') state.runtime.canonicalArtifacts.invalidateAll();
+      else {
+        state.setActiveAccountId('account-b');
+        if (scopeChange === 'account-ABA') {
+          state.runtime.canonicalArtifacts.invalidateAccount('account-a');
+          state.setActiveAccountId('account-a');
+        }
+      }
+      finish({ ok: true, state: 'connected' });
+      await expect(pending).resolves.toMatchObject({ ok: false });
+      expect(state.connections).toHaveLength(writes);
+      expect(state.connectionRows.get('account-a\u0000gmail')?.enabled).toBe(false);
+    },
+  );
+
   it('starts OAuth through a trusted authority and exposes only a token-free receipt', async () => {
     const authorization: PluginAuthorizationAuthority = {
       begin: vi.fn(async () => ({
@@ -536,6 +671,72 @@ describe('account-scoped plugin runtime', () => {
       configuredFields: ['token'],
     });
   });
+
+  it.each(['credential read', 'final grant validation'] as const)(
+    'rechecks runtime authority after a held %s before starting provider IO',
+    async (boundary) => {
+      let active = true;
+      const test = fixture({ runtimeActiveAccountId: () => (active ? 'account-a' : undefined) });
+      await test.runtime.management.saveCredential({
+        accountId: 'account-a',
+        pluginId: 'github',
+        fieldId: 'token',
+        value: 'synthetic-github-token',
+      });
+      let started!: () => void;
+      let release!: () => void;
+      const pendingBoundary = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const heldBoundary = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      if (boundary === 'credential read') {
+        vi.mocked(test.credentialAdapter.readExistingCredential).mockImplementationOnce(
+          async () => {
+            started();
+            await heldBoundary;
+            return 'synthetic-github-token';
+          },
+        );
+      } else {
+        const revalidate = vi.mocked(test.credentialAuthorization.revalidateLocked);
+        const realRevalidate = revalidate.getMockImplementation()!;
+        let calls = 0;
+        revalidate.mockImplementation(async (request) => {
+          const result = await realRevalidate(request);
+          if (++calls === 2) {
+            started();
+            await heldBoundary;
+          }
+          return result;
+        });
+      }
+      const request = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValue(
+          new Response(JSON.stringify({ login: 'fixture-user' }), { status: 200 }),
+        );
+      const pending = test.runtime.management.testConnection({
+        accountId: 'account-a',
+        pluginId: 'github',
+      });
+      await pendingBoundary;
+      expect(request).not.toHaveBeenCalled();
+      active = false;
+      release();
+      await expect(pending).resolves.toMatchObject({ ok: false });
+      expect(request).not.toHaveBeenCalled();
+      expect(test.connections).toHaveLength(0);
+
+      // A fresh check with the same valid grant still reaches the provider.
+      active = true;
+      await expect(
+        test.runtime.management.testConnection({ accountId: 'account-a', pluginId: 'github' }),
+      ).resolves.toEqual({ ok: true, accountLabel: 'fixture-user' });
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('cannot certify a replacement credential with an in-flight old-credential probe', async () => {
     const test = fixture({ randomIds: ['grant-1', 'grant-2'], times: [10, 20, 30, 40] });

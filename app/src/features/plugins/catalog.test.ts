@@ -99,7 +99,11 @@ describe('plugin catalog', () => {
     expect(supabase?.authorizationCapability.kind).toBe('external_blocker');
     expect(supabase?.providerAccessUrl).toBe('https://supabase.com/docs/guides/ai-tools/mcp');
     expect(supabase?.providerAccessUrl).not.toMatch(/api-keys/i);
-    expect(supabase?.help).toMatch(/provider-hosted browser sign-in/i);
+    expect(supabase?.help).toMatch(/hosted MCP browser sign-in runs through OpenCode/i);
+    expect(supabase?.help).toMatch(/connected status is shown in the MCP panel/i);
+    expect(supabase?.help).toMatch(
+      /separate API connector uses a project publishable or anon key/i,
+    );
   });
 
   it('only labels connectors with declared runtime tools as implemented', () => {

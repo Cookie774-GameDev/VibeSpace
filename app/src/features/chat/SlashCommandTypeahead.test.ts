@@ -295,9 +295,11 @@ describe('orderSlashCommandsForDisplay', () => {
     expect(SLASH_COMMANDS.some((cmd) => cmd.cmd === 'skillspage')).toBe(false);
   });
 
-  it('registers every canonical Section 20 command exactly once', () => {
-    expect(SLASH_COMMANDS.map(({ cmd }) => cmd).sort()).toEqual([...SECTION_20_COMMANDS].sort());
-    expect(new Set(SLASH_COMMANDS.map(({ cmd }) => cmd)).size).toBe(SECTION_20_COMMANDS.length);
+  it('registers every canonical Section 20 command and local sketch command exactly once', () => {
+    const expectedCommands = [...SECTION_20_COMMANDS, 'sketch'];
+    const registeredCommands = SLASH_COMMANDS.map(({ cmd }) => cmd);
+    expect(registeredCommands.sort()).toEqual(expectedCommands.sort());
+    expect(new Set(registeredCommands).size).toBe(expectedCommands.length);
   });
 
   it('normalizes legacy slash spellings', () => {

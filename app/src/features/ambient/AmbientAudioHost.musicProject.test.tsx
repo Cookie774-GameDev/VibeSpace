@@ -24,7 +24,13 @@ const mocks = vi.hoisted(() => {
     },
   ];
   return {
-    audio: { play: vi.fn(), playProject: vi.fn(), resume: vi.fn(), stop: vi.fn() },
+    audio: {
+      play: vi.fn(),
+      playProject: vi.fn(),
+      resume: vi.fn(),
+      stop: vi.fn(),
+      setVolume: vi.fn(),
+    },
     clips,
     project: { clips, enabledForAmbient: true, loop: false },
     ui: {
@@ -39,7 +45,9 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('@/stores/ui', () => ({
-  useUIStore: (selector: (state: typeof mocks.ui) => unknown) => selector(mocks.ui),
+  useUIStore: Object.assign((selector: (state: typeof mocks.ui) => unknown) => selector(mocks.ui), {
+    getState: () => mocks.ui,
+  }),
 }));
 vi.mock('@/stores/auth', () => ({
   useAuthStore: (selector: (state: { plan: string }) => unknown) => selector({ plan: 'free' }),

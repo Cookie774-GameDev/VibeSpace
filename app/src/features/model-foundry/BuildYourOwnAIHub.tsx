@@ -80,6 +80,27 @@ interface Props {
   verifiedTrainingModels?: readonly VerifiedTrainingModel[];
 }
 
+// Mirrors the native command contract: spawning can outlive its initial response,
+// whereas completed mutations return the state they have durably written.
+const JOB_ACKNOWLEDGEMENT_CAUSALITY = {
+  model_foundry_start_training: 'initial-run-snapshot',
+  model_foundry_retry_job: 'initial-run-snapshot',
+  model_foundry_resume_job: 'initial-run-snapshot',
+  model_foundry_retrain_artifact: 'initial-run-snapshot',
+  model_foundry_cancel_job: 'completed-mutation',
+  model_foundry_rename_artifact: 'completed-mutation',
+  model_foundry_duplicate_artifact: 'completed-mutation',
+  model_foundry_delete_job: 'deletion',
+} as const;
+type JobActionCommand = Exclude<
+  keyof typeof JOB_ACKNOWLEDGEMENT_CAUSALITY,
+  'model_foundry_start_training'
+>;
+type JobAcknowledgementCausality = Exclude<
+  (typeof JOB_ACKNOWLEDGEMENT_CAUSALITY)[keyof typeof JOB_ACKNOWLEDGEMENT_CAUSALITY],
+  'deletion'
+>;
+
 const steps = ['Purpose', 'Base model', 'Identity', 'Sources', 'Review', 'Train'] as const;
 
 function numericInputValue(value: number): number | '' {
@@ -158,6 +179,52 @@ export function BuildYourOwnAIHub({
   });
   const [sources, setSources] = React.useState<ClassifiedSource[]>([]);
   const [jobs, setJobs] = React.useState<FoundryJob[]>(() => loadJobs(window.localStorage));
+  const jobsRef = React.useRef(jobs);
+  // A list requested before an acknowledged mutation must not restore stale jobs.
+  const jobsRevisionRef = React.useRef(0);
+  const persistJobs = React.useCallback((next: FoundryJob[]) => {
+    jobsRef.current = next;
+    const revision = ++jobsRevisionRef.current;
+    setJobs(next);
+    saveJobs(window.localStorage, next);
+    return revision;
+  }, []);
+  const persistAcknowledgedJob = React.useCallback(
+    (
+      acknowledged: FoundryJob,
+      beforeRequest: readonly FoundryJob[],
+      causality: JobAcknowledgementCausality,
+    ) => {
+      const current = jobsRef.current.find((job) => job.id === acknowledged.id);
+      const previous = beforeRequest.find((job) => job.id === acknowledged.id);
+      const timestamp = (job: FoundryJob) => {
+        const milliseconds = Number(job.updatedAt);
+        return Number.isFinite(milliseconds) ? milliseconds : Date.parse(job.updatedAt);
+      };
+      const changedSinceRequest =
+        current &&
+        previous &&
+        (Object.keys({ ...previous, ...current }) as (keyof FoundryJob)[]).some(
+          (key) => current[key] !== previous[key],
+        );
+      // New IDs observed by polling are downstream of creation. For an existing ID,
+      // a completed mutation wins ties; an initial run snapshot can already be stale.
+      // This orders command effects, not statuses (resume may reset progress).
+      const keepCurrent =
+        current &&
+        (!previous ||
+          (changedSinceRequest &&
+            (timestamp(current) > timestamp(acknowledged) ||
+              (causality === 'initial-run-snapshot' &&
+                !(timestamp(current) < timestamp(acknowledged))))));
+      const next = [
+        keepCurrent ? current : acknowledged,
+        ...jobsRef.current.filter((job) => job.id !== acknowledged.id),
+      ];
+      return { jobs: next, revision: persistJobs(next) };
+    },
+    [persistJobs],
+  );
   const [error, setError] = React.useState('');
   const [installedModels, setInstalledModels] = React.useState<string[]>([]);
   const [ollamaReady, setOllamaReady] = React.useState(false);
@@ -242,25 +309,28 @@ export function BuildYourOwnAIHub({
     let cancelled = false;
     let refreshing = false;
     let previousJobs = jobs;
+    const initialRevision = jobsRevisionRef.current;
     void import('@/lib/ai/models').then(({ syncFoundryModelOptions }) => {
-      if (!cancelled) syncFoundryModelOptions(foundryModelOptions(jobs));
+      if (!cancelled && initialRevision === jobsRevisionRef.current)
+        syncFoundryModelOptions(foundryModelOptions(jobs));
     });
     const refresh = async () => {
       if (refreshing || cancelled) return;
       refreshing = true;
+      const refreshRevision = jobsRevisionRef.current;
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         const nativeJobs = await invoke<FoundryJob[]>('model_foundry_list_jobs');
-        if (!cancelled) {
+        if (!cancelled && refreshRevision === jobsRevisionRef.current) {
           const completedJobId = newlyCompletedJobId(previousJobs, nativeJobs);
           if (completedJobId) {
             setRevealJobId(completedJobId);
           }
           previousJobs = nativeJobs;
-          setJobs(nativeJobs);
-          saveJobs(window.localStorage, nativeJobs);
+          const revision = persistJobs(nativeJobs);
           const { syncFoundryModelOptions } = await import('@/lib/ai/models');
-          if (!cancelled) syncFoundryModelOptions(foundryModelOptions(nativeJobs));
+          if (!cancelled && revision === jobsRevisionRef.current)
+            syncFoundryModelOptions(foundryModelOptions(nativeJobs));
         }
       } catch {
         // Browser preview and unavailable native runtimes retain the last durable UI snapshot.
@@ -274,7 +344,7 @@ export function BuildYourOwnAIHub({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [open]);
+  }, [open, persistJobs]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -659,6 +729,7 @@ export function BuildYourOwnAIHub({
       return;
     }
     setError('');
+    const beforeRequest = jobsRef.current;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const created = await invoke<FoundryJob>('model_foundry_start_training', {
@@ -698,9 +769,11 @@ export function BuildYourOwnAIHub({
           localOnly: true,
         },
       });
-      const next = [created, ...jobs.filter((job) => job.id !== created.id)];
-      setJobs(next);
-      saveJobs(window.localStorage, next);
+      persistAcknowledgedJob(
+        created,
+        beforeRequest,
+        JOB_ACKNOWLEDGEMENT_CAUSALITY.model_foundry_start_training,
+      );
       setStep(5);
     } catch (caught) {
       setError(
@@ -839,39 +912,36 @@ export function BuildYourOwnAIHub({
   };
 
   const runJobAction = async (
-    command:
-      | 'model_foundry_cancel_job'
-      | 'model_foundry_retry_job'
-      | 'model_foundry_resume_job'
-      | 'model_foundry_retrain_artifact'
-      | 'model_foundry_delete_job'
-      | 'model_foundry_rename_artifact'
-      | 'model_foundry_duplicate_artifact',
+    command: JobActionCommand,
     job: FoundryJob,
     extra: Record<string, unknown> = {},
   ) => {
     setBusyJobId(job.id);
     setError('');
+    const beforeRequest = jobsRef.current;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       if (command === 'model_foundry_delete_job') {
         await invoke(command, { jobId: job.id });
-        const next = jobs.filter((candidate) => candidate.id !== job.id);
-        setJobs(next);
-        saveJobs(window.localStorage, next);
+        const next = jobsRef.current.filter((candidate) => candidate.id !== job.id);
+        const revision = persistJobs(next);
         const { syncFoundryModelOptions } = await import('@/lib/ai/models');
-        syncFoundryModelOptions(foundryModelOptions(next));
+        if (revision === jobsRevisionRef.current)
+          syncFoundryModelOptions(foundryModelOptions(next));
         setConfirmDeleteJobId(null);
       } else {
         const changed = await invoke<FoundryJob>(command, {
           jobId: job.id,
           ...extra,
         });
-        const next = [changed, ...jobs.filter((candidate) => candidate.id !== changed.id)];
-        setJobs(next);
-        saveJobs(window.localStorage, next);
+        const { jobs: next, revision } = persistAcknowledgedJob(
+          changed,
+          beforeRequest,
+          JOB_ACKNOWLEDGEMENT_CAUSALITY[command],
+        );
         const { syncFoundryModelOptions } = await import('@/lib/ai/models');
-        syncFoundryModelOptions(foundryModelOptions(next));
+        if (revision === jobsRevisionRef.current)
+          syncFoundryModelOptions(foundryModelOptions(next));
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

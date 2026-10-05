@@ -2528,7 +2528,11 @@ describe('startRuntimeListener agent routing', () => {
     },
   );
 
-  it('routes a locked Codex chat through the exact selected provider connection without changing its model', async () => {
+  it.each([
+    { providerId: 'opencode-go', modelId: 'deepseek-v4-flash-vision-exp' },
+    { providerId: 'openai', modelId: 'gpt-6-luna' },
+  ])('retains the provider-qualified model for Codex bridge route $providerId/$modelId', async ({ providerId, modelId }) => {
+    const qualifiedModel = `${providerId}/${modelId}`;
     mocks.lockChatBackendForDispatch.mockResolvedValueOnce({
       version: 1,
       backend: 'codex',
@@ -2539,13 +2543,13 @@ describe('startRuntimeListener agent routing', () => {
     const connection = PROVIDER_CONNECTIONS.find((candidate) => candidate.id === 'opencode-cli')!;
     rememberLiveOpenCodeProviders([
       {
-        id: 'opencode-go',
-        name: 'OpenCode Go',
+        id: providerId,
+        name: providerId,
         connected: true,
         models: [
           {
-            id: 'deepseek-v4-flash-vision-exp',
-            name: 'DeepSeek V4 FLASH Vision Exp',
+            id: modelId,
+            name: modelId,
             variants: ['low', 'medium', 'high', 'max'],
           },
         ],
@@ -2553,13 +2557,13 @@ describe('startRuntimeListener agent routing', () => {
     ]);
     const selection = selectionFromOption(
       connection.providerId as ProviderId,
-      'opencode-go/deepseek-v4-flash-vision-exp',
+      qualifiedModel,
       connection,
     );
     setDiscoveredConnectionModels(connection.id, [
       {
-        id: 'opencode-go/deepseek-v4-flash-vision-exp',
-        label: 'DeepSeek V4 Flash Vision Exp',
+        id: qualifiedModel,
+        label: modelId,
         source: 'provider_list',
         lastVerifiedAt: 1,
       },
@@ -2568,7 +2572,7 @@ describe('startRuntimeListener agent routing', () => {
       'opencode-cli': { available: true, auth: 'authenticated' },
     });
     useAuthStore.setState({ chatModelSelection: selection });
-    const selectedAgent = agent('agent_codex_affinity', 'apple', 'You are Apple.');
+    const selectedAgent = agent('agent_codex_affinity', 'apple', 'You are Apple.', true);
     const chatId = 'chat_codex_affinity' as ChatId;
     const userMessage: Message = {
       id: 'msg_codex_affinity_user' as MessageId,
@@ -2610,6 +2614,9 @@ describe('startRuntimeListener agent routing', () => {
       expect.objectContaining({
         backend: 'codex',
         connectionId: 'opencode-cli',
+        agent: expect.objectContaining({
+          model: expect.objectContaining({ provider: 'opencode', model: qualifiedModel }),
+        }),
       }),
     );
     expect(useAuthStore.getState().chatModelSelection).toEqual(selection);

@@ -5,6 +5,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from worker import _read_calibration_request, _read_request
 
@@ -73,6 +74,48 @@ class TrainingRequestV2Tests(unittest.TestCase):
         self.assertEqual(normalized["targetModules"], ["q_proj", "v_proj"])
         self.assertEqual(normalized["validationDatasetPath"], str(self.validation.resolve()))
         self.assertEqual(summary["validationExamples"], 1)
+
+    def test_rejects_oversized_validation_dataset_before_reading_it(self) -> None:
+        self.train.write_text('{"text":"small training fixture"}', encoding="utf-8")
+        self.validation.write_text(json.dumps({"text": "x" * 96}), encoding="utf-8")
+        self.request_path.write_text(json.dumps(self.request()), encoding="utf-8")
+        opened_validation = []
+        original_open = Path.open
+
+        def record_open(path, *args, **kwargs):
+            if path == self.validation:
+                opened_validation.append(path)
+            return original_open(path, *args, **kwargs)
+
+        with patch("worker.MAX_DATASET_BYTES", 64), patch.object(Path, "open", record_open):
+            with self.assertRaisesRegex(ValueError, "Validation dataset.*safe local size limit"):
+                _read_request(str(self.request_path))
+        self.assertEqual(opened_validation, [])
+
+    def test_accepts_both_dataset_files_at_the_byte_limit(self) -> None:
+        record = b'{"text":"bounded local fixture"}'
+        bounded = record + b" " * (64 - len(record))
+        self.train.write_bytes(bounded)
+        self.validation.write_bytes(bounded)
+        self.request_path.write_text(json.dumps(self.request()), encoding="utf-8")
+
+        with patch("worker.MAX_DATASET_BYTES", 64):
+            _, summary = _read_request(str(self.request_path))
+
+        self.assertEqual(summary["examples"], 1)
+        self.assertEqual(summary["validationExamples"], 1)
+
+    def test_validation_limit_counts_utf8_bytes_not_characters(self) -> None:
+        self.train.write_text('{"text":"small"}', encoding="utf-8")
+        record = json.dumps({"text": "é" * 30}, ensure_ascii=False)
+        self.assertLess(len(record), 64)
+        self.assertGreater(len(record.encode("utf-8")), 64)
+        self.validation.write_text(record, encoding="utf-8")
+        self.request_path.write_text(json.dumps(self.request()), encoding="utf-8")
+
+        with patch("worker.MAX_DATASET_BYTES", 64):
+            with self.assertRaisesRegex(ValueError, "Validation dataset.*safe local size limit"):
+                _read_request(str(self.request_path))
 
     def test_rejects_a_legacy_limit_that_disagrees_with_v2(self) -> None:
         request = self.request()

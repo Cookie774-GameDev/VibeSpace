@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Check,
@@ -56,9 +56,14 @@ function useReducedMotion(): boolean {
 
 export function KanbanPage() {
   const reducedMotion = useReducedMotion();
+  const availabilityId = useId();
 
-  const { items, ready, scopeKey, addMilestone, updateMilestone, removeMilestone,
+  const { items, ready, unavailable, scopeKey, addMilestone, updateMilestone, removeMilestone,
     toggleDone, clearCompletedTodos, completedMilestones } = useScopedMilestones();
+  const unavailableHint = unavailable ? {
+    id: availabilityId,
+    message: 'Kanban editing is unavailable because this project’s workspace could not be verified. Select a different project or restore a matching account backup in Account Center.',
+  } : undefined;
 
   const todos = useMemo(
     () =>
@@ -122,6 +127,11 @@ export function KanbanPage() {
             Knock out today&apos;s to-dos and track milestones that run for weeks. Everything syncs
             live with the Inspector Trace panel. Only items assigned to this project are shown; older unassigned items are retained.
           </p>
+          {unavailableHint ? (
+            <p id={unavailableHint.id} role="status" className="text-secondary text-muted-foreground max-w-xl">
+              {unavailableHint.message}
+            </p>
+          ) : null}
         </div>
         <AnalyticsSummary
           todoOpen={todos.length - todoDone}
@@ -161,6 +171,7 @@ export function KanbanPage() {
             ) : null
           }
           enabled={ready}
+          unavailableHint={unavailableHint}
           draft={todoDraft}
           onDraftChange={setTodoDraft}
           onAdd={addTodo}
@@ -186,6 +197,7 @@ export function KanbanPage() {
           accent="sage"
           progress={milestones.length > 0 ? milestonePercent : undefined}
           enabled={ready}
+          unavailableHint={unavailableHint}
           draft={milestoneDraft}
           onDraftChange={setMilestoneDraft}
           onAdd={addMilestoneItem}
@@ -211,6 +223,7 @@ interface ChecklistCardProps {
   action?: React.ReactNode;
   progress?: number;
   enabled: boolean;
+  unavailableHint?: { id: string; message: string };
   draft: string;
   onDraftChange: (v: string) => void;
   onAdd: () => void;
@@ -235,6 +248,7 @@ function ChecklistCard({
   action,
   progress,
   enabled,
+  unavailableHint,
   draft,
   onDraftChange,
   onAdd,
@@ -303,6 +317,8 @@ function ChecklistCard({
         <Input
           ref={inputRef}
           disabled={!enabled}
+          aria-describedby={unavailableHint?.id}
+          title={unavailableHint?.message}
           value={draft}
           onChange={(e) => onDraftChange(e.target.value)}
           onKeyDown={(e) => {
@@ -321,6 +337,8 @@ function ChecklistCard({
           variant="accent"
           onClick={handleAddRequest}
           disabled={!enabled}
+          aria-describedby={unavailableHint?.id}
+          title={unavailableHint?.message}
           aria-label={`Add item to ${title}`}
           data-warm-action="kanban-add"
           data-warm-accent={accent}

@@ -1,7 +1,7 @@
 /**
  * Vitest global setup.
  *
- * Three jobs:
+ * Four jobs:
  *   1. Stub `@tauri-apps/api/core` and `@tauri-apps/api/event` so any
  *      module that calls `invoke()` or `listen()` at import time (the
  *      Terminal view, the Ollama bridge, the keychain shim) doesn't
@@ -10,8 +10,12 @@
  *      older jsdom versions.
  *   3. Reset persisted Zustand stores between test files so a stale
  *      `localStorage` value from one suite doesn't leak into another.
+ *   4. Block unmocked fetch calls so fixtures cannot contact live services.
  */
 import { vi } from 'vitest';
+import { installOfflineFetchGuard } from './offlineNetwork';
+
+installOfflineFetchGuard();
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async () => undefined),

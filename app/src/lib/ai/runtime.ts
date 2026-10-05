@@ -3283,8 +3283,9 @@ export interface RuntimeBindings {
 
 /**
  * The authenticated OpenCode catalog exposes OpenAI subscription models as
- * provider-qualified aliases. Once chat affinity selects Codex, carry the
- * canonical OpenAI model into both the kernel snapshot and legacy router.
+ * provider-qualified aliases. For the exact official Codex connection, carry
+ * the canonical OpenAI model into the kernel snapshot and legacy router.
+ * Managed bridge connections retain their qualified native-catalog identity.
  */
 function canonicalizeCodexAgentModel(agent: Agent): Agent {
   const modelId = agent.model.model.trim();
@@ -7403,7 +7404,11 @@ export function startRuntimeListener(
       Boolean(detail.caoAuthority);
     if (stackStepsEarly.length === 0) {
       runnable = applyChatModelSelectionToAgent(runnable, chatModelSelection);
-      if (chatBackendAffinity.backend === 'codex') {
+      if (
+        chatBackendAffinity.backend === 'codex' &&
+        chatModelSelection.mode === 'single' &&
+        chatModelSelection.connectionId === CODEX_CLI_CONNECTION.id
+      ) {
         runnable = canonicalizeCodexAgentModel(runnable);
       }
     }

@@ -185,4 +185,154 @@ describe('AmbientAudioEngine music projects', () => {
     expect(instances[0]!.currentTime).toBe(10);
     unsubscribe();
   });
+
+  it.each([
+    ['pause', 'timeupdate'],
+    ['pause', 'ended'],
+    ['stop', 'timeupdate'],
+    ['stop', 'ended'],
+  ] as const)(
+    'keeps the paused clip selected after %s then a late %s event',
+    async (action, event) => {
+      const audio = new FakeAudio();
+      vi.stubGlobal(
+        'Audio',
+        class {
+          constructor() {
+            return audio;
+          }
+        },
+      );
+      const engine = AmbientAudioEngine.getInstance();
+      engine.playProject(clips, true, 40);
+      await Promise.resolve();
+      engine[action]();
+      audio.currentTime = clips[0]!.trimEnd!;
+      audio.dispatchEvent(new Event(event));
+      const afterTimeUpdate = vi.fn();
+      const unsubscribe = engine.subscribeProgress(afterTimeUpdate);
+      expect(afterTimeUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ clipId: clips[0]!.id }),
+      );
+      expect(engine.seek(0)).toBe(true);
+      expect(audio.currentTime).toBe(clips[0]!.trimStart);
+      expect(afterTimeUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ clipId: clips[0]!.id }),
+      );
+      expect(audio.play).toHaveBeenCalledTimes(1);
+      expect(audio.paused).toBe(true);
+      unsubscribe();
+    },
+  );
+
+  it('does not seek a replacement ambient track with an old mix metadata callback', () => {
+    const audio = new FakeAudio();
+    audio.readyState = 0;
+    vi.stubGlobal(
+      'Audio',
+      class {
+        constructor() {
+          return audio;
+        }
+      },
+    );
+    const engine = AmbientAudioEngine.getInstance();
+    engine.playProject(clips, true, 40);
+    engine.play('music-2', 40);
+    audio.currentTime = 0;
+    audio.readyState = 1;
+    audio.dispatchEvent(new Event('loadedmetadata'));
+    expect(audio.currentTime).toBe(0);
+    expect(audio.playbackRate).toBe(1);
+    expect(audio.loop).toBe(true);
+  });
+
+  it('detaches pending metadata work when the media handle is disposed', () => {
+    const audio = new FakeAudio();
+    audio.readyState = 0;
+    vi.stubGlobal(
+      'Audio',
+      class {
+        constructor() {
+          return audio;
+        }
+      },
+    );
+    const engine = AmbientAudioEngine.getInstance();
+    engine.playProject(clips, true, 40);
+    engine.dispose();
+    audio.dispatchEvent(new Event('loadedmetadata'));
+    expect(audio.currentTime).toBe(0);
+  });
+
+  it('still applies a pending trim when the same clip receives metadata while paused', () => {
+    const audio = new FakeAudio();
+    audio.readyState = 0;
+    vi.stubGlobal(
+      'Audio',
+      class {
+        constructor() {
+          return audio;
+        }
+      },
+    );
+    const engine = AmbientAudioEngine.getInstance();
+    engine.playProject(clips, true, 40);
+    engine.pause();
+    audio.readyState = 1;
+    audio.dispatchEvent(new Event('loadedmetadata'));
+    expect(audio.currentTime).toBe(clips[0]!.trimStart);
+    expect(audio.paused).toBe(true);
+  });
+
+  it('plays a non-looping mix once and ignores further end events until requested again', async () => {
+    const audio = new FakeAudio();
+    vi.stubGlobal(
+      'Audio',
+      class {
+        constructor() {
+          return audio;
+        }
+      },
+    );
+    const engine = AmbientAudioEngine.getInstance();
+    engine.playProject(clips, false, 40);
+    await Promise.resolve();
+    audio.dispatchEvent(new Event('ended'));
+    await Promise.resolve();
+    expect(audio.play).toHaveBeenCalledTimes(2);
+    audio.dispatchEvent(new Event('ended'));
+    expect(engine.isPlaying()).toBe(false);
+    audio.dispatchEvent(new Event('ended'));
+    expect(audio.play).toHaveBeenCalledTimes(2);
+    expect(audio.paused).toBe(true);
+  });
+
+  it('applies only the replacement clip trim when metadata arrives after a mix switch', () => {
+    const audio = new FakeAudio();
+    audio.readyState = 0;
+    vi.stubGlobal(
+      'Audio',
+      class {
+        constructor() {
+          return audio;
+        }
+      },
+    );
+    const engine = AmbientAudioEngine.getInstance();
+    engine.playProject([clips[0]!], false, 40);
+    engine.playProject([clips[1]!], false, 40);
+    const progress = vi.fn();
+    const unsubscribe = engine.subscribeProgress(progress);
+    progress.mockClear();
+    audio.readyState = 1;
+    audio.dispatchEvent(new Event('loadedmetadata'));
+    expect(progress).toHaveBeenCalledTimes(1);
+    expect(progress).toHaveBeenLastCalledWith({
+      clipId: clips[1]!.id,
+      currentTime: clips[1]!.trimStart,
+      duration: 90,
+    });
+    unsubscribe();
+  });
 });

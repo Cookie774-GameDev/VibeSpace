@@ -7,6 +7,9 @@ import {
   createCanvasDocument,
   withBlockAdded,
   withPlacement,
+  withPageOrder,
+  withPresentationOrder,
+  withPresentationNote,
 } from './contracts';
 import { createCanvasGlobalSearchIndex, requestCanvasGlobalSearchNavigation } from './globalSearch';
 import {
@@ -16,7 +19,8 @@ import {
   readActiveCanvasAiContext,
 } from './aiContextRegistry';
 import { CANVAS_MARKDOWN_MAX_SOURCE_LENGTH } from './markdown';
-import { createMindMap } from './mindmaps';
+import { addMindMapChild, createMindMap } from './mindmaps';
+import { createCanvasShape } from './shapes';
 import { encodeCanvasPackage } from './packageFormat';
 import type { CanvasPersistenceRepository, CanvasPersistenceScope } from './persistence';
 import {
@@ -31,6 +35,10 @@ import {
 import type { CanvasRecoveryEntry } from './autosave';
 import { useUIStore } from '@/stores/ui';
 import { useWorkbenchStore } from '@/features/workbench/store';
+import { createJarvisDb } from '@/lib/db';
+import { TEST_INDEXED_DB, uniqueTestDbName } from '@/test/indexedDb';
+import { flushCanvasWorkspaceState } from '@/lib/persistence/canvasWorkspaceFlush';
+import { createCanvasPersistenceRepository } from './persistence';
 
 const PERSISTENCE_SCOPE: CanvasPersistenceScope = {
   accountId: 'account-a',
@@ -937,6 +945,45 @@ describe('CanvasPage', () => {
 
     const title = screen.getByRole('textbox', { name: 'Canvas title' });
     fireEvent.keyDown(title, { key: 'z', ctrlKey: true });
+    expect(screen.getByDisplayValue('New note 1')).toBeTruthy();
+  });
+
+  it('does not capture control-dock pointer presses before Undo and Redo clicks', () => {
+    render(<CanvasPage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edgeless layout' }));
+    const workspace = screen.getByRole('region', { name: 'Canvas workspace' });
+    const capture = vi.fn();
+    Object.defineProperty(workspace, 'setPointerCapture', { configurable: true, value: capture });
+
+    const pointerClick = (button: HTMLElement) => {
+      fireEvent.pointerDown(button, {
+        pointerId: 1,
+        pointerType: 'mouse',
+        button: 0,
+        clientX: 400,
+        clientY: 400,
+      });
+      expect(capture).not.toHaveBeenCalled();
+      fireEvent.mouseDown(button, { button: 0 });
+      button.focus();
+      fireEvent.pointerUp(button, {
+        pointerId: 1,
+        pointerType: 'mouse',
+        button: 0,
+        clientX: 400,
+        clientY: 400,
+      });
+      fireEvent.mouseUp(button, { button: 0 });
+      fireEvent.click(button);
+    };
+    pointerClick(screen.getByRole('button', { name: /^Undo$/ }));
+    expect((screen.getByRole('button', { name: /^Redo$/ }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    pointerClick(screen.getByRole('button', { name: /^Undo$/ }));
+    expect(screen.queryByDisplayValue('New note 1')).toBeNull();
+    pointerClick(screen.getByRole('button', { name: /^Redo$/ }));
     expect(screen.getByDisplayValue('New note 1')).toBeTruthy();
   });
 
@@ -2059,6 +2106,374 @@ describe('CanvasPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
     expect(screen.queryByDisplayValue('Recovered portable idea')).toBeNull();
+  });
+
+  it('does not import a canvas package after the active persistence scope changes', async () => {
+    const otherScope: CanvasPersistenceScope = {
+      accountId: 'account-b',
+      projectId: 'project-b',
+      ownerId: 'account-b',
+    };
+    const repository = persistenceRepository({
+      loadLatest: vi.fn(async (scope) =>
+        persistedDocument(scope, `canvas-${scope.accountId}`, `Canvas for ${scope.accountId}`),
+      ),
+    });
+    const imported = persistedDocument(
+      PERSISTENCE_SCOPE,
+      'portable-source',
+      'Imported private idea',
+    );
+    const encoded = encodeCanvasPackage(imported);
+    let finishRead!: (source: string) => void;
+    const source = new Promise<string>((resolve) => {
+      finishRead = resolve;
+    });
+    const file = new File([encoded], 'scope-race.vibespace-canvas.json', {
+      type: 'application/json',
+    });
+    Object.defineProperty(file, 'text', { value: () => source });
+    const { rerender } = render(
+      <CanvasPage persistence={{ repository, scope: PERSISTENCE_SCOPE }} />,
+    );
+
+    expect(await screen.findByDisplayValue('Canvas for account-a')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Import canvas package'), {
+      target: { files: [file] },
+    });
+    rerender(<CanvasPage persistence={{ repository, scope: otherScope }} />);
+    expect(await screen.findByDisplayValue('Canvas for account-b')).toBeTruthy();
+    await act(async () => finishRead(encoded));
+
+    expect((screen.getByRole('textbox', { name: 'Canvas title' }) as HTMLInputElement).value).toBe(
+      'Canvas for account-b',
+    );
+    expect(screen.getByText(/^Import failed: active canvas changed/)).toBeTruthy();
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects a pending package import as soon as the persistence scope starts changing', async () => {
+    const otherScope = { ...PERSISTENCE_SCOPE, projectId: 'project-b' };
+    let finishLoad!: () => void;
+    const nextDocument = persistedDocument(otherScope, 'canvas-b', 'Canvas B');
+    const nextLoad = new Promise<typeof nextDocument>((resolve) => {
+      finishLoad = () => resolve(nextDocument);
+    });
+    const repository = persistenceRepository({
+      loadLatest: vi.fn((scope) =>
+        scope.projectId === otherScope.projectId
+          ? nextLoad
+          : Promise.resolve(persistedDocument(scope, 'canvas-a', 'Canvas A')),
+      ),
+    });
+    const encoded = encodeCanvasPackage(
+      persistedDocument(PERSISTENCE_SCOPE, 'portable-source', 'Imported private idea'),
+    );
+    let finishRead!: (source: string) => void;
+    const source = new Promise<string>((resolve) => {
+      finishRead = resolve;
+    });
+    const file = new File([encoded], 'scope-loading.vibespace-canvas.json');
+    Object.defineProperty(file, 'text', { value: () => source });
+    const { rerender } = render(
+      <CanvasPage persistence={{ repository, scope: PERSISTENCE_SCOPE }} />,
+    );
+
+    expect(await screen.findByDisplayValue('Canvas A')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Import canvas package'), {
+      target: { files: [file] },
+    });
+    rerender(<CanvasPage persistence={{ repository, scope: otherScope }} />);
+    await act(async () => finishRead(encoded));
+
+    expect(screen.queryByDisplayValue('Imported private idea')).toBeNull();
+    expect(screen.getByText(/^Import failed: active canvas changed/)).toBeTruthy();
+    await act(async () => finishLoad());
+    expect(await screen.findByDisplayValue('Canvas B')).toBeTruthy();
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+
+  it('does not read a canvas package while the target canvas is still loading', async () => {
+    const document = persistedDocument(PERSISTENCE_SCOPE, 'canvas-a', 'Canvas A');
+    let finishLoad!: () => void;
+    const loaded = new Promise<typeof document>((resolve) => {
+      finishLoad = () => resolve(document);
+    });
+    const repository = persistenceRepository({ loadLatest: vi.fn(() => loaded) });
+    const encoded = encodeCanvasPackage(document);
+    const read = vi.fn(async () => encoded);
+    const file = new File([encoded], 'loading.vibespace-canvas.json');
+    Object.defineProperty(file, 'text', { value: read });
+    render(<CanvasPage persistence={{ repository, scope: PERSISTENCE_SCOPE }} />);
+
+    fireEvent.change(screen.getByLabelText('Import canvas package'), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByText('Import failed: canvas is still loading')).toBeTruthy();
+    expect(read).not.toHaveBeenCalled();
+    await act(async () => finishLoad());
+    expect(await screen.findByDisplayValue('Canvas A')).toBeTruthy();
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+
+  it.each(['project', 'account'] as const)(
+    'durably imports a cross-%s package with owned objects, references and undo/redo',
+    async (boundary) => {
+      const databaseName = uniqueTestDbName('canvas-package-portability');
+      let database = createJarvisDb(databaseName, TEST_INDEXED_DB);
+      await database.open();
+      const sourceScope = PERSISTENCE_SCOPE;
+      const targetScope = {
+        ...sourceScope,
+        projectId: 'project-b',
+        ...(boundary === 'account' ? { accountId: 'account-b', ownerId: 'account-b' } : {}),
+      };
+      let source = withBlockAdded(
+        persistedDocument(sourceScope, 'source-canvas', 'Portable canvas'),
+        createCanvasBlock({
+          id: 'source-note',
+          content: { kind: 'note', text: 'Portable note Ω' },
+          now: 100,
+        }),
+        100,
+      );
+      source = withBlockAdded(
+        source,
+        createCanvasBlock({
+          id: 'source-shape',
+          content: {
+            kind: 'shape',
+            shape: createCanvasShape({
+              id: 'source-shape',
+              kind: 'rectangle',
+              text: 'Portable shape',
+              link: 'https://example.com/canvas',
+            }),
+          },
+          now: 100,
+        }),
+        100,
+      );
+      const map = addMindMapChild(
+        createMindMap({
+          id: 'portable-map',
+          rootId: 'portable-root',
+          label: 'Portable map',
+          now: 100,
+        }),
+        { parentId: 'portable-root', nodeId: 'portable-child', label: 'Child reference', now: 100 },
+      );
+      source = withBlockAdded(
+        source,
+        createCanvasBlock({
+          id: 'source-map',
+          content: { kind: 'mind-map', map },
+          now: 100,
+        }),
+        100,
+      );
+      source = withPlacement(
+        source,
+        {
+          blockId: 'source-shape',
+          x: 20,
+          y: 30,
+          width: 200,
+          height: 150,
+          rotation: 15,
+          z: 2,
+        },
+        100,
+      );
+      source = withPageOrder(source, ['source-map', 'source-note', 'source-shape'], 100);
+      source = withPresentationOrder(source, ['source-shape', 'source-note'], 100);
+      source = withPresentationNote(source, 'source-shape', 'Keep these presenter notes', 100);
+      const target = withBlockAdded(
+        persistedDocument(targetScope, 'target-canvas', 'Target canvas'),
+        createCanvasBlock({
+          id: 'target-note',
+          content: { kind: 'note', text: 'Original target note' },
+          now: 100,
+        }),
+        100,
+      );
+      const repository = createCanvasPersistenceRepository(database);
+      await repository.save(sourceScope, source);
+      await repository.save(targetScope, target);
+      const sourceBefore = await repository.load(sourceScope, source.id);
+      const encoded = encodeCanvasPackage(source);
+      const file = new File([encoded], 'portable.vibespace-canvas.json');
+      Object.defineProperty(file, 'text', { value: async () => encoded });
+      const view = render(<CanvasPage persistence={{ repository, scope: targetScope }} />);
+
+      try {
+        expect(await screen.findByDisplayValue('Target canvas')).toBeTruthy();
+        fireEvent.change(screen.getByLabelText('Import canvas package'), {
+          target: { files: [file] },
+        });
+        expect(await screen.findByDisplayValue('Portable note Ω')).toBeTruthy();
+        let result!: Awaited<ReturnType<typeof flushCanvasWorkspaceState>>;
+        await act(async () => {
+          result = await flushCanvasWorkspaceState('package-import-test');
+        });
+        expect(result).toEqual({ completed: 1, failed: 0, timedOut: false });
+        expect(screen.queryByText('Save failed')).toBeNull();
+        const saved = await repository.load(targetScope, target.id);
+        expect(saved?.blocks).toHaveLength(source.blocks.length);
+        const idMap = new Map(source.pageOrder.map((id, index) => [id, saved!.pageOrder[index]]));
+        expect(
+          saved!.blocks.every(
+            (block) => !source.blocks.some((original) => original.id === block.id),
+          ),
+        ).toBe(true);
+        for (const block of source.blocks) {
+          const expectedContent =
+            block.content.kind === 'shape'
+              ? { ...block.content, shape: { ...block.content.shape, id: idMap.get(block.id) } }
+              : block.content;
+          expect(
+            saved!.blocks.find((candidate) => candidate.id === idMap.get(block.id))?.content,
+          ).toEqual(expectedContent);
+        }
+        expect(saved!.placements).toEqual(
+          source.placements.map((placement) => ({
+            ...placement,
+            blockId: idMap.get(placement.blockId),
+          })),
+        );
+        expect(saved!.presentationOrder).toEqual(
+          source.presentationOrder.map((id) => idMap.get(id)),
+        );
+        expect(saved!.presentationNotes).toEqual(
+          source.presentationNotes.map((note) => ({ ...note, frameId: idMap.get(note.frameId) })),
+        );
+        expect(await repository.load(sourceScope, source.id)).toEqual(sourceBefore);
+        expect(await repository.listRecovery(targetScope)).toEqual([]);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+        await act(async () => {
+          result = await flushCanvasWorkspaceState('package-undo-test');
+        });
+        expect(result.failed).toBe(0);
+        expect((await repository.load(targetScope, target.id))?.blocks).toEqual(target.blocks);
+        fireEvent.click(screen.getByRole('button', { name: 'Redo' }));
+        await act(async () => {
+          result = await flushCanvasWorkspaceState('package-redo-test');
+        });
+        expect(result.failed).toBe(0);
+        expect((await repository.load(targetScope, target.id))?.blocks).toEqual(saved!.blocks);
+
+        fireEvent.change(screen.getByLabelText('Import canvas package'), {
+          target: { files: [file] },
+        });
+        await act(async () => {
+          await Promise.resolve();
+          result = await flushCanvasWorkspaceState('package-repeat-test');
+        });
+        expect(result.failed).toBe(0);
+        const repeated = await repository.load(targetScope, target.id);
+        expect(repeated!.blocks).toHaveLength(source.blocks.length);
+        expect(
+          repeated!.blocks.every(
+            (block) => !saved!.blocks.some((previous) => previous.id === block.id),
+          ),
+        ).toBe(true);
+        expect(await database.canvas_objects.count()).toBe(source.blocks.length * 2);
+        expect(await repository.load(sourceScope, source.id)).toEqual(sourceBefore);
+
+        expect((screen.getByRole('button', { name: /^Undo$/ }) as HTMLButtonElement).disabled).toBe(
+          false,
+        );
+        fireEvent.click(screen.getByRole('button', { name: /^Undo$/ }));
+        await act(async () => {
+          result = await flushCanvasWorkspaceState('package-repeat-undo-test');
+        });
+        expect(result.failed).toBe(0);
+        expect((await repository.load(targetScope, target.id))?.blocks).toEqual(saved!.blocks);
+        expect((screen.getByRole('button', { name: /^Redo$/ }) as HTMLButtonElement).disabled).toBe(
+          false,
+        );
+        fireEvent.click(screen.getByRole('button', { name: /^Redo$/ }));
+        await act(async () => {
+          result = await flushCanvasWorkspaceState('package-repeat-redo-test');
+        });
+        expect(result.failed).toBe(0);
+        const repeatedAfterRedo = await repository.load(targetScope, target.id);
+        expect(repeatedAfterRedo?.blocks).toEqual(repeated!.blocks);
+
+        view.unmount();
+        database.close();
+        database = createJarvisDb(databaseName, TEST_INDEXED_DB);
+        await database.open();
+        const reopened = createCanvasPersistenceRepository(database);
+        expect(await reopened.load(targetScope, target.id)).toEqual(repeatedAfterRedo);
+        expect(await reopened.load(sourceScope, source.id)).toEqual(sourceBefore);
+        expect(await reopened.listRecovery(targetScope)).toEqual([]);
+      } finally {
+        view.unmount();
+        await database.delete();
+      }
+    },
+  );
+
+  it('persists Markdown imports into separate project canvases without reusing object ownership', async () => {
+    const database = createJarvisDb(
+      uniqueTestDbName('canvas-markdown-portability'),
+      TEST_INDEXED_DB,
+    );
+    await database.open();
+    const repository = createCanvasPersistenceRepository(database);
+    const otherScope = { ...PERSISTENCE_SCOPE, projectId: 'project-b' };
+    const first = persistedDocument(PERSISTENCE_SCOPE, 'markdown-a', 'Markdown A');
+    const second = persistedDocument(otherScope, 'markdown-b', 'Markdown B');
+    await repository.save(PERSISTENCE_SCOPE, first);
+    await repository.save(otherScope, second);
+    const file = new File(['# Portable heading\n\nPortable paragraph'], 'portable.md');
+    Object.defineProperty(file, 'text', {
+      value: async () => '# Portable heading\n\nPortable paragraph',
+    });
+    const view = render(<CanvasPage persistence={{ repository, scope: PERSISTENCE_SCOPE }} />);
+
+    try {
+      expect(await screen.findByDisplayValue('Markdown A')).toBeTruthy();
+      fireEvent.change(screen.getByLabelText('Import Markdown document'), {
+        target: { files: [file] },
+      });
+      expect(await screen.findByDisplayValue('Portable heading')).toBeTruthy();
+      let result!: Awaited<ReturnType<typeof flushCanvasWorkspaceState>>;
+      await act(async () => {
+        result = await flushCanvasWorkspaceState('markdown-first-test');
+      });
+      expect(result.failed).toBe(0);
+      const savedFirst = await repository.load(PERSISTENCE_SCOPE, first.id);
+
+      view.rerender(<CanvasPage persistence={{ repository, scope: otherScope }} />);
+      expect(await screen.findByDisplayValue('Markdown B')).toBeTruthy();
+      fireEvent.change(screen.getByLabelText('Import Markdown document'), {
+        target: { files: [file] },
+      });
+      expect(await screen.findByDisplayValue('Portable heading')).toBeTruthy();
+      await act(async () => {
+        result = await flushCanvasWorkspaceState('markdown-second-test');
+      });
+      expect(result).toEqual({ completed: 1, failed: 0, timedOut: false });
+      const savedSecond = await repository.load(otherScope, second.id);
+      expect(savedSecond?.blocks).toHaveLength(2);
+      expect(savedSecond!.blocks.map((block) => block.content)).toEqual(
+        savedFirst!.blocks.map((block) => block.content),
+      );
+      expect(
+        savedSecond!.blocks.every(
+          (block) => !savedFirst!.blocks.some((original) => original.id === block.id),
+        ),
+      ).toBe(true);
+      expect(await repository.load(PERSISTENCE_SCOPE, first.id)).toEqual(savedFirst);
+      expect(await repository.listRecovery(otherScope)).toEqual([]);
+    } finally {
+      view.unmount();
+      await database.delete();
+    }
   });
 
   it('renders an imported mind map from the canonical document payload', async () => {

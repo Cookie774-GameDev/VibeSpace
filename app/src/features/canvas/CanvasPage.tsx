@@ -2614,12 +2614,63 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
   };
 
   const importPackage = async (file: File) => {
+    const target = documentRef.current;
+    const generation = hydrationGeneration.current;
     try {
-      const imported = decodeCanvasPackage(await file.text()).document;
+      if (
+        activeScope &&
+        (persistenceStatus === 'loading' ||
+          target.ownerId !== activeScope.ownerId ||
+          target.projectId !== activeScope.projectId)
+      ) {
+        throw new Error('canvas is still loading');
+      }
+      const source = await file.text();
+      const active = documentRef.current;
+      if (
+        hydrationGeneration.current !== generation ||
+        active.id !== target.id ||
+        active.projectId !== target.projectId ||
+        active.ownerId !== target.ownerId
+      ) {
+        throw new Error('active canvas changed before the file finished loading');
+      }
+      const imported = decodeCanvasPackage(source).document;
+      // Object keys are globally owned by their persisted document. A portable
+      // import must clone that identity and every document-local reference,
+      // rather than trying to take the exported board's existing objects.
+      const importId = createDocumentId();
+      const importedIds = new Map(
+        imported.blocks.map((block, index) => [
+          block.id,
+          parseCanvasBlockId(`${importId}-${index.toString(36)}`),
+        ]),
+      );
       clock.current = Math.max(clock.current, imported.updatedAt);
       commit('block-change', 'Import canvas package', (current, now) =>
         parseCanvasDocument({
           ...imported,
+          blocks: imported.blocks.map((block) => {
+            const id = importedIds.get(block.id)!;
+            return {
+              ...block,
+              id,
+              content:
+                block.content.kind === 'shape'
+                  ? { ...block.content, shape: { ...block.content.shape, id } }
+                  : block.content,
+            };
+          }),
+          pageOrder: imported.pageOrder.map((id) => importedIds.get(id)!),
+          placements: imported.placements.map((placement) => ({
+            ...placement,
+            blockId: importedIds.get(placement.blockId)!,
+          })),
+          presentationOrder: imported.presentationOrder.map((id) => importedIds.get(id)!),
+          presentationNotes: imported.presentationNotes.map((note) => ({
+            ...note,
+            frameId: importedIds.get(note.frameId)!,
+          })),
           id: current.id,
           projectId: current.projectId,
           ownerId: current.ownerId,
@@ -2669,6 +2720,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
       if (contents.length === 0) {
         throw new Error('document contains no importable blocks');
       }
+      const importId = createDocumentId();
 
       commit(
         'object-create',
@@ -2679,7 +2731,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
             let blockId: string;
             do {
               sequence.current += 1;
-              blockId = `canvas-markdown-${content.kind}-${sequence.current.toString(36)}`;
+              blockId = `${importId}-${content.kind}-${sequence.current.toString(36)}`;
             } while (knownIds.has(blockId));
             knownIds.add(blockId);
             return createCanvasBlock({ id: blockId, content, now });
@@ -4917,6 +4969,7 @@ export function CanvasPage({ persistence }: CanvasPageProps = {}) {
           <div
             data-monochrome-surface="canvas-control-dock"
             data-sakura-surface="canvas-control-dock"
+            onPointerDown={(event) => event.stopPropagation()}
             className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-border bg-background p-1 shadow-sm [html[data-theme=monochrome]_&]:rounded-sm [html[data-theme=monochrome]_&]:border-border-mid [html[data-theme=monochrome]_&]:bg-panel [html[data-theme=monochrome]_&]:font-mono [html[data-theme=monochrome]_&]:shadow-none"
           >
             {document.layoutMode === 'edgeless' ? (

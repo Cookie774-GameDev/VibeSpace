@@ -168,6 +168,47 @@ describe('TerminalCliRuntimeHost', () => {
     expect(tauriMocks.unlisten).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['unmount', 'runtime replacement'] as const)(
+    'does not execute queued requests after %s and allows a fresh host request', async (transition) => {
+      let finishFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => { finishFirst = resolve; });
+      const response = (requestId: string): TerminalCliRuntimeResponse => ({
+        requestId, ok: true, code: 'ok', message: 'done',
+      });
+      const oldExecute = vi.fn(async (input: { requestId: string }) => {
+        if (input.requestId === 'first') await firstGate;
+        return response(input.requestId);
+      });
+      const freshExecute = vi.fn(async (input: { requestId: string }) => response(input.requestId));
+      const mounted = render(<TerminalCliRuntimeHost runtime={{ execute: oldExecute }} />);
+      let activeMount = mounted;
+      await act(async () => { await Promise.resolve(); });
+      await emit(request('first'));
+      await emit({ ...request('queued'), method: 'project.switch', params: { projectId: 'project-b' } });
+      expect(oldExecute).toHaveBeenCalledTimes(1);
+
+      if (transition === 'unmount') {
+        mounted.unmount();
+        activeMount = render(<TerminalCliRuntimeHost runtime={{ execute: freshExecute }} />);
+      } else {
+        mounted.rerender(<TerminalCliRuntimeHost runtime={{ execute: freshExecute }} />);
+      }
+      await act(async () => { await Promise.resolve(); });
+      await emit(request('fresh'));
+      expect(freshExecute).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        finishFirst();
+        await firstGate;
+      });
+
+      expect(oldExecute).toHaveBeenCalledTimes(1);
+      expect(tauriMocks.invoke).toHaveBeenCalledExactlyOnceWith('terminal_cli_respond', {
+        response: response('fresh'),
+      });
+      activeMount.unmount();
+    },
+  );
+
   it('retires an exact CAO identity receipt when the native PTY exits', async () => {
     observeCaoTerminalOpenCodeEvent(
       binding,
