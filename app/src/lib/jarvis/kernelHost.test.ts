@@ -107,7 +107,226 @@ describe('trusted kernel host', () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    ['kernel_host_wrong_window', 'kernel_host_wrong_window'],
+    ['current webview is not a WebviewWindow', 'webview_window_unavailable'],
+    [new Error('current webview is not a WebviewWindow'), 'webview_window_unavailable'],
+    ['current webview is not a WebviewWindow: ownerToken=private', 'unclassified'],
+    [new Error('ownerToken=private C:\\private\\file.txt account=private-user'), 'unclassified'],
+    [
+      { message: 'kernel_host_wrong_window', ownerToken: 'private', epoch: 417 },
+      'kernel_host_wrong_window',
+    ],
+  ])('reports a closed registration diagnostic for %j', async (error, code) => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const createRuntime = vi.fn();
+    tauri.invoke.mockRejectedValueOnce(error);
+
+    await expect(startJarvisKernelHost({ createRuntime })).resolves.toEqual({
+      role: 'unavailable',
+      reason: 'host_unavailable',
+    });
+
+    expect(consoleError).toHaveBeenCalledExactlyOnceWith('[jarvis-kernel] startup failed', {
+      stage: 'native_registration',
+      code,
+    });
+    expect(tauri.invoke.mock.calls).toEqual([['register_kernel_host']]);
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(tauri.unlisten).toHaveBeenCalledOnce();
+    expect(JSON.stringify(consoleError.mock.calls)).not.toMatch(/private|ownerToken|epoch|417/);
+  });
+
+  it('reports invalid registration without logging returned credentials or constructing a runtime', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const createRuntime = vi.fn();
+    tauri.invoke.mockResolvedValueOnce({ epoch: 417, ownerToken: 'private', unexpected: 'secret' });
+    await expect(startJarvisKernelHost({ createRuntime })).resolves.toEqual({
+      role: 'unavailable',
+      reason: 'host_unavailable',
+    });
+    expect(consoleError).toHaveBeenCalledExactlyOnceWith('[jarvis-kernel] startup failed', {
+      stage: 'native_registration',
+      code: 'kernel_host_registration_invalid',
+    });
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(tauri.invoke.mock.calls).toEqual([['register_kernel_host']]);
+    expect(tauri.unlisten).toHaveBeenCalledOnce();
+  });
+
+  it('reports runtime creation failure and preserves listener cleanup and native release order', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const order: string[] = [];
+    tauri.unlisten.mockImplementation(() => {
+      order.push('unlisten');
+    });
+    tauri.invoke.mockImplementation(async (command: string) => {
+      order.push(command);
+      return command === 'register_kernel_host'
+        ? { epoch: 417, ownerToken: 'native-private-token' }
+        : undefined;
+    });
+    const createRuntime = vi.fn(() => {
+      throw new Error('jarvis_kernel_host_already_installed');
+    });
+    await expect(startJarvisKernelHost({ createRuntime })).resolves.toEqual({
+      role: 'unavailable',
+      reason: 'host_unavailable',
+    });
+    expect(consoleError).toHaveBeenCalledExactlyOnceWith('[jarvis-kernel] startup failed', {
+      stage: 'runtime_creation',
+      code: 'jarvis_kernel_host_already_installed',
+    });
+    expect(createRuntime).toHaveBeenCalledOnce();
+    expect(order).toEqual(['register_kernel_host', 'unlisten', 'release_kernel_host']);
+    expect(tauri.invoke.mock.calls).toEqual([
+      ['register_kernel_host'],
+      ['release_kernel_host', { epoch: 417, ownerToken: 'native-private-token' }],
+    ]);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toMatch(/private|ownerToken|epoch|417/);
+    expect(requestLocalJarvisKernelHost(request.request)).toBeNull();
+  });
+
+  it.each(['reject', 'throw'])(
+    'reports native listener failure (%s) without acquiring authority',
+    async (mode) => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const error = new Error('ownerToken=private-listener-secret');
+      if (mode === 'reject') tauri.listen.mockRejectedValueOnce(error);
+      else
+        tauri.listen.mockImplementationOnce(() => {
+          throw error;
+        });
+      const createRuntime = vi.fn();
+      await expect(startJarvisKernelHost({ createRuntime })).resolves.toEqual({
+        role: 'unavailable',
+        reason: 'host_unavailable',
+      });
+      expect(consoleError).toHaveBeenCalledExactlyOnceWith('[jarvis-kernel] startup failed', {
+        stage: 'native_listener',
+        code: 'unclassified',
+      });
+      expect(tauri.invoke).not.toHaveBeenCalled();
+      expect(createRuntime).not.toHaveBeenCalled();
+      expect(tauri.unlisten).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reports native transport import failure without invoking a listener or registering', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.resetModules();
+    vi.doMock('@tauri-apps/api/core', () => {
+      throw new Error('ownerToken=private-import-secret');
+    });
+    try {
+      const isolatedHost = await import('./kernelHost');
+      const createRuntime = vi.fn();
+      await expect(isolatedHost.startJarvisKernelHost({ createRuntime })).resolves.toEqual({
+        role: 'unavailable',
+        reason: 'host_unavailable',
+      });
+      expect(consoleError).toHaveBeenCalledExactlyOnceWith('[jarvis-kernel] startup failed', {
+        stage: 'native_transport',
+        code: 'unclassified',
+      });
+      expect(tauri.listen).not.toHaveBeenCalled();
+      expect(tauri.invoke).not.toHaveBeenCalled();
+      expect(createRuntime).not.toHaveBeenCalled();
+    } finally {
+      vi.doMock('@tauri-apps/api/core', () => ({ invoke: tauri.invoke }));
+      vi.resetModules();
+    }
+  });
+
+  it.each(['accessor', 'proxy'])(
+    'never exposes or invokes hostile error properties (%s)',
+    async (kind) => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const getter = vi.fn(() => {
+        throw new Error('ownerToken=private-error-getter');
+      });
+      const error =
+        kind === 'accessor'
+          ? Object.defineProperty({}, 'message', { get: getter })
+          : new Proxy({}, { getOwnPropertyDescriptor: getter });
+      tauri.invoke.mockImplementation(async (command: string) =>
+        command === 'register_kernel_host'
+          ? { epoch: 417, ownerToken: 'native-private-token' }
+          : undefined,
+      );
+      await expect(
+        startJarvisKernelHost({
+          createRuntime: () => {
+            throw error;
+          },
+        }),
+      ).resolves.toEqual({
+        role: 'unavailable',
+        reason: 'host_unavailable',
+      });
+      expect(consoleError).toHaveBeenCalledExactlyOnceWith('[jarvis-kernel] startup failed', {
+        stage: 'runtime_creation',
+        code: 'unclassified',
+      });
+      if (kind === 'accessor') expect(getter).not.toHaveBeenCalled();
+      expect(tauri.unlisten).toHaveBeenCalledOnce();
+      expect(tauri.invoke.mock.calls).toEqual([
+        ['register_kernel_host'],
+        ['release_kernel_host', { epoch: 417, ownerToken: 'native-private-token' }],
+      ]);
+    },
+  );
+
+  it.each(['getter', 'call'])(
+    'keeps cleanup and subsequent host startup intact when console observation throws (%s)',
+    async (kind) => {
+      const original = Object.getOwnPropertyDescriptor(console, 'error')!;
+      const fail = vi.fn(() => {
+        throw new Error('private-observer-failure');
+      });
+      Object.defineProperty(
+        console,
+        'error',
+        kind === 'getter'
+          ? { configurable: true, get: fail }
+          : { configurable: true, writable: true, value: fail },
+      );
+      tauri.invoke.mockImplementation(async (command: string) =>
+        command === 'register_kernel_host'
+          ? { epoch: 417, ownerToken: 'native-private-token' }
+          : undefined,
+      );
+      let failed;
+      try {
+        failed = await startJarvisKernelHost({
+          createRuntime: () => {
+            throw new Error('private-runtime-error');
+          },
+        });
+      } finally {
+        Object.defineProperty(console, 'error', original);
+      }
+      expect(failed).toEqual({ role: 'unavailable', reason: 'host_unavailable' });
+      expect(fail).toHaveBeenCalledOnce();
+      expect(tauri.unlisten).toHaveBeenCalledOnce();
+      expect(tauri.invoke.mock.calls.map(([command]) => command)).toEqual([
+        'register_kernel_host',
+        'release_kernel_host',
+      ]);
+      const next = await startJarvisKernelHost({
+        createRuntime: () => ({
+          handleRequest: vi.fn(),
+          invalidateAccount: vi.fn(),
+          dispose: vi.fn(),
+        }),
+      });
+      expect(next.role).toBe('host');
+      if (next.role === 'host') await next.dispose();
+    },
+  );
+
   it('constructs one runtime only after native attestation and keeps the owner token closed', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const order: string[] = [];
     const invalidateAccount = vi.fn((accountId: string) => order.push(`invalidate:${accountId}`));
     const disposeRuntime = vi.fn(async () => {
@@ -159,6 +378,7 @@ describe('trusted kernel host', () => {
     expect(tauri.unlisten).toHaveBeenCalledOnce();
     expect(order.indexOf('runtime:dispose')).toBeLessThan(order.indexOf('release_kernel_host'));
     expect(invalidateAccount).toHaveBeenCalledWith('account-1');
+    expect(consoleError).not.toHaveBeenCalled();
   });
 
   it('installs one validated host-local DTO path only for the attested runtime lifetime', async () => {

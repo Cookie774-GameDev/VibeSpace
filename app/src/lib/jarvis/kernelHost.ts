@@ -97,6 +97,66 @@ export function sanitizeKernelHostFailureCode(error: unknown): string {
   return 'unclassified';
 }
 
+type NativeKernelHostStartupStage =
+  | 'native_transport'
+  | 'native_listener'
+  | 'native_registration'
+  | 'runtime_creation';
+
+const SAFE_KERNEL_STARTUP_FAILURE_CODES: ReadonlySet<string> = new Set([
+  'kernel_host_wrong_window',
+  'kernel_host_token_invalid',
+  'kernel_host_epoch_exhausted',
+  'kernel_host_identity_exhausted',
+  'kernel_host_state_unavailable',
+  'kernel_host_registration_invalid',
+  'kernel_local_host_already_installed',
+  'jarvis_kernel_host_already_installed',
+  'jarvis_plugin_artifact_authority_unavailable',
+]);
+
+function sanitizeKernelHostStartupFailureCode(error: unknown): string {
+  try {
+    // Native invokes reject with strings; JS errors have an own data message.
+    // Never call error getters, stringify unknown values, or include payloads.
+    const message =
+      typeof error === 'string'
+        ? error
+        : typeof error === 'object' && error !== null
+          ? Object.getOwnPropertyDescriptor(error, 'message')?.value
+          : undefined;
+    if (message === 'current webview is not a WebviewWindow') return 'webview_window_unavailable';
+    if (typeof message === 'string' && SAFE_KERNEL_STARTUP_FAILURE_CODES.has(message))
+      return message;
+  } catch {
+    // A hostile proxy cannot turn diagnostic inspection into a startup failure.
+  }
+  return 'unclassified';
+}
+
+function reportKernelHostStartupFailure(stage: NativeKernelHostStartupStage, error: unknown): void {
+  try {
+    console.error('[jarvis-kernel] startup failed', {
+      stage,
+      code: sanitizeKernelHostStartupFailureCode(error),
+    });
+  } catch {
+    // Observation must not bypass listener cleanup, epoch release, or fallback.
+  }
+}
+
+async function observeNativeHostStartup<T>(
+  stage: NativeKernelHostStartupStage,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    reportKernelHostStartupFailure(stage, error);
+    throw error;
+  }
+}
+
 function loadNativeHostTransport() {
   nativeHostTransportPromise ??= Promise.all([
     import('@tauri-apps/api/core'),
@@ -206,7 +266,10 @@ export function requestLocalJarvisKernelHost(
 async function startNativeHost(
   options: StartJarvisKernelHostOptions,
 ): Promise<JarvisKernelHostSession> {
-  const { invoke, listen } = await loadNativeHostTransport();
+  const { invoke, listen } = await observeNativeHostStartup(
+    'native_transport',
+    loadNativeHostTransport,
+  );
   let runtime: JarvisKernelHostRuntime | null = null;
   let registration: NativeHostRegistration | null = null;
   let disposed = false;
@@ -218,38 +281,43 @@ async function startNativeHost(
     resolveRuntimeReady = resolve;
   });
 
-  const unlisten = await listen(KERNEL_HOST_REQUEST_EVENT, (event) => {
-    const payload = event.payload;
-    requestQueue = requestQueue.then(async () => {
-      const activeRuntime = await runtimeReady;
-      const activeRegistration = registration;
-      if (
-        disposed ||
-        !activeRuntime ||
-        !activeRegistration ||
-        !isKernelHostRequestEvent(payload) ||
-        payload.epoch !== activeRegistration.epoch
-      ) {
-        return;
-      }
-      const response = await handleValidatedHostRequest(activeRuntime, payload.request);
-      if (disposed) return;
-      await invoke('kernel_host_respond', {
-        epoch: activeRegistration.epoch,
-        ownerToken: activeRegistration.ownerToken,
-        requestId: payload.requestId,
-        response,
-      }).catch(() => undefined);
-    });
-  });
+  const unlisten = await observeNativeHostStartup('native_listener', () =>
+    listen(KERNEL_HOST_REQUEST_EVENT, (event) => {
+      const payload = event.payload;
+      requestQueue = requestQueue.then(async () => {
+        const activeRuntime = await runtimeReady;
+        const activeRegistration = registration;
+        if (
+          disposed ||
+          !activeRuntime ||
+          !activeRegistration ||
+          !isKernelHostRequestEvent(payload) ||
+          payload.epoch !== activeRegistration.epoch
+        ) {
+          return;
+        }
+        const response = await handleValidatedHostRequest(activeRuntime, payload.request);
+        if (disposed) return;
+        await invoke('kernel_host_respond', {
+          epoch: activeRegistration.epoch,
+          ownerToken: activeRegistration.ownerToken,
+          requestId: payload.requestId,
+          response,
+        }).catch(() => undefined);
+      });
+    }),
+  );
 
+  let startupStage: NativeKernelHostStartupStage = 'native_registration';
   try {
     registration = nativeRegistration(await invoke('register_kernel_host'));
     if (!registration) throw new Error('kernel_host_registration_invalid');
+    startupStage = 'runtime_creation';
     runtime = await options.createRuntime();
     releaseLocalHostRequest = installLocalHostRequest(runtime);
     resolveRuntimeReady(runtime);
-  } catch {
+  } catch (error) {
+    reportKernelHostStartupFailure(startupStage, error);
     disposed = true;
     resolveRuntimeReady(null);
     runCleanup(unlisten);
