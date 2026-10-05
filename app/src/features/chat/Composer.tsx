@@ -7947,13 +7947,8 @@ export function Composer({
                         <Pause />
                       </Button>
                     </Hint>
-                  ) : stoppedRequest && !hasDraft && chatBackendAffinity?.backend === 'codex' ? (
-                    <span role="status" className="text-xs text-muted-foreground">
-                      Exact resume is unavailable. Use Retry in composer to review a new request;
-                      requests with attachments need manual review.
-                    </span>
                   ) : stoppedRequest && !hasDraft ? (
-                    <Hint label="Resume current request">
+                    <Hint label="Continue the stopped request in this session">
                       <Button
                         type="button"
                         size="icon-sm"
@@ -7968,8 +7963,8 @@ export function Composer({
                                 cancellationKey,
                                 onUnavailable: () => {
                                   toast.error(
-                                    'Cannot resume this exact turn',
-                                    'The active runtime could not confirm a safe native continuation. The original request remains in this chat; review the native session before starting another turn.',
+                                    'Cannot continue this request',
+                                    'The previous turn must finish stopping, and its session must still be available. The original request remains in this chat.',
                                   );
                                 },
                               },

@@ -9859,16 +9859,6 @@ export function startRuntimeListener(
       return;
     }
     const stopped = suspended[0]!;
-    if (stopped.backend === 'codex') {
-      devConsole.log({
-        channel: 'ai',
-        level: 'warn',
-        message: 'Codex resume rejected: native exact interrupted-turn resume is unavailable',
-        detail: { chatId },
-      });
-      detail.onUnavailable?.();
-      return;
-    }
     const suspendedSend = stopped.send;
     const resumeScope = useAuthStore.getState();
     const dispatchResume = () => {
@@ -9908,12 +9898,16 @@ export function startRuntimeListener(
         resumeOriginalText: suspendedSend.resumeOriginalText ?? suspendedSend.text,
         resumeOfCancellationKey:
           suspendedSend.resumeOfCancellationKey ?? String(suspendedSend.cancellationKey ?? ''),
-        text: [
-          'Continue the interrupted task using any progress already retained in this persistent session. If the request was stopped before it reached you, begin the original task below. Do not repeat completed work, change model controls, or discard queued context.',
-          'Original user request:',
-          suspendedSend.resumeOriginalText ?? suspendedSend.text,
-        ].join('\n\n'),
+        text: 'Resume',
+        modelText: 'Resume',
       };
+      devConsole.log({
+        channel: 'ai',
+        level: 'info',
+        message: 'AI resume: hidden same-session continuation',
+        detail: { chatId, backend: stopped.backend, cancellationKey: resumed.cancellationKey,
+          resumeOfCancellationKey: resumed.resumeOfCancellationKey },
+      });
       window.dispatchEvent(new CustomEvent(sendEventName, { detail: resumed }));
     };
     if (stopped.backend !== 'opencode') {

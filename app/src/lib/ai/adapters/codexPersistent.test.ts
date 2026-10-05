@@ -2537,7 +2537,9 @@ it.each(['binding', 'approval'] as const)(
         ready: Promise.resolve(),
         stream: (async function* () {
           for await (const frame of frames()) {
-            yield frame;
+            yield runs === 2 && frame.id === 'request_1_thread'
+              ? { ...frame, id: 'request_1_resume' }
+              : frame;
             if (phase === 'approval' && runs === 1 && frame.method === 'turn/started') {
               yield {
                 id: 42,
@@ -2618,8 +2620,23 @@ it.each(['binding', 'approval'] as const)(
     if (phase === 'approval') expect(lateReply).toBe('rejected');
     else expect(writes.map((frame) => frame.method)).not.toContain('turn/start');
     const nextEvents: ProviderEvent[] = [];
-    for await (const event of adapter.send!(request)) nextEvents.push(event);
+    for await (const event of adapter.send!({
+      ...request,
+      sessionId: 'thread_native_1',
+      prompt: 'Resume',
+    })) nextEvents.push(event);
     expect(runs).toBe(2);
     expect(nextEvents).toContainEqual({ type: 'done', finishReason: 'completed' });
+    expect(writes).toContainEqual(expect.objectContaining({
+      method: 'thread/resume',
+      params: expect.objectContaining({ threadId: 'thread_native_1', model: request.modelId }),
+    }));
+    expect(writes).toContainEqual(expect.objectContaining({
+      method: 'turn/start',
+      params: expect.objectContaining({
+        threadId: 'thread_native_1',
+        input: [expect.objectContaining({ type: 'text', text: 'Resume' })],
+      }),
+    }));
   },
 );

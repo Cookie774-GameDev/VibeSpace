@@ -11280,7 +11280,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     },
   );
 
-  it('keeps Codex stop pending until the exact interrupted terminal and fails resume closed', async () => {
+  it('keeps Codex stop pending until the interrupted terminal then sends one hidden continuation', async () => {
     lockTestBackend('codex');
     const selection = selectionFromOption('openai', 'gpt-5.6-terra', CODEX_CLI_CONNECTION);
     setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
@@ -11370,6 +11370,8 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         finish_reason: 'interrupted',
       });
       await vi.waitFor(() => expect(runStates.at(-1)?.status).toBe('cancelled'));
+      await stop.whenIdle();
+      lockTestBackend('codex');
       window.dispatchEvent(new CustomEvent('jarvis:resume', {
         detail: {
           chatId: harness.chatId,
@@ -11378,9 +11380,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         },
       }));
 
-      expect(onUnavailable).toHaveBeenCalledOnce();
-      expect(mocks.runAgent).toHaveBeenCalledOnce();
-      expect(internallyDispatchedSends).toBe(1);
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
+      expect(onUnavailable).not.toHaveBeenCalled();
+      expect(internallyDispatchedSends).toBe(2);
       expect(harness.bindings.appendMessage.mock.calls.every(([message]) => message.role !== 'user')).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -11487,7 +11489,8 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       expect(onUnavailable).toHaveBeenCalledOnce();
       release.resolve();
       await vi.waitFor(() => expect(sent).toHaveLength(2));
-      expect(sent[1]).toMatchObject({ cancellationKey: 'resume-held', resumeOriginalText: 'Finish the same task.' });
+      expect(sent[1]).toMatchObject({ cancellationKey: 'resume-held', text: 'Resume',
+        modelText: 'Resume', resumeOriginalText: 'Finish the same task.', resumeOfCancellationKey: 'msg_kernel_user' });
     } finally {
       release.resolve();
       window.removeEventListener('jarvis:send', observe);
@@ -11525,8 +11528,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           }),
         );
         await vi.waitFor(() => expect(sent).toHaveLength(round + 2));
-        expect(sent.at(-1)?.text).toContain(original);
-        expect(sent.at(-1)?.text.match(/Write a TypeScript CSV parser/g)).toHaveLength(1);
+        expect(sent.at(-1)?.text).toBe('Resume');
+        expect(sent.at(-1)?.modelText).toBe('Resume');
+        expect(sent.at(-1)?.resumeOriginalText).toBe(original);
       }
       expect(sent[1].text).toBe(sent[2].text);
       expect(mocks.runAgent).not.toHaveBeenCalled();

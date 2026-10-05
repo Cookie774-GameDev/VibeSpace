@@ -94,10 +94,11 @@ describe('Composer active-request cancel and resume contract', () => {
     expect(/handleResume/.test(runtimeSource), 'The AI runtime has no resume handler.').toBe(true);
   });
 
-  it('does not turn an unavailable exact resume into a visible replacement message', () => {
+  it('uses a hidden continuation without a visible replacement message', () => {
     expect(composerSource).not.toContain('buildComposerResumeRequest');
     expect(composerSource).not.toContain('handleSend(request)');
-    expect(runtimeSource).toContain('native exact interrupted-turn resume is unavailable');
+    expect(runtimeSource).toContain('AI resume: hidden same-session continuation');
+    expect(runtimeSource).toContain("modelText: 'Resume'");
   });
 
   it('addresses child-agent cancellation through a detail shape the runtime understands', () => {

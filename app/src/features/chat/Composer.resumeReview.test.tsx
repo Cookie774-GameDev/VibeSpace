@@ -50,13 +50,12 @@ afterEach(() => {
 function renderStopped() {
   render(<TooltipProvider><Composer chatId={'resume-review' as never} /></TooltipProvider>);
 }
-it('does not offer unsupported exact Resume or dispatch a new request for a stopped Codex chat', () => {
+it('offers an explicit stopped Codex continuation without adding a visible user message', () => {
   const dispatch = vi.spyOn(window, 'dispatchEvent');
   renderStopped();
-  expect(screen.queryByRole('button', { name: 'Resume current request' })).toBeNull();
-  expect(screen.getByText(/Exact resume is unavailable/)).toBeTruthy();
-  expect(screen.getByText(/requests with attachments need manual review/)).toBeTruthy();
-  expect(dispatch.mock.calls.filter(([event]) => ['jarvis:resume', 'jarvis:send'].includes(event.type))).toEqual([]);
+  fireEvent.click(screen.getByRole('button', { name: 'Resume current request' }));
+  expect(dispatch.mock.calls.filter(([event]) => event.type === 'jarvis:resume')).toHaveLength(1);
+  expect(dispatch.mock.calls.filter(([event]) => event.type === 'jarvis:send')).toEqual([]);
   expect(messageRepo.create).not.toHaveBeenCalled();
 });
 it('retains the existing explicit Resume event for a stopped OpenCode chat', () => {
