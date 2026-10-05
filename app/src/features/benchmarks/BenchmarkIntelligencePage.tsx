@@ -640,13 +640,13 @@ export function BenchmarkIntelligencePage() {
                 </button>
               ) : null}
             </div>
-            <label className="flex items-center gap-2 rounded-lg border border-border bg-paper px-2 text-sm">
+            <label className="flex items-center gap-2 overflow-hidden rounded-lg border border-border bg-paper px-2 text-sm focus-within:ring-2 focus-within:ring-accent-copper/60">
               <span>Models</span>
               <select
                 aria-label="Models"
                 value={provider}
                 onChange={(event) => setProvider(event.target.value)}
-                className="h-9 min-w-24 bg-transparent text-foreground"
+                className="h-9 min-w-24 rounded-md border-0 !bg-transparent !shadow-none text-foreground focus-visible:outline-none"
               >
                 <option value="all">All</option>
                 {providers.map((value) => (
