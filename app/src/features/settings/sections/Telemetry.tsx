@@ -2,7 +2,15 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Download, Eraser, Gift, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { telemetryConsentStore } from '@/features/telemetry/telemetryConsent';
+import {
+  telemetryConsentStore,
+  offersAppDiagnostics,
+  canCollectAppDiagnostics,
+} from '@/features/telemetry/telemetryConsent';
+import {
+  APP_DIAGNOSTICS_SCOPE,
+  APP_DIAGNOSTICS_POLICY_VERSION,
+} from '../../../../../supabase/functions/_shared/telemetrySchema';
 import {
   getAccountTelemetryConsent,
   updateAccountTelemetryConsent,
@@ -59,6 +67,8 @@ export function Telemetry() {
   const mutationSequence = useRef(0);
   const allOptionalClassesEnabled =
     snapshot.consent.productUsage && snapshot.consent.diagnostics && snapshot.consent.toolOutcomes;
+  const diagnosticsOffered = offersAppDiagnostics(accountConsent);
+  const diagnosticsAccepted = canCollectAppDiagnostics(snapshot, accountId, accountConsent);
 
   useEffect(() => {
     accountLifetime.current += 1;
@@ -164,6 +174,55 @@ export function Telemetry() {
     if (accountId) void setRewardEnrollment(false);
   };
 
+  const acceptAppDiagnostics = async () => {
+    if (
+      !accountId ||
+      !accountConsent ||
+      !diagnosticsOffered ||
+      !allOptionalClassesEnabled ||
+      accountBusy ||
+      withdrawalPending ||
+      snapshot.storageError
+    )
+      return;
+    const isCurrentMutation = beginAccountMutation();
+    const consentRevision = telemetryConsentStore.getSnapshot().revision;
+    setAccountBusy(true);
+    const result = await updateAccountTelemetryConsent(true, accountConsent, accountId, {
+      diagnosticsScope: APP_DIAGNOSTICS_SCOPE,
+    });
+    if ((useAuthStore.getState().cloudSession?.user_id ?? null) !== accountId) return;
+    const current = telemetryConsentStore.getSnapshot();
+    if (
+      !(current.consent.productUsage && current.consent.diagnostics && current.consent.toolOutcomes)
+    ) {
+      // Retain the same withdrawal compensation as legacy enrollment.
+      telemetryWithdrawalQueue.enqueue(accountId);
+      void telemetryWithdrawalQueue.flush(accountId);
+    }
+    if (!isCurrentMutation()) return;
+    mutationSequence.current += 1;
+    setAccountBusy(false);
+    if (
+      current.revision !== consentRevision ||
+      telemetryWithdrawalQueue.getSnapshot().pending.some((row) => row.accountId === accountId)
+    ) {
+      setAccountError('Preferences changed. Review app-wide diagnostics again before accepting.');
+      return;
+    }
+    if (!result.ok || !telemetryConsentStore.acceptAppDiagnostics(accountId, result.state)) {
+      setAccountError('App-wide diagnostics consent was not confirmed. Sharing remains off.');
+      return;
+    }
+    setAccountConsent(result.state);
+    setAccountError(null);
+    window.dispatchEvent(new Event('vibespace:telemetry-consent-changed'));
+    toast.success(
+      'App-wide diagnostics consent saved',
+      'Saved for this account and the current policy.',
+    );
+  };
+
   const downloadAudit = () => {
     const blob = new Blob([telemetryConsentStore.exportAudit()], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -260,6 +319,67 @@ export function Telemetry() {
         ))}
       </section>
 
+      <section
+        aria-labelledby="app-diagnostics-title"
+        className="rounded-xl border border-border bg-panel p-4"
+      >
+        <h3 id="app-diagnostics-title" className="text-ui-strong text-foreground">
+          App-wide diagnostics
+        </h3>
+        <p className="mt-1 text-secondary text-muted-foreground">
+          Share bounded counts of feature opens and operation outcomes, coarse performance timing,
+          coarse renderer memory measurements, and fixed error categories. This requires a fresh
+          acceptance for this account and the current notice, even if the switches above were
+          already on.
+        </p>
+        <p className="mt-2 text-metadata text-muted-foreground">
+          Excludes chat and file contents, raw errors, stacks, URLs, paths, DOM text, tool
+          arguments, passwords, tokens, provider keys, and financial balances. Revoking optional
+          telemetry stops sharing and clears this device's acceptance; deleting the local audit does
+          not erase uploaded events.
+        </p>
+        <p className="mt-2 text-metadata text-muted-foreground">
+          Accepting also enables account telemetry enrollment for the optional 10% reward described
+          below. Billing verifies eligibility separately.
+        </p>
+        {diagnosticsOffered && accountConsent && (
+          <a
+            href={accountConsent.noticeUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-2 block w-fit text-metadata text-accent-copper underline underline-offset-4"
+          >
+            Read the app-wide diagnostics and reward notice
+          </a>
+        )}
+        <Button
+          type="button"
+          variant="secondary"
+          className="mt-3"
+          disabled={
+            !accountId ||
+            !diagnosticsOffered ||
+            !allOptionalClassesEnabled ||
+            accountBusy ||
+            withdrawalPending ||
+            snapshot.storageError ||
+            diagnosticsAccepted
+          }
+          onClick={() => void acceptAppDiagnostics()}
+        >
+          Accept app-wide diagnostics
+        </Button>
+        <p className="mt-2 text-metadata text-muted-foreground" aria-live="polite">
+          {diagnosticsAccepted
+            ? 'App-wide diagnostics consent saved for this account and policy.'
+            : !diagnosticsOffered
+              ? 'App-wide diagnostics are unavailable from this server.'
+              : !allOptionalClassesEnabled
+                ? 'Enable all three optional classes before accepting.'
+                : 'App-wide diagnostics remain off until you accept the current scope and notice.'}
+        </p>
+      </section>
+
       <section className="grid gap-3 md:grid-cols-2">
         <PolicyCard title="Never collected">
           Prompts, message contents, generated text, source code, rejected code, terminal commands,
@@ -311,12 +431,20 @@ export function Telemetry() {
                   disabled={
                     accountBusy ||
                     withdrawalPending ||
+                    (!accountConsent.enabled &&
+                      accountConsent.policyVersion === APP_DIAGNOSTICS_POLICY_VERSION) ||
                     (!accountConsent.enabled && !allOptionalClassesEnabled)
                   }
                   onClick={() => void setRewardEnrollment(!accountConsent.enabled)}
                 >
                   {accountConsent.enabled ? 'Withdraw 10% reward consent' : 'Enable 10% reward'}
                 </Button>
+                {!accountConsent.enabled &&
+                  accountConsent.policyVersion === APP_DIAGNOSTICS_POLICY_VERSION && (
+                    <p className="text-metadata text-muted-foreground">
+                      Use Accept app-wide diagnostics to review and enroll under the current notice.
+                    </p>
+                  )}
                 {!allOptionalClassesEnabled && !accountConsent.enabled ? (
                   <p className="text-metadata text-muted-foreground">
                     Enable all three clearly described optional classes before enrolling.

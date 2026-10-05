@@ -6,8 +6,9 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -380,28 +381,132 @@ fn find_system_python() -> Option<String> {
 
 fn ensure_python_venv() -> Result<PathBuf, String> {
     let python = venv_python();
-    if python.exists() {
+    let exists = python.exists();
+    ensure_python_venv_with(
+        python,
+        exists,
+        || create_python_venv(&venv_dir()),
+        python_venv_package_ready,
+        install_faster_whisper,
+    )
+}
+
+// A venv can survive a failed/interrupted pip install. Interpreter presence alone
+// is not package readiness; retry only when the probe explicitly reports absence.
+fn ensure_python_venv_with(
+    python: PathBuf,
+    exists: bool,
+    create: impl FnOnce() -> Result<(), String>,
+    mut package_ready: impl FnMut(&Path) -> Result<bool, String>,
+    install: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<PathBuf, String> {
+    if !exists {
+        create()?;
+    }
+    if package_ready(&python)? {
         return Ok(python);
     }
+    install(&python)?;
+    if !package_ready(&python)? {
+        return Err("faster-whisper package is unavailable after installation.".to_string());
+    }
+    Ok(python)
+}
+
+// Finding the top-level package does not import faster-whisper or load a model.
+// A distinct missing-package exit code keeps interpreter/probe failures from
+// silently initiating an installation.
+const PYTHON_VENV_PROBE: &str = r#"
+import importlib.util
+import sys
+sys.exit(0 if importlib.util.find_spec("faster_whisper") is not None else 42)
+"#;
+
+fn python_venv_probe_result(code: Option<i32>) -> Result<bool, String> {
+    match code {
+        Some(0) => Ok(true),
+        Some(42) => Ok(false),
+        _ => Err("Could not verify faster-whisper package readiness.".to_string()),
+    }
+}
+
+fn python_venv_package_ready(python: &Path) -> Result<bool, String> {
+    let mut child = hidden_command(python.to_str().unwrap_or("python"))
+        .args(["-c", PYTHON_VENV_PROBE])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Could not check faster-whisper package readiness: {error}"))?;
+    wait_python_venv_probe(&mut child, Duration::from_secs(5))
+}
+
+fn wait_python_venv_probe(child: &mut Child, timeout: Duration) -> Result<bool, String> {
+    let started = Instant::now();
+    let failure = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return python_venv_probe_result(status.code()),
+            Ok(None) => {}
+            Err(error) => break format!("Could not observe faster-whisper package probe: {error}"),
+        }
+        if started.elapsed() >= timeout {
+            break "faster-whisper package readiness probe timed out.".to_string();
+        }
+        std::thread::sleep(Duration::from_millis(20).min(timeout.saturating_sub(started.elapsed())));
+    };
+    // Stop only the child created for this probe. try_wait also reaps it; never
+    // turn a deadline into a second unbounded wait during cleanup.
+    match stop_python_venv_probe(child) {
+        Ok(()) => Err(failure),
+        Err(cleanup) => Err(format!("{failure} {cleanup}")),
+    }
+}
+
+fn stop_python_venv_probe(child: &mut Child) -> Result<(), String> {
+    let kill_error = child.kill().err();
+    let started = Instant::now();
+    let timeout = Duration::from_secs(3);
+    let mut wait_error = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) => {}
+            Err(error) => wait_error = Some(error),
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "Owned faster-whisper probe child {} cleanup remains pending (kill: {:?}; reap: {:?}).",
+                child.id(),
+                kill_error,
+                wait_error,
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20).min(timeout.saturating_sub(started.elapsed())));
+    }
+}
+
+fn create_python_venv(vdir: &Path) -> Result<(), String> {
     let system = find_system_python().ok_or_else(|| {
         "Python 3 is required for faster-whisper transcription. Install Python 3 from python.org.".to_string()
     })?;
-    let vdir = venv_dir();
-    fs::create_dir_all(vdir.parent().unwrap_or(&vdir)).map_err(|e| e.to_string())?;
+    fs::create_dir_all(vdir.parent().unwrap_or(vdir)).map_err(|e| e.to_string())?;
 
     let mut create = hidden_command(&system);
     if system == "py" {
         create.arg("-3");
     }
     create.args(["-m", "venv"]);
-    create.arg(&vdir);
+    create.arg(vdir);
     let status = create
         .status()
         .map_err(|e| format!("Could not create Python venv: {e}"))?;
     if !status.success() {
         return Err("Could not create Python venv for faster-whisper.".to_string());
     }
+    Ok(())
+}
 
+fn install_faster_whisper(python: &Path) -> Result<(), String> {
     let mut pip = hidden_command(python.to_str().unwrap_or("python"));
     pip.args(["-m", "pip", "install", "--upgrade", "pip", "faster-whisper"]);
     let pip_status = pip
@@ -413,7 +518,7 @@ fn ensure_python_venv() -> Result<PathBuf, String> {
                 .to_string(),
         );
     }
-    Ok(python)
+    Ok(())
 }
 
 const TRANSCRIBE_SCRIPT: &str = r#"
@@ -581,6 +686,246 @@ fn transcribe_local_file(id: ModelId, source_path: &Path) -> Result<String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
+
+    fn fixture_python() -> PathBuf {
+        PathBuf::from("fixture-venv/Scripts/python.exe")
+    }
+
+    #[test]
+    fn python_venv_reuses_a_ready_interpreter_without_installing() {
+        let python = fixture_python();
+        let checks = Cell::new(0);
+        let result = ensure_python_venv_with(
+            python.clone(),
+            true,
+            || panic!("healthy venv must not be recreated"),
+            |path| {
+                assert_eq!(path, python.as_path());
+                checks.set(checks.get() + 1);
+                Ok(true)
+            },
+            |_| panic!("healthy venv must not reinstall packages"),
+        );
+        assert_eq!(result, Ok(python));
+        assert_eq!(checks.get(), 1);
+    }
+
+    #[test]
+    fn python_venv_first_install_rechecks_readiness() {
+        let events = RefCell::new(Vec::new());
+        let ready = Cell::new(false);
+        let python = fixture_python();
+        let result = ensure_python_venv_with(
+            python.clone(),
+            false,
+            || {
+                events.borrow_mut().push("create");
+                Ok(())
+            },
+            |path| {
+                assert_eq!(path, python.as_path());
+                events.borrow_mut().push("probe");
+                Ok(ready.get())
+            },
+            |path| {
+                assert_eq!(path, python.as_path());
+                events.borrow_mut().push("install");
+                ready.set(true);
+                Ok(())
+            },
+        );
+        assert_eq!(result, Ok(python));
+        assert_eq!(*events.borrow(), ["create", "probe", "install", "probe"]);
+    }
+
+    #[test]
+    fn python_venv_failed_install_retries_without_recreating_the_interpreter() {
+        let exists = Cell::new(false);
+        let ready = Cell::new(false);
+        let creations = Cell::new(0);
+        let installs = Cell::new(0);
+        let probes = Cell::new(0);
+        let python = fixture_python();
+        let attempt = || {
+            ensure_python_venv_with(
+                python.clone(),
+                exists.get(),
+                || {
+                    creations.set(creations.get() + 1);
+                    exists.set(true);
+                    Ok(())
+                },
+                |path| {
+                    assert_eq!(path, python.as_path());
+                    probes.set(probes.get() + 1);
+                    Ok(ready.get())
+                },
+                |path| {
+                    assert_eq!(path, python.as_path());
+                    installs.set(installs.get() + 1);
+                    if installs.get() == 1 {
+                        return Err("interrupted installation".to_string());
+                    }
+                    ready.set(true);
+                    Ok(())
+                },
+            )
+        };
+        assert_eq!(attempt(), Err("interrupted installation".to_string()));
+        assert!(exists.get());
+        assert!(!ready.get());
+        assert_eq!(installs.get(), 1, "no retry inside the failed request");
+        assert_eq!(attempt(), Ok(python.clone()));
+        assert!(ready.get(), "retry must prepare the missing package");
+        assert_eq!(creations.get(), 1);
+        assert_eq!(installs.get(), 2);
+        assert_eq!(probes.get(), 3);
+    }
+
+    #[test]
+    fn python_venv_probe_failure_does_not_start_installation() {
+        let result = ensure_python_venv_with(
+            fixture_python(),
+            true,
+            || panic!("existing venv must not be recreated"),
+            |_| Err("probe process interrupted".to_string()),
+            |_| panic!("probe errors must not authorize installation"),
+        );
+        assert_eq!(result, Err("probe process interrupted".to_string()));
+    }
+
+    #[test]
+    fn python_venv_successful_installer_must_leave_a_ready_package() {
+        let installs = Cell::new(0);
+        let probes = Cell::new(0);
+        let result = ensure_python_venv_with(
+            fixture_python(),
+            true,
+            || panic!("existing venv must not be recreated"),
+            |_| {
+                probes.set(probes.get() + 1);
+                Ok(false)
+            },
+            |_| {
+                installs.set(installs.get() + 1);
+                Ok(())
+            },
+        );
+        assert_eq!(
+            result,
+            Err("faster-whisper package is unavailable after installation.".to_string())
+        );
+        assert_eq!(installs.get(), 1);
+        assert_eq!(probes.get(), 2);
+    }
+
+    #[test]
+    fn python_venv_creation_failure_stops_before_other_commands() {
+        let result = ensure_python_venv_with(
+            fixture_python(),
+            false,
+            || Err("venv creation interrupted".to_string()),
+            |_| panic!("failed creation must not probe"),
+            |_| panic!("failed creation must not install"),
+        );
+        assert_eq!(result, Err("venv creation interrupted".to_string()));
+    }
+
+    #[test]
+    fn python_venv_probe_exit_distinguishes_missing_package_from_failure() {
+        assert_eq!(python_venv_probe_result(Some(0)), Ok(true));
+        assert_eq!(python_venv_probe_result(Some(42)), Ok(false));
+        for code in [Some(1), Some(2), Some(130), None] {
+            assert!(python_venv_probe_result(code).is_err());
+        }
+    }
+
+    // Invoked only as an owned child by the lifecycle cases below. It performs
+    // no package import, installation, model work or network operation.
+    #[test]
+    #[ignore = "owned inert subprocess fixture; not a standalone test"]
+    fn python_venv_probe_fixture_child() {
+        let mode = std::env::var("VIBESPACE_VENV_PROBE_TEST_MODE")
+            .expect("probe fixture mode must be explicit");
+        if let Some(marker) = std::env::var_os("VIBESPACE_VENV_PROBE_TEST_CHILD_PID") {
+            fs::write(marker, std::process::id().to_string()).unwrap();
+        }
+        match mode.as_str() {
+            "present" => std::process::exit(0),
+            "missing" => std::process::exit(42),
+            "failed" => std::process::exit(1),
+            "hang" => {
+                std::thread::sleep(Duration::from_secs(30));
+                std::process::exit(99);
+            }
+            _ => panic!("unknown probe fixture mode"),
+        }
+    }
+
+    fn spawn_python_venv_probe_fixture(mode: &str) -> Child {
+        // libtest names omit the crate prefix in module_path!().
+        let module = module_path!().split_once("::").unwrap().1;
+        let fixture = format!("{module}::python_venv_probe_fixture_child");
+        Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &fixture, "--ignored", "--nocapture"])
+            .env("VIBESPACE_VENV_PROBE_TEST_MODE", mode)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn python_venv_probe_observes_real_owned_child_exit_codes() {
+        for (mode, expected) in [("present", Some(true)), ("missing", Some(false)), ("failed", None)] {
+            let mut child = spawn_python_venv_probe_fixture(mode);
+            let result = wait_python_venv_probe(&mut child, Duration::from_secs(5));
+            match expected {
+                Some(value) => assert_eq!(result, Ok(value)),
+                None => assert!(result.is_err()),
+            }
+            assert!(child.try_wait().unwrap().is_some());
+        }
+    }
+
+    #[test]
+    fn python_venv_probe_timeout_kills_and_reaps_only_its_owned_child() {
+        let mut child = spawn_python_venv_probe_fixture("hang");
+        let pid = child.id();
+        let started = Instant::now();
+        let result = ensure_python_venv_with(
+            fixture_python(),
+            true,
+            || panic!("existing venv must not be recreated"),
+            |_| wait_python_venv_probe(&mut child, Duration::from_millis(100)),
+            |_| panic!("timed-out probe must not trigger installation"),
+        );
+        assert!(result.unwrap_err().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // On Linux inspect before a second try_wait could hide a missed reap.
+        #[cfg(target_os = "linux")]
+        assert!(!PathBuf::from(format!("/proc/{pid}")).exists());
+        #[cfg(not(target_os = "linux"))]
+        let _ = pid;
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn python_venv_probe_cancelled_child_cannot_trigger_installation() {
+        let mut child = spawn_python_venv_probe_fixture("hang");
+        child.kill().unwrap();
+        let result = ensure_python_venv_with(
+            fixture_python(),
+            true,
+            || panic!("existing venv must not be recreated"),
+            |_| wait_python_venv_probe(&mut child, Duration::from_secs(5)),
+            |_| panic!("cancelled probe must not trigger installation"),
+        );
+        assert!(result.is_err());
+        assert!(child.try_wait().unwrap().is_some());
+    }
 
     #[test]
     fn local_file_transcription_rejects_missing_sources_before_process_launch() {

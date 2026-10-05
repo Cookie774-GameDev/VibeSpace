@@ -275,3 +275,93 @@ describe('Telemetry account and mutation lifetimes', () => {
     expect(fixture.success).not.toHaveBeenCalled();
   });
 });
+
+const NEW_POLICY = 'telemetry-app-diagnostics-2026-10-05-v1';
+function expandedConsent(accepted = false): AccountTelemetryConsent {
+  return {
+    ...consent(NEW_POLICY, accepted),
+    acceptedPolicyVersion: accepted ? NEW_POLICY : null,
+    diagnosticsScope: 'app-diagnostics-v1',
+    acceptedDiagnosticsScope: accepted ? 'app-diagnostics-v1' : null,
+    supportedSchemaVersions: [1, 2],
+  };
+}
+const acceptButton = () => screen.getByRole('button', { name: 'Accept app-wide diagnostics' });
+describe('explicit app-wide diagnostics disclosure', () => {
+  it('discloses only bounded categories and requires a fresh acceptance after old class flags', async () => {
+    fixture.states.a = expandedConsent();
+    fixture.update.mockResolvedValue({ ok: true, state: expandedConsent(true) });
+    render(<Telemetry />);
+    await screen.findByRole('button', { name: 'Accept app-wide diagnostics' });
+    expect(screen.getByText(/coarse renderer memory/i)).toBeTruthy();
+    expect(screen.getByText(/raw errors, stacks, URLs/i)).toBeTruthy();
+    expect(telemetryConsentStore.getSnapshot().appDiagnosticsConsent).toBeNull();
+    expect(fixture.update).not.toHaveBeenCalled();
+    fireEvent.click(acceptButton());
+    await waitFor(() =>
+      expect(telemetryConsentStore.getSnapshot().appDiagnosticsConsent).toMatchObject({
+        accountId: 'a',
+        policyVersion: NEW_POLICY,
+        scope: 'app-diagnostics-v1',
+      }),
+    );
+    expect(fixture.update).toHaveBeenCalledWith(true, fixture.states.a, 'a', {
+      diagnosticsScope: 'app-diagnostics-v1',
+    });
+  });
+  it('keeps expanded acceptance unavailable when the old server offers no capability', async () => {
+    render(<Telemetry />);
+    await screen.findByRole('button', { name: 'Enable 10% reward' });
+    expect(acceptButton()).toHaveProperty('disabled', true);
+    expect(telemetryConsentStore.getSnapshot().appDiagnosticsConsent).toBeNull();
+  });
+  it('does not accept an offered-only acknowledgement as actual consent', async () => {
+    fixture.states.a = expandedConsent();
+    fixture.update.mockResolvedValue({ ok: true, state: expandedConsent() });
+    render(<Telemetry />);
+    await screen.findByRole('button', { name: 'Accept app-wide diagnostics' });
+    await waitFor(() => expect(acceptButton()).toHaveProperty('disabled', false));
+    fireEvent.click(acceptButton());
+    await waitFor(() => expect(acceptButton()).toHaveProperty('disabled', false));
+    expect(telemetryConsentStore.getSnapshot().appDiagnosticsConsent).toBeNull();
+    expect(fixture.success).not.toHaveBeenCalled();
+  });
+  it('rejects a delayed acceptance after account A-to-B-to-A', async () => {
+    fixture.states.a = expandedConsent();
+    const old = deferred();
+    fixture.update.mockReturnValue(old.promise);
+    const view = render(<Telemetry />);
+    await waitFor(() => expect(acceptButton()).toHaveProperty('disabled', false));
+    fireEvent.click(acceptButton());
+    await showAccount(view, 'b', consent('b-current'));
+    await showAccount(view, 'a', expandedConsent());
+    await act(async () => {
+      old.resolve({ ok: true, state: expandedConsent(true) });
+      await old.promise;
+    });
+    expect(telemetryConsentStore.getSnapshot().appDiagnosticsConsent).toBeNull();
+    expect(fixture.success).not.toHaveBeenCalled();
+  });
+  it('does not revive acceptance after revoke and local re-enable while the request is pending', async () => {
+    fixture.states.a = expandedConsent();
+    const old = deferred();
+    fixture.update.mockReturnValue(old.promise);
+    render(<Telemetry />);
+    await waitFor(() => expect(acceptButton()).toHaveProperty('disabled', false));
+    fireEvent.click(acceptButton());
+    act(() => {
+      telemetryConsentStore.revoke();
+      telemetryConsentStore.updateConsent({
+        productUsage: true,
+        diagnostics: true,
+        toolOutcomes: true,
+      });
+    });
+    await act(async () => {
+      old.resolve({ ok: true, state: expandedConsent(true) });
+      await old.promise;
+    });
+    expect(telemetryConsentStore.getSnapshot().appDiagnosticsConsent).toBeNull();
+    expect(fixture.success).not.toHaveBeenCalled();
+  });
+});

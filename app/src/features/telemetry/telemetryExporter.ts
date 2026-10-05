@@ -5,10 +5,11 @@ import {
   TELEMETRY_METRIC_NAMES,
   TELEMETRY_EVENT_NAMES,
   type TelemetryEvent,
+  type AppDiagnosticsEvent,
   type TelemetryBatch,
 } from '../../../../supabase/functions/_shared/telemetrySchema';
 
-export type OptionalTelemetryEvent = TelemetryEvent;
+export type OptionalTelemetryEvent = TelemetryEvent | AppDiagnosticsEvent;
 export type { TelemetryBatch };
 type Receipt = { acceptedEventIds: readonly string[]; retryable?: boolean };
 type Transport = (
@@ -24,14 +25,14 @@ const MAX_AGE = 24 * 60 * 60 * 1_000;
 export function optionalTelemetryEvent(
   source: IntelligenceTelemetryEvent,
   environment: Pick<OptionalTelemetryEvent, 'appVersion' | 'platform'>,
-): OptionalTelemetryEvent | null {
+): TelemetryEvent | null {
   if (
     !TELEMETRY_EVENT_NAMES.includes(source.kind) ||
     !Number.isSafeInteger(source.observedAt) ||
     source.observedAt < 0
   )
     return null;
-  const metrics: OptionalTelemetryEvent['metrics'] = {};
+  const metrics: TelemetryEvent['metrics'] = {};
   for (const key of TELEMETRY_METRIC_NAMES) {
     const value = source.metrics[key];
     if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1e12)
@@ -61,7 +62,7 @@ export function optionalTelemetryEvent(
 export function optionalActivityEvent(
   source: AppActivityEvent,
   environment: Pick<OptionalTelemetryEvent, 'appVersion' | 'platform'>,
-): OptionalTelemetryEvent | null {
+): TelemetryEvent | null {
   const outcome = ['completed', 'success', 'succeeded'].includes(source.phase)
     ? 'ok'
     : ['failed', 'error', 'timed_out'].includes(source.phase)
@@ -102,6 +103,7 @@ export function createTelemetryExporter(options: {
   const random = options.random ?? Math.random;
   let accountId: string | null = null;
   let enabled = false;
+  let appDiagnosticsAllowed = false;
   let queue: OptionalTelemetryEvent[] = [];
   let loaded = false;
   let dropped = 0;
@@ -114,6 +116,7 @@ export function createTelemetryExporter(options: {
   let generation = 0;
   let dirty = false;
   const listeners = new Set<() => void>();
+  const authorizationRejections = new Set<(accountId: string) => void>();
   let snapshot = {
     enabled,
     queued: 0,
@@ -165,15 +168,31 @@ export function createTelemetryExporter(options: {
         listeners.delete(listener);
       };
     },
-    configure(nextAccount: string | null, allowed: boolean) {
+    subscribeAuthorizationRejections(listener: (accountId: string) => void) {
+      authorizationRejections.add(listener);
+      return () => {
+        authorizationRejections.delete(listener);
+      };
+    },
+    configure(nextAccount: string | null, allowed: boolean, allowAppDiagnostics = false) {
       const nextEnabled = !!nextAccount && allowed;
-      if (accountId === nextAccount && enabled === nextEnabled && loaded) return;
+      const nextDiagnostics = nextEnabled && allowAppDiagnostics;
+      if (
+        accountId === nextAccount &&
+        enabled === nextEnabled &&
+        appDiagnosticsAllowed === nextDiagnostics &&
+        loaded
+      )
+        return;
+      const sameLegacyScope = accountId === nextAccount && enabled && nextEnabled;
       generation += 1;
       controller?.abort();
       controller = null;
       accountId = nextAccount;
       enabled = nextEnabled;
-      queue = [];
+      appDiagnosticsAllowed = nextDiagnostics;
+      // A diagnostics-only permission change must not discard unrelated v1 receipts.
+      queue = sameLegacyScope ? queue.filter((event) => event.schemaVersion === 1) : [];
       retries = 0;
       retryAt = 0;
       if (!loaded && enabled) {
@@ -183,7 +202,12 @@ export function createTelemetryExporter(options: {
             const saved = JSON.parse(raw);
             if (saved.accountId === accountId && Array.isArray(saved.events)) {
               for (const event of saved.events.slice(-MAX_EVENTS)) {
-                if (options.validate({ batchId: crypto.randomUUID(), events: [event] }))
+                // v2 delivery is best-effort. Its in-memory consent lifetime cannot be
+                // reconstructed from persisted aggregates, so restart recovery is v1-only.
+                if (
+                  event?.schemaVersion === 1 &&
+                  options.validate({ batchId: crypto.randomUUID(), events: [event] })
+                )
                   queue.push(event);
               }
             }
@@ -199,7 +223,12 @@ export function createTelemetryExporter(options: {
       publish();
     },
     enqueue(event: OptionalTelemetryEvent) {
-      if (!enabled || !options.validate({ batchId: event.eventId, events: [event] })) return false;
+      if (
+        !enabled ||
+        (event.schemaVersion === 2 && !appDiagnosticsAllowed) ||
+        !options.validate({ batchId: event.eventId, events: [event] })
+      )
+        return false;
       if (queue.some((existing) => existing.eventId === event.eventId)) return false;
       if (queue.length === MAX_EVENTS) {
         queue.shift();
@@ -256,6 +285,15 @@ export function createTelemetryExporter(options: {
             enabled = false;
             queue = [];
             generation += 1;
+            // A transport denial revokes the runtime's cached decision too. The
+            // epoch check above prevents an old account flight from revoking a new one.
+            for (const listener of authorizationRejections) {
+              try {
+                listener(currentAccount);
+              } catch {
+                /* observational notification */
+              }
+            }
           } else if (accepted.size < batch.events.length)
             throw new Error('Unacknowledged telemetry');
           retries = 0;

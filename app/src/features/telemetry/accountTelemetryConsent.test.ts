@@ -146,3 +146,82 @@ describe('account telemetry consent', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 });
+
+const expanded = {
+  ...response,
+  policyVersion: 'telemetry-app-diagnostics-2026-10-05-v1',
+  acceptedPolicyVersion: null,
+  diagnosticsScope: 'app-diagnostics-v1',
+  acceptedDiagnosticsScope: null,
+  supportedSchemaVersions: [1, 2],
+} as const;
+const explicit = { diagnosticsScope: 'app-diagnostics-v1' } as const;
+describe('expanded scope transport', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+    session.mockReset();
+    user.mockReset();
+    session.mockResolvedValue({
+      data: { session: { user: { id: 'a' }, access_token: 'test-token-a' } },
+      error: null,
+    });
+    user.mockResolvedValue({ data: { user: { id: 'a' } }, error: null });
+  });
+  it('does not silently send expanded opt-in through the old reward API shape', async () => {
+    await expect(updateAccountTelemetryConsent(true, expanded, 'a')).resolves.toEqual({
+      ok: false,
+      error: 'diagnostics_scope_consent_required',
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it('sends the explicit marker only for a supported, account-bound user acceptance', async () => {
+    invoke.mockResolvedValue({
+      data: {
+        ...expanded,
+        enabled: true,
+        eligible: true,
+        acceptedPolicyVersion: expanded.policyVersion,
+        acceptedDiagnosticsScope: expanded.diagnosticsScope,
+      },
+      error: null,
+    });
+    await updateAccountTelemetryConsent(true, expanded, 'a', explicit);
+    expect(invoke).toHaveBeenCalledWith(
+      'telemetry-consent',
+      expect.objectContaining({
+        body: {
+          enabled: true,
+          policyVersion: expanded.policyVersion,
+          dataClasses: response.requiredDataClasses,
+          diagnosticsScope: 'app-diagnostics-v1',
+        },
+      }),
+    );
+  });
+  it.each([
+    { diagnosticsScope: null },
+    { supportedSchemaVersions: [1] },
+    { policyVersion: response.policyVersion },
+  ])('refuses incompatible capability before service IO %j', async (patch) => {
+    await expect(
+      updateAccountTelemetryConsent(true, { ...expanded, ...patch }, 'a', explicit),
+    ).resolves.toEqual({ ok: false, error: 'diagnostics_scope_unavailable' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it('requires the expected verified account for expanded acceptance', async () => {
+    await expect(
+      updateAccountTelemetryConsent(true, expanded, undefined, explicit),
+    ).resolves.toEqual({ ok: false, error: 'account_changed' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it('fails closed on malformed expanded capability metadata', async () => {
+    invoke.mockResolvedValue({
+      data: { ...expanded, supportedSchemaVersions: ['PRIVATE_SENTINEL'] },
+      error: null,
+    });
+    await expect(getAccountTelemetryConsent('a')).resolves.toEqual({
+      ok: false,
+      error: 'invalid_server_response',
+    });
+  });
+});

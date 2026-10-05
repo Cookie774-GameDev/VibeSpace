@@ -1,8 +1,17 @@
 import { getSupabaseClient } from '@/lib/supabase/client';
 import { localIntelligenceTelemetryRuntime } from '@/lib/ai/intelligenceTelemetryRuntime';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
-import { getAccountTelemetryConsent } from './accountTelemetryConsent';
-import { telemetryConsentStore, type TelemetryStorage } from './telemetryConsent';
+import { useUIStore } from '@/stores/ui';
+import {
+  getAccountTelemetryConsent,
+  type AccountTelemetryConsent,
+} from './accountTelemetryConsent';
+import {
+  telemetryConsentStore,
+  canCollectAppDiagnostics,
+  type TelemetryStorage,
+} from './telemetryConsent';
+import { createAppDiagnosticsCollector } from './appDiagnostics';
 import { telemetryWithdrawalQueue } from './telemetryWithdrawal';
 import {
   createTelemetryExporter,
@@ -22,7 +31,8 @@ export const optionalTelemetryExporter = createTelemetryExporter({
   storage,
   validate: (batch): batch is TelemetryBatch => {
     try {
-      parseTelemetryBatch(batch);
+      // Structural support is independent of the exporter's current scope admission.
+      parseTelemetryBatch(batch, { allowAppDiagnostics: true });
       return true;
     } catch {
       return false;
@@ -62,11 +72,15 @@ export const optionalTelemetryExporter = createTelemetryExporter({
 export function startOptionalTelemetryRuntime(accountId: string | null) {
   let disposed = false;
   let approval: boolean | null = null;
+  let approvedState: AccountTelemetryConsent | null = null;
+  let diagnostics: ReturnType<typeof createAppDiagnosticsCollector> | null = null;
   let checking = false;
   let revision = 0;
   let previousAllowed = false;
+  let previousExpanded = false;
   let seen = new WeakSet<object>(localIntelligenceTelemetryRuntime.snapshot().events);
   let activitySequence = appActivityLog.snapshot().sequence;
+  let expandedActivitySequence = activitySequence;
   const platform = /Win/i.test(navigator.platform)
     ? 'windows'
     : /Mac/i.test(navigator.platform)
@@ -75,6 +89,14 @@ export function startOptionalTelemetryRuntime(accountId: string | null) {
         ? 'linux'
         : 'other';
   const appVersion = import.meta.env.VITE_APP_VERSION || '0.0.0';
+  const diagnosticsAllowed = () =>
+    !disposed &&
+    !telemetryWithdrawalQueue.getSnapshot().pending.some((row) => row.accountId === accountId) &&
+    canCollectAppDiagnostics(telemetryConsentStore.getSnapshot(), accountId, approvedState);
+  const stopDiagnostics = () => {
+    diagnostics?.dispose();
+    diagnostics = null;
+  };
   const synchronize = () => {
     const consent = telemetryConsentStore.getSnapshot();
     const pending = telemetryWithdrawalQueue
@@ -96,7 +118,54 @@ export function startOptionalTelemetryRuntime(accountId: string | null) {
       activitySequence = appActivityLog.snapshot().sequence;
     }
     previousAllowed = allowed;
-    optionalTelemetryExporter.configure(accountId, allowed);
+    const expanded = allowed && diagnosticsAllowed();
+    if (expanded !== previousExpanded) {
+      // Expanded permission has its own observation boundary even when v1 stays on.
+      expandedActivitySequence = appActivityLog.snapshot().sequence;
+      previousExpanded = expanded;
+    }
+    optionalTelemetryExporter.configure(accountId, allowed, expanded);
+    if (!expanded) stopDiagnostics();
+    else if (!diagnostics)
+      diagnostics = createAppDiagnosticsCollector({
+        allowed: diagnosticsAllowed,
+        readUi: () => {
+          const ui = useUIStore.getState();
+          return {
+            route: ui.route,
+            settingsOpen: ui.settingsOpen,
+            paletteOpen: ui.paletteOpen,
+            voiceModalOpen: ui.voiceModalOpen,
+          };
+        },
+        subscribeUi: (listener) => useUIStore.subscribe(listener),
+        events: {
+          addEventListener: (type, listener) => {
+            if (listener !== null)
+              (type === 'visibilitychange' ? document : window).addEventListener(type, listener);
+          },
+          removeEventListener: (type, listener) => {
+            if (listener !== null)
+              (type === 'visibilitychange' ? document : window).removeEventListener(type, listener);
+          },
+        },
+        isVisible: () => document.visibilityState !== 'hidden',
+        readHeap: () => {
+          const memory = (
+            performance as Performance & {
+              memory?: { usedJSHeapSize?: number; jsHeapSizeLimit?: number };
+            }
+          ).memory;
+          return typeof memory?.usedJSHeapSize === 'number' &&
+            typeof memory.jsHeapSizeLimit === 'number'
+            ? { usedBytes: memory.usedJSHeapSize, limitBytes: memory.jsHeapSizeLimit }
+            : null;
+        },
+        now: () => Date.now(),
+        monotonic: () => performance.now(),
+        environment: { appVersion, platform },
+        emit: (event) => optionalTelemetryExporter.enqueue(event),
+      });
     return allowed;
   };
   const collect = () => {
@@ -110,9 +179,13 @@ export function startOptionalTelemetryRuntime(accountId: string | null) {
     const activity = appActivityLog.snapshot(activitySequence);
     activitySequence = activity.sequence;
     for (const source of activity.events) {
+      if (source.sequence > expandedActivitySequence)
+        diagnostics?.recordOperation(source.kind, source.phase, source.durationMs);
       const event = optionalActivityEvent(source, { appVersion, platform });
       if (event) optionalTelemetryExporter.enqueue(event);
     }
+    if (diagnostics) expandedActivitySequence = activity.sequence;
+    diagnostics?.sample();
     void optionalTelemetryExporter.flush();
   };
   const authorize = async () => {
@@ -122,6 +195,7 @@ export function startOptionalTelemetryRuntime(accountId: string | null) {
     try {
       const result = await getAccountTelemetryConsent(accountId);
       if (disposed || current !== revision) return;
+      approvedState = result.ok ? result.state : null;
       if (result.ok) approval = result.state.enabled && result.state.eligible;
       synchronize();
     } finally {
@@ -133,13 +207,17 @@ export function startOptionalTelemetryRuntime(accountId: string | null) {
   const consentChanged = () => {
     revision += 1;
     approval = false;
+    approvedState = null;
     synchronize();
     void authorize();
   };
   const unsubConsent = telemetryConsentStore.subscribe(consentChanged);
-  const unsubWithdrawal = telemetryWithdrawalQueue.subscribe(() => {
-    synchronize();
-  });
+  const unsubWithdrawal = telemetryWithdrawalQueue.subscribe(consentChanged);
+  const unsubRejections = optionalTelemetryExporter.subscribeAuthorizationRejections(
+    (rejectedAccount) => {
+      if (!disposed && rejectedAccount === accountId) consentChanged();
+    },
+  );
   synchronize();
   void authorize();
   const timer = window.setInterval(collect, 5_000);
@@ -150,9 +228,11 @@ export function startOptionalTelemetryRuntime(accountId: string | null) {
   window.addEventListener('vibespace:telemetry-consent-changed', authorize);
   return () => {
     disposed = true;
+    stopDiagnostics();
     revision += 1;
     unsubConsent();
     unsubWithdrawal();
+    unsubRejections();
     window.clearInterval(timer);
     window.clearInterval(policyTimer);
     window.removeEventListener('online', authorize);

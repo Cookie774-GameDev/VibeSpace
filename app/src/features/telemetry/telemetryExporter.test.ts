@@ -181,3 +181,158 @@ it('persistence failure cannot stop the product or prevent withdrawal', async ()
   expect(exporter.getSnapshot()).toMatchObject({ queued: 0, acknowledged: 1 });
   expect(() => exporter.configure(null, false)).not.toThrow();
 });
+
+const expandedEvent = () => ({
+  eventId: crypto.randomUUID(),
+  eventName: 'feature_open' as const,
+  schemaVersion: 2 as const,
+  occurredAt: now,
+  appVersion: '1.5.0',
+  platform: 'windows' as const,
+  feature: 'canvas' as const,
+  outcome: 'ok' as const,
+  metrics: { count: 1 },
+});
+function setupExpanded() {
+  const f = setup();
+  let time = now;
+  const options = {
+    ...f.options,
+    now: () => time,
+    validate: (value: unknown): value is TelemetryBatch => {
+      try {
+        parseTelemetryBatch(value, { nowMs: time, allowAppDiagnostics: true });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+  return {
+    ...f,
+    options,
+    exporter: createTelemetryExporter(options),
+    advance: () => {
+      time += 3_000;
+    },
+  };
+}
+it('requires explicit current v2 authorization even with a schema-capable validator', async () => {
+  const f = setupExpanded();
+  f.exporter.configure('a', true);
+  expect(f.exporter.enqueue(expandedEvent())).toBe(false);
+  f.exporter.configure('a', true, true);
+  expect(f.exporter.enqueue(expandedEvent())).toBe(true);
+  await f.exporter.flush();
+  expect(f.transport.mock.calls[0][1].events[0].schemaVersion).toBe(2);
+});
+it('drops persisted v2 rows on restart while retaining legacy mixed-queue recovery', async () => {
+  const f = setupExpanded();
+  f.exporter.configure('a', true, true);
+  const legacy = event();
+  const expanded = expandedEvent();
+  f.exporter.enqueue(legacy);
+  f.exporter.enqueue(expanded);
+  f.transport.mockRejectedValueOnce(new Error('synthetic offline'));
+  await f.exporter.flush();
+  const reopened = createTelemetryExporter(f.options);
+  reopened.configure('a', true, true);
+  expect(reopened.getSnapshot().queued).toBe(1);
+  await reopened.flush();
+  expect(f.transport.mock.calls[1][1].events.map((row) => row.eventId)).toEqual([legacy.eventId]);
+});
+it('retains stable v2 IDs for same-session offline retry under current authorization', async () => {
+  const f = setupExpanded();
+  f.exporter.configure('a', true, true);
+  const row = expandedEvent();
+  f.exporter.enqueue(row);
+  f.transport.mockRejectedValueOnce(new Error('synthetic offline'));
+  await f.exporter.flush();
+  f.advance();
+  await f.exporter.flush();
+  expect(f.transport.mock.calls.map((call) => call[1].events[0].eventId)).toEqual([
+    row.eventId,
+    row.eventId,
+  ]);
+});
+it('aborts old mixed flights and discards v2 when expanded scope is withdrawn without dropping v1', async () => {
+  const f = setupExpanded();
+  let finish!: (value: { acceptedEventIds: string[] }) => void;
+  f.transport.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  f.exporter.configure('a', true, true);
+  const legacy = event();
+  const expanded = expandedEvent();
+  f.exporter.enqueue(legacy);
+  f.exporter.enqueue(expanded);
+  const flight = f.exporter.flush();
+  const signal = f.transport.mock.calls[0][2];
+  f.exporter.configure('a', true, false);
+  expect(signal.aborted).toBe(true);
+  expect(f.exporter.getSnapshot().queued).toBe(1);
+  expect(f.exporter.enqueue(expandedEvent())).toBe(false);
+  finish({ acceptedEventIds: [legacy.eventId, expanded.eventId] });
+  await flight;
+  f.exporter.configure('a', true, true);
+  await f.exporter.flush();
+  expect(f.transport.mock.calls[1][1].events.map((row) => row.eventId)).toEqual([legacy.eventId]);
+});
+it('does not revive v2 after account ABA or scope off/on', async () => {
+  const f = setupExpanded();
+  f.exporter.configure('a', true, true);
+  f.exporter.enqueue(expandedEvent());
+  f.exporter.configure('b', true, true);
+  f.exporter.configure('a', true, true);
+  await f.exporter.flush();
+  expect(f.transport).not.toHaveBeenCalled();
+  f.exporter.enqueue(expandedEvent());
+  f.exporter.configure('a', true, false);
+  f.exporter.configure('a', true, true);
+  await f.exporter.flush();
+  expect(f.transport).not.toHaveBeenCalled();
+});
+
+it('notifies only the current account when authoritative upload authorization is rejected', async () => {
+  const f = setupExpanded();
+  const rejected = vi.fn();
+  const unsubscribe = f.exporter.subscribeAuthorizationRejections(rejected);
+  f.exporter.configure('a', true, true);
+  f.exporter.enqueue(expandedEvent());
+  f.transport.mockResolvedValueOnce({ acceptedEventIds: [], retryable: false } as never);
+  await f.exporter.flush();
+  expect(rejected).toHaveBeenCalledExactlyOnceWith('a');
+  unsubscribe();
+  f.exporter.configure('b', true, true);
+  f.exporter.enqueue(expandedEvent());
+  f.transport.mockResolvedValueOnce({ acceptedEventIds: [], retryable: false } as never);
+  await f.exporter.flush();
+  expect(rejected).toHaveBeenCalledTimes(1);
+});
+it('does not notify denial from an obsolete account flight or a transient outage', async () => {
+  const f = setupExpanded();
+  const rejected = vi.fn();
+  f.exporter.subscribeAuthorizationRejections(rejected);
+  let finish!: (value: { acceptedEventIds: string[]; retryable: false }) => void;
+  f.transport.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  f.exporter.configure('a', true, true);
+  f.exporter.enqueue(expandedEvent());
+  const flight = f.exporter.flush();
+  f.exporter.configure('b', true, true);
+  finish({ acceptedEventIds: [], retryable: false });
+  await flight;
+  expect(rejected).not.toHaveBeenCalled();
+  f.exporter.enqueue(expandedEvent());
+  f.transport.mockRejectedValueOnce(new Error('synthetic temporary outage'));
+  await f.exporter.flush();
+  expect(rejected).not.toHaveBeenCalled();
+  expect(f.exporter.getSnapshot().enabled).toBe(true);
+});
