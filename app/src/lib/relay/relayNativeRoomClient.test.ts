@@ -6,13 +6,14 @@ const context = {
   accountId: 'account-1', workspaceId: 'workspace-1', projectId: 'project-1', chatId: 'chat-1',
 };
 
-function fixture() {
+function fixture(workspaceId: string | null = 'workspace-1') {
+  const nativeContext = { ...context, workspaceId };
   let settings: RelaySettings = {
     scope: 'project', automaticParticipation: false, excludedParticipants: [],
   };
   let generation = 2;
   const invoke = vi.fn(async (command: string): Promise<unknown> => {
-    if (command === 'relay_active_context_snapshot') return { generation, context };
+    if (command === 'relay_active_context_snapshot') return { generation, context: nativeContext };
     if (command === 'relay_engine_start') return { running: true, healthy: true };
     if (command === 'relay_participant_bind') return { bindingId: 'human-binding', relayAgentId: 'human-agent' };
     if (command === 'relay_human_room_snapshot') return {
@@ -182,5 +183,16 @@ it('exposes a stable room identity that survives polling and generation reconnec
   f.setGeneration(3);
   await f.client.refresh();
   expect(f.client.getSnapshot().room.roomId).toBe(identity);
+  f.client.dispose();
+});
+
+
+it('connects the native local-workspace room without a cloud workspace ID', async () => {
+  const f = fixture(null);
+  await f.client.refresh();
+  expect(f.client.getSnapshot()).toMatchObject({ humanAuthorized: true, room: { connection: 'connected' } });
+  expect(f.invoke).toHaveBeenCalledWith('relay_participant_bind', expect.objectContaining({
+    scope: { ...context, workspaceId: null }, role: 'human',
+  }));
   f.client.dispose();
 });

@@ -14,6 +14,7 @@ const request = {
 
 function fixture() {
   let activeChatId = 'chat-1';
+  let workspaceId: string | null = 'workspace-1';
   let settings: RelaySettings = {
     scope: 'project',
     automaticParticipation: false,
@@ -43,7 +44,7 @@ function fixture() {
           generation: 5,
           context: {
             accountId: 'account-1',
-            workspaceId: 'workspace-1',
+            workspaceId,
             projectId: 'project-1',
             chatId: activeChatId,
           },
@@ -91,6 +92,7 @@ function fixture() {
   });
   return {
     connector,
+    setWorkspaceId: (value: string | null) => { workspaceId = value; },
     invoke,
     invocations,
     release,
@@ -218,4 +220,17 @@ describe('production Relay gateway client', () => {
     expect(f.invocations.map((entry) => entry.command)).toContain('relay_participant_unbind');
     await f.connector.stop();
   });
+});
+
+
+it('enrolls a local chat using the native nullable workspace scope', async () => {
+  const f = fixture();
+  f.setWorkspaceId(null);
+  f.connector.start();
+  const participant = await f.port().forSession({ ...request, workspaceId: '' });
+  expect(participant).not.toBeNull();
+  expect(f.invoke).toHaveBeenCalledWith('relay_participant_bind', expect.objectContaining({
+    scope: expect.objectContaining({ workspaceId: null }), role: 'agent',
+  }));
+  await f.connector.stop();
 });

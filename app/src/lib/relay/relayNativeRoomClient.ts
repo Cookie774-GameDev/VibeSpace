@@ -4,7 +4,7 @@ import { canParticipateInRelay, type RelaySettings } from '@/features/settings/r
 type NativeInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 type Context = Readonly<{
   accountId: string;
-  workspaceId: string;
+  workspaceId: string | null;
   projectId: string;
   chatId: string;
 }>;
@@ -53,7 +53,7 @@ function validContext(value: unknown): ContextSnapshot | null {
   const snapshot = value as ContextSnapshot;
   const context = snapshot.context;
   return Number.isSafeInteger(snapshot.generation) && snapshot.generation > 0 &&
-    !!context?.accountId && !!context.workspaceId && !!context.projectId && !!context.chatId
+    !!context?.accountId && !!context.projectId && !!context.chatId
     ? snapshot : null;
 }
 

@@ -95,7 +95,9 @@
   --activity-popover-ink: #b7b7b7;
   --activity-popover-muted: #858585;
   max-height: min(22rem, 46vh);
-  overflow: auto hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   border: 1px solid var(--activity-popover-line);
   border-top: 0;
   border-radius: 0 0 0.8rem 0.8rem;

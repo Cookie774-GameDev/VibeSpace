@@ -67,7 +67,7 @@ function activeContext(value: unknown): NativeContext | null {
   if (!Number.isSafeInteger(result.generation) || result.generation < 1 || !result.context)
     return null;
   const context = result.context;
-  if (!context.accountId || !context.workspaceId || !context.projectId || !context.chatId)
+  if (!context.accountId || !context.projectId || !context.chatId)
     return null;
   return result;
 }
@@ -187,7 +187,7 @@ export function createRelayProductionClient(options: RelayProductionClientOption
     const context = snapshot.context!;
     if (
       context.accountId !== input.accountId ||
-      context.workspaceId !== input.workspaceId ||
+      (context.workspaceId ?? '') !== input.workspaceId ||
       context.projectId !== input.projectId ||
       context.chatId !== messageChatId
     )
