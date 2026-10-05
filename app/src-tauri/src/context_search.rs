@@ -1369,12 +1369,9 @@ fn app_index_location(app: &tauri::AppHandle) -> Result<AppIndexLocation, String
     })
 }
 
-fn ensure_main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
-    if window.label() == "main" {
-        Ok(())
-    } else {
-        Err("context_search_caller_not_authorized".to_string())
-    }
+fn ensure_main_caller(webview_label: &str, window_label: &str) -> Result<(), String> {
+    crate::native_app_surface::ensure_main_caller(webview_label, window_label)
+        .map_err(|_| "context_search_caller_not_authorized".to_string())
 }
 
 async fn run_context_worker<T: Send + 'static>(
@@ -1388,11 +1385,11 @@ async fn run_context_worker<T: Send + 'static>(
 
 #[tauri::command]
 pub async fn context_search_replace_documents(
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     app: tauri::AppHandle,
     request: ContextSearchReplaceRequest,
 ) -> Result<ContextSearchMutationResult, String> {
-    ensure_main_window(&window)?;
+    ensure_main_caller(window.label(), window.window().label())?;
     let location = app_index_location(&app)?;
     run_context_worker(move || {
         let index = ContextSearchIndex::open_from_trusted_base(
@@ -1412,11 +1409,11 @@ pub async fn context_search_replace_documents(
 
 #[tauri::command]
 pub async fn context_search_delete_documents(
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     app: tauri::AppHandle,
     request: ContextSearchDeleteRequest,
 ) -> Result<ContextSearchMutationResult, String> {
-    ensure_main_window(&window)?;
+    ensure_main_caller(window.label(), window.window().label())?;
     let location = app_index_location(&app)?;
     run_context_worker(move || {
         let index = ContextSearchIndex::open_from_trusted_base(
@@ -1436,11 +1433,11 @@ pub async fn context_search_delete_documents(
 
 #[tauri::command]
 pub async fn context_search_query(
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     app: tauri::AppHandle,
     request: ContextSearchRequest,
 ) -> Result<ContextSearchQueryResult, String> {
-    ensure_main_window(&window)?;
+    ensure_main_caller(window.label(), window.window().label())?;
     let location = app_index_location(&app)?;
     run_context_worker(move || {
         let index = ContextSearchIndex::open_from_trusted_base(
@@ -1464,11 +1461,11 @@ pub async fn context_search_query(
 
 #[tauri::command]
 pub async fn context_search_status(
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     app: tauri::AppHandle,
     request: ContextSearchStatusRequest,
 ) -> Result<ContextSearchStatus, String> {
-    ensure_main_window(&window)?;
+    ensure_main_caller(window.label(), window.window().label())?;
     let location = app_index_location(&app)?;
     run_context_worker(move || {
         ContextSearchIndex::open_from_trusted_base(
@@ -1484,11 +1481,11 @@ pub async fn context_search_status(
 
 #[tauri::command]
 pub async fn context_search_acknowledge_rebuild(
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     app: tauri::AppHandle,
     request: ContextSearchStatusRequest,
 ) -> Result<ContextSearchStatus, String> {
-    ensure_main_window(&window)?;
+    ensure_main_caller(window.label(), window.window().label())?;
     let location = app_index_location(&app)?;
     run_context_worker(move || {
         let index = ContextSearchIndex::open_from_trusted_base(
@@ -1510,6 +1507,35 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn context_search_accepts_main_webview_in_main_window() {
+        // A multi-Webview main window still provides the same trusted caller labels.
+        assert_eq!(ensure_main_caller("main", "main"), Ok(()));
+    }
+
+    #[test]
+    fn context_search_rejects_foreign_webviews_and_owner_windows() {
+        for (webview, window) in [
+            ("siyuan-context-vault", "main"),
+            ("workbench-browser-1", "main"),
+            ("preview-surface", "main"),
+            ("pet-overlay", "main"),
+            ("main", "foreign-window"),
+            ("main", ""),
+            ("", "main"),
+            ("Main", "main"),
+            ("main", "Main"),
+            ("main ", "main"),
+            ("main", "main "),
+        ] {
+            assert_eq!(
+                ensure_main_caller(webview, window),
+                Err("context_search_caller_not_authorized".to_string()),
+                "unexpected Context search authority for {webview:?}/{window:?}"
+            );
+        }
+    }
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
