@@ -6,6 +6,11 @@ import {
   reconcileTelemetryWithdrawal,
   type TelemetryBillingReconcileDependencies,
 } from '../_shared/telemetryBillingReconcile.ts';
+import {
+  APP_DIAGNOSTICS_SCOPE,
+  APP_DIAGNOSTICS_POLICY_VERSION,
+  supportsAppDiagnosticsScope,
+} from '../_shared/telemetrySchema.ts';
 
 const MAX_BODY_BYTES = 8 * 1024;
 const REQUIRED_CLASSES = Object.freeze(['product_usage', 'diagnostics', 'tool_outcomes']);
@@ -56,6 +61,25 @@ function exactClasses(value: unknown): value is string[] {
     normalized.length === REQUIRED_CLASSES.length &&
     REQUIRED_CLASSES.every((item) => normalized.includes(item))
   );
+}
+
+function diagnosticsConsentState(state: any, config: any) {
+  const supported = supportsAppDiagnosticsScope(config);
+  const acceptedPolicyVersion =
+    typeof state?.policyVersion === 'string' ? state.policyVersion : null;
+  const accepted =
+    supported &&
+    state?.enabled === true &&
+    state?.eligible === true &&
+    acceptedPolicyVersion === APP_DIAGNOSTICS_POLICY_VERSION &&
+    exactClasses(state?.dataClasses) &&
+    !['pending', 'failed'].includes(state?.withdrawal?.status);
+  return {
+    acceptedPolicyVersion,
+    diagnosticsScope: supported ? APP_DIAGNOSTICS_SCOPE : null,
+    acceptedDiagnosticsScope: accepted ? APP_DIAGNOSTICS_SCOPE : null,
+    supportedSchemaVersions: supported ? [1, 2] : [1],
+  };
 }
 
 async function readBodyBounded(req: Request, maxBytes: number): Promise<string> {
@@ -185,6 +209,7 @@ export async function handleTelemetryConsent(req: Request, deps: any): Promise<R
         noticeUrl: deps.config.noticeUrl,
         discountPercent: 10,
         requiredDataClasses: REQUIRED_CLASSES,
+        ...diagnosticsConsentState(state, deps.config),
       },
       200,
       origin,
@@ -208,10 +233,25 @@ export async function handleTelemetryConsent(req: Request, deps: any): Promise<R
   if (
     !body ||
     typeof body !== 'object' ||
+    Array.isArray(body) ||
+    Object.keys(body).some(
+      (key) => !['enabled', 'policyVersion', 'dataClasses', 'diagnosticsScope'].includes(key),
+    ) ||
     typeof body.enabled !== 'boolean' ||
-    body.policyVersion !== deps.config.policyVersion ||
+    typeof body.policyVersion !== 'string' ||
+    !body.policyVersion.trim() ||
+    body.policyVersion.length > 160 ||
+    (body.enabled && body.policyVersion !== deps.config.policyVersion) ||
     !Array.isArray(body.dataClasses) ||
     (body.enabled ? !exactClasses(body.dataClasses) : body.dataClasses.length !== 0)
+  ) {
+    return json({ error: 'invalid_consent' }, 400, origin);
+  }
+  if (
+    body.enabled &&
+    (deps.config.policyVersion === APP_DIAGNOSTICS_POLICY_VERSION
+      ? !supportsAppDiagnosticsScope(deps.config) || body.diagnosticsScope !== APP_DIAGNOSTICS_SCOPE
+      : Object.hasOwn(body, 'diagnosticsScope'))
   ) {
     return json({ error: 'invalid_consent' }, 400, origin);
   }
@@ -267,6 +307,7 @@ export async function handleTelemetryConsent(req: Request, deps: any): Promise<R
       noticeUrl: deps.config.noticeUrl,
       discountPercent: 10,
       requiredDataClasses: REQUIRED_CLASSES,
+      ...diagnosticsConsentState(state, deps.config),
     },
     200,
     origin,
@@ -287,6 +328,8 @@ if (import.meta.main) {
     config: {
       policyVersion: env.get('TELEMETRY_REWARD_POLICY_VERSION') ?? '',
       noticeUrl: env.get('TELEMETRY_FINANCIAL_INCENTIVE_NOTICE_URL') ?? '',
+      // Keep unset until the new notice, client disclosure and SQL migration are deployed.
+      appDiagnosticsScope: env.get('TELEMETRY_APP_DIAGNOSTICS_SCOPE') ?? '',
     },
     authenticate: async (jwt: string) => {
       const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);

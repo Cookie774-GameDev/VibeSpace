@@ -9,6 +9,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   stat,
@@ -52,6 +53,8 @@ export async function prepareSiyuanRuntime(options = {}) {
     options.allowedOutputParent ?? DEFAULT_ALLOWED_OUTPUT_PARENT,
   );
   assertDirectChild(outputDir, allowedOutputParent, 'SiYuan runtime output');
+  await assertPhysicalDirectory(allowedOutputParent);
+  await assertPhysicalDirectory(outputDir, true);
 
   const closurePath = path.resolve(options.closureManifestPath ?? DEFAULT_CLOSURE_MANIFEST);
   const runtimeManifestPath = path.resolve(options.runtimeManifestPath ?? DEFAULT_RUNTIME_MANIFEST);
@@ -83,6 +86,7 @@ export async function prepareSiyuanRuntime(options = {}) {
       `.siyuan-runtime-stage-${process.pid}-${randomUUID()}`,
     );
     assertDirectChild(stage, allowedOutputParent, 'SiYuan runtime stage');
+    await assertPhysicalDirectory(allowedOutputParent);
     await mkdir(stage, { recursive: false });
     try {
       for (const component of closure.closure.components) {
@@ -102,6 +106,8 @@ export async function prepareSiyuanRuntime(options = {}) {
         flag: 'wx',
       });
       await validatePackagedClosure(stage, closure);
+      await assertPhysicalDirectory(allowedOutputParent);
+      await assertPhysicalDirectory(outputDir, true);
       await rename(stage, outputDir);
     } catch (error) {
       await safeRemoveOwnedTemporary(stage, allowedOutputParent);
@@ -313,8 +319,10 @@ async function locateSevenZip(configured) {
 
 async function reusePreparedOutput(outputDir, closure, ready, metadata) {
   if (!(await exists(outputDir))) return false;
+  const outputIdentity = await assertPhysicalDirectory(outputDir);
   try {
     const observedReady = JSON.parse(await readFile(path.join(outputDir, READY_FILE), 'utf8'));
+    await assertDirectoryIdentity(outputDir, outputIdentity);
     if (
       Object.keys(observedReady).sort().join('\0') !== Object.keys(ready).sort().join('\0') ||
       Object.entries(ready).some(([key, value]) => observedReady[key] !== value)
@@ -322,12 +330,20 @@ async function reusePreparedOutput(outputDir, closure, ready, metadata) {
       return false;
     }
     await validatePackagedClosure(outputDir, closure);
-    await refreshPreparedMetadata(outputDir, {
-      ...metadata,
-      [READY_FILE]: serializeJson(ready),
-    });
+    await assertDirectoryIdentity(outputDir, outputIdentity);
+    await refreshPreparedMetadata(
+      outputDir,
+      {
+        ...metadata,
+        [READY_FILE]: serializeJson(ready),
+      },
+      outputIdentity,
+    );
+    await assertDirectoryIdentity(outputDir, outputIdentity);
     return true;
   } catch {
+    // A replaced or removed output is not permission to rebuild a new directory.
+    await assertDirectoryIdentity(outputDir, outputIdentity);
     return false;
   }
 }
@@ -347,7 +363,7 @@ function serializeJson(value) {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-async function refreshPreparedMetadata(outputDir, metadata) {
+async function refreshPreparedMetadata(outputDir, metadata, outputIdentity) {
   for (const [name, expected] of Object.entries(metadata)) {
     const target = path.join(outputDir, name);
     let observed;
@@ -360,13 +376,23 @@ async function refreshPreparedMetadata(outputDir, metadata) {
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
     }
+    // Metadata reads can yield after closure verification; recheck the verified
+    // directory before publication, including when all metadata already matches.
+    await assertDirectoryIdentity(outputDir, outputIdentity);
     if (observed === expected) continue;
     const temporary = path.join(outputDir, `.siyuan-metadata-${randomUUID()}`);
+    let published = false;
     try {
       await writeFile(temporary, expected, { encoding: 'utf8', flag: 'wx' });
+      await assertDirectoryIdentity(outputDir, outputIdentity);
       await rename(temporary, target);
+      published = true;
     } finally {
-      await rm(temporary, { force: true });
+      if (!published) {
+        // Retain ambiguous temporary files rather than delete through a replaced path.
+        await assertDirectoryIdentity(outputDir, outputIdentity);
+        await rm(temporary, { force: true });
+      }
     }
   }
 }
@@ -389,6 +415,36 @@ function assertDirectChild(target, parent, label) {
   }
 }
 
+async function assertPhysicalDirectory(target, allowMissing = false) {
+  let info;
+  try {
+    // lstat observes dangling links and Windows junctions instead of following them.
+    info = await lstat(target, { bigint: true });
+  } catch (error) {
+    if (allowMissing && error?.code === 'ENOENT') return;
+    throw error;
+  }
+  if (
+    info.isSymbolicLink() ||
+    !info.isDirectory() ||
+    path.relative(target, await realpath(target)) !== ''
+  ) {
+    throw new Error(
+      `SiYuan path must be a physical directory without symlinks or junctions: ${target}`,
+    );
+  }
+  return info;
+}
+
+async function assertDirectoryIdentity(target, expected) {
+  const observed = await assertPhysicalDirectory(target);
+  if (observed.dev !== expected.dev || observed.ino !== expected.ino) {
+    throw new Error(`SiYuan prepared directory identity changed: ${target}`);
+  }
+  // This is a boundary check, not an OS handle-relative/no-reparse operation.
+  // A concurrent external replacement between this check and IO remains possible.
+}
+
 function isWithin(root, candidate) {
   const relative = path.relative(root, candidate);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -401,6 +457,9 @@ async function safeRemoveOwnedTemporary(target, allowedParent) {
   if (!path.basename(resolved).startsWith('.siyuan-')) {
     throw new Error(`Refusing to remove an unowned temporary path: ${resolved}`);
   }
+  // Do not redirect cleanup through a replaced parent or an unowned directory link.
+  await assertPhysicalDirectory(parent);
+  await assertPhysicalDirectory(resolved, true);
   await rm(resolved, { recursive: true, force: true });
 }
 

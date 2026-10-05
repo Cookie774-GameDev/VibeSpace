@@ -211,3 +211,130 @@ describe('telemetry consent', () => {
     assert.deepEqual(order, ['atomic-set', 'user_123:revision-1']);
   });
 });
+
+const EXPANDED_POLICY = 'telemetry-app-diagnostics-2026-10-05-v1';
+const EXPANDED_SCOPE = 'app-diagnostics-v1';
+const getRequest = () =>
+  new Request('https://edge.test', { headers: { authorization: 'Bearer jwt' } });
+const putRequest = (body: unknown) =>
+  new Request('https://edge.test', {
+    method: 'PUT',
+    headers: { authorization: 'Bearer jwt', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+const expandedBody = (extra: Record<string, unknown> = {}) => ({
+  enabled: true,
+  policyVersion: EXPANDED_POLICY,
+  dataClasses: CLASSES,
+  diagnosticsScope: EXPANDED_SCOPE,
+  ...extra,
+});
+const expandedDeps = () => {
+  const d = deps();
+  d.config = { ...d.config, policyVersion: EXPANDED_POLICY, appDiagnosticsScope: EXPANDED_SCOPE };
+  return d;
+};
+describe('explicit expanded diagnostics consent', () => {
+  it('does not advertise expanded capability by default or infer accepted policy from its offer', async () => {
+    const state = await (await handleTelemetryConsent(getRequest(), deps())).json();
+    assert.equal(state.policyVersion, POLICY);
+    assert.equal(state.acceptedPolicyVersion, null);
+    assert.equal(state.diagnosticsScope, null);
+    assert.equal(state.acceptedDiagnosticsScope, null);
+    assert.deepEqual(state.supportedSchemaVersions, [1]);
+  });
+  it('keeps an old enrollment distinct from the newly offered policy', async () => {
+    const d = expandedDeps();
+    d.getConsent = async () => ({
+      enabled: true,
+      eligible: true,
+      policyVersion: POLICY,
+      dataClasses: CLASSES,
+    });
+    const state = await (await handleTelemetryConsent(getRequest(), d)).json();
+    assert.equal(state.policyVersion, EXPANDED_POLICY);
+    assert.equal(state.acceptedPolicyVersion, POLICY);
+    assert.equal(state.diagnosticsScope, EXPANDED_SCOPE);
+    assert.equal(state.acceptedDiagnosticsScope, null);
+    assert.deepEqual(state.supportedSchemaVersions, [1, 2]);
+  });
+  it('requires the explicit expanded marker from a fresh client before mutation', async () => {
+    for (const marker of [undefined, null, '', 'PRIVATE_SENTINEL']) {
+      const d = expandedDeps();
+      const response = await handleTelemetryConsent(
+        putRequest(expandedBody({ diagnosticsScope: marker })),
+        d,
+      );
+      assert.equal(response.status, 400);
+      assert.equal(d.writes.length, 0);
+      assert.equal(JSON.stringify(await response.json()).includes('PRIVATE_SENTINEL'), false);
+    }
+  });
+  it('does not activate a reserved new policy without explicit capability or relabel an old policy', async () => {
+    for (const config of [
+      { policyVersion: EXPANDED_POLICY },
+      { policyVersion: EXPANDED_POLICY, appDiagnosticsScope: 'unknown-scope' },
+      { policyVersion: POLICY, appDiagnosticsScope: EXPANDED_SCOPE },
+    ]) {
+      const d = deps();
+      d.config = { ...d.config, ...config };
+      const response = await handleTelemetryConsent(
+        putRequest(expandedBody({ policyVersion: config.policyVersion })),
+        d,
+      );
+      assert.equal(response.status, 400);
+      assert.equal(d.writes.length, 0);
+      const state = await (await handleTelemetryConsent(getRequest(), d)).json();
+      assert.equal(state.diagnosticsScope, null);
+      assert.deepEqual(state.supportedSchemaVersions, [1]);
+    }
+  });
+  it('persists fresh explicit expanded consent through the existing atomic writer', async () => {
+    const d = expandedDeps();
+    d.atomicWithdrawal = true;
+    d.enqueueWithdrawal = async () => {
+      assert.fail('must not create another withdrawal');
+    };
+    d.reconcileWithdrawal = async () => {
+      assert.fail('opt-in must not reconcile billing');
+    };
+    const response = await handleTelemetryConsent(putRequest(expandedBody()), d);
+    assert.equal(response.status, 200);
+    assert.deepEqual(d.writes, [['user_123', true, EXPANDED_POLICY, CLASSES]]);
+    const state = await response.json();
+    assert.equal(state.acceptedPolicyVersion, EXPANDED_POLICY);
+    assert.equal(state.acceptedDiagnosticsScope, EXPANDED_SCOPE);
+  });
+  it('allows a marker-free withdrawal even when the expanded capability has been disabled', async () => {
+    const d = deps();
+    d.config.policyVersion = EXPANDED_POLICY;
+    const response = await handleTelemetryConsent(
+      putRequest({ enabled: false, policyVersion: EXPANDED_POLICY, dataClasses: [] }),
+      d,
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(d.writes, [['user_123', false, EXPANDED_POLICY, []]]);
+    assert.equal((await response.json()).acceptedDiagnosticsScope, null);
+  });
+  it('rejects private or unknown consent fields without persisting them', async () => {
+    const d = expandedDeps();
+    const response = await handleTelemetryConsent(
+      putRequest(expandedBody({ rawError: 'PRIVATE_SENTINEL' })),
+      d,
+    );
+    assert.equal(response.status, 400);
+    assert.equal(d.writes.length, 0);
+    assert.equal(JSON.stringify(await response.json()).includes('PRIVATE_SENTINEL'), false);
+  });
+});
+
+it('allows a previously enrolled client to withdraw after the offered policy changes', async () => {
+  const d = expandedDeps();
+  const response = await handleTelemetryConsent(
+    putRequest({ enabled: false, policyVersion: POLICY, dataClasses: [] }),
+    d,
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(d.writes, [['user_123', false, EXPANDED_POLICY, []]]);
+  assert.equal((await response.json()).acceptedDiagnosticsScope, null);
+});

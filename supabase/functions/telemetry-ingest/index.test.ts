@@ -183,3 +183,130 @@ it('uses the atomic store admission result under concurrent uploads', async () =
   assert.equal(response.status, 429);
   assert.equal(response.headers.get('retry-after'), '60');
 });
+
+const EXPANDED_POLICY = 'telemetry-app-diagnostics-2026-10-05-v1';
+const EXPANDED_SCOPE = 'app-diagnostics-v1';
+const expandedPayload = () =>
+  body({ schemaVersion: 2, eventName: 'feature_open', feature: 'settings', metrics: { count: 2 } });
+const expandedDeps = (overrides: Record<string, unknown> = {}) =>
+  deps({
+    config: { policyVersion: EXPANDED_POLICY, appDiagnosticsScope: EXPANDED_SCOPE },
+    getConsent: async () => ({
+      enabled: true,
+      eligible: true,
+      policyVersion: EXPANDED_POLICY,
+      dataClasses: CLASSES,
+    }),
+    ...overrides,
+  });
+describe('expanded diagnostics ingest admission', () => {
+  it('fails closed when the server has not explicitly enabled the expanded scope', async () => {
+    for (const config of [
+      { policyVersion: EXPANDED_POLICY },
+      { policyVersion: EXPANDED_POLICY, appDiagnosticsScope: 'unknown-scope' },
+      { policyVersion: POLICY, appDiagnosticsScope: EXPANDED_SCOPE },
+    ]) {
+      let stores = 0;
+      const response = await handleTelemetryIngest(
+        request(expandedPayload()),
+        expandedDeps({
+          config,
+          storeBatch: async () => {
+            stores++;
+          },
+        }),
+      );
+      assert.equal(response.status, 403);
+      assert.equal(stores, 0);
+    }
+  });
+  it('does not treat old, offered-only, disabled or withdrawing consent as expanded acceptance', async () => {
+    for (const state of [
+      { enabled: true, eligible: true, policyVersion: POLICY, dataClasses: CLASSES },
+      {
+        enabled: true,
+        eligible: true,
+        policyVersion: null,
+        offeredPolicyVersion: EXPANDED_POLICY,
+        dataClasses: CLASSES,
+      },
+      { enabled: false, eligible: true, policyVersion: EXPANDED_POLICY, dataClasses: CLASSES },
+      {
+        enabled: true,
+        eligible: true,
+        policyVersion: EXPANDED_POLICY,
+        dataClasses: CLASSES,
+        withdrawal: { status: 'pending' },
+      },
+      {
+        enabled: true,
+        eligible: true,
+        policyVersion: EXPANDED_POLICY,
+        dataClasses: CLASSES.slice(0, 2),
+      },
+    ]) {
+      let stores = 0;
+      const response = await handleTelemetryIngest(
+        request(expandedPayload()),
+        expandedDeps({
+          getConsent: async () => state,
+          storeBatch: async () => {
+            stores++;
+          },
+        }),
+      );
+      assert.equal(response.status, 403);
+      assert.equal(stores, 0);
+    }
+  });
+  it('passes only sanitized scoped v2 dimensions to the existing account-bound atomic store', async () => {
+    const stored: unknown[] = [];
+    const response = await handleTelemetryIngest(
+      request(expandedPayload()),
+      expandedDeps({
+        reconcileWithdrawal: () => assert.fail('ingest must not call billing'),
+        storeBatch: async (account: string, batch: unknown) => {
+          stored.push({ account, batch });
+          return { status: 'accepted', acceptedEventIds: [EVENT_ID] };
+        },
+      }),
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(stored, [{ account: 'user_123', batch: expandedPayload() }]);
+    assert.deepEqual((await response.json()).acceptedEventIds, [EVENT_ID]);
+  });
+  it('keeps authoritative withdrawal after expanded consent preflight effective', async () => {
+    const response = await handleTelemetryIngest(
+      request(expandedPayload()),
+      expandedDeps({ storeBatch: async () => ({ status: 'consent_required' }) }),
+    );
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: 'telemetry_consent_required' });
+  });
+  it('rejects v2 private fields and v1 smuggling before storage with content-free errors', async () => {
+    for (const payload of [
+      body({
+        schemaVersion: 2,
+        eventName: 'diagnostic',
+        feature: 'app',
+        diagnostic: 'renderer_error',
+        metrics: { count: 1 },
+        rawError: 'PRIVATE_SENTINEL',
+      }),
+      body({ schemaVersion: 1, metrics: { heapUsedMiB: 1 } }),
+    ]) {
+      let stores = 0;
+      const response = await handleTelemetryIngest(
+        request(payload),
+        expandedDeps({
+          storeBatch: async () => {
+            stores++;
+          },
+        }),
+      );
+      assert.equal(response.status, 400);
+      assert.equal(stores, 0);
+      assert.deepEqual(await response.json(), { error: 'invalid_telemetry_payload' });
+    }
+  });
+});

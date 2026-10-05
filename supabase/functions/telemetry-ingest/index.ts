@@ -6,6 +6,8 @@ import {
   MAX_TELEMETRY_BATCH_BYTES,
   parseTelemetryJson,
   TelemetrySchemaError,
+  APP_DIAGNOSTICS_SCHEMA_VERSION,
+  supportsAppDiagnosticsScope,
   type TelemetryBatch,
 } from '../_shared/telemetrySchema.ts';
 
@@ -127,7 +129,11 @@ export async function handleTelemetryIngest(req: Request, deps: any): Promise<Re
   let batch: TelemetryBatch;
   try {
     const raw = await readBodyBounded(req, MAX_TELEMETRY_BATCH_BYTES);
-    batch = parseTelemetryJson(raw, { nowMs: deps.nowMs?.() ?? Date.now() });
+    // Parse supported wire versions, then independently enforce account/scope consent below.
+    batch = parseTelemetryJson(raw, {
+      nowMs: deps.nowMs?.() ?? Date.now(),
+      allowAppDiagnostics: true,
+    });
   } catch (error) {
     if (error instanceof TelemetrySchemaError && error.code === 'payload_too_large') {
       return json({ error: 'payload_too_large' }, 413, origin);
@@ -136,7 +142,15 @@ export async function handleTelemetryIngest(req: Request, deps: any): Promise<Re
   }
 
   const consent = await deps.getConsent(user.id).catch(() => null);
-  if (!consentAllowsUpload(consent, deps.config.policyVersion)) {
+  const expanded = batch.events.some(
+    (event) => event.schemaVersion === APP_DIAGNOSTICS_SCHEMA_VERSION,
+  );
+  if (
+    !consentAllowsUpload(consent, deps.config.policyVersion) ||
+    (expanded &&
+      (!supportsAppDiagnosticsScope(deps.config) ||
+        ['pending', 'failed'].includes(consent?.withdrawal?.status)))
+  ) {
     return json({ error: 'telemetry_consent_required' }, 403, origin);
   }
 
@@ -196,6 +210,8 @@ if (import.meta.main) {
   const deps = {
     config: {
       policyVersion: env.get('TELEMETRY_REWARD_POLICY_VERSION') ?? '',
+      // Enabling this scope also requires the separately reviewed storage migration.
+      appDiagnosticsScope: env.get('TELEMETRY_APP_DIAGNOSTICS_SCOPE') ?? '',
     },
     authenticate: async (jwt: string) => {
       const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {

@@ -8,6 +8,24 @@
  */
 
 export const TELEMETRY_SCHEMA_VERSION = 1 as const;
+// Reserved for a newly disclosed scope. Never reuse a legacy policy version.
+export const APP_DIAGNOSTICS_SCOPE = 'app-diagnostics-v1' as const;
+export const APP_DIAGNOSTICS_POLICY_VERSION = 'telemetry-app-diagnostics-2026-10-05-v1' as const;
+export const APP_DIAGNOSTICS_SCHEMA_VERSION = 2 as const;
+
+export function supportsAppDiagnosticsScope(
+  config:
+    | {
+        policyVersion?: unknown;
+        appDiagnosticsScope?: unknown;
+      }
+    | undefined,
+): boolean {
+  return (
+    config?.policyVersion === APP_DIAGNOSTICS_POLICY_VERSION &&
+    config.appDiagnosticsScope === APP_DIAGNOSTICS_SCOPE
+  );
+}
 export const MAX_TELEMETRY_EVENTS_PER_BATCH = 32;
 export const MAX_TELEMETRY_BATCH_BYTES = 64 * 1024;
 export const TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -64,7 +82,60 @@ export interface TelemetryEvent {
 
 export interface TelemetryBatch {
   batchId: string;
-  events: readonly TelemetryEvent[];
+  events: readonly (TelemetryEvent | AppDiagnosticsEvent)[];
+}
+
+// Explicit release allowlists: new routes are not automatically new telemetry.
+export const APP_DIAGNOSTICS_FEATURES = [
+  'chat',
+  'canvas',
+  'workbench',
+  'preview',
+  'browser',
+  'terminal',
+  'kanban',
+  'schedule',
+  'ade',
+  'agents',
+  'model-foundry',
+  'agent-detail',
+  'project-detail',
+  'context',
+  'skills',
+  'benchmarks',
+  'history',
+  'tools',
+  'files',
+  'notes',
+  'account',
+  'settings',
+  'command-palette',
+  'voice',
+  'app',
+] as const;
+export const APP_DIAGNOSTICS_CATEGORIES = [
+  'renderer_error',
+  'unhandled_rejection',
+  'event_loop_delay',
+  'resource_sample',
+  'operation_outcome',
+] as const;
+type AppDiagnosticsMetric =
+  | 'count'
+  | 'sampleCount'
+  | 'durationMs'
+  | 'eventLoopDelayMs'
+  | 'heapUsedMiB'
+  | 'heapLimitMiB';
+export interface AppDiagnosticsEvent extends Omit<
+  TelemetryEvent,
+  'schemaVersion' | 'eventName' | 'metrics'
+> {
+  schemaVersion: typeof APP_DIAGNOSTICS_SCHEMA_VERSION;
+  eventName: 'feature_open' | 'diagnostic' | 'tool_outcome';
+  feature: (typeof APP_DIAGNOSTICS_FEATURES)[number];
+  diagnostic?: (typeof APP_DIAGNOSTICS_CATEGORIES)[number];
+  metrics: Partial<Record<AppDiagnosticsMetric, number>>;
 }
 
 export type TelemetrySchemaErrorCode =
@@ -99,6 +170,9 @@ const EVENT_KEYS = new Set([
   'outcome',
 ]);
 const BATCH_KEYS = new Set(['batchId', 'events']);
+const DIAGNOSTICS_EVENT_KEYS = new Set([...EVENT_KEYS, 'feature', 'diagnostic']);
+const FEATURE_SET = new Set<string>(APP_DIAGNOSTICS_FEATURES);
+const DIAGNOSTIC_SET = new Set<string>(APP_DIAGNOSTICS_CATEGORIES);
 const METRIC_KEYS = new Set<string>(TELEMETRY_METRIC_NAMES);
 const EVENT_NAME_SET = new Set<string>(TELEMETRY_EVENT_NAMES);
 const PLATFORM_SET = new Set<string>(TELEMETRY_PLATFORMS);
@@ -157,12 +231,71 @@ function parseMetrics(value: unknown): TelemetryMetrics {
   return metrics;
 }
 
-function parseEvent(value: unknown, nowMs: number): TelemetryEvent {
-  if (!isRecord(value) || !hasOnlyKeys(value, EVENT_KEYS)) {
+function parseDiagnosticsMetrics(event: Record<string, unknown>): AppDiagnosticsEvent['metrics'] {
+  const metrics = event.metrics;
+  const category = event.diagnostic;
+  const resource = category === 'resource_sample';
+  const delay = category === 'event_loop_delay';
+  const operation = category === 'operation_outcome' || event.eventName === 'tool_outcome';
+  const required = resource
+    ? ['sampleCount', 'heapUsedMiB', 'heapLimitMiB']
+    : delay
+      ? ['sampleCount', 'eventLoopDelayMs']
+      : ['count'];
+  const allowed = new Set(operation ? [...required, 'durationMs'] : required);
+  if (
+    !isRecord(metrics) ||
+    !hasOnlyKeys(metrics, allowed) ||
+    required.some((key) => !Object.hasOwn(metrics, key))
+  ) {
+    return invalid('invalid_metric', 'Metrics do not match the diagnostic category.');
+  }
+  const result: AppDiagnosticsEvent['metrics'] = {};
+  for (const [key, value] of Object.entries(metrics)) {
+    const max =
+      key === 'count'
+        ? 1_000
+        : key === 'sampleCount'
+          ? 60
+          : key === 'eventLoopDelayMs'
+            ? 60_000
+            : key === 'durationMs'
+              ? 86_400_000
+              : 1_048_576;
+    const min = ['count', 'sampleCount', 'heapLimitMiB'].includes(key) ? 1 : 0;
+    if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) {
+      return invalid('invalid_metric', 'Diagnostic metric is outside its aggregate bound.');
+    }
+    result[key as AppDiagnosticsMetric] = value as number;
+  }
+  if (resource && result.heapUsedMiB! > result.heapLimitMiB!) {
+    return invalid('invalid_metric', 'Heap usage exceeds its reported limit.');
+  }
+  return result;
+}
+
+function parseEvent(
+  value: unknown,
+  nowMs: number,
+  allowAppDiagnostics: boolean,
+): TelemetryEvent | AppDiagnosticsEvent {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(
+      value,
+      value.schemaVersion === APP_DIAGNOSTICS_SCHEMA_VERSION ? DIAGNOSTICS_EVENT_KEYS : EVENT_KEYS,
+    )
+  ) {
     return invalid('invalid_event', 'Event contains an unknown field.');
   }
-  if (value.schemaVersion !== TELEMETRY_SCHEMA_VERSION) {
+  if (
+    value.schemaVersion !== TELEMETRY_SCHEMA_VERSION &&
+    value.schemaVersion !== APP_DIAGNOSTICS_SCHEMA_VERSION
+  ) {
     return invalid('invalid_event', 'Unsupported telemetry schema version.');
+  }
+  if (value.schemaVersion === APP_DIAGNOSTICS_SCHEMA_VERSION && !allowAppDiagnostics) {
+    return invalid('invalid_event', 'Expanded diagnostics require an explicit schema opt-in.');
   }
   if (typeof value.eventName !== 'string' || !EVENT_NAME_SET.has(value.eventName)) {
     return invalid('invalid_event', 'Unsupported telemetry event name.');
@@ -181,21 +314,48 @@ function parseEvent(value: unknown, nowMs: number): TelemetryEvent {
     return invalid('invalid_event', 'Unsupported telemetry outcome.');
   }
 
-  return {
+  const common = {
     eventId: requireUuid(value.eventId, 'eventId'),
-    eventName: value.eventName as TelemetryEventName,
-    schemaVersion: TELEMETRY_SCHEMA_VERSION,
     occurredAt: requireTimestamp(value.occurredAt, nowMs),
     appVersion: value.appVersion,
     platform: value.platform as TelemetryPlatform,
-    metrics: parseMetrics(value.metrics),
     outcome: value.outcome as TelemetryOutcome,
+  };
+  if (value.schemaVersion === APP_DIAGNOSTICS_SCHEMA_VERSION) {
+    if (
+      !['feature_open', 'diagnostic', 'tool_outcome'].includes(value.eventName) ||
+      typeof value.feature !== 'string' ||
+      !FEATURE_SET.has(value.feature) ||
+      (value.eventName === 'diagnostic'
+        ? typeof value.diagnostic !== 'string' || !DIAGNOSTIC_SET.has(value.diagnostic)
+        : Object.hasOwn(value, 'diagnostic'))
+    ) {
+      return invalid('invalid_event', 'Unsupported diagnostic feature or category.');
+    }
+    return {
+      ...common,
+      schemaVersion: APP_DIAGNOSTICS_SCHEMA_VERSION,
+      eventName: value.eventName as AppDiagnosticsEvent['eventName'],
+      feature: value.feature as AppDiagnosticsEvent['feature'],
+      ...(value.eventName === 'diagnostic'
+        ? { diagnostic: value.diagnostic as AppDiagnosticsEvent['diagnostic'] }
+        : {}),
+      metrics: parseDiagnosticsMetrics(value),
+    };
+  }
+  return {
+    ...common,
+    eventName: value.eventName as TelemetryEventName,
+    schemaVersion: TELEMETRY_SCHEMA_VERSION,
+    metrics: parseMetrics(value.metrics),
   };
 }
 
 export interface ParseTelemetryBatchOptions {
   /** Tests may inject a fixed clock; production defaults to Date.now(). */
   nowMs?: number;
+  /** Schema support only, not consent. Existing client validators remain v1-only. */
+  allowAppDiagnostics?: boolean;
 }
 
 /** Validate an already-decoded client payload and return a sanitized copy. */
@@ -224,7 +384,7 @@ export function parseTelemetryBatch(
 
   const eventIds = new Set<string>();
   const events = input.events.map((event) => {
-    const parsed = parseEvent(event, nowMs);
+    const parsed = parseEvent(event, nowMs, options.allowAppDiagnostics === true);
     if (eventIds.has(parsed.eventId)) {
       return invalid('invalid_batch', 'Batch contains duplicate event IDs.');
     }
