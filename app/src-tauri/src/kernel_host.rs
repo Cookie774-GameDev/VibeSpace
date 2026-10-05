@@ -4,7 +4,7 @@ use std::{
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State, Webview, WindowEvent};
 
 const HOST_LABEL: &str = "main";
 const HOST_REQUEST_EVENT: &str = "jarvis:kernel-host-request-v1";
@@ -929,8 +929,40 @@ fn with_broker<T>(
     operation(&mut broker).map_err(str::to_string)
 }
 
+fn ensure_kernel_owner_caller(webview_label: &str, window_label: &str) -> Result<(), String> {
+    if webview_label != HOST_LABEL || window_label != HOST_LABEL {
+        return Err("kernel_host_wrong_window".into());
+    }
+    Ok(())
+}
+
+fn ensure_kernel_client_caller(webview_label: &str, window_label: &str) -> Result<(), String> {
+    if webview_label != window_label {
+        return Err("kernel_client_window_rejected".into());
+    }
+    Ok(())
+}
+
+fn kernel_delivery_target_matches(
+    expected_label: &str,
+    webview_label: &str,
+    window_label: &str,
+) -> bool {
+    expected_label == webview_label && webview_label == window_label
+}
+
+// Resolve only the expected top-level surface, even when it owns embedded children.
+// Callers deliberately retain Emitter::emit semantics; this does not redesign event audiences.
+fn kernel_delivery_webview(app: &AppHandle, label: &str) -> Option<Webview> {
+    let webview = app.get_webview(label)?;
+    if !kernel_delivery_target_matches(label, webview.label(), webview.window().label()) {
+        return None;
+    }
+    Some(webview)
+}
+
 fn emit_delivery(app: &AppHandle, delivery: ClientDelivery) {
-    if let Some(requester) = app.get_webview_window(&delivery.requester_label) {
+    if let Some(requester) = kernel_delivery_webview(app, &delivery.requester_label) {
         let _ = requester.emit(CLIENT_RESPONSE_EVENT, delivery.event);
     }
 }
@@ -961,13 +993,15 @@ fn destroy_owner(app: &AppHandle, capture: &OwnerCapture) {
 
 #[tauri::command]
 pub fn register_kernel_host(
-    window: WebviewWindow,
+    webview: Webview,
     app: AppHandle,
     state: State<'_, KernelHostState>,
 ) -> Result<KernelHostRegistration, String> {
+    let window = webview.window();
+    ensure_kernel_owner_caller(webview.label(), window.label())?;
     let token = nanoid::nanoid!(48);
     let replacement = with_broker(&state, |broker| {
-        broker.register_reloaded_main(window.label(), token)
+        broker.register_reloaded_main(webview.label(), token)
     })?;
     for delivery in replacement.released {
         emit_delivery(&app, delivery);
@@ -985,21 +1019,23 @@ pub fn register_kernel_host(
 
 #[tauri::command]
 pub fn kernel_client_request(
-    window: WebviewWindow,
+    webview: Webview,
     app: AppHandle,
     state: State<'_, KernelHostState>,
     request: KernelClientRequestV1,
     timeout_ms: Option<u64>,
 ) -> Result<KernelClientRequestRegistration, String> {
+    let window = webview.window();
+    ensure_kernel_client_caller(webview.label(), window.label())?;
     let dispatch = with_broker(&state, |broker| {
         broker.request(
-            window.label(),
+            webview.label(),
             request,
             now_ms(),
             timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
         )
     })?;
-    let Some(host) = app.get_webview_window(&dispatch.host_label) else {
+    let Some(host) = kernel_delivery_webview(&app, &dispatch.host_label) else {
         let _ = with_broker(&state, |broker| {
             broker.abandon(dispatch.event.epoch, &dispatch.event.request_id);
             Ok(())
@@ -1030,7 +1066,7 @@ pub fn kernel_client_request(
 
 #[tauri::command]
 pub fn kernel_host_respond(
-    window: WebviewWindow,
+    webview: Webview,
     app: AppHandle,
     state: State<'_, KernelHostState>,
     epoch: u64,
@@ -1038,9 +1074,11 @@ pub fn kernel_host_respond(
     request_id: String,
     response: KernelClientResponseV1,
 ) -> Result<(), String> {
+    let window = webview.window();
+    ensure_kernel_owner_caller(webview.label(), window.label())?;
     let delivery = with_broker(&state, |broker| {
         broker.respond(
-            window.label(),
+            webview.label(),
             epoch,
             &owner_token,
             &request_id,
@@ -1054,14 +1092,16 @@ pub fn kernel_host_respond(
 
 #[tauri::command]
 pub fn release_kernel_host(
-    window: WebviewWindow,
+    webview: Webview,
     app: AppHandle,
     state: State<'_, KernelHostState>,
     epoch: u64,
     owner_token: String,
 ) -> Result<(), String> {
+    let window = webview.window();
+    ensure_kernel_owner_caller(webview.label(), window.label())?;
     let deliveries = with_broker(&state, |broker| {
-        broker.release(window.label(), epoch, &owner_token)
+        broker.release(webview.label(), epoch, &owner_token)
     })?;
     for delivery in deliveries {
         emit_delivery(&app, delivery);
@@ -1084,6 +1124,101 @@ pub fn release_on_process_exit(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_owner_requires_main_webview_and_main_parent() {
+        assert_eq!(ensure_kernel_owner_caller("main", "main"), Ok(()));
+        for (webview, window) in [
+            ("siyuan-context-vault", "main"),
+            ("workbench-browser-main", "main"),
+            ("preview-child", "main"),
+            ("pet-overlay", "main"),
+            ("main", "foreign-window"),
+            ("workbench-main", "workbench-main"),
+            ("", "main"),
+        ] {
+            assert_eq!(
+                ensure_kernel_owner_caller(webview, window),
+                Err("kernel_host_wrong_window".into())
+            );
+        }
+    }
+
+    #[test]
+    fn kernel_client_top_level_guard_precedes_existing_broker_policy() {
+        let mut broker = KernelHostBroker::default();
+        broker.register("main", "owner-token".into()).unwrap();
+        for child in [
+            "siyuan-context-vault",
+            "workbench-child",
+            "preview-child",
+            "pet-child",
+        ] {
+            let result = ensure_kernel_client_caller(child, "main").and_then(|()| {
+                broker
+                    .request(child, cancel_request(), 100, 1_000)
+                    .map_err(str::to_string)
+            });
+            assert_eq!(result, Err("kernel_client_window_rejected".into()));
+            assert!(broker.pending.is_empty());
+        }
+        assert_eq!(
+            ensure_kernel_client_caller("main", "foreign"),
+            Err("kernel_client_window_rejected".into())
+        );
+        for label in ["main", "dictation", "pet-overlay", "preview-window"] {
+            ensure_kernel_client_caller(label, label).unwrap();
+            assert_eq!(
+                broker.request(label, cancel_request(), 100, 1_000),
+                Err("kernel_client_window_rejected")
+            );
+            assert!(broker.pending.is_empty());
+        }
+        ensure_kernel_client_caller("workbench-main", "workbench-main").unwrap();
+        assert!(broker
+            .request("workbench-main", cancel_request(), 100, 1_000)
+            .is_ok());
+    }
+
+    #[test]
+    fn kernel_delivery_checks_exact_webview_and_native_parent_labels() {
+        assert!(kernel_delivery_target_matches("main", "main", "main"));
+        assert!(kernel_delivery_target_matches(
+            "workbench-main",
+            "workbench-main",
+            "workbench-main"
+        ));
+        for (expected, actual, parent) in [
+            ("main", "siyuan-context-vault", "main"),
+            ("main", "main", "foreign"),
+            ("workbench-main", "workbench-main", "main"),
+            ("main", "replacement", "replacement"),
+        ] {
+            assert!(!kernel_delivery_target_matches(expected, actual, parent));
+        }
+    }
+
+    #[test]
+    fn kernel_invalid_version_cannot_allocate_pending_or_consume_authority() {
+        let mut broker = KernelHostBroker::default();
+        ensure_kernel_client_caller("main", "main").unwrap();
+        let invalid = KernelClientRequestV1::RunOwnershipDiagnostic {
+            version: 0,
+            run_id: "jrun_native_caller_audit".into(),
+        };
+        // DTO validation precedes even the missing-owner branch.
+        assert_eq!(
+            broker.request("main", invalid.clone(), 100, 25),
+            Err("kernel_request_invalid")
+        );
+        let owner = broker.register("main", "owner-token".into()).unwrap();
+        assert_eq!(
+            broker.request("main", invalid, 100, 25),
+            Err("kernel_request_invalid")
+        );
+        assert!(broker.pending.is_empty());
+        assert_eq!(broker.owner_epoch(), Some(owner.registration.epoch));
+    }
 
     fn cancel_request() -> KernelClientRequestV1 {
         KernelClientRequestV1::Cancel {

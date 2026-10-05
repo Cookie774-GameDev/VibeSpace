@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::{State, WebviewWindow};
+use tauri::{State, Webview};
 
 #[derive(Default)]
 pub struct RelayActiveContextState(Mutex<ContextState>);
@@ -241,58 +241,85 @@ impl RelayActiveContextState {
     }
 }
 
-fn require_main(window: &WebviewWindow) -> Result<(), String> {
-    if window.label() == "main" {
-        Ok(())
-    } else {
-        Err("Relay active context is available only from the main VibeSpace window.".into())
-    }
+fn require_main(webview_label: &str, window_label: &str) -> Result<(), String> {
+    crate::native_app_surface::ensure_main_caller(webview_label, window_label).map_err(|_| {
+        "Relay active context is available only from the main VibeSpace window.".into()
+    })
 }
 
 #[tauri::command]
 pub fn relay_active_context_open(
     state: State<'_, RelayActiveContextState>,
-    window: WebviewWindow,
+    window: Webview,
 ) -> Result<RelayActiveContextOwner, String> {
-    require_main(&window)?;
+    require_main(window.label(), window.window().label())?;
     state.open()
 }
 
 #[tauri::command]
 pub fn relay_active_context_update(
     state: State<'_, RelayActiveContextState>,
-    window: WebviewWindow,
+    window: Webview,
     owner_handle: String,
     revision: u64,
     context: Option<RelayActiveContextUpdate>,
 ) -> Result<RelayActiveContextSnapshot, String> {
-    require_main(&window)?;
+    require_main(window.label(), window.window().label())?;
     state.update(&owner_handle, revision, context)
 }
 
 #[tauri::command]
 pub fn relay_active_context_close(
     state: State<'_, RelayActiveContextState>,
-    window: WebviewWindow,
+    window: Webview,
     owner_handle: String,
     revision: u64,
 ) -> Result<(), String> {
-    require_main(&window)?;
+    require_main(window.label(), window.window().label())?;
     state.close(&owner_handle, revision)
 }
 
 #[tauri::command]
 pub fn relay_active_context_snapshot(
     state: State<'_, RelayActiveContextState>,
-    window: WebviewWindow,
+    window: Webview,
 ) -> Result<RelayActiveContextSnapshot, String> {
-    require_main(&window)?;
+    require_main(window.label(), window.window().label())?;
     state.current()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_active_context_accepts_main_webview_in_main_window() {
+        assert_eq!(require_main("main", "main"), Ok(()));
+    }
+
+    #[test]
+    fn relay_active_context_rejects_foreign_webviews_and_owner_windows() {
+        let denial = "Relay active context is available only from the main VibeSpace window.";
+        for (webview_label, window_label) in [
+            ("siyuan-context-vault", "main"),
+            ("workbench-browser-1", "main"),
+            ("browser", "main"),
+            ("preview-surface", "main"),
+            ("pet-overlay", "main"),
+            ("", "main"),
+            ("Main", "main"),
+            ("main", "foreign-window"),
+            ("main", "Main"),
+            ("main", ""),
+            ("siyuan-context-vault", "siyuan-context-vault"),
+        ] {
+            assert_eq!(
+                require_main(webview_label, window_label),
+                Err(denial.to_string()),
+                "caller {webview_label:?} in window {window_label:?} must be denied"
+            );
+        }
+    }
 
     fn update(project_id: &str, chat_id: &str) -> RelayActiveContextUpdate {
         RelayActiveContextUpdate {
