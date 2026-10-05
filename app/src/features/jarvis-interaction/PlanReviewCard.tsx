@@ -13,6 +13,7 @@ import { messageRepo } from '@/lib/db/repositories';
 import type { MessageId, Part } from '@/types';
 import { useJarvisInteractionStore } from './sessionStore';
 import type { JarvisPlanReview } from './types';
+import { setAgentApprovalMode, setPermissionAccess } from './permissionAccessStore';
 
 type PlanPart = Extract<Part, { kind: 'plan_review' }>;
 
@@ -41,12 +42,16 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
   const [redoOpen, setRedoOpen] = useState(false);
   const [revision, setRevision] = useState('');
   const [adding, setAdding] = useState(false);
-  const [pendingAction, setPendingAction] = useState<'build' | 'revision' | 'cancel' | null>(null);
+  const [pendingAction, setPendingAction] = useState<
+    'build' | 'implement' | 'revision' | 'cancel' | null
+  >(null);
   const busy = pendingAction !== null;
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+  const implementedPlanRef = useRef<string | null>(null);
+  const implementationKey = `${chatId}:${messageId}:${plan.id}`;
 
-  const writeStatus = async (status: JarvisPlanReview['status']) => {
+  const writeStatus = async (status: JarvisPlanReview['status'], allowCompleted = false) => {
     if (!messageId || !chatId) throw new Error('Plan approval is unavailable.');
     const message = await messageRepo.getById(messageId);
     const persistedPart = message?.parts.find(
@@ -57,7 +62,8 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
       !message ||
       String(message.chat_id) !== chatId ||
       !persistedPart ||
-      persistedPart.plan.status !== 'pending' ||
+      (persistedPart.plan.status !== 'pending' &&
+        !(allowCompleted && persistedPart.plan.status === 'built')) ||
       !samePlanDefinition(persistedPart.plan, plan)
     ) {
       throw new Error('Plan approval is no longer pending.');
@@ -71,17 +77,32 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
     });
   };
 
-  const handleBuild = async () => {
-    if (!chatId || busyRef.current || plan.status !== 'pending') return;
+  const handleBuild = async (explicitImplementation = false) => {
+    if (
+      !chatId || busyRef.current ||
+      (explicitImplementation && implementedPlanRef.current === implementationKey) ||
+      (plan.status !== 'pending' && !(explicitImplementation && plan.status === 'built'))
+    ) return;
     busyRef.current = true;
-    setPendingAction('build');
+    setPendingAction(explicitImplementation ? 'implement' : 'build');
     setError(null);
     try {
-      if (!canExecute) {
+      if (!canExecute && !explicitImplementation) {
         await writeStatus('built');
         return;
       }
-      await writeStatus('building');
+      await writeStatus('building', explicitImplementation);
+      if (explicitImplementation) {
+        await messageRepo.create({
+          chat_id: chatId as never,
+          role: 'user',
+          parts: [{ kind: 'text', text: 'Yes, implement the plan.' }],
+        });
+        // Match the existing Agent / Full access picker; retain ordinary
+        // provider permissions and approval checks in the runtime.
+        setAgentApprovalMode(chatId, 'full');
+        setPermissionAccess(chatId, 'full');
+      }
       useJarvisInteractionStore.getState().setChatMode(chatId, 'agent');
       window.dispatchEvent(
         new CustomEvent('jarvis:send', {
@@ -90,8 +111,11 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
             // Preserve the entire validated plan in structuredContext below.
             // Quoting pre-approval restrictions as the new instruction can
             // incorrectly disable the tools needed after approval.
-            text: 'Implement the approved plan in the attached structured context. In-app approval has been granted; use only the tools needed for that plan, preserve its constraints, then verify the result.',
+            text: explicitImplementation
+              ? 'Yes, implement the plan.'
+              : 'Implement the approved plan in the attached structured context. In-app approval has been granted; use only the tools needed for that plan, preserve its constraints, then verify the result.',
             interactionMode: 'agent',
+            ...(explicitImplementation ? { queueIfBusy: true } : {}),
             structuredContext: {
               kind: 'plan_build',
               sourceMessageId: messageId,
@@ -100,6 +124,7 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
           },
         }),
       );
+      if (explicitImplementation) implementedPlanRef.current = implementationKey;
     } catch {
       setError('The plan could not start. Please retry.');
     } finally {
@@ -272,9 +297,22 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
           size="sm"
           variant="accent"
           disabled={busy || plan.status !== 'pending'}
-          onClick={handleBuild}
+          onClick={() => handleBuild()}
         >
           {canExecute ? (pendingAction === 'build' ? 'Implementing…' : 'Yes — Implement Plan') : 'Done'}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="accent"
+          disabled={
+            busy || !chatId || !messageId ||
+            implementedPlanRef.current === implementationKey ||
+            (plan.status !== 'pending' && plan.status !== 'built')
+          }
+          onClick={() => handleBuild(true)}
+        >
+          Yes, implement
         </Button>
         <Button
           type="button"

@@ -4,6 +4,7 @@ import { PlanReviewCard } from './PlanReviewCard';
 import type { Part } from '@/types/chat';
 import { useJarvisInteractionStore } from './sessionStore';
 import { requestsNoTools } from '@/lib/ai/intent';
+import { readAgentApprovalMode, readPermissionAccess, setAgentApprovalMode, setPermissionAccess } from './permissionAccessStore';
 
 const repo = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -41,6 +42,7 @@ const informationalPlanPart: Extract<Part, { kind: 'plan_review' }> = {
 
 describe('PlanReviewCard', () => {
   beforeEach(() => {
+    window.localStorage.clear();
     repo.getById.mockReset();
     repo.update.mockReset();
     repo.create.mockReset();
@@ -54,6 +56,57 @@ describe('PlanReviewCard', () => {
     });
     repo.update.mockResolvedValue({});
     repo.create.mockResolvedValue({});
+  });
+
+  it.each(['pending', 'built'] as const)('implements a %s informational plan with one exact user send and existing Full access', async (status) => {
+    const part = { ...informationalPlanPart, plan: { ...informationalPlanPart.plan, status } };
+    repo.getById.mockResolvedValue({ id: 'msg_1', chat_id: 'chat_1', role: 'assistant', parts: [part] });
+    useJarvisInteractionStore.getState().setChatMode('chat_1', 'plan');
+    useJarvisInteractionStore.getState().setChatMode('other_chat', 'ask');
+    setAgentApprovalMode('chat_1', 'review');
+    setPermissionAccess('chat_1', 'read');
+    render(<PlanReviewCard part={part} messageId={'msg_1' as never} chatId="chat_1" />);
+
+    const button = screen.getByRole('button', { name: /^Yes, implement$/ });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(window.dispatchEvent).toHaveBeenCalledTimes(1));
+    expect(useJarvisInteractionStore.getState().modeForChat('chat_1')).toBe('agent');
+    expect(useJarvisInteractionStore.getState().modeForChat('other_chat')).toBe('ask');
+    expect(readPermissionAccess('chat_1')).toEqual({ access: 'full', approveAll: false });
+    expect(readAgentApprovalMode('chat_1')).toBe('full');
+    expect(repo.create).toHaveBeenCalledExactlyOnceWith({ chat_id: 'chat_1', role: 'user',
+      parts: [{ kind: 'text', text: 'Yes, implement the plan.' }] });
+    const event = vi.mocked(window.dispatchEvent).mock.calls[0][0] as CustomEvent;
+    expect(event.type).toBe('jarvis:send');
+    expect(event.detail).toEqual({ chatId: 'chat_1', text: 'Yes, implement the plan.',
+      interactionMode: 'agent', queueIfBusy: true,
+      structuredContext: { kind: 'plan_build', sourceMessageId: 'msg_1', payload: { plan: part.plan } } });
+    fireEvent.click(button);
+    expect(repo.create).toHaveBeenCalledTimes(1);
+    expect(window.dispatchEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['building', 'cancelled', 'redone'] as const)('cannot implement a %s plan', (status) => {
+    const part = { ...planPart, plan: { ...planPart.plan, status } };
+    render(<PlanReviewCard part={part} messageId={'msg_1' as never} chatId="chat_1" />);
+    fireEvent.click(screen.getByRole('button', { name: /^Yes, implement$/ }));
+    expect(repo.update).not.toHaveBeenCalled();
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it('keeps Plan mode and access if the persisted plan is stale', async () => {
+    repo.getById.mockResolvedValueOnce({ chat_id: 'other_chat', parts: [planPart] });
+    useJarvisInteractionStore.getState().setChatMode('chat_1', 'plan');
+    setPermissionAccess('chat_1', 'read');
+    render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
+    fireEvent.click(screen.getByRole('button', { name: /^Yes, implement$/ }));
+    await screen.findByRole('alert');
+    expect(useJarvisInteractionStore.getState().modeForChat('chat_1')).toBe('plan');
+    expect(readPermissionAccess('chat_1').access).toBe('read');
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
   });
 
   it('keeps the plan body scrollable while decision actions stay outside the scroll region', () => {
