@@ -2344,7 +2344,8 @@ html[data-theme='sakura']
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: hsl(var(--background));
+  /* Opaque Workbench backing for native apps with translucent regions. */
+  background: var(--workbench-ink);
 }
 
 .workbench-native-app-surface {

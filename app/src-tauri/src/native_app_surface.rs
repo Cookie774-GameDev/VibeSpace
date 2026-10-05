@@ -777,13 +777,27 @@ pub async fn workbench_native_app_surface_status(
 ) -> Result<NativeStatus, String> {
     ensure_main_caller(window.label(), window.window().label())?;
     tauri::async_runtime::spawn_blocking(move || {
-        let records = RECORDS
+        let mut records = RECORDS
             .lock()
             .map_err(|_| "workbench_native_app_state_unavailable")?;
         let record = records
-            .get(&panel_id)
+            .get_mut(&panel_id)
             .filter(|r| r.operation_id == operation_id)
             .ok_or("workbench_native_app_operation_stale")?;
+        #[cfg(windows)]
+        if record.visible {
+            if let Some(reason) = record
+                .embedded
+                .as_ref()
+                .and_then(|host| host.reconcile_bounds().err())
+            {
+                // Release the lease if an app no longer accepts panel bounds.
+                // Dropping it restores the original parent/style/placement when
+                // Windows still owns the child relationship.
+                record.embedded = None;
+                record.embedding_error = Some(reason);
+            }
+        }
         Ok(status(&panel_id, record))
     })
     .await

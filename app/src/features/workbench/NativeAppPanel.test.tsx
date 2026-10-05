@@ -4,7 +4,7 @@ import * as React from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUIStore } from '@/stores/ui';
-import { NativeAppPanel } from './NativeAppPanel';
+import { NativeAppPanel, readNativeBounds } from './NativeAppPanel';
 import type { WorkbenchPanel } from './types';
 
 const native = vi.hoisted(() => ({
@@ -51,6 +51,41 @@ function nativeStatus(args?: Record<string, unknown>) {
 }
 
 describe('Workbench NativeAppPanel', () => {
+  it('does not host an app over its own panel header', () => {
+    const canvas = document.createElement('div');
+    canvas.className = 'workbench-canvas';
+    const panel = document.createElement('section');
+    panel.className = 'workbench-panel';
+    const body = document.createElement('div');
+    body.className = 'workbench-panel-body';
+    const surface = document.createElement('div');
+    body.append(surface);
+    panel.append(body);
+    canvas.append(panel);
+    document.body.append(canvas);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const top = this === surface ? 70 : this === body ? 90 : 0;
+      return {
+        x: 30,
+        y: top,
+        left: 30,
+        top,
+        right: 690,
+        bottom: 510,
+        width: 660,
+        height: 510 - top,
+        toJSON: () => ({}),
+      };
+    });
+    try {
+      expect(readNativeBounds(surface)).toBeNull();
+    } finally {
+      canvas.remove();
+    }
+  });
+
   it('settles a closed native app to idle instead of retaining its ready badge', async () => {
     let closed = false;
     native.invoke.mockImplementation(async (command, args) => {

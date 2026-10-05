@@ -1,15 +1,16 @@
 //! A reversible lease on an external HWND; never owns or terminates its process.
 use super::NativeBounds;
+use std::cell::Cell;
 use windows::core::BOOL;
 use windows::Win32::{
-    Foundation::{GetLastError, SetLastError, HWND, LPARAM, WIN32_ERROR},
+    Foundation::{GetLastError, SetLastError, HWND, LPARAM, RECT, WIN32_ERROR},
     UI::WindowsAndMessaging::{
         EnumChildWindows, GetClassNameW, GetParent, GetWindowLongPtrW, GetWindowPlacement,
-        GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetParent, SetWindowLongPtrW,
-        SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_TOP,
-        SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA,
-        WINDOWPLACEMENT, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_POPUP, WS_THICKFRAME,
-        WS_VISIBLE,
+        GetWindowInfo, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, SetParent,
+        SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE,
+        HWND_TOP, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE,
+        SW_SHOWNA, WINDOWINFO, WINDOWPLACEMENT, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_MAXIMIZE,
+        WS_MAXIMIZEBOX, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
     },
 };
 
@@ -25,6 +26,7 @@ pub struct EmbeddedWindow {
     window_visible: bool,
     original_parent: isize,
     frame_visible: bool,
+    expected_bounds: Cell<Option<(i32, i32, i32, i32)>>,
 }
 
 fn class_name(window: HWND) -> String {
@@ -115,8 +117,23 @@ fn handle(value: isize) -> HWND {
 }
 
 fn child_style(style: isize) -> isize {
-    (style & !((WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_VISIBLE).0 as isize))
+    (style
+        & !((WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MAXIMIZE | WS_MAXIMIZEBOX | WS_VISIBLE).0
+            as isize))
         | WS_CHILD.0 as isize
+}
+
+fn embed_failure_message(error: u32, frame_class: &str, content_class: &str) -> String {
+    let kind = if frame_class == "ApplicationFrameWindow"
+        && content_class == "Windows.UI.Core.CoreWindow"
+    {
+        "packaged app"
+    } else {
+        "desktop app"
+    };
+    format!(
+        "Windows rejected embedding this {kind} (SetParent error {error}). It remains in a separate window; use Focus or retry embedding."
+    )
 }
 
 fn restore_show_state(window: HWND, placement: &WINDOWPLACEMENT, visible: bool) {
@@ -205,10 +222,9 @@ impl EmbeddedWindow {
             ex_style: unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) },
             original_parent,
             frame_visible,
+            expected_bounds: Cell::new(None),
         };
-        #[cfg(debug_assertions)]
         let frame_class = class_name(frame);
-        #[cfg(debug_assertions)]
         let content_class = class_name(window);
         let parent_error;
         #[cfg(debug_assertions)]
@@ -296,8 +312,8 @@ impl EmbeddedWindow {
             }
             #[cfg(debug_assertions)]
             {
-                return Err(format!(
-                    "Windows could not embed this app (SetParent error {}; debug frame_class={}, content_class={}, frame={:#x}, content={:#x}, target={:#x}, original_parent={:#x}, parent_after={:#x}, content_pid={}, host_pid={}, content_thread={}, host_thread={}, style_before={:#x}, style_after={:#x}, style_error={}, ex_style_before={:#x}, ex_style_after={:#x}, ex_style_error={}).",
+                eprintln!(
+                    "Workbench native embedding rejected: SetParent error {}; frame_class={}, content_class={}, frame={:#x}, content={:#x}, target={:#x}, original_parent={:#x}, parent_after={:#x}, content_pid={}, host_pid={}, content_thread={}, host_thread={}, style_before={:#x}, style_after={:#x}, style_error={}, ex_style_before={:#x}, ex_style_after={:#x}, ex_style_error={}",
                     parent_error.0,
                     frame_class,
                     content_class,
@@ -316,12 +332,12 @@ impl EmbeddedWindow {
                     lease.ex_style,
                     ex_style_after,
                     ex_style_error.0,
-                ));
+                );
             }
-            #[cfg(not(debug_assertions))]
-            return Err(format!(
-                "Windows could not embed this app (SetParent error {}).",
-                parent_error.0
+            return Err(embed_failure_message(
+                parent_error.0,
+                &frame_class,
+                &content_class,
             ));
         }
         Ok(lease)
@@ -341,18 +357,88 @@ impl EmbeddedWindow {
         if !self.is_attached() {
             return Err("The app window closed or left Workbench.".into());
         }
+        let desired = (
+            (bounds.x * scale).round() as i32,
+            (bounds.y * scale).round() as i32,
+            (bounds.width * scale).round().max(1.) as i32,
+            (bounds.height * scale).round().max(1.) as i32,
+        );
         unsafe {
             SetWindowPos(
                 handle(self.hwnd),
                 None,
-                (bounds.x * scale).round() as i32,
-                (bounds.y * scale).round() as i32,
-                (bounds.width * scale).round().max(1.) as i32,
-                (bounds.height * scale).round().max(1.) as i32,
+                desired.0,
+                desired.1,
+                desired.2,
+                desired.3,
                 SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
             )
             .map_err(|e| e.to_string())?;
             let _ = ShowWindow(handle(self.hwnd), SW_SHOWNA);
+        }
+        self.expected_bounds.set(Some(desired));
+        Ok(())
+    }
+
+    fn screen_rect(&self) -> Result<(i32, i32, i32, i32), String> {
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(handle(self.hwnd), &mut rect) }.map_err(|e| e.to_string())?;
+        Ok((rect.left, rect.top, rect.right, rect.bottom))
+    }
+
+    fn target_rect(&self, desired: (i32, i32, i32, i32)) -> Result<(i32, i32, i32, i32), String> {
+        let mut info = WINDOWINFO {
+            cbSize: std::mem::size_of::<WINDOWINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetWindowInfo(handle(self.parent), &mut info) }.map_err(|e| e.to_string())?;
+        let left = info.rcClient.left.checked_add(desired.0).ok_or("Workbench bounds overflow")?;
+        let top = info.rcClient.top.checked_add(desired.1).ok_or("Workbench bounds overflow")?;
+        let right = left.checked_add(desired.2).ok_or("Workbench bounds overflow")?;
+        let bottom = top.checked_add(desired.3).ok_or("Workbench bounds overflow")?;
+        Ok((left, top, right, bottom))
+    }
+
+    fn rect_matches(actual: (i32, i32, i32, i32), target: (i32, i32, i32, i32)) -> bool {
+        actual.0.abs_diff(target.0) <= 1
+            && actual.1.abs_diff(target.1) <= 1
+            && actual.2.abs_diff(target.2) <= 1
+            && actual.3.abs_diff(target.3) <= 1
+    }
+
+    pub fn reconcile_bounds(&self) -> Result<(), String> {
+        if !self.is_attached() {
+            return Err("The app window closed or left Workbench.".into());
+        }
+        let Some(desired) = self.expected_bounds.get() else {
+            return Ok(());
+        };
+        let target = self.target_rect(desired)?;
+        if Self::rect_matches(self.screen_rect()?, target) {
+            return Ok(());
+        }
+        unsafe {
+            // Some desktop apps maximize or reposition their own child HWND after
+            // attach. Reassert the last DOM-derived panel bounds without touching
+            // the external app's opacity, colors, process, or saved desktop state.
+            SetWindowLongPtrW(
+                handle(self.hwnd),
+                GWL_STYLE,
+                GetWindowLongPtrW(handle(self.hwnd), GWL_STYLE) & !(WS_MAXIMIZE.0 as isize),
+            );
+            SetWindowPos(
+                handle(self.hwnd),
+                None,
+                desired.0,
+                desired.1,
+                desired.2,
+                desired.3,
+                SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if !Self::rect_matches(self.screen_rect()?, target) {
+            return Err("This app will not stay within its Workbench panel. It remains in a separate window.".into());
         }
         Ok(())
     }
@@ -615,6 +701,26 @@ mod tests {
             let mut rect = RECT::default();
             unsafe { GetWindowRect(handle(hwnd), &mut rect) }.unwrap();
             assert_eq!((rect.right - rect.left, rect.bottom - rect.top), (480, 360));
+            // A hosted app can maximize or reposition its own HWND after attach.
+            unsafe {
+                SetWindowPos(
+                    handle(hwnd),
+                    None,
+                    0,
+                    0,
+                    800,
+                    600,
+                    SWP_NOACTIVATE | SWP_NOZORDER,
+                )
+            }
+            .unwrap();
+            host.reconcile_bounds().unwrap();
+            unsafe { GetWindowRect(handle(hwnd), &mut rect) }.unwrap();
+            assert_eq!((rect.right - rect.left, rect.bottom - rect.top), (480, 360));
+            assert!(EmbeddedWindow::rect_matches(
+                (rect.left, rect.top, rect.right, rect.bottom),
+                host.target_rect((15, 30, 480, 360)).unwrap(),
+            ));
             host.hide();
             assert!(!unsafe { IsWindowVisible(handle(hwnd)) }.as_bool());
         }
@@ -651,9 +757,17 @@ mod tests {
 
     #[test]
     fn child_style_hides_until_resize_and_keeps_child_clipping() {
-        use windows::Win32::UI::WindowsAndMessaging::{WS_CLIPCHILDREN, WS_VISIBLE};
-        let original =
-            (WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_VISIBLE | WS_CLIPCHILDREN).0 as isize;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WS_CLIPCHILDREN, WS_MAXIMIZEBOX, WS_VISIBLE,
+        };
+        let original = (WS_POPUP
+            | WS_CAPTION
+            | WS_THICKFRAME
+            | WS_MAXIMIZE
+            | WS_MAXIMIZEBOX
+            | WS_VISIBLE
+            | WS_CLIPCHILDREN)
+            .0 as isize;
         let child = child_style(original);
         assert_ne!(child & WS_CHILD.0 as isize, 0);
         assert_eq!(
@@ -661,10 +775,22 @@ mod tests {
             0
         );
         assert_eq!(child & WS_VISIBLE.0 as isize, 0);
+        assert_eq!(child & WS_MAXIMIZEBOX.0 as isize, 0);
+        assert_eq!(child & WS_MAXIMIZE.0 as isize, 0);
         assert_eq!(
             child & WS_CLIPCHILDREN.0 as isize,
             WS_CLIPCHILDREN.0 as isize
         );
+    }
+
+    #[test]
+    fn packaged_embedding_rejection_is_actionable_without_raw_window_handles() {
+        let message =
+            embed_failure_message(87, "ApplicationFrameWindow", "Windows.UI.Core.CoreWindow");
+        assert!(message.contains("packaged app"));
+        assert!(message.contains("SetParent error 87"));
+        assert!(message.contains("separate window"));
+        assert!(!message.contains("0x"));
     }
 
     #[test]

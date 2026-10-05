@@ -39,10 +39,22 @@ function readNativeBounds(element: HTMLElement | null): NativeAppBounds | null {
   if (!element) return null;
   const rect = element.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return null;
+  const tolerance = 0.5;
+  const body = element.closest<HTMLElement>('.workbench-panel-body');
+  if (body) {
+    const bodyRect = body.getBoundingClientRect();
+    if (
+      rect.left < bodyRect.left - tolerance ||
+      rect.top < bodyRect.top - tolerance ||
+      rect.right > bodyRect.right + tolerance ||
+      rect.bottom > bodyRect.bottom + tolerance
+    ) {
+      return null;
+    }
+  }
   const canvas = element.closest<HTMLElement>('.workbench-canvas');
   if (canvas) {
     const canvasRect = canvas.getBoundingClientRect();
-    const tolerance = 0.5;
     if (
       rect.left < canvasRect.left - tolerance ||
       rect.top < canvasRect.top - tolerance ||
@@ -284,14 +296,14 @@ export function NativeAppPanel({ panel, onUpdate }: NativeAppPanelProps) {
         pending = false;
       }
     };
-    const timer = window.setInterval(() => void refresh(), 1500);
+    const timer = window.setInterval(() => void refresh(), host.embedded ? 500 : 1500);
     window.addEventListener('focus', refresh);
     return () => {
       disposed = true;
       window.clearInterval(timer);
       window.removeEventListener('focus', refresh);
     };
-  }, [!!host, route, panel.id, panel.minimized, operationId, setPanelStatus]);
+  }, [!!host, host?.embedded, route, panel.id, panel.minimized, operationId, setPanelStatus]);
 
   const actOnHost = async () => {
     if (acting) return;
