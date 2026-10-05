@@ -91,12 +91,12 @@ export function NativeAppPickerDialog({
             embedding uses a separate app window.
           </DialogDescription>
         </DialogHeader>
-        <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
+        <label className="flex items-center gap-2 overflow-hidden rounded-md border border-border px-3 py-2 focus-within:ring-2 focus-within:ring-accent-cyan">
           <Search className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           <span className="sr-only">Search detected apps</span>
           <input
             aria-label="Search detected apps"
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+            className="min-w-0 flex-1 !bg-transparent !shadow-none text-sm outline-none"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search installed and running apps"
