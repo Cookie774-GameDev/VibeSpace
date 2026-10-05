@@ -14,12 +14,16 @@ use tauri::{Emitter, Manager};
 mod worker_supervisor;
 pub(crate) use worker_supervisor::verify_training_artifact;
 #[cfg(test)]
+pub(crate) use worker_supervisor::write_and_verify_training_artifact;
+#[cfg(not(test))]
+use worker_supervisor::write_and_verify_training_artifact;
+#[cfg(test)]
 use worker_supervisor::drain_bounded;
 use worker_supervisor::{
     configure_hidden_worker_command, configure_worker_environment,
     file_sha256 as artifact_file_sha256, validate_inference_receipt, validate_training_metadata,
     validate_training_receipt, verify_training_artifact_for_method,
-    write_and_verify_training_artifact, write_bounded_log, TrainingArtifactEvidence,
+    write_bounded_log, TrainingArtifactEvidence,
     TrainingCatalogFile, TrainingCatalogModel, WorkerRegistry, MAX_WORKER_LOG_BYTES,
     MODEL_MARKER_FILE as TRAINING_MODEL_MARKER, WORKER_PROTOCOL,
 };
