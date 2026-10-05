@@ -65,7 +65,7 @@ const MAX_ROWS = 200;
 function matchesHistoryProject(chat: Chat, projectId: ProjectId | null): boolean {
   // Saved chats normally have no archived flag. Both saved and archived
   // records belong in History; permanent deletion removes the record itself.
-  return (chat.project_id ?? null) === projectId;
+  return projectId === null || (chat.project_id ?? null) === projectId;
 }
 
 /**
@@ -92,6 +92,10 @@ export function HistoryList({
   const agents = useAgentStore((s) => s.agents);
 
   const [query, setQuery] = React.useState('');
+  const [allProjectsScope, setAllProjectsScope] = React.useState<string | null>(null);
+  const historyScope = JSON.stringify([accountId, workspaceId, activeProjectId]);
+  const showAllProjects = !activeProjectId || allProjectsScope === historyScope;
+  const historyProjectId = showAllProjects ? null : activeProjectId;
   const [deleting, setDeleting] = React.useState(false);
   const [pendingDeletion, setPendingDeletion] = React.useState<PendingHistoryDeletion | null>(null);
   const deletionSessionId = React.useId();
@@ -187,12 +191,13 @@ export function HistoryList({
   const chats = useLiveQuery(
     async () => {
       if (!workspaceId) return [] as Chat[];
-      const rows = (await db.chats.where('workspace_id').equals(workspaceId).toArray())
-        .filter((chat) => matchesHistoryProject(chat, activeProjectId));
+      const rows = (await db.chats.where('workspace_id').equals(workspaceId).toArray()).filter(
+        (chat) => matchesHistoryProject(chat, historyProjectId),
+      );
       rows.sort((a, b) => b.updated_at - a.updated_at);
       return rows.slice(0, MAX_ROWS);
     },
-    [workspaceId, activeProjectId],
+    [workspaceId, historyProjectId],
     [] as Chat[],
   );
   chatsRef.current = chats ?? [];
@@ -267,9 +272,24 @@ export function HistoryList({
     [browserBindings],
   );
 
+  const importedSnapshots = useLiveQuery(
+    async () => {
+      if (!showAllProjects || !accountId || !workspaceId) return [] as BrowserChatSnapshotRow[];
+      const rows = await db.browser_chat_snapshots
+        .where('[accountId+workspaceId]')
+        .equals([accountId, String(workspaceId)])
+        .toArray();
+      return rows.sort((left, right) => right.updatedAt - left.updatedAt);
+    },
+    [accountId, workspaceId, showAllProjects],
+    [] as BrowserChatSnapshotRow[],
+  );
+
   const filtered = React.useMemo(() => {
     // Also guard the previous live-query result while a project switch resolves.
-    let rows = (chats ?? []).filter((chat) => matchesHistoryProject(chat, activeProjectId));
+    let rows = (chats ?? []).filter(
+      (chat) => chat.workspace_id === workspaceId && matchesHistoryProject(chat, historyProjectId),
+    );
     const q = query.trim().toLowerCase();
     if (q) {
       rows = rows.filter((c) => {
@@ -279,11 +299,23 @@ export function HistoryList({
       });
     }
     return rows;
-  }, [chats, query, activeProjectId, messageMatches]);
+  }, [chats, query, workspaceId, historyProjectId, messageMatches]);
 
-  // Imports lack archived-chat and project identity, so this scoped history
-  // cannot include them. Stored imports remain intact.
-  const filteredSnapshots: BrowserChatSnapshotRow[] = [];
+  // Imports have workspace/account identity but no project identity.
+  const filteredSnapshots = React.useMemo(() => {
+    if (!showAllProjects || !accountId || !workspaceId) return [] as BrowserChatSnapshotRow[];
+    const rows = importedSnapshots.filter(
+      (snapshot) =>
+        snapshot.accountId === accountId && snapshot.workspaceId === String(workspaceId),
+    );
+    const q = query.trim().toLocaleLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (snapshot) =>
+        snapshot.title.toLocaleLowerCase().includes(q) ||
+        snapshot.messages.some((message) => message.text.toLocaleLowerCase().includes(q)),
+    );
+  }, [importedSnapshots, showAllProjects, accountId, workspaceId, query]);
 
   const removeChats = async (request: PendingHistoryDeletion) => {
     const chatIds = request.chatIds ?? [];
@@ -517,11 +549,18 @@ export function HistoryList({
 
         <div className="mt-2 flex flex-wrap gap-1.5">
           <FilterChip
-            active
-            onClick={() => undefined}
-            label={activeProject?.name ?? (activeProjectId ? 'Current project' : 'Unassigned chats')}
-            hue={activeProject?.color_hue}
+            active={showAllProjects}
+            onClick={() => setAllProjectsScope(historyScope)}
+            label="All projects"
           />
+          {activeProjectId && (
+            <FilterChip
+              active={!showAllProjects}
+              onClick={() => setAllProjectsScope(null)}
+              label={activeProject?.name ?? 'Current project'}
+              hue={activeProject?.color_hue}
+            />
+          )}
         </div>
       </div>
 

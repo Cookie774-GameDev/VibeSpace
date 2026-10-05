@@ -11,10 +11,15 @@ const mocks = vi.hoisted(() => ({
   activeWorkspaceId: 'workspace-a',
   activeProjectId: null as string | null,
   liveQueryCall: 0,
+  liveQueries: [] as Array<() => Promise<unknown>>,
+  workspaceRows: [] as Chat[],
+  queriedWorkspace: null as string | null,
   chats: [] as Chat[],
   bindings: [] as Array<{ chatId: string; provider: string; localTitle: string }>,
   snapshots: [] as Array<{
     id: string;
+    accountId: string;
+    workspaceId: string;
     title: string;
     messageCount: number;
     updatedAt: number;
@@ -29,13 +34,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('dexie-react-hooks', () => ({
-  useLiveQuery: () => {
-    const slot = mocks.liveQueryCall++ % 5;
+  useLiveQuery: (query: () => Promise<unknown>) => {
+    const slot = mocks.liveQueryCall++ % 6;
+    mocks.liveQueries[slot] = query;
     if (slot === 0) return mocks.chats;
     if (slot === 1) return [];
     if (slot === 2) return {};
     if (slot === 3) return null;
-    return mocks.bindings;
+    if (slot === 4) return mocks.bindings;
+    return mocks.snapshots;
   },
 }));
 
@@ -55,7 +62,17 @@ vi.mock('@/lib/db', () => ({
     },
   },
   db: {
-    chats: {},
+    chats: {
+      where: () => ({
+        equals: (workspace: string) => {
+          mocks.queriedWorkspace = workspace;
+          return {
+            toArray: async () =>
+              mocks.workspaceRows.filter((row) => row.workspace_id === workspace),
+          };
+        },
+      }),
+    },
     messages: {},
     browser_chat_bindings: {},
     browser_chat_snapshots: {},
@@ -137,6 +154,9 @@ beforeEach(() => {
   mocks.activeWorkspaceId = 'workspace-a';
   mocks.activeProjectId = null;
   mocks.liveQueryCall = 0;
+  mocks.liveQueries = [];
+  mocks.workspaceRows = [];
+  mocks.queriedWorkspace = null;
   mocks.chats = [chat('chat-a', 'Alpha chat'), chat('chat-b', 'Beta chat')];
   mocks.bindings = [];
   mocks.snapshots = [];
@@ -182,8 +202,57 @@ describe('HistoryList destructive confirmation', () => {
     expect(screen.getByText('Archived B')).toBeTruthy();
     mocks.activeProjectId = null;
     view.rerender(<HistoryList selectedChatId={null} onSelectChat={vi.fn()} />);
-    expect(screen.queryByText('Archived B')).toBeNull();
+    expect(screen.getByText('Archived B')).toBeTruthy();
     expect(screen.getByText('Unassigned')).toBeTruthy();
+  });
+  it('lets the user browse all saved project chats and return to the selected project', () => {
+    mocks.activeProjectId = 'project-a';
+    mocks.chats = [chat('a', 'Saved A', 'project-a'), chat('b', 'Saved B', 'project-b')];
+    renderHistory();
+    expect(screen.getByText('Saved A')).toBeTruthy();
+    expect(screen.queryByText('Saved B')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'All projects' }));
+    expect(screen.getByText('Saved B')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Current project' }));
+    expect(screen.queryByText('Saved B')).toBeNull();
+  });
+  it('shows all saved workspace chats when no project is selected', () => {
+    mocks.chats = [chat('a', 'Saved A', 'project-a'), chat('b', 'Saved B', 'project-b')];
+    renderHistory();
+    expect(screen.getByText('Saved A')).toBeTruthy();
+    expect(screen.getByText('Saved B')).toBeTruthy();
+  });
+  it('queries persisted saved chats before applying the project cap', async () => {
+    mocks.activeProjectId = 'project-a';
+    mocks.workspaceRows = [
+      ...Array.from({ length: 201 }, (_, i) => ({
+        ...chat(`b-${i}`, 'Other project', 'project-b'),
+        updated_at: 1000 + i,
+      })),
+      chat('saved-a', 'Saved A', 'project-a'),
+      { ...chat('foreign', 'Other workspace', 'project-a'), workspace_id: 'workspace-b' } as Chat,
+    ];
+    renderHistory();
+    expect(await mocks.liveQueries[0]()).toEqual([chat('saved-a', 'Saved A', 'project-a')]);
+    expect(mocks.queriedWorkspace).toBe('workspace-a');
+    fireEvent.click(screen.getByRole('button', { name: 'All projects' }));
+    const rows = (await mocks.liveQueries[0]()) as Chat[];
+    expect(rows).toHaveLength(200);
+    expect(rows[0].id).toBe('b-200');
+    expect(rows.some((row) => String(row.id) === 'foreign')).toBe(false);
+  });
+  it('returns to the current project after switching away from all-project browsing', () => {
+    mocks.activeProjectId = 'project-a';
+    mocks.chats = [chat('a', 'Saved A', 'project-a'), chat('b', 'Saved B', 'project-b')];
+    const view = renderHistory();
+    fireEvent.click(screen.getByRole('button', { name: 'All projects' }));
+    mocks.activeProjectId = 'project-b';
+    view.rerender(<HistoryList selectedChatId={null} onSelectChat={vi.fn()} />);
+    expect(screen.queryByText('Saved A')).toBeNull();
+    expect(screen.getByText('Saved B')).toBeTruthy();
+    mocks.activeWorkspaceId = 'workspace-b';
+    view.rerender(<HistoryList selectedChatId={null} onSelectChat={vi.fn()} />);
+    expect(screen.queryByText('Saved B')).toBeNull();
   });
   it('labels and opens a durable Browser Chat binding without replaying provider content', () => {
     const onSelectChat = vi.fn();
@@ -205,19 +274,21 @@ describe('HistoryList destructive confirmation', () => {
     expect(document.body.textContent).not.toMatch(/provider message|provider reply/i);
   });
 
-  it('excludes imported snapshots without archived-chat and project identity', () => {
+  it('shows stored imported snapshots in workspace history but not the selected project', () => {
     const onSelectChat = vi.fn();
     const onSelectSnapshot = vi.fn();
     mocks.snapshots = [
       {
         id: 'snapshot-a',
+        accountId: 'account-a',
+        workspaceId: 'workspace-a',
         title: 'Imported Alpha',
         messageCount: 2,
         updatedAt: 10,
         messages: [{ text: 'provider snapshot text' }],
       },
     ];
-    render(
+    const view = render(
       <HistoryList
         selectedChatId={null}
         selectedSnapshotId={null}
@@ -226,8 +297,11 @@ describe('HistoryList destructive confirmation', () => {
       />,
     );
 
+    expect(screen.getByText('Imported Alpha')).toBeTruthy();
+    expect(screen.getByText('Imported snapshot · ChatGPT')).toBeTruthy();
+    mocks.activeProjectId = 'project-a';
+    view.rerender(<HistoryList selectedChatId={null} onSelectChat={onSelectChat} />);
     expect(screen.queryByText('Imported Alpha')).toBeNull();
-    expect(screen.queryByText('Imported snapshot · ChatGPT')).toBeNull();
     expect(onSelectSnapshot).not.toHaveBeenCalled();
     expect(mocks.removeSnapshot).not.toHaveBeenCalled();
   });
@@ -331,7 +405,11 @@ describe('HistoryList destructive confirmation', () => {
     ).toEqual({ version: 1, intent: { kind: 'reuse-primary' } });
     expect(
       store.read({ accountId: 'account-a', workspaceId: 'workspace-a', projectId: 'project-b' }),
-    ).toEqual({ version: 1, intent: { kind: 'specific-chat', chatId: 'chat-b' }, primaryChatId: 'chat-b' });
+    ).toEqual({
+      version: 1,
+      intent: { kind: 'specific-chat', chatId: 'chat-b' },
+      primaryChatId: 'chat-b',
+    });
   });
 
   it('fails closed if the active workspace changes before explicit confirmation', async () => {
