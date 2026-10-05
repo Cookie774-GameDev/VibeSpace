@@ -121,6 +121,7 @@ import {
 } from '@/lib/db/jarvisRepositories';
 import { useAuthStore, getLocalWorkspaceRecoveryRevision } from '@/stores/auth';
 import { revokeLocalAccountReadiness, settleLocalAccountReadiness } from '@/lib/localAccountReadiness';
+import { createAccountAuthorityPublisher } from '@/lib/accountAuthorityReadiness';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import {
   createJarvisPersistenceCoordinator,
@@ -608,26 +609,34 @@ const CelebrationHost = React.lazy(() =>
 
 let cloudPlanSyncGeneration = 0;
 
-function applyCloudSession(session: SupabaseSessionLike): void {
+type CloudSessionProjection = ReturnType<typeof useAuthStore.getState>['cloudSession'];
+
+function applyCloudSession(
+  session: SupabaseSessionLike,
+  beforeApply?: (projection: CloudSessionProjection) => void,
+): CloudSessionProjection {
   const requestGeneration = ++cloudPlanSyncGeneration;
   const store = useAuthStore.getState();
   if (session === null) {
+    beforeApply?.(null);
     useAuthStore.setState({ cloudSession: null, plan: 'free' });
-    return;
+    return null;
   }
   const userId = cloudSessionUserId(session);
   const previousUserId = store.cloudSession?.user_id.trim() ?? '';
   const resetPlan = !userId || previousUserId !== userId;
+  const projection = {
+    user_id: userId,
+    email: session.user?.email ?? '',
+    expires_at: session.expires_at ?? 0,
+  };
+  beforeApply?.(projection);
   useAuthStore.setState({
-    cloudSession: {
-      user_id: userId,
-      email: session.user?.email ?? '',
-      expires_at: session.expires_at ?? 0,
-    },
+    cloudSession: projection,
     ...(resetPlan ? { plan: 'free' as const } : {}),
   });
-  if (!userId) return;
-  void syncPlanFromProfile(userId, requestGeneration);
+  if (userId) void syncPlanFromProfile(userId, requestGeneration);
+  return projection;
 }
 
 /**
@@ -717,6 +726,10 @@ function useBoot() {
   const [runtimeListenerReady, setRuntimeListenerReady] = React.useState(!plan.agentRuntimeEnabled);
 
   React.useEffect(() => {
+    const accountAuthorityPublisher = createAccountAuthorityPublisher();
+    let observedCloudWrite:
+      | { before: CloudSessionProjection; after: CloudSessionProjection; pending: boolean }
+      | undefined;
     let stopRuntime: (() => void) | undefined;
     let stopLearning: (() => void | Promise<void>) | undefined;
     let stopOperator: (() => void) | undefined;
@@ -804,6 +817,50 @@ function useBoot() {
         left?.generation === right?.generation &&
         left?.state === right?.state
       );
+    }
+
+    // Only the existing accepted SDK result paths may establish observations.
+    // This metadata is not server verification or a native account epoch.
+    function applyObservedCloudSession(session: SupabaseSessionLike): CloudSessionProjection {
+      const precedingWrite = observedCloudWrite;
+      try {
+        return applyCloudSession(session, (projection) => {
+          // Capture the intended projection before synchronous store subscribers
+          // run. A nested replacement must never become the observed SDK result.
+          observedCloudWrite = {
+            before: useAuthStore.getState().cloudSession,
+            after: projection,
+            pending: true,
+          };
+        });
+      } finally {
+        observedCloudWrite = precedingWrite;
+      }
+    }
+
+    function publishAccountObservation(
+      session: SupabaseSessionLike,
+      transition: ReturnType<typeof accountAuthorityPublisher.beginTransition>,
+      allowLocal: boolean,
+      observedSession: CloudSessionProjection,
+    ): void {
+      if (session === null) {
+        if (allowLocal) transition.followLocalReadiness();
+        return;
+      }
+      const accountId = cloudSessionUserId(session);
+      if (!accountId) return;
+      const observedGeneration = cloudAuthGeneration;
+      void transition.settleCloud({
+        accountId,
+        teardown: cloudSyncTeardownBarrier,
+        isCurrent: () =>
+          !cancelled &&
+          accountIdentityReady &&
+          cloudAuthGeneration === observedGeneration &&
+          useAuthStore.getState().cloudSession === observedSession &&
+          observedSession?.user_id.trim() === accountId,
+      });
     }
 
     function releaseEnqueueCloudAuthority(expectedUserId?: string): void {
@@ -1126,7 +1183,10 @@ function useBoot() {
       syncAccountScopedListeners();
     }
 
-    function settleInitialAccountAuthority(session: SupabaseSessionLike): boolean {
+    function settleInitialAccountAuthority(
+      session: SupabaseSessionLike,
+      observation = accountAuthorityPublisher.beginTransition(),
+    ): boolean {
       if (cancelled) return false;
       verifiedSignedOutLocal = false;
       revokeLocalAccountReadiness();
@@ -1153,7 +1213,7 @@ function useBoot() {
       }
 
       publishVerifiedEnqueueCloudAuthority(session);
-      applyCloudSession(session);
+      const observedSession = applyObservedCloudSession(session);
       const identity = resolveAccountIdentity(useAuthStore.getState());
       const expectedIdentity =
         session === null
@@ -1170,10 +1230,24 @@ function useBoot() {
       verifiedSignedOutLocal = session === null;
       ensurePersistenceCoordinatorStarted();
       syncAccountScopedListeners();
+      publishAccountObservation(session, observation, session === null, observedSession);
       return true;
     }
 
     stopAccountSubscription = useAuthStore.subscribe((next, previous) => {
+      if (next.cloudSession !== previous.cloudSession) {
+        if (
+          observedCloudWrite?.pending &&
+          previous.cloudSession === observedCloudWrite.before &&
+          next.cloudSession === observedCloudWrite.after
+        ) {
+          observedCloudWrite.pending = false;
+        } else {
+          // Exempt exactly one intended write, never all writes on its call stack.
+          // Even restoring that exact projection after an ABA stays invalidated.
+          accountAuthorityPublisher.revoke();
+        }
+      }
       if (next.cloudSession !== previous.cloudSession && next.cloudSession !== null) {
         verifiedSignedOutLocal = false;
       }
@@ -1324,13 +1398,14 @@ function useBoot() {
                 };
                 if (supa) {
                   const sessionGeneration = ++cloudAuthGeneration;
+                  const initialAccountObservation = accountAuthorityPublisher.beginTransition();
                   void supa.auth
                     .getSession()
                     .then(({ data, error }) => {
                       if (cancelled || sessionGeneration !== cloudAuthGeneration) return;
                       if (error) throw error;
                       const session = data.session as SupabaseSessionLike;
-                      if (!settleInitialAccountAuthority(session)) return;
+                      if (!settleInitialAccountAuthority(session, initialAccountObservation)) return;
                       reconcileCloudSyncAuthority(session, sessionGeneration);
                       const userId = cloudSessionUserId(session);
                       // Startup routing: when cloud auth is configured but no one is
@@ -1345,6 +1420,7 @@ function useBoot() {
                     })
                     .catch((error) => {
                       if (cancelled || sessionGeneration !== cloudAuthGeneration) return;
+                      accountAuthorityPublisher.revoke();
                       verifiedSignedOutLocal = false;
                       revokeLocalAccountReadiness();
                       releaseEnqueueCloudAuthority();
@@ -1358,11 +1434,15 @@ function useBoot() {
                     // Only a successful explicit read may prove initial sign-out.
                     // Ignore late initial nulls too; they cannot erase newer cloud auth.
                     if (_event === 'INITIAL_SESSION' && session === null) return;
+                    // SIGNED_IN may repeat on refocus and TOKEN_REFRESHED may keep
+                    // the same account. Conservatively advance observation identity;
+                    // this does not revoke native leases or claim a new server session.
+                    const observation = accountAuthorityPublisher.beginTransition();
                     verifiedSignedOutLocal = false;
                     revokeLocalAccountReadiness();
                     cloudAuthGeneration += 1;
                     publishVerifiedEnqueueCloudAuthority(session as SupabaseSessionLike);
-                    applyCloudSession(session as SupabaseSessionLike);
+                    const observedSession = applyObservedCloudSession(session as SupabaseSessionLike);
                     accountIdentityReady = true;
                     reconcileCloudSyncAuthority(
                       session as SupabaseSessionLike,
@@ -1371,6 +1451,12 @@ function useBoot() {
                     verifiedSignedOutLocal = session === null;
                     ensurePersistenceCoordinatorStarted();
                     syncAccountScopedListeners();
+                    publishAccountObservation(
+                      session as SupabaseSessionLike,
+                      observation,
+                      _event === 'SIGNED_OUT' && session === null,
+                      observedSession,
+                    );
                     const userId = cloudSessionUserId(session as SupabaseSessionLike);
                     if (userId) {
                       void import('@/lib/launchPromo').then((m) => m.claimLaunchPromo(userId));
@@ -1399,6 +1485,7 @@ function useBoot() {
         verifiedSignedOutLocal = true;
         ensurePersistenceCoordinatorStarted();
         syncLocalRecoveryReadiness();
+        accountAuthorityPublisher.beginTransition().followLocalReadiness();
       }
 
       if (cancelled) return;
@@ -1519,6 +1606,7 @@ function useBoot() {
     })();
 
     return () => {
+      accountAuthorityPublisher.dispose();
       cancelled = true;
       verifiedSignedOutLocal = false;
       revokeLocalAccountReadiness();

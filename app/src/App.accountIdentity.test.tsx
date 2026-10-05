@@ -1,3 +1,7 @@
+import {
+  accountAuthorityReadiness,
+  createAccountAuthorityPublisher,
+} from '@/lib/accountAuthorityReadiness';
 import { getLocalAccountReadyReceipt } from '@/lib/localAccountReadiness';
 import 'fake-indexeddb/auto';
 import * as React from 'react';
@@ -621,6 +625,309 @@ function accountIdentityBootSuite(): void {
     useJarvisTaskRunStore.getState().clearForTests();
   });
 
+  it.each(['initial', 'lifecycle'] as const)(
+    'review: %s SDK result cannot bless reentrant same-account store replacement',
+    async (path) => {
+      cloudBoot.setConfigured(true);
+      const session = cloudBoot.deferSession();
+      prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+      render(<App />);
+      await waitForAccountScopeBoot();
+      if (path === 'lifecycle') {
+        await act(async () => {
+          session.resolve(supabaseSession('cloud-user-a'));
+        });
+        await waitFor(() => expect(accountAuthorityReadiness.getSnapshot().state).toBe('cloud'));
+      }
+      let replaced = false;
+      const stop = useAuthStore.subscribe((next, previous) => {
+        if (
+          !replaced &&
+          next.cloudSession !== previous.cloudSession &&
+          next.cloudSession?.user_id === 'cloud-user-a'
+        ) {
+          replaced = true;
+          useAuthStore.setState({ cloudSession: cloudSession('cloud-user-a') });
+        }
+      });
+      try {
+        await act(async () => {
+          if (path === 'initial') session.resolve(supabaseSession('cloud-user-a'));
+          else cloudBoot.emitAuth(supabaseSession('cloud-user-a'), 'TOKEN_REFRESHED');
+        });
+        expect(replaced).toBe(true);
+        expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+      } finally {
+        stop();
+      }
+    },
+  );
+
+  it('review: reentrant cloud/store ABA cannot bless the replacement object', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    let replaced = false;
+    const stop = useAuthStore.subscribe((next, previous) => {
+      if (
+        !replaced &&
+        next.cloudSession !== previous.cloudSession &&
+        next.cloudSession?.user_id === 'cloud-user-a'
+      ) {
+        replaced = true;
+        useAuthStore.setState({ cloudSession: cloudSession('cloud-user-b') });
+        useAuthStore.setState({ cloudSession: cloudSession('cloud-user-a') });
+      }
+    });
+    try {
+      await act(async () => {
+        session.resolve(supabaseSession('cloud-user-a'));
+      });
+      expect(replaced).toBe(true);
+      expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+    } finally {
+      stop();
+    }
+  });
+
+  it('review: restoring the exact SDK projection after a nested replacement does not restore its observation', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    let replaced = false;
+    const stop = useAuthStore.subscribe((next, previous) => {
+      if (
+        !replaced &&
+        next.cloudSession !== previous.cloudSession &&
+        next.cloudSession?.user_id === 'cloud-user-a'
+      ) {
+        replaced = true;
+        const originalProjection = next.cloudSession;
+        useAuthStore.setState({ cloudSession: cloudSession('cloud-user-a') });
+        useAuthStore.setState({ cloudSession: originalProjection });
+      }
+    });
+    try {
+      await act(async () => {
+        session.resolve(supabaseSession('cloud-user-a'));
+      });
+      expect(replaced).toBe(true);
+      expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+    } finally {
+      stop();
+    }
+  });
+
+  it('publishes only accepted initial SDK observations', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+    await act(async () => {
+      session.resolve(supabaseSession('cloud-user-a'));
+    });
+    await waitFor(() =>
+      expect(accountAuthorityReadiness.getSnapshot()).toMatchObject({
+        state: 'cloud',
+        source: 'supabase-sdk-cache',
+        accountId: 'cloud-user-a',
+      }),
+    );
+  });
+
+  it.each(['SIGNED_IN', 'TOKEN_REFRESHED'])(
+    'advances same-account observation on %s and leaves ordinary UI changes stable',
+    async (event) => {
+      cloudBoot.setConfigured(true);
+      const session = cloudBoot.deferSession();
+      prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+      render(<App />);
+      await waitForAccountScopeBoot();
+      await act(async () => {
+        session.resolve(supabaseSession('cloud-user-a'));
+      });
+      await waitFor(() => expect(accountAuthorityReadiness.getSnapshot().state).toBe('cloud'));
+      const initial = accountAuthorityReadiness.getSnapshot();
+      act(() => {
+        useUIStore.getState().setRoute('account');
+        useAuthStore.setState({ plan: 'pro' });
+      });
+      expect(accountAuthorityReadiness.getSnapshot()).toBe(initial);
+      act(() => {
+        cloudBoot.emitAuth(supabaseSession('cloud-user-a'), event);
+      });
+      expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+      await waitFor(() => expect(accountAuthorityReadiness.getSnapshot().state).toBe('cloud'));
+      expect(accountAuthorityReadiness.getSnapshot().generation).toBeGreaterThan(
+        initial.generation,
+      );
+      expect(cloudSync.startSyncLoop).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('revokes metadata on unverified same-account store replacement and does not restore it from account equality', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    await act(async () => {
+      session.resolve(supabaseSession('cloud-user-a'));
+    });
+    await waitFor(() => expect(accountAuthorityReadiness.getSnapshot().state).toBe('cloud'));
+    act(() => {
+      useAuthStore.setState({ cloudSession: cloudSession('cloud-user-a') });
+    });
+    expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+    await act(async () => {
+      cloudBoot.emitAuth(supabaseSession('cloud-user-a'));
+    });
+    expect(accountAuthorityReadiness.getSnapshot().state).toBe('cloud');
+  });
+
+  it('rejects initial recovery completion after unverified store ABA', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    act(() => {
+      useAuthStore.setState({ cloudSession: cloudSession('unverified-cloud') });
+      useAuthStore.setState({ cloudSession: null });
+    });
+    await act(async () => {
+      session.resolve(supabaseSession('cloud-user-a'));
+    });
+    expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+  });
+
+  it('keeps cloud account ABA unready until old teardown and ignores its intermediate account', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    await act(async () => {
+      session.resolve(supabaseSession('cloud-user-a'));
+    });
+    await waitFor(() => expect(cloudSync.startSyncLoop).toHaveBeenCalled());
+    const initial = accountAuthorityReadiness.getSnapshot();
+    const teardown = deferredValue<void>();
+    cloudSync.loopStops.at(-1)!.mockImplementation(() => teardown.promise);
+    const seen: string[] = [];
+    const stop = accountAuthorityReadiness.subscribe(() => {
+      const value = accountAuthorityReadiness.getSnapshot();
+      if (value.state === 'cloud') seen.push(value.accountId);
+    });
+    try {
+      await act(async () => {
+        cloudBoot.emitAuth(supabaseSession('cloud-user-b'));
+        cloudBoot.emitAuth(supabaseSession('cloud-user-a'));
+      });
+      expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+      await act(async () => {
+        teardown.resolve();
+        await teardown.promise;
+      });
+      await waitFor(() => expect(accountAuthorityReadiness.getSnapshot().state).toBe('cloud'));
+      expect(seen).toEqual(['cloud-user-a']);
+      expect(accountAuthorityReadiness.getSnapshot().generation).toBeGreaterThan(
+        initial.generation,
+      );
+    } finally {
+      stop();
+      teardown.resolve();
+    }
+  });
+
+  it('revokes after terminal refresh failure SIGNED_OUT and waits for real local readiness', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    await act(async () => {
+      session.resolve(supabaseSession('cloud-user-a'));
+    });
+    await waitFor(() => expect(cloudSync.startSyncLoop).toHaveBeenCalled());
+    const old = accountAuthorityReadiness.getSnapshot();
+    const teardown = deferredValue<void>();
+    cloudSync.loopStops.at(-1)!.mockImplementation(() => teardown.promise);
+    try {
+      await act(async () => {
+        cloudBoot.emitAuth(null, 'SIGNED_OUT');
+      });
+      expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+      expect(accountAuthorityReadiness.getSnapshot().generation).toBeGreaterThan(old.generation);
+      await act(async () => {
+        teardown.resolve();
+        await teardown.promise;
+      });
+      await waitFor(() =>
+        expect(accountAuthorityReadiness.getSnapshot()).toMatchObject({
+          state: 'local',
+          accountId: 'stable-local-user',
+          persistenceGeneration: getLocalAccountReadyReceipt()?.persistenceGeneration,
+          localReadinessGeneration: getLocalAccountReadyReceipt()?.generation,
+        }),
+      );
+    } finally {
+      teardown.resolve();
+    }
+  });
+
+  it('never publishes a malformed refresh observation or interprets its null as confirmed sign-out', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    await act(async () => {
+      session.resolve(supabaseSession('cloud-user-a'));
+    });
+    await waitFor(() => expect(accountAuthorityReadiness.getSnapshot().state).toBe('cloud'));
+    await act(async () => {
+      cloudBoot.emitAuth(null, 'TOKEN_REFRESHED');
+    });
+    expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
+  });
+
+  it('unmount and late verification cannot revoke a replacement publisher', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    const first = render(<App />);
+    await waitForAccountScopeBoot();
+    const replacement = createAccountAuthorityPublisher();
+    try {
+      await replacement
+        .beginTransition()
+        .settleCloud({
+          accountId: 'replacement',
+          teardown: Promise.resolve(),
+          isCurrent: () => true,
+        });
+      const current = accountAuthorityReadiness.getSnapshot();
+      first.unmount();
+      await act(async () => {
+        session.resolve(supabaseSession('cloud-user-a'));
+      });
+      expect(accountAuthorityReadiness.getSnapshot()).toBe(current);
+    } finally {
+      replacement.dispose();
+    }
+  });
+
   it('reserves deterministic test-timeout headroom beyond the longest boot wait', () => {
     expect(ACCOUNT_SCOPE_BOOT_TEST_TIMEOUT).toBeGreaterThanOrEqual(
       ACCOUNT_SCOPE_BOOT_WAIT_OPTIONS.timeout * 6,
@@ -950,6 +1257,7 @@ function accountIdentityBootSuite(): void {
     expect(cloudSync.pruneSyncQueue).not.toHaveBeenCalled();
     expect(cloudSync.startSyncLoop).not.toHaveBeenCalled();
     expect(queueAuthority.currentUserId()).toBeUndefined();
+    expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
   });
 
   it('tears down local scope for a live present Supabase session with a missing user id', async () => {
@@ -1306,6 +1614,7 @@ function accountIdentityBootSuite(): void {
       if (ordering === 'error-first') cloudBoot.emitAuth(null, 'INITIAL_SESSION');
     });
     expect(getLocalAccountReadyReceipt()).toBeNull();
+    expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
     expect(accountListeners.learning).not.toHaveBeenCalled();
     expect(accountListeners.allAboutMe).not.toHaveBeenCalled();
   });
@@ -1323,6 +1632,10 @@ function accountIdentityBootSuite(): void {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(useAuthStore.getState().cloudSession?.user_id).toBe('cloud-user-new');
+    expect(accountAuthorityReadiness.getSnapshot()).toMatchObject({
+      state: 'cloud',
+      accountId: 'cloud-user-new',
+    });
     expect(getLocalAccountReadyReceipt()).toBeNull();
   });
 
@@ -1384,6 +1697,11 @@ function accountIdentityBootSuite(): void {
     await act(async () => { teardown.resolve(); await teardown.promise; });
     await waitFor(() => expect(getLocalAccountReadyReceipt()?.accountId).toBe('stable-local-user'));
     expect(getLocalAccountReadyReceipt()?.persistenceGeneration).toBeGreaterThan(0);
+    expect(accountAuthorityReadiness.getSnapshot()).toMatchObject({
+      state: 'local',
+      accountId: 'stable-local-user',
+      localReadinessGeneration: getLocalAccountReadyReceipt()?.generation,
+    });
   });
 
   it('remains fail-closed when configured Supabase session recovery rejects', async () => {
@@ -1412,6 +1730,7 @@ function accountIdentityBootSuite(): void {
       cloudSession: null,
       plan: 'free',
     });
+    expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
   });
 
   it('remains fail-closed when Supabase configuration detection fails', async () => {
@@ -1434,6 +1753,7 @@ function accountIdentityBootSuite(): void {
       cloudSession: null,
       plan: 'free',
     });
+    expect(accountAuthorityReadiness.getSnapshot().state).toBe('unready');
   });
 
   it.each([
