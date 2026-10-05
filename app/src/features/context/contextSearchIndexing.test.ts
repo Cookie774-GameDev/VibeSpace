@@ -26,8 +26,8 @@ function map(
   };
 }
 
-function nativePort() {
-  let count = 0;
+function nativePort(initialCount = 0) {
+  let count = initialCount;
   const port: ContextSearchIndexPort = {
     status: vi.fn(async () => ({
       documentCount: count,
@@ -79,6 +79,77 @@ function dependencies(contents: Record<string, string>, port = nativePort()) {
 }
 
 describe('bounded Context search index population', () => {
+  it.each(['empty', 'rebuild'] as const)(
+    'requires a ready previous search index before incremental refresh (%s)',
+    async (state) => {
+      const deps = dependencies({ 'C:\\repo\\a.txt': 'alpha' });
+      const status = await deps.port.status('account-1', 'map-1');
+      vi.mocked(deps.port.status).mockResolvedValue({
+        ...status,
+        documentCount: state === 'empty' ? 0 : 1,
+        needsRebuild: state === 'rebuild',
+      });
+      deps.port.beginRefresh = vi.fn(async () => 'transaction');
+      deps.port.stageRefresh = vi.fn(async () => {});
+      deps.port.finishRefresh = vi.fn(async () => 0);
+      await expect(createContextSearchIndexPopulationPort(deps).stageChangedMap(
+        'account-1', map(), ['node-a'], [],
+      )).rejects.toThrow(state === 'empty' ? 'search_index_not_ready' : 'rebuild_required');
+      expect(deps.port.beginRefresh).not.toHaveBeenCalled();
+      expect(deps.read).not.toHaveBeenCalled();
+    },
+  );
+  it('can publish complete changed coverage when an empty map gains its first file', async () => {
+    const deps = dependencies({ 'C:\\repo\\a.txt': 'alpha' });
+    deps.port.beginRefresh = vi.fn(async () => 'transaction');
+    deps.port.stageRefresh = vi.fn(async () => {});
+    deps.port.finishRefresh = vi.fn(async () => 1);
+    const transaction = await createContextSearchIndexPopulationPort(deps).stageChangedMap(
+      'account-1', map([{ id: 'node-a', kind: 'file', title: 'a.txt', path: 'a.txt' }]),
+      ['node-a'], [],
+    );
+    await transaction.commit();
+    expect(deps.port.finishRefresh).toHaveBeenCalledWith('account-1', 'map-1', 'transaction', true);
+  });
+  it('stages edits and removals of a populated index without calling destructive empty-map cleanup', async () => {
+    const deps = dependencies({ 'C:\\repo\\a.txt': 'alpha' }, nativePort(1));
+    deps.port.beginRefresh = vi.fn(async () => 'transaction');
+    deps.port.stageRefresh = vi.fn(async () => {});
+    deps.port.finishRefresh = vi.fn(async () => 2);
+    const transaction = await createContextSearchIndexPopulationPort(deps).stageChangedMap('account-1',
+      map([{ id: 'node-a', kind: 'file', title: 'a.txt', path: 'a.txt' }]), ['node-a'], ['node-deleted']);
+    expect(deps.port.finishRefresh).not.toHaveBeenCalled();
+    expect(deps.port.stageRefresh).toHaveBeenCalledWith('account-1', 'map-1', 'transaction',
+      [expect.objectContaining({ documentId: 'node-a', body: 'alpha' })], []);
+    expect(deps.port.stageRefresh).toHaveBeenCalledWith('account-1', 'map-1', 'transaction', [], ['node-deleted']);
+    await transaction.commit();
+    expect(deps.port.finishRefresh).toHaveBeenCalledWith('account-1', 'map-1', 'transaction', true);
+    expect(deps.port.deleteDocuments).not.toHaveBeenCalled(); expect(deps.port.replaceDocuments).not.toHaveBeenCalled();
+  });
+  it('aborts staging when a file cannot be verified and preserves all previously indexed documents', async () => {
+    const deps = dependencies({}, nativePort(1));
+    deps.port.beginRefresh = vi.fn(async () => 'transaction'); deps.port.stageRefresh = vi.fn(async () => {});
+    deps.port.finishRefresh = vi.fn(async () => 0);
+    await expect(createContextSearchIndexPopulationPort(deps).stageChangedMap('account-1',
+      map([{ id: 'node-a', kind: 'file', title: 'a.txt', path: 'a.txt' }]), ['node-a'], ['node-old'])).rejects.toThrow('source_invalid');
+    expect(deps.port.finishRefresh).toHaveBeenCalledWith('account-1', 'map-1', 'transaction', false);
+    expect(deps.port.deleteDocuments).not.toHaveBeenCalled(); expect(deps.port.replaceDocuments).not.toHaveBeenCalled();
+  });
+  it('rejects mismatched post-read native bytes even when size and timestamps are unchanged', async () => {
+    const deps = dependencies({ 'C:\\repo\\a.txt': 'alpha' });
+    deps.stat.mockResolvedValue({ ok: true, path: 'C:\\repo\\a.txt', kind: 'file', size: 5, modifiedMs: 10, sha256: `sha256:${HASH_B}` });
+    await expect(createContextSearchIndexPopulationPort(deps).populateCreatedMap('account-1',
+      map([{ id: 'node-a', kind: 'file', title: 'a.txt', path: 'a.txt' }]))).rejects.toThrow('source_changed');
+    expect(deps.port.replaceDocuments).not.toHaveBeenCalled();
+  });
+  it('reads metadata before the body and verifies one native hash afterwards', async () => {
+    const deps = dependencies({ 'C:\\repo\\a.txt': 'alpha' });
+    deps.stat.mockResolvedValueOnce({ ok: true, path: 'C:\\repo\\a.txt', kind: 'file', size: 5, modifiedMs: 10 });
+    await expect(createContextSearchIndexPopulationPort(deps).populateCreatedMap('account-1',
+      map([{ id: 'node-a', kind: 'file', title: 'a.txt', path: 'a.txt' }]))).resolves.toMatchObject({ documentCount: 1 });
+    expect(deps.stat).toHaveBeenNthCalledWith(1, 'C:\\repo\\a.txt', false, expect.objectContaining({ strictProjectBoundary: true }));
+    expect(deps.stat).toHaveBeenNthCalledWith(2, 'C:\\repo\\a.txt', true, expect.objectContaining({ strictProjectBoundary: true }));
+  });
   it('indexes a NuttX-scale 5,734-file map through bounded native batches', async () => {
     const nodes = Array.from({ length: 5_734 }, (_, index) => ({
       id: `node-${index}`, kind: 'file', title: `${index}.c`, path: `${index}.c`,
@@ -385,7 +456,7 @@ describe('bounded Context search index population', () => {
       createContextSearchIndexPopulationPort(excessive).populateCreatedMap(
         'account-1',
         map(
-          Array.from({ length: 10_001 }, (_, index) => ({
+          Array.from({ length: 100_001 }, (_, index) => ({
             id: `node-${index}`,
             kind: 'file',
             title: `${index}.txt`,

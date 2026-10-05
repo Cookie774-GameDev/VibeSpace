@@ -40,6 +40,7 @@ import {
   type SiyuanIndexJobControl,
   type SiyuanDirectoryLister,
   type SiyuanSafeIndexEntry,
+  type SiyuanSafeIndex,
 } from './siyuan/siyuanSafeIndex';
 import {
   accountForSiyuanRendererOfflineTime,
@@ -446,6 +447,10 @@ export interface SiyuanContextMapSnapshot {
 }
 
 export interface SiyuanContextMapSyncOptions {
+  /** Structural refresh only; never invokes a local or cloud summary model. */
+  automaticRefresh?: boolean;
+  /** Reuse the exact metadata discovery already checked by the refresh owner. */
+  preScannedIndex?: SiyuanSafeIndex;
   accountId?: string | null;
   workspaceId?: string | null;
   summaryPolicy?: Readonly<Partial<SiyuanSummaryPolicy>>;
@@ -665,7 +670,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
       nativeFilesystemAvailable && durableJob && options.forceReconcile === true
         ? await readSiyuanIndexEntries(projectId, record.id)
         : null;
-    let index = nativeFilesystemAvailable
+    let index = options.preScannedIndex ?? (nativeFilesystemAvailable
       ? await scanSiyuanFilesystemIndex(record, manifest.summaryPolicy, {
           signal: options.signal,
           control: options.control,
@@ -677,7 +682,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
               : { accountId: options.accountId ?? null, projectId, mapId: record.id },
           list: options.list,
         })
-      : buildSiyuanSafeIndex(record, manifest.summaryPolicy, manifest.sourcePolicy.excludedPaths);
+      : buildSiyuanSafeIndex(record, manifest.summaryPolicy, manifest.sourcePolicy.excludedPaths));
     let forcedChangedEntries: SiyuanSafeIndexEntry[] = [];
     if (durableJob && previousEntriesForForcedReconciliation) {
       await options.control?.checkpoint(options.signal);
@@ -706,6 +711,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
       });
       const reconciledJob: SiyuanIndexJobRecord = {
         ...durableJob,
+        status: 'running',
         phase: 'creating_nodes',
         indexed: reconciledEntries.length,
         excluded: index.excluded,
@@ -1459,24 +1465,30 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
           await port.deleteManagedDocument(projectId, stale.id, stale.markdown, rootDocument.id);
           delete bindings[nodeId];
           removedNodeIds.push(nodeId);
+        } else if (options.automaticRefresh) {
+          throw new Error('siyuan_removed_node_ownership_changed');
         }
-      } catch {
+      } catch (error) {
         // Preserve the binding so a transient runtime/permission failure is
         // retried instead of orphaning managed SiYuan evidence.
+        if (options.automaticRefresh) {
+          if (isSiyuanBlockNotFoundError(error)) { delete bindings[nodeId]; removedNodeIds.push(nodeId); }
+          else throw error;
+        }
       }
     }
     await deleteSiyuanNodeBindings(projectId, record.id, removedNodeIds);
     if (durableJob) {
       durableJob = {
         ...durableJob,
-        phase: manifest.summaryPolicy.mode === 'none' ? 'reconciling' : 'summarizing',
+        phase: options.automaticRefresh || manifest.summaryPolicy.mode === 'none' ? 'reconciling' : 'summarizing',
         createdNodes: Object.keys(bindings).length,
         updatedAt: Date.now(),
         phaseStartedAt: Date.now(),
         rateSamples: [{ at: Date.now(), processed: Object.keys(bindings).length }],
         estimatedPercent: Math.max(
           durableJob.estimatedPercent ?? 0,
-          manifest.summaryPolicy.mode === 'none' ? 99 : 90,
+          options.automaticRefresh || manifest.summaryPolicy.mode === 'none' ? 99 : 90,
         ),
         estimatedEtaSeconds: null,
       };
@@ -1510,6 +1522,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
     const approvalPreflight = options.approvalPreflight === true || savedCloudRouteNeedsApproval;
     if (
       durableJob &&
+      !options.automaticRefresh &&
       manifest.summaryPolicy.mode !== 'none' &&
       (approvalPreflight || options.pauseBeforeSummaries === true)
     ) {
@@ -1527,7 +1540,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
         approvalPreflight ? 'siyuan_cloud_summary_scope_ready' : 'siyuan_summary_paused_before_run',
       );
     }
-    if (durableJob && manifest.summaryPolicy.mode !== 'none') {
+    if (durableJob && !options.automaticRefresh && manifest.summaryPolicy.mode !== 'none') {
       let summaryIdentity;
       let summaryGenerator = generateSiyuanSummaryWithRegisteredLocalModel;
       try {

@@ -29,6 +29,24 @@ function run(id: string, scheduledFor: number): SecondBrainRun {
 }
 
 describe('Nightly Second Brain scoped persistence', () => {
+  it('preserves the selected schedule and successful cutoff after history pruning and reload', async () => {
+    const scope = 'account:workspace:project';
+    const store = useNightlySecondBrainStore.getState();
+    store.setSchedule(scope, { scheduleHour: 3, scheduleMinute: 15, scheduleDays: [1, 5] });
+    store.setEnabled(scope, true);
+    store.recordRun(scope, { ...run('success', 100), coverageStart: 0, coverageEnd: 110 });
+    for (let index = 0; index < 35; index++)
+      store.recordRun(scope, { ...run(`failed-${index}`, 200 + index), status: 'failed' });
+    expect(getNightlySecondBrainScope(scope).runs).toHaveLength(30);
+    await useNightlySecondBrainStore.persist.rehydrate();
+    expect(getNightlySecondBrainScope(scope).coveredThrough).toBe(110);
+    expect(getNightlySecondBrainScope(scope).config).toMatchObject({
+      enabled: true,
+      scheduleHour: 3,
+      scheduleMinute: 15,
+      scheduleDays: [1, 5],
+    });
+  });
   beforeEach(() => {
     window.localStorage.clear();
     resetNightlySecondBrainStoreForTests();

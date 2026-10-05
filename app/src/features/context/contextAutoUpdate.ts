@@ -1,0 +1,410 @@
+import { db, openDb } from '@/lib/db';
+import { resolveAccountIdentity } from '@/lib/accountIdentity';
+import { useAuthStore } from '@/stores/auth';
+import { captureContextPersistenceScope } from './contextPersistence';
+import { createContextSearchIndexPopulationPort } from './contextSearchIndexing';
+import { productionSiyuanContextMaps } from './siyuanContextMapIntegration';
+import { readSiyuanMapManifest } from './siyuan/siyuanMapManifest';
+import { readSiyuanIndexJob } from './siyuan/siyuanIndexJobStore';
+import {
+  buildProjectContextTreeFromSiyuanIndex,
+  projectSiyuanMapForContextSearch,
+  scanSiyuanFilesystemIndex,
+  type SiyuanSafeIndex,
+} from './siyuan/siyuanSafeIndex';
+import { canonicalSiyuanAuthorityRoot } from './siyuan/siyuanPathAuthority';
+import type { ContextMapRecord, ProjectContextTree } from './tree';
+
+export interface ContextAutoUpdateScope {
+  accountId: string;
+  workspaceId: string;
+  projectId: string;
+  mapId: string;
+}
+export interface ContextAutoMetadata {
+  id: string;
+  path: string | null;
+  kind: string;
+  title: string;
+  size: number | null;
+  modified: number | null;
+}
+export interface ContextAutoUpdateSetting extends ContextAutoUpdateScope {
+  kind: 'context-auto-update-v1';
+  enabled: boolean;
+  consentRevision: number;
+  fingerprint: string;
+  baseline?: ContextAutoMetadata[];
+  baselineMapRevision?: number;
+  status?: 'watching' | 'waiting' | 'updating' | 'failed';
+  error?: string;
+  lastSuccessAt?: number;
+}
+export const CONTEXT_AUTO_UPDATE_EVENT = 'jarvis:context-auto-update-changed';
+export const contextAutoUpdateKey = (scope: ContextAutoUpdateScope) =>
+  `context-auto-update-v1:${JSON.stringify({ accountId: scope.accountId, workspaceId: scope.workspaceId,
+    projectId: scope.projectId, mapId: scope.mapId })}`;
+const summaryNone = { mode: 'none' as const, selectedExtensions: [], selectedPaths: [] };
+const updatingScopes = new Set<string>();
+export const isContextAutoUpdateRunning = (scope: ContextAutoUpdateScope) =>
+  updatingScopes.has(contextAutoUpdateKey(scope));
+
+export function contextAutoFingerprint(map: ContextMapRecord): string {
+  const manifest = map.projectId ? readSiyuanMapManifest(map.projectId, map.id) : null;
+  return JSON.stringify([
+    canonicalSiyuanAuthorityRoot(map.rootDir),
+    map.sourceType ?? 'local_folder',
+    [...(manifest?.sourcePolicy.excludedPaths ?? [])].sort(),
+  ]);
+}
+export function contextAutoMetadata(index: SiyuanSafeIndex): ContextAutoMetadata[] {
+  return index.entries.map((entry) => ({
+    id: entry.nodeId,
+    path: entry.relativePath,
+    kind: entry.kind,
+    title: entry.title,
+    size: entry.sizeBytes,
+    modified: entry.modifiedAt,
+  }));
+}
+function treeMetadata(tree: ProjectContextTree): ContextAutoMetadata[] {
+  const entries: ContextAutoMetadata[] = [];
+  const visit = (nodes: ProjectContextTree['nodes']) =>
+    nodes.forEach((node) => {
+      if (node.kind === 'file' || node.kind === 'area')
+        entries.push({
+          id: node.id,
+          path: node.path ?? null,
+          kind: node.kind,
+          title: node.title,
+          size: node.sizeBytes ?? null,
+          modified: node.modifiedAt ?? null,
+        });
+      visit(node.children ?? []);
+    });
+  visit(tree.nodes);
+  return entries;
+}
+export function contextAutoDelta(
+  previous: readonly ContextAutoMetadata[],
+  next: readonly ContextAutoMetadata[],
+) {
+  const old = new Map(previous.map((entry) => [entry.id, JSON.stringify(entry)]));
+  const current = new Set(next.map((entry) => entry.id));
+  return {
+    changed: next
+      .filter((entry) => old.get(entry.id) !== JSON.stringify(entry))
+      .map((entry) => entry.id),
+    deleted: previous.filter((entry) => !current.has(entry.id)).map((entry) => entry.id),
+  };
+}
+export async function readContextAutoUpdate(
+  scope: ContextAutoUpdateScope,
+): Promise<ContextAutoUpdateSetting | null> {
+  await openDb();
+  const row = await db.settings.get(contextAutoUpdateKey(scope));
+  const value = row?.value as ContextAutoUpdateSetting | undefined;
+  if (
+    !value ||
+    value.kind !== 'context-auto-update-v1' ||
+    value.accountId !== scope.accountId ||
+    value.workspaceId !== scope.workspaceId ||
+    value.projectId !== scope.projectId ||
+    value.mapId !== scope.mapId
+  )
+    return null;
+  return value;
+}
+function active(scope: ContextAutoUpdateScope) {
+  const state = useAuthStore.getState();
+  return (
+    resolveAccountIdentity(state)?.accountId === scope.accountId &&
+    String(state.workspaceId) === scope.workspaceId &&
+    String(state.projectId) === scope.projectId
+  );
+}
+function notify() {
+  window.dispatchEvent(new Event(CONTEXT_AUTO_UPDATE_EVENT));
+}
+export async function setContextAutoUpdate(
+  scope: ContextAutoUpdateScope,
+  map: ContextMapRecord,
+  enabled: boolean,
+): Promise<void> {
+  if (
+    !active(scope) ||
+    map.id !== scope.mapId ||
+    map.projectId !== scope.projectId ||
+    map.status !== 'active' ||
+    (map.sourceType && map.sourceType !== 'local_folder')
+  )
+    throw new Error('context_auto_update_scope_invalid');
+  await openDb();
+  const persistence = await captureContextPersistenceScope(scope.accountId, scope.projectId);
+  const latest = await persistence.loadMap(map.id);
+  if (!latest || latest.status !== 'active' || latest.updatedAt !== map.updatedAt || !active(scope))
+    throw new Error('context_auto_update_scope_changed');
+  await db.settings.put({
+    key: contextAutoUpdateKey(scope),
+    value: {
+      ...scope,
+      kind: 'context-auto-update-v1',
+      enabled,
+      consentRevision: Date.now(),
+      fingerprint: contextAutoFingerprint(latest),
+      status: 'watching',
+    } satisfies ContextAutoUpdateSetting,
+    updated_at: Date.now(),
+  });
+  notify();
+}
+
+export interface ContextAutoUpdatePorts {
+  readSetting(): Promise<ContextAutoUpdateSetting | null>;
+  readMap(): Promise<ContextMapRecord | null>;
+  fingerprint(map: ContextMapRecord): string;
+  active(): boolean;
+  scan(map: ContextMapRecord, signal: AbortSignal): Promise<SiyuanSafeIndex>;
+  stage(
+    map: ContextMapRecord,
+    changed: string[],
+    deleted: string[],
+    signal: AbortSignal,
+  ): Promise<{ commit(): Promise<void>; abort(): Promise<void> }>;
+  sync(
+    map: ContextMapRecord,
+    index: SiyuanSafeIndex,
+    signal: AbortSignal,
+  ): Promise<ProjectContextTree>;
+  saveTree(map: ContextMapRecord, tree: ProjectContextTree): Promise<ContextMapRecord>;
+  saveSetting(setting: ContextAutoUpdateSetting): Promise<void>;
+  now(): number;
+}
+
+/** Two matching metadata observations batch saved edits; bodies are only read for changed files. */
+export function createContextAutoUpdater(ports: ContextAutoUpdatePorts) {
+  let pendingSignature = '';
+  let pendingSince = 0;
+  let inFlight: Promise<'idle' | 'waiting' | 'updated'> | null = null;
+  const tick = async (signal: AbortSignal): Promise<'idle' | 'waiting' | 'updated'> => {
+    const setting = await ports.readSetting();
+    if (!setting?.enabled || !ports.active() || signal.aborted) return 'idle';
+    const map = await ports.readMap();
+    if (!map || map.status !== 'active' || ports.fingerprint(map) !== setting.fingerprint)
+      return 'idle';
+    const guard = async () => {
+      const current = await ports.readSetting();
+      const latest = await ports.readMap();
+      if (
+        signal.aborted ||
+        !ports.active() ||
+        !current?.enabled ||
+        current.consentRevision !== setting.consentRevision ||
+        current.fingerprint !== setting.fingerprint ||
+        !latest ||
+        latest.status !== 'active' ||
+        latest.updatedAt !== map.updatedAt ||
+        ports.fingerprint(latest) !== setting.fingerprint
+      )
+        throw new Error('context_auto_update_scope_changed');
+    };
+    const index = await ports.scan(map, signal);
+    // A partial discovery cannot authorize removing files absent from its result.
+    if (index.unreadable > 0) throw new Error('context_auto_update_discovery_incomplete');
+    await guard();
+    const metadata = contextAutoMetadata(index);
+    const baseline =
+      setting.baselineMapRevision === map.updatedAt && setting.baseline
+        ? setting.baseline
+        : treeMetadata(map.tree);
+    const delta = contextAutoDelta(baseline, metadata);
+    if (!delta.changed.length && !delta.deleted.length) {
+      pendingSignature = '';
+      return 'idle';
+    }
+    const signature = JSON.stringify(metadata);
+    if (signature !== pendingSignature) {
+      pendingSignature = signature;
+      pendingSince = ports.now();
+      return 'waiting';
+    }
+    if (ports.now() - pendingSince < 1_500) return 'waiting';
+    const fileIds = new Set(
+      index.entries.filter((entry) => entry.kind === 'file').map((entry) => entry.nodeId),
+    );
+    const previousFileIds = new Set(
+      baseline.filter((entry) => entry.kind === 'file').map((entry) => entry.id),
+    );
+    const nextMap = {
+      ...map,
+      tree: buildProjectContextTreeFromSiyuanIndex(map.tree, index.entries),
+    };
+    const transaction = await ports.stage(
+      nextMap,
+      delta.changed.filter((id) => fileIds.has(id)),
+      delta.deleted.filter((id) => previousFileIds.has(id)),
+      signal,
+    );
+    let saved: ContextMapRecord | null = null;
+    let committed = false;
+    try {
+      await guard();
+      const tree = await ports.sync(map, index, signal);
+      await guard();
+      // Check again after native/model-free graph reconciliation and before publication.
+      saved = await ports.saveTree(map, { ...tree, generatedAt: ports.now() });
+      const current = await ports.readSetting();
+      const latest = await ports.readMap();
+      if (
+        signal.aborted ||
+        !ports.active() ||
+        !current?.enabled ||
+        current.consentRevision !== setting.consentRevision ||
+        !latest ||
+        latest.status !== 'active' ||
+        latest.updatedAt !== saved.updatedAt ||
+        ports.fingerprint(latest) !== setting.fingerprint
+      )
+        throw new Error('context_auto_update_scope_changed');
+      await transaction.commit();
+      committed = true;
+      await ports.saveSetting({
+        ...setting,
+        baseline: metadata,
+        baselineMapRevision: saved.updatedAt,
+        status: 'watching',
+        lastSuccessAt: ports.now(),
+        error: undefined,
+      });
+      pendingSignature = '';
+      return 'updated';
+    } catch (error) {
+      if (!committed) {
+        const failures: unknown[] = [error];
+        try {
+          await transaction.abort();
+        } catch (abortError) {
+          failures.push(abortError);
+        }
+        if (saved) {
+          try {
+            await ports.saveTree(saved, map.tree);
+          } catch (restoreError) {
+            failures.push(restoreError);
+          }
+        }
+        if (failures.length > 1)
+          throw new AggregateError(failures, 'context_auto_update_rollback_needs_review');
+      }
+      throw error;
+    }
+  };
+  return {
+    tick(signal: AbortSignal) {
+      if (inFlight) return inFlight;
+      inFlight = tick(signal).finally(() => {
+        inFlight = null;
+      });
+      return inFlight;
+    },
+  };
+}
+
+export async function createProductionContextAutoUpdater(scope: ContextAutoUpdateScope) {
+  const persistence = await captureContextPersistenceScope(scope.accountId, scope.projectId);
+  const search = createContextSearchIndexPopulationPort();
+  const readMap = () => persistence.loadMap(scope.mapId);
+  return createContextAutoUpdater({
+    readSetting: () => readContextAutoUpdate(scope),
+    readMap,
+    fingerprint: contextAutoFingerprint,
+    active: () => active(scope),
+    now: () => Date.now(),
+    async scan(map, signal) {
+      const manifest = readSiyuanMapManifest(scope.projectId, map.id);
+      const job = await readSiyuanIndexJob(scope.projectId, map.id);
+      if (
+        manifest?.status !== 'ready' ||
+        job?.status !== 'completed' ||
+        job.accountId !== scope.accountId ||
+        canonicalSiyuanAuthorityRoot(manifest.sourceRoot) !==
+          canonicalSiyuanAuthorityRoot(map.rootDir) ||
+        canonicalSiyuanAuthorityRoot(job.canonicalRoot) !==
+          canonicalSiyuanAuthorityRoot(map.rootDir)
+      )
+        throw new Error('context_auto_update_initial_map_not_ready');
+      return scanSiyuanFilesystemIndex(map, summaryNone, {
+        signal,
+        excludedPaths: manifest.sourcePolicy.excludedPaths,
+      });
+    },
+    async stage(map, changed, deleted, signal) {
+      const transaction = await search.stageChangedMap(
+        scope.accountId,
+        projectSiyuanMapForContextSearch(map),
+        changed,
+        deleted,
+        signal,
+      );
+      const key = contextAutoUpdateKey(scope);
+      updatingScopes.add(key);
+      return {
+        async commit() {
+          try {
+            await transaction.commit();
+          } finally {
+            updatingScopes.delete(key);
+          }
+        },
+        async abort() {
+          try {
+            await transaction.abort();
+          } finally {
+            updatingScopes.delete(key);
+          }
+        },
+      };
+    },
+    async sync(map, index, signal) {
+      return (
+        await productionSiyuanContextMaps.sync(scope.projectId, map, {
+          accountId: scope.accountId,
+          workspaceId: scope.workspaceId,
+          automaticRefresh: true,
+          preScannedIndex: index,
+          forceReconcile: true,
+          signal,
+        })
+      ).tree;
+    },
+    async saveTree(map, tree) {
+      const state = await persistence.saveExistingTree(tree, {
+        mapId: map.id,
+        name: map.name,
+        expectedUpdatedAt: map.updatedAt,
+        select: false,
+        source: {
+          kind: 'local_folder',
+          label: map.sourceLabel ?? 'Local folder',
+          branchRef: map.branchRef,
+        },
+      });
+      const saved = state.maps.find((entry) => entry.id === map.id);
+      if (!saved) throw new Error('context_auto_update_map_missing');
+      return saved;
+    },
+    async saveSetting(setting) {
+      // Do not resurrect a disabled/deleted setting after an asynchronous success.
+      await db.transaction('rw', db.settings, async () => {
+        const current = await readContextAutoUpdate(scope);
+        if (!current?.enabled || current.consentRevision !== setting.consentRevision) return;
+        await db.settings.put({
+          key: contextAutoUpdateKey(scope),
+          value: setting,
+          updated_at: Date.now(),
+        });
+      });
+      notify();
+    },
+  });
+}

@@ -3,6 +3,9 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
 import {
   DEFAULT_SECOND_BRAIN_CONFIG,
+  successfulSecondBrainCoverage,
+  validSecondBrainSchedule,
+  type SecondBrainSchedule,
   type SecondBrainConfig,
   type SecondBrainRun,
   type SecondBrainSourceKind,
@@ -11,11 +14,13 @@ import {
 export interface NightlySecondBrainScopeState {
   config: SecondBrainConfig;
   runs: SecondBrainRun[];
+  coveredThrough?: number;
 }
 
 export interface NightlySecondBrainState {
   scopes: Record<string, NightlySecondBrainScopeState>;
   setEnabled(scopeKey: string, enabled: boolean): void;
+  setSchedule(scopeKey: string, schedule: SecondBrainSchedule): void;
   setMode(scopeKey: string, mode: SecondBrainConfig['mode']): void;
   setModel(scopeKey: string, model: SecondBrainConfig['model']): void;
   setCloudPrivatePermission(scopeKey: string, enabled: boolean): void;
@@ -133,6 +138,7 @@ function recoverChange(value: unknown): SecondBrainRun['changes'][number] | null
     after: change.after,
     provenance: [...change.provenance],
     confidence: change.confidence,
+    ...(change.managedSummary === true ? { managedSummary: true } : {}),
   };
 }
 
@@ -182,6 +188,12 @@ function recoverRun(value: unknown): SecondBrainRun | null {
     model,
     changes: changes as SecondBrainRun['changes'],
     summary: run.summary,
+    ...(Number.isSafeInteger(run.coverageStart) &&
+    Number.isSafeInteger(run.coverageEnd) &&
+    (run.coverageStart as number) >= 0 &&
+    (run.coverageEnd as number) >= (run.coverageStart as number)
+      ? { coverageStart: run.coverageStart as number, coverageEnd: run.coverageEnd as number }
+      : {}),
     ...(run.error === undefined ? {} : { error: run.error }),
     ...(run.retryOf === undefined ? {} : { retryOf: run.retryOf }),
   };
@@ -196,7 +208,11 @@ function recoverScope(value: unknown): NightlySecondBrainScopeState | null {
     !scope ||
     !config ||
     typeof config.enabled !== 'boolean' ||
-    config.scheduleHour !== 2 ||
+    !validSecondBrainSchedule({
+      scheduleHour: config.scheduleHour as number,
+      scheduleMinute: config.scheduleMinute as number | undefined,
+      scheduleDays: config.scheduleDays as number[] | undefined,
+    }) ||
     (config.mode !== 'approve_only' && config.mode !== 'auto') ||
     (config.model !== null && !model) ||
     typeof config.allowPrivateDataToCloud !== 'boolean' ||
@@ -212,7 +228,11 @@ function recoverScope(value: unknown): NightlySecondBrainScopeState | null {
   return {
     config: {
       enabled: config.enabled,
-      scheduleHour: 2,
+      scheduleHour: config.scheduleHour as number,
+      scheduleMinute: (config.scheduleMinute as number | undefined) ?? 0,
+      scheduleDays: (config.scheduleDays as number[] | undefined) ?? [
+        ...DEFAULT_SECOND_BRAIN_CONFIG.scheduleDays!,
+      ],
       mode: config.mode,
       model,
       allowPrivateDataToCloud: config.allowPrivateDataToCloud,
@@ -228,6 +248,10 @@ function recoverScope(value: unknown): NightlySecondBrainScopeState | null {
       .map(recoverRun)
       .filter((run): run is SecondBrainRun => run !== null)
       .slice(0, 30),
+    coveredThrough:
+      Number.isSafeInteger(scope.coveredThrough) && (scope.coveredThrough as number) >= 0
+        ? (scope.coveredThrough as number)
+        : 0,
   };
 }
 
@@ -254,9 +278,24 @@ export const useNightlySecondBrainStore = create<NightlySecondBrainState>()(
         set((state) =>
           updateScope(state, scopeKey, (scope) => ({
             ...scope,
-            config: { ...scope.config, enabled, scheduleHour: 2 },
+            config: { ...scope.config, enabled },
           })),
         ),
+      setSchedule: (scopeKey, schedule) => {
+        if (!validSecondBrainSchedule(schedule)) return;
+        set((state) =>
+          updateScope(state, scopeKey, (scope) => ({
+            ...scope,
+            config: {
+              ...scope.config,
+              ...schedule,
+              scheduleDays: [
+                ...(schedule.scheduleDays ?? DEFAULT_SECOND_BRAIN_CONFIG.scheduleDays!),
+              ],
+            },
+          })),
+        );
+      },
       setMode: (scopeKey, mode) =>
         set((state) =>
           updateScope(state, scopeKey, (scope) => ({
@@ -293,6 +332,7 @@ export const useNightlySecondBrainStore = create<NightlySecondBrainState>()(
           updateScope(state, scopeKey, (scope) => ({
             ...scope,
             runs: [run, ...scope.runs.filter((item) => item.id !== run.id)].slice(0, 30),
+            coveredThrough: successfulSecondBrainCoverage([run], scope.coveredThrough ?? 0),
           })),
         ),
     }),

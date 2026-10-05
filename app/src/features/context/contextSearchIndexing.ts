@@ -16,9 +16,8 @@ const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_BATCH_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_BATCH_DOCUMENTS = 64;
 const MAX_DELETE_BATCH_DOCUMENTS = 1_000;
-// The native limit is per mutation; population writes at most eight documents
-// per batch, so a larger bounded source tree is safe to index incrementally.
-const MAX_MAP_DOCUMENTS = 10_000;
+// Bodies remain bounded to 64 documents/4MiB per mutation at this map scale.
+const MAX_MAP_DOCUMENTS = 100_000;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/u;
 const SAFE_HASH = /^sha256:[a-f0-9]{64}$/u;
 
@@ -65,6 +64,10 @@ interface Dependencies {
 }
 
 export interface ContextSearchIndexPopulationPort {
+  stageChangedMap(accountId: string, map: ContextSearchIndexMap,
+    changedIds: readonly string[], deletedIds: readonly string[], signal?: AbortSignal): Promise<{
+      commit(): Promise<void>; abort(): Promise<void>;
+    }>;
   populateCreatedMap(
     accountId: string,
     map: ContextSearchIndexMap,
@@ -203,14 +206,16 @@ async function documentFor(
 ): Promise<ContextSearchDocumentInput | null> {
   abortIfNeeded(signal);
   const access = { root: map.rootDir, strictProjectBoundary: true };
-  const before = await dependencies.stat(candidate.absolutePath, true, access);
+  // Metadata first avoids an entire pre-read hash pass, including for large
+  // files whose bodies will never be indexed. Verify the read against the
+  // native post-read hash and unchanged size/time before staging any bytes.
+  const before = await dependencies.stat(candidate.absolutePath, false, access);
   abortIfNeeded(signal);
   if (
     !before.ok ||
     before.kind !== 'file' ||
     !Number.isSafeInteger(before.size) ||
-    (before.size ?? -1) < 0 ||
-    !rawHash(before)
+    (before.size ?? -1) < 0
   ) {
     return failSource(candidate, !before.ok ? before.error.code : 'metadata');
   }
@@ -249,8 +254,8 @@ async function documentFor(
     after.kind !== 'file' ||
     after.size !== before.size ||
     after.modifiedMs !== before.modifiedMs ||
-    rawHash(after) !== rawHash(before) ||
-    computedHash !== rawHash(before)
+    !rawHash(after) ||
+    computedHash !== rawHash(after)
   ) {
     return fail('source_changed');
   }
@@ -404,6 +409,66 @@ export function createContextSearchIndexPopulationPort(
     });
 
   const populationPort: ContextSearchIndexPopulationPort = {
+    async stageChangedMap(accountId, map, changedIds, deletedIds, signal) {
+      abortIfNeeded(signal);
+      if (!SAFE_ID.test(accountId)) fail('snapshot_invalid');
+      if (!port.beginRefresh || !port.stageRefresh || !port.finishRefresh) fail('atomic_refresh_unavailable');
+      const changed = new Set(changedIds);
+      const allCandidates = candidatesFor(map);
+      const candidates = allCandidates.filter(({ node }) => changed.has(node.id));
+      if (candidates.length !== changed.size || deletedIds.some((id) => !SAFE_ID.test(id))) fail('snapshot_invalid');
+      const existing = await port.status(accountId, map.id);
+      abortIfNeeded(signal);
+      if (existing.needsRebuild) fail('rebuild_required');
+      // A missing index must never be published with only its newest files.
+      // Full changed coverage is safe, including the first files of an empty map.
+      if (existing.documentCount === 0 && allCandidates.some(({ node }) => !changed.has(node.id)))
+        fail('search_index_not_ready');
+      const transactionId = await port.beginRefresh(accountId, map.id);
+      let settled = false;
+      const abort = async () => {
+        if (settled) return;
+        await port.finishRefresh!(accountId, map.id, transactionId, false);
+        settled = true;
+      };
+      try {
+        let documents: ContextSearchDocumentInput[] = [];
+        let bytes = 0;
+        let omitted: string[] = [];
+        const flush = async () => {
+          abortIfNeeded(signal);
+          if (!documents.length && !omitted.length) return;
+          await port.stageRefresh!(accountId, map.id, transactionId, documents, omitted);
+          documents = []; omitted = []; bytes = 0;
+        };
+        for (const candidate of candidates) {
+          const document = await documentFor(map, candidate, dependencies, signal);
+          const size = document ? new TextEncoder().encode(document.body).byteLength : 0;
+          if (documents.length + omitted.length >= MAX_BATCH_DOCUMENTS || bytes + size > MAX_BATCH_BODY_BYTES) await flush();
+          if (document) { documents.push(document); bytes += size; }
+          else omitted.push(candidate.node.id); // newly binary/secret bodies leave the searchable index
+        }
+        await flush();
+        for (let offset = 0; offset < deletedIds.length; offset += MAX_DELETE_BATCH_DOCUMENTS) {
+          abortIfNeeded(signal);
+          await port.stageRefresh(accountId, map.id, transactionId, [], deletedIds.slice(offset, offset + MAX_DELETE_BATCH_DOCUMENTS));
+        }
+        return {
+          async commit() {
+            abortIfNeeded(signal);
+            if (settled) fail('refresh_settled');
+            await port.finishRefresh!(accountId, map.id, transactionId, true);
+            settled = true;
+          },
+          abort,
+        };
+      } catch (error) {
+        try { await abort(); } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], 'context_search_refresh_abort_failed');
+        }
+        throw error;
+      }
+    },
     populateCreatedMap: populate,
     async repairEmptyMap(accountId, map, signal) {
       abortIfNeeded(signal);

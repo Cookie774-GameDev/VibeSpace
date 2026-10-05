@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tantivy::collector::TopDocs;
 use tantivy::directory::error::OpenReadError;
 use tantivy::query::{BooleanQuery, BoostQuery, PhraseQuery, Query, TermQuery};
@@ -18,7 +18,7 @@ use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{
     LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer, TokenStream,
 };
-use tantivy::{Index, TantivyDocument, TantivyError, Term};
+use tantivy::{Index, IndexWriter, TantivyDocument, TantivyError, Term};
 use tauri::Manager;
 
 const ENGINE: &str = "tantivy-0.22.1";
@@ -43,6 +43,39 @@ const MAX_INDEX_SCOPES: usize = 512;
 const MAX_CONCURRENT_WORKERS: usize = 4;
 static CONTEXT_WORKERS: async_lock::Semaphore = async_lock::Semaphore::new(MAX_CONCURRENT_WORKERS);
 static PROCESS_WRITER_BUDGET: OnceLock<Mutex<()>> = OnceLock::new();
+// One bounded writer across automatic refreshes. Uncommitted segments are never
+// visible to readers; dropping/rolling back it also survives an app interruption.
+static PENDING_REFRESH: OnceLock<Mutex<Option<PendingRefresh>>> = OnceLock::new();
+
+struct PendingRefresh {
+    id: String,
+    scope_key: String,
+    path: PathBuf,
+    base_metadata: Vec<u8>,
+    writer: IndexWriter<TantivyDocument>,
+    fields: IndexFields,
+    touched: Instant,
+    affected: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextSearchRefreshRequest {
+    pub account_id: String,
+    pub map_id: String,
+    pub transaction_id: String,
+    pub documents: Vec<ContextSearchDocumentInput>,
+    pub document_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContextSearchFinishRefreshRequest {
+    pub account_id: String,
+    pub map_id: String,
+    pub transaction_id: String,
+    pub commit: bool,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -329,6 +362,168 @@ impl ContextSearchIndex {
                 harden_tree_permissions(&self.path)?;
                 Ok(documents.len())
             })
+        })
+    }
+
+    fn begin_refresh(&self) -> Result<String, String> {
+        self.with_scope_lock(|| {
+            if self.needs_rebuild()? {
+                return Err("context_search_refresh_rebuild_required".into());
+            }
+            let mut pending = PENDING_REFRESH
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .map_err(|_| "context_search_refresh_poisoned".to_string())?;
+            if pending
+                .as_ref()
+                .is_some_and(|refresh| refresh.touched.elapsed().as_secs() > 600)
+            {
+                if let Some(mut expired) = pending.take() {
+                    expired
+                        .writer
+                        .rollback()
+                        .map_err(|error| format!("context_search_rollback:{error}"))?;
+                }
+            }
+            if pending.is_some() {
+                return Err("context_search_refresh_busy".into());
+            }
+            let (index, fields) = self.open_current_generation()?;
+            let base_metadata = fs::read(self.path.join("meta.json"))
+                .map_err(|error| format!("context_search_refresh_metadata:{error}"))?;
+            let writer = with_writer_budget(|| {
+                index
+                    .writer::<TantivyDocument>(WRITER_MEMORY_BYTES)
+                    .map_err(|error| format!("context_search_writer:{error}"))
+            })?;
+            let id = nanoid::nanoid!(32);
+            *pending = Some(PendingRefresh {
+                id: id.clone(),
+                scope_key: self.scope_key.clone(),
+                path: self.path.clone(),
+                base_metadata,
+                writer,
+                fields,
+                touched: Instant::now(),
+                affected: 0,
+            });
+            Ok(id)
+        })
+    }
+
+    fn stage_refresh(
+        &self,
+        id: &str,
+        documents: &[ContextSearchDocumentInput],
+        deleted: &[String],
+    ) -> Result<(), String> {
+        validate_documents(documents)?;
+        if documents.len() + deleted.len() > MAX_DOCUMENTS_PER_MUTATION {
+            return Err("context_search_input_too_large".into());
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for document in documents {
+            unique.insert(document.document_id.as_str());
+        }
+        for document_id in deleted {
+            validate_stable_id(document_id, "document_id")?;
+            if !unique.insert(document_id.as_str()) {
+                return Err("context_search_duplicate_document_id".into());
+            }
+        }
+        self.with_scope_lock(|| {
+            self.ensure_index_path_safe()?;
+            let mut pending = PENDING_REFRESH
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .map_err(|_| "context_search_refresh_poisoned".to_string())?;
+            let refresh = pending
+                .as_mut()
+                .filter(|refresh| {
+                    refresh.id == id
+                        && refresh.scope_key == self.scope_key
+                        && refresh.path == self.path
+                })
+                .ok_or_else(|| "context_search_refresh_scope_changed".to_string())?;
+            if refresh.touched.elapsed().as_secs() > 600 {
+                return Err("context_search_refresh_expired".into());
+            }
+            for document_id in deleted {
+                refresh.writer.delete_term(Term::from_field_text(
+                    refresh.fields.document_id,
+                    document_id,
+                ));
+            }
+            for document in documents {
+                refresh.writer.delete_term(Term::from_field_text(
+                    refresh.fields.document_id,
+                    &document.document_id,
+                ));
+                let fields = refresh.fields;
+                let mut indexed = TantivyDocument::default();
+                indexed.add_text(fields.document_id, &document.document_id);
+                indexed.add_text(fields.source_id, &document.source_id);
+                indexed.add_text(fields.title, &document.title);
+                indexed.add_text(fields.path, &document.path);
+                indexed.add_text(fields.source_type, &document.source_type);
+                indexed.add_text(fields.body, &document.body);
+                indexed.add_text(fields.tags, document.tags.join(" "));
+                indexed.add_text(
+                    fields.properties,
+                    serde_json::to_string(&document.properties)
+                        .map_err(|error| format!("context_search_properties_serialize:{error}"))?,
+                );
+                indexed.add_i64(fields.updated_at, document.updated_at);
+                indexed.add_text(fields.content_hash, &document.content_hash);
+                refresh
+                    .writer
+                    .add_document(indexed)
+                    .map_err(|error| format!("context_search_add:{error}"))?;
+            }
+            refresh.affected += documents.len() + deleted.len();
+            refresh.touched = Instant::now();
+            Ok(())
+        })
+    }
+
+    fn finish_refresh(&self, id: &str, commit: bool) -> Result<usize, String> {
+        self.with_scope_lock(|| {
+            let mut pending = PENDING_REFRESH
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .map_err(|_| "context_search_refresh_poisoned".to_string())?;
+            if !pending.as_ref().is_some_and(|refresh| {
+                refresh.id == id && refresh.scope_key == self.scope_key && refresh.path == self.path
+            }) {
+                return Err("context_search_refresh_scope_changed".into());
+            }
+            let mut refresh = pending.take().expect("validated refresh");
+            if !commit {
+                refresh
+                    .writer
+                    .rollback()
+                    .map_err(|error| format!("context_search_rollback:{error}"))?;
+                return Ok(0);
+            }
+            self.ensure_index_path_safe()?;
+            let metadata = fs::read(self.path.join("meta.json"))
+                .map_err(|error| format!("context_search_refresh_metadata:{error}"))?;
+            if metadata != refresh.base_metadata
+                || self.needs_rebuild()?
+                || refresh.touched.elapsed().as_secs() > 600
+            {
+                refresh
+                    .writer
+                    .rollback()
+                    .map_err(|error| format!("context_search_rollback:{error}"))?;
+                return Err("context_search_refresh_generation_changed".into());
+            }
+            harden_tree_permissions(&self.path)?;
+            refresh
+                .writer
+                .commit()
+                .map_err(|error| format!("context_search_commit:{error}"))?;
+            Ok(refresh.affected)
         })
     }
 
@@ -1460,6 +1655,70 @@ pub async fn context_search_query(
 }
 
 #[tauri::command]
+pub async fn context_search_begin_refresh(
+    window: tauri::Webview,
+    app: tauri::AppHandle,
+    request: ContextSearchStatusRequest,
+) -> Result<String, String> {
+    ensure_main_caller(window.label(), window.window().label())?;
+    let location = app_index_location(&app)?;
+    run_context_worker(move || {
+        ContextSearchIndex::open_from_trusted_base(
+            &location.trusted_base,
+            &location.relative_root,
+            &request.account_id,
+            &request.map_id,
+        )?
+        .begin_refresh()
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn context_search_stage_refresh(
+    window: tauri::Webview,
+    app: tauri::AppHandle,
+    request: ContextSearchRefreshRequest,
+) -> Result<(), String> {
+    ensure_main_caller(window.label(), window.window().label())?;
+    let location = app_index_location(&app)?;
+    run_context_worker(move || {
+        ContextSearchIndex::open_from_trusted_base(
+            &location.trusted_base,
+            &location.relative_root,
+            &request.account_id,
+            &request.map_id,
+        )?
+        .stage_refresh(
+            &request.transaction_id,
+            &request.documents,
+            &request.document_ids,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn context_search_finish_refresh(
+    window: tauri::Webview,
+    app: tauri::AppHandle,
+    request: ContextSearchFinishRefreshRequest,
+) -> Result<usize, String> {
+    ensure_main_caller(window.label(), window.window().label())?;
+    let location = app_index_location(&app)?;
+    run_context_worker(move || {
+        ContextSearchIndex::open_from_trusted_base(
+            &location.trusted_base,
+            &location.relative_root,
+            &request.account_id,
+            &request.map_id,
+        )?
+        .finish_refresh(&request.transaction_id, request.commit)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn context_search_status(
     window: tauri::Webview,
     app: tauri::AppHandle,
@@ -1579,6 +1838,52 @@ mod tests {
             updated_at: 1_752_600_000_000,
             content_hash: "a".repeat(64),
         }
+    }
+
+    #[test]
+    fn refresh_batches_are_invisible_until_commit_and_abort_preserves_previous_index() {
+        let root = TempRoot::new();
+        let index = ContextSearchIndex::open(&root.0, "refresh-account", "refresh-map").unwrap();
+        index
+            .replace_documents(&[document("old", "Old", "previous evidence")])
+            .unwrap();
+        let id = index.begin_refresh().unwrap();
+        index
+            .stage_refresh(
+                &id,
+                &[document("new", "New", "replacement evidence")],
+                &["old".into()],
+            )
+            .unwrap();
+        let query = |text: &str| {
+            index
+                .query(&ContextSearchQueryInput {
+                    mode: ContextSearchMode::FullText,
+                    query: text.into(),
+                    limit: 10,
+                })
+                .unwrap()
+        };
+        assert_eq!(query("previous").len(), 1);
+        assert!(query("replacement").is_empty());
+        let foreign = ContextSearchIndex::open(&root.0, "other-account", "refresh-map").unwrap();
+        assert!(foreign.finish_refresh(&id, true).is_err());
+        let mut invalid = document("invalid", "Invalid", "bad");
+        invalid.path = "../escape".into();
+        assert!(index.stage_refresh(&id, &[invalid], &[]).is_err());
+        index.finish_refresh(&id, false).unwrap();
+        assert_eq!(query("previous").len(), 1);
+        assert!(query("replacement").is_empty());
+        let id = index.begin_refresh().unwrap();
+        index
+            .stage_refresh(&id, &[document("new", "New", "replacement evidence")], &[])
+            .unwrap();
+        index.stage_refresh(&id, &[], &["old".into()]).unwrap();
+        assert_eq!(index.finish_refresh(&id, true).unwrap(), 2);
+        assert!(query("previous").is_empty());
+        assert_eq!(query("replacement").len(), 1);
+        let reopened = ContextSearchIndex::open(&root.0, "refresh-account", "refresh-map").unwrap();
+        assert_eq!(reopened.status().unwrap().document_count, 1);
     }
 
     #[test]

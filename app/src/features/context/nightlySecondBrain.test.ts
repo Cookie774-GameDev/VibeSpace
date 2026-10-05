@@ -6,6 +6,9 @@ import {
   isNightlySecondBrainRunDue,
   manualSecondBrainScheduledFor,
   nextNightlySecondBrainRun,
+  mostRecentNightlySecondBrainRun,
+  successfulSecondBrainCoverage,
+  secondBrainSourceBatch,
   type SecondBrainChange,
   type SecondBrainSource,
 } from './nightlySecondBrain';
@@ -32,6 +35,125 @@ const change: SecondBrainChange = {
 };
 
 describe('nightly second-brain maintenance', () => {
+  it('processes a bounded chronological prefix without skipping the remaining history', () => {
+    const history = [
+      { ...sources[0]!, observedAt: 11, content: 'a'.repeat(50) },
+      { ...sources[0]!, id: 'chat:2', observedAt: 12, content: 'b'.repeat(50) },
+      { ...sources[0]!, id: 'chat:3', observedAt: 13, content: 'c'.repeat(20) },
+    ];
+    const first = secondBrainSourceBatch(history, { start: 10, end: 20 }, 100);
+    expect(first).toEqual({ sources: history.slice(0, 2), coverageEnd: 12, remaining: 1 });
+    expect(secondBrainSourceBatch(history, { start: first.coverageEnd, end: 20 }, 100)).toEqual({
+      sources: [history[2]],
+      coverageEnd: 20,
+      remaining: 0,
+    });
+    expect(() =>
+      secondBrainSourceBatch(
+        history.map((source) => ({ ...source, observedAt: 11 })),
+        { start: 10, end: 20 },
+        100,
+      ),
+    ).toThrow('Coverage was preserved');
+  });
+
+  it('commits the processed prefix while leaving the current cutoff due for catch-up', async () => {
+    const collectSources = async () => ({ sources: [sources[0]!], coverageEnd: 10, remaining: 1 });
+    const runner = new NightlySecondBrainRunner({
+      collectSources,
+      propose: async () => [change],
+      apply: vi.fn(),
+      rollback: vi.fn(),
+      saveRun: vi.fn(),
+    });
+    const run = await runner.run({
+      config: { ...DEFAULT_SECOND_BRAIN_CONFIG, enabled: true, mode: 'auto', model },
+      scheduledFor: 20,
+      now: 20,
+    });
+    expect(run.status).toBe('applied');
+    expect(run.coverageEnd).toBe(10);
+    expect(successfulSecondBrainCoverage([run])).toBe(10);
+    expect(run.summary).toContain('More saved activity remains');
+  });
+  it('uses the selected local time and weekdays when recovering a missed run', () => {
+    const schedule = { scheduleHour: 3, scheduleMinute: 15, scheduleDays: [1, 5] };
+    const thursday = new Date(2026, 9, 8, 12);
+    expect(mostRecentNightlySecondBrainRun(thursday, schedule)).toEqual(
+      new Date(2026, 9, 5, 3, 15),
+    );
+    expect(nextNightlySecondBrainRun(thursday, schedule)).toEqual(new Date(2026, 9, 9, 3, 15));
+    expect(nextNightlySecondBrainRun(new Date(2026, 9, 9, 3, 15), schedule)).toEqual(
+      new Date(2026, 9, 12, 3, 15),
+    );
+  });
+
+  it('advances coverage only for durably applied runs and preserves the collection cutoff', () => {
+    const base = {
+      id: 'covered',
+      scheduledFor: 100,
+      startedAt: 110,
+      completedAt: 150,
+      mode: 'auto' as const,
+      model,
+      changes: [],
+      summary: 'Saved',
+      coverageStart: 0,
+      coverageEnd: 110,
+    };
+    expect(successfulSecondBrainCoverage([{ ...base, status: 'pending_approval' }])).toBe(0);
+    expect(successfulSecondBrainCoverage([{ ...base, status: 'failed' }])).toBe(0);
+    expect(successfulSecondBrainCoverage([{ ...base, status: 'applied' }])).toBe(110);
+    expect(successfulSecondBrainCoverage([{ ...base, status: 'rolled_back' }])).toBe(0);
+  });
+
+  it('collects the fixed coverage interval and records it only after an actual apply', async () => {
+    const collectSources = vi
+      .fn()
+      .mockResolvedValue(
+        sources.map((source) => ({ ...source, observedAt: source.observedAt + 10 })),
+      );
+    const saveRun = vi.fn();
+    const runner = new NightlySecondBrainRunner({
+      collectSources,
+      propose: async () => [change],
+      apply: vi.fn().mockRejectedValue(new Error('disk full')),
+      rollback: vi.fn(),
+      saveRun,
+    });
+    const run = await runner.run({
+      config: { ...DEFAULT_SECOND_BRAIN_CONFIG, enabled: true, mode: 'auto', model },
+      scheduledFor: 100,
+      now: 120,
+      coverageStart: 10,
+    });
+    expect(collectSources).toHaveBeenCalledWith({ start: 10, end: 120 });
+    expect(run.status).toBe('failed');
+    expect(successfulSecondBrainCoverage([run])).toBe(0);
+  });
+
+  it('preserves private history when a cloud model has no data permission', async () => {
+    const propose = vi.fn();
+    const runner = new NightlySecondBrainRunner({
+      collectSources: async () => sources.filter((source) => source.privateLocal),
+      propose,
+      apply: vi.fn(),
+      rollback: vi.fn(),
+      saveRun: vi.fn(),
+    });
+    const run = await runner.run({
+      config: {
+        ...DEFAULT_SECOND_BRAIN_CONFIG,
+        enabled: true,
+        mode: 'auto',
+        model: { ...model, local: false },
+      },
+      scheduledFor: 100,
+    });
+    expect(run.status).toBe('failed');
+    expect(propose).not.toHaveBeenCalled();
+    expect(successfulSecondBrainCoverage([run])).toBe(0);
+  });
   it('buckets repeated manual requests into one canonical minute', () => {
     expect(manualSecondBrainScheduledFor(Date.parse('2026-08-09T12:34:59.999Z'))).toBe(
       Date.parse('2026-08-09T12:34:00.000Z'),

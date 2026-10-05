@@ -869,6 +869,9 @@ fn run_ordinary(
             context_search::context_search_query,
             context_search::context_search_status,
             context_search::context_search_acknowledge_rebuild,
+            context_search::context_search_begin_refresh,
+            context_search::context_search_stage_refresh,
+            context_search::context_search_finish_refresh,
             fsread::fs_create_dir_all,
             fsread::fs_create_dir_all_strict,
             fsread::fs_stat_path,
@@ -1242,6 +1245,9 @@ context_search::context_search_delete_documents
 context_search::context_search_query
 context_search::context_search_status
 context_search::context_search_acknowledge_rebuild
+context_search::context_search_begin_refresh
+context_search::context_search_stage_refresh
+context_search::context_search_finish_refresh
 fsread::fs_create_dir_all
 fsread::fs_create_dir_all_strict
 fsread::fs_stat_path

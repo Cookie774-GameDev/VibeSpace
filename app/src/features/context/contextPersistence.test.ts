@@ -78,6 +78,27 @@ afterEach(async () => {
 });
 
 describe('production Context persistence service', () => {
+  it('refreshes a background map without stealing selection and clears only its own opt-in on deletion', async () => {
+    const service = createContextPersistenceService(database, localStorage);
+    await service.initialize('account-1', 'project-1');
+    const first = await service.saveTree('account-1', treeFixture(), { mapId: 'map-first' });
+    await service.saveTree('account-1', treeFixture('C:/Other'), { mapId: 'map-selected' });
+    const before = first.maps.find((map) => map.id === 'map-first')!;
+    const refreshed = await service.saveTree('account-1', { ...before.tree, generatedAt: Date.now() + 1 }, {
+      mapId: before.id, expectedUpdatedAt: before.updatedAt, requireExisting: true, select: false,
+    });
+    expect(refreshed.selectedMapId).toBe('map-selected');
+    await database.settings.bulkPut([
+      { key: 'auto-own', value: { kind: 'context-auto-update-v1', accountId: 'account-1', projectId: 'project-1', mapId: 'map-first', enabled: true }, updated_at: 1 },
+      { key: 'auto-peer', value: { kind: 'context-auto-update-v1', accountId: 'account-1', projectId: 'project-1', mapId: 'map-selected', enabled: true }, updated_at: 1 },
+      { key: 'auto-foreign', value: { kind: 'context-auto-update-v1', accountId: 'account-2', projectId: 'project-1', mapId: 'map-first', enabled: true }, updated_at: 1 },
+    ]);
+    await service.deleteMap('account-1', 'project-1', 'map-first');
+    expect(await database.settings.get('auto-own')).toBeUndefined();
+    expect(await database.settings.get('auto-peer')).toBeDefined(); expect(await database.settings.get('auto-foreign')).toBeDefined();
+    await service.restoreMap('account-1', 'project-1', 'map-first');
+    expect(await database.settings.get('auto-own')).toBeUndefined();
+  });
   it('migrates legacy state once, publishes the validated V2 projection, and retains rollback data', async () => {
     const legacy = legacyMap();
     const collectionKey = contextMapCollectionKey('project-1');

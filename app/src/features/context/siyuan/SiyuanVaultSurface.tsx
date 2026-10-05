@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { Button } from '@/components/ui';
+import contextLoadingArtwork from '@/assets/siyuan-context-loading.webp';
 import {
   measureSiyuanSurfaceBounds,
   productionSiyuanSurfaceBridge,
@@ -23,76 +24,16 @@ export function SiyuanVaultLoading({ stage }: { stage: 'checking' | 'starting' }
       aria-live="polite"
       className="relative grid h-full min-h-[240px] w-full place-items-center overflow-hidden bg-paper px-6 py-10 text-center"
     >
-      <div className="pointer-events-none absolute -top-28 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-accent-copper/10 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-36 left-1/2 h-72 w-[34rem] -translate-x-1/2 rounded-full bg-accent-sage/10 blur-3xl" />
       <div className="relative flex max-w-sm flex-col items-center">
-        <div className="relative mb-7 grid h-44 w-44 place-items-center">
-          <div className="absolute inset-1 rounded-full border border-accent-copper/20" />
-          <div className="absolute inset-0 rounded-full border border-dashed border-accent-copper/35 motion-safe:animate-spin motion-reduce:animate-none [animation-duration:12s]" />
-          <div className="absolute inset-5 rounded-[2rem] border border-accent-copper/20 bg-panel/85 shadow-soft" />
-          <svg
-            data-siyuan-axo
-            viewBox="0 0 160 160"
-            className="relative h-32 w-32 drop-shadow-md motion-safe:animate-bounce motion-reduce:animate-none [animation-duration:2.4s]"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <path
-              d="M50 63 23 50l11 18-17 7 23 7M110 63l27-13-11 18 17 7-23 7"
-              fill="#e49b78"
-              stroke="#a75e47"
-              strokeWidth="3"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M49 82 21 85l17 9-10 12 26-8M111 82l28 3-17 9 10 12-26-8"
-              fill="#d57b61"
-              stroke="#a75e47"
-              strokeWidth="3"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M61 112c-4 7-7 13-7 19m45-19c4 7 7 13 7 19"
-              fill="none"
-              stroke="#a75e47"
-              strokeWidth="6"
-              strokeLinecap="round"
-            />
-            <path
-              d="M47 111c5-18 18-28 33-28s28 10 33 28l-6 23H53z"
-              fill="#f9e9d4"
-              stroke="#a75e47"
-              strokeWidth="3"
-            />
-            <path
-              d="M27 59c0-25 22-43 53-43s53 18 53 43v29c0 26-23 43-53 43S27 114 27 88z"
-              fill="#fff3df"
-              stroke="#a75e47"
-              strokeWidth="3"
-            />
-            <path
-              d="M41 67c2-21 18-34 39-34s37 13 39 34v20c0 21-17 32-39 32S41 108 41 87z"
-              fill="#3f302b"
-            />
-            <path
-              d="M65 45c4-5 10-7 15-7s11 2 15 7"
-              fill="none"
-              stroke="#edb08b"
-              strokeWidth="3"
-              strokeLinecap="round"
-            />
-            <circle cx="63" cy="73" r="4" fill="#fff7e9" />
-            <circle cx="97" cy="73" r="4" fill="#fff7e9" />
-            <path
-              d="M72 91c5 5 11 5 16 0"
-              fill="none"
-              stroke="#edb08b"
-              strokeWidth="3"
-              strokeLinecap="round"
-            />
-            <path d="M77 25h6m-3-3v6" stroke="#a75e47" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-        </div>
+        <img
+          src={contextLoadingArtwork}
+          alt=""
+          aria-hidden="true"
+          width={176}
+          height={176}
+          draggable={false}
+          className="mb-7 h-44 w-44 select-none object-contain"
+        />
         <p className="mb-2 text-[0.65rem] font-semibold uppercase tracking-[0.28em] text-accent-copper">
           Context Vault
         </p>
@@ -101,8 +42,8 @@ export function SiyuanVaultLoading({ stage }: { stage: 'checking' | 'starting' }
         </h2>
         <p className="mt-3 max-w-xs text-sm leading-relaxed text-muted-foreground">
           {stage === 'checking'
-            ? 'Axo is checking your saved map and picking up the latest safe checkpoint.'
-            : 'Axo is opening the local SiYuan graph. Your source files stay where they are.'}
+            ? 'Checking your saved map and picking up the latest safe checkpoint.'
+            : 'Opening the local SiYuan graph. Your source files stay where they are.'}
         </p>
         <div className="mt-6 flex items-center gap-1.5" aria-hidden="true">
           <span className="h-1.5 w-1.5 rounded-full bg-accent-copper motion-safe:animate-pulse motion-reduce:animate-none" />

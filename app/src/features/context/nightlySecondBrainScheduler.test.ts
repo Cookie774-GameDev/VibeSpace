@@ -2,6 +2,25 @@ import { describe, expect, it, vi } from 'vitest';
 import { NightlySecondBrainScheduler } from './nightlySecondBrainScheduler';
 
 describe('NightlySecondBrainScheduler', () => {
+  it('recovers the selected weekday/time and retries failure with one bounded timer', async () => {
+    const run = vi.fn().mockResolvedValue(false);
+    const setTimer = vi.fn().mockReturnValue(1);
+    const scheduler = new NightlySecondBrainScheduler({
+      now: () => new Date(2026, 9, 9, 8),
+      lastScheduledFor: () => new Date(2026, 9, 5, 3).getTime(),
+      schedule: () => ({ scheduleHour: 3, scheduleMinute: 0, scheduleDays: [1, 5] }),
+      run,
+      setTimer,
+      clearTimer: vi.fn(),
+    });
+    scheduler.start();
+    scheduler.resume();
+    await vi.waitFor(() => expect(setTimer).toHaveBeenCalledTimes(1));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith(new Date(2026, 9, 9, 3).getTime());
+    expect(setTimer.mock.calls[0]?.[1]).toBe(300_000);
+    scheduler.stop();
+  });
   it('recovers one missed 2 a.m. run and uses one long-lived timer', async () => {
     const run = vi.fn().mockResolvedValue(undefined);
     const setTimer = vi.fn().mockReturnValue(7);

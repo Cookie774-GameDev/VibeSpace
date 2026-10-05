@@ -56,4 +56,16 @@ describe('NightlySecondBrainPanel manual run', () => {
     await vi.waitFor(() => expect(runNightlySecondBrain).toHaveBeenCalledTimes(1));
     expect(runNightlySecondBrain.mock.calls[0]?.[0]).toEqual(expect.any(Number));
   });
+
+  it('saves the selected time/days and explains app-open catch-up', async () => {
+    render(<NightlySecondBrainPanel />);
+    fireEvent.click(screen.getByRole('button', { name: /expand nightly maintenance settings/i }));
+    fireEvent.change(screen.getByLabelText('Local update time'), { target: { value: '03:15' } });
+    fireEvent.click(screen.getByLabelText('Tue'));
+    const scope = Object.values(useNightlySecondBrainStore.getState().scopes)[0]!;
+    expect(scope.config.scheduleHour).toBe(3);
+    expect(scope.config.scheduleMinute).toBe(15);
+    expect(scope.config.scheduleDays).not.toContain(2);
+    expect(screen.getByText(/the app must be open/i)).toBeTruthy();
+  });
 });

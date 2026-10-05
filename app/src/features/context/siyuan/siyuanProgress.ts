@@ -1,8 +1,17 @@
+import { canonicalSiyuanAuthorityRoot } from './siyuanPathAuthority';
+
 export interface SiyuanProgressSample {
   at: number;
   processed: number;
   frontierRemaining: number;
   discovered: number;
+}
+
+/** A checkpoint is display authority only for the currently selected map scope. */
+export function siyuanProgressMatchesMap(job: SiyuanIndexJobRecord | null,
+  accountId: string | null, projectId: string | null, map: { id: string; rootDir: string } | null): boolean {
+  return Boolean(job && map && job.accountId === accountId && job.projectId === projectId &&
+    job.mapId === map.id && canonicalSiyuanAuthorityRoot(job.canonicalRoot) === canonicalSiyuanAuthorityRoot(map.rootDir));
 }
 
 export interface SiyuanProgressEstimate {
@@ -128,6 +137,16 @@ export function formatSiyuanEta(etaSeconds: number | null): string {
 }
 
 export function siyuanOverallProgressPercent(job: SiyuanIndexJobRecord): number | null {
+  const complete =
+    job.phase === 'completed' &&
+    job.status === 'completed' &&
+    job.completedAt !== null &&
+    Number.isFinite(job.completedAt) &&
+    job.reconciledAt !== null &&
+    Number.isFinite(job.reconciledAt) &&
+    Number.isSafeInteger(job.indexed) && job.indexed >= 0 &&
+    job.createdNodes === job.indexed && job.failed === 0 &&
+    job.pendingNativeNodeIds.length === 0;
   const calculated =
     job.phase === 'completed'
       ? 100
@@ -141,7 +160,7 @@ export function siyuanOverallProgressPercent(job: SiyuanIndexJobRecord): number 
               ? 90
               : null;
   if (calculated === null && job.estimatedPercent === null) return null;
-  if (job.phase === 'completed') return 100;
+  if (complete) return 100;
   return Math.min(99, Math.max(calculated ?? 0, job.estimatedPercent ?? 0));
 }
 

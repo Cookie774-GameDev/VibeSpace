@@ -3,6 +3,7 @@ import {
   applySecondBrainChangesWithRollback,
   canonicalSecondBrainRun,
   parseSecondBrainProposal,
+  redactSecondBrainEvidence,
   scopedSecondBrainMessages,
   scopedSecondBrainTerminalSessions,
   resolveContextMapChangeTarget,
@@ -14,6 +15,39 @@ import type { ContextMapRecord } from './tree';
 import type { SecondBrainChange } from './nightlySecondBrain';
 
 describe('nightly second-brain production runtime helpers', () => {
+  it('retains Monday-to-Friday evidence and excludes activity after the fixed cutoff', () => {
+    const monday = Date.parse('2026-10-05T08:00:00Z');
+    const friday = Date.parse('2026-10-09T08:00:00Z');
+    const messages = [
+      { chat_id: 'codex', updated_at: monday },
+      { chat_id: 'codex', updated_at: monday + 1 },
+      { chat_id: 'opencode', updated_at: friday },
+      { chat_id: 'opencode', updated_at: friday + 1 },
+      { chat_id: 'foreign', updated_at: friday },
+    ];
+    expect(
+      scopedSecondBrainMessages(messages, new Set(['codex', 'opencode']), monday, friday),
+    ).toEqual(messages.slice(1, 3));
+  });
+
+  it('does not let a failed canonical run prevent retrying the same schedule', () => {
+    expect(canonicalSecondBrainRun([{ scheduledFor: 100, status: 'failed' }], 100)).toBeUndefined();
+  });
+
+  it('does not mark the entire schedule covered after a bounded prefix', () => {
+    expect(
+      canonicalSecondBrainRun(
+        [{ scheduledFor: 100, status: 'applied', startedAt: 150, coverageEnd: 120 }],
+        100,
+      ),
+    ).toBeUndefined();
+    expect(
+      canonicalSecondBrainRun(
+        [{ scheduledFor: 100, status: 'applied', startedAt: 150, coverageEnd: 150 }],
+        100,
+      ),
+    ).toBeDefined();
+  });
   it('accepts only bounded proposals with real source provenance', () => {
     expect(
       parseSecondBrainProposal(
@@ -28,6 +62,17 @@ describe('nightly second-brain production runtime helpers', () => {
         confidence: 0.9,
       },
     ]);
+  });
+  it('rejects a model proposal that would copy credentials into a managed summary', () => {
+    const fakeKey = 'sk-proj-' + 'a'.repeat(40);
+    expect(parseSecondBrainProposal(JSON.stringify({ updates: [{ target: 'related_markdown',
+      content: 'Configured OPENAI_API_KEY=' + fakeKey, provenance: ['chat:1'], confidence: 0.9 }] }), new Set(['chat:1']))).toEqual([]);
+  });
+  it('redacts detected credentials from model evidence while preserving useful work text', () => {
+    const fakeKey = 'sk-proj-' + 'b'.repeat(40);
+    const evidence = redactSecondBrainEvidence('Built the local index. OPENAI_API_KEY=' + fakeKey);
+    expect(evidence).toContain('Built the local index.');
+    expect(evidence).not.toContain(fakeKey); expect(evidence).toContain('[redacted:');
   });
 
   it('deduplicates markdown facts instead of rewriting the document', () => {

@@ -7,9 +7,44 @@ import {
   formatSiyuanJobEta,
   SIYUAN_STALLED_CHECKPOINT_MS,
   siyuanOverallProgressPercent,
+  siyuanProgressMatchesMap,
 } from './siyuanProgress';
 
 describe('SiYuan honest progress estimator', () => {
+  it('rejects a completed checkpoint from another map, account, project or source root', () => {
+    const job = createSiyuanIndexJob({ accountId: 'account', projectId: 'project', mapId: 'map', canonicalRoot: 'C:/root', policyFingerprint: 'policy' });
+    const map = { id: 'map', rootDir: 'C:\\root' };
+    expect(siyuanProgressMatchesMap(job, 'account', 'project', map)).toBe(true);
+    expect(siyuanProgressMatchesMap(job, 'foreign', 'project', map)).toBe(false);
+    expect(siyuanProgressMatchesMap(job, 'account', 'foreign', map)).toBe(false);
+    expect(siyuanProgressMatchesMap(job, 'account', 'project', { ...map, id: 'other-map' })).toBe(false);
+    expect(siyuanProgressMatchesMap(job, 'account', 'project', { ...map, rootDir: 'D:/root' })).toBe(false);
+  });
+  it('never reports 100 for a failed or still-running completed-phase checkpoint', () => {
+    const base = createSiyuanIndexJob({
+      projectId: 'project-1',
+      mapId: 'map-1',
+      canonicalRoot: 'C:/root',
+      policyFingerprint: 'policy',
+    });
+    const complete = {
+      ...base,
+      phase: 'completed' as const,
+      status: 'completed' as const,
+      completedAt: 100,
+      reconciledAt: 99,
+      estimatedPercent: 100,
+    };
+    expect(siyuanOverallProgressPercent(complete)).toBe(100);
+    expect(siyuanOverallProgressPercent({ ...complete, status: 'failed' })).toBe(99);
+    expect(siyuanOverallProgressPercent({ ...complete, status: 'running' })).toBe(99);
+    expect(siyuanOverallProgressPercent({ ...complete, reconciledAt: null })).toBe(99);
+    expect(siyuanOverallProgressPercent({ ...complete, indexed: 10, createdNodes: 9 })).toBe(99);
+    expect(siyuanOverallProgressPercent({ ...complete, failed: 1 })).toBe(99);
+    expect(
+      siyuanOverallProgressPercent({ ...complete, pendingNativeNodeIds: ['unfinished'] }),
+    ).toBe(99);
+  });
   it('distinguishes active progress from a stale running checkpoint without changing job state', () => {
     const base = createSiyuanIndexJob({
       projectId: 'project-1',
@@ -19,9 +54,9 @@ describe('SiYuan honest progress estimator', () => {
     });
     const running = { ...base, status: 'running' as const, updatedAt: 10_000 };
 
-    expect(classifySiyuanCheckpointLiveness(running, 10_000 + SIYUAN_STALLED_CHECKPOINT_MS - 1)).toBe(
-      'running',
-    );
+    expect(
+      classifySiyuanCheckpointLiveness(running, 10_000 + SIYUAN_STALLED_CHECKPOINT_MS - 1),
+    ).toBe('running');
     expect(classifySiyuanCheckpointLiveness(running, 10_000 + SIYUAN_STALLED_CHECKPOINT_MS)).toBe(
       'stalled',
     );

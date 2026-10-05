@@ -167,6 +167,31 @@ async function seedPendingNativeFileRecovery(record: ContextMapRecord) {
 }
 
 describe('SiYuan Context Map integration', () => {
+  it('refreshes a completed map without consuming its saved cloud summary approval or running models', async () => {
+    const record = { ...map(), id: 'map-auto-no-model' };
+    const policy = { mode: 'all' as const, selectedExtensions: [], selectedPaths: [] };
+    const base = createSiyuanIndexJob({ accountId: 'account-1', projectId: 'project-1', mapId: record.id,
+      canonicalRoot: record.rootDir, policyFingerprint: siyuanIndexPolicyFingerprint(record.rootDir, policy, []) });
+    await replaceSiyuanIndexJob(base, { path: record.rootDir, relativePath: '', parentNodeId: null });
+    await checkpointSiyuanIndexJob({ job: { ...base, status: 'completed', phase: 'completed', completedAt: 10,
+      reconciledAt: 10, summaryProviderId: 'cloud-unavailable', summaryConnectionId: 'missing', summaryModelId: 'missing-model' } });
+    writeSiyuanMapManifest(updateSiyuanMapManifest(createSiyuanMapManifest(record, 'project-1', policy), { status: 'ready' }));
+    const previousInternals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    try {
+      const result = await createSiyuanContextMapIntegration(port()).sync('project-1', record, {
+        accountId: 'account-1', automaticRefresh: true, forceReconcile: true,
+        preScannedIndex: { entries: [{ nodeId: 'path:new.txt', parentNodeId: null, title: 'new.txt', kind: 'file',
+          relativePath: 'new.txt', sourcePointer: `${record.rootDir}\\new.txt`, summary: null, sizeBytes: 2, modifiedAt: 20 }],
+          excluded: 0, unreadable: 0, summarized: 0 },
+      });
+      expect(result.manifest).toMatchObject({ status: 'ready', summaryPolicy: { mode: 'all' }, counts: { indexed: 1 } });
+      expect(await readSiyuanIndexJob('project-1', record.id)).toMatchObject({ status: 'completed', inputTokens: 0, outputTokens: 0 });
+    } finally {
+      if (previousInternals === undefined) delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+      else (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = previousInternals;
+    }
+  });
   beforeEach(async () => {
     localStorage.clear();
     await clearSiyuanNodeBindings('project-1', 'map-1');

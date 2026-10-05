@@ -44,7 +44,7 @@ function bridge(overrides: Partial<SiyuanSurfaceBridge> = {}): SiyuanSurfaceBrid
 }
 
 describe('SiYuan Context Vault surface', () => {
-  it('shows the animated Axo startup state until the official graph is ready', async () => {
+  it('shows the loading illustration until the official graph is ready', async () => {
     let finishOpen!: (status: Awaited<ReturnType<SiyuanSurfaceBridge['status']>>) => void;
     const ready = await bridge().status();
     const native = bridge({
@@ -67,7 +67,7 @@ describe('SiYuan Context Vault surface', () => {
     const loading = screen.getByTestId('siyuan-vault-loading');
     expect(loading.getAttribute('role')).toBe('status');
     expect(loading.textContent).toContain('Starting SiYuan Context Map');
-    expect(loading.querySelector('svg[data-siyuan-axo]')).not.toBeNull();
+    expect(loading.querySelector('img[alt=""]')).not.toBeNull();
     await waitFor(() => expect(native.open).toHaveBeenCalledOnce());
     expect(screen.getByTestId('siyuan-vault-loading')).not.toBeNull();
 

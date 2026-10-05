@@ -54,6 +54,7 @@ export function NightlySecondBrainPanel() {
   );
   const { config, runs } = scope;
   const setEnabled = useNightlySecondBrainStore((state) => state.setEnabled);
+  const setSchedule = useNightlySecondBrainStore((state) => state.setSchedule);
   const setMode = useNightlySecondBrainStore((state) => state.setMode);
   const setModel = useNightlySecondBrainStore((state) => state.setModel);
   const setCloudPrivatePermission = useNightlySecondBrainStore(
@@ -70,8 +71,8 @@ export function NightlySecondBrainPanel() {
     wasConfigured.current = configured;
   }, [configured]);
   const week = useMemo(
-    () => buildNightlySecondBrainWeek(Date.now(), runs, configured),
-    [configured, runs],
+    () => buildNightlySecondBrainWeek(Date.now(), runs, configured, config),
+    [configured, runs, config],
   );
   const perform = async (action: () => Promise<unknown>, success: string) => {
     if (actionBusy) return;
@@ -99,7 +100,9 @@ export function NightlySecondBrainPanel() {
             Nightly second-brain update
           </h2>
           <p className="text-metadata text-muted-foreground">
-            Runs every night at 2:00 a.m. local time. Missed runs recover after restart.
+            Runs on your selected days in local time (
+            {Intl.DateTimeFormat().resolvedOptions().timeZone}). The app must be open; missed runs
+            recover after restart.
           </p>
           <p className="mt-1 truncate text-metadata text-accent-copper">
             {config.enabled && config.model
@@ -133,6 +136,45 @@ export function NightlySecondBrainPanel() {
               disabled={!scopeKey}
             />
           </label>
+
+          <label className="grid gap-1 text-secondary">
+            Local update time
+            <input
+              type="time"
+              value={`${String(config.scheduleHour).padStart(2, '0')}:${String(config.scheduleMinute ?? 0).padStart(2, '0')}`}
+              disabled={!scopeKey}
+              onChange={(event) => {
+                const [scheduleHour, scheduleMinute] = event.target.value.split(':').map(Number);
+                if (scheduleHour !== undefined && scheduleMinute !== undefined)
+                  setSchedule(scopeKey, { ...config, scheduleHour, scheduleMinute });
+              }}
+            />
+          </label>
+          <fieldset className="flex flex-wrap gap-3 text-metadata">
+            <legend className="text-secondary font-medium">Update days</legend>
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => {
+              const days = config.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6];
+              const checked = days.includes(index);
+              return (
+                <label key={day} className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={!scopeKey || (checked && days.length === 1)}
+                    onChange={() =>
+                      setSchedule(scopeKey, {
+                        ...config,
+                        scheduleDays: checked
+                          ? days.filter((value) => value !== index)
+                          : [...days, index].sort(),
+                      })
+                    }
+                  />
+                  {day}
+                </label>
+              );
+            })}
+          </fieldset>
 
           <label className="grid gap-1 text-secondary">
             Accessible AI model
@@ -221,7 +263,7 @@ export function NightlySecondBrainPanel() {
 
           <div className="flex gap-2 text-metadata text-muted-foreground">
             <Clock3 className="h-4 w-4" aria-hidden="true" />
-            Next run: {formatUserDateTime(nextNightlySecondBrainRun(new Date()).getTime())}
+            Next run: {formatUserDateTime(nextNightlySecondBrainRun(new Date(), config).getTime())}
           </div>
           <button
             type="button"

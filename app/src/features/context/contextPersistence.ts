@@ -31,6 +31,7 @@ export interface ContextPersistenceState {
 }
 
 export interface ContextPersistenceService {
+  loadMap(accountId: string, projectId: string | null, mapId: string): Promise<ContextMapRecord | null>;
   initialize(accountId: string, projectId: string | null): Promise<ContextPersistenceState>;
   load(accountId: string, projectId: string | null): Promise<ContextPersistenceState>;
   saveTree(
@@ -61,6 +62,8 @@ export interface ContextPersistenceService {
 }
 
 export interface ContextTreeSaveOptions {
+  /** Background refresh must preserve the user's current map selection. */
+  select?: boolean;
   mapId?: string;
   name?: string;
   /** Update an already persisted map; never synthesize a replacement if it disappeared. */
@@ -364,6 +367,12 @@ export function createContextPersistenceService(
   };
 
   const service: ContextPersistenceService = {
+    async loadMap(accountId, projectId, mapId) {
+      assertIdentity(accountId, projectId);
+      const snapshot = await repository.getSnapshot(accountId, mapId);
+      if (!snapshot || snapshot.map.projectId !== projectId) return null;
+      return mapFromSnapshot(structuredClone(snapshot) as ContextGraphSnapshotV2);
+    },
     async initialize(accountId, projectId) {
       assertIdentity(accountId, projectId);
       let migration: ContextV1MigrationResult;
@@ -413,7 +422,7 @@ export function createContextPersistenceService(
       if (existing && existing.map.projectId !== tree.projectId) {
         fail('map_scope_conflict');
       }
-      if (options.requireExisting && !existing) {
+      if (options.requireExisting && (!existing || existing.map.status !== 'active')) {
         fail('map_missing');
       }
       if (
@@ -465,7 +474,7 @@ export function createContextPersistenceService(
       await repository.putSnapshot(accountId, snapshot, {
         expectedKnowledgeRevision: existing?.map.knowledgeRevision ?? 0,
       });
-      await writeSelection(accountId, tree.projectId, mapId);
+      if (options.select !== false) await writeSelection(accountId, tree.projectId, mapId);
       return load(accountId, tree.projectId);
     },
 
@@ -490,6 +499,12 @@ export function createContextPersistenceService(
           expectedKnowledgeRevision: snapshot.map.knowledgeRevision,
         });
       }
+      // A restored map requires a fresh opt-in. Preserve every other map/account setting.
+      await database.settings.filter((row) => {
+        const value = row.value as { kind?: string; accountId?: string; projectId?: string | null; mapId?: string } | null;
+        return value?.kind === 'context-auto-update-v1' && value.accountId === accountId &&
+          value.projectId === projectId && value.mapId === mapId;
+      }).delete();
       return load(accountId, projectId);
     },
 
@@ -690,6 +705,7 @@ export interface CapturedContextPersistenceScope {
   readonly accountId: string;
   readonly projectId: string | null;
   load(): Promise<ContextPersistenceState>;
+  loadMap(mapId: string): Promise<ContextMapRecord | null>;
   saveExistingTree(
     tree: ProjectContextTree,
     options: ContextTreeSaveOptions & { mapId: string; expectedUpdatedAt: number },
@@ -716,6 +732,7 @@ export async function captureContextPersistenceScope(
     accountId,
     projectId,
     load: () => getProductionService().load(accountId, projectId),
+    loadMap: (mapId: string) => getProductionService().loadMap(accountId, projectId, mapId),
     saveExistingTree: async (
       tree: ProjectContextTree,
       options: ContextTreeSaveOptions & { mapId: string; expectedUpdatedAt: number },

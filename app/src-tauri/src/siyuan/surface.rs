@@ -138,13 +138,23 @@ const SIYUAN_GRAPH_FIRST_INITIALIZATION_SCRIPT_TEMPLATE: &str = r#"
   };
 
   const openBrowserTarget = async () => {
-    const response = await fetch("/api/block/getBlockInfo", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: targetDocumentId }),
-      signal: AbortSignal.timeout(5000),
-    });
-    const payload = await response.json();
+    let response;
+    let payload;
+    // SiYuan reports code 3 while an opened notebook is being reindexed.
+    // Retry only that explicit transient state inside the original deadline.
+    do {
+      if (Date.now() >= deadline) throw new Error("siyuan_graph_target_timeout");
+      response = await fetch("/api/block/getBlockInfo", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: targetDocumentId }),
+        signal: AbortSignal.timeout(Math.max(1, Math.min(5000, deadline - Date.now()))),
+      });
+      payload = await response.json();
+      if (!response.ok || payload?.code !== 3) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
+    } while (Date.now() < deadline);
+    if (payload?.code === 3) throw new Error("siyuan_graph_target_timeout");
     const notebookId = payload?.code === 0 ? payload.data?.box : undefined;
     const rootId = payload?.code === 0 ? payload.data?.rootID : undefined;
     const path = payload?.code === 0 ? payload.data?.path : undefined;
@@ -180,11 +190,27 @@ const SIYUAN_GRAPH_FIRST_INITIALIZATION_SCRIPT_TEMPLATE: &str = r#"
     if (!fileDock.classList.contains("dock__item--active")) {
       fileDock.click();
     }
-    const tree = await waitFor(() =>
-      Array.from(document.querySelectorAll("ul[data-url]")).find(
+    let notebookOpenRequested = false;
+    const tree = await waitFor(() => {
+      const openTree = Array.from(document.querySelectorAll("ul[data-url]")).find(
         (candidate) => candidate.dataset.url === targetNotebookId,
-      ),
-    );
+      );
+      if (openTree) return openTree;
+      // Pinned SiYuan renders closed notebooks as li elements, not ul trees.
+      // Use its official Open action once, only for the verified notebook.
+      if (!notebookOpenRequested) {
+        const closed = Array.from(document.querySelectorAll("li[data-url]")).find(
+          (candidate) => candidate.dataset.url === targetNotebookId,
+        );
+        if (closed?.dataset.encrypted === "true") throw new Error("siyuan_graph_target_unavailable");
+        const open = closed?.querySelector('[data-type="open"]');
+        if (open && open.dataset.url === targetNotebookId) {
+          notebookOpenRequested = true;
+          open.click();
+        }
+      }
+      return undefined;
+    });
     const notebookRoot = tree.querySelector(':scope > li[data-type="navigation-root"]');
     const notebookArrow = notebookRoot?.querySelector(".b3-list-item__arrow");
     if (notebookRoot && !notebookArrow?.classList.contains("b3-list-item__arrow--open")) {
@@ -1675,7 +1701,7 @@ mod tests {
             r#"window.require?.("siyuan")"#,
             "window.siyuan?.ws?.app",
             r#"fetch("/api/block/getBlockInfo""#,
-            "AbortSignal.timeout(5000)",
+            "AbortSignal.timeout(Math.max(1, Math.min(5000, deadline - Date.now())))",
             "notebookId !== targetNotebookId",
             "path.length > 4096",
             "pathIds.length > 128",

@@ -13,7 +13,11 @@ export interface SecondBrainModel {
 
 export interface SecondBrainConfig {
   enabled: boolean;
-  scheduleHour: 2;
+  scheduleHour: number;
+  /** Local wall-clock time; follows the operating system's timezone and DST. */
+  scheduleMinute?: number;
+  /** JavaScript weekdays: Sunday 0 through Saturday 6. Missing means every day. */
+  scheduleDays?: readonly number[];
   mode: SecondBrainMode;
   model: SecondBrainModel | null;
   allowPrivateDataToCloud: boolean;
@@ -42,6 +46,8 @@ export interface SecondBrainChange {
   after: string;
   provenance: readonly string[];
   confidence: number;
+  /** Exact scope-bound generated summary; never a user-authored Markdown target. */
+  managedSummary?: true;
 }
 
 export interface SecondBrainRun {
@@ -58,6 +64,8 @@ export interface SecondBrainRun {
   snapshotCreated?: boolean;
   error?: string;
   retryOf?: string;
+  coverageStart?: number;
+  coverageEnd?: number;
 }
 
 export interface SecondBrainWeekRun {
@@ -76,6 +84,8 @@ export interface SecondBrainWeekDay {
 export const DEFAULT_SECOND_BRAIN_CONFIG: SecondBrainConfig = Object.freeze({
   enabled: false,
   scheduleHour: 2,
+  scheduleMinute: 0,
+  scheduleDays: Object.freeze([0, 1, 2, 3, 4, 5, 6]),
   mode: 'approve_only',
   model: null,
   allowPrivateDataToCloud: false,
@@ -86,24 +96,77 @@ export function manualSecondBrainScheduledFor(nowMs = Date.now()): number {
   return Math.floor(nowMs / 60_000) * 60_000;
 }
 
-export function nextNightlySecondBrainRun(now: Date): Date {
-  const next = new Date(now);
-  next.setHours(2, 0, 0, 0);
-  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
-  return next;
+export type SecondBrainSchedule = Pick<
+  SecondBrainConfig,
+  'scheduleHour' | 'scheduleMinute' | 'scheduleDays'
+>;
+
+export function validSecondBrainSchedule(schedule: SecondBrainSchedule): boolean {
+  return (
+    Number.isInteger(schedule.scheduleHour) &&
+    schedule.scheduleHour >= 0 &&
+    schedule.scheduleHour <= 23 &&
+    Number.isInteger(schedule.scheduleMinute ?? 0) &&
+    (schedule.scheduleMinute ?? 0) >= 0 &&
+    (schedule.scheduleMinute ?? 0) <= 59 &&
+    (schedule.scheduleDays === undefined ||
+      (Array.isArray(schedule.scheduleDays) &&
+        schedule.scheduleDays.length > 0 &&
+        schedule.scheduleDays.length <= 7 &&
+        new Set(schedule.scheduleDays).size === schedule.scheduleDays.length &&
+        schedule.scheduleDays.every((day) => Number.isInteger(day) && day >= 0 && day <= 6)))
+  );
 }
 
-export function mostRecentNightlySecondBrainRun(now: Date): Date {
-  const due = new Date(now);
-  due.setHours(2, 0, 0, 0);
-  if (due.getTime() > now.getTime()) due.setDate(due.getDate() - 1);
-  return due;
+function scheduledDay(now: Date, schedule: SecondBrainSchedule, direction: 1 | -1): Date {
+  if (!validSecondBrainSchedule(schedule)) throw new Error('Invalid nightly schedule.');
+  for (let offset = 0; offset <= 7; offset += 1) {
+    const day = new Date(now);
+    day.setDate(day.getDate() + offset * direction);
+    day.setHours(schedule.scheduleHour, schedule.scheduleMinute ?? 0, 0, 0);
+    if (
+      (schedule.scheduleDays ?? DEFAULT_SECOND_BRAIN_CONFIG.scheduleDays!).includes(day.getDay()) &&
+      (direction === 1 ? day.getTime() > now.getTime() : day.getTime() <= now.getTime())
+    )
+      return day;
+  }
+  throw new Error('Nightly schedule has no eligible day.');
+}
+
+export function nextNightlySecondBrainRun(
+  now: Date,
+  schedule: SecondBrainSchedule = DEFAULT_SECOND_BRAIN_CONFIG,
+): Date {
+  return scheduledDay(now, schedule, 1);
+}
+
+export function mostRecentNightlySecondBrainRun(
+  now: Date,
+  schedule: SecondBrainSchedule = DEFAULT_SECOND_BRAIN_CONFIG,
+): Date {
+  return scheduledDay(now, schedule, -1);
+}
+
+export function successfulSecondBrainCoverage(
+  runs: readonly SecondBrainRun[],
+  persisted = 0,
+): number {
+  return runs.reduce(
+    (latest, run) =>
+      run.status === 'applied' &&
+      Number.isSafeInteger(run.coverageEnd) &&
+      (run.coverageEnd ?? 0) >= (run.coverageStart ?? 0)
+        ? Math.max(latest, run.coverageEnd!)
+        : latest,
+    persisted,
+  );
 }
 
 export function buildNightlySecondBrainWeek(
   nowMs: number,
   runs: readonly SecondBrainRun[],
   enabled: boolean,
+  schedule: SecondBrainSchedule = DEFAULT_SECOND_BRAIN_CONFIG,
 ): readonly SecondBrainWeekDay[] {
   const now = new Date(nowMs);
   const first = new Date(now);
@@ -128,13 +191,19 @@ export function buildNightlySecondBrainWeek(
         }));
 
       const scheduledFor = new Date(day);
-      scheduledFor.setHours(2, 0, 0, 0);
+      scheduledFor.setHours(schedule.scheduleHour, schedule.scheduleMinute ?? 0, 0, 0);
+      const selectedDay = (
+        schedule.scheduleDays ?? DEFAULT_SECOND_BRAIN_CONFIG.scheduleDays!
+      ).includes(day.getDay());
       if (recorded.length === 0 && scheduledFor.getTime() > nowMs) {
         recorded.push({
           id: `scheduled-${scheduledFor.getTime()}`,
           scheduledFor: scheduledFor.getTime(),
-          status: enabled ? 'scheduled' : 'not_scheduled',
-          summary: enabled ? 'Nightly Context check scheduled.' : 'Nightly maintenance is off.',
+          status: enabled && selectedDay ? 'scheduled' : 'not_scheduled',
+          summary:
+            enabled && selectedDay
+              ? 'Nightly Context check scheduled.'
+              : 'No update scheduled for this day.',
         });
       }
 
@@ -150,19 +219,68 @@ export function buildNightlySecondBrainWeek(
 export function isNightlySecondBrainRunDue(input: {
   now: Date;
   lastScheduledFor?: number;
+  schedule?: SecondBrainSchedule;
 }): boolean {
-  return (input.lastScheduledFor ?? 0) < mostRecentNightlySecondBrainRun(input.now).getTime();
+  return (
+    (input.lastScheduledFor ?? 0) <
+    mostRecentNightlySecondBrainRun(input.now, input.schedule).getTime()
+  );
 }
 
 export interface SecondBrainRuntimePorts {
-  collectSources(): Promise<readonly SecondBrainSource[]>;
+  coveredThrough?(): Promise<number>;
+  collectSources(window: {
+    start: number;
+    end: number;
+  }): Promise<readonly SecondBrainSource[] | SecondBrainSourceBatch>;
   propose(input: {
     model: SecondBrainModel;
     sources: readonly SecondBrainSource[];
+    window: { start: number; end: number };
   }): Promise<readonly SecondBrainChange[]>;
   apply(changes: readonly SecondBrainChange[]): Promise<SecondBrainApplyReceipt | void>;
   rollback(changes: readonly SecondBrainChange[]): Promise<void>;
   saveRun(run: SecondBrainRun): Promise<void>;
+}
+
+export interface SecondBrainSourceBatch {
+  sources: readonly SecondBrainSource[];
+  coverageEnd: number;
+  remaining: number;
+}
+
+/** A bounded chronological prefix. Equal timestamps stay together so no record is skipped. */
+export function secondBrainSourceBatch(
+  sources: readonly SecondBrainSource[],
+  window: { start: number; end: number },
+  maximumChars: number,
+): SecondBrainSourceBatch {
+  const ordered = sources
+    .filter((source) => source.observedAt > window.start && source.observedAt <= window.end)
+    .sort((left, right) => left.observedAt - right.observedAt);
+  let count = 0;
+  let chars = 0;
+  while (count < ordered.length) {
+    const at = ordered[count]!.observedAt;
+    let end = count;
+    let groupChars = 0;
+    while (end < ordered.length && ordered[end]!.observedAt === at) {
+      groupChars += ordered[end]!.content.length;
+      end++;
+    }
+    if (groupChars > maximumChars && count === 0)
+      throw new Error(
+        'One activity timestamp exceeds the summary budget; reduce the selected sources. Coverage was preserved.',
+      );
+    if (chars + groupChars > maximumChars) break;
+    chars += groupChars;
+    count = end;
+  }
+  return {
+    sources: ordered.slice(0, count),
+    coverageEnd: count < ordered.length ? ordered[count]!.observedAt - 1 : window.end,
+    remaining: ordered.length - count,
+  };
 }
 
 export interface SecondBrainApplyReceipt {
@@ -210,20 +328,46 @@ export class NightlySecondBrainRunner {
     scheduledFor: number;
     retryOf?: string;
     now?: number;
+    coverageStart?: number;
   }): Promise<SecondBrainRun> {
     const startedAt = input.now ?? Date.now();
+    const window = { start: input.coverageStart ?? 0, end: startedAt };
     const model = input.config.model;
     if (!input.config.enabled || !model)
       throw new Error('Nightly second-brain model is unavailable.');
     try {
-      const collected = await this.ports.collectSources();
-      const admitted = collected.filter(
+      if (this.ports.coveredThrough) window.start = await this.ports.coveredThrough();
+      if (!Number.isSafeInteger(window.start) || window.start < 0 || window.start > window.end)
+        throw new Error('Saved coverage is ahead of the current clock or invalid.');
+      const collection = await this.ports.collectSources(window);
+      const batch = Array.isArray(collection) ? null : (collection as SecondBrainSourceBatch);
+      const collected = batch ? batch.sources : (collection as readonly SecondBrainSource[]);
+      if (batch) {
+        if (
+          !Number.isSafeInteger(batch.coverageEnd) ||
+          batch.coverageEnd < window.start ||
+          batch.coverageEnd > window.end
+        )
+          throw new Error('Invalid activity coverage interval.');
+        window.end = batch.coverageEnd;
+      }
+      const eligible = collected.filter(
+        (source) => source.observedAt > window.start && source.observedAt <= window.end,
+      );
+      const admitted = eligible.filter(
         (source) =>
           input.config.sources[source.kind] &&
           (!source.privateLocal || model.local || input.config.allowPrivateDataToCloud),
       );
+      const withheld = eligible.some(
+        (source) => input.config.sources[source.kind] && !admitted.includes(source),
+      );
+      if (withheld && admitted.length === 0)
+        throw new Error(
+          'Private evidence requires a local model or your cloud-data permission; coverage was preserved.',
+        );
       const changes = verifiedSecondBrainChanges(
-        await this.ports.propose({ model, sources: admitted }),
+        await this.ports.propose({ model, sources: admitted, window }),
         admitted,
       );
       const status = input.config.mode === 'auto' ? 'applied' : 'pending_approval';
@@ -241,6 +385,7 @@ export class NightlySecondBrainRunner {
         scheduledFor: input.scheduledFor,
         startedAt,
         completedAt: Date.now(),
+        ...(withheld ? {} : { coverageStart: window.start, coverageEnd: window.end }),
         status,
         mode: input.config.mode,
         model,
@@ -250,7 +395,7 @@ export class NightlySecondBrainRunner {
             ? 'No meaningful new context was found.'
             : `${changes.length} verified context ${changes.length === 1 ? 'update' : 'updates'} ${
                 status === 'applied' ? 'applied' : 'awaiting approval'
-              }.${snapshotCreated ? ' A repository snapshot was created first.' : ''}`,
+              }.${snapshotCreated ? ' A repository snapshot was created first.' : ''}${withheld ? ' Private evidence was withheld; coverage was preserved.' : ''}${batch?.remaining ? ' More saved activity remains for a later update.' : ''}`,
         ...(snapshotCreated ? { snapshotCreated: true } : {}),
         ...(input.retryOf ? { retryOf: input.retryOf } : {}),
       });
@@ -266,7 +411,8 @@ export class NightlySecondBrainRunner {
         mode: input.config.mode,
         model,
         changes: Object.freeze([]),
-        summary: 'Nightly context maintenance failed safely; no context was changed.',
+        summary:
+          'Nightly maintenance failed; coverage was preserved for retry. A completed summary file may remain in the managed folder.',
         error: cause instanceof Error ? cause.message : 'Unknown maintenance failure.',
         ...(input.retryOf ? { retryOf: input.retryOf } : {}),
       });

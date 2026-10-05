@@ -87,6 +87,8 @@ import { populatePersistedCreatedContextMap } from './contextMapCreationLifecycl
 import { subscribeContextNavigation } from './contextNavigation';
 import type { ContextRecoverySummary } from './contextRecovery';
 import { NightlySecondBrainPanel } from './NightlySecondBrainPanel';
+import { ContextAutoUpdateCheckbox } from './ContextAutoUpdateCheckbox';
+import { isContextAutoUpdateRunning } from './contextAutoUpdate';
 import { searchContextNodes } from './contextSearch';
 import { createContextSearchIndexPopulationPort } from './contextSearchIndexing';
 import { contextJobPollDelay } from './contextJobPolling';
@@ -147,7 +149,7 @@ import {
   updateSiyuanIndexJobStatus,
   type SiyuanIndexJobRecord,
 } from './siyuan/siyuanIndexJobStore';
-import { formatSiyuanJobEta, siyuanOverallProgressPercent } from './siyuan/siyuanProgress';
+import { formatSiyuanJobEta, siyuanOverallProgressPercent, siyuanProgressMatchesMap } from './siyuan/siyuanProgress';
 import {
   approvedCloudSiyuanSummaryIdentity,
   computeSiyuanCloudSummaryScope,
@@ -191,6 +193,7 @@ function createSiyuanMetadataSeed(projectId: string | null, rootDir: string): Pr
 
 function SiyuanIndexProgressCard({
   job,
+  mapName,
   summaryScope,
   onPause,
   onResume,
@@ -209,6 +212,7 @@ function SiyuanIndexProgressCard({
   scopeRefreshPending,
 }: {
   job: SiyuanIndexJobRecord;
+  mapName: string;
   summaryScope: string;
   onPause: () => void;
   onResume: () => void;
@@ -239,7 +243,7 @@ function SiyuanIndexProgressCard({
     creating_nodes: 'Creating SiYuan nodes',
     summarizing: 'Generating selected summaries',
     reconciling: 'Reconciling and finalizing',
-    completed: 'Context Map complete',
+    completed: siyuanOverallProgressPercent(job) === 100 ? 'Context Map complete' : 'Awaiting confirmed completion',
   };
   const exactPercent = siyuanOverallProgressPercent(job);
   const elapsedSeconds = Math.max(
@@ -263,7 +267,7 @@ function SiyuanIndexProgressCard({
           ? 'Paused · progress saved'
           : job.status === 'cancelled'
             ? 'Cancelled'
-            : 'Complete';
+            : exactPercent === 100 ? 'Complete' : 'Completion needs review';
   const elapsed =
     elapsedSeconds < 60
       ? `${elapsedSeconds}s`
@@ -273,10 +277,11 @@ function SiyuanIndexProgressCard({
   return (
     <section
       className="rounded-xl border border-border/80 bg-paper-soft/75 p-3 shadow-sm backdrop-blur-sm"
-      aria-label="SiYuan map progress"
+      aria-label={`SiYuan map progress: ${mapName}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
+          <p className="truncate text-metadata text-muted-foreground">{mapName}</p>
           <div className="flex items-center gap-2">
             {job.status === 'running' && job.phase !== 'completed' ? (
               <span
@@ -318,7 +323,7 @@ function SiyuanIndexProgressCard({
                   ? job.startupDisposition === 'needs_repair'
                     ? 'Automatic resume stopped safely and needs repair.'
                     : 'Needs repair before it can continue.'
-                  : job.phase === 'completed'
+                  : exactPercent === 100
                     ? 'Finished and saved.'
                     : job.startupDisposition === 'auto_resumed'
                       ? `Auto-resumed after reopening · ${exactPercent === null ? 'recalculating…' : `≈ ${Math.round(exactPercent)}% · ${eta}${job.phase === 'discovering' ? ' for discovery' : ' remaining'} · elapsed ${elapsed}`}`
@@ -339,19 +344,19 @@ function SiyuanIndexProgressCard({
         <span className="text-sm font-semibold tabular-nums text-foreground">
           {exactPercent === null
             ? '≈ —'
-            : `${job.phase === 'completed' ? '' : '≈ '}${Math.round(exactPercent)}%`}
+            : `${exactPercent === 100 ? '' : '≈ '}${Math.round(exactPercent)}%`}
         </span>
       </div>
       <WarmHexProgress
         className="mt-2"
         progress={exactPercent}
-        label="SiYuan map creation progress"
+        label={`SiYuan map creation progress: ${mapName}`}
         detail={`${phaseLabel[job.phase]} · ${job.status}`}
         mode="compact"
         density="fine"
         paused={job.status !== 'running'}
         failed={job.status === 'failed'}
-        estimated={job.phase !== 'completed'}
+        estimated={exactPercent !== 100}
       />
       <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-metadata text-muted-foreground sm:grid-cols-4">
         <div>
@@ -845,6 +850,7 @@ export function ContextPage() {
   );
 
   React.useEffect(() => {
+    setIndexJobSnapshot(null);
     if (!projectId || !selectedMap || selectedMap.sourceType === 'github_repository') {
       setIndexJobSnapshot(null);
       return;
@@ -858,7 +864,7 @@ export function ContextPage() {
     };
     const refresh = async (): Promise<SiyuanIndexJobRecord | null> => {
       const job = await readSiyuanIndexJob(projectId, selectedMap.id);
-      if (active) setIndexJobSnapshot(job);
+      if (active) setIndexJobSnapshot(siyuanProgressMatchesMap(job, accountId, projectId, selectedMap) ? job : null);
       return job;
     };
     const schedule = () => {
@@ -894,7 +900,7 @@ export function ContextPage() {
       clearTimer();
       document.removeEventListener('visibilitychange', schedule);
     };
-  }, [projectId, selectedMap]);
+  }, [accountId, projectId, selectedMap]);
 
   React.useEffect(() => {
     if (
@@ -907,6 +913,7 @@ export function ContextPage() {
     ) {
       return;
     }
+    if (accountId && workspaceId && isContextAutoUpdateRunning({ accountId, workspaceId: String(workspaceId), projectId, mapId: selectedMap.id })) return;
     const hydrationKey = `${projectId}:${selectedMap.id}:${indexJobSnapshot.status}:${indexJobSnapshot.updatedAt}`;
     if (indexedTreeHydrationRef.current === hydrationKey) return;
     const requiresStructuralRepair =
@@ -919,6 +926,11 @@ export function ContextPage() {
       .then(async (entries) => {
         if (!active || entries.length === 0) return;
         const completedTree = buildProjectContextTreeFromSiyuanIndex(selectedMap.tree, entries);
+        if (JSON.stringify(completedTree.nodes) === JSON.stringify(selectedMap.tree.nodes) && completedTree.fileCount === selectedMap.tree.fileCount) {
+          await contextSearchIndexPopulation.repairEmptyMap(accountId!, projectSiyuanMapForContextSearch(selectedMap), controller.signal);
+          if (active) setSiyuanTree(completedTree);
+          return;
+        }
         const persisted = await savePersistedContextTree(completedTree, {
           mapId: selectedMap.id,
           requireExisting: true,
@@ -2457,7 +2469,8 @@ export function ContextPage() {
               Official SiYuan map · source files stay read-only
             </p>
           </div>
-          {indexJobSnapshot?.mapId === selectedMap.id &&
+          <ContextAutoUpdateCheckbox accountId={accountId} workspaceId={workspaceId ? String(workspaceId) : null} map={selectedMap} />
+          {siyuanProgressMatchesMap(indexJobSnapshot, accountId, projectId, selectedMap) && indexJobSnapshot &&
           indexJobSnapshot.status === 'running' &&
           indexJobSnapshot.phase !== 'completed' ? (
             <div
@@ -2567,6 +2580,7 @@ export function ContextPage() {
           </div>
 
           <ContextWorkspaceNavigation active={workspaceSection} onSelect={selectWorkspaceSection} />
+          {selectedMap ? <ContextAutoUpdateCheckbox accountId={accountId} workspaceId={workspaceId ? String(workspaceId) : null} map={selectedMap} /> : null}
 
           {workspaceSection === 'sources' ? (
             <div className="space-y-2">
@@ -2846,9 +2860,10 @@ export function ContextPage() {
                   Create Map
                 </Button>
               </div>
-              {indexJobSnapshot && projectId ? (
+              {indexJobSnapshot && projectId && selectedMap && siyuanProgressMatchesMap(indexJobSnapshot, accountId, projectId, selectedMap) ? (
                 <SiyuanIndexProgressCard
                   job={indexJobSnapshot}
+                  mapName={selectedMap.name}
                   summaryScope={indexSummaryScope}
                   cloudDisclosure={cloudSummaryDisclosure}
                   summaryModelGroups={summaryModelGroups}
