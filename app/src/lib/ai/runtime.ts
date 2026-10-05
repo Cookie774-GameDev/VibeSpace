@@ -3813,8 +3813,17 @@ function getInteractionModeOverlay(mode: JarvisInteractionMode, needsVisiblePlan
   ].join('\n');
 }
 
+function currentToolRequestText(userText: string): string {
+  const handoffBoundary = userText.indexOf('\n\nChat handoff from “');
+  return handoffBoundary < 0 ? userText : userText.slice(0, handoffBoundary);
+}
+
 function requestsSemanticMcpTool(userText: string, tool: 'list' | 'run'): boolean {
-  return new RegExp(`\\bmcp(?:[._-]|\\s+)${tool}\\b`, 'iu').test(userText);
+  return new RegExp(`\\bmcp(?:[._-]|\\s+)${tool}\\b`, 'iu').test(currentToolRequestText(userText));
+}
+
+function requestsAgentRelay(userText: string): boolean {
+  return /\b(?:agent[\s-]+relay|relaycast)\b/iu.test(currentToolRequestText(userText));
 }
 
 export function openCodeToolsForInteractionMode(
@@ -3831,13 +3840,15 @@ export function openCodeToolsForInteractionMode(
   // provider or MCP connection does not expose a dynamic tool.
   const requestsMcpList = requestsSemanticMcpTool(userText, 'list');
   const requestsMcpRun = requestsSemanticMcpTool(userText, 'run');
+  const requestsRelay = requestsAgentRelay(userText);
   const requestsSemanticMcp = requestsMcpList || requestsMcpRun;
   const requestsContextMapTool =
-    !requestsSemanticMcp && userText.length > 0 && requestsReadOnlyContextTool(userText);
+    !requestsSemanticMcp && !requestsRelay && userText.length > 0 && requestsReadOnlyContextTool(userText);
   const contextEnabled = resolveRlmEnabled(scope).enabled;
   const coordinationIntent = requestsContextMapTool ? contextTerminalCoordinationIntent(userText) : undefined;
   const ordinaryDirectAsk =
     mode !== 'agent' &&
+    !requestsRelay &&
     userText.length > 0 &&
     !requestsContextMapTool &&
     routeDefaultContextQuery(userText, {
@@ -3939,7 +3950,7 @@ export function prepareOpenCodeMessagesForInteractionMode(
   // Semantic MCP requests have their own dynamic-tool contract. Do not append
   // the Context convenience wrapper, which can turn a source/result clause in
   // the MCP request into an unrelated vibespace_context instruction.
-  if (requestsSemanticMcpTool(userText, 'list') || requestsSemanticMcpTool(userText, 'run')) {
+  if (requestsSemanticMcpTool(userText, 'list') || requestsSemanticMcpTool(userText, 'run') || requestsAgentRelay(userText)) {
     return messages;
   }
   if (!requestsReadOnlyContextTool(userText)) return messages;

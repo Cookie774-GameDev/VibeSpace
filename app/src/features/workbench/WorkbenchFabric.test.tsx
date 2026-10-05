@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createRelayRoomController } from '@/lib/relay/relayRoomController';
+import { StrictMode } from 'react';
+import { writeRelaySettings } from '@/features/settings/relaySettings';
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   panels: [] as any[],
@@ -31,6 +33,57 @@ import { useFabricPresentationStore } from '@/features/tools/terminal-peer-fabri
 afterEach(() => {
   cleanup();
   mocks.relay.mockClear();
+  writeRelaySettings({ scope: 'off', automaticParticipation: false, excludedParticipants: [] });
+});
+it('connects the visible Workbench room and sends as the human after StrictMode startup', async () => {
+  writeRelaySettings({ scope: 'project', automaticParticipation: false, excludedParticipants: [] });
+  mocks.invoke.mockImplementation(async (command: string) => {
+    if (command === 'relay_active_context_snapshot')
+      return {
+        generation: 2,
+        context: {
+          accountId: 'account-1',
+          workspaceId: 'workspace-1',
+          projectId: 'project-k24',
+          chatId: 'chat-1',
+        },
+      };
+    if (command === 'relay_engine_start') return { running: true, healthy: true };
+    if (command === 'relay_participant_bind')
+      return { bindingId: 'workbench-human-binding', relayAgentId: 'human-agent' };
+    if (command === 'relay_human_room_snapshot')
+      return {
+        channel: 'vibespace',
+        participants: [{ id: 'human-agent', name: 'You', role: 'human', status: 'online' }],
+        messages: [],
+      };
+    if (command === 'relay_human_message') return { messageId: 'workbench-message' };
+    if (command === 'relay_participant_unbind') return {};
+    throw new Error(`Unexpected native command ${command}`);
+  });
+  const view = render(
+    <StrictMode>
+      <WorkbenchFabric />
+    </StrictMode>,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Open Agent Relay group chat' }));
+  await waitFor(() =>
+    expect(mocks.relay.mock.lastCall?.[0]).toMatchObject({
+      humanAuthorized: true,
+      room: { connection: 'connected' },
+    }),
+  );
+  await act(async () => mocks.relay.mock.lastCall?.[0].onSend('Hello from Workbench'));
+  expect(mocks.invoke).toHaveBeenCalledWith('relay_human_message', {
+    bindingId: 'workbench-human-binding',
+    generation: 2,
+    text: 'Hello from Workbench',
+  });
+  view.unmount();
+  expect(mocks.invoke).toHaveBeenCalledWith('relay_participant_unbind', {
+    bindingId: 'workbench-human-binding',
+    generation: 2,
+  });
 });
 it('discovers ten real Workbench sessions with native project identities, not the terminal-page tree', async () => {
   mocks.panels = Array.from({ length: 10 }, (_, i) => ({
@@ -131,7 +184,9 @@ it('projects only host-bound controller data and forwards owner actions through 
     await props.onSend('real request');
   });
   expect(humanBroadcast).toHaveBeenCalledWith('verified-human-session', ticket, 'real request');
-  await expect(props.onSend('thread reply', 'sdk-message')).rejects.toThrow('Thread replies are unavailable');
+  await expect(props.onSend('thread reply', 'sdk-message')).rejects.toThrow(
+    'Thread replies are unavailable',
+  );
   expect(humanBroadcast).toHaveBeenCalledTimes(1);
   await act(async () => {
     await props.onStopAll();

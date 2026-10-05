@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { Link2, MessageCircleMore } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -52,15 +52,22 @@ export function readWorkbenchFabricTargets() {
 export function WorkbenchFabric({ relayController }: { relayController?: RelayRoomController }) {
   const projectId = useAuthStore((state) => state.projectId);
   const [relayOpen, setRelayOpen] = useState(false);
-  const nativeRelayClient = useMemo(() =>
-    !relayController && typeof window !== 'undefined'
-      ? createRelayNativeRoomClient({
-          invoke: (command, args) => invoke(command, args),
-          readSettings: readRelaySettings,
-          readLocalProfiles: () => readLocalRelayProfiles(projectId).catch(() => []),
-        })
-      : null,
-  [relayController, projectId]);
+  const [nativeBinding, setNativeBinding] = useState<{
+    projectId: typeof projectId;
+    client: ReturnType<typeof createRelayNativeRoomClient>;
+  } | null>(null);
+  const nativeRelayClient =
+    nativeBinding?.projectId === projectId ? (nativeBinding?.client ?? null) : null;
+  useEffect(() => {
+    if (relayController || typeof window === 'undefined') return;
+    const client = createRelayNativeRoomClient({
+      invoke: (command, args) => invoke(command, args),
+      readSettings: readRelaySettings,
+      readLocalProfiles: () => readLocalRelayProfiles(projectId).catch(() => []),
+    });
+    setNativeBinding({ projectId, client });
+    return () => client.dispose();
+  }, [relayController, projectId]);
   const activeRelay = relayController ?? nativeRelayClient;
   const subscribeRelay = useCallback(
     (listener: () => void) => activeRelay?.subscribe(listener) ?? (() => {}),
@@ -79,10 +86,11 @@ export function WorkbenchFabric({ relayController }: { relayController?: RelayRo
     const timer = window.setInterval(() => void activeRelay.refresh(), 5000);
     const onFocus = () => void activeRelay.refresh();
     window.addEventListener('focus', onFocus);
-    return () => { window.clearInterval(timer); window.removeEventListener('focus', onFocus); };
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
   }, [relayOpen, activeRelay]);
-
-  useEffect(() => () => nativeRelayClient?.dispose(), [nativeRelayClient]);
 
   return (
     <>
@@ -100,7 +108,10 @@ export function WorkbenchFabric({ relayController }: { relayController?: RelayRo
         size="icon-sm"
         aria-label="Open Agent Relay group chat"
         title="Agent Relay group chat"
-        onClick={() => { setRelayOpen(true); void activeRelay?.refresh(); }}
+        onClick={() => {
+          setRelayOpen(true);
+          void activeRelay?.refresh();
+        }}
       >
         <MessageCircleMore />
       </Button>
@@ -122,7 +133,8 @@ export function WorkbenchFabric({ relayController }: { relayController?: RelayRo
             onClose={() => setRelayOpen(false)}
             onSend={async (text, parentMessageId) => {
               if (relayController) {
-                if (parentMessageId) throw new Error('Thread replies are unavailable in this room.');
+                if (parentMessageId)
+                  throw new Error('Thread replies are unavailable in this room.');
                 await relayController.send(text);
               } else if (nativeRelayClient) {
                 await nativeRelayClient.send(text, parentMessageId);

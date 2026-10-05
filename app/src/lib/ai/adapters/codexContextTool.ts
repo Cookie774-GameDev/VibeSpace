@@ -33,7 +33,7 @@ export const CODEX_CONTEXT_TOOL = {
 export const CODEX_MCP_LIST_TOOL: CodexDynamicTool = Object.freeze({
   type: 'function',
   name: 'mcp_list',
-  description: 'List approved, healthy, explicitly exposed custom MCP tools for this VibeSpace project. Call this before mcp_run. Credentials remain managed by VibeSpace.',
+  description: 'Discover Agent Relay and approved custom MCP tools for this VibeSpace project. Enabled, scoped Agent Relay tools appear under connectionId agent-relay. Call this before mcp_run and use the returned room/channel schema. Credentials remain managed by VibeSpace.',
   inputSchema: Object.freeze({
     type: 'object',
     properties: Object.freeze({
@@ -46,7 +46,7 @@ export const CODEX_MCP_LIST_TOOL: CodexDynamicTool = Object.freeze({
 export const CODEX_MCP_RUN_TOOL: CodexDynamicTool = Object.freeze({
   type: 'function',
   name: 'mcp_run',
-  description: 'Run one exact custom MCP tool returned by mcp_list. Use its returned connection ID, tool name, classification, and input schema. Never request or pass credentials.',
+  description: 'Run one exact tool returned by mcp_list, including Agent Relay under connectionId agent-relay. Use the returned tool name, classification and input schema for room messages, reads and replies. Never invent a room or request or pass credentials.',
   inputSchema: Object.freeze({
     type: 'object',
     properties: Object.freeze({
@@ -80,7 +80,7 @@ export const CODEX_PLUGIN_RUN_TOOL: CodexDynamicTool = Object.freeze({
 
 export const CODEX_COMMAND_LIST_TOOL: CodexDynamicTool = Object.freeze({
   type: 'function', name: 'command_list',
-  description: 'Discover registered VibeSpace actions by query matching ID, label, or description. Use offset to page; details=true returns items, total, nextOffset and truncation. Without details the result remains an array. Propose actions using the Agent action contract; listing never executes them.',
+  description: 'Discover registered VibeSpace actions by query matching ID, label, or description. For Agent Relay messaging, use mcp_list to discover the agent-relay connection, then mcp_run with the returned tool schema. Use offset to page; details=true returns items, total, nextOffset and truncation. Without details the result remains an array. Propose actions using the Agent action contract; listing never executes them.',
   inputSchema: { type: 'object', properties: {
     limit: { type: 'integer', minimum: 0, maximum: 100 },
     query: { type: 'string', minLength: 1, maxLength: 512 },

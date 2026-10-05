@@ -2774,6 +2774,44 @@ describe('startRuntimeListener agent routing', () => {
     expect(prepared[0]).toBe(message);
   });
 
+  it('keeps Agent Relay discovery and dispatch available alongside Context requests', () => {
+    const messages = [{ role: 'user' as const, content: 'Use Agent Relay to read the room and reply with the active Context Map summary.' }];
+    const tools = openCodeToolsForInteractionMode('agent', messages);
+    expect(tools['mcp.list']).toBe(true);
+    expect(tools['mcp.run']).toBe(true);
+    expect(tools.vibespace_context).toBe(true);
+    expect(prepareOpenCodeMessagesForInteractionMode(messages)).toBe(messages);
+  });
+
+  it('exposes Agent Relay discovery in Ask without enabling message writes', () => {
+    const tools = openCodeToolsForInteractionMode('ask', [{ role: 'user', content: 'Check Agent Relay for room messages.' }]);
+    expect(tools['mcp.list']).toBe(true);
+    expect(tools['mcp.run']).toBe(false);
+    expect(tools['terminal.write']).toBe(false);
+  });
+
+  it('keeps Agent Relay requests inside access and explicit-disk boundaries', () => {
+    const messages = [{ role: 'user' as const, content: 'Use Agent Relay to send the Context Map summary.' }];
+    setPermissionAccess('relay-read-only', 'read');
+    const readTools = openCodeToolsForInteractionMode('agent', messages, { chatId: 'relay-read-only' });
+    expect(readTools['mcp.list']).toBe(true);
+    expect(readTools['mcp.run']).toBe(false);
+    expect(Object.values(openCodeToolsForInteractionMode('agent', messages, { explicitReadRoot: true })).every(value => value === false)).toBe(true);
+  });
+
+  it.each([
+    'Use Agent Relay to post a message.',
+    'Use Agent Relay through mcp_list and mcp_run.',
+  ])('does not treat quoted Agent Relay handoff text as the current tool request: %s', (handoffText) => {
+    const tools = openCodeToolsForInteractionMode('agent', [{
+      role: 'user',
+      content: 'Read the active Context Map.\n\nChat handoff from “Old chat”:\n' + handoffText,
+    }]);
+    expect(tools.vibespace_context).toBe(true);
+    expect(tools['mcp.list']).toBe(false);
+    expect(tools['mcp.run']).toBe(false);
+  });
+
   it('keeps generic read-and-cite file questions on the native catalog', () => {
     const naturalContextTools = openCodeToolsForInteractionMode('agent', [
       {
