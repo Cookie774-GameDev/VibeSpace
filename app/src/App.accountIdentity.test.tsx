@@ -1,3 +1,4 @@
+import { getLocalAccountReadyReceipt } from '@/lib/localAccountReadiness';
 import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
@@ -126,6 +127,7 @@ const cloudBoot = vi.hoisted(() => {
     data: {
       session: Session;
     };
+    error?: unknown;
   };
 
   let configured = false;
@@ -190,10 +192,11 @@ const cloudBoot = vi.hoisted(() => {
       return {
         resolve: (session: Session) => resolve?.({ data: { session } }),
         reject: (error: unknown) => reject?.(error),
+        fail: (error: unknown) => resolve?.({ data: { session: null }, error }),
       };
     },
-    emitAuth: (session: Session) => {
-      for (const listener of [...authListeners]) listener('SIGNED_IN', session);
+    emitAuth: (session: Session, event = 'SIGNED_IN') => {
+      for (const listener of [...authListeners]) listener(event, session);
     },
     getSession,
     maybeSingle,
@@ -1288,6 +1291,99 @@ function accountIdentityBootSuite(): void {
     expect(cloudSync.processCloudPull).not.toHaveBeenCalled();
     expect(cloudSync.pruneSyncQueue).not.toHaveBeenCalled();
     expect(cloudSync.startSyncLoop).not.toHaveBeenCalled();
+  });
+
+  it.each(['event-first', 'error-first'] as const)('never grants local readiness from INITIAL_SESSION/null plus getSession error (%s)', async (ordering) => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    await act(async () => {
+      if (ordering === 'event-first') cloudBoot.emitAuth(null, 'INITIAL_SESSION');
+      session.fail(new Error('initial read failed'));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (ordering === 'error-first') cloudBoot.emitAuth(null, 'INITIAL_SESSION');
+    });
+    expect(getLocalAccountReadyReceipt()).toBeNull();
+    expect(accountListeners.learning).not.toHaveBeenCalled();
+    expect(accountListeners.allAboutMe).not.toHaveBeenCalled();
+  });
+
+  it('ignores a late INITIAL_SESSION/null after newer verified cloud authority', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    await act(async () => {
+      cloudBoot.emitAuth(supabaseSession('cloud-user-new'));
+      cloudBoot.emitAuth(null, 'INITIAL_SESSION');
+      session.resolve(null);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(useAuthStore.getState().cloudSession?.user_id).toBe('cloud-user-new');
+    expect(getLocalAccountReadyReceipt()).toBeNull();
+  });
+
+  it('publishes local recovery readiness only after the prior cloud loop settles', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    await act(async () => { session.resolve(supabaseSession('cloud-user-a')); });
+    await waitFor(() => expect(cloudSync.startSyncLoop).toHaveBeenCalled());
+    const teardown = deferredValue<void>();
+    cloudSync.loopStops.at(-1)!.mockImplementation(() => teardown.promise);
+    await act(async () => { cloudBoot.emitAuth(null, 'SIGNED_OUT'); });
+    expect(getLocalAccountReadyReceipt()).toBeNull();
+    await act(async () => { teardown.resolve(); await teardown.promise; });
+    await waitFor(() => expect(getLocalAccountReadyReceipt()?.accountId).toBe('stable-local-user'));
+  });
+
+  it('independent review: a cloud/local/cloud ABA cannot publish stale local readiness after teardown', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    await act(async () => { session.resolve(supabaseSession('cloud-user-a')); });
+    await waitFor(() => expect(cloudSync.startSyncLoop).toHaveBeenCalled());
+    const teardown = deferredValue<void>();
+    cloudSync.loopStops.at(-1)!.mockImplementation(() => teardown.promise);
+    await act(async () => {
+      cloudBoot.emitAuth(null, 'SIGNED_OUT');
+      cloudBoot.emitAuth(supabaseSession('cloud-user-a'), 'SIGNED_IN');
+    });
+    expect(getLocalAccountReadyReceipt()).toBeNull();
+    await act(async () => { teardown.resolve(); await teardown.promise; });
+    await waitFor(() => expect(cloudSync.startSyncLoop).toHaveBeenCalledTimes(2));
+    expect(getLocalAccountReadyReceipt()).toBeNull();
+    expect(useAuthStore.getState().cloudSession?.user_id).toBe('cloud-user-a');
+    await act(async () => { cloudBoot.emitAuth(null, 'SIGNED_OUT'); });
+    await waitFor(() => expect(getLocalAccountReadyReceipt()?.accountId).toBe('stable-local-user'));
+  });
+
+  it('independent review: local owner ABA while a teardown is pending cannot restore the old receipt', async () => {
+    cloudBoot.setConfigured(true);
+    const session = cloudBoot.deferSession();
+    prepareAppIdentity({ cloudSession: null, localUserId: 'stable-local-user' });
+    render(<App />);
+    await waitForAccountScopeBoot();
+    await act(async () => { session.resolve(supabaseSession('cloud-user-a')); });
+    await waitFor(() => expect(cloudSync.startSyncLoop).toHaveBeenCalled());
+    const teardown = deferredValue<void>();
+    cloudSync.loopStops.at(-1)!.mockImplementation(() => teardown.promise);
+    await act(async () => {
+      cloudBoot.emitAuth(null, 'SIGNED_OUT');
+      useAuthStore.setState({ localUserId: 'other-local-user' });
+      useAuthStore.setState({ localUserId: 'stable-local-user' });
+    });
+    expect(getLocalAccountReadyReceipt()).toBeNull();
+    await act(async () => { teardown.resolve(); await teardown.promise; });
+    await waitFor(() => expect(getLocalAccountReadyReceipt()?.accountId).toBe('stable-local-user'));
+    expect(getLocalAccountReadyReceipt()?.persistenceGeneration).toBeGreaterThan(0);
   });
 
   it('remains fail-closed when configured Supabase session recovery rejects', async () => {

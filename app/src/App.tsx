@@ -119,7 +119,8 @@ import {
   jarvisEventRepo,
   jarvisRunRepo,
 } from '@/lib/db/jarvisRepositories';
-import { useAuthStore } from '@/stores/auth';
+import { useAuthStore, getLocalWorkspaceRecoveryRevision } from '@/stores/auth';
+import { revokeLocalAccountReadiness, settleLocalAccountReadiness } from '@/lib/localAccountReadiness';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import {
   createJarvisPersistenceCoordinator,
@@ -747,6 +748,8 @@ function useBoot() {
     let desiredAccountIdentity: ReturnType<typeof resolveAccountIdentity> = null;
     let desiredPersistenceReceipt: JarvisPersistenceReadyReceipt | null = null;
     let accountIdentityReady = false;
+    let verifiedSignedOutLocal = false;
+    revokeLocalAccountReadiness();
     let accountListenersBootReady = false;
     let accountTransitionRequest = 0;
     let accountScopeGeneration = 0;
@@ -1021,7 +1024,38 @@ function useBoot() {
       }
     }
 
+    function syncLocalRecoveryReadiness(): void {
+      revokeLocalAccountReadiness();
+      const auth = useAuthStore.getState();
+      const receipt = persistenceReadyReceipt;
+      const revision = getLocalWorkspaceRecoveryRevision();
+      if (
+        cancelled ||
+        !accountIdentityReady ||
+        !verifiedSignedOutLocal ||
+        auth.cloudSession !== null ||
+        !auth.localUserId ||
+        !receipt ||
+        receipt.accountId !== auth.localUserId
+      )
+        return;
+      void settleLocalAccountReadiness({
+        accountId: auth.localUserId,
+        persistenceGeneration: receipt.generation,
+        teardown: cloudSyncTeardownBarrier,
+        isCurrent: () =>
+          !cancelled &&
+          accountIdentityReady &&
+          verifiedSignedOutLocal &&
+          useAuthStore.getState().cloudSession === null &&
+          useAuthStore.getState().localUserId === auth.localUserId &&
+          getLocalWorkspaceRecoveryRevision() === revision &&
+          sameReadyReceipt(receipt, persistenceReadyReceipt),
+      });
+    }
+
     function syncAccountScopedListeners(): void {
+      syncLocalRecoveryReadiness();
       if (!accountListenersBootReady || !accountIdentityReady) {
         if (!activeAccountIdentity) quarantineAccountScopedState();
         return;
@@ -1094,6 +1128,8 @@ function useBoot() {
 
     function settleInitialAccountAuthority(session: SupabaseSessionLike): boolean {
       if (cancelled) return false;
+      verifiedSignedOutLocal = false;
+      revokeLocalAccountReadiness();
 
       // AppContent quarantines persisted cloud state before boot starts. Any
       // cloud-session object that appears while detached initial recovery is
@@ -1131,17 +1167,19 @@ function useBoot() {
       }
 
       accountIdentityReady = true;
+      verifiedSignedOutLocal = session === null;
       ensurePersistenceCoordinatorStarted();
       syncAccountScopedListeners();
       return true;
     }
 
-    if (plan.cloudSyncEnabled) {
-      stopAccountSubscription = useAuthStore.subscribe(() => {
-        revokeEnqueueAuthorityOnStoreDivergence();
-        syncAccountScopedListeners();
-      });
-    }
+    stopAccountSubscription = useAuthStore.subscribe((next, previous) => {
+      if (next.cloudSession !== previous.cloudSession && next.cloudSession !== null) {
+        verifiedSignedOutLocal = false;
+      }
+      revokeEnqueueAuthorityOnStoreDivergence();
+      syncAccountScopedListeners();
+    });
 
     (async () => {
       // Phase 1: storage & keys
@@ -1288,8 +1326,9 @@ function useBoot() {
                   const sessionGeneration = ++cloudAuthGeneration;
                   void supa.auth
                     .getSession()
-                    .then(({ data }) => {
+                    .then(({ data, error }) => {
                       if (cancelled || sessionGeneration !== cloudAuthGeneration) return;
+                      if (error) throw error;
                       const session = data.session as SupabaseSessionLike;
                       if (!settleInitialAccountAuthority(session)) return;
                       reconcileCloudSyncAuthority(session, sessionGeneration);
@@ -1306,6 +1345,8 @@ function useBoot() {
                     })
                     .catch((error) => {
                       if (cancelled || sessionGeneration !== cloudAuthGeneration) return;
+                      verifiedSignedOutLocal = false;
+                      revokeLocalAccountReadiness();
                       releaseEnqueueCloudAuthority();
                       applyCloudSession(null);
                       console.warn('[auth] initial Supabase session unavailable:', error);
@@ -1313,16 +1354,23 @@ function useBoot() {
                     });
                   const sub = supa.auth.onAuthStateChange((_event, session) => {
                     if (cancelled) return;
+                    // INITIAL_SESSION/null is also emitted when getSession fails.
+                    // Only a successful explicit read may prove initial sign-out.
+                    // Ignore late initial nulls too; they cannot erase newer cloud auth.
+                    if (_event === 'INITIAL_SESSION' && session === null) return;
+                    verifiedSignedOutLocal = false;
+                    revokeLocalAccountReadiness();
                     cloudAuthGeneration += 1;
                     publishVerifiedEnqueueCloudAuthority(session as SupabaseSessionLike);
                     applyCloudSession(session as SupabaseSessionLike);
                     accountIdentityReady = true;
-                    ensurePersistenceCoordinatorStarted();
-                    syncAccountScopedListeners();
                     reconcileCloudSyncAuthority(
                       session as SupabaseSessionLike,
                       cloudAuthGeneration,
                     );
+                    verifiedSignedOutLocal = session === null;
+                    ensurePersistenceCoordinatorStarted();
+                    syncAccountScopedListeners();
                     const userId = cloudSessionUserId(session as SupabaseSessionLike);
                     if (userId) {
                       void import('@/lib/launchPromo').then((m) => m.claimLaunchPromo(userId));
@@ -1348,7 +1396,9 @@ function useBoot() {
         releaseEnqueueCloudAuthority();
         applyCloudSession(null);
         accountIdentityReady = true;
+        verifiedSignedOutLocal = true;
         ensurePersistenceCoordinatorStarted();
+        syncLocalRecoveryReadiness();
       }
 
       if (cancelled) return;
@@ -1470,6 +1520,8 @@ function useBoot() {
 
     return () => {
       cancelled = true;
+      verifiedSignedOutLocal = false;
+      revokeLocalAccountReadiness();
       publishRuntimeListenerReady(false);
       releaseEnqueueCloudAuthority();
       accountListenersBootReady = false;

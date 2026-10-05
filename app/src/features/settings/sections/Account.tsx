@@ -1,3 +1,4 @@
+import { LocalWorkspaceRecovery } from './LocalWorkspaceRecovery';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Mail,
@@ -688,6 +689,10 @@ export function Account({ profileOnly = true }: { profileOnly?: boolean }) {
           )}
         </div>
       </section>
+
+      <Separator />
+
+      <LocalWorkspaceRecovery />
 
       <Separator />
 
