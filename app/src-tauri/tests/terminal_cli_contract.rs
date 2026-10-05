@@ -253,6 +253,7 @@ fn carries_bounded_terminal_scope_without_exposing_it_in_command_params() {
             pane_id: Some("pane-1".into()),
             project_id: Some("project-1".into()),
             run_identity: Some("ctxrun_exact-1".into()),
+            process_instance_id: None,
         },
     )
     .expect("scoped request");
@@ -294,6 +295,7 @@ fn rejects_context_ask_without_a_bounded_question_or_valid_run_identity() {
             pane_id: Some("pane-1".into()),
             project_id: Some("project-1".into()),
             run_identity: Some("ctxrun_exact-1".into()),
+            process_instance_id: None,
         },
     )
     .expect("scoped ask");
