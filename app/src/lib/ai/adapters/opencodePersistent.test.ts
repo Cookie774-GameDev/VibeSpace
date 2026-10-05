@@ -5398,6 +5398,19 @@ describe('persistent OpenCode live authority', () => {
   });
 });
 
+it('projects a failed native task envelope as a failed child, even when transport completed', async () => {
+  const { normalizeToolEvent } = await import('./opencodePersistent');
+  const event = normalizeToolEvent({ type: 'message.part.updated', properties: { part: {
+    id: 'task-part', type: 'tool', tool: 'task', callID: 'task-call', state: {
+      status: 'completed', input: { description: 'Review' }, metadata: { sessionId: 'ses_child' },
+      output: JSON.stringify({ success: false, error: { message: 'Child failed' } }),
+    },
+  } } }, {});
+  expect(event).toMatchObject({ status: 'failed', nativeTask: { sessionId: 'ses_child', harness: 'opencode', status: 'error' } });
+  if (event?.type !== 'tool') throw new Error('Expected a native task event.');
+  expect(event.nativeTask?.result).toBeUndefined();
+});
+
 it('preserves live OpenCode public tool input output and actual changes before prose', async () => {
   const { normalizeToolEvent } = await import('./opencodePersistent');
   const event = normalizeToolEvent(

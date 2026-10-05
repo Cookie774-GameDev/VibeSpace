@@ -7,7 +7,7 @@ export interface NativeTaskRun extends Omit<NativeTaskActivity, 'status'> {
   status: ChatActivityStatus | 'unknown';
 }
 
-/** Merge live and saved evidence; a saved result wins over its earlier live event. */
+/** Keep known native children across parent turns, merging the newest evidence. */
 export function collectNativeTaskRuns(
   messages: readonly Message[],
   activity: readonly ChatActivityEvent[],
@@ -15,27 +15,70 @@ export function collectNativeTaskRuns(
   parentEnded = false,
 ): NativeTaskRun[] {
   const runs = new Map<string, NativeTaskRun>();
-  const add = (value: unknown, source: string, status: ChatActivityStatus) => {
+  const observed = new Map<string, number>();
+  const add = (
+    value: unknown,
+    source: string,
+    status: ChatActivityStatus,
+    observedAt: number,
+    startedAt = observedAt,
+  ) => {
     const task = readNativeTaskActivity(value);
-    if (!task) return;
+    if (!task || (startedAt < since && !(task.sessionId && task.harness))) return;
     const id = task.sessionId ? `native-session:${task.sessionId}` : source;
-    runs.set(id, { ...task, id, status: task.status ?? status });
+    const previous = runs.get(id);
+    if (previous && (observed.get(id) ?? 0) > observedAt) {
+      // Earlier metadata can fill an omitted model/route, never rewind status.
+      runs.set(id, { ...task, ...previous });
+      return;
+    }
+    observed.set(id, observedAt);
+    const nextStatus = task.status ?? status;
+    runs.set(id, {
+      ...runs.get(id),
+      ...task,
+      id,
+      status: nextStatus,
+      ...(nextStatus !== 'done' ? { result: undefined } : {}),
+      ...(nextStatus !== 'error' ? { error: undefined } : {}),
+    });
   };
   for (const event of activity) {
-    if ((event.startedAt ?? event.ts) < since) continue;
-    add(event.nativeTask, `${event.messageId ?? event.id}:${event.providerCallId ?? event.id}`, event.status);
+    add(
+      event.nativeTask,
+      `${event.messageId ?? event.id}:${event.providerCallId ?? event.id}`,
+      event.status,
+      event.ts,
+      event.startedAt ?? event.ts,
+    );
   }
   for (const message of messages) {
-    if (message.role !== 'assistant' || message.created_at < since) continue;
-    const results = new Map(message.parts.filter(part => part.kind === 'tool_result').map(part => [part.call_id, part]));
+    if (message.role !== 'assistant') continue;
+    const results = new Map(
+      message.parts
+        .filter((part) => part.kind === 'tool_result')
+        .map((part) => [part.call_id, part]),
+    );
     for (const part of message.parts) {
       if (part.kind !== 'tool_call' || part.tool !== 'task') continue;
       const result = results.get(part.call_id);
-      const confirmed = result?.result !== null && typeof result?.result === 'object' &&
-        'status' in result.result && result.result.status === 'completed';
-      add(part.args?.nativeTask, `${message.id}:${part.call_id}`, result?.error ? 'error' : confirmed ? 'done' : 'running');
+      const confirmed =
+        result?.result !== null &&
+        typeof result?.result === 'object' &&
+        'status' in result.result &&
+        result.result.status === 'completed';
+      add(
+        part.args?.nativeTask,
+        `${message.id}:${part.call_id}`,
+        result?.error ? 'error' : confirmed ? 'done' : 'running',
+        message.updated_at ?? message.created_at,
+        message.created_at,
+      );
     }
   }
-  return [...runs.values()].map(run => parentEnded && (run.status === 'running' || run.status === 'pending')
-    ? { ...run, status: 'unknown', currentStep: 'Final status unavailable' } : run);
+  return [...runs.values()].map((run) =>
+    parentEnded && (run.status === 'running' || run.status === 'pending')
+      ? { ...run, status: 'unknown', currentStep: 'Final status unavailable' }
+      : run,
+  );
 }

@@ -1504,7 +1504,7 @@ export function normalizeToolEvent(
   const fileLabel = cleanIdentifier(redactedLeaf, 256);
   const scope = classifyExplicitRootInventoryScope({ name, status, input: state?.input }, request);
   const checklist = sanitizeOpenCodeChecklistSnapshot(name, callId, state?.input);
-  const nativeTask = projectNativeTaskActivity(name, state);
+  const nativeTask = projectNativeTaskActivity(name, state, status);
   return {
     type: 'tool',
     name,

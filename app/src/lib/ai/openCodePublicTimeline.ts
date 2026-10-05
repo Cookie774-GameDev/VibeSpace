@@ -286,8 +286,8 @@ export function projectOpenCodePublicTimeline(
       const contextFailure = vibeSpaceContextFailure(state?.output, tool) ??
         nativeShellFailure(tool, state) ??
         (isFailedOpenCodeToolOutput(state?.output) ? 'Tool failed' : undefined);
-      const nativeTask = projectNativeTaskActivity(tool, state);
       const status = transportStatus === 'completed' && contextFailure ? 'failed' : transportStatus;
+      const nativeTask = projectNativeTaskActivity(tool, state, status);
       const rawDiff = recordOf(state?.metadata)?.diff;
       const diff = status === 'completed' && /^(edit|write|apply_patch)$/.test(tool) &&
         typeof rawDiff === 'string' && rawDiff.length <= MAX_TEXT_CHARS

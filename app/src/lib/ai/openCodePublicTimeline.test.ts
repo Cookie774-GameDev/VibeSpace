@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { projectOpenCodePublicTimeline } from './openCodePublicTimeline';
 
 describe('projectOpenCodePublicTimeline', () => {
+  it('keeps persisted native task failure consistent with the live adapter', () => {
+    const snapshot = projectOpenCodePublicTimeline([{ info: { role: 'assistant' }, parts: [{
+      type: 'tool', tool: 'task', callID: 'task-failed', state: { status: 'completed',
+        input: { description: 'Review' }, metadata: { sessionId: 'ses_child' },
+        output: JSON.stringify({ success: false, error: { message: 'Child failed' } }),
+      },
+    }] }], { toolCallIdFor: () => 'opencode-tool-1' });
+    expect(snapshot.timeline.find(part => part.kind === 'tool_call')).toMatchObject({ args: { nativeTask: { status: 'error', sessionId: 'ses_child' } } });
+  });
   it('keeps live tool identities when persisted history arrives in a different order', () => {
     const messages = [
       {

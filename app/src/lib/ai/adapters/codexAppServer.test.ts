@@ -777,8 +777,25 @@ it('projects native Codex child identity and running state without copying its p
       agentsStates: { child_1: { status: 'running' } }, prompt: 'Private task instructions', model: 'gpt-5.4-mini' },
   } });
   expect(value.events).toEqual([expect.objectContaining({ type: 'tool', name: 'task', status: 'completed',
-    nativeTask: { name: 'Codex agent', sessionId: 'child_1', status: 'running', currentStep: 'spawnAgent', modelLabel: 'gpt-5.4-mini' } })]);
+    nativeTask: expect.objectContaining({ name: 'Codex agent', sessionId: 'child_1', status: 'running', currentStep: 'spawnAgent', modelLabel: 'gpt-5.4-mini' }) })]);
   expect(JSON.stringify(value)).not.toContain('Private task instructions');
+});
+
+it('retains Codex native wait results and effort without treating a control acknowledgment as child completion', () => {
+  const value = normalizeCodexAppServerMessage({ method: 'item/completed', params: {
+    threadId: 'thr_123', turnId: 'turn_1', item: { id: 'wait_1', type: 'collabAgentToolCall',
+      tool: 'wait', status: 'completed', senderThreadId: 'thr_123', receiverThreadIds: ['child_done', 'child_busy', 'child_error'],
+      reasoningEffort: 'high', agentsStates: {
+        child_done: { status: 'completed', message: 'Review complete.' },
+        child_busy: { status: 'running', message: null },
+        child_error: { status: 'errored', message: 'Native child failed.' },
+      } },
+  } });
+  expect(value.events).toEqual([
+    expect.objectContaining({ nativeTask: expect.objectContaining({ sessionId: 'child_done', parentSessionId: 'thr_123', harness: 'codex', reasoningEffort: 'high', status: 'done', result: 'Review complete.' }) }),
+    expect.objectContaining({ nativeTask: expect.objectContaining({ sessionId: 'child_busy', status: 'running' }) }),
+    expect.objectContaining({ nativeTask: expect.objectContaining({ sessionId: 'child_error', status: 'error', error: 'Native child failed.' }) }),
+  ]);
 });
 
 it('projects completed native plans into the existing approval contract', () => {

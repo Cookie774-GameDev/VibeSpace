@@ -1,6 +1,7 @@
 import type { ProviderEvent, UsageSnapshot, UsageValue } from './types';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 import { publicToolDetails, publicToolOutput } from '../publicToolDetails';
+import { readNativeTaskActivity } from '../openCodeNativeActivity';
 
 export type CodexApprovalKind = 'command' | 'file_change' | 'permissions';
 export type CodexSimpleApprovalDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel';
@@ -389,12 +390,15 @@ function normalizeItem(item: Record<string, unknown>, method: string): ProviderE
         child?.status === 'errored' ? 'error' :
         child?.status === 'interrupted' || child?.status === 'shutdown' ? 'cancelled' :
         child?.status === 'running' || child?.status === 'pendingInit' ? 'running' : 'unknown';
+      const nativeTask = readNativeTaskActivity({ name: 'Codex agent', sessionId,
+        parentSessionId: item.senderThreadId, harness: 'codex', currentStep: operation, status,
+        modelLabel: item.model, reasoningEffort: item.reasoningEffort,
+        ...(status === 'done' ? { result: child?.message } : {}),
+        ...(status === 'error' ? { error: child?.message } : {}),
+      });
       return { type: 'tool', name: 'task',
         status: toolStatus(item.status ?? (method === 'item/completed' ? 'completed' : 'started')),
-        callId: `${callId}:${index}`, nativeTask: { name: 'Codex agent',
-          ...(sessionId ? { sessionId } : {}), currentStep: operation, status,
-          ...(safeIdentifier(item.model) ? { modelLabel: safeIdentifier(item.model) } : {}),
-        } };
+        callId: `${callId}:${index}`, ...(nativeTask ? { nativeTask } : {}) };
     });
   }
 

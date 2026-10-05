@@ -1,11 +1,66 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { browserChatStore } from '@/features/browser-chat/browserChatStore';
 import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
 import { useUIStore } from '@/stores/ui';
 import { SubagentsHeaderButton, subagentStatusLabel } from './SubagentsMiniPanel';
+import { requestNativeSubagentReply } from '@/features/jarvis-interaction/nativeSubagentReply';
+
+vi.mock('@/features/jarvis-interaction/nativeSubagentReply', () => ({
+  requestNativeSubagentReply: vi.fn().mockResolvedValue(undefined),
+  requestBoundChildReply: vi.fn().mockResolvedValue(undefined),
+}));
 
 describe('SubagentsMiniPanel', () => {
+  it('shows native results and only requests one reply to the returned child without navigating away', async () => {
+    let finish!: () => void;
+    vi.mocked(requestNativeSubagentReply).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const run = {
+      id: 'child',
+      name: 'Review layout',
+      sessionId: 'native_child',
+      harness: 'codex' as const,
+      status: 'done' as const,
+      modelLabel: 'gpt-child',
+      reasoningEffort: 'high',
+      result: 'Found an edge case.',
+    };
+    render(<SubagentsHeaderButton chatId="chat_parent" nativeRuns={[run]} />);
+    fireEvent.click(screen.getByTestId('agentic-subagents-toggle'));
+    expect(screen.getByText('Found an edge case.')).toBeTruthy();
+    fireEvent.click(screen.getByText('Details and reply'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Reply to Review layout' }), {
+      target: { value: 'Check it again' },
+    });
+    const button = screen.getByRole('button', { name: 'Request reply' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(requestNativeSubagentReply).toHaveBeenCalledTimes(1);
+    expect(requestNativeSubagentReply).toHaveBeenCalledWith(
+      expect.objectContaining({ parentChatId: 'chat_parent', text: 'Check it again', run }),
+    );
+    finish();
+    expect(await screen.findByText('Reply requested through the native agent.')).toBeTruthy();
+    expect(useUIStore.getState().activeChatId).toBe('chat_parent');
+  });
+
+  it('labels unreported model and unavailable native reply honestly', () => {
+    render(
+      <SubagentsHeaderButton
+        chatId="chat_parent"
+        nativeRuns={[{ id: 'legacy', name: 'Review', status: 'unknown' }]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('agentic-subagents-toggle'));
+    expect(screen.getByText('Model not reported')).toBeTruthy();
+    expect(screen.getByText(/Native reply unavailable/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Request reply' })).toBeNull();
+  });
   it('maps pause, resume, working, and terminal states to truthful labels', () => {
     expect(subagentStatusLabel('paused')).toBe('Paused');
     expect(subagentStatusLabel('resuming')).toBe('Resuming');
@@ -67,6 +122,7 @@ describe('SubagentsMiniPanel', () => {
     expect(screen.queryByText('Inspect one')).toBeNull();
   });
   beforeEach(() => {
+    vi.clearAllMocks();
     useJarvisInteractionStore.setState({ agentsByChat: {} });
     browserChatStore.setState({ engine: 'browser', chatPreferences: {} });
     useUIStore.setState({ activeChatId: 'chat_parent', route: 'chat' });

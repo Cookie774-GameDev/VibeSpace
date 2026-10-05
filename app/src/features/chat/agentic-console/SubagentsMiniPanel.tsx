@@ -8,6 +8,10 @@ import { openNativeChildChat } from '@/features/jarvis-interaction/openNativeChi
 import type { NativeTaskRun } from './nativeTaskRuns';
 import { usePagedChatMessages } from '../hooks';
 import { MessageBubble } from '../MessageBubble';
+import {
+  requestBoundChildReply,
+  requestNativeSubagentReply,
+} from '@/features/jarvis-interaction/nativeSubagentReply';
 
 const EMPTY_AGENTS: JarvisChatAgent[] = [];
 const EMPTY_NATIVE_RUNS: readonly NativeTaskRun[] = [];
@@ -130,9 +134,39 @@ export function SubagentsMiniPanel({
                     {run.currentStep}
                   </p>
                 )}
-                {run.modelLabel && (
-                  <p className="mt-0.5 break-all text-[10px] text-muted-foreground">
-                    {run.modelLabel}
+                <p className="mt-1 break-all text-[11px] text-muted-foreground">
+                  {run.modelLabel ?? 'Model not reported'}
+                  {run.reasoningEffort ? ` · ${run.reasoningEffort}` : ''}
+                </p>
+                {run.result && (
+                  <pre
+                    className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border p-2 text-xs"
+                    aria-label={`${run.name} result`}
+                  >
+                    {run.result}
+                  </pre>
+                )}
+                {run.error && (
+                  <p className="mt-2 break-words text-xs text-destructive">{run.error}</p>
+                )}
+                {run.sessionId && run.harness ? (
+                  <details className="mt-2 text-xs">
+                    <summary className="cursor-pointer text-muted-foreground">
+                      Details and reply
+                    </summary>
+                    <p className="mt-2 break-all text-[10px] text-muted-foreground">
+                      {run.harness === 'codex' ? 'Codex' : 'OpenCode'} · {run.sessionId}
+                    </p>
+                    <SubagentReplyBox
+                      name={run.name}
+                      requestReply={(text) =>
+                        requestNativeSubagentReply({ parentChatId: chatId, run, text })
+                      }
+                    />
+                  </details>
+                ) : (
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    Native reply unavailable: session route not reported.
                   </p>
                 )}
               </div>
@@ -156,22 +190,22 @@ function SubagentRow({ agent, parentChatId }: { agent: JarvisChatAgent; parentCh
         <Bot className="h-3.5 w-3.5" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <span className="agentic-subagents-panel__badge">{label}</span>
-          <span className="truncate text-[12px] font-medium text-foreground">{agent.name}</span>
+          <span className="break-words text-[12px] font-medium text-foreground">{agent.name}</span>
           <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
             {subagentStatusLabel(String(agent.status))}
           </span>
         </div>
-        <p className="mt-0.5 truncate text-[11px] text-muted-foreground" title={agent.task}>
+        <p className="mt-1 break-words text-[12px] text-muted-foreground" title={agent.task}>
           {agent.task}
         </p>
         <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
-          <span className="truncate" title={agent.modelLabel}>
+          <span className="break-all" title={agent.modelLabel}>
             {agent.modelLabel}
           </span>
           <span>{formatElapsed(agent.createdAt, agent.updatedAt)}</span>
-          {agent.currentStep ? <span className="truncate">{agent.currentStep}</span> : null}
+          {agent.currentStep ? <span className="break-words">{agent.currentStep}</span> : null}
         </div>
       </div>
       <Button
@@ -188,6 +222,59 @@ function SubagentRow({ agent, parentChatId }: { agent: JarvisChatAgent; parentCh
         <ChevronRight className="h-3.5 w-3.5" />
       </Button>
     </li>
+  );
+}
+
+function SubagentReplyBox({
+  name,
+  requestReply,
+}: {
+  name: string;
+  requestReply: (text: string) => Promise<void>;
+}) {
+  const [text, setText] = React.useState('');
+  const [pending, setPending] = React.useState(false);
+  const [notice, setNotice] = React.useState('');
+  const submitting = React.useRef(false);
+  return (
+    <form
+      className="mt-2 space-y-2"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (submitting.current || !text.trim()) return;
+        submitting.current = true;
+        setPending(true);
+        setNotice('');
+        try {
+          await requestReply(text);
+          setText('');
+          setNotice('Reply requested through the native agent.');
+        } catch (error) {
+          setNotice(error instanceof Error ? error.message : 'Could not request this reply.');
+        } finally {
+          submitting.current = false;
+          setPending(false);
+        }
+      }}
+    >
+      <textarea
+        aria-label={`Reply to ${name}`}
+        placeholder="Send follow-up work"
+        value={text}
+        maxLength={32_768}
+        disabled={pending}
+        onChange={(event) => setText(event.target.value)}
+        className="min-h-16 w-full resize-y rounded-md border border-border bg-background p-2 text-xs text-foreground"
+      />
+      <Button type="submit" variant="outline" size="sm" disabled={pending || !text.trim()}>
+        {pending ? 'Requesting…' : 'Request reply'}
+      </Button>
+      {notice && (
+        <p role="status" className="break-words text-[11px] text-muted-foreground">
+          {notice}
+        </p>
+      )}
+    </form>
   );
 }
 
@@ -214,7 +301,7 @@ export function SubagentChatSidePanel({
           <div className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">
             Sub-agent child chat
           </div>
-          <strong className="block truncate text-sm" title={agent.name}>
+          <strong className="block break-words text-sm" title={agent.name}>
             {agent.name}
           </strong>
         </div>
@@ -235,7 +322,11 @@ export function SubagentChatSidePanel({
         <p className="break-words text-foreground" title={agent.task}>
           {agent.task}
         </p>
-        <p className="break-words">{agent.currentStep ?? agent.summary ?? agent.modelLabel}</p>
+        <p className="break-all">{agent.modelLabel || 'Model not reported'}</p>
+        {agent.currentStep && <p className="break-words">{agent.currentStep}</p>}
+        {agent.summary && (
+          <p className="whitespace-pre-wrap break-words text-foreground">{agent.summary}</p>
+        )}
         {agent.error ? <p className="break-words text-destructive">{agent.error}</p> : null}
       </div>
       <div
@@ -268,6 +359,19 @@ export function SubagentChatSidePanel({
         ) : (
           <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
             No child messages have been recorded yet.
+          </p>
+        )}
+      </div>
+      <div className="shrink-0 border-t border-border px-3 pb-3">
+        {agent.harnessSessionId ? (
+          <SubagentReplyBox
+            key={String(agent.childChatId)}
+            name={agent.name}
+            requestReply={(text) => requestBoundChildReply({ agent, text })}
+          />
+        ) : (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Native reply unavailable: child session not bound.
           </p>
         )}
       </div>

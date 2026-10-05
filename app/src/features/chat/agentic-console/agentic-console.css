@@ -1037,8 +1037,8 @@ html[data-agentic-console-caret='block'] [data-tour='chat-composer'] textarea {
   right: 0;
   top: calc(100% + 0.35rem);
   z-index: 40;
-  width: min(22rem, 86vw);
-  max-height: min(20rem, 50vh);
+  width: min(30rem, 92vw);
+  max-height: min(36rem, 65vh);
   overflow: auto;
   border: 1px solid var(--console-line);
   border-radius: 0.75rem;
@@ -1081,7 +1081,7 @@ html[data-agentic-console-caret='block'] [data-tour='chat-composer'] textarea {
   border: 1px solid color-mix(in srgb, var(--console-accent) 18%, var(--console-line));
   border-radius: 0.55rem;
   background: color-mix(in srgb, var(--console-raised) 70%, transparent);
-  padding: 0.4rem 0.45rem;
+  padding: 0.65rem;
 }
 
 .agentic-subagents-panel__icon {
