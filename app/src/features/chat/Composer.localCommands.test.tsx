@@ -36,6 +36,7 @@ vi.mock('./HarnessReadinessGate', async (original) => ({
 
 const originalAuth = useAuthStore.getState();
 const originalRoute = useUIStore.getState().route;
+const originalSettingsOpen = useUIStore.getState().settingsOpen;
 function enableFixtureModel() {
   liveQueryFixture.ready = true;
   setDiscoveredConnectionModels(GEMINI_API_CONNECTION.id, [
@@ -65,7 +66,7 @@ beforeEach(() => {
     cloudSession: null,
     chatModelSelection: { mode: 'none' },
   });
-  useUIStore.setState({ route: 'account' });
+  useUIStore.setState({ route: 'account', settingsOpen: false });
 });
 afterEach(() => {
   cleanup();
@@ -81,7 +82,7 @@ afterEach(() => {
     cloudSession: originalAuth.cloudSession,
   });
   resetDiscoveredConnectionModelsForTests();
-  useUIStore.setState({ route: originalRoute });
+  useUIStore.setState({ route: originalRoute, settingsOpen: originalSettingsOpen });
 });
 
 it('sends ordinary text through production dispatch without entering an unavailable local action bridge', async () => {
@@ -275,6 +276,9 @@ it.each([
   ['Enter', 'open files'],
   ['Tab', 'open files'],
   ['CtrlEnter', 'open files'],
+  ['Enter', 'open settings'],
+  ['Tab', 'open settings'],
+  ['CtrlEnter', 'OPen settings'],
   ['Enter', '/connect'],
 ])(
   'runs a pure local command through the real authority during an active run using %s: %s',
@@ -307,6 +311,8 @@ it.each([
       else fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key, code: key });
       if (text === 'open files')
         await waitFor(() => expect(useUIStore.getState().route).toBe('files'));
+      if (text.toLowerCase() === 'open settings')
+        await waitFor(() => expect(useUIStore.getState().settingsOpen).toBe(true));
       expect(document.querySelectorAll('[data-queued-message-id]')).toHaveLength(0);
       expect(interference).not.toHaveBeenCalled();
       const { messageRepo } = await import('@/lib/db/repositories');
