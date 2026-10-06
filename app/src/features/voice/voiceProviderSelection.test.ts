@@ -72,6 +72,30 @@ describe('resolveVoiceProviderSelection', () => {
       }),
     ).toThrow(VoiceProviderUnavailableError);
   });
+
+  it.each(['missing', 'unavailable'])(
+    'does not replace an explicit %s saved model in the requested harness',
+    (state) => {
+      const saved = route('openai', 'selected-model', CODEX_CLI_CONNECTION, false);
+      expect(() =>
+        resolveVoiceProviderSelection({
+          provider: 'codex',
+          options: state === 'missing' ? [codex] : [codex, saved],
+          preferredSelection: selectionFromOption('openai', saved.modelId, CODEX_CLI_CONNECTION),
+        }),
+      ).toThrow(VoiceProviderUnavailableError);
+    },
+  );
+
+  it('does not replace an explicit non-harness selection with a CLI default', () => {
+    expect(() =>
+      resolveVoiceProviderSelection({
+        provider: 'codex',
+        options: [codex],
+        preferredSelection: selectionFromOption('groq', 'selected-cloud-model'),
+      }),
+    ).toThrow(VoiceProviderUnavailableError);
+  });
 });
 
 describe('parseVoiceProviderOverrides', () => {

@@ -17,14 +17,30 @@ export interface VoiceProviderResolution {
 export class VoiceProviderUnavailableError extends Error {
   readonly code = 'voice_provider_unavailable';
 
-  constructor(readonly provider: VoiceAgentProvider) {
-    super(`${provider === 'codex' ? 'Codex' : 'OpenCode'} has no available connected voice route.`);
+  constructor(
+    readonly provider: VoiceAgentProvider,
+    selectedModelUnavailable = false,
+  ) {
+    const label = provider === 'codex' ? 'Codex' : 'OpenCode';
+    super(
+      selectedModelUnavailable
+        ? `The selected ${label} model is unavailable. Choose an available ${label} model.`
+        : `${label} has no available connected voice route.`,
+    );
     this.name = 'VoiceProviderUnavailableError';
   }
 }
 
 function providerConnectionId(provider: VoiceAgentProvider): string {
   return provider === 'codex' ? CODEX_CLI_CONNECTION.id : OPENCODE_CLI_CONNECTION.id;
+}
+
+export function voiceProviderForConnectionId(
+  connectionId: string | undefined,
+): VoiceAgentProvider | null {
+  if (connectionId === CODEX_CLI_CONNECTION.id) return 'codex';
+  if (connectionId === OPENCODE_CLI_CONNECTION.id) return 'opencode';
+  return null;
 }
 
 function providerLabel(provider: VoiceAgentProvider): 'Codex' | 'OpenCode' {
@@ -52,15 +68,24 @@ export function resolveVoiceProviderSelection(input: {
     );
 
   const preferred = input.preferredSelection;
-  const selectedRoute =
-    (preferred?.mode === 'single'
+  const preferredRoute =
+    preferred?.mode === 'single'
       ? routes.find(
           (option) =>
             option.connectionId === preferred.connectionId &&
             option.provider === preferred.providerId &&
             option.modelId === preferred.modelId,
         )
-      : undefined) ?? routes[0];
+      : undefined;
+  if (
+    preferred?.mode === 'single' &&
+    !preferredRoute &&
+    (preferred.connectionId === connectionId ||
+      !voiceProviderForConnectionId(preferred.connectionId))
+  ) {
+    throw new VoiceProviderUnavailableError(input.provider, true);
+  }
+  const selectedRoute = preferredRoute ?? routes[0];
 
   if (!selectedRoute?.connection) {
     throw new VoiceProviderUnavailableError(input.provider);

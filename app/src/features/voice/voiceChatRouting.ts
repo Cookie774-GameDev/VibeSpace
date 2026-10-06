@@ -223,7 +223,7 @@ export async function ensureJarvisChatForVoice(titleHint?: string): Promise<Chat
 export async function ensureJarvisChatForProvider(
   provider: VoiceAgentProvider,
   titleHint?: string,
-  options: { freshVoiceConversation?: boolean; openingId?: string } = {},
+  options: { freshVoiceConversation?: boolean; openingId?: string; cachedChatId?: ChatId } = {},
 ): Promise<ChatId | null> {
   const auth = useAuthStore.getState();
   const identity = resolveAccountIdentity(auth);
@@ -238,6 +238,7 @@ export async function ensureJarvisChatForProvider(
     'jarvis-provider',
     provider,
     options.freshVoiceConversation ? options.openingId : 'reuse',
+    options.cachedChatId ?? null,
   ]);
   return runVoiceChatSingleFlight(key, async () => {
     const protectedJarvis = findProtectedJarvisAgent(
@@ -252,7 +253,6 @@ export async function ensureJarvisChatForProvider(
     if (!protectedJarvis || !targetIsCurrent()) return null;
     const find = async () => {
       const scoped = await listScopedChats(captured.workspaceId, captured.projectId);
-      if (options.freshVoiceConversation) return { scoped, existing: undefined };
       const providerChats = scoped
         .filter((chat) => isJarvisChat(chat, useAgentStore.getState().agents))
         .filter((chat) => {
@@ -267,6 +267,12 @@ export async function ensureJarvisChatForProvider(
             return false;
           }
         });
+      // A fresh opening still keeps one chat for its later turns. Reuse only a
+      // cached row that survived deletion and still has the requested scope,
+      // protected Jarvis identity and native backend affinity.
+      const cached = providerChats.find((chat) => chat.id === options.cachedChatId);
+      if (cached) return { scoped, existing: cached };
+      if (options.freshVoiceConversation) return { scoped, existing: undefined };
       const voiceScope = {
         accountId: captured.accountId,
         workspaceId: String(captured.workspaceId),

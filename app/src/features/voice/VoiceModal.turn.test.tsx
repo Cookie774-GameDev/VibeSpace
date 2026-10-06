@@ -16,6 +16,8 @@ import { dispatchVoiceMainRequest } from './voiceNativeDelegation';
 import { resolveVoiceProviderSelection } from './voiceProviderSelection';
 import { createVoiceSessionBinding } from './voiceSessionBinding';
 import type { ChatId } from '@/types';
+import type { ModelPickerOption } from '@/lib/ai/useAccessibleChatModels';
+import { CODEX_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
 
 type VoiceHandler = (payload?: unknown) => void;
 type MockVoiceChatTarget = {
@@ -52,7 +54,7 @@ const chatRoutingMocks = vi.hoisted(() => ({
     async (
       _provider: string,
       _title?: string,
-      _options?: { freshVoiceConversation?: boolean; openingId?: string },
+      _options?: { freshVoiceConversation?: boolean; openingId?: string; cachedChatId?: ChatId },
     ): Promise<string | null> => 'chat_voice',
   ),
   focusVoiceChat: vi.fn(),
@@ -107,8 +109,13 @@ vi.mock('@/features/chat/hooks', () => ({
 }));
 
 // Turn/lifecycle fixtures do not exercise authenticated provider discovery.
+const accessibleModelFixture = vi.hoisted(() => ({ options: [] as ModelPickerOption[] }));
 vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
-  useAccessibleChatModels: () => ({ groups: [], flatOptions: [], hasAny: false }),
+  useAccessibleChatModels: () => ({
+    groups: [],
+    flatOptions: accessibleModelFixture.options,
+    hasAny: accessibleModelFixture.options.length > 0,
+  }),
 }));
 
 vi.mock('@/components/ui/toast', () => ({
@@ -289,6 +296,7 @@ function voiceMiniBar() {
 describe('VoiceModal hands-free turn-taking', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    accessibleModelFixture.options = [];
     fetchSpy = vi.spyOn(globalThis, 'fetch');
     setReducedMotion(false);
     chatHookMocks.useChatMessages.mockReset().mockReturnValue([]);
@@ -337,6 +345,38 @@ describe('VoiceModal hands-free turn-taking', () => {
     clearContextGalaxySnapshotsForTests();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('shows an available native default when opening with no selected model, before speech', async () => {
+    const selection = selectionFromOption('openai', 'gpt-6.1-sol', CODEX_CLI_CONNECTION);
+    accessibleModelFixture.options = [
+      {
+        id: 'native-default',
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+        label: 'GPT-6.1 Sol',
+        connection: CODEX_CLI_CONNECTION,
+        connectionId: CODEX_CLI_CONNECTION.id,
+        available: true,
+      },
+    ];
+    useAuthStore.setState({
+      chatModelSelection: { mode: 'none' },
+      voiceMainAgentProvider: 'codex',
+    });
+    vi.mocked(resolveVoiceProviderSelection).mockReturnValueOnce({
+      provider: 'codex',
+      providerLabel: 'Codex',
+      connectionId: CODEX_CLI_CONNECTION.id,
+      routeId: 'native-default',
+      modelLabel: 'Codex · GPT-6.1 Sol',
+      selection,
+    });
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    await waitFor(() => expect(useAuthStore.getState().chatModelSelection).toEqual(selection));
+    expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+    expect(messageRepo.create).not.toHaveBeenCalled();
   });
 
   it('resumes the provider chat by default and requests a fresh chat only when selected', async () => {
@@ -392,6 +432,51 @@ describe('VoiceModal hands-free turn-taking', () => {
     expect(useVoiceStore.getState().state).toBe('idle');
     expect(useUIStore.getState().voiceListening).toBe(false);
     expect(VoiceService.cancelListening).toHaveBeenCalled();
+  });
+
+  it('revalidates the cached backing chat before sending and rebinds a missing chat', async () => {
+    chatRoutingMocks.ensureJarvisChatForProvider
+      .mockResolvedValueOnce('deleted-voice-chat')
+      .mockResolvedValue('replacement-voice-chat');
+    render(<VoiceModal />);
+    await waitFor(() =>
+      expect(useVoiceStore.getState().session?.chatId).toBe('deleted-voice-chat'),
+    );
+    act(() => {
+      emitVoice('voice:final', { text: 'Hello Jarvis' });
+      emitVoice('voice:final', { text: 'send it' });
+    });
+    await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce());
+    expect(vi.mocked(dispatchVoiceMainRequest).mock.calls[0]?.[0].chatId).toBe(
+      'replacement-voice-chat',
+    );
+    expect(messageRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ chat_id: 'replacement-voice-chat' }),
+    );
+    expect(useVoiceStore.getState().session?.chatId).toBe('replacement-voice-chat');
+  });
+
+  it('does not save or dispatch the old utterance after account scope changes during chat validation', async () => {
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    let resolveChat!: (id: string) => void;
+    chatRoutingMocks.ensureJarvisChatForProvider.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveChat = resolve;
+        }),
+    );
+    act(() => emitVoice('voice:final', { text: 'Old account request send it' }));
+    await waitFor(() => expect(resolveChat).toBeTypeOf('function'));
+    act(() => useAuthStore.setState({ localUserId: 'account-b' }));
+    await waitFor(() => expect(useVoiceStore.getState().session?.accountId).toBe('account-b'));
+    await act(async () => {
+      resolveChat('old-account-chat');
+      await Promise.resolve();
+    });
+    expect(messageRepo.create).not.toHaveBeenCalled();
+    expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+    expect(useVoiceStore.getState().session?.accountId).toBe('account-b');
   });
 
   it('keeps voice lifecycle active while hiding the panel and enabled mini bar', async () => {
@@ -542,7 +627,9 @@ describe('VoiceModal hands-free turn-taking', () => {
     useAuthStore.getState().setVoiceStartFreshChat(true);
     chatRoutingMocks.ensureJarvisChatForProvider
       .mockResolvedValueOnce('voice-first')
-      .mockResolvedValueOnce('voice-second');
+      .mockResolvedValueOnce('voice-first')
+      .mockResolvedValueOnce('voice-second')
+      .mockResolvedValue('voice-second');
     const send = vi.fn();
     window.addEventListener('jarvis:send', send as EventListener);
     try {
@@ -568,7 +655,9 @@ describe('VoiceModal hands-free turn-taking', () => {
     useAuthStore.getState().setVoiceStartFreshChat(true);
     chatRoutingMocks.ensureJarvisChatForProvider
       .mockResolvedValueOnce('voice-pending-first')
-      .mockResolvedValueOnce('voice-pending-second');
+      .mockResolvedValueOnce('voice-pending-first')
+      .mockResolvedValueOnce('voice-pending-second')
+      .mockResolvedValue('voice-pending-second');
     let accept!: (receipt: Awaited<ReturnType<typeof dispatchVoiceMainRequest>>) => void;
     vi.mocked(dispatchVoiceMainRequest).mockImplementationOnce(
       () => new Promise((resolve) => (accept = resolve)),

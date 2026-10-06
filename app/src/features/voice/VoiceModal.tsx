@@ -726,6 +726,26 @@ function VoiceModalPanel() {
   ]);
 
   React.useEffect(() => {
+    if (!open || !session || chatModelSelection.mode !== 'none' || !accessibleModels.length) return;
+    const auth = useAuthStore.getState();
+    if (resolveAccountIdentity(auth)?.accountId !== session.accountId) return;
+    try {
+      const route = resolveVoiceProviderSelection({
+        provider: auth.voiceMainAgentProvider,
+        options: accessibleModels,
+        preferredSelection: auth.chatModelSelection,
+      });
+      // The ordinary chat controls persist this exact connected route. Opening
+      // voice may choose a default only when there is no explicit selection.
+      if (useAuthStore.getState().chatModelSelection.mode === 'none') {
+        auth.setChatModelSelection(route.selection);
+      }
+    } catch {
+      // Discovery can still be loading; a send reports the actionable route error.
+    }
+  }, [open, session, chatModelSelection, accessibleModels]);
+
+  React.useEffect(() => {
     if (!open) return;
     listeningArmedRef.current = voiceAutoListenOnOpen;
     if (voiceAutoListenOnOpen) startListening();
@@ -829,8 +849,18 @@ function VoiceModalPanel() {
       void speakWithSettings('On it.', { allowBackground: true }).catch(() => undefined);
       voiceFlowActiveRef.current = true;
       const flowGeneration = ++voiceFlowGenerationRef.current;
+      const auth = useAuthStore.getState();
+      const requestAccountId = resolveAccountIdentity(auth)?.accountId;
+      const requestIsCurrent = () => {
+        const live = useAuthStore.getState();
+        return (
+          voiceFlowGenerationRef.current === flowGeneration &&
+          resolveAccountIdentity(live)?.accountId === requestAccountId &&
+          live.workspaceId === auth.workspaceId &&
+          live.projectId === auth.projectId
+        );
+      };
       void (async () => {
-        const auth = useAuthStore.getState();
         const parsed = parseVoiceProviderOverrides(text);
         const messageText = (parsed ? parsed.taskText : text).trim();
         if (!messageText) throw new Error('Say a task after the provider instruction.');
@@ -849,11 +879,16 @@ function VoiceModalPanel() {
         }
 
         const openingId = (openingIdRef.current ??= newVoiceSessionId());
-        const chatId = await (providerChatsRef.current[mainProvider] ??=
-          ensureJarvisChatForProvider(mainProvider, messageText, {
-            freshVoiceConversation: auth.voiceStartFreshChat,
-            openingId: `${openingId}:${mainProvider}`,
-          }));
+        const cachedChatId = await providerChatsRef.current[mainProvider];
+        if (!requestIsCurrent()) return;
+        const chatPromise = ensureJarvisChatForProvider(mainProvider, messageText, {
+          freshVoiceConversation: auth.voiceStartFreshChat,
+          openingId: `${openingId}:${mainProvider}`,
+          ...(cachedChatId ? { cachedChatId } : {}),
+        });
+        providerChatsRef.current[mainProvider] = chatPromise;
+        const chatId = await chatPromise;
+        if (!requestIsCurrent()) return;
         if (!chatId) delete providerChatsRef.current[mainProvider];
         if (!chatId) throw new Error(VOICE_CHAT_TARGET_FAILURE);
         const identity = resolveAccountIdentity(useAuthStore.getState());
@@ -920,6 +955,7 @@ function VoiceModalPanel() {
             // The prompt acknowledgment already started before chat preparation.
             acknowledge: () => undefined,
             persistUser: async (input) => {
+              if (!requestIsCurrent()) throw new Error('voice_scope_changed');
               const saved = await messageRepo.create({
                 chat_id: input.chatId as ChatId,
                 role: 'user',
@@ -943,7 +979,14 @@ function VoiceModalPanel() {
               }
               return captureVoiceScreenAttachment(requestText);
             },
-            dispatchMain: dispatchVoiceMainRequest,
+            dispatchMain: (detail) =>
+              requestIsCurrent()
+                ? dispatchVoiceMainRequest(detail)
+                : Promise.resolve({
+                    status: 'failed' as const,
+                    code: 'runtime_cancelled' as const,
+                    message: 'The voice request scope changed.',
+                  }),
             reportStatus: (status) => {
               report(status);
               if (useVoiceStore.getState().session?.chatId !== status.chatId) return;
@@ -986,7 +1029,7 @@ function VoiceModalPanel() {
         releaseTurnAndRestart();
       })()
         .catch((error) => {
-          if (voiceFlowGenerationRef.current !== flowGeneration) return;
+          if (!requestIsCurrent()) return;
           const message = error instanceof Error ? error.message : VOICE_MESSAGE_SAVE_FAILURE;
           toast.error('Voice message failed', message);
           setVoiceFlowStatus(message);
@@ -995,7 +1038,10 @@ function VoiceModalPanel() {
           releaseTurnAndRestart();
         })
         .finally(() => {
-          if (voiceFlowGenerationRef.current === flowGeneration) voiceFlowActiveRef.current = false;
+          if (voiceFlowGenerationRef.current === flowGeneration) {
+            voiceFlowActiveRef.current = false;
+            if (!requestIsCurrent()) turnBusyRef.current = false;
+          }
         });
     };
     flushUtteranceRef.current = (text: string) => flushUtterance(text);

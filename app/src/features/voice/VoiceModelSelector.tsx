@@ -6,6 +6,7 @@ import {
   type ChatModelSelection,
 } from '@/lib/ai/modelSelection';
 import { useAccessibleChatModels } from '@/lib/ai/useAccessibleChatModels';
+import { voiceProviderForConnectionId } from './voiceProviderSelection';
 
 export function VoiceModelSelector({
   selection,
@@ -16,20 +17,35 @@ export function VoiceModelSelector({
 }) {
   const storedSelection = useAuthStore((state) => state.chatModelSelection);
   const persistSelection = useAuthStore((state) => state.setChatModelSelection);
-  const { groups, flatOptions, hasAny } = useAccessibleChatModels();
+  const setMainProvider = useAuthStore((state) => state.setVoiceMainAgentProvider);
+  const { groups } = useAccessibleChatModels();
+  const routes = React.useMemo(
+    () =>
+      groups.flatMap((group) =>
+        group.options.flatMap((option) => option.alternativeRoutes ?? [option]),
+      ),
+    [groups],
+  );
+  const routeSupported = (option: (typeof routes)[number]) =>
+    Boolean(
+      voiceProviderForConnectionId(option.connectionId) &&
+      option.connection?.id === option.connectionId,
+    );
+  const hasAny = routes.some((option) => option.available === true && routeSupported(option));
   const currentSelection = selection ?? storedSelection;
   const currentOptionId = React.useMemo(() => {
     const exactId = selectionOptionId(currentSelection);
-    if (exactId && flatOptions.some((option) => option.id === exactId)) return exactId;
+    if (exactId && routes.some((option) => option.id === exactId)) return exactId;
     if (currentSelection.mode !== 'single') return '';
+    if (currentSelection.connectionId) return '';
     return (
-      flatOptions.find(
+      routes.find(
         (option) =>
           option.provider === currentSelection.providerId &&
           option.modelId === currentSelection.modelId,
       )?.id ?? ''
     );
-  }, [currentSelection, flatOptions]);
+  }, [currentSelection, routes]);
   const currentGroupLabel = React.useMemo(
     () =>
       groups.find((group) =>
@@ -54,14 +70,16 @@ export function VoiceModelSelector({
         value={currentOptionId}
         disabled={!hasAny}
         onChange={(event) => {
-          const option = flatOptions.find((candidate) => candidate.id === event.target.value);
-          if (!option || option.available === false) return;
+          const option = routes.find((candidate) => candidate.id === event.target.value);
+          if (!option || option.available !== true || !routeSupported(option)) return;
+          const mainProvider = voiceProviderForConnectionId(option.connectionId)!;
           const nextSelection = selectionFromOption(
             option.provider,
             option.modelId,
             option.connection,
           );
           (onSelectionChange ?? persistSelection)(nextSelection);
+          setMainProvider(mainProvider);
         }}
       >
         {!currentOptionId ? <option value="">Select model</option> : null}
@@ -70,9 +88,17 @@ export function VoiceModelSelector({
             {group.options
               .flatMap((option) => option.alternativeRoutes ?? [option])
               .map((option) => (
-                <option key={option.id} value={option.id} disabled={option.available === false}>
+                <option
+                  key={option.id}
+                  value={option.id}
+                  disabled={option.available !== true || !routeSupported(option)}
+                >
                   {option.label}
-                  {option.available === false ? ' — unavailable' : ''}
+                  {!routeSupported(option)
+                    ? ' — unavailable for Jarvis voice'
+                    : option.available !== true
+                      ? ' — unavailable'
+                      : ''}
                 </option>
               ))}
           </optgroup>

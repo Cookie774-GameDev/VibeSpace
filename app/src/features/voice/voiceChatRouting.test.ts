@@ -39,6 +39,58 @@ const agents = {
 };
 
 describe('provider-bound Jarvis voice chats', () => {
+  it.each(['present', 'deleted', 'wrong-provider', 'wrong-project'])(
+    'revalidates a %s cached chat within a fresh voice opening',
+    async (state) => {
+      const previousAuth = useAuthStore.getState();
+      const previousAgents = useAgentStore.getState().agents;
+      useAuthStore.setState({
+        cloudSession: null,
+        localUserId: 'voice-cache-account',
+        workspaceId: 'voice-cache-workspace' as never,
+        projectId: null,
+      });
+      useAgentStore.setState({ agents: { [jarvisAgent.id]: jarvisAgent } });
+      const cached = {
+        id: 'cached-voice-chat',
+        title: 'Jarvis Voice',
+        active_agent_ids: [jarvisAgent.id],
+        updated_at: 10,
+        backend_affinity: {
+          version: 1,
+          backend: state === 'wrong-provider' ? 'opencode' : 'codex',
+          locked: false,
+          selectedAt: 1,
+        },
+        ...(state === 'wrong-project' ? { project_id: 'other-project' } : {}),
+      };
+      vi.spyOn(db.chats, 'where').mockReturnValue({
+        equals: () => ({ toArray: async () => (state === 'deleted' ? [] : [cached]) }),
+      } as never);
+      const create = vi
+        .spyOn(chatRepo, 'createAuthorized')
+        .mockImplementation(async (input) => ({ ...input, id: 'authorized-replacement' }) as never);
+      try {
+        await expect(
+          ensureJarvisChatForProvider('codex', undefined, {
+            freshVoiceConversation: true,
+            openingId: `cache-${state}`,
+            cachedChatId: 'cached-voice-chat' as never,
+          }),
+        ).resolves.toBe(state === 'present' ? 'cached-voice-chat' : 'authorized-replacement');
+        expect(create).toHaveBeenCalledTimes(state === 'present' ? 0 : 1);
+        if (state !== 'present')
+          expect(create.mock.calls[0]?.[0]).toMatchObject({
+            workspace_id: 'voice-cache-workspace',
+            backend_affinity: expect.objectContaining({ backend: 'codex' }),
+          });
+      } finally {
+        useAuthStore.setState(previousAuth);
+        useAgentStore.setState({ agents: previousAgents });
+      }
+    },
+  );
+
   it('resumes the recorded voice conversation instead of a newer ordinary Jarvis chat', async () => {
     const previousAuth = useAuthStore.getState();
     const previousAgents = useAgentStore.getState().agents;

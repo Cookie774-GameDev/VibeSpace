@@ -1,26 +1,42 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import { OPENCODE_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
-import type { ChatModelSelection } from '@/lib/ai/modelSelection';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CODEX_CLI_CONNECTION, OPENCODE_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
+import { selectionFromOption, type ChatModelSelection } from '@/lib/ai/modelSelection';
+import type { ModelPickerGroup, ModelPickerOption } from '@/lib/ai/useAccessibleChatModels';
 import { VoiceModelSelector } from './VoiceModelSelector';
 
 const setChatModelSelection = vi.fn();
+const setVoiceMainAgentProvider = vi.fn();
+let storedSelection: ChatModelSelection;
+let catalogOverride: {
+  groups: ModelPickerGroup[];
+  flatOptions: ModelPickerOption[];
+  hasAny: boolean;
+} | null = null;
+beforeEach(() => {
+  setChatModelSelection.mockClear();
+  setVoiceMainAgentProvider.mockClear();
+  storedSelection = {
+    mode: 'single',
+    providerId: 'openai',
+    modelId: 'gpt-5',
+    connectionId: 'openai-api',
+  } as ChatModelSelection;
+  catalogOverride = null;
+});
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: (selector: (state: unknown) => unknown) =>
     selector({
-      chatModelSelection: {
-        mode: 'single',
-        providerId: 'openai',
-        modelId: 'gpt-5',
-        connectionId: 'openai-api',
-      } as ChatModelSelection,
+      chatModelSelection: storedSelection,
       setChatModelSelection,
+      setVoiceMainAgentProvider,
     }),
 }));
 
 vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
   useAccessibleChatModels: () => {
+    if (catalogOverride) return catalogOverride;
     const apiRoute = {
       id: 'openai-api:gpt-5',
       provider: 'openai',
@@ -88,7 +104,7 @@ vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
 }));
 
 describe('VoiceModelSelector', () => {
-  it('shows connected models, disables unavailable routes, and persists selection', () => {
+  it('shows connected models and disables unavailable or unsupported voice routes', () => {
     render(<VoiceModelSelector />);
 
     expect(screen.getByText('Model')).toBeTruthy();
@@ -103,14 +119,14 @@ describe('VoiceModelSelector', () => {
     );
 
     fireEvent.change(selector, { target: { value: 'openai-api:gpt-5' } });
-    expect(setChatModelSelection).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: 'single',
-        providerId: 'openai',
-        modelId: 'gpt-5',
-        connectionId: 'openai-api',
-      }),
-    );
+    expect(
+      (
+        screen.getByRole('option', {
+          name: /^GPT-5 — unavailable for Jarvis voice$/,
+        }) as HTMLOptionElement
+      ).disabled,
+    ).toBe(true);
+    expect(setChatModelSelection).not.toHaveBeenCalled();
   });
 
   it('expands grouped exact routes and persists the selected alternate identity untouched', () => {
@@ -139,5 +155,51 @@ describe('VoiceModelSelector', () => {
       authSource: OPENCODE_CLI_CONNECTION.authSource,
       capabilities: OPENCODE_CLI_CONNECTION.capabilities,
     });
+    expect(setVoiceMainAgentProvider).toHaveBeenCalledWith('opencode');
+  });
+
+  it('keeps an unknown connection distinct from the same model on another route', () => {
+    const route: ModelPickerOption = {
+      id: 'codex-cli:gpt-5',
+      provider: 'openai',
+      modelId: 'gpt-5',
+      label: 'Codex GPT-5',
+      available: true,
+      connection: CODEX_CLI_CONNECTION,
+      connectionId: CODEX_CLI_CONNECTION.id,
+    };
+    catalogOverride = {
+      groups: [{ id: 'native', provider: 'openai', label: 'Codex', options: [route] }],
+      flatOptions: [route],
+      hasAny: true,
+    };
+    storedSelection = {
+      ...selectionFromOption('openai', 'gpt-5', CODEX_CLI_CONNECTION),
+      connectionId: 'missing-connection',
+    } as ChatModelSelection;
+    render(<VoiceModelSelector />);
+    expect((screen.getByLabelText('Jarvis voice model') as HTMLSelectElement).value).toBe('');
+  });
+
+  it('disables a cloud-only route instead of persisting a choice the voice Main harness cannot send', () => {
+    const cloud: ModelPickerOption = {
+      id: 'cloud-only',
+      provider: 'groq',
+      modelId: 'cloud-model',
+      label: 'Cloud-only model',
+      available: true,
+    };
+    catalogOverride = {
+      groups: [{ id: 'cloud', provider: 'groq', label: 'Cloud', options: [cloud] }],
+      flatOptions: [cloud],
+      hasAny: true,
+    };
+    render(<VoiceModelSelector />);
+    expect(
+      (screen.getByRole('option', { name: /Cloud-only model/ }) as HTMLOptionElement).disabled,
+    ).toBe(true);
+    fireEvent.change(screen.getByLabelText('Jarvis voice model'), { target: { value: cloud.id } });
+    expect(setChatModelSelection).not.toHaveBeenCalled();
+    expect(setVoiceMainAgentProvider).not.toHaveBeenCalled();
   });
 });
