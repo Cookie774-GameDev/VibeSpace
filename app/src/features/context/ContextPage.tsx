@@ -1,3 +1,4 @@
+import { contextEvidenceNavigation, type ContextEvidenceNavigationTicket } from './contextEvidenceNavigation';
 import * as React from 'react';
 import {
   ArrowLeft,
@@ -1737,6 +1738,7 @@ export function ContextPage() {
       const detail = (event as CustomEvent<{ projectId?: string | null; path?: string }>).detail;
       if (!detail?.path) return;
       if ((detail.projectId ?? null) !== (projectId ?? null)) return;
+      contextEvidenceNavigation.cancel();
       void selectFilePath(detail.path).then((selected) => {
         if (selected) lastAppliedFileRef.current = detail.path!;
       });
@@ -1745,6 +1747,37 @@ export function ContextPage() {
     return () =>
       window.removeEventListener('jarvis:context:select-file', onSelectFile as EventListener);
   }, [projectId, selectFilePath]);
+
+  React.useEffect(() => {
+    let active = true;
+    let handling: ContextEvidenceNavigationTicket | undefined;
+    const applyPending = () => {
+      if (!active || handling) return;
+      const ticket = contextEvidenceNavigation.take(projectId);
+      if (!ticket) return;
+      handling = ticket;
+      ++focusedMapOpenGenerationRef.current;
+      void selectPersistedContextMap(projectId,ticket.target.mapId,ticket.guard)
+        .then(state => {
+          if (!active) {ticket.fail();return;}
+          ticket.assertCurrent();
+          const targetMap = state.maps.find(map=>map.id===ticket.target.mapId && map.status==='active');
+          const targetNode = targetMap ? findContextNode(targetMap.tree,ticket.target.entityId) : null;
+          if (!targetNode || targetNode.kind !== 'file' || !applyPersistenceState(state)) {ticket.fail();return;}
+          ticket.assertCurrent();
+          setWorkspaceSection('maps');
+          setCenterMode('graph');
+          setSelectedId(targetNode.id);
+          setStatus(`Opened ${targetNode.title} from chat Context.`);
+          ticket.complete();
+        })
+        .catch(() => ticket.fail())
+        .finally(() => {handling=undefined;if(active) applyPending();});
+    };
+    const stop = contextEvidenceNavigation.subscribe(applyPending);
+    applyPending();
+    return () => {active=false;stop();handling?.fail();};
+  },[applyPersistenceState,projectId]);
 
   React.useEffect(() => {
     const onOpenCitation = (event: Event) => {
@@ -1757,6 +1790,7 @@ export function ContextPage() {
         }>
       ).detail;
       if (!detail || detail.projectId !== (projectId ?? null)) return;
+      contextEvidenceNavigation.cancel();
       const targetMap = maps.find((map) => map.id === detail.mapId && map.status === 'active');
       if (!targetMap) {
         toast.info('Context source is unavailable', 'Refresh the Context map and try again.');
@@ -1829,8 +1863,14 @@ export function ContextPage() {
     });
   }, [tree]);
 
+  const selectNode = React.useCallback((nodeId: string) => {
+    contextEvidenceNavigation.cancel();
+    setSelectedId(nodeId);
+  }, []);
+
   const selectMap = React.useCallback(
     async (mapId: string) => {
+      contextEvidenceNavigation.cancel();
       try {
         const state = await selectPersistedContextMap(projectId, mapId);
         if (!applyPersistenceState(state)) return false;
@@ -2485,6 +2525,7 @@ export function ContextPage() {
   }, [makeSkillTree]);
 
   const selectWorkspaceSection = React.useCallback((next: ContextWorkspaceSectionId) => {
+    contextEvidenceNavigation.cancel();
     setWorkspaceSection(next);
     if (next === 'maps' || next === 'workspaces') setCenterMode('graph');
     if (next === 'sources' || next === 'views' || next === 'templates') {
@@ -2614,7 +2655,7 @@ export function ContextPage() {
           rootNode={rootNode}
           selected={selected}
           selectedId={selected.id}
-          onSelect={setSelectedId}
+          onSelect={selectNode}
           flash={mapFlash}
           mode="graph"
           onModeChange={setCenterMode}
@@ -3181,7 +3222,7 @@ export function ContextPage() {
             <SelectedContextCard
               tree={tree}
               node={selected}
-              onSelectRoot={() => setSelectedId(PROJECT_ROOT_NODE_ID)}
+              onSelectRoot={() => selectNode(PROJECT_ROOT_NODE_ID)}
             />
           ) : null}
         </div>
@@ -3196,7 +3237,7 @@ export function ContextPage() {
                 node={rootNode ?? makeProjectRootNode(tree)}
                 depth={0}
                 selectedId={selected?.id ?? null}
-                onSelect={setSelectedId}
+                onSelect={selectNode}
               />
             </div>
           )}
@@ -3222,7 +3263,7 @@ export function ContextPage() {
             rootNode={rootNode}
             selected={selected}
             selectedId={selected.id}
-            onSelect={setSelectedId}
+            onSelect={selectNode}
             flash={mapFlash}
             mode={centerMode}
             onModeChange={setCenterMode}

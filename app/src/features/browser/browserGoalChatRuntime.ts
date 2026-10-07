@@ -23,6 +23,14 @@ import {
 
 const SAFE_FAILURE = 'Browser goal recovery authority is unavailable.';
 
+export class BrowserGoalControlRevokedError extends Error {
+  constructor() {
+    super('Browser goal control binding is no longer current.');
+    this.name = 'BrowserGoalControlRevokedError';
+  }
+}
+
+
 export type BrowserGoalChatControls = Readonly<{
   pause(record: GoalCheckpointStoredRecordV1): Promise<GoalCheckpointStoredRecordV1>;
   cancel(record: GoalCheckpointStoredRecordV1): Promise<GoalCheckpointStoredRecordV1>;
@@ -229,6 +237,13 @@ export function createBrowserGoalChatRuntime(input: {
     operation: 'pause' | 'cancel' | 'resume',
   ): Promise<BrowserGoalChatSnapshot> => {
     const current = required(chatId);
+    const revokedSnapshot = (): BrowserGoalChatSnapshot | undefined => {
+      if (managed.get(chatId) === current) return undefined;
+      const replacement = store.getSnapshot(chatId);
+      if (!replacement) throw new BrowserGoalControlRevokedError();
+      // Return observed current state; an old operation cannot publish for its successor.
+      return replacement;
+    };
     if (current.busy) throw new Error('Browser goal control is already pending.');
     if (
       (operation === 'pause' && !['active', 'awaiting_approval'].includes(current.state)) ||
@@ -246,6 +261,8 @@ export function createBrowserGoalChatRuntime(input: {
           current.binding.currentAuthority(),
         );
         if (!validation.ok) {
+          const replacement = revokedSnapshot();
+          if (replacement) return replacement;
           return publish(current, {
             state: 'recovery_unavailable',
             failureReason: SAFE_FAILURE,
@@ -254,15 +271,21 @@ export function createBrowserGoalChatRuntime(input: {
       }
       if (operation === 'cancel') {
         const record = await current.binding.controls.cancel(current.record);
+        const replacement = revokedSnapshot();
+        if (replacement) return replacement;
         replaceRecord(current, record);
         current.failureReason = undefined;
         return publish(current, { state: 'cancelled' });
       }
       const record = await current.binding.controls[operation](current.record);
+      const replacement = revokedSnapshot();
+      if (replacement) return replacement;
       replaceRecord(current, record);
       current.failureReason = undefined;
       return publish(current, { state: operation === 'pause' ? 'paused' : 'active' });
     } catch {
+      const replacement = revokedSnapshot();
+      if (replacement) return replacement;
       return publish(current, {
         state: operation === 'resume' ? 'recovery_unavailable' : 'failed',
         failureReason:

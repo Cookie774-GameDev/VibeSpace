@@ -34,6 +34,16 @@ const sessionTurnAbortHandlers = new Map<
   Readonly<{ signal: AbortSignal; listener: () => void }>
 >();
 const capturedAuthorityClaims = new WeakSet<object>();
+const sessionChildLeases = new Map<string, Set<() => void>>();
+const MAX_SESSION_CHILD_LEASES = 64;
+
+function revokeSessionChildLeases(sessionId: string): void {
+  for (const revoke of [...(sessionChildLeases.get(sessionId) ?? [])]) revoke();
+}
+function revokeAllSessionChildLeases(): void {
+  for (const sessionId of [...sessionChildLeases.keys()]) revokeSessionChildLeases(sessionId);
+}
+
 export type ToolGatewayObservedExecutionAuthority = Readonly<{
   executionIdentity: Readonly<ExecutionIdentity>;
   performance: PerformanceProfile;
@@ -127,6 +137,10 @@ function ensureScopeObserver(): void {
   observedScope = activeScope();
   useAuthStore.subscribe(() => {
     const next = activeScope();
+    // Child persistence leases are narrower than ordinary request admission:
+    // project navigation revokes them without changing captured turn grants.
+    if ((observedScope === null) !== (next === null) ||
+      (observedScope && next && !sameScope(observedScope, next))) revokeAllSessionChildLeases();
     if (
       (observedScope === null) !== (next === null) ||
       (observedScope !== null &&
@@ -206,6 +220,7 @@ function clearTurnIdentity(sessionId: string): void {
   if (handler) handler.signal.removeEventListener('abort', handler.listener);
   sessionTurnAbortHandlers.delete(sessionId);
   sessionTurnIdentities.delete(sessionId);
+  revokeSessionChildLeases(sessionId);
 }
 
 function clearAllTurnIdentities(): void {
@@ -433,6 +448,58 @@ export function readToolGatewaySessionAuthority(
   return current && bound && sameStableAuthority(current, bound) ? bound : null;
 }
 
+/** Read-only lifetime signal for an already-bound exact protected turn. */
+export function captureToolGatewaySessionLease(
+  sessionId: string,
+  expected: ToolGatewayAuthorityClaim,
+  turn: ToolGatewayTurnIdentity,
+): Readonly<{ signal: AbortSignal; dispose(): void }> | undefined {
+  const current = currentAuthority();
+  const bound = sessionAuthorities.get(sessionId);
+  const storedTurn = sessionTurnIdentities.get(sessionId);
+  const normalized = immutableTurnIdentity(turn);
+  const ownerSignal = sessionSignals.get(sessionId);
+  if (
+    !current ||
+    !bound ||
+    bound !== expected ||
+    !capturedAuthorityClaims.has(expected) ||
+    !sameAuthority(current, bound) ||
+    !normalized?.protectedAttempt ||
+    !storedTurn ||
+    !sameTurnIdentity(
+      { ...storedTurn, nativeToolMessageIds: undefined },
+      normalized,
+    ) ||
+    ownerSignal?.aborted
+  )
+    return undefined;
+  const subscriptions =
+    sessionChildLeases.get(sessionId) ?? new Set<() => void>();
+  if (subscriptions.size >= MAX_SESSION_CHILD_LEASES) return undefined;
+  const controller = new AbortController();
+  const revoke = () => {
+    ownerSignal?.removeEventListener('abort', revoke);
+    subscriptions.delete(revoke);
+    if (
+      subscriptions.size === 0 &&
+      sessionChildLeases.get(sessionId) === subscriptions
+    )
+      sessionChildLeases.delete(sessionId);
+    controller.abort();
+  };
+  subscriptions.add(revoke);
+  sessionChildLeases.set(sessionId, subscriptions);
+  ownerSignal?.addEventListener('abort', revoke, { once: true });
+  if (
+    ownerSignal?.aborted ||
+    sessionAuthorities.get(sessionId) !== bound ||
+    sessionTurnIdentities.get(sessionId) !== storedTurn
+  )
+    revoke();
+  return Object.freeze({ signal: controller.signal, dispose: revoke });
+}
+
 export function releaseToolGatewaySessionAuthority(sessionId: string): void {
   clearTurnIdentity(sessionId);
   sessionAuthorities.delete(sessionId);
@@ -591,6 +658,7 @@ export function authorizeToolGatewayMutation(request: ToolGatewayRequest): boole
 export function clearToolGatewayAuthorityForTests(): void {
   ensureScopeObserver();
   clearAllTurnIdentities();
+  revokeAllSessionChildLeases();
   sessionAuthorities.clear();
   sessionSignals.clear();
   observedExecutionAuthorities.clear();

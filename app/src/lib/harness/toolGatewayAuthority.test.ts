@@ -3,6 +3,7 @@ import { useAuthStore } from '@/stores/auth';
 import type { ProjectId, WorkspaceId } from '@/types/common';
 import { parseToolGatewayRequest } from './toolGatewayProtocol';
 import {
+  captureToolGatewaySessionLease,
   authorizeToolGatewayRequest,
   bindToolGatewayObservedExecutionAuthority,
   bindToolGatewaySessionAuthority,
@@ -387,5 +388,157 @@ describe('tool gateway session authority', () => {
     ).toBe(true);
     releaseToolGatewaySessionAuthority('second-session');
     expect(readToolGatewayObservedExecutionAuthority('second-session')).toBeNull();
+  });
+});
+
+
+describe('read-only bound session child leases', () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      localUserId: 'account-a',
+      cloudSession: null,
+      workspaceId: 'workspace-a' as WorkspaceId,
+      projectId: 'project-a' as ProjectId,
+    });
+    clearToolGatewayAuthorityForTests();
+  });
+  const turn = {
+    requestId: 'request-a',
+    chatId: 'chat-a',
+    protectedAttempt: {
+      accountId: 'account-a',
+      runId: 'run-a',
+      requestId: 'request-a',
+      attemptNumber: 1,
+    },
+  };
+  function bind(id = 'child-a') {
+    const claim = captureToolGatewayAuthorityClaim()!;
+    const owner = new AbortController();
+    expect(bindToolGatewaySessionAuthority(id, claim, owner.signal, turn)).toBe(
+      true,
+    );
+    return {
+      claim,
+      owner,
+      lease: captureToolGatewaySessionLease(id, claim, turn)!,
+    };
+  }
+  it('requires the already-bound exact claim and protected turn, without granting a new session', () => {
+    const { claim, lease } = bind();
+    expect(lease).toBeDefined();
+    expect(
+      captureToolGatewaySessionLease('unbound', claim, turn),
+    ).toBeUndefined();
+    expect(
+      captureToolGatewaySessionLease('child-a', { ...claim }, turn),
+    ).toBeUndefined();
+    expect(
+      captureToolGatewaySessionLease('child-a', claim, {
+        ...turn,
+        protectedAttempt: { ...turn.protectedAttempt, attemptNumber: 2 },
+      }),
+    ).toBeUndefined();
+    expect(
+      captureToolGatewaySessionLease('child-a', claim, {
+        requestId: turn.requestId,
+        chatId: turn.chatId,
+      }),
+    ).toBeUndefined();
+    lease.dispose();
+  });
+  it('revokes only the released session and never revives an older child after exact-identity rebind', () => {
+    const first = bind(),
+      other = bind('child-b');
+    releaseToolGatewaySessionAuthority('child-a');
+    expect(first.lease.signal.aborted).toBe(true);
+    expect(first.owner.signal.aborted).toBe(false);
+    expect(other.lease.signal.aborted).toBe(false);
+    expect(
+      bindToolGatewaySessionAuthority(
+        'child-a',
+        first.claim,
+        first.owner.signal,
+        turn,
+      ),
+    ).toBe(true);
+    const newer = captureToolGatewaySessionLease('child-a', first.claim, turn)!;
+    expect(newer.signal.aborted).toBe(false);
+    expect(first.lease.signal.aborted).toBe(true);
+    newer.dispose();
+    other.lease.dispose();
+  });
+  it.each(['account', 'workspace', 'project'] as const)(
+    'revokes a child on %s ABA without widening request admission',
+    (field) => {
+      const { lease } = bind();
+      if (field === 'account') {
+        useAuthStore.setState({ localUserId: 'account-b' });
+        useAuthStore.setState({ localUserId: 'account-a' });
+      }
+      if (field === 'workspace') {
+        useAuthStore.setState({ workspaceId: 'workspace-b' as WorkspaceId });
+        useAuthStore.setState({ workspaceId: 'workspace-a' as WorkspaceId });
+      }
+      if (field === 'project') {
+        useAuthStore.setState({ projectId: 'project-b' as ProjectId });
+        useAuthStore.setState({ projectId: 'project-a' as ProjectId });
+      }
+      expect(lease.signal.aborted).toBe(true);
+      if (field === 'project')
+        expect(authorizeToolGatewayRequest(readRequest('child-a'))).toBe(true);
+    },
+  );
+  it('revokes on owner abort and bounds disposable subscriptions', () => {
+    const { claim, owner, lease } = bind();
+    owner.abort();
+    expect(lease.signal.aborted).toBe(true);
+    expect(
+      captureToolGatewaySessionLease('child-a', claim, turn),
+    ).toBeUndefined();
+    const next = bind('child-b');
+    for (let i = 0; i < 160; i++) {
+      const temporary = captureToolGatewaySessionLease(
+        'child-b',
+        next.claim,
+        turn,
+      );
+      expect(temporary).toBeDefined();
+      temporary!.dispose();
+      expect(temporary!.signal.aborted).toBe(true);
+    }
+    expect(next.lease.signal.aborted).toBe(false);
+    next.lease.dispose();
+  });
+  it('refuses reentrant reacquisition during release and reclaims the finite child-lease bound', () => {
+    const { claim, lease } = bind();
+    let reentrant: ReturnType<typeof captureToolGatewaySessionLease>;
+    lease.signal.addEventListener('abort', () => {
+      reentrant = captureToolGatewaySessionLease('child-a', claim, turn);
+    });
+    releaseToolGatewaySessionAuthority('child-a');
+    expect(reentrant).toBeUndefined();
+    const next = bind('bounded');
+    const children = Array.from(
+      { length: 63 },
+      () => captureToolGatewaySessionLease('bounded', next.claim, turn)!,
+    );
+    expect(children.every(Boolean)).toBe(true);
+    expect(
+      captureToolGatewaySessionLease('bounded', next.claim, turn),
+    ).toBeUndefined();
+    children[0]!.dispose();
+    const replacement = captureToolGatewaySessionLease(
+      'bounded',
+      next.claim,
+      turn,
+    );
+    expect(replacement).toBeDefined();
+    releaseToolGatewaySessionAuthority('bounded');
+    expect(
+      [...children, replacement!, next.lease].every(
+        (child) => child.signal.aborted,
+      ),
+    ).toBe(true);
   });
 });

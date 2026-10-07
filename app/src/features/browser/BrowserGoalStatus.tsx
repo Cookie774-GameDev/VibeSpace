@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import {
   browserGoalChatRuntime,
+  BrowserGoalControlRevokedError,
   type BrowserGoalChatRuntime,
 } from './browserGoalChatRuntime';
 import {
@@ -36,11 +37,39 @@ export function BrowserGoalStatus({
   store = browserGoalStore,
   runtime = browserGoalChatRuntime,
 }: BrowserGoalStatusProps) {
-  const snapshot = React.useSyncExternalStore(
-    store.subscribe,
-    () => store.getSnapshot(chatId),
-    () => store.getSnapshot(chatId),
-  );
+  const ownerRef = React.useRef<{
+    store: BrowserGoalStore;
+    chatId: string;
+    identity: string | undefined;
+  }>();
+  const readSnapshot = React.useCallback(() => {
+    const current = store.getSnapshot(chatId);
+    const identity = current
+      ? JSON.stringify([current.accountId, current.projectId, current.runId, current.goalId])
+      : undefined;
+    if (ownerRef.current?.store !== store || ownerRef.current.chatId !== chatId ||
+      ownerRef.current.identity !== identity) {
+      ownerRef.current = { store, chatId, identity };
+    }
+    return current;
+  }, [store, chatId]);
+  const subscribe = React.useCallback((listener: () => void) => store.subscribe(() => {
+    // Observe each ownership transition, including remove/re-add ABA before a render.
+    readSnapshot();
+    listener();
+  }), [store, readSnapshot]);
+  const snapshot = React.useSyncExternalStore(subscribe, readSnapshot, readSnapshot);
+  const owner = ownerRef.current;
+  type PendingControl = { owner: typeof owner };
+  const pendingRef = React.useRef<PendingControl | null>(null);
+  const [pending, setPending] = React.useState<PendingControl | null>(null);
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; pendingRef.current = null; };
+  }, []);
+  const busy = pending?.owner === owner;
+
   const pendingApproval = useBrowserStore((state) =>
     snapshot
       ? state.agentActions.find(
@@ -52,7 +81,6 @@ export function BrowserGoalStatus({
       : undefined,
   );
   const [expanded, setExpanded] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
 
   if (!snapshot) return null;
   const approval =
@@ -66,12 +94,20 @@ export function BrowserGoalStatus({
   const terminal = ['completed', 'cancelled', 'failed'].includes(snapshot.state);
 
   const runControl = async (control: 'pause' | 'cancel' | 'resume') => {
-    if (busy) return;
-    setBusy(true);
+    readSnapshot();
+    if (!mountedRef.current || ownerRef.current !== owner || pendingRef.current?.owner === owner) return;
+    const operation = { owner };
+    pendingRef.current = operation;
+    setPending(operation);
     try {
       await runtime[control](chatId);
+    } catch (error) {
+      if (!(error instanceof BrowserGoalControlRevokedError)) throw error;
     } finally {
-      setBusy(false);
+      if (pendingRef.current === operation) {
+        pendingRef.current = null;
+        if (mountedRef.current) setPending((current) => current === operation ? null : current);
+      }
     }
   };
 

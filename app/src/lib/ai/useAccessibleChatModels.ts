@@ -1411,9 +1411,11 @@ export function useAccessibleChatModels() {
     const expectedAccountGeneration = openCodeAccountGeneration;
     void loadOpenCodeModels()
       .then((models) => {
+        // This load is shared. A retired consumer cannot clear the receipt
+        // published by a surviving consumer of the same verified catalog.
+        if (cancelled) return;
         const currentSessionState = readConnectionSessionPickerStates()[OPENCODE_CLI_CONNECTION.id];
         if (
-          cancelled ||
           expectedGeneration !== openCodeCatalogGeneration ||
           expectedAccountGeneration !== openCodeAccountGeneration ||
           !isConnectionSessionChecked(OPENCODE_CLI_CONNECTION.id) ||

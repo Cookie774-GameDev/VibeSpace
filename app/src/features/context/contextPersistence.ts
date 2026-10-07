@@ -1,4 +1,4 @@
-import { db, openDb, type JarvisDexie } from '@/lib/db';
+import { db, openDb, type JarvisDexie, type SettingsRow } from '@/lib/db';
 import { getActiveAccountIdentity } from '@/lib/accountIdentity';
 import {
   convertContextMapRecordV1ToSnapshotV2,
@@ -30,6 +30,15 @@ export interface ContextPersistenceState {
   recovery: ContextRecoverySummary | null;
 }
 
+export interface ContextSelectionGuard {
+  signal: AbortSignal;
+  assertCurrent(): void;
+  expectedSelection: SettingsRow | undefined;
+  expectedMapUpdatedAt: number;
+  expectedKnowledgeRevision: number;
+  validateOwnership?(database: JarvisDexie): Promise<boolean>;
+}
+
 export interface ContextPersistenceService {
   loadMap(accountId: string, projectId: string | null, mapId: string): Promise<ContextMapRecord | null>;
   initialize(accountId: string, projectId: string | null): Promise<ContextPersistenceState>;
@@ -44,6 +53,7 @@ export interface ContextPersistenceService {
     accountId: string,
     projectId: string | null,
     mapId: string,
+    guard?: ContextSelectionGuard,
   ): Promise<ContextPersistenceState>;
   deleteMap(
     accountId: string,
@@ -300,6 +310,7 @@ export function createContextPersistenceService(
   const load = async (
     accountId: string,
     projectId: string | null,
+    shouldPublish = true,
   ): Promise<ContextPersistenceState> => {
     assertIdentity(accountId, projectId);
     const mapRows = await repository.listMaps(accountId, projectId);
@@ -347,7 +358,7 @@ export function createContextPersistenceService(
       migration,
       recovery,
     });
-    publish(state);
+    if (shouldPublish) publish(state);
     return state;
   };
 
@@ -372,13 +383,13 @@ export function createContextPersistenceService(
 
   // A bound live owner can revoke a pending IDB commit, including after a
   // queued write succeeds. Repository CAS and optional selection share the transaction.
-  const withAbortableWrite = async <T>(signal: AbortSignal | undefined, write: () => Promise<T>): Promise<T> => {
+  const withAbortableWrite = async <T>(signal: AbortSignal | undefined, write: () => Promise<T>, additionalTables: readonly ('messages' | 'chats' | 'projects')[] = []): Promise<T> => {
     if (!signal) return write();
     signal.throwIfAborted();
     let detachAbort = () => {};
     try {
       return await database.transaction('rw', [database.context_maps, database.context_sources,
-        database.context_entities, database.context_edges, database.context_provenance, database.settings], async transaction => {
+        database.context_entities, database.context_edges, database.context_provenance, database.settings, ...additionalTables.map(name => database[name])], async transaction => {
         const abort = () => transaction.abort();
         signal.addEventListener('abort', abort, {once:true});
         detachAbort = () => signal.removeEventListener('abort', abort);
@@ -529,7 +540,41 @@ export function createContextPersistenceService(
       return load(accountId, projectId);
     },
 
-    async selectMap(accountId, projectId, mapId) {
+    async selectMap(accountId, projectId, mapId, guard) {
+      if (guard) {
+        const check = () => { guard.signal.throwIfAborted(); guard.assertCurrent(); };
+        const checkOwnership = async () => {
+          check();
+          if (guard.validateOwnership && !await guard.validateOwnership(database)) fail('selection_owner_changed');
+          check();
+        };
+        check();
+        await withAbortableWrite(guard.signal, async () => {
+          check();
+          const selection = await database.settings.get(contextSelectionSettingKey(accountId,projectId));
+          check();
+          if (JSON.stringify(selection) !== JSON.stringify(guard.expectedSelection)) fail('selection_changed');
+          const snapshot = await repository.getSnapshot(accountId,mapId);
+          check();
+          if (!snapshot || snapshot.map.projectId !== projectId || snapshot.map.status !== 'active') fail('map_missing');
+          if (snapshot.map.updatedAt !== guard.expectedMapUpdatedAt || snapshot.map.knowledgeRevision !== guard.expectedKnowledgeRevision) fail('map_changed');
+          await checkOwnership();
+          await writeSelection(accountId,projectId,mapId);
+          await checkOwnership();
+        }, guard.validateOwnership ? ['messages','chats','projects'] : []);
+        check();
+        const selected = await load(accountId,projectId,false);
+        check();
+        const latestMap = await database.context_maps.get(mapId);
+        check();
+        if (!latestMap || latestMap.accountId !== accountId || latestMap.projectId !== projectId || latestMap.status !== 'active' ||
+          latestMap.updatedAt !== guard.expectedMapUpdatedAt || latestMap.knowledgeRevision !== guard.expectedKnowledgeRevision) fail('map_changed');
+        if (selected.selectedMapId !== mapId) fail('selection_changed');
+        await checkOwnership();
+        publish(selected);
+        check();
+        return selected;
+      }
       const state = await load(accountId, projectId);
       if (!state.maps.some((map) => map.id === mapId && map.status === 'active')) {
         fail('map_missing');
@@ -849,10 +894,14 @@ export async function savePersistedContextTree(
 export async function selectPersistedContextMap(
   projectId: string | null,
   mapId: string,
+  guard?: ContextSelectionGuard,
 ): Promise<ContextPersistenceState> {
+  guard?.signal.throwIfAborted(); guard?.assertCurrent();
   const initialized = await ensureContextPersistence(projectId);
+  guard?.signal.throwIfAborted(); guard?.assertCurrent();
   assertActiveIdentity(initialized.accountId);
-  const selected = await getProductionService().selectMap(initialized.accountId, projectId, mapId);
+  const selected = await getProductionService().selectMap(initialized.accountId, projectId, mapId, guard);
+  guard?.signal.throwIfAborted(); guard?.assertCurrent();
   assertActiveIdentity(initialized.accountId);
   return selected;
 }

@@ -1,3 +1,4 @@
+import { contextEvidenceNavigation, ContextEvidenceNavigationError, isContextEvidenceUri } from '@/features/context/contextEvidenceNavigation';
 import { Bot, FileText, Image as ImageIcon, Layers, Zap } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -707,7 +708,22 @@ export function MessagePart({
       );
       return (
         <div className="inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-elevated px-2 py-1 text-secondary text-foreground">
-          {uri ? (
+          {uri && isContextEvidenceUri(uri) ? (
+            <button
+              type="button"
+              className="inline-flex min-w-0 items-center gap-1.5 underline-offset-2 hover:underline"
+              aria-label={source.label}
+              onClick={() => {
+                void contextEvidenceNavigation.open({uri,chatId:chatId ?? '',messageId:messageId ? String(messageId) : ''})
+                  .catch(error => {
+                    if (error instanceof ContextEvidenceNavigationError && error.code === 'revoked') return;
+                    toast.info('Context source is unavailable', 'This source reference is no longer available in the current project.');
+                  });
+              }}
+            >
+              {label}
+            </button>
+          ) : uri ? (
             <a
               href={uri}
               target="_blank"

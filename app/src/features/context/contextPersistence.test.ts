@@ -536,3 +536,165 @@ it('keeps successful nonlocal imports on their existing ready behavior',async()=
  const next=await service.saveTree('account-1',treeFixture(),{mapId:'repository',source,expectedUpdatedAt:first.maps[0]!.updatedAt});
  expect(next.maps[0]!.sourceStatus).toBe('ready');
 });
+
+describe('guarded evidence-link selection intent', () => {
+  it('refuses a revoked navigation selection before mutation', async () => {
+    const service = createContextPersistenceService(database, localStorage);
+    await service.initialize('account-1', 'project-1');
+    const first = await service.saveTree('account-1', treeFixture(), {
+      mapId: 'map-A',
+    });
+    await service.saveTree('account-1', treeFixture('C:/Second'), {
+      mapId: 'map-B',
+    });
+    const expectedKnowledgeRevision = (await database.context_maps.get(
+      'map-A',
+    ))!.knowledgeRevision;
+    const expectedSelection = await database.settings.get(
+      contextSelectionSettingKey('account-1', 'project-1'),
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      service.selectMap('account-1', 'project-1', 'map-A', {
+        signal: controller.signal,
+        assertCurrent() {
+          controller.signal.throwIfAborted();
+        },
+        expectedSelection,
+        expectedKnowledgeRevision,
+        expectedMapUpdatedAt: first.maps[0]!.updatedAt,
+      }),
+    ).rejects.toThrow();
+    expect((await service.load('account-1', 'project-1')).selectedMapId).toBe(
+      'map-B',
+    );
+  });
+
+  it('does not overwrite a newer selection after a held old-map load', async () => {
+    const service = createContextPersistenceService(database, localStorage);
+    await service.initialize('account-1', 'project-1');
+    const first = await service.saveTree('account-1', treeFixture(), {
+      mapId: 'map-A',
+    });
+    await service.saveTree('account-1', treeFixture('C:/Second'), {
+      mapId: 'map-B',
+    });
+    const expectedKnowledgeRevision = (await database.context_maps.get(
+      'map-A',
+    ))!.knowledgeRevision;
+    const key = contextSelectionSettingKey('account-1', 'project-1');
+    const expectedSelection = await database.settings.get(key);
+    let release!: () => void, entered!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const get = database.settings.get.bind(database.settings);
+    let firstGet = true;
+    const spy = vi
+      .spyOn(database.settings, 'get')
+      .mockImplementation((lookup: string | Parameters<JarvisDexie['settings']['get']>[0]) =>
+        (typeof lookup === 'string' ? get(lookup) : get(lookup)).then(async (value) => {
+          if (typeof lookup === 'string' && lookup === key && firstGet) {
+            firstGet = false;
+            entered();
+            await held;
+          }
+          return value;
+        }),
+      );
+    const controller = new AbortController();
+    const pending = service
+      .selectMap('account-1', 'project-1', 'map-A', {
+        signal: controller.signal,
+        assertCurrent() {
+          controller.signal.throwIfAborted();
+        },
+        expectedSelection,
+        expectedKnowledgeRevision,
+        expectedMapUpdatedAt: first.maps[0]!.updatedAt,
+      })
+      .then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
+    try {
+      await reached;
+      controller.abort();
+      await service.selectMap('account-1', 'project-1', 'map-B');
+      release();
+      expect((await pending).ok).toBe(false);
+      expect((await service.load('account-1', 'project-1')).selectedMapId).toBe(
+        'map-B',
+      );
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+});
+
+async function guardedSelectionFixture() {
+  const service = createContextPersistenceService(database, localStorage);
+  await service.initialize('account-1', 'project-1');
+  await service.saveTree('account-1', treeFixture(), { mapId: 'guard-map-A' });
+  await service.saveTree('account-1', treeFixture('C:/Second'), {
+    mapId: 'guard-map-B',
+  });
+  const row = await database.context_maps.get('guard-map-A');
+  const controller = new AbortController();
+  const guard = {
+    signal: controller.signal,
+    assertCurrent() {
+      controller.signal.throwIfAborted();
+    },
+    expectedSelection: await database.settings.get(
+      contextSelectionSettingKey('account-1', 'project-1'),
+    ),
+    expectedMapUpdatedAt: row!.updatedAt,
+    expectedKnowledgeRevision: row!.knowledgeRevision,
+  };
+  return { service, controller, guard };
+}
+it('compares the actual selection row before a guarded citation write', async () => {
+  const { service, guard } = await guardedSelectionFixture();
+  await service.selectMap('account-1', 'project-1', 'guard-map-A');
+  await expect(
+    service.selectMap('account-1', 'project-1', 'guard-map-A', guard),
+  ).rejects.toThrow('selection_changed');
+});
+it('rejects a newer map revision even when its timestamp is unchanged', async () => {
+  const { service, guard } = await guardedSelectionFixture();
+  await database.context_maps.update('guard-map-A', {
+    knowledgeRevision: guard.expectedKnowledgeRevision + 1,
+  });
+  await expect(
+    service.selectMap('account-1', 'project-1', 'guard-map-A', guard),
+  ).rejects.toThrow('map_changed');
+  expect((await service.load('account-1', 'project-1')).selectedMapId).toBe(
+    'guard-map-B',
+  );
+});
+it('aborts a successful selection put before commit and preserves the previous map', async () => {
+  const { service, guard, controller } = await guardedSelectionFixture();
+  const put = database.settings.put.bind(database.settings);
+  const spy = vi.spyOn(database.settings, 'put').mockImplementation((...args) =>
+    put(...args).then((result) => {
+      controller.abort();
+      return result;
+    }),
+  );
+  try {
+    await expect(
+      service.selectMap('account-1', 'project-1', 'guard-map-A', guard),
+    ).rejects.toThrow();
+    expect((await service.load('account-1', 'project-1')).selectedMapId).toBe(
+      'guard-map-B',
+    );
+  } finally {
+    spy.mockRestore();
+  }
+});
