@@ -13,6 +13,7 @@ use tauri::{Emitter, Manager};
 #[path = "foundry_worker_supervisor.rs"]
 mod worker_supervisor;
 pub(crate) use worker_supervisor::verify_training_artifact;
+pub(crate) use worker_supervisor::{export_knowledge_json, export_training_artifact, checked_export_source};
 #[cfg(test)]
 pub(crate) use worker_supervisor::write_and_verify_training_artifact;
 #[cfg(not(test))]

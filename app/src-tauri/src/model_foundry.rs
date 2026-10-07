@@ -728,7 +728,11 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 fn validate_artifact(path: &Path) -> Result<KnowledgeArtifact, String> {
     let bytes = fs::read(path).map_err(|error| format!("Could not read artifact: {error}"))?;
-    let artifact: KnowledgeArtifact = serde_json::from_slice(&bytes)
+    validate_artifact_bytes(&bytes)
+}
+
+fn validate_artifact_bytes(bytes: &[u8]) -> Result<KnowledgeArtifact, String> {
+    let artifact: KnowledgeArtifact = serde_json::from_slice(bytes)
         .map_err(|error| format!("Artifact is not valid JSON: {error}"))?;
     if artifact.schema_version != 1
         || artifact.processing != "local-rag-knowledge"
@@ -2584,41 +2588,347 @@ pub fn model_foundry_duplicate_artifact(
 }
 
 #[tauri::command]
-pub fn model_foundry_export_artifact(
+pub async fn model_foundry_export_artifact(
     app: tauri::AppHandle,
     job_id: String,
     destination: String,
 ) -> Result<(), String> {
-    let job_id = validated_job_id(job_id.trim())?;
-    let job_dir = foundry_root(&app)?.join("jobs").join(job_id);
-    let artifact_path = job_dir.join("knowledge-artifact.json");
-    validate_artifact(&artifact_path)?;
-    let requested = PathBuf::from(destination);
-    if !requested
-        .extension()
-        .and_then(|value| value.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
-    {
-        return Err("Model Foundry exports must use a .json file.".into());
+    let job_id = validated_job_id(job_id.trim())?.to_owned();
+    let root = foundry_root(&app)?;
+    let job_dir = root.join("jobs").join(&job_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        export_artifact_from_job_dir(&job_dir, &job_id, &destination, &root)
+    })
+    .await
+    .map_err(|error| format!("Artifact export task could not finish: {error}"))?
+}
+
+fn export_artifact_from_job_dir(
+    job_dir: &Path,
+    job_id: &str,
+    destination: &str,
+    protected_root: &Path,
+) -> Result<(), String> {
+    use crate::model_foundry_training::{
+        checked_export_source, export_knowledge_json, export_training_artifact,
+    };
+    validated_job_id(job_id)?;
+    let expected_dir =
+        checked_export_source(&protected_root.join("jobs").join(job_id), protected_root)?;
+    if checked_export_source(job_dir, protected_root)? != expected_dir {
+        return Err("Model Foundry export job escaped its private directory.".into());
     }
-    let parent = requested
-        .parent()
-        .ok_or_else(|| "Export destination has no parent directory.".to_string())?
-        .canonicalize()
-        .map_err(|_| "Export destination directory is unavailable.".to_string())?;
-    let file_name = requested
-        .file_name()
-        .ok_or_else(|| "Export destination has no file name.".to_string())?;
-    let safe_destination = parent.join(file_name);
-    let bytes =
-        fs::read(&artifact_path).map_err(|error| format!("Could not read artifact: {error}"))?;
-    fs::write(&safe_destination, bytes)
-        .map_err(|error| format!("Could not export Model Foundry artifact: {error}"))
+    let job_path = checked_export_source(&expected_dir.join("job.json"), protected_root)?;
+    let metadata = fs::metadata(&job_path).map_err(|_| "Export job metadata is unavailable.")?;
+    if !metadata.is_file() || metadata.len() > 1024 * 1024 {
+        return Err("Export job metadata is not a bounded regular file.".into());
+    }
+    let job_bytes =
+        fs::read(&job_path).map_err(|error| format!("Could not read export job: {error}"))?;
+    let job: FoundryJob = serde_json::from_slice(&job_bytes)
+        .map_err(|error| format!("Export job metadata is invalid: {error}"))?;
+    if job.id != job_id || job.status != "completed" || !job.artifact_verified {
+        return Err("Only completed, verified Model Foundry artifacts can be exported.".into());
+    }
+    let method = parsed_method(&job.method)?;
+    let artifact_name = match method {
+        FoundryMethod::Knowledge => "knowledge-artifact.json",
+        FoundryMethod::Weight => "weight-artifact",
+    };
+    let artifact_path = checked_export_source(&expected_dir.join(artifact_name), protected_root)?;
+    let recorded_path = job
+        .artifact_path
+        .as_deref()
+        .ok_or("Export artifact path is missing.")?;
+    if checked_export_source(Path::new(recorded_path), protected_root)? != artifact_path {
+        return Err("Export artifact does not match its recorded job path.".into());
+    }
+    let expected_hash = job
+        .artifact_sha256
+        .as_deref()
+        .filter(|value| is_sha256(value))
+        .ok_or("Export artifact has no recorded integrity hash.")?;
+    let still_current = || {
+        checked_export_source(&job_path, protected_root)?;
+        if fs::read(&job_path)
+            .map_err(|error| format!("Could not revalidate export job: {error}"))?
+            != job_bytes
+        {
+            return Err(
+                "Model Foundry job changed during export; retry the current artifact.".into(),
+            );
+        }
+        Ok(())
+    };
+    match method {
+        FoundryMethod::Knowledge => {
+            let bytes = fs::read(&artifact_path)
+                .map_err(|error| format!("Could not read artifact: {error}"))?;
+            let artifact = validate_artifact_bytes(&bytes)?;
+            if artifact.base_model_id != job.base_model_id
+                || artifact.model_name != job.name
+                || artifact.version != job.version
+                || bytes.len() as u64 != job.storage_bytes
+                || format!("{:x}", Sha256::digest(&bytes)) != expected_hash
+            {
+                return Err("Knowledge export no longer matches its verified job.".into());
+            }
+            export_knowledge_json(
+                &bytes,
+                Path::new(destination),
+                protected_root,
+                still_current,
+            )
+        }
+        FoundryMethod::Weight => export_training_artifact(
+            &artifact_path,
+            &job.method,
+            expected_hash,
+            job.storage_bytes,
+            Path::new(destination),
+            protected_root,
+            still_current,
+        ),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn artifact_export_fixture(method: &str) -> (PathBuf, PathBuf, FoundryJob) {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let suffix = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "vibespace-export-test-{}-{}-{suffix}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let job_dir = root.join("private/jobs/job_export");
+        fs::create_dir_all(&job_dir).unwrap();
+        let (artifact_path, artifact_sha256, storage_bytes) = if method == "knowledge" {
+            let artifact = KnowledgeArtifact {
+                schema_version: 1,
+                version: 1,
+                model_name: "Synthetic export".into(),
+                description: "Synthetic test only".into(),
+                purpose: "Test".into(),
+                default_behavior: None,
+                base_model_id: ALLOWED_MODELS[0].into(),
+                processing: "local-rag-knowledge".into(),
+                source_count: 1,
+                sources: vec![],
+                chunks: vec![KnowledgeChunk {
+                    id: "chunk-1".into(),
+                    source_name: "fixture.txt".into(),
+                    source_anchor: None,
+                    text: "Synthetic text".into(),
+                    sha256: format!("{:x}", Sha256::digest(b"Synthetic text")),
+                }],
+            };
+            let bytes = serde_json::to_vec(&artifact).unwrap();
+            let path = job_dir.join("knowledge-artifact.json");
+            fs::write(&path, &bytes).unwrap();
+            (
+                path,
+                format!("{:x}", Sha256::digest(&bytes)),
+                bytes.len() as u64,
+            )
+        } else {
+            let path = job_dir.join("weight-artifact");
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("model.safetensors"), b"synthetic weights only").unwrap();
+            fs::write(path.join("config.json"), b"{}").unwrap();
+            let evidence =
+                crate::model_foundry_training::write_and_verify_training_artifact(&path, method)
+                    .unwrap();
+            (path, evidence.sha256, evidence.storage_bytes)
+        };
+        let job = FoundryJob {
+            id: "job_export".into(),
+            project_id: Some("synthetic-project".into()),
+            name: "Synthetic export".into(),
+            base_model_id: ALLOWED_MODELS[0].into(),
+            method: method.into(),
+            status: "completed".into(),
+            progress: 100,
+            artifact_path: Some(artifact_path.to_string_lossy().into_owned()),
+            artifact_verified: true,
+            artifact_sha256: Some(artifact_sha256),
+            storage_bytes,
+            source_count: 1,
+            version: 1,
+            resume_available: false,
+            error: None,
+            created_at: "2026-10-07".into(),
+            updated_at: "2026-10-07".into(),
+        };
+        fs::write(job_dir.join("job.json"), serde_json::to_vec(&job).unwrap()).unwrap();
+        (root, job_dir, job)
+    }
+
+    #[test]
+    fn artifact_export_knowledge_preserves_exact_json() {
+        let (root, job_dir, job) = artifact_export_fixture("knowledge");
+        let destination = root.join("knowledge.json");
+        let before = fs::read(job_dir.join("knowledge-artifact.json")).unwrap();
+        export_artifact_from_job_dir(
+            &job_dir,
+            &job.id,
+            destination.to_str().unwrap(),
+            &root.join("private"),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn artifact_export_weight_does_not_require_a_knowledge_artifact() {
+        let (root, job_dir, job) = artifact_export_fixture("full");
+        let destination = root.join("weight.zip");
+        assert!(!job_dir.join("knowledge-artifact.json").exists());
+        let result = export_artifact_from_job_dir(
+            &job_dir,
+            &job.id,
+            destination.to_str().unwrap(),
+            &root.join("private"),
+        );
+        // Always release the synthetic fixture even when the baseline expectation fails.
+        let exists = destination.is_file();
+        fs::remove_dir_all(root).unwrap();
+        assert!(result.is_ok(), "Verified weight export failed: {result:?}");
+        assert!(exists);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn artifact_export_weight_archives_are_exact_and_deterministic() {
+        use std::io::Read;
+        for method in ["full", "lora", "qlora"] {
+            let (root, job_dir, job) = artifact_export_fixture(method);
+            let destination = root.join("first.zip");
+            let second = root.join("second.zip");
+            for path in [&destination, &second] {
+                export_artifact_from_job_dir(
+                    &job_dir,
+                    &job.id,
+                    path.to_str().unwrap(),
+                    &root.join("private"),
+                )
+                .unwrap();
+            }
+            assert_eq!(fs::read(&destination).unwrap(), fs::read(second).unwrap());
+            let mut archive = zip::ZipArchive::new(fs::File::open(destination).unwrap()).unwrap();
+            assert_eq!(archive.len(), 3);
+            for (index, name) in [
+                ".vibespace-artifact.json",
+                "config.json",
+                "model.safetensors",
+            ]
+            .iter()
+            .enumerate()
+            {
+                let mut member = archive.by_index(index).unwrap();
+                assert_eq!(member.name(), *name);
+                let mut bytes = Vec::new();
+                member.read_to_end(&mut bytes).unwrap();
+                assert_eq!(
+                    bytes,
+                    fs::read(job_dir.join("weight-artifact").join(name)).unwrap()
+                );
+            }
+            assert!(!root.read_dir().unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".vibespace-export-")));
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn artifact_export_rejects_stale_foreign_or_unverified_job_records() {
+        for case in [
+            "foreign-id",
+            "running",
+            "unverified",
+            "foreign-path",
+            "hash",
+            "size",
+            "method",
+            "missing",
+        ] {
+            let (root, job_dir, mut job) = artifact_export_fixture("full");
+            match case {
+                "foreign-id" => job.id = "job_foreign".into(),
+                "running" => job.status = "running".into(),
+                "unverified" => job.artifact_verified = false,
+                "foreign-path" => job.artifact_path = Some(root.to_string_lossy().into_owned()),
+                "hash" => job.artifact_sha256 = Some("0".repeat(64)),
+                "size" => job.storage_bytes += 1,
+                "method" => job.method = "lora".into(),
+                "missing" => {
+                    fs::remove_file(job_dir.join("weight-artifact/model.safetensors")).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            fs::write(job_dir.join("job.json"), serde_json::to_vec(&job).unwrap()).unwrap();
+            let destination = root.join("rejected.zip");
+            assert!(
+                export_artifact_from_job_dir(
+                    &job_dir,
+                    "job_export",
+                    destination.to_str().unwrap(),
+                    &root.join("private")
+                )
+                .is_err(),
+                "{case}"
+            );
+            assert!(!destination.exists(), "{case}");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn artifact_export_rejects_changed_knowledge_bytes_and_wrong_destination() {
+        for case in ["metadata", "tamper", "extension", "existing", "private"] {
+            let (root, job_dir, mut job) = artifact_export_fixture("knowledge");
+            let mut destination = root.join("rejected.json");
+            match case {
+                "metadata" => job.name = "Other model".into(),
+                "tamper" => {
+                    fs::write(job_dir.join("knowledge-artifact.json"), b"{}").unwrap();
+                }
+                "extension" => destination = root.join("wrong.zip"),
+                "existing" => fs::write(&destination, b"unrelated user file").unwrap(),
+                "private" => destination = root.join("private/export.json"),
+                _ => unreachable!(),
+            }
+            fs::write(job_dir.join("job.json"), serde_json::to_vec(&job).unwrap()).unwrap();
+            assert!(
+                export_artifact_from_job_dir(
+                    &job_dir,
+                    &job.id,
+                    destination.to_str().unwrap(),
+                    &root.join("private")
+                )
+                .is_err(),
+                "{case}"
+            );
+            if case == "existing" {
+                assert_eq!(fs::read(&destination).unwrap(), b"unrelated user file");
+            } else {
+                assert!(!destination.exists(), "{case}");
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     #[test]
     fn hardware_probe_uses_configured_storage_root_for_disk_measurement() {

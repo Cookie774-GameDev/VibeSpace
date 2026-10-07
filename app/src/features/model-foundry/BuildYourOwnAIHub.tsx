@@ -1022,10 +1022,11 @@ export function BuildYourOwnAIHub({
     setError('');
     try {
       const { save } = await import('@tauri-apps/plugin-dialog');
+      const extension = job.method === 'knowledge' ? 'json' : 'zip';
       const destination = await save({
         title: `Export ${job.name}`,
-        defaultPath: `${job.name.replace(/[^a-z0-9_-]+/gi, '-') || 'model-foundry'}.json`,
-        filters: [{ name: 'Model Foundry artifact', extensions: ['json'] }],
+        defaultPath: `${job.name.replace(/[^a-z0-9_-]+/gi, '-') || 'model-foundry'}.${extension}`,
+        filters: [{ name: 'Model Foundry artifact', extensions: [extension] }],
       });
       if (!destination) return;
       const { invoke } = await import('@tauri-apps/api/core');

@@ -147,6 +147,50 @@ the Model Foundry reveal state when the hub is next opened.
 Exports occur only after the user chooses a local destination. Model Foundry
 does not upload source files or artifacts and has no cloud fallback.
 
+Knowledge artifacts export as their existing validated JSON bytes. Completed,
+verified Full, LoRA, and QLoRA weight artifacts export as a ZIP archive on
+Windows and Linux. Other platforms report unsupported weight ZIP publication;
+knowledge JSON remains available. The
+archive contains `.vibespace-artifact.json` first, followed by exactly the
+payload files declared in that manifest, in its verified sorted order and at
+their existing relative paths. File contents are streamed without compression;
+ZIP timestamps and permissions are fixed, and ZIP64 is used for large payloads.
+The same unchanged artifact produces the same archive bytes. No job record,
+source dataset, credential store, or separate base-model directory is added.
+A LoRA or QLoRA export remains dependent on its corresponding base model; the
+archive is not advertised as a standalone merged model.
+
+Export revalidates the completed job, its recorded artifact path/hash/size,
+the manifest and every payload before writing. Payload hashes are also checked
+while streaming. Unsafe relative paths, links/junctions, case-colliding archive
+names, foreign artifact roots and destinations inside private storage are
+rejected. On Windows and Linux, a changed job or copy error prevents final
+publication. The selected
+destination must be a new file: exports never replace an existing file, even
+if it appears during the copy. The file actually written and verified stays open through publication. Windows
+renames that retained handle with replacement disabled; Linux links its open
+descriptor into the retained destination directory with no replacement. A
+scratch filename replacement cannot become the successful exported source.
+Windows error cleanup marks the retained handle for deletion; Unix cleanup
+only removes a scratch name that still identifies the original file. Cleanup
+after external namespace changes or OS denial is best-effort. Filesystems or
+Linux environments without the required descriptor publication support report
+an error rather than falling back to a scratch-path copy. Cancelling the Save dialog starts no export; after dispatch,
+export runs as blocking work off the UI thread, without an in-progress cancel
+control. Native filesystem behavior still requires the affected desktop build.
+
+On other platforms, including macOS, knowledge export preserves its prior
+direct write of already-validated in-memory JSON bytes, strengthened to create
+only a new destination. That path has no scratch source to substitute and
+never replaces an existing file. It is not an atomic export: an I/O failure
+can leave a partial new destination, and its error says so. This limited
+compatibility path is not used for weight ZIPs.
+
+This format provides verified artifact bytes for backup or external use.
+Importing a weight ZIP into a clean VibeSpace profile is a separate workflow
+and is not implemented by this export path. Export success does not establish
+clean-profile restore, model quality, or training completion for another job.
+
 ## Security boundaries
 
 - Artifact identifiers are path-safe and never accepted as arbitrary paths.
