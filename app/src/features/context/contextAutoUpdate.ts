@@ -48,6 +48,8 @@ export const contextAutoUpdateKey = (scope: ContextAutoUpdateScope) =>
     projectId: scope.projectId, mapId: scope.mapId })}`;
 const summaryNone = { mode: 'none' as const, selectedExtensions: [], selectedPaths: [] };
 const updatingScopes = new Set<string>();
+// Read authority stays in memory; it is never persisted as part of the setting.
+const settingObservations = new WeakMap<ContextAutoUpdateSetting, { updatedAt: number; value: string }>();
 export const isContextAutoUpdateRunning = (scope: ContextAutoUpdateScope) =>
   updatingScopes.has(contextAutoUpdateKey(scope));
 
@@ -115,6 +117,7 @@ export async function readContextAutoUpdate(
     value.mapId !== scope.mapId
   )
     return null;
+  settingObservations.set(value, { updatedAt: row!.updated_at, value: JSON.stringify(value) });
   return value;
 }
 function active(scope: ContextAutoUpdateScope) {
@@ -180,7 +183,11 @@ export interface ContextAutoUpdatePorts {
     signal: AbortSignal,
   ): Promise<ProjectContextTree>;
   saveTree(map: ContextMapRecord, tree: ProjectContextTree): Promise<ContextMapRecord>;
-  saveSetting(setting: ContextAutoUpdateSetting): Promise<void>;
+  saveSetting(setting: ContextAutoUpdateSetting, recovery?: {
+    observed: ContextAutoUpdateSetting;
+    map: ContextMapRecord;
+    signal: AbortSignal;
+  }): Promise<void>;
   now(): number;
 }
 
@@ -223,6 +230,11 @@ export function createContextAutoUpdater(ports: ContextAutoUpdatePorts) {
     const delta = contextAutoDelta(baseline, metadata);
     if (!migrateIndexIdentity && !delta.changed.length && !delta.deleted.length) {
       pendingSignature = '';
+      if (setting.status === 'failed' && setting.error === 'context_auto_update_scope_changed') {
+        await ports.saveSetting({ ...setting, status: 'watching', error: undefined }, {
+          observed: setting, map, signal,
+        });
+      }
       return 'idle';
     }
     const signature = JSON.stringify(metadata);
@@ -415,7 +427,54 @@ export async function createProductionContextAutoUpdater(scope: ContextAutoUpdat
       if (!saved) throw new Error('context_auto_update_map_missing');
       return saved;
     },
-    async saveSetting(setting) {
+    async saveSetting(setting, recovery) {
+      if (recovery) {
+        const { observed, map, signal } = recovery;
+        const observation = settingObservations.get(observed);
+        if (!observation || observation.value !== JSON.stringify(observed)) return;
+        let abortTransaction: (() => void) | undefined;
+        const abort = () => abortTransaction?.();
+        signal.addEventListener('abort', abort, { once: true });
+        let recovered = false;
+        try {
+          await db.transaction('rw', db.settings, db.context_maps, async (transaction) => {
+            abortTransaction = () => transaction.abort();
+            signal.throwIfAborted();
+            const row = await db.settings.get(contextAutoUpdateKey(scope));
+            const current = row?.value as ContextAutoUpdateSetting | undefined;
+            const currentMap = await db.context_maps.get(scope.mapId);
+            signal.throwIfAborted();
+            if (
+              !active(scope) ||
+              map.id !== scope.mapId || map.projectId !== scope.projectId ||
+              !current?.enabled ||
+              current.status !== 'failed' ||
+              current.error !== 'context_auto_update_scope_changed' ||
+              row?.updated_at !== observation.updatedAt ||
+              JSON.stringify(current) !== observation.value ||
+              !currentMap || currentMap.accountId !== scope.accountId ||
+              currentMap.projectId !== scope.projectId || currentMap.status !== 'active' ||
+              currentMap.updatedAt !== map.updatedAt ||
+              contextAutoFingerprint(map) !== current.fingerprint
+            ) return;
+            await db.settings.put({
+              key: contextAutoUpdateKey(scope),
+              value: { ...current, status: 'watching', error: undefined },
+              updated_at: Math.max(Date.now(), observation.updatedAt + 1),
+            });
+            signal.throwIfAborted();
+            if (!active(scope) || contextAutoFingerprint(map) !== current.fingerprint) {
+              transaction.abort();
+              return;
+            }
+            recovered = true;
+          });
+        } finally {
+          signal.removeEventListener('abort', abort);
+        }
+        if (recovered) notify();
+        return;
+      }
       // Do not resurrect a disabled/deleted setting after an asynchronous success.
       await db.transaction('rw', db.settings, async () => {
         const current = await readContextAutoUpdate(scope);

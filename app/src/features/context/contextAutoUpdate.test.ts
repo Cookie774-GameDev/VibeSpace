@@ -245,3 +245,28 @@ describe('legacy index identity migration guards', () => {
     expect(f.ports.stage).not.toHaveBeenCalled();
   });
 });
+
+
+describe('unchanged-source failure status recovery', () => {
+  it('requests status recovery only after a complete matching scan without advancing its index baseline', async () => {
+    const f = fixture();
+    f.setting.status = 'failed';
+    f.setting.error = 'context_auto_update_scope_changed';
+    f.setting.lastSuccessAt = 50;
+    f.index.entries[0] = { ...f.index.entries[0]!, nodeId: 'path:old.txt', title: 'old.txt', relativePath: 'old.txt', sizeBytes: 3, modifiedAt: 2 };
+    expect(await f.updater.tick(f.controller.signal)).toBe('idle');
+    expect(f.ports.saveSetting).toHaveBeenCalledExactlyOnceWith(
+      { ...f.setting, status: 'watching', error: undefined },
+      { observed: f.setting, map: f.map, signal: f.controller.signal },
+    );
+    expect(f.ports.stage).not.toHaveBeenCalled();
+  });
+  it('does not clear failure after an unreadable discovery', async () => {
+    const f = fixture();
+    f.setting.status = 'failed';
+    f.setting.error = 'context_auto_update_scope_changed';
+    f.index.unreadable = 1;
+    await expect(f.updater.tick(f.controller.signal)).rejects.toThrow('discovery_incomplete');
+    expect(f.ports.saveSetting).not.toHaveBeenCalled();
+  });
+});
