@@ -728,7 +728,7 @@ describe('issuer-backed durable evidence link association', () => {
     expect(result).not.toHaveProperty('content');
   });
 
-  it.each(['file-change', 'map-change', 'missing-entity', 'foreign-scope'] as const)(
+  it.each(['file-change', 'same-size-hash-change', 'map-change', 'missing-entity', 'foreign-scope'] as const)(
     'fresh navigation target refuses %s',
     async (change) => {
       await gatewayCall('vibespace_context_search', { query: 'Atlas steward', limit: 2 });
@@ -739,6 +739,12 @@ describe('issuer-backed durable evidence link association', () => {
           knownSources.charter.path,
           'Changed current bytes with matching fixture timestamps.',
         );
+      if (change === 'same-size-hash-change') {
+        const original = fixture.files.get(knownSources.charter.path)!;
+        const changed = (original.startsWith('X') ? 'Y' : 'X') + original.slice(1);
+        expect(new TextEncoder().encode(changed).length).toBe(new TextEncoder().encode(original).length);
+        fixture.files.set(knownSources.charter.path, changed);
+      }
       if (change === 'map-change') (fixture.maps[0] as { updatedAt: number }).updatedAt++;
       if (change === 'missing-entity')
         (fixture.maps[0] as { tree: { nodes: Array<{ id: string }> } }).tree.nodes = (

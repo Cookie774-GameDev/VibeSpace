@@ -82,6 +82,7 @@ import {
   getActiveContextPersistenceState,
   restorePersistedContextMap,
   savePersistedContextTree,
+  hasEquivalentPersistedContextTree,
   setPersistedContextSourceStatus,
   selectPersistedContextFile,
   selectPersistedContextMap,
@@ -1004,9 +1005,12 @@ export function ContextPage() {
       .then(async (entries) => {
         if (!active || (entries.length === 0 && indexJobSnapshot.indexed !== 0)) return;
         const completedTree = buildProjectContextTreeFromSiyuanIndex(selectedMap.tree, entries);
-        if (JSON.stringify(completedTree.nodes) === JSON.stringify(selectedMap.tree.nodes) && completedTree.fileCount === selectedMap.tree.fileCount) {
+        assertCurrent();
+        const unchanged = await hasEquivalentPersistedContextTree(projectId, selectedMap.id, completedTree, selectedMap.updatedAt, controller.signal);
+        assertCurrent();
+        if (unchanged) {
           await finishSearch(selectedMap, accountId!);
-          if (active) setSiyuanTree(completedTree);
+          if (active) setSiyuanTree(selectedMap.tree);
           return;
         }
         assertCurrent();
@@ -1026,7 +1030,7 @@ export function ContextPage() {
         const finalized = await finishSearch(completedMap, persisted.accountId);
         if (!active) return;
         applyPersistenceState(finalized ?? persisted);
-        setSiyuanTree(completedTree);
+        setSiyuanTree(completedMap.tree);
       })
       .catch(async (error) => {
         if (controller.signal.aborted) return;

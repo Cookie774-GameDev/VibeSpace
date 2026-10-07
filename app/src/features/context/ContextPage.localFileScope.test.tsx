@@ -72,6 +72,8 @@ vi.mock("./contextPersistence", async (original) => ({
   ensureContextPersistence: (projectId: string) =>
     io.service.initialize(auth.localUserId, projectId),
   getActiveContextPersistenceState: () => io.state,
+  hasEquivalentPersistedContextTree: (_projectId: string, mapId: string, tree: ProjectContextTree, expected: number, signal?: AbortSignal) =>
+    io.service.hasEquivalentTree(auth.localUserId, tree, mapId, expected, signal),
   setPersistedContextSourceStatus: async (
     projectId: string,
     mapId: string,

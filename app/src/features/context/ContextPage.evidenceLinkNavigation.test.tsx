@@ -25,6 +25,11 @@ const io = vi.hoisted(() => ({
   selectCalls: [] as string[],
   selectionSignals: [] as AbortSignal[],
   openResults: [] as string[],
+  job: null as any,
+  entries: [] as any[],
+  entriesGate: undefined as Promise<void> | undefined,
+  jobGate: undefined as Promise<void> | undefined,
+  repair: vi.fn(),
 }));
 vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
   useAccessibleChatModels: () => ({ groups: [], flatOptions: [], loading: false }),
@@ -42,10 +47,19 @@ vi.mock('./siyuanContextMapIntegration', () => ({
     read: async (_project: unknown, map: { tree: ProjectContextTree }) => ({ tree: map.tree }),
   },
 }));
+vi.mock('./siyuan/siyuanIndexJobStore', async (original) => ({
+  ...(await original<typeof import('./siyuan/siyuanIndexJobStore')>()),
+  readSiyuanIndexJob: async (_project:string,mapId:string) => {await io.jobGate;return mapId==='page-map-A' ? io.job : null;},
+  readSiyuanIndexEntries: async () => { await io.entriesGate; return io.entries; },
+}));
+vi.mock('./contextSearchIndexing', () => ({createContextSearchIndexPopulationPort:()=>({repairEmptyMap:io.repair})}));
 vi.mock('./contextPersistence', async (original) => ({
   ...(await original<typeof import('./contextPersistence')>()),
   ensureContextPersistence: () => io.service!.load('page-account', 'page-project'),
   getActiveContextPersistenceState: () => io.state,
+  hasEquivalentPersistedContextTree: (_project:string,mapId:string,tree:ProjectContextTree,expected:number,signal?:AbortSignal) =>
+    io.service!.hasEquivalentTree('page-account',tree,mapId,expected,signal),
+  savePersistedContextTree: (tree:ProjectContextTree,options:any) => io.service!.saveTree('page-account',tree,options),
   selectPersistedContextMap: async (
     projectId: string,
     mapId: string,
@@ -110,6 +124,7 @@ beforeEach(async () => {
   io.selectCalls = [];
   io.selectionSignals = [];
   io.openResults = [];
+  io.job=null;io.entries=[];io.entriesGate=undefined;io.jobGate=undefined;io.repair.mockReset();io.repair.mockResolvedValue({status:"ready",documentCount:1,bodyBytes:4});
   useAuthStore.setState({
     localUserId: scope.accountId,
     cloudSession: null,
@@ -415,4 +430,27 @@ it('a real unmount before the queued initial claim cannot consume or revive afte
   await act(async()=>{await new Promise(resolve=>setTimeout(resolve,10));});
   expect(io.selectCalls).toEqual([]);
   expect((await io.service!.load(scope.accountId,scope.projectId)).selectedMapId).toBe('page-map-B');
+});
+
+
+it('keeps a freshly opened canonical source visible after unchanged index hydration completes',async()=>{
+  const {buildProjectContextTreeFromSiyuanIndex}=await import('./siyuan/siyuanSafeIndex');
+  const initial=(await io.service!.load(scope.accountId,scope.projectId)).maps.find(map=>map.id==='page-map-A')!;
+  io.entries=[{nodeId:'node-file',parentNodeId:null,title:'linked-file.txt',kind:'file',relativePath:'linked-file.txt',sourcePointer:'C:/owned-page/linked-file.txt',summary:'Owned source',sizeBytes:4,modifiedAt:1}];
+  const built=buildProjectContextTreeFromSiyuanIndex(initial.tree,io.entries);
+  const state=await io.service!.saveTree(scope.accountId,built,{mapId:initial.id,sourceStatus:'ready'});
+  const map=state.maps.find(map=>map.id===initial.id)!;
+  io.job={schemaVersion:1,scope:'fixture',accountId:scope.accountId,projectId:scope.projectId,mapId:map.id,canonicalRoot:map.rootDir,policyFingerprint:'fixture',status:'completed',phase:'completed',pauseReason:null,cursor:1,frontierLength:0,indexed:1,excluded:0,unreadable:0,summarized:0,summaryEligible:0,createdNodes:1,failed:0,skipped:0,inputTokens:0,outputTokens:0,totalTokens:0,tokenProvenance:'none',summaryProviderId:null,summaryConnectionId:null,summaryModelId:null,phaseStartedAt:1,rateSamples:[],discoverySamples:[],estimatedPercent:100,estimatedEtaSeconds:null,reconciledAt:1,pendingNativeNodeIds:[],startupDisposition:null,startupDispositionAt:null,pausedMs:0,startedAt:1,updatedAt:2,completedAt:2};
+  let release!:()=>void;io.jobGate=new Promise(resolve=>{release=resolve;});
+  io.nav!.dispose();
+  io.nav=createContextEvidenceNavigation({database,revalidate:async input=>{input.assertCurrent();return {accountId:scope.accountId,projectId:scope.projectId,mapId:map.id,entityId:map.tree.nodes[0]!.id,path:`${scope.worktreeId}/linked-file.txt`,mapUpdatedAt:map.updatedAt};}});
+  const before=await database.context_maps.get(map.id);
+  render(<React.StrictMode><Shell /></React.StrictMode>);
+  fireEvent.click(screen.getByRole('button',{name:'Open verified Context source'}));
+  await waitFor(()=>expect(io.openResults).toEqual(['completed']));
+  await act(async()=>{release();});
+  await waitFor(()=>expect(io.repair).toHaveBeenCalled());
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,20));});
+  expect(await database.context_maps.get(map.id)).toEqual(before);
+  expect(screen.getByRole('heading',{name:'linked-file.txt'})).toBeTruthy();
 });

@@ -47,6 +47,7 @@ export interface ContextSelectionGuard {
 export interface ContextPersistenceService {
   loadMap(accountId: string, projectId: string | null, mapId: string): Promise<ContextMapRecord | null>;
   initialize(accountId: string, projectId: string | null): Promise<ContextPersistenceState>;
+  hasEquivalentTree(accountId: string, tree: ProjectContextTree, mapId: string, expectedUpdatedAt: number, signal?: AbortSignal): Promise<boolean>;
   load(accountId: string, projectId: string | null): Promise<ContextPersistenceState>;
   saveTree(
     accountId: string,
@@ -310,6 +311,24 @@ function freezeState(state: Omit<ContextPersistenceState, 'maps'> & { maps: Cont
   });
 }
 
+/** Compare durable content, retaining source/provenance authority but excluding write clocks. */
+function graphContentIdentity(snapshot: DeepReadonly<ContextGraphSnapshotV2>): string {
+  const row = (value: object, omitted: readonly string[]) => Object.fromEntries(
+    Object.entries(value).filter(([key]) => !omitted.includes(key)).sort(([left], [right]) => left.localeCompare(right)),
+  );
+  const rows = (values: readonly { readonly id: string }[]) => [...values]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map(value => row(value, ['createdAt', 'updatedAt']));
+  return JSON.stringify({
+    version: snapshot.version,
+    map: row(snapshot.map, ['createdAt', 'updatedAt', 'knowledgeRevision']),
+    sources: rows(snapshot.sources),
+    entities: rows(snapshot.entities),
+    edges: rows(snapshot.edges),
+    provenance: rows(snapshot.provenance),
+  });
+}
+
 export function createContextPersistenceService(
   database: JarvisDexie,
   storage: Pick<Storage, 'getItem'>,
@@ -421,6 +440,27 @@ export function createContextPersistenceService(
       if (!snapshot || snapshot.map.projectId !== projectId) return null;
       return mapFromSnapshot(structuredClone(snapshot) as ContextGraphSnapshotV2);
     },
+    async hasEquivalentTree(accountId, tree, mapId, expectedUpdatedAt, signal) {
+      signal?.throwIfAborted();
+      assertIdentity(accountId, tree.projectId);
+      const snapshot = await repository.getSnapshot(accountId, mapId);
+      signal?.throwIfAborted();
+      if (!snapshot || snapshot.map.projectId !== tree.projectId || snapshot.map.status !== 'active') fail('map_missing');
+      if (snapshot.map.updatedAt !== expectedUpdatedAt) fail('map_changed');
+      const record = mapFromSnapshot(snapshot);
+      // This read-only hydration comparison never changes source ownership or scope.
+      if (record.sourceType === 'github_repository' || tree.rootDir !== record.rootDir ||
+          (tree.sourceType !== undefined && tree.sourceType !== record.sourceType) ||
+          (tree.localFileScope !== undefined && JSON.stringify(tree.localFileScope) !== JSON.stringify(record.localFileScope))) return false;
+      const proposed = convertContextMapRecordV1ToSnapshotV2({ ...record, tree }, accountId, mapId, {
+        knowledgeRevision: snapshot.map.knowledgeRevision,
+        sourceStatus: snapshot.sources[0]!.status,
+        parser: 'context-tree-v2-persistence',
+      });
+      signal?.throwIfAborted();
+      return graphContentIdentity(snapshot) === graphContentIdentity(proposed);
+    },
+
     async initialize(accountId, projectId) {
       assertIdentity(accountId, projectId);
       let migration: ContextV1MigrationResult;
@@ -919,6 +959,22 @@ export async function savePersistedContextTree(
     assertActiveIdentity(initialized.accountId);
   }
   return saved;
+}
+
+/** Read-only exact graph comparison for completed-index hydration; never a freshness grant. */
+export async function hasEquivalentPersistedContextTree(
+  projectId: string | null, mapId: string, tree: ProjectContextTree,
+  expectedUpdatedAt: number, signal?: AbortSignal,
+): Promise<boolean> {
+  signal?.throwIfAborted();
+  if (tree.projectId !== projectId) fail('map_scope_conflict');
+  const initialized = await ensureContextPersistence(projectId);
+  signal?.throwIfAborted();
+  assertActiveIdentity(initialized.accountId);
+  const equivalent = await getProductionService().hasEquivalentTree(initialized.accountId, tree, mapId, expectedUpdatedAt, signal);
+  signal?.throwIfAborted();
+  assertActiveIdentity(initialized.accountId);
+  return equivalent;
 }
 
 export async function selectPersistedContextMap(

@@ -62,6 +62,8 @@ vi.mock('./contextPersistence', async (original) => ({
   ensureContextPersistence: (projectId: string) =>
     io.service.initialize(auth.localUserId, projectId),
   getActiveContextPersistenceState: () => io.state,
+  hasEquivalentPersistedContextTree: (_projectId: string, mapId: string, tree: ProjectContextTree, expected: number, signal?: AbortSignal) =>
+    io.service.hasEquivalentTree(auth.localUserId, tree, mapId, expected, signal),
   setPersistedContextSourceStatus: async (
     projectId: string,
     mapId: string,
@@ -472,4 +474,45 @@ it('independent Context C04 recovered pending indexing rejects workspace ABA bef
     expect(io.state?.maps.find(item => item.id === map.id)?.sourceStatus).toBe('indexing');
     await waitFor(() => expect(io.authListeners.size).toBe(0));
   } finally { release.resolve(); }
+});
+
+
+it('completed unchanged index hydration is idempotent across two Context mounts',async()=>{
+  indexGate.resolve();
+  const {buildProjectContextTreeFromSiyuanIndex}=await import('./siyuan/siyuanSafeIndex');
+  const built=buildProjectContextTreeFromSiyuanIndex(independentPendingTree(),io.entries);
+  const initial=await io.service.saveTree(auth.localUserId,built,{mapId:'idempotent-map',sourceStatus:'ready'});
+  const map=initial.maps.find((map:ContextMapRecord)=>map.id==='idempotent-map')!;
+  await independentCompletedJob(map);
+  const beforeMap=await database.context_maps.get(map.id);
+  const beforeSources=await database.context_sources.where('[accountId+mapId]').equals([auth.localUserId,map.id]).toArray();
+  const first=render(<ContextPage />);
+  await waitFor(()=>expect(io.repair).toHaveBeenCalledOnce());
+  first.unmount();
+  render(<ContextPage />);
+  await waitFor(()=>expect(io.repair).toHaveBeenCalledTimes(2));
+  expect(io.saves).toEqual([]);
+  expect(await database.context_maps.get(map.id)).toEqual(beforeMap);
+  expect(await database.context_sources.where('[accountId+mapId]').equals([auth.localUserId,map.id]).toArray()).toEqual(beforeSources);
+});
+
+
+it.each(['add','remove','source-time'] as const)('completed hydration still persists a genuine %s change',async(change)=>{
+  indexGate.resolve();
+  const {buildProjectContextTreeFromSiyuanIndex}=await import('./siyuan/siyuanSafeIndex');
+  const built=buildProjectContextTreeFromSiyuanIndex(independentPendingTree(),io.entries);
+  const initial=await io.service.saveTree(auth.localUserId,built,{mapId:'changed-map',sourceStatus:'ready'});
+  const map=initial.maps.find((map:ContextMapRecord)=>map.id==='changed-map')!;
+  await independentCompletedJob(map);
+  const before=await database.context_maps.get(map.id);
+  if(change==='add')io.entries.push({...io.entries[0],nodeId:'path:added.txt',title:'added.txt',relativePath:'added.txt',sourcePointer:'C:/fixture/added.txt'});
+  if(change==='remove')io.entries=[];
+  if(change==='source-time')io.entries[0].modifiedAt++;
+  io.job={...io.job,indexed:io.entries.length,createdNodes:io.entries.length,updatedAt:++clock};
+  render(<ContextPage />);
+  await waitFor(()=>expect(io.saves).toHaveLength(1));
+  await waitFor(async()=>expect((await database.context_maps.get(map.id))!.knowledgeRevision).toBe(before!.knowledgeRevision+1));
+  const latest=await io.service.loadMap(auth.localUserId,auth.projectId,map.id);
+  expect(latest!.tree.fileCount).toBe(io.entries.length);
+  if(change==='source-time')expect(latest!.tree.nodes[0]!.modifiedAt).toBe(io.entries[0].modifiedAt);
 });
