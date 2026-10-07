@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
 
 const source = readFileSync(resolve(__dirname, 'ContextPage.tsx'), 'utf8').replace(/\r\n/g, '\n');
 const creationLifecycleSource = readFileSync(
@@ -46,9 +47,38 @@ describe('ContextPage SiYuan creation contract', () => {
     const creationStart = source.indexOf('const makeSkillTree = React.useCallback(async () => {');
     const creationEnd = source.indexOf('React.useEffect(() => {', creationStart);
     const creation = source.slice(creationStart, creationEnd);
-    const persisted = creation.indexOf(
-      "const persisted = await savePersistedContextTree(generated, { sourceStatus: 'indexing', signal: controller.signal });",
-    );
+    const syntax = ts.createSourceFile('ContextPage.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const calls: ts.CallExpression[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && node.expression.getText(syntax) === 'savePersistedContextTree' &&
+          node.arguments[0]?.getText(syntax) === 'generated' && node.getStart(syntax) >= creationStart && node.getEnd() <= creationEnd) calls.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(syntax);
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    expect(call.arguments).toHaveLength(2);
+    expect(call.arguments[0]!.getText(syntax)).toBe('generated');
+    const options = call.arguments[1]!;
+    if (!ts.isObjectLiteralExpression(options)) throw new Error('Creation options must remain explicit');
+    const property = (object: ts.ObjectLiteralExpression, name: string) =>
+      object.properties.find((entry): entry is ts.PropertyAssignment => ts.isPropertyAssignment(entry) && entry.name.getText(syntax) === name)?.initializer;
+    expect(property(options, 'sourceStatus')?.getText(syntax)).toBe("'indexing'");
+    expect(property(options, 'signal')?.getText(syntax)).toBe('controller.signal');
+    const spreads = options.properties.filter(ts.isSpreadAssignment);
+    expect(spreads).toHaveLength(1);
+    let conditional = spreads[0]!.expression;
+    while (ts.isParenthesizedExpression(conditional)) conditional = conditional.expression;
+    if (!ts.isConditionalExpression(conditional) || !ts.isObjectLiteralExpression(conditional.whenTrue) ||
+        !ts.isObjectLiteralExpression(conditional.whenFalse)) throw new Error('File descriptor must be conditional and explicit');
+    expect(conditional.condition.getText(syntax)).toBe('localFileScope');
+    expect(conditional.whenFalse.properties).toHaveLength(0);
+    const fileSource = property(conditional.whenTrue, 'source');
+    if (!fileSource || !ts.isObjectLiteralExpression(fileSource)) throw new Error('File source descriptor missing');
+    expect(property(fileSource, 'kind')?.getText(syntax)).toBe("'local_file' as const");
+    expect(property(fileSource, 'label')?.getText(syntax)).toBe('localFileScope.filePath');
+    expect(fileSource.properties.some(entry => ts.isShorthandPropertyAssignment(entry) && entry.name.text === 'localFileScope')).toBe(true);
+    const persisted = call.getStart(syntax) - creationStart;
     const preference = creation.indexOf('persistedMap.id,', persisted);
     const sync = creation.indexOf(
       'productionSiyuanContextMaps.sync(projectId, generatedMap, {',

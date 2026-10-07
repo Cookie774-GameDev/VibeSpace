@@ -1,3 +1,4 @@
+import { assertContextLocalFilePath, contextLocalFileScopeFingerprint, readContextLocalFileScope, type ContextLocalFileScopeV1 } from './contextLocalFileScope';
 import { type JarvisDexie } from '@/lib/db';
 import { captureToolGatewaySessionLease, readToolGatewaySessionAuthority, readToolGatewayTurnIdentity } from '@/lib/harness/toolGatewayAuthority';
 import { canonicalContextUri } from '@/lib/harness/toolGatewayCitations';
@@ -118,6 +119,7 @@ interface ProductionContextNode {
 }
 
 interface ProductionContextMap {
+  localFileScope?: ContextLocalFileScopeV1;
   id: string;
   projectId: string | null;
   rootDir: string;
@@ -171,6 +173,7 @@ interface ContextMapRlmDependencies {
 }
 
 interface SearchAuthorityCandidate {
+  localFileScope?: ContextLocalFileScopeV1;
   map: ProductionContextMap;
   node: ProductionContextNode;
   sourceKind: ContextSourceKind;
@@ -188,6 +191,7 @@ interface SearchCandidateSnapshot {
 }
 
 interface RecordAuthority {
+  localFileScope?: ContextLocalFileScopeV1;
   record: ContextRecord;
   mapId: string;
   nodeId: string;
@@ -944,6 +948,7 @@ function selectContextMapsForScope(
     (scope.projectId === undefined || map.projectId === scope.projectId));
   const root = scope.worktreeId?.replaceAll('\\', '/').replace(/\/+$/u, '').toLocaleLowerCase('en-US');
   const assertReady = (selected: ProductionContextMap[]) => {
+    for (const map of selected) readContextLocalFileScope(map);
     if (selected.some(map => map.sourceStatus === 'indexing' || map.sourceStatus === 'pending')) {
       throw new ContextSearchReadinessError('source_indexing');
     }
@@ -960,6 +965,16 @@ function selectContextMapsForScope(
   // A worktree ID is not always a filesystem path. Restrict only when it
   // resolves to a mapped source root in this project.
   return assertReady(matching.length ? matching : active);
+}
+
+async function currentScopedMembershipDigest(scope: ContextScope, map: ProductionContextMap, signal?: AbortSignal) {
+  const fileScope = contextLocalFileScopeFingerprint(map);
+  const membership = await currentMembershipDigest(scope, map, signal);
+  signal?.throwIfAborted();
+  if (!membership || !fileScope) return membership;
+  const scoped = 'sha256:' + await sha256Text(JSON.stringify([membership, fileScope]));
+  signal?.throwIfAborted();
+  return scoped;
 }
 
 function authorityBuildRevisionKey(
@@ -981,6 +996,7 @@ function authorityBuildRevisionKey(
         map.updatedAt,
         map.sourceType ?? null,
         map.github?.resolvedCommitSha ?? null,
+        ...(map.localFileScope ? [contextLocalFileScopeFingerprint(map)] : []),
         flatten(map.tree.nodes).map((node) => [
           node.id,
           node.kind,
@@ -1050,6 +1066,7 @@ function authoritySourceRevisionKey(authority: RecordAuthority): string {
     authority.mapId,
     authority.nodeId,
     authority.rootDir,
+    ...(authority.localFileScope ? [authority.localFileScope] : []),
     record.id,
     record.contentRef,
     record.contentHash,
@@ -1225,6 +1242,31 @@ export function createContextMapRlmRepository(
     Promise<{ authority: RecordAuthority; source: ResolvedAuthoritySource } | undefined>
   >();
 
+  const assertCurrentFileScope = async (
+    mapId: string, projectId: string | null | undefined, rootDir: string,
+    localFileScope: ContextLocalFileScopeV1 | undefined, path: string,
+    signal?: AbortSignal, assertCurrent?: () => void,
+  ) => {
+    if (!localFileScope) return;
+    signal?.throwIfAborted(); assertCurrent?.();
+    const captured = { sourceType: 'local_file', rootDir, localFileScope };
+    assertContextLocalFilePath(captured, path);
+    const maps = await dependencies.loadMaps(projectId ?? null);
+    signal?.throwIfAborted(); assertCurrent?.();
+    const current = maps.filter(map => map.id === mapId && map.projectId === (projectId ?? null) && map.status === 'active');
+    if (current.length !== 1 || contextLocalFileScopeFingerprint(current[0]!) !== contextLocalFileScopeFingerprint(captured)) {
+      throw new Error('context_local_file_scope_changed');
+    }
+    assertContextLocalFilePath(current[0]!, path);
+  };
+  const assertCandidateFileScope = (candidate: SearchAuthorityCandidate, signal?: AbortSignal, assertCurrent?: () => void) =>
+    assertCurrentFileScope(candidate.map.id, candidate.map.projectId, candidate.map.rootDir, candidate.localFileScope, candidate.path, signal, assertCurrent);
+  const assertAuthorityFileScope = (authority: RecordAuthority, signal?: AbortSignal) =>
+    assertCurrentFileScope(authority.mapId, authority.record.projectId, authority.rootDir, authority.localFileScope, authority.record.contentRef, signal);
+  const assertAuthorityReceiptPath = (authority: RecordAuthority, path: string) => {
+    if (authority.localFileScope) assertContextLocalFilePath({ sourceType: 'local_file', rootDir: authority.rootDir, localFileScope: authority.localFileScope }, path);
+  };
+
   const enumerateSearchCandidates = (
     scope: ContextScope,
     maps: readonly ProductionContextMap[],
@@ -1243,10 +1285,12 @@ export function createContextMapRlmRepository(
         if ((node.kind !== 'file' && inlineContent === undefined) || !node.path) continue;
         const path = sourceKind === 'file_version' ? sourcePath(map.rootDir, node.path) : node.path;
         if (!path) continue;
+        assertContextLocalFilePath(map, path);
         const pathKey = path.replaceAll('\\', '/').toLocaleLowerCase('en-US');
         if (admittedPaths.has(pathKey)) continue;
         admittedPaths.add(pathKey);
         candidates.push({
+          ...(map.localFileScope ? { localFileScope: readContextLocalFileScope(map)! } : {}),
           map,
           node,
           sourceKind,
@@ -1281,6 +1325,7 @@ export function createContextMapRlmRepository(
         ['mapUpdatedAt', map.updatedAt],
         ['nodeModifiedAt', node.modifiedAt ?? null],
         ['gitCommit', map.github?.resolvedCommitSha ?? null],
+        ...(map.localFileScope ? [['localFileScope', contextLocalFileScopeFingerprint(map)]] : []),
         ['contentHash', hash],
       ]),
     );
@@ -1317,6 +1362,7 @@ export function createContextMapRlmRepository(
       mapId: map.id,
       nodeId: node.id,
       rootDir: map.rootDir,
+      ...(candidate.localFileScope ? { localFileScope: candidate.localFileScope } : {}),
       ...(inlineContent === undefined ? {} : { inlineContent }),
     };
   };
@@ -1326,6 +1372,7 @@ export function createContextMapRlmRepository(
     maps: readonly ProductionContextMap[],
   ): Promise<RecordAuthority[]> => {
     const candidates: Array<{
+      localFileScope?: ContextLocalFileScopeV1;
       map: ProductionContextMap;
       node: ProductionContextNode;
       sourceKind: ContextSourceKind;
@@ -1341,10 +1388,12 @@ export function createContextMapRlmRepository(
         if ((node.kind !== 'file' && inlineContent === undefined) || !node.path) continue;
         const path = sourceKind === 'file_version' ? sourcePath(map.rootDir, node.path) : node.path;
         if (!path) continue;
+        assertContextLocalFilePath(map, path);
         const pathKey = path.replaceAll('\\', '/').toLocaleLowerCase('en-US');
         if (admittedPaths.has(pathKey)) continue;
         admittedPaths.add(pathKey);
         candidates.push({
+          ...(map.localFileScope ? { localFileScope: readContextLocalFileScope(map)! } : {}),
           map,
           node,
           sourceKind,
@@ -1356,7 +1405,8 @@ export function createContextMapRlmRepository(
     const built = await mapBoundedInOrder(
       candidates,
       MAX_CONCURRENT_SOURCE_VALIDATIONS,
-      async ({ map, node, sourceKind, path, inlineContent }) => {
+      async ({ map, node, sourceKind, path, inlineContent, localFileScope }) => {
+        if (localFileScope) await assertCurrentFileScope(map.id, map.projectId, map.rootDir, localFileScope, path);
         const stat =
           inlineContent === undefined
             ? await dependencies.stat(path, true, {
@@ -1364,6 +1414,8 @@ export function createContextMapRlmRepository(
                 strictProjectBoundary: true,
               })
             : undefined;
+        if (localFileScope) await assertCurrentFileScope(map.id, map.projectId, map.rootDir, localFileScope, path);
+        if (stat?.ok && localFileScope) assertContextLocalFilePath({ sourceType: 'local_file', rootDir: map.rootDir, localFileScope }, stat.path);
         if (
           stat !== undefined &&
           (!stat.ok || stat.kind !== 'file' || (stat.size ?? 0) > MAX_SOURCE_SHARD_BYTES)
@@ -1387,7 +1439,8 @@ export function createContextMapRlmRepository(
             ['mapUpdatedAt', map.updatedAt],
             ['nodeModifiedAt', node.modifiedAt ?? null],
             ['gitCommit', map.github?.resolvedCommitSha ?? null],
-            ['contentHash', hash],
+            ...(map.localFileScope ? [['localFileScope', contextLocalFileScopeFingerprint(map)]] : []),
+        ['contentHash', hash],
           ]),
         );
         const observedCreatedAt = Math.max(
@@ -1423,6 +1476,7 @@ export function createContextMapRlmRepository(
           mapId: map.id,
           nodeId: node.id,
           rootDir: map.rootDir,
+          ...(localFileScope ? { localFileScope } : {}),
           ...(inlineContent === undefined ? {} : { inlineContent }),
         };
         return authority;
@@ -1490,16 +1544,21 @@ export function createContextMapRlmRepository(
         sourceVersion: `sha256:${authority.record.contentHash}`,
       };
     }
+    if (authority.localFileScope) await assertAuthorityFileScope(authority);
     const result = await dependencies.read(authority.record.contentRef, MAX_SOURCE_SHARD_BYTES, {
       root: authority.rootDir,
       strictProjectBoundary: true,
     });
+    if (authority.localFileScope) await assertAuthorityFileScope(authority);
     if (!result.ok) return undefined;
+    assertAuthorityReceiptPath(authority, result.path);
     const stat = await dependencies.stat(authority.record.contentRef, true, {
       root: authority.rootDir,
       strictProjectBoundary: true,
     });
+    if (authority.localFileScope) await assertAuthorityFileScope(authority);
     if (!stat.ok || stat.kind !== 'file') return undefined;
+    assertAuthorityReceiptPath(authority, stat.path);
     const hash = rawSha256(stat.sha256);
     if (!hash) return undefined;
     const bytes = new TextEncoder().encode(result.content);
@@ -1550,12 +1609,16 @@ export function createContextMapRlmRepository(
       assertCurrent?.();
       return { candidate, size, hash };
     }
+    if (candidate.localFileScope) await assertCandidateFileScope(candidate, signal, assertCurrent);
+    signal?.throwIfAborted(); assertCurrent?.();
     const preflight = await dependencies.stat(candidate.path, false, {
       root: candidate.map.rootDir,
       strictProjectBoundary: true,
     });
     signal?.throwIfAborted();
     assertCurrent?.();
+    if (candidate.localFileScope) await assertCandidateFileScope(candidate, signal, assertCurrent);
+    if (preflight.ok) assertContextLocalFilePath(candidate.map, preflight.path);
     if (!preflight.ok || preflight.kind !== 'file' || preflight.size === undefined ||
         preflight.size < 0 || preflight.size > maximumBytes) return undefined;
     const stat = await dependencies.stat(candidate.path, true, {
@@ -1564,6 +1627,8 @@ export function createContextMapRlmRepository(
     });
     signal?.throwIfAborted();
     assertCurrent?.();
+    if (candidate.localFileScope) await assertCandidateFileScope(candidate, signal, assertCurrent);
+    if (stat.ok) assertContextLocalFilePath(candidate.map, stat.path);
     const hash = stat.ok ? rawSha256(stat.sha256) : undefined;
     if (
       !stat.ok ||
@@ -1605,22 +1670,30 @@ export function createContextMapRlmRepository(
         },
       };
     }
+    if (candidate.localFileScope) await assertCandidateFileScope(candidate, undefined, assertCurrent);
+    assertCurrent?.();
     const result = await dependencies.read(candidate.path, MAX_SOURCE_SHARD_BYTES, {
       root: candidate.map.rootDir,
       strictProjectBoundary: true,
     });
     assertCurrent?.();
+    if (candidate.localFileScope) await assertCandidateFileScope(candidate, undefined, assertCurrent);
     if (!result.ok) return undefined;
+    assertContextLocalFilePath(candidate.map, result.path);
     const bytes = new TextEncoder().encode(result.content);
     if (bytes.length !== snapshot.size || bytes.length > MAX_SOURCE_SHARD_BYTES) return undefined;
     const bytesHash = await sha256Text(result.content);
     assertCurrent?.();
     if (bytesHash !== snapshot.hash) return undefined;
+    if (candidate.localFileScope) await assertCandidateFileScope(candidate, undefined, assertCurrent);
+    assertCurrent?.();
     const postStat = await dependencies.stat(candidate.path, true, {
       root: candidate.map.rootDir,
       strictProjectBoundary: true,
     });
     assertCurrent?.();
+    if (candidate.localFileScope) await assertCandidateFileScope(candidate, undefined, assertCurrent);
+    if (postStat.ok) assertContextLocalFilePath(candidate.map, postStat.path);
     const postHash = postStat.ok ? rawSha256(postStat.sha256) : undefined;
     if (
       !postStat.ok ||
@@ -1683,10 +1756,12 @@ export function createContextMapRlmRepository(
   const readAddressSource = async (authority: RecordAuthority, maximumBytes: number, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     const options = { root: authority.rootDir, strictProjectBoundary: true };
+    if (authority.localFileScope) await assertAuthorityFileScope(authority, signal);
     const before = await dependencies.stat(authority.record.contentRef, false, options);
     signal?.throwIfAborted();
     if (!before.ok || before.kind !== 'file' || before.size === undefined ||
         before.size < 1 || before.size > maximumBytes) return undefined;
+    if (authority.localFileScope) await assertAuthorityFileScope(authority, signal);
     const result = await dependencies.read(authority.record.contentRef, maximumBytes, options);
     signal?.throwIfAborted();
     if (!result.ok) return undefined;
@@ -1695,8 +1770,12 @@ export function createContextMapRlmRepository(
     signal?.throwIfAborted();
     if (bytes.length !== before.size || bytes.length > maximumBytes ||
         hash !== authority.record.contentHash) return undefined;
+    if (authority.localFileScope) await assertAuthorityFileScope(authority, signal);
+    assertAuthorityReceiptPath(authority, result.path);
     const after = await dependencies.stat(authority.record.contentRef, true, options);
     signal?.throwIfAborted();
+    if (authority.localFileScope) await assertAuthorityFileScope(authority, signal);
+    if (after.ok) assertAuthorityReceiptPath(authority, after.path);
     if (!after.ok || after.kind !== 'file' || after.size !== before.size ||
         after.createdMs !== before.createdMs || after.modifiedMs !== before.modifiedMs ||
         rawSha256(after.sha256) !== hash) return undefined;
@@ -1727,7 +1806,7 @@ export function createContextMapRlmRepository(
     const addressMaps = await dependencies.loadMaps(normalizedScope.projectId ?? null);
     const addressMemberships = new Map<string, string>();
     for (const map of selectContextMapsForScope(normalizedScope, addressMaps)) {
-      const membership = await currentMembershipDigest(normalizedScope, map, signal);
+      const membership = await currentScopedMembershipDigest(normalizedScope, map, signal);
       signal?.throwIfAborted();
       if (!membership || addressMemberships.has(map.id)) largeAddressError();
       addressMemberships.set(map.id, membership);
@@ -1925,7 +2004,7 @@ export function createContextMapRlmRepository(
     const currentMaps = await dependencies.loadMaps(normalizedScope.projectId ?? null);
     signal?.throwIfAborted();
     const currentMap = selectContextMapsForScope(normalizedScope, currentMaps).find(map => map.id === selectedDescriptor.authority.mapId);
-    const membership = currentMap ? await currentMembershipDigest(normalizedScope, currentMap, signal) : undefined;
+    const membership = currentMap ? await currentScopedMembershipDigest(normalizedScope, currentMap, signal) : undefined;
     if (!membership || membership !== originalMembership) largeAddressError();
     const capture = Object.freeze({});
     evidenceCaptures.set(capture, Object.freeze({ scopeKey: JSON.stringify(normalizedScope),
@@ -1948,7 +2027,7 @@ export function createContextMapRlmRepository(
       signal?.throwIfAborted();
       const selected = selectContextMapsForScope(normalized, maps).filter(map => map.id === mapId);
       if (selected.length !== 1) return undefined;
-      return currentMembershipDigest(normalized, selected[0]!, signal);
+      return currentScopedMembershipDigest(normalized, selected[0]!, signal);
     },
     async captureIssuedEvidence(scope, mapId, pointers, signal) {
       const normalized = validateContextScope(scope);
@@ -1979,7 +2058,7 @@ export function createContextMapRlmRepository(
       const maps = await dependencies.loadMaps(normalized.projectId ?? null);
       signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
       const selected = selectContextMapsForScope(normalized, maps).filter(map => map.id === mapId);
-      if (selected.length !== 1 || await currentMembershipDigest(normalized, selected[0]!, signal) !== membershipRevision) return undefined;
+      if (selected.length !== 1 || await currentScopedMembershipDigest(normalized, selected[0]!, signal) !== membershipRevision) return undefined;
       signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
       const { candidates } = enumerateSearchCandidates(normalized, selected, selected.length);
       const selectedAuthorities = new Map<string, { authority: RecordAuthority; candidate: SearchAuthorityCandidate }>();
@@ -2001,7 +2080,10 @@ export function createContextMapRlmRepository(
       let verifiedBytes = 0;
       for (const { authority, candidate } of selectedAuthorities.values()) {
         signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+        if (candidate.localFileScope) await assertCandidateFileScope(candidate, signal, () => { if (assertCurrent && !assertCurrent()) throw new Error('context_local_file_scope_changed'); });
         const before = await dependencies.stat(candidate.path, false, { root: candidate.map.rootDir, strictProjectBoundary: true });
+        if (candidate.localFileScope) await assertCandidateFileScope(candidate, signal, () => { if (assertCurrent && !assertCurrent()) throw new Error('context_local_file_scope_changed'); });
+        if (before.ok) assertContextLocalFilePath(candidate.map, before.path);
         signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
         if (!before.ok || before.kind !== 'file' || !Number.isSafeInteger(before.size)
           || before.size! < 0 || before.size! > MAX_SOURCE_SHARD_BYTES) return undefined;
@@ -2012,12 +2094,18 @@ export function createContextMapRlmRepository(
       const fingerprints: string[] = [];
       for (const { authority, candidate, before } of prepared) {
         signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
+        if (candidate.localFileScope) await assertCandidateFileScope(candidate, signal, () => { if (assertCurrent && !assertCurrent()) throw new Error('context_local_file_scope_changed'); });
         const hashed = await dependencies.stat(candidate.path, true, { root: candidate.map.rootDir, strictProjectBoundary: true });
+        if (candidate.localFileScope) await assertCandidateFileScope(candidate, signal, () => { if (assertCurrent && !assertCurrent()) throw new Error('context_local_file_scope_changed'); });
+        if (hashed.ok) assertContextLocalFilePath(candidate.map, hashed.path);
         signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
         if (!hashed.ok || hashed.kind !== 'file' || hashed.size !== before.size
           || hashed.createdMs !== before.createdMs || hashed.modifiedMs !== before.modifiedMs
           || rawSha256(hashed.sha256) !== authority.record.contentHash) return undefined;
+        if (candidate.localFileScope) await assertCandidateFileScope(candidate, signal, () => { if (assertCurrent && !assertCurrent()) throw new Error('context_local_file_scope_changed'); });
         const after = await dependencies.stat(candidate.path, false, { root: candidate.map.rootDir, strictProjectBoundary: true });
+        if (candidate.localFileScope) await assertCandidateFileScope(candidate, signal, () => { if (assertCurrent && !assertCurrent()) throw new Error('context_local_file_scope_changed'); });
+        if (after.ok) assertContextLocalFilePath(candidate.map, after.path);
         signal?.throwIfAborted(); if (assertCurrent && !assertCurrent()) return undefined;
         if (!after.ok || after.kind !== 'file' || after.size !== hashed.size
           || after.createdMs !== hashed.createdMs || after.modifiedMs !== hashed.modifiedMs) return undefined;
@@ -2040,7 +2128,7 @@ export function createContextMapRlmRepository(
       const selected = selectContextMapsForScope(normalized,maps).filter(map=>map.id===target.mapId);
       if (selected.length !== 1) return undefined;
       const map = selected[0]!;
-      const membership = await currentMembershipDigest(normalized,map,signal);
+      const membership = await currentScopedMembershipDigest(normalized,map,signal);
       check();
       if (membership !== target.membershipRevision) return undefined;
       const {candidates} = enumerateSearchCandidates(normalized,selected,1);
@@ -2104,7 +2192,16 @@ export function createContextMapRlmRepository(
         rootDir: candidate.map.rootDir, path: candidate.path,
         ...(candidate.map.github?.resolvedCommitSha ? { gitCommit: candidate.map.github.resolvedCommitSha } : {}),
         ...(candidate.inlineContent !== undefined ? { inlineContent: candidate.inlineContent } : {}),
-      })), dependencies.stat, signal);
+      })), async (path, includeSha256, options) => {
+        const candidate = candidates.find(candidate => candidate.path === path && candidate.map.rootDir === options.root);
+        if (candidate?.localFileScope) await assertCandidateFileScope(candidate, signal);
+        const result = await dependencies.stat(path, includeSha256, options);
+        if (candidate) {
+          if (candidate.localFileScope) await assertCandidateFileScope(candidate, signal);
+          if (result.ok) assertContextLocalFilePath(candidate.map, result.path);
+        }
+        return result;
+      }, signal);
     },
     async describeSummary(scope, signal) {
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
@@ -2592,6 +2689,7 @@ export function createContextMapRlmRepository(
       ) {
         return false;
       }
+      if (authority.localFileScope) await assertAuthorityFileScope(authority, signal);
       const pathDecision = classifyJarvisSource({
         path: authority.record.contentRef,
         root: authority.rootDir,
@@ -2611,7 +2709,9 @@ export function createContextMapRlmRepository(
               content: authority.inlineContent,
             };
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      if (authority.localFileScope) await assertAuthorityFileScope(authority, signal);
       if (!sample.ok) return false;
+      assertAuthorityReceiptPath(authority, sample.path);
       return classifyJarvisSource({
         path: authority.record.contentRef,
         root: authority.rootDir,

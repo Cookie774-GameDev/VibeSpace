@@ -152,3 +152,14 @@ describe('partial SiYuan surface availability', () => {
     ).toBe(false);
   });
 });
+
+describe('N11 single-file surface authority',()=>{
+  it('refuses legacy file scope and a checkpoint for another selected file',()=>{
+    const scoped={...record(),sourceType:'local_file' as const,localFileScope:{version:1 as const,rootDir:'C:/root',filePath:'C:/root/selected.txt'}};
+    const manifest=partialManifest();
+    const matching={...partialJob(),policyFingerprint:siyuanIndexPolicyFingerprint(scoped.rootDir,manifest.summaryPolicy,manifest.sourcePolicy.excludedPaths,scoped.localFileScope)};
+    expect(canOpenPartialSiyuanSurface(scoped,manifest,matching,'account-1')).toBe(true);
+    expect(canOpenPartialSiyuanSurface({...scoped,localFileScope:undefined},manifest,matching,'account-1')).toBe(false);
+    expect(canOpenPartialSiyuanSurface({...scoped,localFileScope:{...scoped.localFileScope,filePath:'C:/root/sibling.txt'}},manifest,matching,'account-1')).toBe(false);
+  });
+});

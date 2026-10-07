@@ -2,10 +2,19 @@ import { applySecretPolicy } from '@/lib/security/secretDetector';
 import {
   listDirectoriesStrict,
   listDirectory,
+  statProjectPath,
   type FsBatchListResult,
   type FsEntry,
   type FsListResult,
+  type FsPathStatResult,
 } from '@/lib/fs';
+import {
+  assertContextLocalFilePath,
+  contextLocalFileRelativePath,
+  contextLocalFileScopeFingerprint,
+  readContextLocalFileScope,
+  type ContextLocalFileScopeV1,
+} from '../contextLocalFileScope';
 import type { ContextMapRecord, ContextTreeNode, ProjectContextTree } from '../tree';
 import type { SiyuanSummaryPolicy } from './siyuanMapManifest';
 import {
@@ -388,9 +397,15 @@ export function siyuanIndexPolicyFingerprint(
   root: string,
   policy: SiyuanSummaryPolicy,
   excludedPaths: readonly string[],
+  localFileScope?: ContextLocalFileScopeV1 | null,
 ): string {
   const normalizedPolicy = normalizedSummaryPolicy(root, policy);
-  return indexPolicyFingerprintPayload(root, normalizedPolicy, excludedPaths, 2);
+  const folder = indexPolicyFingerprintPayload(root, normalizedPolicy, excludedPaths, 2);
+  if (!localFileScope) return folder;
+  return JSON.stringify({
+    ...JSON.parse(folder),
+    localFileScope: contextLocalFileScopeFingerprint({ sourceType: 'local_file', rootDir: root, localFileScope }),
+  });
 }
 
 function legacySiyuanIndexPolicyFingerprint(
@@ -459,11 +474,29 @@ function summarySelected(
   );
 }
 
+/** Admit only the selected-file entry, including retained/pre-scanned checkpoints. */
+export function assertSiyuanLocalFileEntries(
+  record: ContextMapRecord,
+  entries: readonly SiyuanSafeIndexEntry[],
+): void {
+  if (!readContextLocalFileScope(record)) return;
+  try {
+    if (entries.length > 1) throw new Error('multiple_file_entries');
+    for (const entry of entries) {
+      if (entry.kind !== 'file' || entry.parentNodeId !== null || !entry.relativePath ||
+          /[\\/]/u.test(entry.relativePath) || !entry.sourcePointer) throw new Error('invalid_file_entry');
+      assertContextLocalFilePath(record, `${record.rootDir.replace(/[\\/]$/u, '')}/${entry.relativePath}`);
+      assertContextLocalFilePath(record, entry.sourcePointer);
+    }
+  } catch { throw new Error('siyuan_local_file_checkpoint_scope_invalid'); }
+}
+
 export function buildSiyuanSafeIndex(
   record: ContextMapRecord,
   policy: SiyuanSummaryPolicy,
   customExclusions: readonly string[] = [],
 ): SiyuanSafeIndex {
+  const fileScope = readContextLocalFileScope(record);
   const entries: SiyuanSafeIndexEntry[] = [];
   const exclusions = normalizedCustomExclusions(record.rootDir, customExclusions);
   const summaryPolicy = normalizedSummaryPolicy(record.rootDir, policy);
@@ -472,7 +505,16 @@ export function buildSiyuanSafeIndex(
   const walk = (nodes: readonly ContextTreeNode[], parentNodeId: string | null): void => {
     for (const node of nodes) {
       if (entries.length >= MAX_ENTRIES) throw new Error('siyuan_safe_index_entry_limit');
+      if (fileScope && node.kind === 'root' &&
+          (!node.path || node.path === '.' || canonical(node.path) === canonical(record.rootDir))) {
+        walk(node.children ?? [], null);
+        continue;
+      }
       const relativePath = relativeSource(record.rootDir, node.path);
+      if (fileScope) {
+        if (node.kind !== 'file' || !relativePath) throw new Error('context_local_file_path_denied');
+        assertContextLocalFilePath(record, `${fileScope.rootDir.replace(/\/$/u, '')}/${relativePath}`);
+      }
       if (
         (node.path && relativePath === null) ||
         excludedPath(relativePath, node.title, exclusions)
@@ -507,6 +549,7 @@ export function buildSiyuanSafeIndex(
     }
   };
   walk(record.tree.nodes, null);
+  assertSiyuanLocalFileEntries(record, entries);
   return Object.freeze({
     entries: Object.freeze(entries) as SiyuanSafeIndexEntry[],
     excluded,
@@ -550,14 +593,29 @@ export async function scanSiyuanFilesystemIndex(
     ) => void;
     list?: SiyuanDirectoryLister;
     listBatch?: SiyuanDirectoryBatchLister;
+    stat?: (path: string, includeSha256: boolean, options: { root: string; strictProjectBoundary: true }) => Promise<FsPathStatResult>;
     excludedPaths?: readonly string[];
     durableJob?: Readonly<{ accountId: string | null; projectId: string; mapId: string }>;
   }> = {},
 ): Promise<SiyuanSafeIndex> {
   if (options.signal?.aborted) throw new Error('siyuan_index_cancelled');
-  const root = canonical(record.rootDir);
-  const list = options.list ?? listDirectory;
-  const listBatch = options.listBatch ?? (options.list ? null : listDirectoriesStrict);
+  const fileScope = readContextLocalFileScope(record);
+  const root = fileScope?.rootDir ?? canonical(record.rootDir);
+  const list: SiyuanDirectoryLister = fileScope ? async (path) => {
+    readContextLocalFileScope({ ...record, rootDir: path });
+    const stat = await (options.stat ?? statProjectPath)(fileScope.filePath, false, {
+      root: fileScope.rootDir, strictProjectBoundary: true,
+    });
+    if (options.signal?.aborted) throw new Error('siyuan_index_cancelled');
+    if (!stat.ok) throw new Error(`siyuan_local_file_unavailable:${stat.error.code}`);
+    if (stat.kind !== 'file') throw new Error('siyuan_local_file_not_a_file');
+    assertContextLocalFilePath(record, stat.path);
+    return { ok: true, path: root, entries: [{
+      name: contextLocalFileRelativePath(record)!, path: fileScope.filePath,
+      isDir: false, size: stat.size, modifiedMs: stat.modifiedMs,
+    }] };
+  } : options.list ?? listDirectory;
+  const listBatch = fileScope ? null : options.listBatch ?? (options.list ? null : listDirectoriesStrict);
   const summaries = existingSummaries(record);
   const exclusions = normalizedCustomExclusions(root, options.excludedPaths ?? []);
   const summaryPolicy = normalizedSummaryPolicy(root, policy);
@@ -568,6 +626,7 @@ export async function scanSiyuanFilesystemIndex(
   let unreadable = 0;
   let summarized = 0;
   let durableRecord: SiyuanIndexJobRecord | null = null;
+  const assertFileEntries = () => assertSiyuanLocalFileEntries(record, entries);
 
   if (options.durableJob) {
     const { accountId, projectId, mapId } = options.durableJob;
@@ -575,6 +634,7 @@ export async function scanSiyuanFilesystemIndex(
       root,
       policy,
       options.excludedPaths ?? [],
+      fileScope,
     );
     const legacyPolicyFingerprint = legacySiyuanIndexPolicyFingerprint(
       root,
@@ -582,6 +642,9 @@ export async function scanSiyuanFilesystemIndex(
       options.excludedPaths ?? [],
     );
     let existing = await readSiyuanIndexJob(projectId, mapId);
+    if (fileScope && existing && existing.policyFingerprint !== policyFingerprint) {
+      throw new Error('siyuan_index_resume_authority_mismatch');
+    }
     if (existing && existing.accountId === null && accountId !== null) {
       existing = { ...existing, accountId, updatedAt: Date.now() };
       await checkpointSiyuanIndexJob({ job: existing });
@@ -620,6 +683,7 @@ export async function scanSiyuanFilesystemIndex(
         throw new Error('siyuan_index_resume_authority_mismatch');
       }
       entries = await readSiyuanIndexEntries(projectId, mapId);
+      assertFileEntries();
       return Object.freeze({
         entries: Object.freeze(entries) as SiyuanSafeIndexEntry[],
         excluded: existing.excluded,
@@ -638,6 +702,15 @@ export async function scanSiyuanFilesystemIndex(
         readSiyuanIndexFrontier(projectId, mapId),
         readSiyuanIndexEntries(projectId, mapId),
       ]);
+      assertFileEntries();
+      if (fileScope) {
+        try {
+          if (queue.length !== 1 || queue[0]!.relativePath !== '' || queue[0]!.parentNodeId !== null) {
+            throw new Error('invalid_file_frontier');
+          }
+          readContextLocalFileScope({ ...record, rootDir: queue[0]!.path });
+        } catch { throw new Error('siyuan_local_file_checkpoint_scope_invalid'); }
+      }
       if (queue.length !== existing.frontierLength || entries.length !== existing.indexed) {
         throw new Error('siyuan_index_checkpoint_inconsistent');
       }

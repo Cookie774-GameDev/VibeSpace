@@ -8,9 +8,14 @@ import {
   type ContextV1MigrationResult,
 } from './migration';
 import { createContextGraphRepository } from './repository';
-import type { ContextEntityKind, ContextEntityV2, ContextGraphSnapshotV2 } from './contracts';
+import type { ContextEntityKind, ContextEntityV2, ContextGraphSnapshotV2, DeepReadonly } from './contracts';
 import { queueContextCloudDocument, type ContextCloudDocumentV1 } from './contextCloudSync';
 import { loadContextRecoverySummary, type ContextRecoverySummary } from './contextRecovery';
+import {
+  contextLocalFileScopeFingerprint,
+  readContextLocalFileScope,
+  type ContextLocalFileScopeV1,
+} from './contextLocalFileScope';
 import {
   contextNodeFilePath,
   findContextFileNodeByPath,
@@ -86,6 +91,7 @@ export interface ContextTreeSaveOptions {
   source?: {
     kind: 'local_folder' | 'local_file' | 'github_repository';
     label: string;
+    localFileScope?: ContextLocalFileScopeV1;
     branchRef?: string;
     github?: {
       installationId: string;
@@ -120,10 +126,11 @@ function nodeKind(kind: ContextEntityKind): ContextNodeKind {
   return 'symbol';
 }
 
-function treeFromSnapshot(snapshot: ContextGraphSnapshotV2): ProjectContextTree {
+function treeFromSnapshot(snapshot: DeepReadonly<ContextGraphSnapshotV2>): ProjectContextTree {
   const source = snapshot.sources[0];
   if (!source) fail('source_missing');
   const sourceRoot =
+    source.localFileScope?.rootDir ??
     source.localRoot ??
     source.localFile ??
     (source.github
@@ -148,7 +155,7 @@ function treeFromSnapshot(snapshot: ContextGraphSnapshotV2): ProjectContextTree 
     childIds.add(edge.targetEntityId);
   }
   const built = new Set<string>();
-  const build = (entity: ContextEntityV2, ancestors: ReadonlySet<string>): ContextTreeNode => {
+  const build = (entity: DeepReadonly<ContextEntityV2>, ancestors: ReadonlySet<string>): ContextTreeNode => {
     if (ancestors.has(entity.id)) fail('contains_cycle');
     const nextAncestors = new Set(ancestors);
     nextAncestors.add(entity.id);
@@ -176,6 +183,8 @@ function treeFromSnapshot(snapshot: ContextGraphSnapshotV2): ProjectContextTree 
     version: 1,
     projectId: snapshot.map.projectId,
     rootDir: sourceRoot,
+    sourceType: source.kind,
+    ...(source.localFileScope ? { localFileScope: source.localFileScope } : {}),
     generatedAt: snapshot.map.lastIndexedAt ?? snapshot.map.updatedAt,
     model: 'context-map-v2',
     fileCount: snapshot.entities.filter((entity) => entity.kind === 'file').length,
@@ -188,10 +197,11 @@ function treeFromSnapshot(snapshot: ContextGraphSnapshotV2): ProjectContextTree 
   };
 }
 
-function mapFromSnapshot(snapshot: ContextGraphSnapshotV2): ContextMapRecord {
+function mapFromSnapshot(snapshot: DeepReadonly<ContextGraphSnapshotV2>): ContextMapRecord {
   const source = snapshot.sources[0];
   if (!source) fail('source_missing');
   const rootDir =
+    source.localFileScope?.rootDir ??
     source.localRoot ??
     source.localFile ??
     (source.github
@@ -201,13 +211,16 @@ function mapFromSnapshot(snapshot: ContextGraphSnapshotV2): ContextMapRecord {
     id: snapshot.map.id,
     projectId: snapshot.map.projectId,
     rootDir,
+    ...(source.localFileScope ? { localFileScope: source.localFileScope } : {}),
     name: snapshot.map.name,
     status: snapshot.map.status === 'active' ? 'active' : 'deleted',
     createdAt: snapshot.map.createdAt,
     updatedAt: snapshot.map.updatedAt,
     sourceType: source.kind,
     sourceLabel: source.label,
-    sourceStatus: source.status,
+    sourceStatus: source.kind === 'local_file' && !source.localFileScope
+      ? 'permission_required'
+      : source.status,
     branchRef: source.github?.selectedRef,
     github: source.github
       ? {
@@ -473,6 +486,21 @@ export function createContextPersistenceService(
       ) {
         fail('active_map_limit');
       }
+      const previousSource = existing?.sources[0];
+      const sourceType = options.source?.kind ?? previousSource?.kind ?? 'local_folder';
+      const localFileScope = options.source
+        ? options.source.localFileScope
+        : previousSource?.localFileScope;
+      const nextSource = { sourceType, rootDir: tree.rootDir, localFileScope };
+      if (previousSource?.kind === 'local_file') {
+        const previousMap = mapFromSnapshot(existing!);
+        if (sourceType !== 'local_file' ||
+            contextLocalFileScopeFingerprint(previousMap) !== contextLocalFileScopeFingerprint(nextSource)) {
+          fail('file_scope_changed');
+        }
+      }
+      readContextLocalFileScope(nextSource);
+      if (tree.localFileScope !== undefined && sourceType !== 'local_file') fail('file_scope_changed');
       const record: ContextMapRecord = {
         id: mapId,
         projectId: tree.projectId,
@@ -484,12 +512,14 @@ export function createContextPersistenceService(
         status: 'active',
         createdAt: existing?.map.createdAt ?? tree.generatedAt,
         updatedAt: Math.max(Date.now(), tree.generatedAt, (existing?.map.updatedAt ?? -1) + 1),
-        sourceType: options.source?.kind ?? 'local_folder',
-        sourceLabel: options.source?.label ?? 'Local folder',
+        sourceType,
+        ...(localFileScope ? { localFileScope } : {}),
+        sourceLabel: options.source?.label ?? previousSource?.label ?? 'Local folder',
         sourceStatus: options.sourceStatus ?? (
-          existing?.sources[0]?.kind === 'local_folder' &&
-          ['indexing', 'error'].includes(existing.sources[0].status)
-            ? existing.sources[0].status
+          previousSource &&
+          ['local_folder', 'local_file'].includes(previousSource.kind) &&
+          ['indexing', 'error'].includes(previousSource.status)
+            ? previousSource.status
             : 'ready'
         ),
         branchRef: options.source?.branchRef ?? 'workspace',
@@ -502,7 +532,7 @@ export function createContextPersistenceService(
             }
           : undefined,
         lastIndexedAt: tree.generatedAt,
-        tree,
+        tree: { ...tree, sourceType, localFileScope },
       };
       const snapshot = convertContextMapRecordV1ToSnapshotV2(record, accountId, mapId, {
         knowledgeRevision: (existing?.map.knowledgeRevision ?? 0) + 1,

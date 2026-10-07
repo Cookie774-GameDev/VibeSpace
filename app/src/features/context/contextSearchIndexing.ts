@@ -1,3 +1,4 @@
+import { assertContextLocalFilePath, contextLocalFileScopeFingerprint, readContextLocalFileScope, type ContextLocalFileScopeV1 } from './contextLocalFileScope';
 import {
   readTextFileSample,
   sha256Text,
@@ -38,6 +39,7 @@ export interface ContextSearchIndexMap {
   status: 'active' | 'deleted';
   updatedAt: number;
   sourceType?: string;
+  localFileScope?: ContextLocalFileScopeV1;
   tree: { nodes: readonly ContextSearchIndexNode[] };
 }
 
@@ -134,6 +136,7 @@ function validAbsoluteRoot(root: string): boolean {
 }
 
 function candidatesFor(map: ContextSearchIndexMap): Candidate[] {
+  readContextLocalFileScope(map);
   if (
     map.status !== 'active' ||
     !SAFE_ID.test(map.id) ||
@@ -163,11 +166,9 @@ function candidatesFor(map: ContextSearchIndexMap): Candidate[] {
       ) {
         return fail('snapshot_invalid');
       }
-      return {
-        node,
-        relativePath: node.path,
-        absolutePath: absolutePath(map.rootDir, node.path),
-      };
+      const path = absolutePath(map.rootDir, node.path);
+      assertContextLocalFilePath(map, path);
+      return { node, relativePath: node.path, absolutePath: path };
     })
     .sort(
       (left, right) =>
@@ -207,11 +208,19 @@ async function documentFor(
 ): Promise<ContextSearchDocumentInput | null> {
   abortIfNeeded(signal);
   const access = { root: map.rootDir, strictProjectBoundary: true };
+  const fileScope = contextLocalFileScopeFingerprint(map);
+  const assertScope = () => {
+    assertContextLocalFilePath(map, candidate.absolutePath);
+    if (contextLocalFileScopeFingerprint(map) !== fileScope) throw new Error('context_local_file_path_denied');
+  };
+  assertScope();
   // Metadata first avoids an entire pre-read hash pass, including for large
   // files whose bodies will never be indexed. Verify the read against the
   // native post-read hash and unchanged size/time before staging any bytes.
   const before = await dependencies.stat(candidate.absolutePath, false, access);
   abortIfNeeded(signal);
+  assertScope();
+  if (before.ok) assertContextLocalFilePath(map, before.path);
   if (
     !before.ok ||
     before.kind !== 'file' ||
@@ -225,6 +234,8 @@ async function documentFor(
   if (before.size! > MAX_FILE_BYTES) return null;
   const read = await dependencies.read(candidate.absolutePath, MAX_FILE_BYTES + 1, access);
   abortIfNeeded(signal);
+  assertScope();
+  if (read.ok) assertContextLocalFilePath(map, read.path);
   if (!read.ok) return failSource(candidate, read.error.code);
   // Binary/media files still belong in the recursive Context graph. Keep the
   // structural node, but omit decoded bodies that are unsafe as physical text.
@@ -248,8 +259,11 @@ async function documentFor(
   }
   const computedHash = await dependencies.hash(read.content);
   abortIfNeeded(signal);
+  assertScope();
   const after = await dependencies.stat(candidate.absolutePath, true, access);
   abortIfNeeded(signal);
+  assertScope();
+  if (after.ok) assertContextLocalFilePath(map, after.path);
   if (
     !after.ok ||
     after.kind !== 'file' ||

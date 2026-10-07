@@ -12,6 +12,7 @@ import {
 } from './contracts';
 import { createContextGraphRepository, ContextGraphRepositoryError } from './repository';
 import {
+  contextNodeFilePath,
   contextMapCollectionKey,
   contextSelectedFileKey,
   contextStorageKey,
@@ -20,6 +21,7 @@ import {
   type ContextTreeNode,
   type ProjectContextTree,
 } from './tree';
+import { readContextLocalFileScope } from './contextLocalFileScope';
 
 export type ContextV1MigrationState =
   | 'no_legacy_data'
@@ -240,6 +242,10 @@ function parseLegacyTree(value: unknown, projectId: string | null): ProjectConte
   const record = plainRecord(value, 'legacy_tree_invalid');
   if (record.version !== 1 || record.projectId !== projectId) fail('legacy_tree_scope_invalid');
   const rootDir = absoluteRoot(record.rootDir);
+  const localFileScope = record.localFileScope === undefined ? null : readContextLocalFileScope({
+    sourceType: typeof record.sourceType === 'string' ? record.sourceType : undefined,
+    rootDir, localFileScope: record.localFileScope,
+  });
   const generatedAt = safeInteger(record.generatedAt, 'legacy_tree_time_invalid');
   if (!Array.isArray(record.nodes) || record.nodes.length > 100_000) {
     fail('legacy_tree_nodes_invalid');
@@ -259,6 +265,8 @@ function parseLegacyTree(value: unknown, projectId: string | null): ProjectConte
     rootDir,
     generatedAt,
     model: safeText(record.model, 'legacy_tree_model_invalid', 500),
+    ...(record.sourceType === 'local_file' ? { sourceType: 'local_file' as const } : {}),
+    ...(localFileScope ? { localFileScope } : {}),
     fileCount: safeInteger(record.fileCount, 'legacy_tree_file_count_invalid'),
     totalBytes: safeInteger(record.totalBytes, 'legacy_tree_bytes_invalid'),
     summary:
@@ -279,6 +287,14 @@ function parseLegacyMap(value: unknown, projectId: string | null): ContextMapRec
   const createdAt = safeInteger(record.createdAt, 'legacy_map_invalid');
   const updatedAt = safeInteger(record.updatedAt, 'legacy_map_invalid');
   if (updatedAt < createdAt) fail('legacy_map_invalid');
+  const sourceType = record.sourceType ?? tree.sourceType;
+  const scopeValue = record.localFileScope ?? tree.localFileScope;
+  if (tree.sourceType === 'local_file' && sourceType !== 'local_file') fail('legacy_file_scope_conflict');
+  const localFileScope = scopeValue === undefined ? null : readContextLocalFileScope({
+    sourceType: typeof sourceType === 'string' ? sourceType : undefined,
+    rootDir, localFileScope: scopeValue,
+  });
+  if (localFileScope && tree.localFileScope && JSON.stringify(localFileScope) !== JSON.stringify(tree.localFileScope)) fail('legacy_file_scope_conflict');
   return {
     id,
     projectId,
@@ -290,6 +306,8 @@ function parseLegacyMap(value: unknown, projectId: string | null): ContextMapRec
     status: record.status,
     createdAt,
     updatedAt,
+    ...(sourceType === 'local_file' ? { sourceType: 'local_file' as const } : {}),
+    ...(localFileScope ? { localFileScope } : {}),
     tree,
   };
 }
@@ -382,7 +400,7 @@ export function convertContextMapRecordV1ToSnapshotV2(
   } = {},
 ): ContextGraphSnapshotV2 {
   const knowledgeRevision = options.knowledgeRevision ?? 1;
-  const sourceStatus = options.sourceStatus ?? 'stale';
+  let sourceStatus = options.sourceStatus ?? 'stale';
   const parser = options.parser ?? 'context-v1-tree-migration';
   const tree = legacy.tree;
   const createdAt = Math.min(legacy.createdAt, tree.generatedAt);
@@ -391,14 +409,23 @@ export function convertContextMapRecordV1ToSnapshotV2(
   const sourceRevision = `v1-${tree.generatedAt}-${tree.fileCount}-${tree.totalBytes}`;
   const sourceKind = options.github
     ? ('github_repository' as const)
-    : legacy.sourceType === 'local_file'
+    : (legacy.sourceType ?? tree.sourceType) === 'local_file'
       ? ('local_file' as const)
       : ('local_folder' as const);
+  const scopeValue = legacy.localFileScope ?? tree.localFileScope;
+  const localFileScope = scopeValue === undefined
+    ? null
+    : readContextLocalFileScope({ sourceType: sourceKind, rootDir: legacy.rootDir, localFileScope: scopeValue });
+  if (sourceKind === 'local_file' && !localFileScope) sourceStatus = 'permission_required';
   const entities: ContextEntityV2[] = [];
   const edges: ContextEdgeV2[] = [];
   const provenance: ContextProvenanceV2[] = [];
 
   const walk = (node: ContextTreeNode, parentEntityId?: string) => {
+    if (localFileScope && node.kind === 'file') {
+      const path = contextNodeFilePath({ ...tree, sourceType: 'local_file', localFileScope }, node);
+      if (!path) throw new Error('context_local_file_path_denied');
+    }
     const entityId = contextEntityIdForTreeNode(mapId, node.id);
     const entityProvenanceId = boundedId(`${entityId}:provenance`, 'ctxprov');
     const entityCreatedAt = optionalTime(node.createdAt, createdAt);
@@ -515,7 +542,10 @@ export function convertContextMapRecordV1ToSnapshotV2(
         label: options.sourceLabel ?? legacy.sourceLabel ?? legacy.name,
         status: sourceStatus,
         ...(sourceKind === 'local_folder' ? { localRoot: tree.rootDir } : {}),
-        ...(sourceKind === 'local_file' ? { localFile: tree.rootDir } : {}),
+        ...(sourceKind === 'local_file' ? {
+          localFile: localFileScope?.filePath ?? tree.rootDir,
+          ...(localFileScope ? { localFileScope } : {}),
+        } : {}),
         ...(options.github
           ? {
               github: {
@@ -552,6 +582,8 @@ function fallbackMapFromTree(tree: ProjectContextTree): ContextMapRecord {
     projectId: tree.projectId,
     rootDir: tree.rootDir,
     name: `${rootName} Context Map`,
+    ...(tree.sourceType === 'local_file' ? { sourceType: 'local_file' as const } : {}),
+    ...(tree.localFileScope ? { localFileScope: tree.localFileScope } : {}),
     status: 'active',
     createdAt: tree.generatedAt,
     updatedAt: tree.generatedAt,

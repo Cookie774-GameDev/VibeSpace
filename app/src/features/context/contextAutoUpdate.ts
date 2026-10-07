@@ -1,3 +1,4 @@
+import { contextLocalFileScopeFingerprint, readContextLocalFileScope } from './contextLocalFileScope';
 import { db, openDb } from '@/lib/db';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
@@ -8,6 +9,7 @@ import { readSiyuanMapManifest } from './siyuan/siyuanMapManifest';
 import { readSiyuanIndexJob } from './siyuan/siyuanIndexJobStore';
 import {
   buildProjectContextTreeFromSiyuanIndex,
+  assertSiyuanLocalFileEntries,
   projectSiyuanMapForContextSearch,
   scanSiyuanFilesystemIndex,
   type SiyuanSafeIndex,
@@ -55,11 +57,18 @@ export const isContextAutoUpdateRunning = (scope: ContextAutoUpdateScope) =>
 
 export function contextAutoFingerprint(map: ContextMapRecord): string {
   const manifest = map.projectId ? readSiyuanMapManifest(map.projectId, map.id) : null;
-  return JSON.stringify([
+  const base = [
     canonicalSiyuanAuthorityRoot(map.rootDir),
     map.sourceType ?? 'local_folder',
     [...(manifest?.sourcePolicy.excludedPaths ?? [])].sort(),
-  ]);
+  ];
+  try {
+    const fileScope = contextLocalFileScopeFingerprint(map);
+    return JSON.stringify(fileScope ? [...base, fileScope] : base);
+  } catch {
+    // Legacy/invalid rows remain renderable; runtime admission still rejects them.
+    return JSON.stringify([...base, 'context_local_file_scope_unavailable']);
+  }
 }
 export function contextAutoMetadata(index: SiyuanSafeIndex): ContextAutoMetadata[] {
   return index.entries.map((entry) => ({
@@ -218,10 +227,12 @@ export function createContextAutoUpdater(ports: ContextAutoUpdatePorts) {
       )
         throw new Error('context_auto_update_scope_changed');
     };
+    readContextLocalFileScope(map);
     const index = await ports.scan(map, signal);
     // A partial discovery cannot authorize removing files absent from its result.
     if (index.unreadable > 0) throw new Error('context_auto_update_discovery_incomplete');
     await guard();
+    assertSiyuanLocalFileEntries(map, index.entries);
     const metadata = contextAutoMetadata(index);
     // This is the last committed physical-source checkpoint, not a projection
     // revision. Rehydrating the same map must not discard source metadata.
@@ -351,6 +362,7 @@ export async function createProductionContextAutoUpdater(scope: ContextAutoUpdat
     active: () => active(scope),
     now: () => Date.now(),
     async scan(map, signal) {
+      readContextLocalFileScope(map);
       if (map.sourceStatus === 'indexing' || map.sourceStatus === 'pending' || map.sourceStatus === 'error') {
         throw new Error('context_auto_update_initial_map_not_ready');
       }

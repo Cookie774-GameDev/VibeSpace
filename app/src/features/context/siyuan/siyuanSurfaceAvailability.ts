@@ -3,6 +3,7 @@ import type { SiyuanIndexJobRecord } from './siyuanIndexJobStore';
 import type { SiyuanMapManifest } from './siyuanMapManifest';
 import { siyuanIndexPolicyFingerprint } from './siyuanSafeIndex';
 import { canonicalSiyuanAuthorityRoot } from './siyuanPathAuthority';
+import { readContextLocalFileScope } from '../contextLocalFileScope';
 
 export function hasSiyuanMapJobAuthority(
   record: ContextMapRecord,
@@ -10,6 +11,9 @@ export function hasSiyuanMapJobAuthority(
   job: SiyuanIndexJobRecord | null,
   accountId: string | null,
 ): boolean {
+  let localFileScope;
+  try { localFileScope = readContextLocalFileScope(record); }
+  catch { return false; }
   return Boolean(
     record.status === 'active' &&
     manifest &&
@@ -29,6 +33,7 @@ export function hasSiyuanMapJobAuthority(
         manifest.sourceRoot,
         manifest.summaryPolicy,
         manifest.sourcePolicy.excludedPaths,
+        localFileScope,
       ),
   );
 }

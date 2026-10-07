@@ -1,3 +1,4 @@
+import { contextLocalFileScopeFingerprint, readContextLocalFileScope } from './contextLocalFileScope';
 import { devConsole } from '@/features/dev-console';
 import { withSiyuanGraphNavigation } from './siyuan/siyuanGraphNavigation';
 import { canonicalSiyuanAuthorityRoot } from './siyuan/siyuanPathAuthority';
@@ -35,6 +36,8 @@ import {
 } from './siyuan/siyuanBindingStore';
 import {
   buildSiyuanSafeIndex,
+  assertSiyuanLocalFileEntries,
+  siyuanIndexPolicyFingerprint,
   buildProjectContextTreeFromSiyuanIndex,
   scanSiyuanFilesystemIndex,
   type SiyuanIndexJobControl,
@@ -458,6 +461,7 @@ export interface SiyuanContextMapSyncOptions {
   signal?: AbortSignal;
   control?: SiyuanIndexJobControl;
   list?: SiyuanDirectoryLister;
+  stat?: NonNullable<Parameters<typeof scanSiyuanFilesystemIndex>[2]>['stat'];
   forceReconcile?: boolean;
   approvalPreflight?: boolean;
   /** Rebuild structure on restore, then require an explicit user resume before any model runs. */
@@ -486,6 +490,22 @@ export function assertSiyuanCloudApprovalPreflightReady(
   }
 }
 
+function withLocalFileScope(record: ContextMapRecord, tree: ProjectContextTree): ProjectContextTree {
+  const localFileScope = readContextLocalFileScope(record);
+  if (!localFileScope) return tree;
+  buildSiyuanSafeIndex({ ...record, tree }, { mode: 'none', selectedExtensions: [], selectedPaths: [] });
+  return { ...tree, rootDir: record.rootDir, sourceType: 'local_file', localFileScope };
+}
+
+function assertLocalFileJobScope(record: ContextMapRecord, manifest: SiyuanMapManifest, job: SiyuanIndexJobRecord | null): void {
+  const scope = readContextLocalFileScope(record);
+  if (!scope) return;
+  readContextLocalFileScope({ ...record, rootDir: manifest.sourceRoot });
+  if (job && job.policyFingerprint !== siyuanIndexPolicyFingerprint(record.rootDir, manifest.summaryPolicy, manifest.sourcePolicy.excludedPaths, scope)) {
+    throw new Error('siyuan_index_resume_authority_mismatch');
+  }
+}
+
 function parseContextMapMarkdown(
   document: SiyuanManagedDocument,
   record: ContextMapRecord,
@@ -496,14 +516,14 @@ function parseContextMapMarkdown(
   }
   if (document.markdown.includes(`<!-- ${marker(record.id)} index=v1 -->`)) {
     if (!indexedTree) throw new Error('siyuan_context_map_index_missing');
-    return { document, tree: { ...indexedTree, model: 'siyuan-managed-v1' } };
+    return { document, tree: withLocalFileScope(record, { ...indexedTree, model: 'siyuan-managed-v1' }) };
   }
   const payloadMatch = /\bpayload=([A-Za-z0-9_-]+)\s*-->/u.exec(document.markdown);
   if (payloadMatch?.[1]) {
     return {
       document,
       tree: {
-        ...decodeTree(payloadMatch[1]),
+        ...withLocalFileScope(record, decodeTree(payloadMatch[1])),
         model: 'siyuan-managed-v1',
       },
     };
@@ -539,11 +559,11 @@ function parseContextMapMarkdown(
   }
   return {
     document,
-    tree: {
+    tree: withLocalFileScope(record, {
       ...record.tree,
       model: 'siyuan-managed-v1',
       nodes,
-    },
+    }),
   };
 }
 
@@ -628,6 +648,7 @@ async function readManagedDocumentWithDuplicateRecovery(
 export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort) {
   const warming = new Map<string, Promise<void>>();
   const synchronizing = new Map<string, Promise<SiyuanContextMapSnapshot>>();
+  const synchronizingFileScopes = new Map<string, string | null>();
   const syncControllers = new Map<string, AbortController>();
   const managedDocumentIds = new Map<string, string>();
   const documentKey = (projectId: string, mapId: string) => `${projectId}\u0000${mapId}`;
@@ -650,6 +671,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
     let durableJob: SiyuanIndexJobRecord | null = nativeFilesystemAvailable
       ? await readSiyuanIndexJob(projectId, record.id)
       : null;
+    assertLocalFileJobScope(record, manifest, durableJob);
     const needsResumeReconciliation = Boolean(
       durableJob &&
       (options.forceReconcile === true || (durableJob.reconciledAt ?? 0) < rendererStartedAt),
@@ -681,8 +703,10 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
               ? undefined
               : { accountId: options.accountId ?? null, projectId, mapId: record.id },
           list: options.list,
+          stat: options.stat,
         })
       : buildSiyuanSafeIndex(record, manifest.summaryPolicy, manifest.sourcePolicy.excludedPaths));
+    assertSiyuanLocalFileEntries(record, index.entries);
     let forcedChangedEntries: SiyuanSafeIndexEntry[] = [];
     if (durableJob && previousEntriesForForcedReconciliation) {
       await options.control?.checkpoint(options.signal);
@@ -1295,6 +1319,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
         control: options.control,
         excludedPaths: manifest.sourcePolicy.excludedPaths,
         list: options.list,
+        stat: options.stat,
       });
       const previousById = new Map(index.entries.map((entry) => [entry.nodeId, entry]));
       const reconciledEntries = freshIndex.entries.map((entry) => {
@@ -1831,10 +1856,13 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
     ): Promise<SiyuanContextMapSnapshot | null> {
       const exactProjectId = projectId.trim();
       if (!exactProjectId || record.status !== 'active') return null;
+      const fileScope = readContextLocalFileScope(record);
+      if (fileScope) withLocalFileScope(record, record.tree);
       // An indexing manifest is deliberately not presented as ready. Returning
       // null makes the Context page call sync(), which restores the durable
       // directory frontier after navigation, HMR, a crash, or full app restart.
       const manifest = readSiyuanMapManifest(exactProjectId, record.id);
+      if (fileScope && manifest) assertLocalFileJobScope(record, manifest, await readSiyuanIndexJob(exactProjectId, record.id));
       if (manifest?.status === 'indexing') return null;
       const document =
         (await readKnownDocument(exactProjectId, record)) ??
@@ -1850,10 +1878,11 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
           if (entries.length !== job.indexed || entries.length !== manifest.counts.indexed) {
             throw new Error('siyuan_index_checkpoint_inconsistent');
           }
+          assertSiyuanLocalFileEntries(record, entries);
           indexedTree = buildProjectContextTreeFromSiyuanIndex(record.tree, entries);
         }
         const payload = /\bpayload=([A-Za-z0-9_-]+)\s*-->/u.exec(document.markdown)?.[1];
-        const legacy = payload ? decodeTree(payload) : null;
+        const legacy = payload ? withLocalFileScope(record, decodeTree(payload)) : null;
         // Upgrade only untouched generated metadata roots. User-authored SiYuan
         // content remains authoritative; the native update also checks old text.
         if (
@@ -1865,6 +1894,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
         ) {
           const entries = await readSiyuanIndexEntries(exactProjectId, record.id);
           if (entries.length > 0) {
+            assertSiyuanLocalFileEntries(record, entries);
             const tree = buildProjectContextTreeFromSiyuanIndex(legacy, entries);
             const markdown = contextMapMarkdown({ ...record, tree });
             let updated: SiyuanManagedDocument;
@@ -1920,9 +1950,16 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
       const exactProjectId = projectId.trim();
       if (!exactProjectId || record.status !== 'active')
         throw new Error('siyuan_context_map_scope_invalid');
+      const fileScope = contextLocalFileScopeFingerprint(record);
+      if (fileScope && (options.signal?.aborted || options.control?.state === 'cancelled')) throw new Error('siyuan_index_cancelled');
+      if (fileScope) withLocalFileScope(record, record.tree);
+      if (options.preScannedIndex) assertSiyuanLocalFileEntries(record, options.preScannedIndex.entries);
       const syncKey = documentKey(exactProjectId, record.id);
       const activeSync = synchronizing.get(syncKey);
-      if (activeSync) return activeSync;
+      if (activeSync) {
+        if (synchronizingFileScopes.get(syncKey) !== fileScope) throw new Error('context_local_file_scope_changed');
+        return activeSync;
+      }
       const syncController = new AbortController();
       const relayAbort = () => syncController.abort(options.signal?.reason);
       if (options.signal?.aborted) relayAbort();
@@ -1938,6 +1975,10 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
             effectiveOptions.summaryPolicy,
             effectiveOptions.sourcePolicy,
           );
+        if (fileScope) {
+          assertLocalFileJobScope(record, manifest, await readSiyuanIndexJob(exactProjectId, record.id));
+          if (effectiveOptions.signal.aborted) throw new Error('siyuan_index_cancelled');
+        }
         if (manifest.status === 'recycled') {
           // Retained bindings are the durable retirement journal. Restore
           // reconciles survivors and recreates only blocks already deleted.
@@ -2064,13 +2105,17 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
         });
         return snapshot;
       })();
+      synchronizingFileScopes.set(syncKey, fileScope);
       synchronizing.set(syncKey, task);
       syncControllers.set(syncKey, syncController);
       try {
         return await task;
       } finally {
         options.signal?.removeEventListener('abort', relayAbort);
-        if (synchronizing.get(syncKey) === task) synchronizing.delete(syncKey);
+        if (synchronizing.get(syncKey) === task) {
+          synchronizing.delete(syncKey);
+          synchronizingFileScopes.delete(syncKey);
+        }
         if (syncControllers.get(syncKey) === syncController) syncControllers.delete(syncKey);
       }
     },

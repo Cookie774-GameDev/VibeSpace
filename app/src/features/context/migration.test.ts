@@ -686,3 +686,46 @@ describe('Context Map v1 migration', () => {
     await expect(database.context_migration_backups.count()).resolves.toBe(0);
   });
 });
+
+describe('N11 legacy file migration admission', () => {
+  it('does not silently convert an ambiguous local-file row into a folder grant', async () => {
+    const map={...mapFixture('map-old-file','active'),sourceType:'local_file' as const};
+    seedCollection(localStorage,[map]);
+    const key=contextMapCollectionKey('project-1');const before=localStorage.getItem(key);
+    await migrateContextV1ForAccount({database,storage:localStorage,accountId:'account-1',projectId:'project-1'});
+    const sources=await database.context_sources.toArray();
+    expect(sources).toHaveLength(1);
+    expect(sources[0]).toMatchObject({kind:'local_file',localFile:map.rootDir});
+    expect((sources[0] as {localFileScope?:unknown}).localFileScope).toBeUndefined();
+    expect(localStorage.getItem(key)).toBe(before);
+  });
+});
+
+describe('N11 explicitly scoped legacy-format recovery', () => {
+  it('retains an explicit versioned file scope instead of discarding it on migration', async () => {
+    const root='/owned/docs';
+    const map={...mapFixture('map-scoped-file','active',root),sourceType:'local_file' as const,
+      localFileScope:{version:1 as const,rootDir:root,filePath:root+'/README.md'}};
+    map.tree.nodes=[{id:'file-readme',kind:'file',title:'README.md',path:'README.md',summary:'',createdAt:1000,modifiedAt:1000}];
+    map.tree.fileCount=1;
+    seedCollection(localStorage,[map]);
+    const key=contextMapCollectionKey('project-1');const before=localStorage.getItem(key);
+    await migrateContextV1ForAccount({database,storage:localStorage,accountId:'account-1',projectId:'project-1'});
+    expect((await database.context_sources.toArray())[0]).toMatchObject({kind:'local_file',localFile:root+'/README.md',localFileScope:map.localFileScope});
+    expect(localStorage.getItem(key)).toBe(before);
+  });
+});
+
+describe('N11 standalone legacy-tree recovery', () => {
+  it.each([false,true])('preserves standalone local-file intent (versioned scope=%s)',async explicit=>{
+    const root='/owned/docs';const scope={version:1 as const,rootDir:root,filePath:root+'/README.md'};
+    const tree={...treeFixture(root),sourceType:'local_file' as const,...(explicit?{localFileScope:scope}:{}),nodes:[{id:'file-readme',kind:'file' as const,title:'README.md',path:'README.md',summary:''}],fileCount:1};
+    const key=contextStorageKey('project-1');const bytes=JSON.stringify(tree);localStorage.setItem(key,bytes);
+    await migrateContextV1ForAccount({database,storage:localStorage,accountId:'account-1',projectId:'project-1'});
+    const source=(await database.context_sources.toArray())[0];
+    expect(source?.kind).toBe('local_file');
+    if(explicit)expect(source).toMatchObject({localFile:scope.filePath,localFileScope:scope});
+    else expect(source).toMatchObject({status:'permission_required',localFile:root});
+    expect(localStorage.getItem(key)).toBe(bytes);
+  });
+});

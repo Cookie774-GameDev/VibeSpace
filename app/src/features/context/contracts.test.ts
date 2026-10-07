@@ -408,3 +408,37 @@ describe('physical source metadata compatibility', () => {
     }
   });
 });
+
+describe('N11 selected-file source descriptor', () => {
+  const makeSource = () => ({
+    version: 2, id: 'source-n11', accountId: 'account-n11', mapId: 'map-n11',
+    kind: 'local_file', label: 'selected.txt', status: 'ready',
+    localFile: '/owned/docs/selected.txt', createdAt: 1000, updatedAt: 2000,
+    parserVersion: 1,
+  });
+  const scope = { version: 1, rootDir: '/owned/docs', filePath: '/owned/docs/selected.txt' };
+  it('retains a newly selected file and its distinct reader directory root', () => {
+    const input = { ...makeSource(), localFileScope: { ...scope } };
+    const result = parseContextSourceV2(input);
+    expect(result).toMatchObject({ ok: true, value: { localFile: scope.filePath, localFileScope: scope } });
+    expect(input.localFileScope).toEqual(scope);
+    if (result.ok) expect(Object.isFrozen(result.value)).toBe(true);
+  });
+  it('retains a legacy row without inventing selection authority', () => {
+    const input = makeSource(); const before = JSON.stringify(input);
+    expect(parseContextSourceV2(input)).toEqual({ ok: true, value: input });
+    expect(JSON.stringify(input)).toBe(before);
+  });
+  it.each([
+    { ...scope, filePath: '/owned/docs/sibling.txt' },
+    { ...scope, rootDir: '/other' },
+    { ...scope, version: 9 },
+  ])('refuses an inconsistent or invalid explicit scope: %j', localFileScope => {
+    expect(parseContextSourceV2({ ...makeSource(), localFileScope })).toMatchObject({ ok: false, reason: 'source_local_file_scope_invalid' });
+  });
+  it('refuses to attach one-file authority to a directory source', () => {
+    const { localFile: _file, ...base } = makeSource();
+    expect(parseContextSourceV2({ ...base, kind: 'local_folder', localRoot: '/owned/docs', localFileScope: scope }))
+      .toMatchObject({ ok: false, reason: 'source_local_file_scope_invalid' });
+  });
+});

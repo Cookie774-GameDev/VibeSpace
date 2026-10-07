@@ -9,6 +9,12 @@ import { basename, extension, isPopularTextFile } from '@/features/files/project
 import { classifyJarvisReadError, classifyJarvisSource } from '@/lib/jarvis/sourcePolicy';
 import { formatUserDateTime } from '@/lib/timeFormat';
 import { contextMapPickerOption } from './contextChatIntegration';
+import {
+  assertContextLocalFilePath,
+  contextLocalFileScopeFingerprint,
+  readContextLocalFileScope,
+  type ContextLocalFileScopeV1,
+} from './contextLocalFileScope';
 
 export const CONTEXT_MIME = 'application/x-jarvis-context';
 export const CONTEXT_STORAGE_PREFIX = 'jarvis-context-tree-v1';
@@ -59,6 +65,8 @@ export interface ProjectContextTree {
   version: 1;
   projectId: string | null;
   rootDir: string;
+  sourceType?: ContextMapRecord['sourceType'];
+  localFileScope?: ContextLocalFileScopeV1;
   generatedAt: number;
   model: string;
   fileCount: number;
@@ -86,6 +94,7 @@ export interface ContextMapRecord {
   id: string;
   projectId: string | null;
   rootDir: string;
+  localFileScope?: ContextLocalFileScopeV1;
   filePath?: string;
   name: string;
   status: ContextMapStatus;
@@ -399,7 +408,8 @@ export function saveContextTree(
     status: 'active',
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
-    sourceType: existing?.sourceType ?? 'local_folder',
+    sourceType: existing?.sourceType ?? tree.sourceType ?? 'local_folder',
+    localFileScope: existing?.localFileScope ?? tree.localFileScope,
     sourceLabel: existing?.sourceLabel ?? 'Local folder',
     sourceStatus: existing?.sourceStatus ?? 'ready',
     branchRef: existing?.branchRef ?? 'workspace',
@@ -407,6 +417,19 @@ export function saveContextTree(
     lastIndexedAt: tree.generatedAt,
     tree,
   };
+
+  const localFileScope = readContextLocalFileScope(record);
+  if (localFileScope) {
+    if ((tree.sourceType !== undefined && tree.sourceType !== 'local_file') ||
+        contextLocalFileScopeFingerprint({ sourceType: 'local_file', rootDir: tree.rootDir,
+          localFileScope: tree.localFileScope ?? localFileScope }) !== contextLocalFileScopeFingerprint(record)) {
+      throw new Error('context_local_file_scope_changed');
+    }
+    record.tree = { ...tree, sourceType: 'local_file', localFileScope };
+    for (const node of flattenContextNodes(record.tree.nodes)) {
+      if (node.kind === 'file' && !contextNodeFilePath(record.tree, node)) throw new Error('context_local_file_path_denied');
+    }
+  }
 
   const maps =
     existingIndex >= 0
@@ -418,7 +441,7 @@ export function saveContextTree(
     selectedMapId: record.id,
     maps: sortContextMaps(maps),
   });
-  writeLegacyContextTree(tree);
+  writeLegacyContextTree(record.tree);
   dispatchContextMapsUpdated(tree.projectId, tree.rootDir, record.id);
   return record;
 }
@@ -520,6 +543,16 @@ function normalizeContextMapRecord(
     : typeof record.filePath === 'string' && record.filePath.trim()
       ? record.filePath.trim()
       : contextMapFilePath(rootDir);
+  const sourceType = [
+    'local_folder', 'local_file', 'github_repository', 'linked_vibespace_content', 'portable_markdown_folder',
+  ].includes(record.sourceType ?? '') ? record.sourceType
+    : tree.sourceType === 'local_file' ? 'local_file' : undefined;
+  let localFileScope: ContextLocalFileScopeV1 | null = null;
+  const rawScope = record.localFileScope === undefined ? tree.localFileScope : record.localFileScope;
+  if (rawScope !== undefined) {
+    try { localFileScope = readContextLocalFileScope({ sourceType, rootDir, localFileScope: rawScope }); }
+    catch { return null; }
+  }
   return {
     id,
     projectId,
@@ -532,20 +565,13 @@ function normalizeContextMapRecord(
     status: record.status === 'deleted' ? 'deleted' : 'active',
     createdAt,
     updatedAt,
-    sourceType: [
-      'local_folder',
-      'local_file',
-      'github_repository',
-      'linked_vibespace_content',
-      'portable_markdown_folder',
-    ].includes(record.sourceType ?? '')
-      ? record.sourceType
-      : undefined,
+    sourceType,
+    ...(localFileScope ? { localFileScope } : {}),
     sourceLabel:
       typeof record.sourceLabel === 'string' && record.sourceLabel.trim()
         ? record.sourceLabel.trim()
         : undefined,
-    sourceStatus: [
+    sourceStatus: sourceType === 'local_file' && !localFileScope ? 'permission_required' : [
       'pending',
       'indexing',
       'ready',
@@ -572,7 +598,9 @@ function normalizeContextMapRecord(
       record.lastIndexedAt <= 8_640_000_000_000_000
         ? record.lastIndexedAt
         : undefined,
-    tree,
+    tree: sourceType === 'local_file'
+      ? { ...tree, rootDir, sourceType, localFileScope: localFileScope ?? undefined }
+      : tree,
   };
 }
 
@@ -740,6 +768,9 @@ export function nodeToAttachment(
   tree: ProjectContextTree,
   node: ContextTreeNode,
 ): ContextAttachment {
+  const fileScope = readContextLocalFileScope(tree);
+  const selectedPath = fileScope ? contextNodeFilePath(tree, node) : undefined;
+  if (fileScope && !selectedPath) throw new Error('context_local_file_path_denied');
   return {
     projectId: tree.projectId,
     rootDir: tree.rootDir,
@@ -748,7 +779,7 @@ export function nodeToAttachment(
     title: node.title,
     kind: node.kind,
     summary: node.summary,
-    path: node.kind === 'root' ? contextTreeBackingFilePath(tree) : node.path,
+    path: fileScope ? selectedPath : node.kind === 'root' ? contextTreeBackingFilePath(tree) : node.path,
     tags: node.tags,
     sizeBytes: node.sizeBytes,
     createdAt: node.createdAt,
@@ -761,14 +792,21 @@ export function contextNodeFilePath(
   tree: ProjectContextTree,
   node: ContextTreeNode,
 ): string | undefined {
+  const fileScope = readContextLocalFileScope(tree);
+  if (fileScope && node.kind === 'root') return fileScope.filePath;
   if (node.kind !== 'file' || !node.path) return undefined;
   const path = node.path.trim();
   if (!path) return undefined;
-  if (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('/') || path.startsWith('\\\\')) return path;
+  if (/^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('/') || path.startsWith('\\\\')) {
+    assertContextLocalFilePath(tree, path);
+    return path;
+  }
   const root = tree.rootDir.replace(/[\\/]$/g, '');
   if (!root) return path;
   const separator = root.includes('\\') ? '\\' : '/';
-  return `${root}${separator}${path.replace(/^[\\/]/, '')}`;
+  const absolute = `${root}${separator}${path.replace(/^[\\/]/, '')}`;
+  assertContextLocalFilePath(tree, absolute);
+  return absolute;
 }
 
 export function flattenContextNodes(nodes: ContextTreeNode[]): ContextTreeNode[] {

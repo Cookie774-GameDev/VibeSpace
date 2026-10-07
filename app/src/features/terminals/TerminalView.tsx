@@ -31,7 +31,9 @@
  * before slice 1 lands) we render a calm `bg-paper-soft` placeholder
  * instead of crashing the React tree.
  */
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
+import {
+  useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent,
+} from 'react';
 import { Mic, X } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -98,6 +100,12 @@ import {
 } from '@/features/composer-stt/selectedSttSession';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
+import { getActiveAccountIdentity } from '@/lib/accountIdentity';
+import { projectRepo, workspaceRepo } from '@/lib/db/repositories';
+import { db } from '@/lib/db';
+import Dexie, { RangeSet, rangesOverlap, type ObservabilitySet } from 'dexie';
+import { getStoredProjectRoot, projectStorageKey, ROOT_PREFIX } from '@/features/files/projectFiles';
+import type { ProjectId, WorkspaceId } from '@/types';
 import {
   CONTEXT_MIME,
   formatContextAttachmentForTerminal,
@@ -641,6 +649,132 @@ function sameTerminalPromptEvidence(
   );
 }
 
+// This temporary lease admits only this pending spawn. It never derives
+// Context authority from a directory returned by the native fallback shell.
+function captureTerminalContextSpawnScope(input: {
+  cwd?: string;
+  paneId?: string;
+  projectId?: string;
+  viewIsCurrent(): boolean;
+  revokeIdentity(): void;
+}) {
+  const account = getActiveAccountIdentity();
+  const auth = useAuthStore.getState();
+  const workspaceId = auth.workspaceId;
+  const activeProjectId = auth.projectId;
+  const storedRoot = !input.cwd && input.projectId ? getStoredProjectRoot(input.projectId) : '';
+  const effectiveCwd = input.cwd || storedRoot || undefined;
+  const scoped = Boolean(effectiveCwd && account && workspaceId && input.projectId && input.paneId);
+  let revoked = false;
+  let finished = false;
+  const assertCurrent = () => {
+    const currentAccount = getActiveAccountIdentity();
+    const current = useAuthStore.getState();
+    if (
+      revoked ||
+      !input.viewIsCurrent() ||
+      currentAccount?.accountId !== account?.accountId ||
+      currentAccount?.source !== account?.source ||
+      current.workspaceId !== workspaceId ||
+      current.projectId !== activeProjectId ||
+      (!input.cwd && input.projectId && getStoredProjectRoot(input.projectId) !== storedRoot)
+    )
+      throw new Error('terminal_context_spawn_scope_changed');
+  };
+  const cancel = () => {
+    if (finished || revoked) return;
+    revoked = true;
+    input.revokeIdentity();
+  };
+  const check = () => {
+    if (finished) return;
+    try {
+      assertCurrent();
+    } catch {
+      cancel();
+    }
+  };
+  const verifyOwnership = async () => {
+    assertCurrent();
+    if (!scoped || !account || !workspaceId || !input.projectId) return;
+    if (activeProjectId !== input.projectId)
+      throw new Error('terminal_context_project_unavailable');
+    const project = await projectRepo.getById(input.projectId as ProjectId);
+    assertCurrent();
+    if (!project || project.workspace_id !== workspaceId)
+      throw new Error('terminal_context_project_unavailable');
+    const workspace = await workspaceRepo.getById(workspaceId as WorkspaceId);
+    assertCurrent();
+    if (!workspace || workspace.owner_id !== account.accountId)
+      throw new Error('terminal_context_project_unavailable');
+  };
+  const touchesAuthority = (
+    parts: ObservabilitySet,
+    table: 'workspaces' | 'projects',
+    key: string,
+    index: 'owner_id' | 'workspace_id',
+    owner: string,
+  ): boolean => {
+    const prefix = `idb://${db.name}/${table}/`;
+    const primary = parts[prefix];
+    const deletedOrUnknown = parts[`${prefix}:dels`];
+    const authority = parts[`${prefix}${index}`];
+    const keyRange = new RangeSet(key);
+    // Unknown/deleted row ranges fail closed. Ordinary precise name-only
+    // updates do not touch the indexed authority, nor do unrelated row keys.
+    return Boolean(
+      (deletedOrUnknown && rangesOverlap(deletedOrUnknown, keyRange)) ||
+      (primary &&
+        authority &&
+        rangesOverlap(primary, keyRange) &&
+        rangesOverlap(authority, new RangeSet(owner))),
+    );
+  };
+  const onCommittedMutation = (parts: ObservabilitySet) => {
+    if (finished || !scoped || !account || !workspaceId || !input.projectId) return;
+    if (
+      touchesAuthority(parts, 'workspaces', workspaceId, 'owner_id', account.accountId) ||
+      touchesAuthority(parts, 'projects', input.projectId, 'workspace_id', workspaceId)
+    )
+      cancel();
+  };
+  const onStorage = (event: StorageEvent) => {
+    if (finished || input.cwd || !input.projectId || event.storageArea !== window.localStorage)
+      return;
+    if (
+      event.key === null ||
+      (event.key === projectStorageKey(ROOT_PREFIX, input.projectId) &&
+        (event.oldValue !== storedRoot || event.newValue !== storedRoot))
+    )
+      cancel();
+    check();
+  };
+  if (scoped) Dexie.on.storagemutated.subscribe(onCommittedMutation);
+  const stopAuth = useAuthStore.subscribe(check);
+  window.addEventListener('jarvis:files:root-changed', check);
+  window.addEventListener('storage', onStorage);
+  return {
+    assertCurrent,
+    check,
+    cancel,
+    verifyOwnership,
+    async resolveCwd(): Promise<string | undefined> {
+      assertCurrent();
+      if (!scoped) return input.cwd;
+      await verifyOwnership();
+      return effectiveCwd;
+    },
+    finish() {
+      if (finished) return;
+      finished = true;
+      stopAuth();
+      if (scoped) Dexie.on.storagemutated.unsubscribe(onCommittedMutation);
+      window.removeEventListener('jarvis:files:root-changed', check);
+      window.removeEventListener('storage', onStorage);
+    },
+  };
+}
+
 export function TerminalView({
   sessionId: existingSessionId,
   paneId,
@@ -672,6 +806,12 @@ export function TerminalView({
     state.cloudSession ? state.cloudSession.user_id.trim() : state.localUserId?.trim() || '',
   );
   const terminalWorkspaceId = useAuthStore((state) => state.workspaceId?.trim() ?? '');
+  const spawnViewRef = useRef({ paneId, projectId, cwd });
+  spawnViewRef.current = { paneId, projectId, cwd };
+  const spawnScopeRef = useRef<ReturnType<typeof captureTerminalContextSpawnScope> | null>(null);
+  useLayoutEffect(() => {
+    spawnScopeRef.current?.check();
+  }, [paneId, projectId, cwd]);
   const terminalAccountIdRef = useRef(terminalAccountId);
   terminalAccountIdRef.current = terminalAccountId;
   const resolvedAgentMode = agentMode ?? (agentSlug ? 'default' : undefined);
@@ -1052,6 +1192,19 @@ export function TerminalView({
     let startupRestoreMode = false;
     let sshSession = isSshSessionCommand(startupCommand);
     let contextBridgeIdentityId: string | null = null;
+    const spawnScope = captureTerminalContextSpawnScope({
+      cwd,
+      paneId,
+      projectId: projectId ?? undefined,
+      viewIsCurrent: () =>
+        !cancelled && spawnViewRef.current.paneId === paneId &&
+        spawnViewRef.current.projectId === projectId && spawnViewRef.current.cwd === cwd,
+      revokeIdentity: () => {
+        if (contextBridgeIdentityId) revokeTerminalContextBridgeIdentity(contextBridgeIdentityId);
+        contextBridgeIdentityId = null;
+      },
+    });
+    spawnScopeRef.current = spawnScope;
     const webglDispose = createWebglDisposeTracker();
     let webglLease: TerminalWebglLease | null = null;
     let onResourcePressure: (() => void) | null = null;
@@ -1648,6 +1801,8 @@ export function TerminalView({
         startupRestoreMode = Boolean(restoreDecision.restoredText);
 
         if (restoreDecision.kind === 'spawn') {
+          const effectiveCwd = await spawnScope.resolveCwd();
+          spawnScope.assertCurrent();
           spawnedFresh = true;
           restoredInput = restoreDecision.restoredInput;
           let spawnCommand = command;
@@ -1667,13 +1822,14 @@ export function TerminalView({
             accountId: terminalAccountId,
             projectId,
             paneId,
-            cwd,
+            cwd: effectiveCwd,
             restore: isRecoveredSession,
             command,
             startupCommand,
             startupCommands,
           });
           if (cancelled) return;
+          spawnScope.assertCurrent();
           if (managedClaude) {
             spawnCommand = command?.trim() === 'claude' ? undefined : command;
             nativeStartupCommand = managedClaude.startupCommand;
@@ -1700,31 +1856,36 @@ export function TerminalView({
           // coordination doc) BEFORE the process starts whenever the
           // working directory is known, so a CLI spawned directly (e.g.
           // `opencode` as the pane command) reads it on session start.
-          if (cwd) {
+          if (effectiveCwd) {
             setInitializationPhase('kernel_terminal_phase_agent_briefing');
+            const summary = await coordinationSummaryFor(modeAtSpawn, effectiveCwd);
+            spawnScope.assertCurrent();
             const delivery = await deliverAgentTerminalContext({
-              cwd,
+              cwd: effectiveCwd,
               agentSlug: slugAtSpawn,
               agentMode: modeAtSpawn,
               terminalId: paneId ?? null,
               projectId: projectId ?? null,
               projectName: projectName ?? null,
-              coordinationSummary: await coordinationSummaryFor(modeAtSpawn, cwd),
+              coordinationSummary: summary,
             });
+            spawnScope.assertCurrent();
             briefingDelivered = delivery.ok;
             if (!delivery.ok && delivery.error) {
               console.warn('[Jarvis] agent briefing delivery failed:', delivery.error);
             }
           }
 
+          await spawnScope.verifyOwnership();
+          spawnScope.assertCurrent();
           setInitializationPhase('kernel_terminal_phase_native_spawn');
-          if (terminalAccountId && terminalWorkspaceId && projectId && paneId && cwd) {
+          if (terminalAccountId && terminalWorkspaceId && projectId && paneId && effectiveCwd) {
             try {
               contextBridgeIdentityId = mintTerminalContextBridgeIdentity({
                 accountId: terminalAccountId,
                 workspaceId: terminalWorkspaceId,
                 projectId,
-                worktreeId: cwd,
+                worktreeId: effectiveCwd,
                 paneId,
                 access: 'read',
               }).identityId;
@@ -1738,7 +1899,7 @@ export function TerminalView({
                   agentSlug: slugAtSpawn,
                   agentName: resolveAgentForSlug(slugAtSpawn).name,
                   agentMode: modeAtSpawn,
-                  cwd: cwd ?? null,
+                  cwd: effectiveCwd ?? null,
                   projectName: projectName ?? null,
                 })
               : {}),
@@ -1759,10 +1920,11 @@ export function TerminalView({
             }
             spawnCancellationToken = authorizedCancellationToken;
           }
+          spawnScope.assertCurrent();
           const result = await invoke<SpawnResult>('terminal_spawn', {
             command: spawnCommand,
             startupCommand: nativeStartupCommand,
-            cwd,
+            cwd: effectiveCwd,
             rows: term.rows,
             cols: term.cols,
             projectId: projectId,
@@ -1774,6 +1936,12 @@ export function TerminalView({
             env: Object.keys(spawnEnv).length > 0 ? spawnEnv : undefined,
           });
           sid = result.sessionId;
+          nativeSessionStarted = true;
+          await spawnScope.verifyOwnership();
+          spawnScope.assertCurrent();
+          if (contextBridgeIdentityId && result.cwd !== effectiveCwd) {
+            throw new Error('terminal_context_spawn_directory_changed');
+          }
           if (
             contextBridgeIdentityId &&
             (!paneId ||
@@ -1798,13 +1966,13 @@ export function TerminalView({
             runtimeGeneration: result.runtimeGeneration,
           };
           nativeStartupCommandConsumed = result.startupCommandConsumed;
-          nativeSessionStarted = true;
           setInitializationPhase('kernel_terminal_phase_execution_attach');
           const attached = await attachTerminalViewExecution(executionId, processAttachment);
           if (!attached) throw new TypeError('terminal_native_attach_failed');
           if (executionId && hasCanonicalTerminalExecution(executionId)) {
             executionAttached = true;
           }
+          spawnScope.assertCurrent();
           sessionRef.current = sid;
           if (terminalAccountId && paneId) {
             screenSnapshotLease = claimTerminalScreenSnapshotLease({
@@ -1823,7 +1991,7 @@ export function TerminalView({
           outputLatch.bind(sid);
           outputSubscription?.bind(sid);
           if (exitLatch.bind(processAttachment)) return;
-          sessionCwd = result.cwd || cwd || null;
+          sessionCwd = result.cwd || effectiveCwd || null;
           console.log(`[Jarvis] Spawned new PTY session: ${sid}`);
 
           // The backend resolved a cwd we did not know up front — deliver
@@ -1840,6 +2008,7 @@ export function TerminalView({
               coordinationSummary: await coordinationSummaryFor(modeAtSpawn, sessionCwd),
               terminalContextSession: getTerminalContextSession(sid),
             });
+            spawnScope.assertCurrent();
             briefingDelivered = delivery.ok;
             if (!delivery.ok && delivery.error) {
               console.warn('[Jarvis] agent briefing delivery failed:', delivery.error);
@@ -2139,10 +2308,15 @@ export function TerminalView({
 
     void init().catch((err) => {
       if (!cancelled) setError(String(err));
+    }).finally(() => {
+      spawnScope.finish();
+      if (spawnScopeRef.current === spawnScope) spawnScopeRef.current = null;
     });
 
     return () => {
       cancelled = true;
+      spawnScope.cancel();
+      spawnScope.finish();
       outputSubscription?.unsubscribe();
       outputSubscription = undefined;
       unlistenExit?.();

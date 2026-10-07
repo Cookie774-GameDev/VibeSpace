@@ -1,3 +1,4 @@
+import { parseContextLocalFileScope, readContextLocalFileScope, type ContextLocalFileScopeV1 } from './contextLocalFileScope';
 import { contextEvidenceNavigation, type ContextEvidenceNavigationTicket } from './contextEvidenceNavigation';
 import * as React from 'react';
 import {
@@ -136,6 +137,7 @@ import {
 } from './siyuan/siyuanMapManifest';
 import {
   buildProjectContextTreeFromSiyuanIndex,
+  assertSiyuanLocalFileEntries,
   createSiyuanIndexJobControl,
   projectSiyuanMapForContextSearch,
   siyuanIndexPolicyFingerprint,
@@ -662,6 +664,13 @@ export function ContextPage() {
   const [rootDraft, setRootDraft] = React.useState(() =>
     normalizeSiyuanFilesystemPath(getStoredContextSourceRoot(accountId, projectId)),
   );
+  const [localFileScopeDraft, setLocalFileScopeDraft] = React.useState<ContextLocalFileScopeV1 | null>(null);
+  const sourcePickerGenerationRef = React.useRef(0);
+  const sourcePickerScopeRef = React.useRef<{ dispose(): void } | null>(null);
+  React.useEffect(() => () => {
+    sourcePickerScopeRef.current?.dispose();
+    sourcePickerGenerationRef.current += 1;
+  }, []);
   const [maps, setMaps] = React.useState<ContextMapRecord[]>([]);
   const [recovery, setRecovery] = React.useState<ContextRecoverySummary | null>(null);
   const [selectedMapId, setSelectedMapId] = React.useState<string | null>(null);
@@ -752,6 +761,9 @@ export function ContextPage() {
     indexControlRef.current?.resume();
     indexControlRef.current = null;
     generationAbortRef.current = null;
+    sourcePickerScopeRef.current?.dispose();
+    sourcePickerGenerationRef.current += 1;
+    setLocalFileScopeDraft(null);
     setRootDraft(normalizeSiyuanFilesystemPath(getStoredContextSourceRoot(accountId, projectId)));
     setMaps([]);
     setRecovery(null);
@@ -1656,7 +1668,7 @@ export function ContextPage() {
   const sourceCards = React.useMemo(
     () =>
       buildContextSourceCards({
-        localFolderSelected: Boolean(rootDraft.trim()),
+        localFolderSelected: Boolean(rootDraft.trim() && !localFileScopeDraft),
         localFileSelected: maps.some(
           (map) => map.status === 'active' && map.sourceType === 'local_file',
         ),
@@ -1668,7 +1680,7 @@ export function ContextPage() {
             !['permission_required', 'error', 'removed'].includes(map.sourceStatus ?? 'ready'),
         ),
       }),
-    [maps, rootDraft],
+    [maps, rootDraft, localFileScopeDraft],
   );
   const githubBadge = React.useMemo<ContextGitHubMapBadge | null>(() => {
     if (
@@ -2074,31 +2086,84 @@ export function ContextPage() {
     [accountId, applyPersistenceState, maps, projectId, workspaceId],
   );
 
+  const sourcePickerIsCurrent = (generation: number) => {
+    const current = useAuthStore.getState();
+    return sourcePickerGenerationRef.current === generation &&
+      resolveAccountIdentity(current)?.accountId === accountId &&
+      (current.projectId ?? null) === (projectId ?? null) &&
+      (current.workspaceId ?? null) === (workspaceId ?? null);
+  };
+
+  const beginSourcePicker = () => {
+    sourcePickerScopeRef.current?.dispose();
+    const generation = ++sourcePickerGenerationRef.current;
+    const controller = new AbortController();
+    const scope = bindContextWorkScope(controller);
+    let disposed = false;
+    const request = {
+      isCurrent() {
+        if (disposed) return false;
+        try {
+          scope.assertCurrent();
+          return sourcePickerIsCurrent(generation);
+        } catch {
+          return false;
+        }
+      },
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        controller.abort('source_picker_finished');
+        scope.dispose();
+        if (sourcePickerScopeRef.current === request) sourcePickerScopeRef.current = null;
+      },
+    };
+    sourcePickerScopeRef.current = request;
+    return request;
+  };
+
   const openFolderPicker = async () => {
-    const picked = await chooseProjectFolder({
-      title: 'Choose a Context source folder',
-      initialPath: rootDraft.trim() || undefined,
-    });
-    if (!picked) return;
-    const sourceRoot = normalizeSiyuanFilesystemPath(picked);
-    setRootDraft(sourceRoot);
-    setStoredContextSourceRoot(accountId, projectId, sourceRoot);
-    toast.success('Context source selected', sourceRoot);
+    const request = beginSourcePicker();
+    try {
+      if (!request.isCurrent()) return;
+      const picked = await chooseProjectFolder({
+        title: 'Choose a Context source folder',
+        initialPath: rootDraft.trim() || undefined,
+      });
+      if (!picked || !request.isCurrent()) return;
+      const sourceRoot = normalizeSiyuanFilesystemPath(picked);
+      setLocalFileScopeDraft(null);
+      setRootDraft(sourceRoot);
+      setStoredContextSourceRoot(accountId, projectId, sourceRoot);
+      toast.success('Context source selected', sourceRoot);
+    } finally {
+      request.dispose();
+    }
   };
 
   const openFilePicker = async () => {
-    const [picked] = await chooseProjectFiles(false, {
-      title: 'Choose a file for this Context map',
-      initialPath: rootDraft.trim() || undefined,
-    });
-    if (!picked) return;
-    const containingFolder = normalizeSiyuanFilesystemPath(parentDirectory(picked));
-    setRootDraft(containingFolder);
-    setStoredContextSourceRoot(accountId, projectId, containingFolder);
-    setStatus(
-      `Selected ${basename(picked)}. Create Map will securely index its containing folder.`,
-    );
-    toast.success('Context file selected', basename(picked));
+    const request = beginSourcePicker();
+    try {
+      if (!request.isCurrent()) return;
+      const [picked] = await chooseProjectFiles(false, {
+        title: 'Choose a file for this Context map',
+        initialPath: rootDraft.trim() || undefined,
+      });
+      if (!picked || !request.isCurrent()) return;
+      try {
+        const containingFolder = parentDirectory(normalizeSiyuanFilesystemPath(picked));
+        const fileScope = parseContextLocalFileScope({ version: 1, rootDir: containingFolder, filePath: picked });
+        setLocalFileScopeDraft(fileScope);
+        setRootDraft(fileScope.rootDir);
+        // A one-file selection must not persist its parent as a future folder grant.
+        setStatus(`Selected ${basename(picked)}. Create Map will index only this file.`);
+        toast.success('Context file selected', basename(picked));
+      } catch {
+        toast.warning('Context file unavailable', 'Choose a supported local file path.');
+      }
+    } finally {
+      request.dispose();
+    }
   };
 
   const addPastedSummaryPaths = React.useCallback(() => {
@@ -2271,8 +2336,8 @@ export function ContextPage() {
   const rememberRoot = () => {
     const clean = normalizeSiyuanFilesystemPath(rootDraft.trim());
     if (!clean) return;
-    setStoredContextSourceRoot(accountId, projectId, clean);
-    toast.success('Context source saved', clean);
+    if (!localFileScopeDraft) setStoredContextSourceRoot(accountId, projectId, clean);
+    toast.success('Context source saved', localFileScopeDraft?.filePath ?? clean);
   };
 
   const makeSkillTree = React.useCallback(async () => {
@@ -2311,13 +2376,19 @@ export function ContextPage() {
     setStatus('Starting Context map creation...');
     let creationMap: ContextMapRecord | null = null;
     try {
-      setStoredContextSourceRoot(accountId, projectId, rootDir);
+      const localFileScope = localFileScopeDraft
+        ? readContextLocalFileScope({ sourceType: 'local_file', rootDir, localFileScope: localFileScopeDraft })
+        : null;
+      if (!localFileScope) setStoredContextSourceRoot(accountId, projectId, rootDir);
       // Native SiYuan maps must not run the legacy bounded preview generator:
       // that path reads source content before the user's summary boundary is
       // applied and writes context_map.json into the selected source. Persist
       // only an internal metadata seed; the guarded SiYuan scanner below owns
       // recursive discovery, exclusions, summaries, and source pointers.
-      const generated = createSiyuanMetadataSeed(projectId, rootDir);
+      const generated = {
+        ...createSiyuanMetadataSeed(projectId, rootDir),
+        ...(localFileScope ? { sourceType: 'local_file' as const, localFileScope } : {}),
+      };
       const persistenceAuth = useAuthStore.getState();
       if (
         controller.signal.aborted ||
@@ -2329,7 +2400,13 @@ export function ContextPage() {
         setStructuralPreview(null);
         return;
       }
-      const persisted = await savePersistedContextTree(generated, { sourceStatus: 'indexing', signal: controller.signal });
+      const persisted = await savePersistedContextTree(generated, {
+        sourceStatus: 'indexing', signal: controller.signal,
+        ...(localFileScope ? {
+          name: `${basename(localFileScope.filePath)} Context Map`,
+          source: { kind: 'local_file' as const, label: localFileScope.filePath, localFileScope },
+        } : {}),
+      });
       creationMap = persisted.maps.find(map => map.id === persisted.selectedMapId) ?? null;
       let completedPersistence = persisted;
       let indexedFileCount = generated.fileCount;
@@ -2392,6 +2469,7 @@ export function ContextPage() {
         boundScope.assertCurrent();
         const indexedEntries = await readSiyuanIndexEntries(projectId, persistedMap.id);
         boundScope.assertCurrent();
+        assertSiyuanLocalFileEntries(generatedMap, indexedEntries);
         const completedTree = buildProjectContextTreeFromSiyuanIndex(
           {
             ...generated,
@@ -2512,6 +2590,7 @@ export function ContextPage() {
     projectId,
     workspaceId,
     rootDraft,
+    localFileScopeDraft,
     selectedSummaryModel,
     summaryModelEffort,
     summaryMode,
@@ -2754,7 +2833,12 @@ export function ContextPage() {
                 <Input
                   id="context-project-folder"
                   value={rootDraft}
-                  onChange={(e) => setRootDraft(e.target.value)}
+                  onChange={(e) => {
+                    sourcePickerScopeRef.current?.dispose();
+                    sourcePickerGenerationRef.current += 1;
+                    setLocalFileScopeDraft(null);
+                    setRootDraft(e.target.value);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') rememberRoot();
                   }}
@@ -3159,6 +3243,7 @@ export function ContextPage() {
                           restartMap.rootDir,
                           manifest.summaryPolicy,
                           manifest.sourcePolicy.excludedPaths,
+                          readContextLocalFileScope(restartMap),
                         ),
                       });
                       await archiveAndReplaceSiyuanIndexJob(restarted, {
@@ -3867,7 +3952,7 @@ function NoContextHero({
                   {card.kind === 'local_folder'
                     ? 'Choose a folder, then create its local SiYuan Context Map.'
                     : card.kind === 'local_file'
-                      ? 'Choose a file here, then create a map from its containing folder.'
+                      ? 'Choose a file here, then create a map from only that file.'
                       : 'Check the read-only GitHub App here, then choose an accessible repository.'}
                 </span>
                 <img
@@ -6026,7 +6111,15 @@ function MetaRow({ label, value }: { label: string; value: string }) {
 function useContextDrag(tree: ProjectContextTree, node: ContextTreeNode) {
   return React.useCallback(
     (e: React.DragEvent) => {
-      const attachment = nodeToAttachment(tree, node);
+      let attachment: ReturnType<typeof nodeToAttachment>;
+      try {
+        attachment = nodeToAttachment(tree, node);
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.startsWith('context_local_file_')) throw error;
+        e.preventDefault();
+        toast.warning('File selection required', 'Choose the local file again before sharing this Context node.');
+        return;
+      }
       const filePath =
         contextNodeFilePath(tree, node) || (node.kind === 'root' ? attachment.path : undefined);
       e.dataTransfer.effectAllowed = 'copy';
@@ -6346,6 +6439,8 @@ function rootTitle(rootDir: string): string {
 function parentDirectory(path: string): string {
   const normalized = path.trim().replace(/[\\/]$/g, '');
   const separatorIndex = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'));
+  if (separatorIndex === 0) return normalized.slice(0, 1);
+  if (separatorIndex === 2 && /^[A-Za-z]:/u.test(normalized)) return normalized.slice(0, 3);
   return separatorIndex > 0 ? normalized.slice(0, separatorIndex) : normalized;
 }
 

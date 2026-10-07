@@ -1,3 +1,9 @@
+import {
+  assertContextLocalFilePath,
+  parseContextLocalFileScope,
+  type ContextLocalFileScopeV1,
+} from './contextLocalFileScope';
+
 export const CONTEXT_SCHEMA_VERSION = 2 as const;
 
 export const CONTEXT_SOURCE_KINDS = [
@@ -119,6 +125,7 @@ export interface ContextSourceV2 {
   status: ContextSourceStatus;
   localRoot?: string;
   localFile?: string;
+  localFileScope?: ContextLocalFileScopeV1;
   github?: GitHubContextSourceV2;
   createdAt: number;
   updatedAt: number;
@@ -432,6 +439,7 @@ function parseContextSourceUnsafe(value: unknown): ContextSourceV2 {
       'status',
       'localRoot',
       'localFile',
+      'localFileScope',
       'github',
       'createdAt',
       'updatedAt',
@@ -474,6 +482,20 @@ function parseContextSourceUnsafe(value: unknown): ContextSourceV2 {
     (record.kind === 'linked_vibespace_content' && !localRoot && !localFile && !github);
   if (!locatorValid) fail('source_locator_invalid');
 
+  let localFileScope: ContextLocalFileScopeV1 | undefined;
+  if (record.localFileScope !== undefined) {
+    try {
+      if (record.kind !== 'local_file' || !localFile) fail('source_local_file_scope_invalid');
+      localFileScope = parseContextLocalFileScope(record.localFileScope);
+      assertContextLocalFilePath(
+        { sourceType: 'local_file', rootDir: localFileScope.rootDir, localFileScope },
+        localFile,
+      );
+    } catch {
+      fail('source_local_file_scope_invalid');
+    }
+  }
+
   return {
     version: CONTEXT_SCHEMA_VERSION,
     id: stableId(record.id, 'source_id_invalid'),
@@ -483,7 +505,8 @@ function parseContextSourceUnsafe(value: unknown): ContextSourceV2 {
     label: safeString(record.label, 'source_label_invalid'),
     status: record.status,
     ...(localRoot ? { localRoot } : {}),
-    ...(localFile ? { localFile } : {}),
+    ...(localFile ? { localFile: localFileScope?.filePath ?? localFile } : {}),
+    ...(localFileScope ? { localFileScope } : {}),
     ...(github ? { github } : {}),
     createdAt,
     updatedAt,
