@@ -826,37 +826,26 @@ fn list_open_directory_bounded(
         .map_err(|error| format!("io: {error}"))?
     {
         let entry = entry.map_err(|error| format!("io: {error}"))?;
-        let file_type = entry.file_type().ok();
-        if reject_links
-            && file_type
-                .as_ref()
-                .map(|kind| kind.is_symlink())
-                .unwrap_or(true)
-        {
+        let file_type = entry.file_type().map_err(|error| format!("io: {error}"))?;
+        if reject_links && file_type.is_symlink() {
             continue;
         }
         let name = entry.file_name();
         let name_path = Path::new(&name);
-        let metadata = if file_type
-            .as_ref()
-            .map(|kind| kind.is_dir())
-            .unwrap_or(false)
-        {
+        let metadata = if file_type.is_dir() {
             directory
                 .open_dir_nofollow(name_path)
                 .and_then(|opened| opened.dir_metadata())
-                .ok()
         } else {
             let mut options = OpenOptions::new();
             options.read(true).follow(FollowSymlinks::No);
             directory
                 .open_with(name_path, &options)
                 .and_then(|opened| opened.metadata())
-                .ok()
-        };
-        let Some(metadata) = metadata else {
-            continue;
-        };
+        }
+        // A failed observation is not evidence that the entry was deleted.
+        // Strict Context scans must retain their last-good membership on IO errors.
+        .map_err(|error| format!("io: {error}"))?;
         if out.len() >= entry_budget {
             if error_on_overflow {
                 return Err("too_large".to_string());
@@ -1938,6 +1927,26 @@ mod tests {
 
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strict_batch_locked_file_fails_closed_then_recovers_without_omitting_the_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = test_root("strict-locked-file");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("dispatch.txt");
+        std::fs::write(&file, b"last good dispatch evidence").unwrap();
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(&file).unwrap();
+        let listed = fs_list_dirs_strict(vec![root.to_string_lossy().into_owned()],
+            Some(root.to_string_lossy().into_owned())).unwrap();
+        assert!(listed[0].entries.is_none());
+        assert!(listed[0].error.is_some());
+        drop(lock);
+        let recovered = fs_list_dirs_strict(vec![root.to_string_lossy().into_owned()],
+            Some(root.to_string_lossy().into_owned())).unwrap();
+        assert_eq!(recovered[0].entries.as_ref().unwrap()[0].name, "dispatch.txt");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

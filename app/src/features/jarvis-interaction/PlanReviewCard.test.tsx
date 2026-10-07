@@ -8,6 +8,8 @@ import { readAgentApprovalMode, readPermissionAccess, setAgentApprovalMode, setP
 
 const repo = vi.hoisted(() => ({
   getById: vi.fn(),
+  approvePlan: vi.fn(),
+  revisePlan: vi.fn(),
   update: vi.fn(),
   create: vi.fn(),
 }));
@@ -44,6 +46,8 @@ describe('PlanReviewCard', () => {
   beforeEach(() => {
     window.localStorage.clear();
     repo.getById.mockReset();
+    repo.approvePlan.mockReset();
+    repo.revisePlan.mockReset();
     repo.update.mockReset();
     repo.create.mockReset();
     window.dispatchEvent = vi.fn();
@@ -54,6 +58,9 @@ describe('PlanReviewCard', () => {
       role: 'assistant',
       parts: [planPart],
     });
+    repo.approvePlan.mockResolvedValue(undefined);
+    repo.revisePlan.mockImplementation(async (_id: unknown, input: { revision: string; preserveExistingRequirements: boolean }) =>
+      `Redo this plan with this instruction: ${input.preserveExistingRequirements ? 'Preserve the existing requirements and add: ' : ''}${input.revision}`);
     repo.update.mockResolvedValue({});
     repo.create.mockResolvedValue({});
   });
@@ -75,15 +82,18 @@ describe('PlanReviewCard', () => {
     expect(useJarvisInteractionStore.getState().modeForChat('other_chat')).toBe('ask');
     expect(readPermissionAccess('chat_1')).toEqual({ access: 'full', approveAll: false });
     expect(readAgentApprovalMode('chat_1')).toBe('full');
-    expect(repo.create).toHaveBeenCalledExactlyOnceWith({ chat_id: 'chat_1', role: 'user',
-      parts: [{ kind: 'text', text: 'Yes, implement the plan.' }] });
+    expect(repo.approvePlan).toHaveBeenCalledExactlyOnceWith('msg_1', {
+      chatId: 'chat_1', planId: part.plan.id, expectedParts: [part],
+    });
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(repo.update).not.toHaveBeenCalled();
     const event = vi.mocked(window.dispatchEvent).mock.calls[0][0] as CustomEvent;
     expect(event.type).toBe('jarvis:send');
     expect(event.detail).toEqual({ chatId: 'chat_1', text: 'Yes, implement the plan.',
       interactionMode: 'agent', queueIfBusy: true,
       structuredContext: { kind: 'plan_build', sourceMessageId: 'msg_1', payload: { plan: part.plan } } });
     fireEvent.click(button);
-    expect(repo.create).toHaveBeenCalledTimes(1);
+    expect(repo.approvePlan).toHaveBeenCalledTimes(1);
     expect(window.dispatchEvent).toHaveBeenCalledTimes(1);
   });
 
@@ -92,6 +102,7 @@ describe('PlanReviewCard', () => {
     render(<PlanReviewCard part={part} messageId={'msg_1' as never} chatId="chat_1" />);
     fireEvent.click(screen.getByRole('button', { name: /^Yes, implement$/ }));
     expect(repo.update).not.toHaveBeenCalled();
+    expect(repo.approvePlan).not.toHaveBeenCalled();
     expect(repo.create).not.toHaveBeenCalled();
     expect(window.dispatchEvent).not.toHaveBeenCalled();
   });
@@ -107,6 +118,86 @@ describe('PlanReviewCard', () => {
     expect(readPermissionAccess('chat_1').access).toBe('read');
     expect(repo.create).not.toHaveBeenCalled();
     expect(window.dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it('can retry implementation if the user message fails to persist before dispatch', async () => {
+    let persisted = {
+      id: 'msg_1',
+      chat_id: 'chat_1',
+      role: 'assistant',
+      parts: [structuredClone(planPart)] as Part[],
+    };
+    const createdMessages: unknown[] = [];
+    let failNextCreate = true;
+    repo.getById.mockImplementation(async () => structuredClone(persisted));
+    // Database rollback/commit boundaries are exercised against real Dexie in
+    // repositories.planApproval.test.ts; this isolates the caller's behavior.
+    repo.approvePlan.mockImplementation(async () => {
+      if (failNextCreate) {
+        failNextCreate = false;
+        throw new Error('Synthetic atomic approval storage failure');
+      }
+      createdMessages.push({ chat_id: 'chat_1', role: 'user',
+        parts: [{ kind: 'text', text: 'Yes, implement the plan.' }] });
+      persisted = { ...persisted, parts: [{ ...planPart, plan: { ...planPart.plan, status: 'building' } }] };
+    });
+    useJarvisInteractionStore.getState().setChatMode('chat_1', 'plan');
+    setAgentApprovalMode('chat_1', 'review');
+    setPermissionAccess('chat_1', 'read');
+    render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Yes, implement$/ }));
+    await screen.findByRole('alert');
+
+    expect(persisted.parts[0]).toMatchObject({
+      kind: 'plan_review', plan: { id: planPart.plan.id, status: 'pending' },
+    });
+    expect(createdMessages).toEqual([]);
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+    expect(useJarvisInteractionStore.getState().modeForChat('chat_1')).toBe('plan');
+    expect(readPermissionAccess('chat_1').access).toBe('read');
+    expect(readAgentApprovalMode('chat_1')).toBe('review');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Yes, implement$/ }));
+    await waitFor(() => expect(window.dispatchEvent).toHaveBeenCalledTimes(1));
+    expect(createdMessages).toEqual([{
+      chat_id: 'chat_1', role: 'user',
+      parts: [{ kind: 'text', text: 'Yes, implement the plan.' }],
+    }]);
+    expect(persisted.parts[0]).toMatchObject({
+      kind: 'plan_review', plan: { id: planPart.plan.id, status: 'building' },
+    });
+  });
+
+  it('does not grant access or dispatch until the atomic approval commits', async () => {
+    let finish!: () => void;
+    repo.approvePlan.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+    useJarvisInteractionStore.getState().setChatMode('chat_1', 'plan');
+    setAgentApprovalMode('chat_1', 'review');
+    setPermissionAccess('chat_1', 'read');
+    render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
+    fireEvent.click(screen.getByRole('button', { name: /^Yes, implement$/ }));
+    await waitFor(() => expect(repo.approvePlan).toHaveBeenCalledTimes(1));
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+    expect(useJarvisInteractionStore.getState().modeForChat('chat_1')).toBe('plan');
+    expect(readPermissionAccess('chat_1').access).toBe('read');
+    expect(readAgentApprovalMode('chat_1')).toBe('review');
+    await act(async () => finish());
+    expect(window.dispatchEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches only the winning approval when two rendered cards compete', async () => {
+    repo.approvePlan.mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Plan approval is no longer pending.'));
+    render(<>
+      <PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />
+      <PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />
+    </>);
+    for (const button of screen.getAllByRole('button', { name: /^Yes, implement$/ })) fireEvent.click(button);
+    await screen.findByRole('alert');
+    expect(repo.approvePlan).toHaveBeenCalledTimes(2);
+    expect(window.dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(repo.create).not.toHaveBeenCalled();
   });
 
   it('keeps the plan body scrollable while decision actions stay outside the scroll region', () => {
@@ -256,18 +347,13 @@ describe('PlanReviewCard', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Send Revision/i }));
 
-    await waitFor(() => expect(repo.create).toHaveBeenCalledTimes(1));
-    expect(repo.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        role: 'user',
-        parts: [
-          expect.objectContaining({
-            kind: 'text',
-            text: expect.stringContaining('Make it smaller.'),
-          }),
-        ],
-      }),
-    );
+    await waitFor(() => expect(repo.revisePlan).toHaveBeenCalledTimes(1));
+    expect(repo.revisePlan).toHaveBeenCalledWith('msg_1', expect.objectContaining({
+      chatId: 'chat_1', planId: planPart.plan.id, expectedParts: [planPart],
+      revision: 'Make it smaller.', preserveExistingRequirements: false,
+    }));
+    expect(repo.create).not.toHaveBeenCalled();
+    expect(repo.update).not.toHaveBeenCalled();
     expect(window.dispatchEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         detail: expect.objectContaining({ interactionMode: 'plan' }),
@@ -312,7 +398,8 @@ describe('PlanReviewCard', () => {
   });
 
   it.each(['revision', 'cancel'] as const)('recovers from a failed %s save without executing', async (action) => {
-    repo.update.mockRejectedValueOnce(new Error('Database write failed'));
+    const save = action === 'revision' ? repo.revisePlan : repo.update;
+    save.mockRejectedValueOnce(new Error('Database write failed'));
     render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
     if (action === 'revision') {
       fireEvent.click(screen.getByRole('button', { name: 'Redo Plan' }));
@@ -330,8 +417,58 @@ describe('PlanReviewCard', () => {
     ).toBe(false);
     expect(window.dispatchEvent).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: action === 'revision' ? 'Send Revision' : 'No — Cancel' }));
-    await waitFor(() => expect(repo.update).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
+  it.each(['Redo Plan', 'Add to Plan'] as const)('keeps %s retryable when revision-message persistence fails', async action => {
+    let persisted = { id: 'msg_1', chat_id: 'chat_1', role: 'assistant', parts: [structuredClone(planPart)] as Part[] };
+    const createdMessages: unknown[] = [];
+    let failNextCreate = true;
+    repo.getById.mockImplementation(async () => structuredClone(persisted));
+    // Actual rollback is exercised by the real-Dexie repository tests.
+    repo.revisePlan.mockImplementation(async (_id: unknown, input: { revision: string; preserveExistingRequirements: boolean }) => {
+      if (failNextCreate) { failNextCreate = false; throw new Error('Synthetic revision insert failure'); }
+      const text = `Redo this plan with this instruction: ${input.preserveExistingRequirements ? 'Preserve the existing requirements and add: ' : ''}${input.revision}`;
+      createdMessages.push({ chat_id: 'chat_1', role: 'user', parts: [{ kind: 'text', text }] });
+      persisted = { ...persisted, parts: [{ ...planPart, plan: { ...planPart.plan, status: 'redone' } }] };
+      return text;
+    });
+    useJarvisInteractionStore.getState().setChatMode('chat_1', 'plan');
+    render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    const hint = action === 'Add to Plan' ? 'What should Jarvis add to the plan?' : 'What should Jarvis change in the next plan?';
+    fireEvent.change(screen.getByPlaceholderText(hint), { target: { value: 'Include rollback verification.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Revision' }));
+    await screen.findByRole('alert');
+    expect(persisted.parts[0]).toMatchObject({ kind: 'plan_review', plan: { status: 'pending' } });
+    expect(createdMessages).toEqual([]);
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+    expect((screen.getByPlaceholderText(hint) as HTMLTextAreaElement).value).toBe('Include rollback verification.');
+    fireEvent.click(screen.getByRole('button', { name: 'Send Revision' }));
+    await waitFor(() => expect(window.dispatchEvent).toHaveBeenCalledTimes(1));
+    expect(createdMessages).toHaveLength(1);
+    expect(persisted.parts[0]).toMatchObject({ kind: 'plan_review', plan: { status: 'redone' } });
+    expect(window.dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({
+      detail: expect.objectContaining({ interactionMode: 'plan', structuredContext: expect.objectContaining({ kind: 'plan_redo' }) }),
+    }));
+  });
+
+  it('changes mode and dispatches once only after the revision transaction commits', async () => {
+    let finish!: (text: string) => void;
+    repo.revisePlan.mockReturnValueOnce(new Promise<string>(resolve => { finish = resolve; }));
+    useJarvisInteractionStore.getState().setChatMode('chat_1', 'ask');
+    render(<PlanReviewCard part={planPart} messageId={'msg_1' as never} chatId="chat_1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Redo Plan' }));
+    fireEvent.change(screen.getByPlaceholderText('What should Jarvis change in the next plan?'), { target: { value: 'Keep verification scoped.' } });
+    const send = screen.getByRole('button', { name: 'Send Revision' });
+    fireEvent.click(send); fireEvent.click(send);
+    await waitFor(() => expect(repo.revisePlan).toHaveBeenCalledTimes(1));
+    expect(useJarvisInteractionStore.getState().modeForChat('chat_1')).toBe('ask');
+    expect(window.dispatchEvent).not.toHaveBeenCalled();
+    await act(async () => finish('Redo this plan with this instruction: Keep verification scoped.'));
+    expect(useJarvisInteractionStore.getState().modeForChat('chat_1')).toBe('plan');
+    expect(window.dispatchEvent).toHaveBeenCalledTimes(1);
   });
 
   it('renders as a wider review card for long plans', () => {

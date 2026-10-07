@@ -235,6 +235,15 @@ function retrievalQuery(question: string): string {
   if (/\bsource\s+(?:file|path)\s+[`"']?(?:[\w.-]+[\\/])+[\w.-]+\.[\w]+/iu.test(semanticQuestion)) {
     return semanticQuestion;
   }
+  // Routing instructions are not source facts. Preserve the full factual
+  // question/list instead of promoting "RLM" from a tools-only preamble.
+  const factualStart = semanticQuestion.search(/\b(?:what|which|who|where|when|why|how)\b/iu);
+  if (factualStart > 0) {
+    const preamble = semanticQuestion.slice(0, factualStart);
+    const requestsContextTools = /\b(?:use|invoke|call|run|consult)\b[\s\S]*?\b(?:Context(?:\/RLM)?|RLM|vibespace_context)\b[\s\S]*?\btools?\b/iu.test(preamble);
+    const hasSourceAnchor = /`(?!vibespace_context(?:_[a-z]+)?\b)[^`]+`|\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/u.test(preamble);
+    if (requestsContextTools && !hasSourceAnchor) return semanticQuestion.slice(factualStart).trim();
+  }
   // Explicit tool requests can name RLM before the source question. Search
   // the factual question so routing words cannot become the index key.
   if (/\b(?:(?:use|invoke|call)\s+(?:the\s+)?|run\s+(?:a\s+)?(?:recursive\s+)?)(?:RLM|vibespace_context)\b/iu.test(semanticQuestion)) {

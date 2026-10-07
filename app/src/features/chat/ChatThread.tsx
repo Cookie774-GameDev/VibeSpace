@@ -583,6 +583,8 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
             : [];
           const currentCard = currentMatches.length === 1 ? currentMatches[0] : undefined;
           if (!currentCard || !acknowledgeJarvisApprovalNavigation(requested)) return;
+          // This validated navigation supersedes any older pending page anchor.
+          pendingHistoryAnchorRef.current = undefined;
           stickyRef.current = false;
           currentCard.scrollIntoView({
             behavior:
@@ -618,8 +620,14 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
 
   const tailSize = streamingSize(messages[messages.length - 1]);
   const activityEvents = useUnifiedChatActivity(String(chatId));
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // Compact hosts reuse this instance across chats. Reset ownership before
+    // the older-page layout effect can apply a previous chat's scroll anchor.
+    stickyRef.current = true;
     pendingHistoryAnchorRef.current = undefined;
+    setHasNewActivityBelow(false);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
     setClassicWindow((current) =>
       current.chatId === chatKey
         ? current
@@ -642,6 +650,14 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
+    if (pendingHistoryAnchorRef.current) {
+      // The user may keep reading while the older page is in flight. Preserve
+      // the latest position and height, not only the position that requested it.
+      pendingHistoryAnchorRef.current = {
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      };
+    }
     const hasLoadedClassicHistory =
       consoleView === 'classic' && classicMessages.length < messages.length;
     const shouldLoadOlderPage =
@@ -687,6 +703,7 @@ export function ChatThread({ chatId, compact = false, fixtureMessages }: ChatThr
   const jumpToLatest = () => {
     const el = scrollRef.current;
     if (!el) return;
+    pendingHistoryAnchorRef.current = undefined;
     stickyRef.current = true;
     el.scrollTop = el.scrollHeight;
     setHasNewActivityBelow(false);

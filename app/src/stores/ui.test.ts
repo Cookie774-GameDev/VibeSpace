@@ -154,3 +154,24 @@ describe('application brightness', () => {
     expect(css).toContain('opacity: var(--vibespace-app-boost-opacity, 0)');
   });
 });
+
+
+describe('transient Voice input mode', () => {
+  afterEach(() => useUIStore.getState().setVoiceModalOpen(false));
+
+  it('selects text mode atomically with opening and restores ordinary speech mode on reopen', () => {
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    expect(useUIStore.getState()).toMatchObject({ voiceModalOpen: true, voiceInputMode: 'text' });
+    useUIStore.getState().setVoiceModalOpen(false);
+    useUIStore.getState().setVoiceModalOpen(true);
+    expect(useUIStore.getState()).toMatchObject({ voiceModalOpen: true, voiceInputMode: 'speech' });
+  });
+
+  it('does not persist text-opening mode across application hydration', () => {
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    const persisted = useUIStore.persist.getOptions().partialize!(useUIStore.getState());
+    expect(persisted).not.toHaveProperty('voiceInputMode');
+    expect(persisted).not.toHaveProperty('voiceModalOpen');
+    expect(mergePersistedUiState({ voiceInputMode: 'text' }, { ...useUIStore.getState(), voiceInputMode: 'speech' }).voiceInputMode).toBe('speech');
+  });
+});

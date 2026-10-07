@@ -50,6 +50,7 @@ const EXPECTED_CONNECTIONS = [
   'mistral-api',
   'together-api',
   'ollama-local',
+  'foundry-local',
   'opencode-cli',
 ] as const;
 
@@ -106,6 +107,7 @@ describe('provider capability catalog', () => {
       'mistral',
       'together',
       'ollama',
+      'foundry',
       'opencode',
     ]);
     expect(PROVIDER_CONNECTIONS.map(({ id }) => id)).toEqual(EXPECTED_CONNECTIONS);
@@ -136,6 +138,7 @@ describe('provider capability catalog', () => {
       'mistral-api': 'native-api',
       'together-api': 'native-api',
       'ollama-local': 'local',
+      'foundry-local': 'local',
       'opencode-cli': 'external-cli',
     });
   });
@@ -903,5 +906,26 @@ describe('typed Tauri CLI bridge client', () => {
     }
 
     if (deferredAssertion) throw deferredAssertion;
+  });
+});
+
+it('binds Foundry native artifacts to an exact credential-free local descriptor', () => {
+  expect(getProviderConnectionDescriptor('foundry-local')).toMatchObject({
+    id: 'foundry-local',
+    providerId: 'foundry',
+    mode: 'local',
+    authSource: 'local-artifact',
+    enabled: true,
+    promptTransport: 'native-system',
+    capabilities: {
+      localOnly: true,
+      text: true,
+      images: false,
+      files: false,
+      tools: false,
+      streaming: false,
+      cancellation: false,
+      subscriptionQuota: false,
+    },
   });
 });

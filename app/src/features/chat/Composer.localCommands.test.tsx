@@ -272,6 +272,78 @@ it('executes an older queued pure local command without cancelling the active re
   }
 });
 
+it.each(['/settings', 'open settings'])(
+  'preserves a nonempty FIFO queue through a busy local %s command and remount',
+  async text => {
+    enableFixtureModel();
+    const { useComposerQueueSession } = await import('./composerQueueSession');
+    const runState = await import('./runtime/chatRunState');
+    const { resetTurnStoreForTests } = await import('./runtime/turn/turnStore');
+    const { messageRepo } = await import('@/lib/db/repositories');
+    const chatId = text.startsWith('/') ? 'chat-busy-queue-slash-settings' : 'chat-busy-queue-settings';
+    resetTurnStoreForTests();
+    act(() => runState.publishChatRunState({
+      chatId, status: 'running', cancellationKey: 'active-settings-queue-turn',
+    }));
+    const scope = JSON.stringify([
+      'account-local-test', 'workspace-local-test', 'project-local-test', chatId,
+    ]);
+    const queued = [
+      { id: `${chatId}-first`, text: 'Read the synthetic attachment after this turn.', createdAt: 1,
+        flushMode: 'after-run' as const,
+        attachments: { files: ['C:/synthetic-only/queue-record.json'], images: [], terminals: [],
+          plugins: [], contexts: [], commands: [], agents: [], catalog: [] } },
+      { id: `${chatId}-second`, text: 'Then compare its two values.', createdAt: 2,
+        flushMode: 'after-run' as const },
+    ];
+    const initial = renderHook(() => useComposerQueueSession(scope));
+    act(() => initial.result.current.setMessages(structuredClone(queued)));
+    initial.unmount();
+    const interference = vi.fn();
+    for (const event of ['jarvis:send', 'jarvis:cancel', 'jarvis:steer', 'jarvis:queue'])
+      window.addEventListener(event, interference);
+    const mount = () => render(
+      <TooltipProvider><Composer chatId={chatId as never} /></TooltipProvider>,
+    );
+    const queuedIds = () => Array.from(document.querySelectorAll('[data-queued-message-id]'))
+      .map(row => row.getAttribute('data-queued-message-id'));
+    try {
+      const view = mount();
+      expect(queuedIds()).toEqual(queued.map(message => message.id));
+      const input = screen.getByRole('textbox', { name: 'Message' });
+      fireEvent.change(input, { target: { value: text } });
+      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+      await waitFor(() => expect(useUIStore.getState().settingsOpen).toBe(true));
+      await waitFor(async () => {
+        const messages = await messageRepo.listByChat(chatId as never);
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({ role: 'user', parts: expect.arrayContaining([{ kind: 'text', text }]) });
+      });
+      expect(queuedIds()).toEqual(queued.map(message => message.id));
+      const retained = renderHook(() => useComposerQueueSession(scope));
+      expect(retained.result.current.messages).toEqual(queued);
+      retained.unmount();
+      view.unmount();
+      act(() => useUIStore.setState({ settingsOpen: false }));
+
+      mount();
+      const restored = renderHook(() => useComposerQueueSession(scope));
+      expect(restored.result.current.messages).toEqual(queued);
+      expect(queuedIds()).toEqual(queued.map(message => message.id));
+      expect(interference).not.toHaveBeenCalled();
+      expect(runState.getChatRunState(chatId)).toMatchObject({
+        status: 'running', cancellationKey: 'active-settings-queue-turn',
+      });
+      act(() => restored.result.current.setMessages([]));
+      restored.unmount();
+    } finally {
+      for (const event of ['jarvis:send', 'jarvis:cancel', 'jarvis:steer', 'jarvis:queue'])
+        window.removeEventListener(event, interference);
+      resetTurnStoreForTests();
+    }
+  },
+);
+
 it.each([
   ['Enter', 'open files'],
   ['Tab', 'open files'],

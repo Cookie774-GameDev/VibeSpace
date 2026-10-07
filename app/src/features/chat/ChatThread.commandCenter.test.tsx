@@ -17,13 +17,17 @@ import { ChatThread } from './ChatThread';
 import { useAuthStore } from '@/stores/auth';
 import { resetTurnStoreForTests } from './runtime/turn/turnStore';
 
-const hookState = vi.hoisted(() => ({ messages: [] as Message[] }));
+const hookState = vi.hoisted(() => ({
+  messages: [] as Message[],
+  hasOlder: false,
+  loadOlder: vi.fn(),
+}));
 
 vi.mock('./hooks', () => ({
   usePagedChatMessages: () => ({
     messages: hookState.messages,
-    hasOlder: false,
-    loadOlder: vi.fn(),
+    hasOlder: hookState.hasOlder,
+    loadOlder: hookState.loadOlder,
   }),
 }));
 vi.mock('./MessageBubble', () => ({ MessageBubble: () => <div>message</div> }));
@@ -260,6 +264,8 @@ describe('ChatThread Command Center routing', () => {
   beforeEach(() => {
     setReducedMotion(false);
     hookState.messages = [];
+    hookState.hasOlder = false;
+    hookState.loadOlder.mockReset();
     resetTurnStoreForTests();
     localStorage.clear();
     useJarvisTaskRunStore.getState().clearForTests();
@@ -783,4 +789,76 @@ describe('ChatThread Command Center routing', () => {
     expect(cards.filter((card) => document.activeElement === card)).toHaveLength(1);
     expect(readPendingJarvisApprovalNavigation()).toBeUndefined();
   });
+  it.each([true, false])(
+    'retires an older page anchor only after current approval navigation is accepted (%s)',
+    async (accepted) => {
+      const messages = (count: number) => Array.from({ length: count }, (_, index) => ({
+        id: `message-${index}`,
+        chat_id: 'chat-1',
+        role: 'assistant',
+        parts: [{ kind: 'text', text: 'Synthetic bounded content.' }],
+        created_at: index + 1,
+        updated_at: index + 1,
+      }) as Message);
+      hookState.messages = messages(2);
+      hookState.hasOlder = true;
+      const selected = binding([canonicalRun({ id: 'run-1', status: 'awaiting_approval' })]);
+      const tree = () => (
+        <JarvisCommandCenterProvider value={selected}>
+          <ChatThread chatId="chat-1" compact />
+        </JarvisCommandCenterProvider>
+      );
+      const view = render(tree());
+      const log = screen.getByRole('log');
+      let height = 1000;
+      let top = 600;
+      const writes: number[] = [];
+      Object.defineProperties(log, {
+        scrollHeight: { configurable: true, get: () => height },
+        clientHeight: { configurable: true, value: 400 },
+        scrollTop: { configurable: true, get: () => top, set: (value: number) => {
+          top = Number(value);
+          writes.push(top);
+        } },
+      });
+      log.scrollTop = 10;
+      fireEvent.scroll(log);
+      expect(hookState.loadOlder).toHaveBeenCalledOnce();
+      const card = document.createElement('div');
+      card.dataset.approvalKind = 'canonical';
+      card.dataset.approvalId = 'approval-1';
+      card.dataset.status = 'pending';
+      card.tabIndex = -1;
+      card.scrollIntoView = vi.fn(() => { log.scrollTop = 300; });
+      act(() => log.append(card));
+      act(() => {
+        requestJarvisApprovalNavigation({
+          accountId: 'account-1', chatId: 'chat-1',
+          runId: accepted ? 'run-1' : 'other-run', approvalId: 'approval-1',
+        });
+      });
+      if (accepted) {
+        await vi.waitFor(() => expect(document.activeElement).toBe(card));
+        expect(log.scrollTop).toBe(300);
+        expect(readPendingJarvisApprovalNavigation()).toBeUndefined();
+      } else {
+        await vi.waitFor(() => expect(readPendingJarvisApprovalNavigation()?.runId).toBe('other-run'));
+        expect(card.scrollIntoView).not.toHaveBeenCalled();
+      }
+      writes.length = 0;
+      hookState.messages = messages(4);
+      hookState.hasOlder = false;
+      height = 1600;
+      view.rerender(tree());
+      if (accepted) {
+        expect(writes).not.toContain(610);
+        expect(log.scrollTop).toBe(300);
+        expect(document.activeElement).toBe(card);
+      } else {
+        expect(writes).toContain(610);
+        expect(log.scrollTop).toBe(610);
+      }
+    },
+  );
+
 });

@@ -110,16 +110,16 @@ export interface FoundryArtifactGeneration {
 export interface FoundryRealEvaluationReport {
   readonly suite: string;
   readonly caseCount: number;
-  readonly baseScore: number;
+  readonly baseScore: number | null;
   readonly candidateScore: number;
   readonly championScore: number | null;
-  readonly delta: number;
+  readonly delta: number | null;
   readonly safetyFailures: readonly string[];
   readonly gate: 'pass' | 'blocked';
   readonly caseEvidence: readonly {
     readonly caseId: string;
     readonly hidden?: boolean;
-    readonly baseScore: number;
+    readonly baseScore: number | null;
     readonly candidateScore: number;
     readonly championScore: number | null;
     readonly evidenceHash: string;
@@ -460,24 +460,74 @@ interface NativeFoundryChatResponse {
   text: string; inputTokens: number; outputTokens: number;
 }
 
+function abortedFoundryInference(cause?: unknown): DOMException {
+  const error = new DOMException('Local inference was aborted.', 'AbortError');
+  if (cause !== undefined) Object.defineProperty(error, 'cause', { value: cause });
+  return error;
+}
+
 async function chatWithArtifact(
   artifactId: string,
   prompt: string,
   maxNewTokens?: number,
   messages?: readonly FoundryChatMessage[],
+  signal?: AbortSignal,
 ): Promise<NativeFoundryChatResponse> {
+  if (signal?.aborted) throw abortedFoundryInference();
+  const core = await import('@tauri-apps/api/core');
+  if (signal?.aborted) throw abortedFoundryInference();
   const requestId = 'foundry-bridge-' + crypto.randomUUID();
+  let settled = false;
+  let cancelling = false;
+  let cancellationRequested = false;
+  let cancellationError: unknown;
+  let retryDelay = 100;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  const cancel = () => {
+    if (settled || cancelling || cancellationRequested) return;
+    cancelling = true;
+    void (async () => {
+      try {
+        const cancelled = await core.invoke<boolean>('model_foundry_cancel_chat', { requestId });
+        if (cancelled === true) {
+          cancellationRequested = true;
+          cancellationError = undefined;
+        } else if (cancelled !== false) {
+          cancellationError = new Error('Model Foundry returned invalid cancellation evidence.');
+        }
+      } catch (error) {
+        cancellationError = error;
+      } finally {
+        cancelling = false;
+        // Verification can precede worker registration. A false acknowledgment
+        // does not finish this request; retry only its ID while its IPC is pending.
+        if (!settled && !cancellationRequested) {
+          retryTimer = setTimeout(cancel, retryDelay);
+          retryDelay = Math.min(retryDelay * 2, 1_000);
+        }
+      }
+    })();
+  };
+  signal?.addEventListener('abort', cancel, { once: true });
   // The chat command performs its own completed-job and full artifact checks.
   // A separate prepare call repeats an expensive full weight-manifest scan.
-  const response = await invoke<NativeFoundryChatResponse>(
-    'model_foundry_chat',
-    {
+  let response: NativeFoundryChatResponse;
+  try {
+    response = await core.invoke<NativeFoundryChatResponse>('model_foundry_chat', {
       requestId,
       artifactId,
       messages: messages ? [...messages] : [{ role: 'user', content: prompt }],
       maxOutputTokens: maxNewTokens ?? null,
-    },
-  );
+    });
+  } finally {
+    // Preserve native rejection details: a cleanup failure does not prove closure.
+    // The original native invocation owns worker completion, including after a
+    // successful cancel request. Never publish completion from its boolean alone.
+    settled = true;
+    signal?.removeEventListener('abort', cancel);
+    if (retryTimer !== undefined) clearTimeout(retryTimer);
+  }
+  if (signal?.aborted) throw abortedFoundryInference(cancellationError);
   if (!response || response.artifactId !== artifactId || typeof response.modelName !== 'string' ||
       !response.modelName.trim() || !Number.isInteger(response.version) || response.version < 1 ||
       !['lora', 'qlora', 'full'].includes(response.method) || typeof response.text !== 'string' ||
@@ -494,10 +544,14 @@ export async function generateFromFoundryArtifact(args: {
   prompt: string;
   messages?: readonly FoundryChatMessage[];
   maxNewTokens?: number;
+  signal?: AbortSignal;
 }): Promise<FoundryArtifactGeneration> {
   if (!isTauri) throw new Error('Local adapter inference is available only in the desktop app.');
-  const response = await chatWithArtifact(args.jobId, args.prompt, args.maxNewTokens, args.messages);
+  const response = await chatWithArtifact(
+    args.jobId, args.prompt, args.maxNewTokens, args.messages, args.signal,
+  );
   const jobs = await invoke<CurrentFoundryJob[]>('model_foundry_list_jobs');
+  if (args.signal?.aborted) throw abortedFoundryInference();
   const job = Array.isArray(jobs) ? jobs.find((entry) => entry.id === args.jobId) : undefined;
   if (!job || job.status !== 'completed' || job.artifactVerified !== true ||
       job.name !== response.modelName || job.version !== response.version || job.method !== response.method ||
@@ -522,54 +576,70 @@ export async function evaluateFoundryArtifact(args: {
   cases?: readonly FoundryPrivateEvaluationCase[];
 }): Promise<FoundryArtifactEvaluation> {
   if (!isTauri) throw new Error('Local adapter evaluation is available only in the desktop app.');
-  const cases = (args.cases ?? []).slice(0, args.maxCases ?? 32);
-  if (cases.length === 0)
-    throw new Error('Evaluation requires at least one reviewed private case.');
+  if (args.championJobId !== undefined)
+    throw new Error('Champion comparison is not available in the current local evaluator.');
+  const maxCases = args.maxCases ?? 32;
+  if (!Number.isInteger(maxCases) || maxCases < 1 || maxCases > 32)
+    throw new Error('Evaluation case limit must be an integer from 1 to 32.');
+  if (!Array.isArray(args.cases) || args.cases.length === 0 || args.cases.length > 32)
+    throw new Error('Evaluation requires 1 to 32 reviewed private cases.');
+  const ids = new Set<string>();
+  for (const entry of args.cases) {
+    if (!entry || typeof entry.id !== 'string' || !entry.id.trim() || entry.id.length > 128 ||
+        ids.has(entry.id) || typeof entry.prompt !== 'string' || !entry.prompt.trim() ||
+        entry.prompt.length > 16_384 || typeof entry.expectedCompletion !== 'string' ||
+        !entry.expectedCompletion.trim() || entry.expectedCompletion.length > 12_000)
+      throw new Error('Every evaluation case needs a unique ID, prompt and expected completion within the supported limits.');
+    ids.add(entry.id);
+  }
+  const cases = args.cases.slice(0, maxCases).map((entry) => ({ ...entry }));
   const jobs = await invoke<CurrentFoundryJob[]>('model_foundry_list_jobs');
-  const job = jobs.find((entry) => entry.id === args.jobId);
-  if (!job) throw new Error('Model Foundry artifact was not found.');
-  const evidence: {
-    caseId: string;
-    hidden?: boolean;
-    baseScore: number;
-    candidateScore: number;
-    championScore: number | null;
-    evidenceHash: string;
-  }[] = [];
-  let passed = 0;
+  const job = Array.isArray(jobs) ? jobs.find((entry) => entry.id === args.jobId) : undefined;
+  if (!job || job.status !== 'completed' || job.artifactVerified !== true ||
+      typeof job.artifactSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(job.artifactSha256) ||
+      (args.projectId !== 'artifact' && job.projectId !== args.projectId))
+    throw new Error('Evaluation requires the selected verified artifact in its original project.');
+  const manifestSha256 = job.artifactSha256;
+  const evidence: FoundryRealEvaluationReport['caseEvidence'][number][] = [];
+  let totalScore = 0;
   for (const evaluationCase of cases) {
-    const output = (await chatWithArtifact(args.jobId, evaluationCase.prompt, args.maxNewTokens)).text;
+    const result = await generateFromFoundryArtifact({
+      projectId: args.projectId, jobId: args.jobId,
+      prompt: evaluationCase.prompt, maxNewTokens: args.maxNewTokens,
+    });
+    if (result.artifactManifestSha256 !== manifestSha256)
+      throw new Error('The selected artifact changed during evaluation. Run a new evaluation.');
+    const output = result.text;
     const normalizedOutput = output.trim().toLowerCase();
     const normalizedExpected = evaluationCase.expectedCompletion.trim().toLowerCase();
-    const score =
-      normalizedOutput === normalizedExpected
-        ? 1
-        : normalizedOutput.includes(normalizedExpected) ||
-            normalizedExpected.includes(normalizedOutput)
-          ? 0.5
-          : 0;
-    if (score >= 0.5) passed += 1;
+    const score = normalizedOutput === normalizedExpected ? 1
+      : normalizedOutput.includes(normalizedExpected) || normalizedExpected.includes(normalizedOutput) ? 0.5 : 0;
+    totalScore += score;
     evidence.push({
       caseId: evaluationCase.id,
       hidden: evaluationCase.hidden || undefined,
-      baseScore: 0,
+      baseScore: null,
       candidateScore: score,
       championScore: null,
-      evidenceHash: await sha256Hex(JSON.stringify({ prompt: evaluationCase.prompt, output })),
+      evidenceHash: await sha256Hex(JSON.stringify({
+        artifactManifestSha256: manifestSha256,
+        prompt: evaluationCase.prompt, expectedCompletion: evaluationCase.expectedCompletion, output,
+      })),
     });
   }
-  const candidateScore = passed / cases.length;
   return {
-    artifactManifestSha256: job.artifactSha256 ?? '',
+    artifactManifestSha256: manifestSha256,
     report: {
-      suite: 'private-dataset-studio',
+      suite: 'private-dataset-candidate-v1',
       caseCount: cases.length,
-      baseScore: 0,
-      candidateScore,
+      baseScore: null,
+      candidateScore: totalScore / cases.length,
       championScore: null,
-      delta: candidateScore,
+      delta: null,
       safetyFailures: [],
-      gate: candidateScore >= 0.5 ? 'pass' : 'blocked',
+      // This boundary only measures reference matching for the candidate. No base,
+      // champion, or safety assessment was executed, so it cannot authorize promotion.
+      gate: 'blocked',
       caseEvidence: evidence,
     },
   };

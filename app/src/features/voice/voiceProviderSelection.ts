@@ -55,8 +55,13 @@ export function resolveVoiceProviderSelection(input: {
   provider: VoiceAgentProvider;
   options: readonly ModelPickerOption[];
   preferredSelection?: ChatModelSelection;
+  /** A saved Voice default cannot override the explicit visible chat route. */
+  preservePreferredRoute?: boolean;
 }): VoiceProviderResolution {
-  const connectionId = providerConnectionId(input.provider);
+  const provider = input.preservePreferredRoute && input.preferredSelection?.mode === 'single'
+    ? voiceProviderForConnectionId(input.preferredSelection.connectionId) ?? input.provider
+    : input.provider;
+  const connectionId = providerConnectionId(provider);
   const routes = input.options
     .flatMap((option) => option.alternativeRoutes ?? [option])
     .filter(
@@ -83,17 +88,17 @@ export function resolveVoiceProviderSelection(input: {
     (preferred.connectionId === connectionId ||
       !voiceProviderForConnectionId(preferred.connectionId))
   ) {
-    throw new VoiceProviderUnavailableError(input.provider, true);
+    throw new VoiceProviderUnavailableError(provider, true);
   }
   const selectedRoute = preferredRoute ?? routes[0];
 
   if (!selectedRoute?.connection) {
-    throw new VoiceProviderUnavailableError(input.provider);
+    throw new VoiceProviderUnavailableError(provider);
   }
 
-  const label = providerLabel(input.provider);
+  const label = providerLabel(provider);
   return {
-    provider: input.provider,
+    provider,
     providerLabel: label,
     connectionId,
     routeId: selectedRoute.id,
@@ -129,7 +134,32 @@ const PROVIDER_DIRECTIVE_PATTERNS = [
 
 const SAVE_DEFAULT_PATTERN =
   /\b(?:please\s+)?(?:save|set|make|remember)\s+(?:(?:these|both|the|this|it)\s+)*(?:(?:main|worker)\s+)?(?:providers?|selections?)?\s*(?:as\s+)?(?:my\s+)?defaults?\b/giu;
-const NEGATED_SAVE_PREFIX = /(?:\bdo\s+not|\bdon['’]t|\bnever|\bnot)\s*$/iu;
+const NEGATED_COMMAND_PREFIX =
+  /(?:\bdo\s+not|\bdon['’]t|\bnever|\bnot)\s*(?:(?:set|make)\s+(?:the\s+)?)?$/iu;
+
+// Quoted examples are task content, never routing or persistence authority.
+function directiveIsQuoted(text: string, position: number): boolean {
+  let closing: string | null = null;
+  const quotes: Record<string, string> = { '"': '"', "'": "'", '“': '”', '‘': '’', '`': '`' };
+  for (let index = 0; index < position; index += 1) {
+    const char = text[index]!;
+    if (char === '\\') {
+      index += 1;
+      continue;
+    }
+    if (closing) {
+      if (
+        char === closing &&
+        !((char === "'" || char === '’') && /[\p{L}\p{N}]/u.test(text[index + 1] ?? ''))
+      ) {
+        closing = null;
+      }
+    } else if (quotes[char] && !(char === "'" && /[\p{L}\p{N}]/u.test(text[index - 1] ?? ''))) {
+      closing = quotes[char]!;
+    }
+  }
+  return closing !== null;
+}
 
 function normalizeProvider(value: string): VoiceAgentProvider {
   return value.replace(/\s+/gu, '').toLowerCase() === 'codex' ? 'codex' : 'opencode';
@@ -179,6 +209,10 @@ export function parseVoiceProviderOverrides(text: string): ParsedVoiceProviderOv
       const providerValue = match[pattern.providerGroup];
       const roleValue = match[pattern.roleGroup];
       if (!providerValue || !roleValue || match.index === undefined) continue;
+      if (directiveIsQuoted(text, match.index)) continue;
+      // Keep the entire request on its current route when a directive is negated.
+      // In particular, do not reinterpret its chained "and ..." as positive.
+      if (NEGATED_COMMAND_PREFIX.test(text.slice(0, match.index))) return null;
       const role = normalizeRole(roleValue);
       const provider = normalizeProvider(providerValue);
       const existing = providers[role];
@@ -195,8 +229,9 @@ export function parseVoiceProviderOverrides(text: string): ParsedVoiceProviderOv
   SAVE_DEFAULT_PATTERN.lastIndex = 0;
   for (const match of text.matchAll(SAVE_DEFAULT_PATTERN)) {
     if (match.index === undefined) continue;
+    if (directiveIsQuoted(text, match.index)) continue;
     const prefix = text.slice(Math.max(0, match.index - 20), match.index);
-    if (NEGATED_SAVE_PREFIX.test(prefix)) continue;
+    if (NEGATED_COMMAND_PREFIX.test(prefix)) continue;
     saveAsDefault = true;
     saveRanges.push({ start: match.index, end: match.index + match[0].length });
   }

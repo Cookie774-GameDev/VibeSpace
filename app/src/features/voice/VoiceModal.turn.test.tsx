@@ -314,6 +314,7 @@ describe('VoiceModal hands-free turn-taking', () => {
     voiceListeners.handlers.clear();
     useUIStore.setState({
       voiceModalOpen: true,
+      voiceInputMode: 'speech',
       voiceListening: false,
       activeChatId: 'chat_voice',
       route: 'chat',
@@ -345,6 +346,210 @@ describe('VoiceModal hands-free turn-taking', () => {
     clearContextGalaxySnapshotsForTests();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('opens the compact typed Voice input visibly without arming capture', async () => {
+    useUIStore.getState().setVoiceModalOpen(false);
+    render(<VoiceModal />);
+    act(() => useUIStore.getState().setVoiceModalOpen(true, 'text'));
+    const form = await screen.findByRole('form', { name: 'Jarvis voice mini bar' });
+    expect(form.hasAttribute('hidden')).toBe(false);
+    expect(form.hasAttribute('inert')).toBe(false);
+    expect(screen.getByRole('textbox', { name: 'Type to Jarvis voice' })).toBeTruthy();
+    expect(VoiceService.startListening).not.toHaveBeenCalled();
+  });
+
+  it('never starts capture for a typed opening even when hands-free auto-listen is enabled', async () => {
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    expect(VoiceService.startListening).not.toHaveBeenCalled();
+    act(() => emitVoice('voice:final', { text: 'stale recording send it' }));
+    expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+  });
+
+  it('does not open the visualization microphone for stale listening state in text mode', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    const getUserMedia = vi.fn(async () => { throw new Error('Synthetic capture denied'); });
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia } });
+    try {
+      useUIStore.getState().setVoiceModalOpen(true, 'text');
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      act(() => useVoiceStore.getState().setState('listening'));
+      expect(getUserMedia).not.toHaveBeenCalled();
+    } finally {
+      if (descriptor) Object.defineProperty(navigator, 'mediaDevices', descriptor);
+      else Reflect.deleteProperty(navigator, 'mediaDevices');
+    }
+  });
+
+  it('submits visible typed text with its exact session and inherited visible Low effort', async () => {
+    const key = 'vibespace.chat-reasoning.v1';
+    const old = localStorage.getItem(key);
+    try {
+      useUIStore.setState({ activeChatId: 'visible-source-chat' });
+      writeChatReasoningEffort('visible-source-chat', 'low');
+      useUIStore.getState().setVoiceModalOpen(true, 'text');
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      const binding = useVoiceStore.getState().session!;
+      fireEvent.change(screen.getByRole('textbox', { name: 'Type to Jarvis voice' }), { target: { value: 'Typed route check' } });
+      fireEvent.submit(screen.getByRole('form', { name: 'Jarvis voice mini bar' }));
+      await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce());
+      expect(vi.mocked(dispatchVoiceMainRequest).mock.calls[0]?.[0]).toMatchObject({
+        text: 'Typed route check', chatId: 'chat_voice', accountId: 'account-a',
+        voiceSessionId: binding.sessionId, speakReply: true,
+        reasoningPreference: { mode: 'normal', effortOverride: 'low' },
+      });
+      expect(VoiceService.startListening).not.toHaveBeenCalled();
+    } finally {
+      if (old === null) localStorage.removeItem(key); else localStorage.setItem(key, old);
+    }
+  });
+
+  it('clears the typed draft on close and keeps typed and speech reopen behavior separate', async () => {
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Type to Jarvis voice' }), { target: { value: 'Unsent private draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close typed Jarvis voice' }));
+    expect(screen.queryByRole('form', { name: 'Jarvis voice mini bar' })).toBeNull();
+    act(() => useUIStore.getState().setVoiceModalOpen(true, 'text'));
+    expect(await screen.findByRole('textbox', { name: 'Type to Jarvis voice' })).toHaveProperty('value', '');
+    expect(VoiceService.startListening).not.toHaveBeenCalled();
+    act(() => useUIStore.getState().setVoiceModalOpen(false));
+    act(() => useUIStore.getState().setVoiceModalOpen(true));
+    await waitFor(() => expect(VoiceService.startListening).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('form', { name: 'Jarvis voice mini bar' })).toBeNull();
+  });
+
+  it.each(['account', 'workspace', 'project', 'session', 'stop', 'close'] as const)(
+    'does not dispatch a stale typed request after %s changes during persistence',
+    async (change) => {
+      let finish!: (value: { id: string }) => void;
+      const pending = new Promise<{ id: string }>((resolve) => { finish = resolve; });
+      vi.mocked(messageRepo.create).mockImplementationOnce(() => pending as ReturnType<typeof messageRepo.create>);
+      useUIStore.getState().setVoiceModalOpen(true, 'text');
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Type to Jarvis voice' }), { target: { value: 'Deferred typed request ' + change } });
+      fireEvent.submit(screen.getByRole('form', { name: 'Jarvis voice mini bar' }));
+      await waitFor(() => expect(messageRepo.create).toHaveBeenCalledOnce());
+      if (change === 'account') act(() => useAuthStore.setState({ localUserId: 'account-b' }));
+      if (change === 'workspace') act(() => useAuthStore.setState({ workspaceId: 'workspace-b' as ReturnType<typeof useAuthStore.getState>['workspaceId'] }));
+      if (change === 'project') act(() => useAuthStore.setState({ projectId: 'project-b' as ProjectId }));
+      if (change === 'session') act(() => {
+        useVoiceStore.getState().endSession(useVoiceStore.getState().session!.sessionId);
+        useVoiceStore.getState().beginSession(createVoiceSessionBinding({
+          sessionId: 'new-typed-session', accountId: 'account-a', chatId: 'another-chat' as ChatId, startedAt: Date.now(),
+        }));
+      });
+      if (change === 'stop') fireEvent.click(screen.getByRole('button', { name: 'Stop reply' }));
+      if (change === 'close') fireEvent.click(screen.getByRole('button', { name: 'Close typed Jarvis voice' }));
+      await act(async () => { finish({ id: 'persisted-old-typed-request' }); await pending; });
+      expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+      expect(VoiceService.startListening).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['account', 'workspace', 'project', 'close-reopen', 'session', 'unrelated-setting'] as const)(
+    'keeps scope revocation monotonic across a batched %s transition during typed persistence',
+    async (change) => {
+      let finish!: (value: { id: string }) => void;
+      const pending = new Promise<{ id: string }>((resolve) => { finish = resolve; });
+      vi.mocked(messageRepo.create).mockImplementationOnce(() => pending as ReturnType<typeof messageRepo.create>);
+      useUIStore.getState().setVoiceModalOpen(true, 'text');
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      const binding = useVoiceStore.getState().session!;
+      fireEvent.change(screen.getByRole('textbox', { name: 'Type to Jarvis voice' }), { target: { value: 'Unique revoked typed request: ' + change } });
+      fireEvent.submit(screen.getByRole('form', { name: 'Jarvis voice mini bar' }));
+      await waitFor(() => expect(messageRepo.create).toHaveBeenCalledOnce());
+      const original = useAuthStore.getState();
+      act(() => {
+        if (change === 'account') {
+          useAuthStore.setState({ localUserId: 'round-trip-account' });
+          useAuthStore.setState({ localUserId: original.localUserId });
+        } else if (change === 'workspace') {
+          useAuthStore.setState({ workspaceId: 'round-trip-workspace' as typeof original.workspaceId });
+          useAuthStore.setState({ workspaceId: original.workspaceId });
+        } else if (change === 'project') {
+          useAuthStore.setState({ projectId: 'round-trip-project' as typeof original.projectId });
+          useAuthStore.setState({ projectId: original.projectId });
+        } else if (change === 'close-reopen') {
+          useUIStore.getState().setVoiceModalOpen(false);
+          useUIStore.getState().setVoiceModalOpen(true, 'text');
+        } else if (change === 'session') {
+          useVoiceStore.getState().endSession(binding.sessionId);
+          useVoiceStore.getState().beginSession(createVoiceSessionBinding({
+            sessionId: 'round-trip-session', accountId: binding.accountId,
+            chatId: 'round-trip-chat' as ChatId, startedAt: Date.now(),
+          }));
+          useVoiceStore.getState().endSession('round-trip-session');
+          useVoiceStore.getState().beginSession(binding);
+        } else {
+          useAuthStore.setState({ voiceAccentIntensity: original.voiceAccentIntensity + 1 });
+        }
+      });
+      await act(async () => { finish({ id: 'saved-round-trip-' + change }); await pending; });
+      if (change === 'unrelated-setting') {
+        expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce();
+        expect(dispatchVoiceMainRequest).toHaveBeenCalledWith(expect.objectContaining({
+          chatId: binding.chatId, voiceSessionId: binding.sessionId, accountId: binding.accountId,
+        }));
+      } else expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+      expect(VoiceService.startListening).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['account', 'workspace', 'project'] as const)(
+    'does not bind an opening after a batched %s revocation during chat preparation',
+    async (change) => {
+      let finish!: (value: string) => void;
+      const pending = new Promise<string>((resolve) => { finish = resolve; });
+      chatRoutingMocks.ensureJarvisChatForProvider.mockImplementationOnce(() => pending);
+      useUIStore.getState().setVoiceModalOpen(true, 'text');
+      render(<VoiceModal />);
+      await waitFor(() => expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledOnce());
+      const original = useAuthStore.getState();
+      act(() => {
+        if (change === 'account') {
+          useAuthStore.setState({ localUserId: 'opening-other-account' });
+          useAuthStore.setState({ localUserId: original.localUserId });
+        } else if (change === 'workspace') {
+          useAuthStore.setState({ workspaceId: 'opening-other-workspace' as typeof original.workspaceId });
+          useAuthStore.setState({ workspaceId: original.workspaceId });
+        } else {
+          useAuthStore.setState({ projectId: 'opening-other-project' as typeof original.projectId });
+          useAuthStore.setState({ projectId: original.projectId });
+        }
+      });
+      await act(async () => { finish('revoked-opening-chat'); await pending; });
+      expect(useVoiceStore.getState().session).toBeNull();
+      expect(chatRoutingMocks.focusVoiceChat).not.toHaveBeenCalled();
+      expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+      expect(VoiceService.startListening).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retains the original typed voice target when an unrelated chat becomes active', async () => {
+    let finish!: (value: { id: string }) => void;
+    const pending = new Promise<{ id: string }>((resolve) => { finish = resolve; });
+    vi.mocked(messageRepo.create).mockImplementationOnce(() => pending as ReturnType<typeof messageRepo.create>);
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    const binding = useVoiceStore.getState().session!;
+    fireEvent.change(screen.getByRole('textbox', { name: 'Type to Jarvis voice' }), { target: { value: 'Original voice target' } });
+    fireEvent.submit(screen.getByRole('form', { name: 'Jarvis voice mini bar' }));
+    await waitFor(() => expect(messageRepo.create).toHaveBeenCalledOnce());
+    act(() => useUIStore.setState({ activeChatId: 'unrelated-chat' }));
+    await act(async () => { finish({ id: 'voice-target-message' }); await pending; });
+    expect(dispatchVoiceMainRequest).toHaveBeenCalledWith(expect.objectContaining({
+      chatId: 'chat_voice', voiceSessionId: binding.sessionId, accountId: binding.accountId,
+    }));
+    expect(VoiceService.startListening).not.toHaveBeenCalled();
   });
 
   it('shows an available native default when opening with no selected model, before speech', async () => {

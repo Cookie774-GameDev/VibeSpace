@@ -67,6 +67,7 @@ export const foundryProvider: LLMProvider = {
       prompt,
       messages,
       maxNewTokens: Math.min(512, Math.max(1, req.max_output_tokens ?? 320)),
+      signal: req.signal,
     });
     if (req.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     req.onChunk?.({ delta: response.text, first: true });

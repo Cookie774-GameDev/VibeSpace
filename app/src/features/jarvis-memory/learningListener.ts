@@ -1,12 +1,29 @@
 import { loadLearningFile, saveLearningFile, type LearningFileResult } from './learningFile';
-import { useJarvisLearningStore } from './learningStore';
-import type { JarvisMemoryCategory, MemoryEvidenceItem } from './types';
+import {
+  parseJarvisLearningMarkdown,
+  renderMarkdown,
+  useJarvisLearningStore,
+} from './learningStore';
+import type {
+  JarvisLearningProfile,
+  JarvisMemoryCategory,
+  JarvisMemoryItem,
+  MemoryEvidenceItem,
+} from './types';
 import { safeLocalStorage } from '@/lib/persistence/safeLocalStorage';
 import { clearJarvisMemoryStatus, publishJarvisMemoryStatus } from './memoryStatusRuntime';
 import { reconcileDurableEvidence } from './evidencePersistenceRecovery';
 import { reconcileDurableProfile } from './profilePersistenceRecovery';
 import { createAccountHydrationAuthority } from './accountHydrationAuthority';
 import { createMemoryEvidenceWriteAuthority } from './memoryEvidenceWriteAuthority';
+
+interface PendingLearningControls {
+  enabled?: boolean;
+  removedIds: ReadonlySet<string>;
+  retainedEpoch?: string;
+  retainedProfile?: JarvisLearningProfile;
+  upsertedItems?: ReadonlyMap<string, JarvisMemoryItem>;
+}
 
 interface LearningSendDetail {
   origin?: string;
@@ -92,6 +109,10 @@ export function startJarvisLearningListener(
   const evidenceWriteAuthority = createMemoryEvidenceWriteAuthority();
   const profileWriteAuthority = createMemoryEvidenceWriteAuthority();
   let suppressAutomaticProfilePersistence = 0;
+  // Explicit consent and removal remain authoritative during content recovery.
+  const pendingControls = new Map<string, PendingLearningControls>();
+  const recoveringProfiles = new Map<string, number>();
+  const attemptedRecoveryControls = new Map<string, PendingLearningControls>();
   const timers = new Map<
     string,
     {
@@ -114,6 +135,29 @@ export function startJarvisLearningListener(
     }
   };
 
+  const projectDurableProfile = (
+    accountId: string,
+    durableMarkdown: string,
+    controls = pendingControls.get(accountId),
+  ): string | null => {
+    if (controls?.retainedProfile) return renderMarkdown(controls.retainedProfile);
+    const durable = parseJarvisLearningMarkdown(durableMarkdown, accountId);
+    if (!durable) return null;
+    const items = new Map(durable.items.map((item) => [item.id, item]));
+    for (const [id, item] of controls?.upsertedItems ?? []) items.set(id, item);
+    for (const id of controls?.removedIds ?? []) items.delete(id);
+    return renderMarkdown({
+      ...durable,
+      ...(controls?.enabled !== undefined ? { enabled: controls.enabled } : {}),
+      items: [...items.values()].sort((a, b) => b.updatedAt - a.updatedAt),
+    });
+  };
+  const applyDurableProfile = (accountId: string, durableMarkdown: string): boolean =>
+    mutateAutomaticLearning(() => {
+      const projected = projectDurableProfile(accountId, durableMarkdown);
+      return projected !== null && store.getState().importMarkdown(projected);
+    });
+
   const loadAccount = (accountId: string) => {
     const scopeEpoch = accountScopeEpoch;
     const isCurrent = () =>
@@ -129,8 +173,16 @@ export function startJarvisLearningListener(
         if (!isCurrent()) return;
         store.getState().setAccount(accountId);
         const markdown = typeof loaded === 'string' ? loaded : loaded?.markdown;
-        if (markdown) store.getState().importMarkdown(markdown);
+        if (markdown) applyDurableProfile(accountId, markdown);
+        else if (pendingControls.has(accountId)) {
+          applyDurableProfile(accountId, store.getState().exportMarkdown());
+        }
         if (evidenceRepository) store.getState().hydrateEvidence(accountId, evidence);
+        if (pendingControls.has(accountId)) {
+          // Hydration is complete; keep later UI control changes observable during the retry.
+          void writeProfile(accountId, store.getState().exportMarkdown(), undefined, true);
+        }
+        if (!isCurrent()) return;
         if (typeof loaded === 'object' && loaded?.recovered) {
           publishStatus(undefined, 'recovered');
         }
@@ -160,29 +212,77 @@ export function startJarvisLearningListener(
     announceCompletion = false,
     writeToken = profileWriteAuthority.token(active),
   ): Promise<void> => {
+    const scopeEpoch = accountScopeEpoch;
+    const isCurrent = () =>
+      !disposed &&
+      accountScopeEpoch === scopeEpoch &&
+      bindings.getAccountId().trim() === active &&
+      store.getState().activeAccountId === active;
     const pending = writeQueue
       .then(async () => {
         if (!profileWriteAuthority.canWrite(writeToken)) return;
+        const controls = pendingControls.get(active);
         await save(active, markdown);
-        if (announceCompletion) publishStatus(chatId, 'updated');
+        const saved = controls ? parseJarvisLearningMarkdown(markdown, active) : null;
+        if (
+          controls &&
+          saved &&
+          pendingControls.get(active) === controls &&
+          (controls.enabled === undefined || saved.enabled === controls.enabled) &&
+          !saved.items.some((item) => controls.removedIds.has(item.id)) &&
+          (!controls.retainedEpoch || saved.caoLearningEpoch === controls.retainedEpoch) &&
+          [...(controls.upsertedItems ?? [])].every(
+            ([id, item]) =>
+              JSON.stringify(saved.items.find((savedItem) => savedItem.id === id)) ===
+              JSON.stringify(item),
+          )
+        ) {
+          pendingControls.delete(active);
+        }
+        if (announceCompletion && isCurrent()) publishStatus(chatId, 'updated');
       })
       .catch(async (error) => {
+        if (!isCurrent()) return;
+        let attemptedControls: PendingLearningControls | undefined;
+        recoveringProfiles.set(active, scopeEpoch);
         profileWriteAuthority.beginRecovery(active);
         publishStatus(chatId, 'error');
         report(bindings, error);
         try {
           const recovery = await reconcileDurableProfile({
             load: () => load(active),
-            isCurrent: () => !disposed && bindings.getAccountId().trim() === active,
-            apply: (durableMarkdown) =>
-              mutateAutomaticLearning(() => store.getState().importMarkdown(durableMarkdown)),
+            isCurrent,
+            apply: (durableMarkdown) => applyDurableProfile(active, durableMarkdown),
           });
-          if (recovery === 'reconciled') publishStatus(chatId, 'recovered');
+          if (recovery === 'reconciled' && isCurrent()) {
+            attemptedControls = pendingControls.get(active);
+            if (attemptedControls) {
+              // One bounded retry saves recovered content with the latest explicit controls.
+              // Failure remains unavailable, without looping or reviving removed authority.
+              attemptedRecoveryControls.set(active, attemptedControls);
+              await save(active, store.getState().exportMarkdown());
+              if (pendingControls.get(active) === attemptedControls) pendingControls.delete(active);
+            }
+            if (isCurrent() && !pendingControls.has(active)) publishStatus(chatId, 'recovered');
+          }
         } catch (recoveryError) {
-          publishStatus(chatId, 'error');
-          report(bindings, recoveryError);
+          if (isCurrent()) {
+            publishStatus(chatId, 'error');
+            report(bindings, recoveryError);
+          }
         } finally {
+          attemptedRecoveryControls.delete(active);
+          recoveringProfiles.delete(active);
           profileWriteAuthority.endRecovery(active);
+          const newerControls = pendingControls.get(active);
+          if (
+            isCurrent() &&
+            newerControls &&
+            attemptedControls &&
+            newerControls !== attemptedControls
+          ) {
+            persistProfileNow(active, store.getState().exportMarkdown(), chatId);
+          }
         }
       });
     writeQueue = pending;
@@ -272,6 +372,47 @@ export function startJarvisLearningListener(
       !loadingAccounts.has(active) &&
       state.profiles[active] !== previous.profiles[active]
     ) {
+      const current = state.profiles[active];
+      const prior = previous.profiles[active];
+      if (current && prior) {
+        const pending = pendingControls.get(active);
+        const currentIds = new Set(current.items.map((item) => item.id));
+        const removed = prior.items.filter((item) => !currentIds.has(item.id));
+        const restored = pending && [...pending.removedIds].some((id) => currentIds.has(id));
+        const epochChanged = current.caoLearningEpoch !== prior.caoLearningEpoch;
+        const retainManualItems =
+          (recoveringProfiles.get(active) === accountScopeEpoch || pending?.upsertedItems) &&
+          bindings.getAccountId().trim() === active;
+        const priorItems = new Map(prior.items.map((item) => [item.id, item]));
+        const changedItems = retainManualItems
+          ? current.items.filter((item) => priorItems.get(item.id) !== item)
+          : [];
+        if (
+          current.enabled !== prior.enabled ||
+          removed.length ||
+          restored ||
+          epochChanged ||
+          pending?.retainedProfile ||
+          changedItems.length
+        ) {
+          pendingControls.set(active, {
+            enabled: current.enabled !== prior.enabled ? current.enabled : pending?.enabled,
+            removedIds: new Set([
+              ...[...(pending?.removedIds ?? [])].filter((id) => !currentIds.has(id)),
+              ...removed.map((item) => item.id),
+            ]),
+            // Clear and explicit Undo establish a newer profile generation to retain.
+            retainedEpoch:
+              epochChanged || restored ? current.caoLearningEpoch : pending?.retainedEpoch,
+            retainedProfile:
+              epochChanged || restored || pending?.retainedProfile ? current : undefined,
+            upsertedItems: new Map([
+              ...[...(pending?.upsertedItems ?? [])].filter(([id]) => currentIds.has(id)),
+              ...changedItems.map((item) => [item.id, item] as const),
+            ]),
+          });
+        }
+      }
       persistProfile(active, store.getState().exportMarkdown());
     }
     if (
@@ -290,6 +431,7 @@ export function startJarvisLearningListener(
     if (next === previous) return;
     activeAccountId = next;
     accountScopeEpoch += 1;
+    if (disposed) return;
     evidenceWriteAuthority.invalidate(previous);
     hydrationAuthority.invalidate();
     const pendingFlush = flushScheduled(previous).finally(() => {
@@ -328,6 +470,25 @@ export function startJarvisLearningListener(
           messageId,
         }),
       );
+      if (result.explicitMemoryId && recoveringProfiles.get(currentAccount) === accountScopeEpoch) {
+        // A direct Remember command is user intent, although its store mutation bypasses autosave.
+        const currentProfile = store.getState().currentProfile();
+        const item = currentProfile.items.find((item) => item.id === result.explicitMemoryId);
+        if (item) {
+          const pending = pendingControls.get(currentAccount);
+          pendingControls.set(currentAccount, {
+            ...pending,
+            removedIds: pending?.removedIds ?? new Set(),
+            retainedProfile: pending?.retainedProfile ? currentProfile : undefined,
+            upsertedItems: new Map([
+              ...[...(pending?.upsertedItems ?? [])].filter(([id]) =>
+                currentProfile.items.some((item) => item.id === id),
+              ),
+              [item.id, item],
+            ]),
+          });
+        }
+      }
       if (result.explicitMemoryId && !result.evaluateNow) {
         publishStatus(chatId, 'updating');
         persistProfileNow(currentAccount, store.getState().exportMarkdown(), chatId);
@@ -386,16 +547,52 @@ export function startJarvisLearningListener(
   window.addEventListener('jarvis:run-state', onRunState);
   window.addEventListener(eventName, onSend);
   window.addEventListener('jarvis:user-command', onSend);
-  return async () => {
+  let stopping: Promise<void> | undefined;
+  return () => {
+    if (stopping) return stopping;
+    const drainingAccount = activeAccountId;
+    const drainingEpoch = accountScopeEpoch;
+    const controls = pendingControls.get(drainingAccount);
+    const needsDrain =
+      controls &&
+      recoveringProfiles.has(drainingAccount) &&
+      attemptedRecoveryControls.get(drainingAccount) !== controls;
+    const canDrain = () =>
+      accountScopeEpoch === drainingEpoch && bindings.getAccountId().trim() === drainingAccount;
     disposed = true;
     learningController.abort();
     window.removeEventListener('jarvis:run-state', onRunState);
     unsubscribe();
-    unsubscribeAccount?.();
     window.removeEventListener(eventName, onSend);
     window.removeEventListener('jarvis:user-command', onSend);
     flushScheduled();
-    await writeQueue;
+    stopping = (async () => {
+      try {
+        await writeQueue;
+        if (!needsDrain || !canDrain() || pendingControls.get(drainingAccount) !== controls) return;
+        // Recovery invalidates its queued epochs. Graceful shutdown still drains the
+        // already-authorized intent, without restoring the quarantined visible store.
+        let projected: string | null = null;
+        const recovery = await reconcileDurableProfile({
+          load: () => load(drainingAccount),
+          isCurrent: canDrain,
+          apply: (markdown) => {
+            projected = projectDurableProfile(drainingAccount, markdown, controls);
+            return projected !== null;
+          },
+        });
+        if (recovery !== 'reconciled' || !canDrain() || projected === null) return;
+        await save(drainingAccount, projected);
+        if (pendingControls.get(drainingAccount) === controls)
+          pendingControls.delete(drainingAccount);
+      } catch (error) {
+        report(bindings, error);
+      } finally {
+        // Keep only transition observation alive until the captured flush has settled.
+        unsubscribeAccount?.();
+      }
+    })();
+    return stopping;
   };
 }
 

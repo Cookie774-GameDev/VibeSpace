@@ -241,6 +241,8 @@ import {
   buildExplicitRootCorrectionLengthGuidance,
   cancelPendingProjectedNativeQuestions,
   responseAwaitsApproval,
+  resumeContinuationText,
+  resumeToolReceiptProjection,
   createCanonicalProviderEvidenceAuthority,
   createJarvisCommandCenterHostPort,
   createRuntimeCancellationTaskTracker,
@@ -271,7 +273,7 @@ import {
 } from './runtime';
 import { CAO_LEARNER_IDENTITY } from '@/features/cao/bootstrap';
 import { TOOL_GATEWAY_CATALOG } from '@/lib/harness/toolGatewayProtocol';
-import { setPermissionAccess } from '@/features/jarvis-interaction/permissionAccessStore';
+import { setPermissionAccess, setAgentApprovalMode } from '@/features/jarvis-interaction/permissionAccessStore';
 import { selectionFromOption } from './modelSelection';
 import { DEFAULT_CUSTOM_STEPS } from './stacks/presets';
 import { CODEX_CLI_CONNECTION, PROVIDER_CONNECTIONS } from './adapters/catalog';
@@ -6789,10 +6791,16 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     stop();
   });
 
-  it('cancels an in-flight speakReply run when a new voice send arrives', async () => {
+  it('cancels an in-flight speakReply run only in its bound voice session while another chat stays active', async () => {
     useUIStore.setState({ voiceModalOpen: true });
     const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
     const chatId = 'chat_voice_replace' as ChatId;
+    const voiceSessionId = 'vsession_voice_replace';
+    const voiceScope = { accountId: 'runtime-test-account', voiceSessionId };
+    useAuthStore.setState({ localUserId: voiceScope.accountId, cloudSession: null });
+    useVoiceStore.getState().beginSession(createVoiceSessionBinding({
+      sessionId: voiceSessionId, accountId: voiceScope.accountId, chatId, startedAt: 1,
+    }));
     let placeholderSeq = 0;
     const signals: AbortSignal[] = [];
     mocks.runAgent.mockImplementation(async (payload: { signal: AbortSignal }) => {
@@ -6824,18 +6832,103 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       }),
     );
 
+    window.dispatchEvent(new CustomEvent('jarvis:send', {
+      detail: { chatId: 'chat_independent_typed', text: 'Keep running independently.' },
+    }));
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
     window.dispatchEvent(
-      new CustomEvent('jarvis:send', { detail: { chatId, text: 'first', speakReply: true } }),
+      new CustomEvent('jarvis:send', { detail: { chatId, text: 'first', speakReply: true, ...voiceScope } }),
     );
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
+
+    window.dispatchEvent(
+      new CustomEvent('jarvis:send', { detail: { chatId, text: 'second', speakReply: true, ...voiceScope } }),
+    );
+
+    await vi.waitFor(() => expect(signals[1]?.aborted).toBe(true));
+    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(3));
+    expect(signals[0].aborted).toBe(false);
+    expect(signals[2].aborted).toBe(false);
+
+    stop();
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+  });
+
+  it.each([
+    'different-chat-typed', 'different-chat-voice', 'same-chat-typed', 'unbound-incoming',
+    'unbound-previous', 'stale-session', 'claimed-account', 'changed-account',
+    'changed-workspace', 'changed-project', 'duplicate-key',
+  ] as const)('voice replacement preserves an unrelated or unauthorized run: %s', async (boundary) => {
+    const jarvis = agent('agent_jarvis', 'jarvis', 'You are Jarvis.');
+    const chatId = 'chat_voice_cancellation_scope' as ChatId;
+    const otherChatId = 'chat_unrelated_foundry' as ChatId;
+    const voiceSessionId = 'vsession_voice_cancellation_scope';
+    const accountId = 'runtime-test-account';
+    useAuthStore.setState({
+      localUserId: accountId, cloudSession: null,
+      workspaceId: 'workspace-voice-cancellation' as never,
+      projectId: 'project-voice-cancellation' as never,
+    });
+    useVoiceStore.getState().beginSession(createVoiceSessionBinding({
+      sessionId: voiceSessionId, accountId, chatId, startedAt: 1,
+    }));
+    const signals: AbortSignal[] = [];
+    mocks.runAgent.mockImplementation(async (payload: { signal: AbortSignal }) => {
+      signals.push(payload.signal);
+      await new Promise<void>((resolve) => {
+        if (payload.signal.aborted) resolve();
+        else payload.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      return { text: 'Synthetic settled response.', provider: 'mock', model: 'mock-default',
+        usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 } };
+    });
+    let sequence = 0;
+    const getAgentForChat = vi.fn(async () => jarvis);
+    const stop = trackListener(startRuntimeListener({
+      getAgentById: id => id === jarvis.id ? jarvis : null,
+      getAgentBySlug: slug => slug === 'jarvis' ? jarvis : null,
+      getAgentForChat,
+      getMessages: vi.fn(async () => []),
+      appendMessage: vi.fn(async msg => ({ ...msg,
+        id: `msg_voice_scope_${++sequence}` as MessageId, created_at: sequence, updated_at: sequence })),
+      updateMessage: vi.fn(async () => undefined),
+    }));
+    const priorVoice = !['different-chat-typed', 'same-chat-typed'].includes(boundary);
+    const original: SendDetail = {
+      chatId: boundary.startsWith('different-chat') ? otherChatId : chatId,
+      text: 'Keep this original request active.', cancellationKey: 'voice-scope-original' as MessageId,
+      ...(priorVoice ? { speakReply: true, accountId,
+        ...(boundary === 'unbound-previous' ? {} : { voiceSessionId }) } : {}),
+    };
+    window.dispatchEvent(new CustomEvent('jarvis:send', { detail: original }));
     await vi.waitFor(() => expect(signals).toHaveLength(1));
 
-    window.dispatchEvent(
-      new CustomEvent('jarvis:send', { detail: { chatId, text: 'second', speakReply: true } }),
-    );
-
-    await vi.waitFor(() => expect(signals[0]?.aborted).toBe(true));
-    await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
-
+    if (boundary === 'stale-session') {
+      expect(useVoiceStore.getState().endSession(voiceSessionId)).toBe(true);
+      expect(useVoiceStore.getState().beginSession(createVoiceSessionBinding({
+        sessionId: 'vsession-newer', accountId, chatId, startedAt: 2,
+      }))).toBe(true);
+    }
+    if (boundary === 'changed-account') useAuthStore.setState({ localUserId: 'another-account' });
+    if (boundary === 'changed-workspace') useAuthStore.setState({ workspaceId: 'another-workspace' as never });
+    if (boundary === 'changed-project') useAuthStore.setState({ projectId: 'another-project' as never });
+    const incoming: SendDetail = {
+      chatId, text: 'A separate voice request.', speakReply: true,
+      cancellationKey: (boundary === 'duplicate-key' ? 'voice-scope-original' : 'voice-scope-new') as MessageId,
+      ...(boundary === 'unbound-incoming' ? {} : {
+        accountId: boundary === 'claimed-account' ? 'another-account' : accountId, voiceSessionId,
+      }),
+    };
+    window.dispatchEvent(new CustomEvent('jarvis:send', { detail: incoming }));
+    if (boundary === 'duplicate-key') {
+      await vi.waitFor(() => expect(mocks.devLog).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Duplicate AI cancellation key rejected' }),
+      ));
+      expect(getAgentForChat).toHaveBeenCalledOnce();
+    } else {
+      await vi.waitFor(() => expect(getAgentForChat).toHaveBeenCalledTimes(2));
+    }
+    expect(signals[0].aborted).toBe(false);
     stop();
   });
 
@@ -11459,6 +11552,323 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     }
   });
 
+  // Extends the independent C02 review's three before-click adversaries to
+  // cover the second validation after the native release wait as well.
+  it.each([
+    { changed: 'account', timing: 'before click' },
+    { changed: 'workspace', timing: 'before click' },
+    { changed: 'project', timing: 'before click' },
+    { changed: 'account', timing: 'while waiting' },
+    { changed: 'workspace', timing: 'while waiting' },
+    { changed: 'project', timing: 'while waiting' },
+  ] as const)('rejects Resume when original $changed scope changes $timing', async ({ changed, timing }) => {
+    const previous = useAuthStore.getState();
+    useAuthStore.setState({ localUserId: 'runtime-test-account', workspaceId: 'resume-workspace-a' as never, projectId: 'resume-project-a' as never });
+    const harness = kernelRuntimeBindings(agent('agent_resume_scope', 'apple', 'Answer clearly.'));
+    const chatId = String(harness.chatId);
+    useJarvisInteractionStore.getState().setChatMode(chatId, 'ask');
+    setPermissionAccess(chatId, 'read');
+    const release = deferred<void>();
+    if (timing === 'while waiting') mocks.waitForPersistentOpenCodeChatRelease.mockReturnValue(release.promise);
+    const changeScope = () => {
+      if (changed === 'account') useAuthStore.setState({ localUserId: 'resume-account-b' });
+      if (changed === 'workspace') useAuthStore.setState({ workspaceId: 'resume-workspace-b' as never });
+      if (changed === 'project') useAuthStore.setState({ projectId: 'resume-project-b' as never });
+    };
+    mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: { chatId, text: 'Continue this scope-owned task.', cancellationKey: 'msg_kernel_user' } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { chatId } }));
+      await stop.whenIdle();
+      if (timing === 'before click') changeScope();
+      const onUnavailable = vi.fn();
+      window.dispatchEvent(new CustomEvent('jarvis:resume', { detail: { chatId, cancellationKey: 'resume_original_scope', onUnavailable } }));
+      if (timing === 'while waiting') {
+        await vi.waitFor(() => expect(mocks.waitForPersistentOpenCodeChatRelease).toHaveBeenCalledOnce());
+        changeScope();
+        release.resolve();
+      }
+      await stop.whenIdle();
+      expect(mocks.runAgent).toHaveBeenCalledOnce();
+      expect(onUnavailable).toHaveBeenCalledOnce();
+      if (timing === 'before click') expect(mocks.waitForPersistentOpenCodeChatRelease).not.toHaveBeenCalled();
+    } finally {
+      release.resolve(); stop(); await stop.whenIdle();
+      useAuthStore.setState({ localUserId: previous.localUserId, workspaceId: previous.workspaceId, projectId: previous.projectId });
+    }
+  });
+
+  describe('bounded Resume tool observations', () => {
+    const chatId = 'chat_receipt_scope' as ChatId;
+    const message = (parts: Part[], patch: Partial<Message> = {}): Message => ({
+      id: 'msg_receipts' as MessageId, chat_id: chatId, role: 'assistant', parts,
+      created_at: 1, updated_at: 1, ...patch,
+    });
+    const call = (id: string): Part => ({ kind: 'tool_call', tool: 'files.create', call_id: id,
+      args: { password: 'synthetic-argument-secret' },
+      details: { command: 'synthetic-private-command', cwd: 'synthetic-private-path' } });
+    const text = (rows: Message[]) => [...resumeToolReceiptProjection(rows, String(chatId)).values()].join('\n');
+
+    it.each([
+      { label: 'completed', result: { status: 'completed', output: 'synthetic-result-secret' }, expected: 'completed' },
+      { label: 'failed', result: { status: 'failed' }, expected: 'failed' },
+      { label: 'negative result', result: { status: 'completed', ok: false }, expected: 'failed' },
+      { label: 'pending', result: { status: 'running' }, expected: 'pending' },
+      { label: 'cancelled', result: { status: 'cancelled' }, expected: 'cancelled' },
+      { label: 'unknown result', result: { output: 'synthetic-result-secret' }, expected: 'unconfirmed' },
+      { label: 'inherited status', result: Object.create({ status: 'completed' }), expected: 'unconfirmed' },
+      { label: 'conflicting error envelope', result: { status: 'completed', error: { message: 'synthetic-error-secret' } }, expected: 'unconfirmed' },
+    ])('projects $label metadata without raw arguments, outputs or details', ({ result, expected }) => {
+      const history = [message([call('receipt-once'), { kind: 'tool_result', call_id: 'receipt-once', result }])];
+      const before = structuredClone(history);
+      const body = text(history);
+      expect(structuredClone(history)).toEqual(before);
+      expect(body).toContain('receipt-once');
+      expect(body).toContain('files.create');
+      expect(body).toContain(`"status":"${expected}"`);
+      expect(body).toContain('"source_role":"assistant"');
+      expect(body).not.toContain('synthetic-argument-secret');
+      expect(body).not.toContain('synthetic-result-secret');
+      expect(body).not.toContain('synthetic-private');
+    });
+
+    it('keeps missing, orphaned and conflicting outcomes unconfirmed', () => {
+      const body = text([message([call('missing'),
+        { kind: 'tool_result', call_id: 'orphan', result: { status: 'completed' } },
+        call('conflict'), { kind: 'tool_result', call_id: 'conflict', result: { status: 'completed' } },
+        { kind: 'tool_result', call_id: 'conflict', error: 'synthetic-error-secret' },
+      ])]);
+      expect(body).not.toContain('"status":"completed"');
+      for (const id of ['missing', 'orphan', 'conflict']) expect(body).toContain(id);
+      expect(body).not.toContain('synthetic-error-secret');
+    });
+
+    it('does not promote user-supplied parts or another chat into tool evidence', () => {
+      const parts: Part[] = [call('forged'), { kind: 'tool_result', call_id: 'forged', result: { status: 'completed' } }];
+      expect(text([message(parts, { role: 'user' }), message(parts, { chat_id: 'other_chat' as ChatId })])).toBe('');
+    });
+
+    it('omits unsafe identifiers without exposing credential-shaped values', () => {
+      const unsafe = 'sk-' + 'synthetic-credential-shape-1234567890';
+      const body = text([message([call(unsafe), { kind: 'tool_result', call_id: unsafe, result: { status: 'completed' } }])]);
+      expect(body).not.toContain(unsafe);
+      expect(body).toContain('omitted');
+      expect(body).not.toContain('"status":"completed"');
+    });
+
+    it('bounds a large history and explicitly warns that omitted calls may have executed', () => {
+      const parts: Part[] = Array.from({ length: 200 }, (_, i): Part[] => [call(`call-${i}`),
+        { kind: 'tool_result', call_id: `call-${i}`, result: { status: 'completed' } }]).flat();
+      const body = text([message(parts)]);
+      expect(body.length).toBeLessThanOrEqual(16_384);
+      expect(body).toContain('call-199');
+      expect(body).not.toContain('"call_id":"call-0"');
+      expect(body).toContain('omitted');
+      expect(body).toContain('must not be assumed unexecuted');
+    });
+  });
+
+  it('retains a completed tool receipt across hidden continuation', async () => {
+    const harness = kernelRuntimeBindings(agent('agent_review_resume_receipt', 'apple', 'Answer clearly.'));
+    const original = 'Create the synthetic marker once, then explain the result.';
+    const persisted: Message[] = [{ id: 'msg_kernel_user' as MessageId, chat_id: harness.chatId, role: 'user', parts: [{ kind: 'text', text: original }], created_at: 1, updated_at: 1 }];
+    harness.bindings.getMessages.mockImplementation(async () => structuredClone(persisted));
+    harness.bindings.appendMessage.mockImplementation(async message => { const row = { ...message, id: `review_receipt_${persisted.length}` as MessageId, created_at: 2, updated_at: 2 }; persisted.push(row); return row; });
+    harness.updateMessage.mockImplementation(async (id, patch) => { Object.assign(persisted.find(message => message.id === id)!, patch); });
+    useJarvisInteractionStore.getState().setChatMode(String(harness.chatId), 'agent');
+    setPermissionAccess(String(harness.chatId), 'full');
+    mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+      persisted.push({ id: 'review_completed_tool' as MessageId, chat_id: harness.chatId, role: 'assistant', parts: [
+        { kind: 'tool_call', tool: 'files.create', call_id: 'review-marker-created-once', args: { path: 'synthetic-marker.txt' } },
+        { kind: 'tool_result', call_id: 'review-marker-created-once', result: { status: 'completed' } },
+      ], created_at: 3, updated_at: 3 });
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: { chatId: harness.chatId, text: original, cancellationKey: 'msg_kernel_user' } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { chatId: harness.chatId } })); await stop.whenIdle();
+      window.dispatchEvent(new CustomEvent('jarvis:resume', { detail: { chatId: harness.chatId, cancellationKey: 'review_receipt_resume' } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2)); await stop.whenIdle();
+      expect(persisted.find(message => message.id === 'review_completed_tool')!.parts).toHaveLength(2);
+      expect(JSON.stringify(mocks.runAgent.mock.calls[1]![0].messages)).toContain('review-marker-created-once');
+    } finally { stop(); await stop.whenIdle(); }
+  });
+
+  it('keeps an explicit read-only root recognizable in the hidden Resume request', async () => {
+    const { extractExplicitReadRoot } = await vi.importActual<typeof import('./context')>('./context');
+    const original = 'C:\\synthetic-read-root please inspect the source inventory.';
+    const root = extractExplicitReadRoot(original);
+    expect(root).toBe('C:\\synthetic-read-root');
+    expect(extractExplicitReadRoot(resumeContinuationText(original, root))).toBe(root);
+  });
+
+  it('Resume after provider start with no answer text requests the first unanswered item without asking for a stopping point', async () => {
+    const harness = kernelRuntimeBindings(agent('agent_resume_no_output', 'apple', 'Answer clearly.'));
+    const original = 'Give exactly 25 numbered short observations about a synthetic counter. Use no tools, commands, or file edits. Start at 1 and finish at 25.';
+    const persisted: Message[] = [{ id: 'msg_kernel_user' as MessageId, chat_id: harness.chatId,
+      role: 'user', parts: [{ kind: 'text', text: original }], created_at: 1, updated_at: 1 }];
+    harness.bindings.getMessages.mockImplementation(async () => structuredClone(persisted));
+    harness.bindings.appendMessage.mockImplementation(async message => {
+      const row = { ...message, id: `empty_answer_${persisted.length}` as MessageId, created_at: 2, updated_at: 2 };
+      persisted.push(row); return row;
+    });
+    harness.updateMessage.mockImplementation(async (id, patch) => {
+      Object.assign(persisted.find(message => message.id === id)!, patch);
+    });
+    useJarvisInteractionStore.getState().setChatMode(String(harness.chatId), 'ask');
+    setPermissionAccess(String(harness.chatId), 'read');
+    // Provider dispatch genuinely begins, but it emits no text or tool event
+    // before Stop. This does not assert that provider dispatch never happened.
+    mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId: harness.chatId, text: original, cancellationKey: 'msg_kernel_user',
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { chatId: harness.chatId } }));
+      await stop.whenIdle();
+      window.dispatchEvent(new CustomEvent('jarvis:resume', { detail: {
+        chatId: harness.chatId, cancellationKey: 'resume_no_answer',
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
+      await stop.whenIdle();
+      const request = mocks.runAgent.mock.calls[1]![0];
+      const currentText = request.messages.filter((message: { role: string }) => message.role === 'user').at(-1)?.content;
+      expect(currentText).toContain(original);
+      expect(currentText).toMatch(/if no (?:prior )?answer text.*first unanswered/iu);
+      expect(currentText).toMatch(/numbered answer.*first requested number/iu);
+      expect(currentText).toMatch(/do not ask.*stopping point/iu);
+      expect(currentText).toMatch(/missing tool receipts.*not.*unexecuted/iu);
+      expect(currentText).toMatch(/uncertain.*verify.*retry/iu);
+      expect(request).toMatchObject({ chatId: String(harness.chatId), interactionMode: 'ask', accessLevel: 'read-only' });
+      expect(persisted.filter(message => message.role === 'user')).toHaveLength(1);
+      expect(mocks.runAgent.mock.calls[0]![0].messages).not.toEqual(request.messages);
+    } finally { stop(); await stop.whenIdle(); }
+  });
+
+  it('continues the stopped partial answer with original intent and no replay or visible replacement', async () => {
+    const harness = kernelRuntimeBindings(agent('agent_resume_partial', 'apple', 'Answer clearly.'));
+    const original = 'List 25 distinct counter-demo checks, numbered 1 through 25.';
+    const persisted: Message[] = [{ id: 'msg_kernel_user' as MessageId, chat_id: harness.chatId,
+      role: 'user', parts: [{ kind: 'text', text: original }], created_at: 1, updated_at: 1 }];
+    harness.bindings.getMessages.mockImplementation(async () => structuredClone(persisted));
+    harness.bindings.appendMessage.mockImplementation(async message => {
+      const row = { ...message, id: `partial_${persisted.length}` as MessageId, created_at: 2, updated_at: 2 };
+      persisted.push(row); return row;
+    });
+    harness.updateMessage.mockImplementation(async (id, patch) => {
+      Object.assign(persisted.find(message => message.id === id)!, patch);
+    });
+    useJarvisInteractionStore.getState().setChatMode(String(harness.chatId), 'ask');
+    setPermissionAccess(String(harness.chatId), 'read');
+    mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+      input.onChunk?.({ delta: '1. Check initial zero.\n2. Check increment.\n', first: true });
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId: harness.chatId, text: original, cancellationKey: 'msg_kernel_user',
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { chatId: harness.chatId } }));
+      await stop.whenIdle();
+      window.dispatchEvent(new CustomEvent('jarvis:resume', { detail: {
+        chatId: harness.chatId, cancellationKey: 'resume_partial',
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
+      await stop.whenIdle();
+      const request = mocks.runAgent.mock.calls[1]![0];
+      const currentText = request.messages.filter((message: { role: string; content: unknown }) => message.role === 'user').at(-1)?.content;
+      expect(currentText).toContain(original);
+      expect(currentText).toMatch(/continue.*interrupted/iu);
+      expect(currentText).toMatch(/do not (?:repeat|replay).*completed/iu);
+      expect(currentText).toMatch(/do not ask.*(?:continue|restart)/iu);
+      expect(JSON.stringify(request.messages)).toContain('2. Check increment.');
+      expect(request).toMatchObject({ chatId: String(harness.chatId), interactionMode: 'ask', accessLevel: 'read-only' });
+      expect(persisted.filter(message => message.role === 'user')).toHaveLength(1);
+      const onUnavailable = vi.fn();
+      window.dispatchEvent(new CustomEvent('jarvis:resume', { detail: {
+        chatId: harness.chatId, cancellationKey: 'resume_already_finished', onUnavailable,
+      } }));
+      await stop.whenIdle();
+      expect(onUnavailable).toHaveBeenCalledOnce();
+      expect(mocks.runAgent).toHaveBeenCalledTimes(2);
+    } finally { stop(); await stop.whenIdle(); }
+  });
+
+  it.each(['mode', 'mode-escalation', 'access', 'approval'] as const)('rejects ordinary Resume after its persistent %s authority changes', async changed => {
+    const harness = kernelRuntimeBindings(agent('agent_resume_policy', 'apple', 'Answer clearly.'));
+    const chatId = String(harness.chatId);
+    useJarvisInteractionStore.getState().setChatMode(chatId, 'agent');
+    setPermissionAccess(chatId, 'full');
+    setAgentApprovalMode(chatId, 'review');
+    if (changed === 'mode-escalation') {
+      useJarvisInteractionStore.getState().setChatMode(chatId, 'ask');
+      setPermissionAccess(chatId, 'read');
+    }
+    mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId, text: 'Continue only the already authorized work.', cancellationKey: 'msg_kernel_user',
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { chatId } }));
+      await stop.whenIdle();
+      if (changed === 'mode') useJarvisInteractionStore.getState().setChatMode(chatId, 'ask');
+      if (changed === 'mode-escalation') {
+        useJarvisInteractionStore.getState().setChatMode(chatId, 'agent');
+        setPermissionAccess(chatId, 'full');
+      }
+      if (changed === 'access') setPermissionAccess(chatId, 'read');
+      if (changed === 'approval') setAgentApprovalMode(chatId, 'full');
+      const onUnavailable = vi.fn();
+      window.dispatchEvent(new CustomEvent('jarvis:resume', { detail: { chatId, cancellationKey: 'resume_policy_changed', onUnavailable } }));
+      await stop.whenIdle();
+      expect(onUnavailable).toHaveBeenCalledOnce();
+      expect(mocks.runAgent).toHaveBeenCalledOnce();
+    } finally { stop(); await stop.whenIdle(); }
+  });
+
+  it('does not revive the stopped turn one-run approval grant on Resume', async () => {
+    const harness = kernelRuntimeBindings(agent('agent_resume_grant', 'apple', 'Answer clearly.'));
+    const chatId = String(harness.chatId);
+    useJarvisInteractionStore.getState().setChatMode(chatId, 'agent');
+    setPermissionAccess(chatId, 'full');
+    setAgentApprovalMode(chatId, 'review');
+    mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+        chatId, text: 'Complete only the approved fixture work.', cancellationKey: 'msg_kernel_user', approveAllForRun: true,
+      } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      expect(mocks.runAgent.mock.calls[0]![0].approveAllForRun).toBe(true);
+      window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { chatId } }));
+      await stop.whenIdle();
+      window.dispatchEvent(new CustomEvent('jarvis:resume', { detail: { chatId, cancellationKey: 'resume_expired_grant' } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
+      await stop.whenIdle();
+      expect(mocks.runAgent.mock.calls[1]![0]).toMatchObject({
+        interactionMode: 'agent', accessLevel: 'full', agentApprovalMode: 'review', approveAllForRun: false,
+      });
+    } finally { stop(); await stop.whenIdle(); }
+  });
+
   it('waits for the stopped OpenCode slot before resuming once and rejects duplicate resumes', async () => {
     const harness = kernelRuntimeBindings(agent('agent_resume', 'apple', 'Answer clearly.'));
     const release = deferred<void>();
@@ -11490,7 +11900,9 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       release.resolve();
       await vi.waitFor(() => expect(sent).toHaveLength(2));
       expect(sent[1]).toMatchObject({ cancellationKey: 'resume-held', text: 'Resume',
-        modelText: 'Resume', resumeOriginalText: 'Finish the same task.', resumeOfCancellationKey: 'msg_kernel_user' });
+        resumeOriginalText: 'Finish the same task.', resumeOfCancellationKey: 'msg_kernel_user' });
+      expect(sent[1].modelText).toContain('Finish the same task.');
+      expect(sent[1].modelText).toContain('Continue the interrupted response');
     } finally {
       release.resolve();
       window.removeEventListener('jarvis:send', observe);
@@ -11529,7 +11941,8 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
         );
         await vi.waitFor(() => expect(sent).toHaveLength(round + 2));
         expect(sent.at(-1)?.text).toBe('Resume');
-        expect(sent.at(-1)?.modelText).toBe('Resume');
+        expect(sent.at(-1)?.modelText).toContain(original);
+        expect(sent.at(-1)?.modelText).toContain('Do not repeat completed');
         expect(sent.at(-1)?.resumeOriginalText).toBe(original);
       }
       expect(sent[1].text).toBe(sent[2].text);
@@ -13841,6 +14254,142 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       },
     );
   });
+
+  it.each([
+    { code: '401', message: 'Provider session expired.', retryable: false },
+    { code: '402', message: 'Payment required.', retryable: false },
+    { code: 'model_not_found', message: 'Selected model is unavailable.', retryable: false },
+    { code: '429', message: 'Too many requests.', retryable: true, retryAfterMs: 12000 },
+  ])('settles synthetic $code once, retains queued work and retries the same route explicitly', async failure => {
+    const { getChatRunState } = await import('@/features/chat/runtime/chatRunState');
+    const selectedAgent = agent('agent_provider_recovery', 'jarvis', 'Answer clearly.', true);
+    const harness = kernelRuntimeBindings(selectedAgent);
+    const selection = selectionFromOption('openai', 'gpt-6-luna', CODEX_CLI_CONNECTION);
+    setDiscoveredConnectionModels(CODEX_CLI_CONNECTION.id, [
+      { id: 'gpt-6-luna', label: 'Synthetic Luna', source: 'provider_list', lastVerifiedAt: 1 },
+    ]);
+    writeConnectionPickerStates({ [CODEX_CLI_CONNECTION.id]: { available: true, auth: 'authenticated' } });
+    const workspaceId = 'workspace-provider-recovery';
+    useAuthStore.setState({ localUserId: 'runtime-test-account', cloudSession: null,
+      workspaceId: workspaceId as never, projectId: null, apiKeys: {}, chatModelSelection: selection });
+    mocks.lockChatBackendForDispatch.mockResolvedValue({ version: 1, backend: 'codex', locked: true, selectedAt: 1, lockedAt: 2 });
+    useJarvisInteractionStore.getState().setChatMode(String(harness.chatId), 'ask');
+    setPermissionAccess(String(harness.chatId), 'read');
+    const database = createJarvisDb(uniqueTestDbName('provider-recovery-' + failure.code), TEST_INDEXED_DB);
+    await database.open();
+    await database.chats.add({ id: harness.chatId, workspace_id: workspaceId as never,
+      title: 'Provider recovery fixture', mode: 'chat', active_agent_ids: [selectedAgent.id],
+      backend_affinity: { version: 1, backend: 'codex', locked: true, selectedAt: 1, lockedAt: 2 },
+      created_at: 1, updated_at: 1 });
+    mocks.chatGetById.mockImplementation(id => database.chats.get(id));
+    let messageSequence = 0;
+    const persistUser = async (id: string, text: string) => {
+      await database.messages.add({ id: id as MessageId, chat_id: harness.chatId, role: 'user',
+        parts: [{ kind: 'text', text }], created_at: ++messageSequence, updated_at: messageSequence });
+    };
+    harness.bindings.getMessages.mockImplementation(async () => database.messages.where('chat_id').equals(harness.chatId).sortBy('created_at'));
+    harness.bindings.appendMessage.mockImplementation(async message => {
+      const row = { ...message, id: `msg_provider_recovery_${++messageSequence}` as MessageId,
+        created_at: messageSequence, updated_at: messageSequence };
+      await database.messages.add(row); return row;
+    });
+    harness.updateMessage.mockImplementation(async (id, patch) => { await database.messages.update(id, patch); });
+    const pendingRun: JarvisRun = { id: 'jrun_unrelated_pending', accountId: 'runtime-test-account',
+      workspaceId, chatId: 'chat_unrelated_approval', source: 'typed_chat', status: 'awaiting_approval',
+      agentId: 'agent-unrelated', identityVersion: 1, profileRevisionId: 'profile-unrelated',
+      model: { connectionId: CODEX_CLI_CONNECTION.id, providerId: 'openai', modelId: 'gpt-6-luna',
+        connectionMode: 'external-cli', capabilities: { tools: true }, capturedAt: 1 }, createdAt: 1, updatedAt: 2 };
+    const pendingApproval: JarvisApprovalV1 = { id: 'jappr_unrelated_pending', runId: pendingRun.id,
+      actionId: 'terminal.create', actionVersion: 1, params: { count: 1 }, paramsHash: 'params-unrelated',
+      targetSnapshot: { kind: 'external_resource', service: 'terminal', resourceId: 'new' },
+      risk: 'confirm', status: 'pending', createdAt: 2, schemaVersion: 1,
+      requestId: 'request-unrelated', attemptNumber: 1, capabilityId: 'terminal.execute',
+      capabilitySnapshotHash: 'capability-unrelated', expectedEffect: 'Create one synthetic terminal.', expiresAt: 10000 };
+    await database.jarvis_runs.add(toJarvisRunRow(pendingRun));
+    await database.jarvis_approvals.add(toJarvisApprovalRow(pendingApproval));
+    const approvalBefore = await database.jarvis_approvals.get(pendingApproval.id);
+    const runBefore = await database.jarvis_runs.get(pendingRun.id);
+    const failureGate = deferred<Awaited<ReturnType<typeof mocks.runAgent>>>();
+    let failedRequest!: Parameters<typeof mocks.runAgent>[0];
+    mocks.runAgent.mockImplementationOnce(input => { failedRequest = input; return failureGate.promise; });
+    mocks.runAgent.mockImplementation(async request => ({ text: 'The explicit retry completed.',
+      usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 }, provider: request.agent.model.provider, model: request.agent.model.model }));
+    let queuedSequence = 0;
+    const nativeQueue = vi.fn(async () => ({ submissionId: `submission-error-${++queuedSequence}`,
+      threadId: 'thread-provider-recovery', turnId: 'turn-before-provider-error' }));
+    const disposeHost = await installKernelTestHost(database, 'provider-recovery-' + failure.code);
+    const stop = trackListener(startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() }));
+    const states: Array<{ chatId: string; status: string; cancellationKey?: string }> = [];
+    const stateListener = (event: Event) => states.push((event as CustomEvent).detail);
+    window.addEventListener('jarvis:run-state', stateListener);
+    const send = (key: string, text: string) => window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+      accountId: 'runtime-test-account', chatId: harness.chatId, cancellationKey: key,
+      text, interactionMode: 'ask', modelSelectionOverride: selection,
+      reasoningPreference: { mode: 'normal', effortOverride: 'low' },
+    } }));
+    try {
+      await persistUser('msg_kernel_user', 'Explain the synthetic counter without tools.');
+      send('msg_kernel_user', 'Explain the synthetic counter without tools.');
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      failedRequest.onLiveTurnControl?.({ steer: vi.fn(), enqueue: nativeQueue });
+      for (const number of [1, 2]) {
+        const accepted = vi.fn();
+        window.dispatchEvent(new CustomEvent('jarvis:queue', { detail: {
+          chatId: harness.chatId, clientUserMessageId: `queued-error-${number}`,
+          text: `Retain queued follow-up ${number}.`, onAccepted: accepted,
+        } }));
+        await vi.waitFor(() => expect(accepted).toHaveBeenCalledOnce());
+      }
+      const queuedBefore = (await harness.bindings.getMessages()).filter(message => message.parts.some(part => part.kind === 'codex_native_queue_receipt'));
+      expect(queuedBefore).toHaveLength(2);
+      failureGate.reject(new ProviderRuntimeError({ ...failure,
+        message: failure.message + ' api_key=synthetic-private-value',
+        providerId: 'openai', modelId: 'gpt-6-luna', connectionId: CODEX_CLI_CONNECTION.id,
+        requestId: failedRequest.requestId, runId: failedRequest.protectedAttempt?.runId }));
+      await stop.whenIdle();
+
+      expect(mocks.runAgent).toHaveBeenCalledOnce();
+      expect(getChatRunState(harness.chatId)).toMatchObject({ status: 'error', cancellationKey: 'msg_kernel_user', errorCode: failure.code });
+      expect(states.filter(state => state.chatId === harness.chatId && state.status === 'error' && state.cancellationKey === 'msg_kernel_user')).toHaveLength(1);
+      const failedRunId = failedRequest.protectedAttempt!.runId;
+      expect((await database.jarvis_runs.get(failedRunId))?.status).toBe('failed');
+      expect((await database.jarvis_events.where('run_id').equals(failedRunId).toArray())
+        .filter(event => event.type === 'run_state' && event.status === 'failed')).toHaveLength(1);
+      const queueAfter = (await harness.bindings.getMessages()).filter(message => queuedBefore.some(before => before.id === message.id));
+      expect(queueAfter.map(message => message.id)).toEqual(queuedBefore.map(message => message.id));
+      for (const message of queueAfter) {
+        expect(message.parts).toContainEqual(expect.objectContaining({ kind: 'codex_native_queue_receipt', state: 'review_required' }));
+      }
+      expect(await database.jarvis_approvals.get(pendingApproval.id)).toEqual(approvalBefore);
+      expect(await database.jarvis_runs.get(pendingRun.id)).toEqual(runBefore);
+      const errors = (await harness.bindings.getMessages()).flatMap(message => message.parts).filter(part => part.kind === 'provider_error');
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatchObject({ error: { code: failure.code, retryable: failure.retryable,
+        providerId: 'openai', modelId: 'gpt-6-luna', connectionId: CODEX_CLI_CONNECTION.id,
+        requestId: failedRequest.requestId, runId: failedRunId } });
+      expect(JSON.stringify(errors)).not.toContain('synthetic-private-value');
+
+      await persistUser('msg_provider_retry', 'Explicitly retry the same read-only request.');
+      send('msg_provider_retry', 'Explicitly retry the same read-only request.');
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledTimes(2));
+      await stop.whenIdle();
+      expect(getChatRunState(harness.chatId)).toMatchObject({ status: 'done', cancellationKey: 'msg_provider_retry' });
+      expect(states.filter(state => state.chatId === harness.chatId && state.status === 'done' && state.cancellationKey === 'msg_provider_retry')).toHaveLength(1);
+      for (const [request] of mocks.runAgent.mock.calls) expect(request).toMatchObject({
+        chatId: harness.chatId, backend: 'codex', connectionId: CODEX_CLI_CONNECTION.id,
+        agent: { model: { provider: 'openai', model: 'gpt-6-luna' } }, interactionMode: 'ask', accessLevel: 'read-only',
+      });
+      expect(mocks.runAgent.mock.calls[1]![0].requestId).not.toBe(failedRequest.requestId);
+      expect(await database.jarvis_approvals.get(pendingApproval.id)).toEqual(approvalBefore);
+      expect(await database.jarvis_runs.get(pendingRun.id)).toEqual(runBefore);
+      expect((await harness.bindings.getMessages()).filter(message => queueAfter.some(before => before.id === message.id))).toEqual(queueAfter);
+      expect(nativeQueue).toHaveBeenCalledTimes(2);
+    } finally {
+      window.removeEventListener('jarvis:run-state', stateListener);
+      stop(); failureGate.resolve({ text: 'Fixture cleanup.', usage: { input_tokens: 1, output_tokens: 1, cost_usd: 0 }, provider: 'openai', model: 'gpt-6-luna' });
+      await stop.whenIdle(); disposeHost(); database.close(); await database.delete();
+    }
+  }, 15000);
 
   it('persists bounded provider error detail for a canonical failure', async () => {
     const selectedAgent = agent('agent_jarvis', 'jarvis', 'LEGACY SYSTEM PROMPT', true);

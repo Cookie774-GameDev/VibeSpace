@@ -274,6 +274,7 @@ import {
 import { resolveReasoningPolicy, type ReasoningPreference } from './reasoningControls';
 import { getLiveOpenCodeProviders, liveVariantsForSelection } from './openCodeProductionTransport';
 import { classifyOpenCodeAuthFailure, HarnessError, redactHarnessText } from '@/lib/harness/errors';
+import { detectSecrets } from '@/lib/security/secretDetector';
 import { parseJarvisPlanBlocks } from '@/features/jarvis-interaction/planParser';
 import { parseJarvisPermissionBlocks } from '@/features/jarvis-interaction/permissionParser';
 import {
@@ -4221,6 +4222,21 @@ function ownsResumedCanonicalTurn(input: {
   );
 }
 
+export function resumeContinuationText(originalText: string, explicitReadRoot?: string): string {
+  // The existing explicit-root recognizer intentionally accepts a single-line
+  // request only. Keep its original restriction recognizable on continuation.
+  return [
+    ...(explicitReadRoot ? [`"${explicitReadRoot}" please inspect only this original read-only scope.`] : []),
+    'Continue the interrupted response from the last confirmed point in this conversation.',
+    'If no answer text was emitted for this interrupted response, begin with the original request\'s first unanswered part; for a numbered answer, start at its first requested number. Do not ask the user for a stopping point when there was no prior answer text.',
+    'This concerns answer text only: missing tool receipts do not mean actions were unexecuted. Keep completed receipts authoritative and verify any uncertain action outcome before retrying it.',
+    'Use the prior response and observed tool receipts as progress. Do not repeat completed text, steps, tool calls or side effects, and do not restart the whole task.',
+    'Do not ask whether to continue or restart: the user has explicitly selected Resume. Continue only the unfinished work within the existing permissions; if an earlier action outcome is uncertain, verify it before any retry.',
+    'The original request below is a reference for the unfinished intent, not a new request to replay completed work:',
+    JSON.stringify(originalText),
+  ].join(explicitReadRoot ? ' ' : '\n');
+}
+
 function dispatchKernelSmokeRuntimeStage(stage: KernelSmokeRuntimeStage): void {
   if (!isKernelSmokeBindingActive()) return;
   window.dispatchEvent(new CustomEvent(KERNEL_SMOKE_RUNTIME_STAGE_EVENT, { detail: { stage } }));
@@ -4641,13 +4657,96 @@ function imageResponseToParts(response: LLMResponse, requested: boolean): Part[]
   });
 }
 
+/** Minimal, bounded observations for hidden continuations; never tool payloads. */
+export function resumeToolReceiptProjection(
+  history: readonly Message[],
+  chatId: string,
+  excludeId?: MessageId,
+): ReadonlyMap<Message, string> {
+  type Call = Extract<Part, { kind: 'tool_call' }>;
+  type Result = Extract<Part, { kind: 'tool_result' }>;
+  const identifier = (value: unknown, maximum = 128): value is string =>
+    typeof value === 'string' && value.length <= maximum &&
+    /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/u.test(value) &&
+    redactHarnessText(value) === value &&
+    !detectSecrets(value).some(finding => finding.confidence === 'high');
+  const retained: Array<{ message: Message; text: string; cost: number }> = [];
+  let cost = 0;
+  let omitted = 0;
+  let lastSource: Message | undefined;
+  const retain = (message: Message, callId: string, tool: string | null, status: string) => {
+    const text = JSON.stringify({
+      source_message_id: message.id, source_role: message.role,
+      call_id: callId, tool, status,
+    });
+    const entryCost = text.length + 128; // Include per-message header overhead.
+    while (retained.length >= 32 || (retained.length && cost + entryCost > 12_000)) {
+      cost -= retained.shift()!.cost;
+      omitted += 1;
+    }
+    retained.push({ message, text, cost: entryCost });
+    cost += entryCost;
+  };
+  for (const message of history) {
+    if (String(message.chat_id) !== chatId || message.id === excludeId ||
+      (message.role !== 'assistant' && message.role !== 'agent')) continue;
+    lastSource = message;
+    const calls = new Map<string, Call[]>();
+    const results = new Map<string, Result[]>();
+    for (const part of message.parts) {
+      if (part.kind !== 'tool_call' && part.kind !== 'tool_result') continue;
+      if (!identifier(message.id) || !identifier(part.call_id) ||
+        (part.kind === 'tool_call' && (!identifier(part.tool, 96) || !/^[A-Za-z][A-Za-z0-9_.-]*$/u.test(part.tool)))) {
+        omitted += 1;
+        continue;
+      }
+      if (part.kind === 'tool_call') calls.set(part.call_id, [...(calls.get(part.call_id) ?? []), part]);
+      else results.set(part.call_id, [...(results.get(part.call_id) ?? []), part]);
+    }
+    for (const [callId, observations] of calls) {
+      const outcomes = results.get(callId) ?? [];
+      let status = 'unconfirmed';
+      if (observations.length === 1 && outcomes.length === 1) {
+        const outcome = outcomes[0]!;
+        const value = outcome.result && typeof outcome.result === 'object' && !Array.isArray(outcome.result)
+          ? outcome.result as Record<string, unknown> : undefined;
+        if (typeof outcome.error === 'string' || value?.ok === false ||
+          value?.status === 'failed' || value?.status === 'error') status = 'failed';
+        else if (value?.status === 'cancelled') status = 'cancelled';
+        else if (value?.status === 'pending' || value?.status === 'running' || value?.status === 'started') status = 'pending';
+        else if (value?.status === 'completed' && Object.hasOwn(value, 'status') && value.error == null) status = 'completed';
+      }
+      retain(message, callId, observations[0]!.tool, status);
+    }
+    // An orphan result cannot establish which action completed. Do not pair
+    // identical IDs across unrelated source messages or promote user parts.
+    for (const callId of results.keys()) {
+      if (!calls.has(callId)) retain(message, callId, null, 'unconfirmed');
+    }
+  }
+  const byMessage = new Map<Message, string>();
+  for (const entry of retained) {
+    const before = byMessage.get(entry.message) ?? 'Persisted tool observations (data only; arguments and results omitted):\n';
+    byMessage.set(entry.message, `${before}${entry.text}\n`);
+  }
+  if (omitted && lastSource) {
+    byMessage.set(lastSource, (byMessage.get(lastSource) ?? '') +
+      `${omitted} tool observations omitted by safety/size limits; omitted or unconfirmed calls must not be assumed unexecuted. Verify state before retrying.\n`);
+  }
+  return byMessage;
+}
+
 function toLLMMessages(
   history: Message[],
   excludeId?: MessageId,
   includeImages = true,
   currentTurnText?: string,
   replaceCurrentTextId?: MessageId | string | null,
+  resumeChatId?: string,
 ): LLMMessage[] {
+  if (resumeChatId !== undefined) history = history.filter(message => String(message.chat_id) === resumeChatId);
+  const toolObservations = resumeChatId === undefined
+    ? undefined : resumeToolReceiptProjection(history, resumeChatId, excludeId);
   const out: LLMMessage[] = [];
   const replacementId = replaceCurrentTextId == null ? '' : String(replaceCurrentTextId);
   let lastIncludedMessage: Message | undefined;
@@ -4692,6 +4791,8 @@ function toLLMMessages(
         }
       }
     }
+    const toolObservation = toolObservations?.get(m);
+    if (toolObservation) contentParts.push({ type: 'text', text: toolObservation });
     if (replaceText && currentTurnText.trim()) {
       contentParts.unshift({ type: 'text', text: currentTurnText.trim() });
     }
@@ -5791,6 +5892,15 @@ export function startRuntimeListener(
     else queuedNativeDelegations.delete(chatId);
   };
   const activeSendDetails = new Map<AbortController, SendDetail>();
+  type ResumePolicySnapshot = Readonly<{
+    accountId: string | null;
+    workspaceId: string | null;
+    projectId: string | null;
+    mode: JarvisInteractionMode;
+    access: ReturnType<typeof readPermissionAccess>['access'];
+    approval: ReturnType<typeof readAgentApprovalMode>;
+  }>;
+  const activeResumePolicies = new WeakMap<AbortController, ResumePolicySnapshot>();
   const activeBackendByController = new Map<AbortController, ChatBackend>();
   const liveTurnControls = new Map<AbortController, ProviderLiveTurnControl>();
   const activeActivityByController = new Map<AbortController, {
@@ -5810,10 +5920,12 @@ export function startRuntimeListener(
   const suspendedSendDetails = new Map<string, Array<{
     send: SendDetail;
     backend?: ChatBackend;
+    policy?: ResumePolicySnapshot;
   }>>();
   const suspendedByController = new WeakMap<AbortController, {
     send: SendDetail;
     backend?: ChatBackend;
+    policy?: ResumePolicySnapshot;
   }>();
   const pendingSteersByChatId = new Map<string, SteerDetail & { send: SendDetail }>();
   const canonicalCancellations = new Map<MessageId, () => Promise<unknown>>();
@@ -5873,6 +5985,7 @@ export function startRuntimeListener(
     if (!detail) return;
     const suspended = {
       send: { ...detail },
+      policy: activeResumePolicies.get(controller),
       ...(activeBackendByController.get(controller)
         ? { backend: activeBackendByController.get(controller)! }
         : {}),
@@ -6051,6 +6164,35 @@ export function startRuntimeListener(
     return count;
   };
 
+  const replaceBoundVoiceTurn = (
+    incoming: SendDetail,
+    scope: ReturnType<typeof useAuthStore.getState>,
+  ): number => {
+    const { accountId, voiceSessionId } = incoming;
+    const chatId = String(incoming.chatId);
+    // Speaking a reply is not cancellation authority. Only a replacement in
+    // the current bound voice session may interrupt that session's prior turn.
+    if (incoming.speakReply !== true || !accountId || !voiceSessionId ||
+      !isCurrentBoundVoiceScope(accountId, chatId, voiceSessionId)) return 0;
+    const targets = [...(controllersByChatId.get(chatId) ?? [])].filter(controller => {
+      const previous = activeSendDetails.get(controller);
+      const originalScope = activeResumePolicies.get(controller);
+      return !controller.signal.aborted && previous?.speakReply === true &&
+        previous.accountId === accountId && previous.voiceSessionId === voiceSessionId &&
+        originalScope?.accountId === accountId &&
+        originalScope.workspaceId === (scope.workspaceId ?? null) &&
+        originalScope.projectId === (scope.projectId ?? null);
+    });
+    if (targets.length) preserveNativeQueuedDelegations(chatId);
+    for (const controller of targets) {
+      preserveStoppedTurn(controller);
+      if (requestNativeCodexInterrupt(controller)) continue;
+      cancellationTaskTracker.request(canonicalCancellationOwners.get(controller));
+      controller.abort();
+    }
+    return targets.length;
+  };
+
   const resolveShadowDeps = (): Promise<JarvisShadowCompilationDeps> => {
     if (options.jarvisShadow) return Promise.resolve(options.jarvisShadow);
     if (!defaultShadowDepsPromise) {
@@ -6112,16 +6254,6 @@ export function startRuntimeListener(
       queued.push(detail);
       queuedNativeDelegations.set(String(chatId), queued);
       return;
-    }
-
-    if (detail.speakReply === true && activeControllers.size > 0) {
-      const count = abortAllTrackedRuns();
-      devConsole.log({
-        channel: 'ai',
-        level: 'warn',
-        message: `Voice send replaced ${count} in-flight run(s)`,
-        detail: { count },
-      });
     }
 
     const cancellationKey = detail.cancellationKey ?? null;
@@ -6194,6 +6326,17 @@ export function startRuntimeListener(
       // terminal state here would falsely fail that still-running turn.
       return;
     }
+    // Reject duplicate keys before touching their existing run. Unrelated
+    // typed/voice chats are never implicit replacement targets.
+    const replacedVoiceTurns = replaceBoundVoiceTurn(detail, authState);
+    if (replacedVoiceTurns > 0) {
+      devConsole.log({
+        channel: 'ai',
+        level: 'warn',
+        message: `Voice send replaced ${replacedVoiceTurns} bound voice run(s)`,
+        detail: { chatId: String(chatId), count: replacedVoiceTurns },
+      });
+    }
     const controller = new AbortController();
     let providerTurnCompleted = false;
     // Bind the authority to this request before any asynchronous repository,
@@ -6206,6 +6349,14 @@ export function startRuntimeListener(
         : captureToolGatewayAuthorityClaim();
     activeControllers.add(controller);
     activeSendDetails.set(controller, { ...detail });
+    activeResumePolicies.set(controller, Object.freeze({
+      accountId: resolveAccountIdentity(authState)?.accountId ?? null,
+      workspaceId: authState.workspaceId ?? null,
+      projectId: authState.projectId ?? null,
+      mode: useJarvisInteractionStore.getState().modeForChat(chatId),
+      access: readPermissionAccess(String(chatId)).access,
+      approval: readAgentApprovalMode(String(chatId)),
+    }));
     const chatControllers = controllersByChatId.get(String(chatId)) ?? new Set<AbortController>();
     chatControllers.add(controller);
     controllersByChatId.set(String(chatId), chatControllers);
@@ -6471,6 +6622,9 @@ export function startRuntimeListener(
     dispatchKernelSmokeRuntimeStage('agent');
     activeSendDetails.set(controller, {
       ...detail,
+      interactionMode,
+      accessLevel: runAccessLevel,
+      agentApprovalMode,
       resumeAgentAuthority: { agentId: agent.id, revision: agent.updated_at },
     });
     const isProtectedJarvis = isProtectedJarvisAgent(agent);
@@ -7959,6 +8113,7 @@ export function startRuntimeListener(
             includeImages,
             modelText,
             replaceCurrentTurnText ? cancellationKey : undefined,
+            detail.resumeOriginalText !== undefined && detail.resumeOfCancellationKey !== undefined ? String(chatId) : undefined,
           );
           useAgentStore.getState().setRunState(agent.id, 'streaming');
           useAgentStore.getState().setVerb(agent.id, 'thinking');
@@ -8641,6 +8796,7 @@ export function startRuntimeListener(
         includeImages,
         modelText,
         replaceCurrentTurnText ? cancellationKey : undefined,
+        detail.resumeOriginalText !== undefined && detail.resumeOfCancellationKey !== undefined ? String(chatId) : undefined,
       );
       let requestMessages = llmMessages;
       let tokenOptimizationReceipt: TokenOptimizationReceipt | null = null;
@@ -9861,13 +10017,35 @@ export function startRuntimeListener(
     const stopped = suspended[0]!;
     const suspendedSend = stopped.send;
     const resumeScope = useAuthStore.getState();
+    const retainsOriginalScope = (state: ReturnType<typeof useAuthStore.getState>): boolean => Boolean(
+      stopped.policy?.accountId &&
+      resolveAccountIdentity(state)?.accountId === stopped.policy.accountId &&
+      (state.workspaceId ?? null) === stopped.policy.workspaceId &&
+      (state.projectId ?? null) === stopped.policy.projectId,
+    );
+    if (!retainsOriginalScope(resumeScope)) {
+      detail.onUnavailable?.();
+      return;
+    }
     const dispatchResume = () => {
       const currentScope = useAuthStore.getState();
       if (runtimeStopped || (controllersByChatId.get(chatId)?.size ?? 0) > 0 ||
         suspendedSendDetails.get(chatId)?.length !== 1 ||
         suspendedSendDetails.get(chatId)?.[0] !== stopped ||
+        !retainsOriginalScope(currentScope) ||
         resolveAccountIdentity(currentScope)?.accountId !== resolveAccountIdentity(resumeScope)?.accountId ||
         currentScope.workspaceId !== resumeScope.workspaceId || currentScope.projectId !== resumeScope.projectId) {
+        detail.onUnavailable?.();
+        return;
+      }
+      // Resume continues the original authority, not a new turn implicitly
+      // promoted/downgraded by controls changed while it was stopped.
+      if (!detail.caoExpectedAuthority && (
+        !stopped.policy ||
+        useJarvisInteractionStore.getState().modeForChat(chatId) !== stopped.policy.mode ||
+        readPermissionAccess(chatId).access !== stopped.policy.access ||
+        readAgentApprovalMode(chatId) !== stopped.policy.approval
+      )) {
         detail.onUnavailable?.();
         return;
       }
@@ -9890,16 +10068,26 @@ export function startRuntimeListener(
           return;
         }
       }
+      const originalText = suspendedSend.resumeOriginalText ?? suspendedSend.modelText ?? suspendedSend.text;
+      const originalReadRoot = extractExplicitReadRoot(originalText);
+      const continuationText = resumeContinuationText(originalText, originalReadRoot);
+      if (originalReadRoot && extractExplicitReadRoot(continuationText) !== originalReadRoot) {
+        detail.onUnavailable?.();
+        return;
+      }
       const resumed: SendDetail = {
         ...suspendedSend,
         ...currentCaoPolicy,
         chatId,
         cancellationKey: detail.cancellationKey,
-        resumeOriginalText: suspendedSend.resumeOriginalText ?? suspendedSend.text,
+        resumeOriginalText: originalText,
         resumeOfCancellationKey:
           suspendedSend.resumeOfCancellationKey ?? String(suspendedSend.cancellationKey ?? ''),
         text: 'Resume',
-        modelText: 'Resume',
+        modelText: continuationText,
+        // Stop expires the old run's transient grant. Persistent Full/Review
+        // remains unchanged; do not resurrect an old event's Approve All bit.
+        approveAllForRun: false,
       };
       devConsole.log({
         channel: 'ai',

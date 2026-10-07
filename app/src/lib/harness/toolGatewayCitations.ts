@@ -76,7 +76,9 @@ export function clearToolGatewayContextCitationItems(): void {
  * fallback search/open/expand path (which bypasses the investigate receipt).
  * Without this, final-answer spans citing those pointers are stripped as
  * unverified. Only validated pointer/record identifiers are registered; no
- * arbitrary links are accepted.
+ * arbitrary links are accepted. The return value acknowledges only evidence
+ * handles actually retained under the requested authority and kind. A colliding
+ * record is preserved, never silently treated as a successful new issuance.
  */
 export function registerToolGatewayFallbackCitations(
   sessionId: string,
@@ -87,8 +89,8 @@ export function registerToolGatewayFallbackCitations(
     contentHash: string;
   }>,
   scope: Readonly<{ accountId: string; projectId: string }>,
-): void {
-  if (citations.length === 0) return;
+): readonly Readonly<JarvisContextItem>[] {
+  if (citations.length === 0) return Object.freeze([]);
   if (
     citations.some(
       (citation) =>
@@ -98,26 +100,60 @@ export function registerToolGatewayFallbackCitations(
         !SAFE_CITATION_TEXT.test(citation.contentHash),
     )
   ) {
-    return;
+    return Object.freeze([]);
   }
   const observedAt = Date.now();
-  const additions = citations.map((citation) =>
-    contextCitationItem({
+  const additions = citations.map((citation) => {
+    const item = contextCitationItem({
       id: citation.pointerId,
       kind: 'evidence',
       label: 'Context evidence handle',
       accountId: scope.accountId,
       projectId: scope.projectId,
       observedAt,
-    }),
-  );
+    });
+    return Object.freeze({
+      ...item,
+      source: Object.freeze({ ...item.source, contentHash: citation.contentHash }),
+    });
+  });
   const existing = contextCitationItems.get(sessionId) ?? [];
-  const existingIds = new Set(existing.map((item) => item.source.id));
+  const byId = new Map<string, Readonly<JarvisContextItem>[]>();
+  for (const item of existing)
+    byId.set(item.source.id, [...(byId.get(item.source.id) ?? []), item]);
   const merged = [...existing];
+  const acknowledged = new Map<string, Readonly<JarvisContextItem>>();
+  const sameAuthority = (
+    stored: Readonly<JarvisContextItem>,
+    issued: Readonly<JarvisContextItem>,
+  ) =>
+    stored.purpose === issued.purpose &&
+    stored.freshness === issued.freshness &&
+    stored.source.id === issued.source.id &&
+    stored.source.uri === issued.source.uri &&
+    stored.source.contentHash === issued.source.contentHash &&
+    stored.source.kind === issued.source.kind &&
+    stored.source.accountId === issued.source.accountId &&
+    stored.source.projectId === issued.source.projectId &&
+    stored.source.trust === issued.source.trust &&
+    stored.source.origin === issued.source.origin &&
+    stored.source.sensitivity === issued.source.sensitivity;
   for (const item of additions) {
-    if (existingIds.has(item.source.id)) continue;
-    existingIds.add(item.source.id);
+    const previous = byId.get(item.source.id);
+    if (previous) {
+      if (previous.every((stored) => sameAuthority(stored, item)))
+        acknowledged.set(item.source.id, previous[0]!);
+      continue;
+    }
+    byId.set(item.source.id, [item]);
     merged.push(item);
+    acknowledged.set(item.source.id, item);
   }
   replaceToolGatewayContextCitationItems(sessionId, Object.freeze(merged));
+  return Object.freeze(
+    [...acknowledged.values()].map((item) => {
+      const snapshot = structuredClone(item);
+      return Object.freeze({ ...snapshot, source: Object.freeze(snapshot.source) });
+    }),
+  );
 }

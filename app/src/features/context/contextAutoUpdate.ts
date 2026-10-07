@@ -13,7 +13,8 @@ import {
   type SiyuanSafeIndex,
 } from './siyuan/siyuanSafeIndex';
 import { canonicalSiyuanAuthorityRoot } from './siyuan/siyuanPathAuthority';
-import type { ContextMapRecord, ProjectContextTree } from './tree';
+import type { ContextMapRecord, ContextTreeNode, ProjectContextTree } from './tree';
+import { contextEntityIdForTreeNode } from './migration';
 
 export interface ContextAutoUpdateScope {
   accountId: string;
@@ -36,6 +37,7 @@ export interface ContextAutoUpdateSetting extends ContextAutoUpdateScope {
   fingerprint: string;
   baseline?: ContextAutoMetadata[];
   baselineMapRevision?: number;
+  indexIdentityVersion?: 1;
   status?: 'watching' | 'waiting' | 'updating' | 'failed';
   error?: string;
   lastSuccessAt?: number;
@@ -170,6 +172,7 @@ export interface ContextAutoUpdatePorts {
     changed: string[],
     deleted: string[],
     signal: AbortSignal,
+    options?: { reconcileMembership: true },
   ): Promise<{ commit(): Promise<void>; abort(): Promise<void> }>;
   sync(
     map: ContextMapRecord,
@@ -213,12 +216,12 @@ export function createContextAutoUpdater(ports: ContextAutoUpdatePorts) {
     if (index.unreadable > 0) throw new Error('context_auto_update_discovery_incomplete');
     await guard();
     const metadata = contextAutoMetadata(index);
-    const baseline =
-      setting.baselineMapRevision === map.updatedAt && setting.baseline
-        ? setting.baseline
-        : treeMetadata(map.tree);
+    // This is the last committed physical-source checkpoint, not a projection
+    // revision. Rehydrating the same map must not discard source metadata.
+    const baseline = setting.baseline ?? treeMetadata(map.tree);
+    const migrateIndexIdentity = setting.indexIdentityVersion !== 1 || !setting.baseline;
     const delta = contextAutoDelta(baseline, metadata);
-    if (!delta.changed.length && !delta.deleted.length) {
+    if (!migrateIndexIdentity && !delta.changed.length && !delta.deleted.length) {
       pendingSignature = '';
       return 'idle';
     }
@@ -239,11 +242,25 @@ export function createContextAutoUpdater(ports: ContextAutoUpdatePorts) {
       ...map,
       tree: buildProjectContextTreeFromSiyuanIndex(map.tree, index.entries),
     };
+    // Initial population indexes the persisted V2 entity IDs. Refreshes must
+    // use that same identity, while SiYuan bindings keep their filesystem IDs.
+    const canonicalId = (id: string) => contextEntityIdForTreeNode(map.id, id);
+    const canonicalNodes = (nodes: ContextTreeNode[]): ContextTreeNode[] =>
+      nodes.map((node) => ({
+        ...node,
+        id: canonicalId(node.id),
+        ...(node.children ? { children: canonicalNodes(node.children) } : {}),
+      }));
     const transaction = await ports.stage(
-      nextMap,
-      delta.changed.filter((id) => fileIds.has(id)),
-      delta.deleted.filter((id) => previousFileIds.has(id)),
+      { ...nextMap, tree: { ...nextMap.tree, nodes: canonicalNodes(nextMap.tree.nodes) } },
+      (migrateIndexIdentity ? [...fileIds] : delta.changed.filter((id) => fileIds.has(id))).map(
+        canonicalId,
+      ),
+      migrateIndexIdentity
+        ? []
+        : delta.deleted.filter((id) => previousFileIds.has(id)).map(canonicalId),
       signal,
+      migrateIndexIdentity ? { reconcileMembership: true } : undefined,
     );
     let saved: ContextMapRecord | null = null;
     let committed = false;
@@ -272,6 +289,7 @@ export function createContextAutoUpdater(ports: ContextAutoUpdatePorts) {
         ...setting,
         baseline: metadata,
         baselineMapRevision: saved.updatedAt,
+        indexIdentityVersion: 1,
         status: 'watching',
         lastSuccessAt: ports.now(),
         error: undefined,
@@ -321,6 +339,9 @@ export async function createProductionContextAutoUpdater(scope: ContextAutoUpdat
     active: () => active(scope),
     now: () => Date.now(),
     async scan(map, signal) {
+      if (map.sourceStatus === 'indexing' || map.sourceStatus === 'pending' || map.sourceStatus === 'error') {
+        throw new Error('context_auto_update_initial_map_not_ready');
+      }
       const manifest = readSiyuanMapManifest(scope.projectId, map.id);
       const job = await readSiyuanIndexJob(scope.projectId, map.id);
       if (
@@ -338,13 +359,14 @@ export async function createProductionContextAutoUpdater(scope: ContextAutoUpdat
         excludedPaths: manifest.sourcePolicy.excludedPaths,
       });
     },
-    async stage(map, changed, deleted, signal) {
+    async stage(map, changed, deleted, signal, options) {
       const transaction = await search.stageChangedMap(
         scope.accountId,
         projectSiyuanMapForContextSearch(map),
         changed,
         deleted,
         signal,
+        options,
       );
       const key = contextAutoUpdateKey(scope);
       updatingScopes.add(key);

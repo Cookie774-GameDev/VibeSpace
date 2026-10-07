@@ -1,5 +1,14 @@
 import { canonicalSiyuanAuthorityRoot } from './siyuanPathAuthority';
 
+/** View projection from the persisted Context source state, never a job checkpoint. */
+export type SiyuanProgressView = SiyuanIndexJobRecord & { sourceIndexState?: 'indexing' | 'error' };
+export function projectSiyuanSearchProgress(job: SiyuanIndexJobRecord, sourceStatus?: string): SiyuanProgressView {
+  if (job.phase !== 'completed' || job.status !== 'completed' || !['indexing', 'error'].includes(sourceStatus ?? '')) return job;
+  return { ...job, sourceIndexState: sourceStatus as 'indexing' | 'error',
+    phase: 'reconciling', status: sourceStatus === 'error' ? 'failed' : 'running',
+    completedAt: null, estimatedPercent: null, estimatedEtaSeconds: null };
+}
+
 export interface SiyuanProgressSample {
   at: number;
   processed: number;
@@ -136,7 +145,8 @@ export function formatSiyuanEta(etaSeconds: number | null): string {
   return `About ${hours} hr`;
 }
 
-export function siyuanOverallProgressPercent(job: SiyuanIndexJobRecord): number | null {
+export function siyuanOverallProgressPercent(job: SiyuanProgressView): number | null {
+  if (job.sourceIndexState) return null;
   const complete =
     job.phase === 'completed' &&
     job.status === 'completed' &&
@@ -164,7 +174,8 @@ export function siyuanOverallProgressPercent(job: SiyuanIndexJobRecord): number 
   return Math.min(99, Math.max(calculated ?? 0, job.estimatedPercent ?? 0));
 }
 
-export function siyuanJobEtaSeconds(job: SiyuanIndexJobRecord): number | null {
+export function siyuanJobEtaSeconds(job: SiyuanProgressView): number | null {
+  if (job.sourceIndexState) return null;
   if (job.phase === 'discovering') return job.estimatedEtaSeconds;
   const first = job.rateSamples[0];
   const last = job.rateSamples.at(-1);

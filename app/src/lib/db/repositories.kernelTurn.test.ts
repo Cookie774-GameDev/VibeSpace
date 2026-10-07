@@ -201,8 +201,17 @@ describe('enqueueLocalSyncInTransaction', () => {
   it('keeps generic message insert and chat update on the same narrow helper', () => {
     const source = readFileSync(resolve('src/lib/db/repositories.ts'), 'utf8');
     expect(source).toContain("from './kernelTurnTransactionAuthority'");
-    expect(source.match(/enqueueLocalSyncInTransaction\(/g)).toHaveLength(1);
-    expect(source).toContain("table === 'messages' && op === 'insert'");
-    expect(source).toContain("table === 'chats' && op === 'update'");
+    // Count the generic routing function only: atomic Plan approval now also
+    // uses this helper inside its own all-or-nothing transaction.
+    const genericRouting = source.slice(source.indexOf('async function enqueueLocalSync('), source.indexOf('async function syncInsert<'));
+    expect(genericRouting.match(/enqueueLocalSyncInTransaction\(/g)).toHaveLength(1);
+    const planApproval = source.slice(source.indexOf('async function persistPlanReviewTransition('), source.indexOf('export const messageRepo ='));
+    const planDecisions = source.slice(source.indexOf('  async approvePlan('), source.indexOf('  async getById(', source.indexOf('  async approvePlan(')));
+    expect(planDecisions.match(/persistPlanReviewTransition\(/g)).toHaveLength(2);
+    expect(planApproval.match(/enqueueLocalSyncInTransaction\(/g)).toHaveLength(2);
+    expect(planApproval).toContain("op: 'insert', table: 'messages', row: userMessage");
+    expect(planApproval).toContain("op: 'update', table: 'chats', row: updatedChat");
+    expect(genericRouting).toContain("table === 'messages' && op === 'insert'");
+    expect(genericRouting).toContain("table === 'chats' && op === 'update'");
   });
 });

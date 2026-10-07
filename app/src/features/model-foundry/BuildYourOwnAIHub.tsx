@@ -149,12 +149,20 @@ export function BuildYourOwnAIHub({
   initialMethod,
 }: Props) {
   const [step, setStep] = React.useState(0);
+  const startViewRevision = React.useRef(0);
+  const pendingStart = React.useRef(false);
+  const [starting, setStarting] = React.useState(false);
+  const changeStep = (next: React.SetStateAction<number>) => {
+    startViewRevision.current += 1;
+    setStep(next);
+  };
   React.useEffect(() => {
     if (!open || !initialMethod) return;
+    sourceImportRevision.current += 1;
     setMethod(initialMethod);
     if (initialMethod !== 'knowledge')
       setTrainingConfig(defaultFoundryTrainingConfiguration(initialMethod));
-    setStep(0);
+    changeStep(0);
   }, [open, initialMethod]);
   const [method, setMethod] = React.useState<TrainingMethod>('knowledge');
   const [trainingConfig, setTrainingConfig] = React.useState<FoundryTrainingConfiguration>(() =>
@@ -252,6 +260,15 @@ export function BuildYourOwnAIHub({
   const [revealJobId, setRevealJobId] = React.useState<string | null>(null);
   const [sourceDropActive, setSourceDropActive] = React.useState(false);
   const sourceDropZoneRef = React.useRef<HTMLDivElement | null>(null);
+  const sourceImportRevision = React.useRef(0);
+  const sourceImportScope = React.useRef<string | null>(null);
+  const changeOpen = (next: boolean) => {
+    if (!next) {
+      sourceImportRevision.current += 1;
+      startViewRevision.current += 1;
+    }
+    onOpenChange(next);
+  };
 
   React.useEffect(() => {
     if (!open) return;
@@ -423,6 +440,17 @@ export function BuildYourOwnAIHub({
           ),
     [method, selectedModel.modalities, trainingWorkerCapability],
   );
+  const sourceImportScopeKey = JSON.stringify([
+    initialMethod, method, selectedModel.id, availableTrainingModalities, transcriptionReady,
+  ]);
+  React.useLayoutEffect(() => {
+    sourceImportRevision.current += 1;
+    sourceImportScope.current = open ? sourceImportScopeKey : null;
+    return () => {
+      sourceImportRevision.current += 1;
+      sourceImportScope.current = null;
+    };
+  }, [open, sourceImportScopeKey]);
   const assessed = React.useMemo(() => {
     const base = compatibleModels(hardware, availableModels);
     if (method === 'knowledge') return base;
@@ -619,7 +647,9 @@ export function BuildYourOwnAIHub({
   };
 
   const addSourcePaths = React.useCallback(
-    async (candidatePaths: readonly string[]) => {
+    async (candidatePaths: readonly string[], revision = sourceImportRevision.current) => {
+      const isCurrent = () => sourceImportScope.current === sourceImportScopeKey && sourceImportRevision.current === revision;
+      if (!isCurrent()) return;
       const paths = distinctFoundryPaths(candidatePaths);
       if (paths.length === 0) return;
       const classified = await Promise.all(
@@ -644,7 +674,9 @@ export function BuildYourOwnAIHub({
           return source;
         }),
       );
+      if (!isCurrent()) return;
       setSources((current) => {
+        if (!isCurrent()) return current;
         const existing = new Set(
           current
             .map((source) => source.path?.replaceAll('/', '\\').toLocaleLowerCase())
@@ -660,7 +692,7 @@ export function BuildYourOwnAIHub({
       });
       setError('');
     },
-    [availableTrainingModalities, method, transcriptionReady],
+    [availableTrainingModalities, method, sourceImportScopeKey, transcriptionReady],
   );
 
   const addSources = async (files: FileList | null) => {
@@ -678,23 +710,29 @@ export function BuildYourOwnAIHub({
   };
 
   const pickLocalSources = async () => {
+    const revision = sourceImportRevision.current;
+    const isCurrent = () => sourceImportScope.current === sourceImportScopeKey && sourceImportRevision.current === revision;
+    if (!isCurrent()) return;
     try {
       const { open } = await import('@tauri-apps/plugin-dialog');
+      if (!isCurrent()) return;
       const picked = await open({
         multiple: true,
         directory: false,
         title: 'Choose local Model Foundry sources',
       });
+      if (!isCurrent()) return;
       const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
-      await addSourcePaths(paths);
+      await addSourcePaths(paths, revision);
     } catch {
-      setError('The native file picker is unavailable. No private file was accessed.');
+      if (isCurrent()) setError('The native file picker is unavailable. No private file was accessed.');
     }
   };
 
   React.useEffect(() => {
     if (!open || step !== 3 || !isTauri) return;
     let disposed = false;
+    const revision = sourceImportRevision.current;
     let unlisten: (() => void) | undefined;
     const handler = createNativeFoundryFileDropHandler({
       devicePixelRatio: window.devicePixelRatio,
@@ -703,13 +741,13 @@ export function BuildYourOwnAIHub({
         return Boolean(target && sourceDropZoneRef.current?.contains(target));
       },
       onHoverChange: setSourceDropActive,
-      onDropPaths: (paths) => void addSourcePaths(paths),
+      onDropPaths: (paths) => void addSourcePaths(paths, revision),
     });
     void import('@tauri-apps/api/webview')
       .then(({ getCurrentWebview }) =>
-        getCurrentWebview().onDragDropEvent((event) =>
-          handler(event.payload as NativeFoundryFileDropEvent),
-        ),
+        getCurrentWebview().onDragDropEvent((event) => {
+          if (!disposed) handler(event.payload as NativeFoundryFileDropEvent);
+        }),
       )
       .then((stop) => {
         if (disposed) stop();
@@ -724,14 +762,25 @@ export function BuildYourOwnAIHub({
   }, [addSourcePaths, open, step]);
 
   const start = async () => {
+    if (pendingStart.current) return;
     if (startError) {
       setError(startError);
       return;
     }
+    const viewRevision = startViewRevision.current;
+    const importRevision = sourceImportRevision.current;
+    const isCurrent = () =>
+      startViewRevision.current === viewRevision &&
+      sourceImportRevision.current === importRevision &&
+      sourceImportScope.current === sourceImportScopeKey;
+    if (!isCurrent()) return;
+    pendingStart.current = true;
+    setStarting(true);
     setError('');
     const beforeRequest = jobsRef.current;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
+      if (!isCurrent()) return;
       const created = await invoke<FoundryJob>('model_foundry_start_training', {
         request: {
           schemaVersion: method === 'knowledge' ? undefined : 2,
@@ -774,13 +823,20 @@ export function BuildYourOwnAIHub({
         beforeRequest,
         JOB_ACKNOWLEDGEMENT_CAUSALITY.model_foundry_start_training,
       );
-      setStep(5);
+      // Native acceptance remains durable even if the user has left this draft.
+      if (isCurrent()) setStep(5);
     } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : 'The verified local training backend is unavailable. No training was started.',
-      );
+      if (isCurrent()) {
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : 'The verified local training backend is unavailable. No training was started.',
+        );
+      }
+    } finally {
+      // Closing a draft does not cancel a submitted native operation.
+      pendingStart.current = false;
+      setStarting(false);
     }
   };
 
@@ -974,7 +1030,7 @@ export function BuildYourOwnAIHub({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={changeOpen}>
       <DialogContent className="max-h-[94vh] max-w-6xl overflow-y-auto border-border/70 bg-background p-0 shadow-2xl">
         <div className="sticky top-0 z-20 border-b border-border/70 bg-background/95 px-5 py-5 backdrop-blur-xl sm:px-7">
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -990,7 +1046,7 @@ export function BuildYourOwnAIHub({
                 </DialogDescription>
               </div>
             </div>
-            <Button type="button" variant="ghost" className="shrink-0" onClick={() => setStep(5)}>
+            <Button type="button" variant="ghost" className="shrink-0" onClick={() => changeStep(5)}>
               View model library
             </Button>
           </div>
@@ -1014,7 +1070,7 @@ export function BuildYourOwnAIHub({
                 <button
                   type="button"
                   disabled={index > step}
-                  onClick={() => setStep(index)}
+                  onClick={() => changeStep(index)}
                   aria-current={index === step ? 'step' : undefined}
                   className={cn(
                     'flex w-full items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-metadata transition-colors',
@@ -1122,6 +1178,7 @@ export function BuildYourOwnAIHub({
                       disabled={trainingSetupBusy}
                       aria-pressed={method === id}
                       onClick={() => {
+                        if (method !== id) sourceImportRevision.current += 1;
                         setMethod(id);
                         if (id !== 'knowledge') {
                           setComputePresetId('low-memory');
@@ -1271,7 +1328,7 @@ export function BuildYourOwnAIHub({
                       key={model.id}
                       type="button"
                       disabled={!compatible}
-                      onClick={() => setModelId(model.id)}
+                      onClick={() => { if (modelId !== model.id) sourceImportRevision.current += 1; setModelId(model.id); }}
                       className={cn(
                         'rounded-lg border p-4 text-left disabled:opacity-55',
                         modelId === model.id
@@ -1394,7 +1451,7 @@ export function BuildYourOwnAIHub({
                         type="button"
                         variant="ghost"
                         onClick={() => {
-                          onOpenChange(false);
+                          changeOpen(false);
                           window.dispatchEvent(
                             new CustomEvent('jarvis:settings:tab', {
                               detail: { tab: 'local-models' },
@@ -2460,7 +2517,7 @@ export function BuildYourOwnAIHub({
             <Button
               variant="ghost"
               disabled={step === 0}
-              onClick={() => setStep((current) => Math.max(0, current - 1))}
+              onClick={() => changeStep((current) => Math.max(0, current - 1))}
             >
               Back
             </Button>
@@ -2470,16 +2527,16 @@ export function BuildYourOwnAIHub({
             {step < 4 ? (
               <Button
                 variant="accent"
-                onClick={() => setStep((current) => Math.min(4, current + 1))}
+                onClick={() => changeStep((current) => Math.min(4, current + 1))}
               >
                 Continue
               </Button>
             ) : step === 4 ? (
-              <Button variant="accent" disabled={Boolean(startError)} onClick={() => void start()}>
+              <Button variant="accent" disabled={starting || Boolean(startError)} onClick={() => void start()}>
                 Begin local processing
               </Button>
             ) : (
-              <Button variant="ghost" onClick={() => onOpenChange(false)}>
+              <Button variant="ghost" onClick={() => changeOpen(false)}>
                 Continue using VibeSpace
               </Button>
             )}

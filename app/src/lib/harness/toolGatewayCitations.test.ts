@@ -170,3 +170,103 @@ describe('fallback Context citation retention', () => {
     expect(consumeToolGatewayContextCitationItems('latest')).toHaveLength(1);
   });
 });
+
+describe('fallback registration acknowledgement', () => {
+  const scope = { accountId: 'account-current', projectId: 'project-current' };
+  const tuple = {
+    pointerId: 'ptr:shared',
+    recordId: 'record-current',
+    sourceRevision: 'sha256:' + 'a'.repeat(64),
+    contentHash: 'a'.repeat(64),
+  };
+  beforeEach(() => clearToolGatewayContextCitationItems());
+  it('returns a detached frozen acknowledgement for actual current evidence and idempotent registration', () => {
+    const first = registerToolGatewayFallbackCitations('ack-session', [tuple], scope);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.source).toMatchObject({
+      ...scope,
+      id: tuple.pointerId,
+      uri: canonicalContextUri('evidence', tuple.pointerId),
+    });
+    const again = registerToolGatewayFallbackCitations('ack-session', [tuple, tuple], scope);
+    expect(again).toHaveLength(1);
+    expect(Object.isFrozen(again)).toBe(true);
+    expect(Object.isFrozen(again[0]!.source)).toBe(true);
+    expect(consumeToolGatewayContextCitationItems('ack-session')).toEqual(first);
+  });
+  it.each(['foreign-scope', 'different-kind', 'unverified'])(
+    'does not acknowledge or replace an existing %s collision',
+    (kind) => {
+      const existing = contextCitationItem({
+        id: tuple.pointerId,
+        kind: kind === 'different-kind' ? 'source' : 'evidence',
+        label: 'Existing item',
+        accountId: kind === 'foreign-scope' ? 'foreign' : scope.accountId,
+        projectId: scope.projectId,
+        observedAt: 1,
+      });
+      const retained =
+        kind === 'unverified'
+          ? { ...existing, source: { ...existing.source, trust: 'external_untrusted' as const } }
+          : existing;
+      replaceToolGatewayContextCitationItems('ack-session', [retained]);
+      const acknowledged = registerToolGatewayFallbackCitations('ack-session', [tuple], scope);
+      expect(acknowledged).toEqual([]);
+      expect(consumeToolGatewayContextCitationItems('ack-session')).toEqual([retained]);
+    },
+  );
+  it('acknowledges an unrelated valid addition while leaving a foreign collision untouched', () => {
+    const foreign = contextCitationItem({
+      id: tuple.pointerId,
+      kind: 'evidence',
+      label: 'Foreign existing',
+      accountId: 'foreign',
+      projectId: 'foreign',
+      observedAt: 1,
+    });
+    replaceToolGatewayContextCitationItems('ack-session', [foreign]);
+    const other = { ...tuple, pointerId: 'ptr:another' };
+    const acknowledged = registerToolGatewayFallbackCitations('ack-session', [tuple, other], scope);
+    expect(acknowledged.map((item) => item.source.id)).toEqual([other.pointerId]);
+    const actual = consumeToolGatewayContextCitationItems('ack-session');
+    expect(actual[0]).toEqual(foreign);
+    expect(actual[1]).toEqual(acknowledged[0]);
+  });
+  it('refuses ambiguous duplicate stored IDs even when one matches current scope', () => {
+    const make = (accountId: string) =>
+      contextCitationItem({
+        id: tuple.pointerId,
+        kind: 'evidence',
+        label: 'Existing',
+        accountId,
+        projectId: scope.projectId,
+        observedAt: 1,
+      });
+    const previous = [make(scope.accountId), make('foreign')];
+    replaceToolGatewayContextCitationItems('ack-session', previous);
+    expect(registerToolGatewayFallbackCitations('ack-session', [tuple], scope)).toEqual([]);
+    expect(consumeToolGatewayContextCitationItems('ack-session')).toEqual(previous);
+  });
+});
+
+it('does not acknowledge a stored handle carrying a conflicting source hash', () => {
+  clearToolGatewayContextCitationItems();
+  const scope = { accountId: 'account-current', projectId: 'project-current' };
+  const tuple = {
+    pointerId: 'ptr:hash-collision',
+    recordId: 'record-current',
+    sourceRevision: 'sha256:' + 'a'.repeat(64),
+    contentHash: 'a'.repeat(64),
+  };
+  const base = contextCitationItem({
+    id: tuple.pointerId,
+    kind: 'evidence',
+    label: 'Existing hash',
+    ...scope,
+    observedAt: 1,
+  });
+  const old = { ...base, source: { ...base.source, contentHash: 'b'.repeat(64) } };
+  replaceToolGatewayContextCitationItems('hash-session', [old]);
+  expect(registerToolGatewayFallbackCitations('hash-session', [tuple], scope)).toEqual([]);
+  expect(consumeToolGatewayContextCitationItems('hash-session')).toEqual([old]);
+});

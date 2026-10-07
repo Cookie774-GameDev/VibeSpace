@@ -119,6 +119,7 @@ interface ProductionContextMap {
   rootDir: string;
   status: 'active' | 'deleted';
   updatedAt: number;
+  sourceStatus?: string;
   sourceType?:
     | 'local_folder'
     | 'local_file'
@@ -929,14 +930,23 @@ function selectContextMapsForScope(
     map.status === 'active' &&
     (scope.projectId === undefined || map.projectId === scope.projectId));
   const root = scope.worktreeId?.replaceAll('\\', '/').replace(/\/+$/u, '').toLocaleLowerCase('en-US');
-  if (!root) return active;
+  const assertReady = (selected: ProductionContextMap[]) => {
+    if (selected.some(map => map.sourceStatus === 'indexing' || map.sourceStatus === 'pending')) {
+      throw new ContextSearchReadinessError('source_indexing');
+    }
+    if (selected.some(map => map.sourceStatus === 'error')) {
+      throw new ContextSearchReadinessError('source_index_failed');
+    }
+    return selected;
+  };
+  if (!root) return assertReady(active);
   const matching = active.filter((map) => {
     const mappedRoot = map.rootDir.replaceAll('\\', '/').replace(/\/+$/u, '').toLocaleLowerCase('en-US');
     return mappedRoot === root || mappedRoot.startsWith(`${root}/`);
   });
   // A worktree ID is not always a filesystem path. Restrict only when it
   // resolves to a mapped source root in this project.
-  return matching.length ? matching : active;
+  return assertReady(matching.length ? matching : active);
 }
 
 function authorityBuildRevisionKey(

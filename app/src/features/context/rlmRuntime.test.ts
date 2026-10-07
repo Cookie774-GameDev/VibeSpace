@@ -93,6 +93,45 @@ function tools(items: ContextSearchItem[]) {
 
 describe('RLM runtime', () => {
   it.each([
+    ['What do RLM tools report about source authority?', 'RLM'],
+    ['Use Context/RLM tools to inspect O_NOFOLLOW. Which cleanup path is skipped?', 'O_NOFOLLOW'],
+    ['Use Context/RLM tools. What is in source file fs/vfs/fs_open.c?', 'fs/vfs/fs_open.c'],
+  ])('preserves factual acronyms and exact source anchors: %s', async (question, anchor) => {
+    const item=searchItem('anchor');const contextTools=tools([item]);
+    const runtime=createRlmRuntime({contextTools,
+      childRunner: async request=>({answer:'grounded',citations:request.sourcePointers}),
+      synthesize: async()=>({answer:'grounded',citations:[item.pointer]})});
+    await runtime.investigate({question,scope,executionIdentity,budget});
+    const query=(contextTools.search.mock.calls[0] as unknown as [{query:string}])[0].query;
+    expect(query).toContain(anchor);
+  });
+
+  it.each([
+    "Use the current project Context/RLM tools to ground each answer in the mapped synthetic files. Make five separate Context tool requests as needed and cite the current source paths: (1) What is the dispatch count? (2) What day are dispatches reviewed? (3) What is the stable station color? (4) What is the renamed route nickname? (5) What platform does the added source name? Do not modify files or use a shell. If a Context tool is unavailable, say so instead of guessing.",
+    'Use the current project Context/RLM tools before answering: What is the dispatch count?',
+  ])('retrieves factual evidence when Context/RLM tool directions precede the question', async (question) => {
+    const item = searchItem('dispatch');
+    const contextTools = { ...tools([item]), search: vi.fn(async ({ query }: { query: string }) => ({
+      items: /dispatch/iu.test(query) ? [item] : [],
+      truncated: false, indexAvailable: true, stale: false,
+    })) };
+    const childRunner = vi.fn(async (request: RlmChildRequest) => ({
+      answer: '42', citations: request.sourcePointers,
+    }));
+    const runtime = createRlmRuntime({ contextTools, childRunner,
+      synthesize: async () => ({ answer: '42', citations: [item.pointer] }) });
+    const result = await runtime.investigate({ question, scope, executionIdentity, budget });
+    expect(result.answer).toBe('42');
+    const query = (contextTools.search.mock.calls[0] as unknown as [{query: string}])[0].query;
+    expect(query).toContain('dispatch count');
+    expect(query).not.toContain('RLM tools ground');
+    if (question.includes('(5)')) {
+      for (const phrase of ['stable station color', 'renamed route nickname', 'platform']) expect(query).toContain(phrase);
+    }
+    expect(childRunner).toHaveBeenCalledWith(expect.objectContaining({ question }));
+  });
+
+  it.each([
     'What does the VFS file-open helper return for a null pathname? Use the source file fs/vfs/fs_open.c as the source of record.',
     'Identify the O_NOFOLLOW cleanup path in VFS open. Use the source file fs/vfs/fs_open.c as the source of record.',
     'Compare O_NOFOLLOW cleanup in source file fs/vfs/fs_open.c and source file fs/inode/fs_inodefind.c.',

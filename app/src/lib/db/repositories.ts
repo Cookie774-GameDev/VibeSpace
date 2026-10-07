@@ -948,6 +948,59 @@ export function createChatDispatchRepository(database: JarvisDexie, clock: () =>
 
 export const chatDispatchRepo = createChatDispatchRepository(db);
 
+/** Keep a Plan decision and its user message atomic before UI dispatch. */
+async function persistPlanReviewTransition(
+  id: MessageId,
+  input: {
+    chatId: ChatId; planId: string; expectedParts: Message['parts'];
+    nextStatus: 'building' | 'redone'; allowBuilt: boolean; userText: string;
+  },
+): Promise<void> {
+  const syncOwner = captureSyncQueueOwner();
+  const expectedParts = structuredClone(input.expectedParts);
+  await db.transaction('rw', [db.messages, db.chats, db.sync_queue, db.settings], async () => {
+    const message = await db.messages.get(id);
+    const chat = await db.chats.get(input.chatId);
+    const plans = message?.parts.filter(part => part.kind === 'plan_review' && part.plan.id === input.planId);
+    const planPart = plans?.[0];
+    if (
+      !message || message.role !== 'assistant' || message.chat_id !== input.chatId ||
+      !chat || chat.archived || !exactMessageParts(message.parts, expectedParts) ||
+      plans?.length !== 1 || planPart?.kind !== 'plan_review' ||
+      (planPart.plan.status !== 'pending' && !(input.allowBuilt && planPart.plan.status === 'built'))
+    ) {
+      throw new Error('Plan approval is no longer pending.');
+    }
+    const ts = now();
+    const updatedPlan: Message = {
+      ...message,
+      parts: message.parts.map(part => part.kind === 'plan_review' && part.plan.id === input.planId
+        ? { ...part, plan: { ...part.plan, status: input.nextStatus } }
+        : part),
+      updated_at: Math.max(ts, message.updated_at + 1),
+    };
+    const userMessage: Message = {
+      id: newMessageId(), chat_id: input.chatId, role: 'user',
+      parts: [{ kind: 'text', text: input.userText }],
+      created_at: ts, updated_at: ts,
+    };
+    const updatedChat: Chat = { ...chat, updated_at: Math.max(ts, chat.updated_at + 1) };
+    await db.messages.put(updatedPlan);
+    await db.messages.add(userMessage);
+    await db.chats.put(updatedChat);
+    await enqueueGenericLocalSyncInTransaction(
+      'update', 'messages', updatedPlan.id, payloadForSync('messages', updatedPlan), syncOwner, ts,
+    );
+    const context = { sync_queue: db.sync_queue, settings: db.settings };
+    await enqueueLocalSyncInTransaction(context, {
+      op: 'insert', table: 'messages', row: userMessage, createdAt: ts, ownerSnapshot: syncOwner,
+    });
+    await enqueueLocalSyncInTransaction(context, {
+      op: 'update', table: 'chats', row: updatedChat, createdAt: ts, ownerSnapshot: syncOwner,
+    });
+  });
+}
+
 /**
  * CRUD over the `messages` table.
  *
@@ -956,6 +1009,34 @@ export const chatDispatchRepo = createChatDispatchRepository(db);
  * regenerations and forks.
  */
 export const messageRepo = {
+  /**
+   * Commit explicit Plan approval before the caller changes mode or dispatches.
+   * Unlike ordinary independent CRUD writes, this workflow must fail together:
+   * a partial write would strand the plan or duplicate its approval on retry.
+   */
+  async approvePlan(
+    id: MessageId,
+    input: { chatId: ChatId; planId: string; expectedParts: Message['parts'] },
+  ): Promise<void> {
+    await persistPlanReviewTransition(id, {
+      ...input, nextStatus: 'building', allowBuilt: true, userText: 'Yes, implement the plan.',
+    });
+  },
+  async revisePlan(
+    id: MessageId,
+    input: {
+      chatId: ChatId; planId: string; expectedParts: Message['parts'];
+      revision: string; preserveExistingRequirements: boolean;
+    },
+  ): Promise<string> {
+    const revision = input.revision.trim();
+    if (!revision) throw new Error('Plan revision must not be empty.');
+    const text = `Redo this plan with this instruction: ${input.preserveExistingRequirements === true ? 'Preserve the existing requirements and add: ' : ''}${revision}`;
+    await persistPlanReviewTransition(id, {
+      ...input, nextStatus: 'redone', allowBuilt: false, userText: text,
+    });
+    return text;
+  },
   async getById(id: MessageId): Promise<Message | undefined> {
     return db.messages.get(id);
   },

@@ -1,6 +1,47 @@
 import { describe, expect, it } from 'vitest';
 import { canRoutePromotedAdapter, LocalAdapterRegistry, promotedAdapterForProject } from './adapterRegistry';
 import { InMemoryStorageAdapter } from './localRepository';
+import type { FoundryRealEvaluationReport } from './nativeBridge';
+
+const legacyCandidateReport: FoundryRealEvaluationReport = {
+  suite: 'private-dataset-studio', caseCount: 1, baseScore: 0, candidateScore: 1,
+  championScore: null, delta: 1, safetyFailures: [], gate: 'pass', caseEvidence: [],
+};
+
+describe('candidate-only reports cannot grant promotion authority', () => {
+  const artifact = { projectId: 'project', jobId: 'candidate', manifestSha256: 'a'.repeat(64),
+    adapterFiles: { 'weights': 'b'.repeat(64) }, metrics: {}, trainingConfig: {} };
+
+  it('rejects the exact formerly accepted fabricated-positive report without deleting its evidence', () => {
+    const registry = new LocalAdapterRegistry(new InMemoryStorageAdapter(), () => 'now');
+    registry.upsert('project', 'candidate', artifact);
+    registry.recordEvaluation('project', 'candidate', artifact.manifestSha256, legacyCandidateReport);
+    expect(() => registry.promote('project', 'candidate')).toThrow(/passing local evaluation/i);
+    expect(registry.list('project')[0]?.evaluation?.report).toEqual(legacyCandidateReport);
+  });
+
+  it('does not accept a current candidate-only report with a serialized pass flag', () => {
+    const registry = new LocalAdapterRegistry(new InMemoryStorageAdapter(), () => 'now');
+    registry.upsert('project', 'candidate', artifact);
+    registry.recordEvaluation('project', 'candidate', artifact.manifestSha256, {
+      ...legacyCandidateReport, suite: 'private-dataset-candidate-v1', baseScore: null, delta: null,
+    });
+    expect(() => registry.promote('project', 'candidate')).toThrow(/passing local evaluation/i);
+  });
+
+  it('revokes route and rollback eligibility for a persisted legacy promotion', () => {
+    const storage = new InMemoryStorageAdapter();
+    const registry = new LocalAdapterRegistry(storage, () => 'now');
+    const record = registry.upsert('project', 'candidate', artifact);
+    const saved = { ...record, status: 'promoted', previousChampionJobId: 'prior',
+      evaluation: { artifactManifestSha256: artifact.manifestSha256, evaluatedAt: 'now', report: legacyCandidateReport } };
+    storage.setItem('vibespace.model-foundry.real-adapters.v1', JSON.stringify([saved, { ...saved, jobId: 'prior', status: 'candidate' }]));
+    expect(canRoutePromotedAdapter(storage, 'project', 'candidate')).toBe(false);
+    expect(promotedAdapterForProject(storage, 'project')).toBeNull();
+    expect(() => registry.rollback('project')).toThrow(/verified prior champion/i);
+    expect(registry.list('project')).toHaveLength(2);
+  });
+});
 
 describe('LocalAdapterRegistry', () => {
   it('persists only verified adapter metadata and archives without deleting provenance', () => {

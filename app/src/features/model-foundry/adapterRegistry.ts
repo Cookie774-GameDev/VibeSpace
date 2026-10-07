@@ -20,6 +20,19 @@ export interface LocalAdapterRecord {
 export interface LocalAdapterStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 const STORAGE_KEY = 'vibespace.model-foundry.real-adapters.v1';
 
+export function isCandidateOnlyEvaluation(report: FoundryRealEvaluationReport): boolean {
+  // The original Studio producer filled unmeasured base/delta fields with zero.
+  // Retain that historical report, but never treat it as comparison or safety proof.
+  return report.suite === 'private-dataset-studio' || report.suite === 'private-dataset-candidate-v1';
+}
+
+export function hasPassingLocalEvaluation(report: FoundryRealEvaluationReport | undefined): report is FoundryRealEvaluationReport & { baseScore: number; delta: number } {
+  return Boolean(report && report.gate === 'pass' && !isCandidateOnlyEvaluation(report)
+    && typeof report.baseScore === 'number' && Number.isFinite(report.baseScore)
+    && typeof report.delta === 'number' && Number.isFinite(report.delta)
+    && Array.isArray(report.safetyFailures) && report.safetyFailures.length === 0);
+}
+
 function notifyRegistryChanged(): void {
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('vibespace:foundry-adapters-changed'));
 }
@@ -41,7 +54,7 @@ export function canRoutePromotedAdapter(storage: LocalAdapterStorage, projectId:
   const record = parse(storage.getItem(STORAGE_KEY)).find((item) => item.projectId === projectId && item.jobId === jobId);
   return record?.status === 'promoted'
     && record.evaluation?.artifactManifestSha256 === record.artifactManifestSha256
-    && record.evaluation.report.gate === 'pass';
+    && hasPassingLocalEvaluation(record.evaluation.report);
 }
 
 export function promotedAdapterForProject(storage: LocalAdapterStorage, projectId: string): LocalAdapterRecord | null {
@@ -75,7 +88,7 @@ export class LocalAdapterRegistry {
   promote(projectId: string, jobId: string): readonly LocalAdapterRecord[] {
     const source = parse(this.storage.getItem(STORAGE_KEY));
     const current = source.find((record) => record.projectId === projectId && record.jobId === jobId);
-    if (!current || current.status === 'archived' || current.evaluation?.artifactManifestSha256 !== current.artifactManifestSha256 || current.evaluation.report.gate !== 'pass') throw new Error('A current passing local evaluation is required before approval.');
+    if (!current || current.status === 'archived' || current.evaluation?.artifactManifestSha256 !== current.artifactManifestSha256 || !hasPassingLocalEvaluation(current.evaluation.report)) throw new Error('A current passing local evaluation is required before approval.');
     const previous = source.find((record) => record.projectId === projectId && record.status === 'promoted');
     const records = source.map((record) => record.projectId !== projectId ? record : record.jobId === jobId ? { ...record, status: 'promoted' as const, previousChampionJobId: previous?.jobId } : record.status === 'promoted' ? { ...record, status: 'candidate' as const } : record);
     this.storage.setItem(STORAGE_KEY, JSON.stringify(records));
@@ -86,7 +99,7 @@ export class LocalAdapterRegistry {
     const source = parse(this.storage.getItem(STORAGE_KEY));
     const champion = source.find((record) => record.projectId === projectId && record.status === 'promoted');
     const previous = champion?.previousChampionJobId ? source.find((record) => record.projectId === projectId && record.jobId === champion.previousChampionJobId) : undefined;
-    if (!champion || !previous || previous.status === 'archived' || previous.evaluation?.artifactManifestSha256 !== previous.artifactManifestSha256 || previous.evaluation.report.gate !== 'pass') throw new Error('No verified prior champion is available for rollback.');
+    if (!champion || !previous || previous.status === 'archived' || previous.evaluation?.artifactManifestSha256 !== previous.artifactManifestSha256 || !hasPassingLocalEvaluation(previous.evaluation.report)) throw new Error('No verified prior champion is available for rollback.');
     const records = source.map((record) => record.projectId !== projectId ? record : record.jobId === champion.jobId ? { ...record, status: 'candidate' as const, previousChampionJobId: undefined } : record.jobId === previous.jobId ? { ...record, status: 'promoted' as const } : record);
     this.storage.setItem(STORAGE_KEY, JSON.stringify(records));
     notifyRegistryChanged();

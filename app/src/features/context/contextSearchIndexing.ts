@@ -65,7 +65,8 @@ interface Dependencies {
 
 export interface ContextSearchIndexPopulationPort {
   stageChangedMap(accountId: string, map: ContextSearchIndexMap,
-    changedIds: readonly string[], deletedIds: readonly string[], signal?: AbortSignal): Promise<{
+    changedIds: readonly string[], deletedIds: readonly string[], signal?: AbortSignal,
+    options?: { reconcileMembership: true }): Promise<{
       commit(): Promise<void>; abort(): Promise<void>;
     }>;
   populateCreatedMap(
@@ -409,7 +410,7 @@ export function createContextSearchIndexPopulationPort(
     });
 
   const populationPort: ContextSearchIndexPopulationPort = {
-    async stageChangedMap(accountId, map, changedIds, deletedIds, signal) {
+    async stageChangedMap(accountId, map, changedIds, deletedIds, signal, options) {
       abortIfNeeded(signal);
       if (!SAFE_ID.test(accountId)) fail('snapshot_invalid');
       if (!port.beginRefresh || !port.stageRefresh || !port.finishRefresh) fail('atomic_refresh_unavailable');
@@ -417,6 +418,8 @@ export function createContextSearchIndexPopulationPort(
       const allCandidates = candidatesFor(map);
       const candidates = allCandidates.filter(({ node }) => changed.has(node.id));
       if (candidates.length !== changed.size || deletedIds.some((id) => !SAFE_ID.test(id))) fail('snapshot_invalid');
+      if (options?.reconcileMembership && allCandidates.some(({ node }) => !changed.has(node.id)))
+        fail('reconciliation_incomplete');
       const existing = await port.status(accountId, map.id);
       abortIfNeeded(signal);
       if (existing.needsRebuild) fail('rebuild_required');
@@ -452,6 +455,12 @@ export function createContextSearchIndexPopulationPort(
         for (let offset = 0; offset < deletedIds.length; offset += MAX_DELETE_BATCH_DOCUMENTS) {
           abortIfNeeded(signal);
           await port.stageRefresh(accountId, map.id, transactionId, [], deletedIds.slice(offset, offset + MAX_DELETE_BATCH_DOCUMENTS));
+        }
+        if (options?.reconcileMembership) {
+          abortIfNeeded(signal);
+          await port.stageRefresh(
+            accountId, map.id, transactionId, [], [], allCandidates.map(({ node }) => node.id),
+          );
         }
         return {
           async commit() {

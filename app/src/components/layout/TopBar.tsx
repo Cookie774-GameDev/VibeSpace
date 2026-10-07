@@ -16,6 +16,7 @@ import {
   Newspaper,
   PanelRight,
   BrainCircuit,
+  Keyboard,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar } from '@/components/ui/avatar';
@@ -287,6 +288,17 @@ export function TopBar() {
             />
           </span>
         </button>
+        <Hint label="Type to Jarvis voice">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setVoiceModalOpen(true, 'text')}
+            aria-label="Type to Jarvis voice"
+            className={TOP_BAR_POINTER_TARGET_CLASS}
+          >
+            <Keyboard className="h-3.5 w-3.5" aria-hidden />
+          </Button>
+        </Hint>
         <span
           className={cn(
             'truncate font-medium',

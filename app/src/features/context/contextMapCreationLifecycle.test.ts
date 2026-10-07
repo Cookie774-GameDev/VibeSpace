@@ -1,9 +1,9 @@
 import Dexie from 'dexie';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createJarvisDb, type JarvisDexie } from '@/lib/db';
 import { TEST_INDEXED_DB, uniqueTestDbName } from '@/test/indexedDb';
 import { createContextPersistenceService } from './contextPersistence';
-import { populatePersistedCreatedContextMap } from './contextMapCreationLifecycle';
+import { reconcilePendingContextSearch, populatePersistedCreatedContextMap } from './contextMapCreationLifecycle';
 import type { ProjectContextTree } from './tree';
 
 function treeFixture(): ProjectContextTree {
@@ -110,4 +110,42 @@ describe('Context Map creation lifecycle', () => {
     expect(state.maps.filter((map) => map.status === 'active')).toHaveLength(1);
     expect(state.maps.filter((map) => map.status === 'deleted')).toHaveLength(0);
   });
+});
+
+describe('pending source search reconciliation',()=>{
+ async function pending() {
+  const service=createContextPersistenceService(database,localStorage);
+  const state=await service.saveTree('account-1',treeFixture(),{sourceStatus:'indexing'});
+  const map=state.maps[0]!;
+  const commit=vi.fn().mockResolvedValue(undefined);const abort=vi.fn().mockResolvedValue(undefined);
+  const stageChangedMap=vi.fn().mockResolvedValue({commit,abort});
+  const controller=new AbortController();const assertCurrent=vi.fn();
+  const port={stageChangedMap,populateCreatedMap:vi.fn(),repairEmptyMap:vi.fn()};
+  return {map,commit,abort,stageChangedMap,controller,assertCurrent,port};
+ }
+ it('reconciles every durable file ID atomically without using the empty-index population exception',async()=>{
+  const x=await pending();
+  await reconcilePendingContextSearch({accountId:'account-1',...x,signal:x.controller.signal});
+  expect(x.stageChangedMap).toHaveBeenCalledWith('account-1',x.map,[x.map.tree.nodes[0]!.id],[],x.controller.signal,{reconcileMembership:true});
+  expect(x.commit).toHaveBeenCalledOnce();expect(x.abort).not.toHaveBeenCalled();
+  expect(x.port.populateCreatedMap).not.toHaveBeenCalled();expect(x.port.repairEmptyMap).not.toHaveBeenCalled();
+ });
+ it.each(['cancel','stale','commit'])('rolls back when %s interrupts the staged generation',async mode=>{
+  const x=await pending();
+  if(mode==='cancel') x.stageChangedMap.mockImplementation(async()=>{x.controller.abort();return {commit:x.commit,abort:x.abort};});
+  if(mode==='stale') x.assertCurrent.mockImplementationOnce(()=>{}).mockImplementation(()=>{throw new Error('stale');});
+  if(mode==='commit') x.commit.mockRejectedValue(new Error('index failure'));
+  await expect(reconcilePendingContextSearch({accountId:'account-1',...x,signal:x.controller.signal})).rejects.toThrow();
+  expect(x.abort).toHaveBeenCalledOnce();
+  if(mode!=='commit') expect(x.commit).not.toHaveBeenCalled();
+ });
+ it('preserves both failures when rollback also fails',async()=>{
+  const x=await pending();x.commit.mockRejectedValue(new Error('commit'));x.abort.mockRejectedValue(new Error('abort'));
+  await expect(reconcilePendingContextSearch({accountId:'account-1',...x,signal:x.controller.signal})).rejects.toMatchObject({errors:[expect.objectContaining({message:'commit'}),expect.objectContaining({message:'abort'})]});
+ });
+ it('refuses a ready map before acquiring the mutation lease',async()=>{
+  const x=await pending();x.map.sourceStatus='ready';
+  await expect(reconcilePendingContextSearch({accountId:'account-1',...x,signal:x.controller.signal})).rejects.toThrow('not_pending');
+  expect(x.stageChangedMap).not.toHaveBeenCalled();
+ });
 });

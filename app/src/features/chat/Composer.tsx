@@ -1574,6 +1574,15 @@ export function Composer({
       String(chatId),
     ]),
   );
+  const providerOverrideViewRef = useRef({ scope: queueScope, mounted: true });
+  if (providerOverrideViewRef.current.scope !== queueScope) {
+    // A rendered A -> B -> A navigation must not revive A's old publisher.
+    providerOverrideViewRef.current = { scope: queueScope, mounted: true };
+  }
+  useEffect(() => {
+    providerOverrideViewRef.current.mounted = true;
+    return () => { providerOverrideViewRef.current.mounted = false; };
+  }, []);
   const queueSession = useComposerQueueSession(queueScope);
   const { messages: queuedMessages, setMessages: setQueuedMessages } = queueSession;
   const escapeCancelRef = useRef<EscapeCancelState>(createEscapeCancelState());
@@ -4554,6 +4563,17 @@ export function Composer({
         return false;
       }
       if (sending) return false;
+      const submittedView = providerOverrideViewRef.current;
+      let scopeRevoked = false;
+      const unsubscribeScope = useAuthStore.subscribe((next, previous) => {
+        // Observe transitions synchronously, including an ABA batched by React.
+        if (resolveAccountIdentity(next)?.accountId !== resolveAccountIdentity(previous)?.accountId ||
+          next.workspaceId !== previous.workspaceId || next.projectId !== previous.projectId) {
+          scopeRevoked = true;
+        }
+      });
+      const ownsCurrentView = () => !scopeRevoked && submittedView.mounted &&
+        providerOverrideViewRef.current === submittedView;
       setSending(true);
       try {
         const routedChatId = await startTypedAgentOverride({
@@ -4561,15 +4581,23 @@ export function Composer({
           options: accessibleChatModels.flatOptions,
           sourceChatId: String(chatId),
         });
-        if (!overrideText) setText('');
-        playUiSound('chat_message_send');
-        focusVoiceChat(routedChatId);
+        if (ownsCurrentView() &&
+          handoffDraftEditRevisionRef.current === directlySubmittedDraftEditRevision) {
+          if (!overrideText) setText('');
+          playUiSound('chat_message_send');
+          focusVoiceChat(routedChatId);
+        }
+        // The original task was accepted even if its initiating view moved on.
+        // Do not report cancellation or invite a duplicate dispatch.
         return true;
       } catch (error) {
-        toast.error('Provider override failed', error instanceof Error ? error.message : 'The task could not be routed.');
+        if (ownsCurrentView()) {
+          toast.error('Provider override failed', error instanceof Error ? error.message : 'The task could not be routed.');
+        }
         return false;
       } finally {
-        setSending(false);
+        unsubscribeScope();
+        if (providerOverrideViewRef.current.mounted) setSending(false);
       }
     }
     const hasConfirmedCommands = confirmedCommands.length > 0;

@@ -73,7 +73,8 @@ export interface ContextSearchIndexMutationResult {
 export interface ContextSearchIndexPort {
   beginRefresh?(accountId: string, mapId: string): Promise<string>;
   stageRefresh?(accountId: string, mapId: string, transactionId: string,
-    documents: readonly ContextSearchDocumentInput[], documentIds: readonly string[]): Promise<void>;
+    documents: readonly ContextSearchDocumentInput[], documentIds: readonly string[],
+    retainDocumentIds?: readonly string[]): Promise<void>;
   finishRefresh?(accountId: string, mapId: string, transactionId: string, commit: boolean): Promise<number>;
   status(accountId: string, mapId: string): Promise<ContextSearchIndexStatus>;
   replaceDocuments(
@@ -529,9 +530,10 @@ export function createTauriContextSearchIndexPort(): ContextSearchIndexPort {
       if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{32}$/u.test(id)) return contextSearchIndexResponseInvalid();
       return id;
     },
-    async stageRefresh(accountId, mapId, transactionId, documents, documentIds) {
+    async stageRefresh(accountId, mapId, transactionId, documents, documentIds, retainDocumentIds) {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('context_search_stage_refresh', { request: { accountId, mapId, transactionId, documents, documentIds } });
+      await invoke('context_search_stage_refresh', { request: { accountId, mapId, transactionId, documents, documentIds,
+        ...(retainDocumentIds === undefined ? {} : { retainDocumentIds }) } });
     },
     async finishRefresh(accountId, mapId, transactionId, commit) {
       const { invoke } = await import('@tauri-apps/api/core');

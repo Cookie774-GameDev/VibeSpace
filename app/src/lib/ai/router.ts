@@ -1,3 +1,4 @@
+import { FOUNDRY_LOCAL_CONNECTION } from './adapters/nativeCatalog';
 /**
  * Canonical PR31 AI router.
  *
@@ -1660,12 +1661,22 @@ async function runKernelSmokeDispatch(req: RunAgentRequest): Promise<LLMResponse
   return response;
 }
 
-/// Bounded direct executor for locally promoted Model Foundry adapters.
-/// Foundry inference never crosses a cloud boundary: the provider fails
-/// closed unless the desktop native runtime is present, the adapter id is a
-/// verified project/job pair, and the adapter has passed its current local
-/// evaluation. No credentials, connections, or OpenCode transport involved.
+/// Bounded direct executor for verified native artifacts and promoted adapters.
+/// The exact local connection carries route identity, not a credential grant.
+/// The provider and native bridge still validate the artifact identity and evidence.
 async function runFoundryDispatch(req: RunAgentRequest): Promise<LLMResponse> {
+  if (req.connectionId !== FOUNDRY_LOCAL_CONNECTION.id) {
+    throw new Error('Foundry inference requires its exact local artifact connection.');
+  }
+  const connection = getProviderConnectionDescriptor(req.connectionId);
+  if (!connection.enabled || connection.providerId !== 'foundry' || connection.mode !== 'local' ||
+      connection.capabilities.localOnly !== true) {
+    throw new Error('Foundry local artifact connection is unavailable.');
+  }
+  assertConnectionCapabilities(connection, {
+    ...req.connectionRequirements,
+    images: requestRequiresImageInput(req),
+  });
   if (!foundryProvider.isAvailable()) {
     throw new Error('Model Foundry adapters are available only in the desktop app.');
   }

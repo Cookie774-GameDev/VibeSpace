@@ -55,21 +55,24 @@ export function usePagedChatMessages(
     limit: DEFAULT_CHAT_MESSAGE_PAGE_SIZE,
   });
   const activeLimit = request.chatKey === chatKey ? request.limit : DEFAULT_CHAT_MESSAGE_PAGE_SIZE;
-  const page = useLiveQuery(
-    async () => {
-      if (!chatId) return EMPTY_CHAT_MESSAGE_PAGE;
-      return queryChatMessagePage(chatId, activeLimit);
-    },
+  const result = useLiveQuery(
+    async () => ({
+      chatKey,
+      page: chatId ? await queryChatMessagePage(chatId, activeLimit) : EMPTY_CHAT_MESSAGE_PAGE,
+    }),
     [chatId, activeLimit],
-    EMPTY_CHAT_MESSAGE_PAGE,
+    null,
   );
-  const hasOlder = page?.hasOlder ?? false;
+  // Live queries retain the previous value while a new subscription loads.
+  // Never publish that value under a different selected chat (including null).
+  const page = result?.chatKey === chatKey ? result.page : EMPTY_CHAT_MESSAGE_PAGE;
+  const hasOlder = page.hasOlder;
   const loadOlder = useCallback(() => {
     if (!chatId || !hasOlder) return;
     setRequest({ chatKey, limit: activeLimit + CHAT_MESSAGE_PAGE_INCREMENT });
   }, [activeLimit, chatId, chatKey, hasOlder]);
   return {
-    messages: page?.messages ?? [],
+    messages: page.messages,
     hasOlder,
     loadOlder,
   };

@@ -151,6 +151,23 @@ export const OLLAMA_LOCAL_CONNECTION: Readonly<ProviderConnection> = Object.free
   enabled: true,
 });
 
+/** Exact identity for the existing bounded native Foundry executor; no credential grant. */
+export const FOUNDRY_LOCAL_CONNECTION: Readonly<ProviderConnection> = Object.freeze({
+  id: 'foundry-local',
+  adapterId: 'foundry-native',
+  providerId: 'foundry',
+  displayName: 'Build Your Own AI',
+  mode: 'local' as const,
+  authSource: 'local-artifact',
+  capabilities: capabilities({
+    localOnly: true,
+    streaming: false,
+    cancellation: false,
+  }),
+  promptTransport: 'native-system',
+  enabled: true,
+});
+
 export const NATIVE_AND_LOCAL_CONNECTIONS = Object.freeze([
   OPENAI_API_CONNECTION,
   ANTHROPIC_API_CONNECTION,
@@ -165,4 +182,5 @@ export const NATIVE_AND_LOCAL_CONNECTIONS = Object.freeze([
   MISTRAL_API_CONNECTION,
   TOGETHER_API_CONNECTION,
   OLLAMA_LOCAL_CONNECTION,
+  FOUNDRY_LOCAL_CONNECTION,
 ]);

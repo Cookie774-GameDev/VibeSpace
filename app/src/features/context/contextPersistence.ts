@@ -39,6 +39,7 @@ export interface ContextPersistenceService {
     tree: ProjectContextTree,
     options?: ContextTreeSaveOptions,
   ): Promise<ContextPersistenceState>;
+  setSourceStatus(accountId: string, projectId: string | null, mapId: string, status: 'indexing' | 'ready' | 'error', expectedUpdatedAt: number, signal?: AbortSignal): Promise<ContextPersistenceState>;
   selectMap(
     accountId: string,
     projectId: string | null,
@@ -62,6 +63,8 @@ export interface ContextPersistenceService {
 }
 
 export interface ContextTreeSaveOptions {
+  signal?: AbortSignal;
+  sourceStatus?: 'indexing' | 'ready' | 'error';
   /** Background refresh must preserve the user's current map selection. */
   select?: boolean;
   mapId?: string;
@@ -148,7 +151,8 @@ function treeFromSnapshot(snapshot: ContextGraphSnapshotV2): ProjectContextTree 
       summary: entity.summary ?? '',
       ...(entity.path ? { path: entity.path } : {}),
       createdAt: entity.createdAt,
-      modifiedAt: entity.updatedAt,
+      modifiedAt: entity.sourceModifiedAt ?? entity.updatedAt,
+      ...(entity.sourceSizeBytes === undefined ? {} : { sizeBytes: entity.sourceSizeBytes }),
       ...(nested.length ? { children: nested } : {}),
     };
   };
@@ -366,6 +370,26 @@ export function createContextPersistenceService(
     });
   };
 
+  // A bound live owner can revoke a pending IDB commit, including after a
+  // queued write succeeds. Repository CAS and optional selection share the transaction.
+  const withAbortableWrite = async <T>(signal: AbortSignal | undefined, write: () => Promise<T>): Promise<T> => {
+    if (!signal) return write();
+    signal.throwIfAborted();
+    let detachAbort = () => {};
+    try {
+      return await database.transaction('rw', [database.context_maps, database.context_sources,
+        database.context_entities, database.context_edges, database.context_provenance, database.settings], async transaction => {
+        const abort = () => transaction.abort();
+        signal.addEventListener('abort', abort, {once:true});
+        detachAbort = () => signal.removeEventListener('abort', abort);
+        signal.throwIfAborted();
+        const result = await write();
+        signal.throwIfAborted();
+        return result;
+      });
+    } finally { detachAbort(); }
+  };
+
   const service: ContextPersistenceService = {
     async loadMap(accountId, projectId, mapId) {
       assertIdentity(accountId, projectId);
@@ -408,6 +432,7 @@ export function createContextPersistenceService(
     load,
 
     async saveTree(accountId, tree, options = {}) {
+      options.signal?.throwIfAborted();
       assertIdentity(accountId, tree.projectId);
       const current = await load(accountId, tree.projectId);
       const mapId = options.mapId ?? generatedMapId(accountId, tree);
@@ -447,10 +472,15 @@ export function createContextPersistenceService(
           mapName(tree),
         status: 'active',
         createdAt: existing?.map.createdAt ?? tree.generatedAt,
-        updatedAt: Math.max(Date.now(), tree.generatedAt),
+        updatedAt: Math.max(Date.now(), tree.generatedAt, (existing?.map.updatedAt ?? -1) + 1),
         sourceType: options.source?.kind ?? 'local_folder',
         sourceLabel: options.source?.label ?? 'Local folder',
-        sourceStatus: 'ready',
+        sourceStatus: options.sourceStatus ?? (
+          existing?.sources[0]?.kind === 'local_folder' &&
+          ['indexing', 'error'].includes(existing.sources[0].status)
+            ? existing.sources[0].status
+            : 'ready'
+        ),
         branchRef: options.source?.branchRef ?? 'workspace',
         github: options.source?.github
           ? {
@@ -465,17 +495,38 @@ export function createContextPersistenceService(
       };
       const snapshot = convertContextMapRecordV1ToSnapshotV2(record, accountId, mapId, {
         knowledgeRevision: (existing?.map.knowledgeRevision ?? 0) + 1,
-        sourceStatus: 'ready',
+        sourceStatus: record.sourceStatus,
         parser: 'context-tree-v2-persistence',
         github: options.source?.github,
         sourceLabel: options.source?.label,
         branchRef: options.source?.branchRef,
       });
-      await repository.putSnapshot(accountId, snapshot, {
-        expectedKnowledgeRevision: existing?.map.knowledgeRevision ?? 0,
+      await withAbortableWrite(options.signal, async () => {
+        await repository.putSnapshot(accountId, snapshot, {
+          expectedKnowledgeRevision: existing?.map.knowledgeRevision ?? 0,
+        });
+        if (options.select !== false) await writeSelection(accountId, tree.projectId, mapId);
       });
-      if (options.select !== false) await writeSelection(accountId, tree.projectId, mapId);
+      options.signal?.throwIfAborted();
       return load(accountId, tree.projectId);
+    },
+
+    async setSourceStatus(accountId, projectId, mapId, status, expectedUpdatedAt, signal) {
+      signal?.throwIfAborted();
+      assertIdentity(accountId, projectId);
+      if (!['indexing', 'ready', 'error'].includes(status)) fail('source_status_invalid');
+      const snapshot = await repository.getSnapshot(accountId, mapId);
+      if (!snapshot || snapshot.map.projectId !== projectId || snapshot.map.status !== 'active') fail('map_missing');
+      if (snapshot.map.updatedAt !== expectedUpdatedAt) fail('map_changed');
+      const next = structuredClone(snapshot) as ContextGraphSnapshotV2;
+      const now = Math.max(Date.now(), snapshot.map.updatedAt + 1);
+      next.map.updatedAt = now;
+      next.map.knowledgeRevision += 1;
+      next.sources = next.sources.map(source => ({ ...source, status, updatedAt: now }));
+      await withAbortableWrite(signal, () => repository.putSnapshot(accountId, next, {
+        expectedKnowledgeRevision: snapshot.map.knowledgeRevision,
+      }));
+      return load(accountId, projectId);
     },
 
     async selectMap(accountId, projectId, mapId) {
@@ -762,6 +813,22 @@ export async function reloadPersistedContextMaps(
   const reloaded = await getProductionService().load(initialized.accountId, projectId);
   assertActiveIdentity(initialized.accountId);
   return reloaded.maps;
+}
+
+/** Publish search readiness without rewriting entity IDs or changing selection. */
+export async function setPersistedContextSourceStatus(
+  projectId: string | null, mapId: string, status: 'indexing' | 'ready' | 'error',
+  expectedUpdatedAt: number, signal?: AbortSignal,
+): Promise<ContextPersistenceState> {
+  signal?.throwIfAborted();
+  const initialized = await ensureContextPersistence(projectId);
+  assertActiveIdentity(initialized.accountId);
+  signal?.throwIfAborted();
+  const saved = await getProductionService().setSourceStatus(initialized.accountId, projectId, mapId, status, expectedUpdatedAt, signal);
+  assertActiveIdentity(initialized.accountId);
+  signal?.throwIfAborted();
+  await queuePersistedMapMetadataSafely(initialized.accountId, mapId);
+  return saved;
 }
 
 export async function savePersistedContextTree(

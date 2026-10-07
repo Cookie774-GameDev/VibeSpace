@@ -63,7 +63,9 @@ vi.mock('@/lib/ai/modelSelection', () => ({
 }));
 vi.mock('@/stores/auth', () => ({
   useAuthStore: {
+    subscribe: () => () => {},
     getState: () => ({
+      localUserId: 'typed-test-account', cloudSession: null, workspaceId: 'typed-test-workspace', projectId: null,
       voiceMainAgentProvider: 'codex',
       voiceWorkerProvider: 'codex',
       chatModelSelection: { mode: 'none' },
@@ -78,6 +80,8 @@ vi.mock('@/components/ui/toast', () => ({
 
 import { startTypedAgentOverride } from './voiceTypedAgentFlow';
 import { VOICE_BRIEF_SYSTEM_INSTRUCTION } from './voiceAgentFlow';
+import { resolveVoiceProviderSelection } from './voiceProviderSelection';
+import { writeChatReasoningEffort } from '@/features/chat/reasoningSlashStore';
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -119,6 +123,34 @@ describe('typed one-request provider override', () => {
       expect(mocks.info).toHaveBeenCalledWith('Main Agent routed', 'Sent to Codex.');
     } finally {
       window.removeEventListener('jarvis:send', onSend);
+    }
+  });
+
+  it('keeps the resolved visible Main route and source effort for a worker-only directive', async () => {
+    const key = 'vibespace.chat-reasoning.v1';
+    const old = localStorage.getItem(key);
+    try {
+      writeChatReasoningEffort('source', 'low');
+      const { selectionFromOption } = await vi.importActual<typeof import('@/lib/ai/modelSelection')>('@/lib/ai/modelSelection');
+      const { OPENCODE_CLI_CONNECTION } = await import('@/lib/ai/adapters/catalog');
+      vi.mocked(resolveVoiceProviderSelection).mockReturnValueOnce({
+        provider: 'opencode', providerLabel: 'OpenCode', connectionId: 'opencode-cli',
+        routeId: 'luna-current', modelLabel: 'Luna',
+        selection: selectionFromOption('openai', 'openai/gpt-6-luna', OPENCODE_CLI_CONNECTION),
+      });
+      await startTypedAgentOverride({
+        parsed: { providers: { worker: 'codex' }, taskText: 'Keep the selected Main route', saveAsDefault: false },
+        options: [], sourceChatId: 'source',
+      });
+      expect(resolveVoiceProviderSelection).toHaveBeenCalledWith(expect.objectContaining({ preservePreferredRoute: true }));
+      expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+        modelSelectionOverride: expect.objectContaining({ modelId: 'openai/gpt-6-luna', connectionId: 'opencode-cli' }),
+        reasoningPreference: { mode: 'normal', effortOverride: 'low' },
+        structuredContext: expect.objectContaining({ payload: expect.objectContaining({ mainProvider: 'opencode', requestedWorkerProvider: 'codex' }) }),
+      }));
+      expect(mocks.mainSetter).not.toHaveBeenCalled();
+    } finally {
+      if (old === null) localStorage.removeItem(key); else localStorage.setItem(key, old);
     }
   });
 

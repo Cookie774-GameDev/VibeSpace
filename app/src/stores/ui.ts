@@ -163,6 +163,8 @@ export interface UIState {
   // Modals / overlays
   paletteOpen: boolean;
   voiceModalOpen: boolean;
+  /** Per-opening input choice; never persisted. */
+  voiceInputMode: 'speech' | 'text';
   voiceListening: boolean; // distinct - drives glow border without modal
   settingsOpen: boolean;
   onboardingComplete: boolean;
@@ -290,7 +292,7 @@ export interface UIState {
   setPaletteOpen: (open: boolean) => void;
   toggleVoice: () => void;
   setVoiceListening: (v: boolean) => void;
-  setVoiceModalOpen: (v: boolean) => void;
+  setVoiceModalOpen: (v: boolean, inputMode?: 'speech' | 'text') => void;
   setSettingsOpen: (v: boolean) => void;
   setActiveChat: (id: string | null) => void;
   setActiveAgent: (id: string | null) => void;
@@ -349,6 +351,7 @@ const defaults: Pick<
   | 'chatMode'
   | 'paletteOpen'
   | 'voiceModalOpen'
+  | 'voiceInputMode'
   | 'voiceListening'
   | 'settingsOpen'
   | 'onboardingComplete'
@@ -398,6 +401,7 @@ const defaults: Pick<
   chatMode: 'chat',
   paletteOpen: false,
   voiceModalOpen: false,
+  voiceInputMode: 'speech',
   voiceListening: false,
   settingsOpen: false,
   onboardingComplete: false,
@@ -559,6 +563,7 @@ export function mergePersistedUiState(persistedState: unknown, currentState: UIS
   const merged = {
     ...currentState,
     ...validatedState,
+    voiceInputMode: currentState.voiceInputMode,
   } as UIState & Record<string, unknown>;
 
   for (const [key, value] of Object.entries(currentState)) {
@@ -581,13 +586,13 @@ export const useUIStore = create<UIState>()(
         set((s) => {
           const next = !s.voiceModalOpen;
           syncVoiceModuleOpenState(next);
-          return { voiceModalOpen: next };
+          return { voiceModalOpen: next, voiceInputMode: 'speech' };
         }),
       setVoiceListening: (v) => set({ voiceListening: v }),
-      setVoiceModalOpen: (v) =>
+      setVoiceModalOpen: (v, inputMode = 'speech') =>
         set((s) => {
           if (v !== s.voiceModalOpen) syncVoiceModuleOpenState(v);
-          return { voiceModalOpen: v };
+          return { voiceModalOpen: v, voiceInputMode: v ? inputMode : 'speech' };
         }),
       setSettingsOpen: (v) => set({ settingsOpen: v }),
       setActiveChat: (id) => set({ activeChatId: id }),

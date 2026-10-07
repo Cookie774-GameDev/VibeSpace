@@ -47,7 +47,7 @@ describe('ContextPage SiYuan creation contract', () => {
     const creationEnd = source.indexOf('React.useEffect(() => {', creationStart);
     const creation = source.slice(creationStart, creationEnd);
     const persisted = creation.indexOf(
-      'const persisted = await savePersistedContextTree(generated);',
+      "const persisted = await savePersistedContextTree(generated, { sourceStatus: 'indexing', signal: controller.signal });",
     );
     const preference = creation.indexOf('persistedMap.id,', persisted);
     const sync = creation.indexOf(
@@ -151,16 +151,16 @@ describe('ContextPage SiYuan creation contract', () => {
     expect(source).toContain('density="fine"');
     expect(source).toContain("failed={job.status === 'failed'}");
     expect(source).toContain("? 'Failed · repair needed'");
-    expect(source).toContain('label="SiYuan map creation progress"');
+    expect(source).toContain('label={`SiYuan map creation progress: ${mapName}`}');
     expect(source).toContain('aria-hidden="true"');
     expect(source).toContain('motion-reduce:animate-none');
     expect(source).toContain('progress={exactPercent}');
     expect(source).toContain("paused={job.status !== 'running'}");
-    expect(source).toContain("estimated={job.phase !== 'completed'}");
+    expect(source).toContain("estimated={exactPercent !== 100}");
     expect(source).toContain('data-testid="siyuan-paused-timing"');
     expect(source).toContain('ETA ${eta} · elapsed ${elapsed}');
     expect(source).toContain("? 'Estimating time…'");
-    expect(source).toContain("`${job.phase === 'completed' ? '' : '≈ '}");
+    expect(source).toContain("`${exactPercent === 100 ? '' : '≈ '}");
   });
 
   it('offers an explicit safe restart only for terminal failed or cancelled jobs', () => {

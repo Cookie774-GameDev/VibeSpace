@@ -2,7 +2,7 @@ use fs4::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -26,6 +26,9 @@ const SCHEMA_VERSION: u32 = 1;
 const TOKENIZER: &str = "vibespace_unicode_v1";
 const WRITER_MEMORY_BYTES: usize = 50_000_000;
 const MAX_DOCUMENTS_PER_MUTATION: usize = 1_000;
+const MAX_RETAINED_DOCUMENT_IDS: usize = 100_000;
+const MAX_RETAINED_ID_BYTES: usize = 20_000_000;
+const MAX_EXISTING_ID_TERMS: usize = 200_000;
 const MAX_DOCUMENT_BODY_BYTES: usize = 1_048_576;
 const MAX_TOTAL_MUTATION_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PROPERTIES_BYTES: usize = 65_536;
@@ -56,6 +59,8 @@ struct PendingRefresh {
     fields: IndexFields,
     touched: Instant,
     affected: usize,
+    staged_document_ids: BTreeSet<String>,
+    retained_document_ids: Option<BTreeSet<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -66,6 +71,8 @@ pub struct ContextSearchRefreshRequest {
     pub transaction_id: String,
     pub documents: Vec<ContextSearchDocumentInput>,
     pub document_ids: Vec<String>,
+    #[serde(default)]
+    pub retain_document_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -406,6 +413,8 @@ impl ContextSearchIndex {
                 fields,
                 touched: Instant::now(),
                 affected: 0,
+                staged_document_ids: BTreeSet::new(),
+                retained_document_ids: None,
             });
             Ok(id)
         })
@@ -416,6 +425,7 @@ impl ContextSearchIndex {
         id: &str,
         documents: &[ContextSearchDocumentInput],
         deleted: &[String],
+        retain_document_ids: Option<&[String]>,
     ) -> Result<(), String> {
         validate_documents(documents)?;
         if documents.len() + deleted.len() > MAX_DOCUMENTS_PER_MUTATION {
@@ -431,6 +441,26 @@ impl ContextSearchIndex {
                 return Err("context_search_duplicate_document_id".into());
             }
         }
+        let retained = retain_document_ids
+            .map(|ids| {
+                if ids.len() > MAX_RETAINED_DOCUMENT_IDS {
+                    return Err("context_search_retention_input_too_large".to_string());
+                }
+                let mut bytes = 0_usize;
+                let mut unique = BTreeSet::new();
+                for id in ids {
+                    validate_stable_id(id, "document_id")?;
+                    bytes = bytes.saturating_add(id.len());
+                    if bytes > MAX_RETAINED_ID_BYTES {
+                        return Err("context_search_retention_input_too_large".into());
+                    }
+                    if !unique.insert(id.clone()) {
+                        return Err("context_search_duplicate_document_id".into());
+                    }
+                }
+                Ok(unique)
+            })
+            .transpose()?;
         self.with_scope_lock(|| {
             self.ensure_index_path_safe()?;
             let mut pending = PENDING_REFRESH
@@ -448,13 +478,73 @@ impl ContextSearchIndex {
             if refresh.touched.elapsed().as_secs() > 600 {
                 return Err("context_search_refresh_expired".into());
             }
+            let effective_retained = retained.as_ref().or(refresh.retained_document_ids.as_ref());
+            if let Some(ids) = effective_retained {
+                if documents
+                    .iter()
+                    .any(|document| !ids.contains(&document.document_id))
+                    || !refresh
+                        .staged_document_ids
+                        .iter()
+                        .all(|id| ids.contains(id) || deleted.contains(id))
+                {
+                    return Err("context_search_retention_incomplete".into());
+                }
+            }
+            if let Some(ids) = retained {
+                if let Some(previous) = &refresh.retained_document_ids {
+                    if previous != &ids {
+                        return Err("context_search_retention_changed".into());
+                    }
+                } else {
+                    // Enumerate only document-ID terms in this lease's exact index.
+                    // Source bodies and every other map/account index remain untouched.
+                    let reader = refresh
+                        .writer
+                        .index()
+                        .reader()
+                        .map_err(|error| format!("context_search_reader:{error}"))?;
+                    let searcher = reader.searcher();
+                    let mut existing = BTreeSet::new();
+                    for segment in searcher.segment_readers() {
+                        let inverted = segment
+                            .inverted_index(refresh.fields.document_id)
+                            .map_err(|error| format!("context_search_retention_terms:{error}"))?;
+                        let mut terms = inverted
+                            .terms()
+                            .stream()
+                            .map_err(|error| format!("context_search_retention_terms:{error}"))?;
+                        while terms.advance() {
+                            let id = std::str::from_utf8(terms.key()).map_err(|_| {
+                                "context_search_stored_document_invalid".to_string()
+                            })?;
+                            validate_stable_id(id, "document_id")?;
+                            existing.insert(id.to_string());
+                            if existing.len() > MAX_EXISTING_ID_TERMS {
+                                return Err("context_search_retention_index_too_large".into());
+                            }
+                        }
+                    }
+                    for id in existing.difference(&ids) {
+                        refresh
+                            .writer
+                            .delete_term(Term::from_field_text(refresh.fields.document_id, id));
+                        refresh.affected += 1;
+                    }
+                    refresh.retained_document_ids = Some(ids);
+                }
+            }
             for document_id in deleted {
+                refresh.staged_document_ids.remove(document_id);
                 refresh.writer.delete_term(Term::from_field_text(
                     refresh.fields.document_id,
                     document_id,
                 ));
             }
             for document in documents {
+                refresh
+                    .staged_document_ids
+                    .insert(document.document_id.clone());
                 refresh.writer.delete_term(Term::from_field_text(
                     refresh.fields.document_id,
                     &document.document_id,
@@ -1693,6 +1783,7 @@ pub async fn context_search_stage_refresh(
             &request.transaction_id,
             &request.documents,
             &request.document_ids,
+            request.retain_document_ids.as_deref(),
         )
     })
     .await
@@ -1840,8 +1931,205 @@ mod tests {
         }
     }
 
+    fn refresh_document(id: &str, title: &str, body: &str) -> ContextSearchDocumentInput {
+        let mut value = document(id, title, body);
+        value.path = format!("notes/{}.md", id.replace(':', "_"));
+        value
+    }
+
+    static REFRESH_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn refresh_retention_migrates_legacy_ids_only_inside_its_lease_and_is_idempotent() {
+        let _guard = REFRESH_TEST_LOCK.lock().unwrap();
+        let root = TempRoot::new();
+        let index = ContextSearchIndex::open(&root.0, "account", "map").unwrap();
+        let other_map = ContextSearchIndex::open(&root.0, "account", "other-map").unwrap();
+        let other_account = ContextSearchIndex::open(&root.0, "other-account", "map").unwrap();
+        let old = [
+            refresh_document("path:shared", "Shared", "legacy shared evidence"),
+            refresh_document("map:path:shared", "Shared", "canonical shared evidence"),
+            refresh_document("path:removed", "Removed", "retired unique evidence"),
+            refresh_document("map:path:old-name", "Renamed", "oldname unique evidence"),
+        ];
+        index.replace_documents(&old).unwrap();
+        other_map.replace_documents(&old).unwrap();
+        other_account.replace_documents(&old).unwrap();
+        let kept = vec!["map:path:shared".into(), "map:path:new-name".into()];
+        let id = index.begin_refresh().unwrap();
+        assert!(other_map.begin_refresh().is_err());
+        assert!(other_map.stage_refresh(&id, &[], &[], Some(&[])).is_err());
+        assert!(other_account
+            .stage_refresh(&id, &[], &[], Some(&[]))
+            .is_err());
+        index
+            .stage_refresh(
+                &id,
+                &[
+                    refresh_document("map:path:shared", "Shared", "current shared evidence"),
+                    refresh_document("map:path:new-name", "Renamed", "renamed current evidence"),
+                ],
+                &[],
+                None,
+            )
+            .unwrap();
+        index.stage_refresh(&id, &[], &[], Some(&kept)).unwrap();
+        assert_eq!(index.status().unwrap().document_count, 4);
+        // A repeat of the same retained set is idempotent inside this transaction.
+        index.stage_refresh(&id, &[], &[], Some(&kept)).unwrap();
+        index.finish_refresh(&id, true).unwrap();
+        let reopened = ContextSearchIndex::open(&root.0, "account", "map").unwrap();
+        assert_eq!(reopened.status().unwrap().document_count, 2);
+        for text in ["legacy", "retired", "oldname"] {
+            assert!(reopened
+                .query(&ContextSearchQueryInput {
+                    mode: ContextSearchMode::FullText,
+                    query: text.into(),
+                    limit: 10
+                })
+                .unwrap()
+                .is_empty());
+        }
+        assert_eq!(other_map.status().unwrap().document_count, 4);
+        assert_eq!(other_account.status().unwrap().document_count, 4);
+        let next = reopened.begin_refresh().unwrap();
+        reopened
+            .stage_refresh(&next, &[], &[], Some(&kept))
+            .unwrap();
+        reopened.finish_refresh(&next, true).unwrap();
+        assert_eq!(reopened.status().unwrap().document_count, 2);
+    }
+
+    #[test]
+    fn refresh_retention_refuses_invalid_or_changing_membership_and_rolls_back() {
+        let _guard = REFRESH_TEST_LOCK.lock().unwrap();
+        let root = TempRoot::new();
+        let index = ContextSearchIndex::open(&root.0, "account", "map").unwrap();
+        index
+            .replace_documents(&[document("old", "Old", "previous evidence")])
+            .unwrap();
+        let id = index.begin_refresh().unwrap();
+        let too_many = vec!["x".to_string(); MAX_RETAINED_DOCUMENT_IDS + 1];
+        assert_eq!(
+            index
+                .stage_refresh(&id, &[], &[], Some(&too_many))
+                .unwrap_err(),
+            "context_search_retention_input_too_large"
+        );
+        assert!(index
+            .stage_refresh(&id, &[], &[], Some(&["old".into(), "old".into()]))
+            .is_err());
+        assert!(index
+            .stage_refresh(&id, &[], &[], Some(&["../bad".into()]))
+            .is_err());
+        index
+            .stage_refresh(
+                &id,
+                &[document("new", "New", "replacement evidence")],
+                &[],
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            index.stage_refresh(&id, &[], &[], Some(&[])).unwrap_err(),
+            "context_search_retention_incomplete"
+        );
+        index
+            .stage_refresh(&id, &[], &[], Some(&["new".into()]))
+            .unwrap();
+        assert!(index
+            .stage_refresh(
+                &id,
+                &[document("foreign", "Wrong", "unexpected")],
+                &[],
+                None
+            )
+            .is_err());
+        assert!(index
+            .stage_refresh(&id, &[], &[], Some(&["old".into(), "new".into()]))
+            .is_err());
+        index.finish_refresh(&id, false).unwrap();
+        assert_eq!(index.status().unwrap().document_count, 1);
+        assert_eq!(
+            index
+                .query(&ContextSearchQueryInput {
+                    mode: ContextSearchMode::FullText,
+                    query: "previous".into(),
+                    limit: 10
+                })
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(index
+            .query(&ContextSearchQueryInput {
+                mode: ContextSearchMode::FullText,
+                query: "replacement".into(),
+                limit: 10
+            })
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn refresh_retention_late_metadata_change_rejects_commit_and_preserves_old_index() {
+        let _guard = REFRESH_TEST_LOCK.lock().unwrap();
+        let root = TempRoot::new();
+        let index = ContextSearchIndex::open(&root.0, "account", "map").unwrap();
+        index
+            .replace_documents(&[document("old", "Old", "previous evidence")])
+            .unwrap();
+        let id = index.begin_refresh().unwrap();
+        index
+            .stage_refresh(
+                &id,
+                &[document("new", "New", "replacement evidence")],
+                &[],
+                None,
+            )
+            .unwrap();
+        index
+            .stage_refresh(&id, &[], &[], Some(&["new".into()]))
+            .unwrap();
+        // Change only the bytes of this disposable index's valid JSON metadata.
+        // The generation fence must reject even a semantically equal rewrite.
+        let metadata_path = index.path.join("meta.json");
+        let mut metadata = fs::read(&metadata_path).unwrap();
+        metadata.push(b' ');
+        fs::write(&metadata_path, metadata).unwrap();
+        assert!(index.finish_refresh(&id, true).is_err());
+        let reopened = ContextSearchIndex::open(&root.0, "account", "map").unwrap();
+        assert_eq!(reopened.status().unwrap().document_count, 1);
+        assert_eq!(
+            reopened
+                .query(&ContextSearchQueryInput {
+                    mode: ContextSearchMode::FullText,
+                    query: "previous".into(),
+                    limit: 10
+                })
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn refresh_request_accepts_optional_bounded_identity_migration_membership() {
+        let request = serde_json::json!({
+            "accountId": "account", "mapId": "map", "transactionId": "t".repeat(32),
+            "documents": [], "documentIds": [], "retainDocumentIds": ["map:path:current.txt"]
+        });
+        assert!(serde_json::from_value::<ContextSearchRefreshRequest>(request).is_ok());
+        let legacy = serde_json::json!({
+            "accountId": "account", "mapId": "map", "transactionId": "t".repeat(32),
+            "documents": [], "documentIds": []
+        });
+        assert!(serde_json::from_value::<ContextSearchRefreshRequest>(legacy).is_ok());
+    }
+
     #[test]
     fn refresh_batches_are_invisible_until_commit_and_abort_preserves_previous_index() {
+        let _guard = REFRESH_TEST_LOCK.lock().unwrap();
         let root = TempRoot::new();
         let index = ContextSearchIndex::open(&root.0, "refresh-account", "refresh-map").unwrap();
         index
@@ -1853,6 +2141,7 @@ mod tests {
                 &id,
                 &[document("new", "New", "replacement evidence")],
                 &["old".into()],
+                None,
             )
             .unwrap();
         let query = |text: &str| {
@@ -1870,15 +2159,22 @@ mod tests {
         assert!(foreign.finish_refresh(&id, true).is_err());
         let mut invalid = document("invalid", "Invalid", "bad");
         invalid.path = "../escape".into();
-        assert!(index.stage_refresh(&id, &[invalid], &[]).is_err());
+        assert!(index.stage_refresh(&id, &[invalid], &[], None).is_err());
         index.finish_refresh(&id, false).unwrap();
         assert_eq!(query("previous").len(), 1);
         assert!(query("replacement").is_empty());
         let id = index.begin_refresh().unwrap();
         index
-            .stage_refresh(&id, &[document("new", "New", "replacement evidence")], &[])
+            .stage_refresh(
+                &id,
+                &[document("new", "New", "replacement evidence")],
+                &[],
+                None,
+            )
             .unwrap();
-        index.stage_refresh(&id, &[], &["old".into()]).unwrap();
+        index
+            .stage_refresh(&id, &[], &["old".into()], None)
+            .unwrap();
         assert_eq!(index.finish_refresh(&id, true).unwrap(), 2);
         assert!(query("previous").is_empty());
         assert_eq!(query("replacement").len(), 1);

@@ -49,6 +49,8 @@ function fixture() {
     enabled: true,
     consentRevision: 1,
     fingerprint: 'allowed',
+    indexIdentityVersion: 1,
+    baseline: [{ id: 'path:old.txt', path: 'old.txt', kind: 'file', title: 'old.txt', size: 3, modified: 2 }],
   };
   let now = 100;
   let active = true;
@@ -127,9 +129,10 @@ describe('opt-in saved-file updates', () => {
     expect(await f.updater.tick(f.controller.signal)).toBe('updated');
     expect(f.ports.stage).toHaveBeenCalledWith(
       expect.anything(),
-      ['path:new.txt'],
-      ['path:old.txt'],
+      ['map:path:new.txt'],
+      ['map:path:old.txt'],
       f.controller.signal,
+      undefined,
     );
     expect(f.transaction.commit).toHaveBeenCalledTimes(1);
     expect(f.transaction.abort).not.toHaveBeenCalled();
@@ -215,5 +218,30 @@ describe('opt-in saved-file updates', () => {
       deleted: [],
     });
     expect(contextAutoDelta(old, [])).toEqual({ changed: [], deleted: ['a'] });
+  });
+});
+
+
+describe('legacy index identity migration guards', () => {
+  it.each(['disable', 'account', 'revision', 'abort'] as const)('does not publish a migration marker after %s revocation', async change => {
+    const f = fixture();
+    delete f.setting.indexIdentityVersion;
+    await f.updater.tick(f.controller.signal); f.advance();
+    f.ports.sync = vi.fn(async record => {
+      if (change === 'disable') f.disable();
+      if (change === 'account') f.changeAccount();
+      if (change === 'revision') f.changeRevision();
+      if (change === 'abort') f.controller.abort();
+      return record.tree;
+    });
+    await expect(f.updater.tick(f.controller.signal)).rejects.toThrow('scope_changed');
+    expect(f.transaction.commit).not.toHaveBeenCalled();
+    expect(f.transaction.abort).toHaveBeenCalledOnce();
+    expect(f.ports.saveSetting).not.toHaveBeenCalled();
+  });
+  it('cannot authorize retention cleanup from a partial discovery', async () => {
+    const f = fixture(); delete f.setting.indexIdentityVersion; f.index.unreadable = 1;
+    await expect(f.updater.tick(f.controller.signal)).rejects.toThrow('discovery_incomplete');
+    expect(f.ports.stage).not.toHaveBeenCalled();
   });
 });

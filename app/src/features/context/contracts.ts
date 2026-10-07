@@ -175,6 +175,9 @@ export interface ContextEntityV2 {
   label: string;
   path?: string;
   summary?: string;
+  /** Physical source observations, distinct from entity lifecycle timestamps. */
+  sourceSizeBytes?: number;
+  sourceModifiedAt?: number;
   sourceRevision: string;
   provenanceIds: string[];
   createdAt: number;
@@ -620,6 +623,8 @@ function parseContextEntityUnsafe(value: unknown): ContextEntityV2 {
       'path',
       'summary',
       'sourceRevision',
+      'sourceSizeBytes',
+      'sourceModifiedAt',
       'provenanceIds',
       'createdAt',
       'updatedAt',
@@ -648,6 +653,12 @@ function parseContextEntityUnsafe(value: unknown): ContextEntityV2 {
               ? ''
               : safeString(record.summary, 'entity_summary_invalid', MAX_SUMMARY_CHARS),
         }),
+    ...(record.sourceSizeBytes === undefined
+      ? {}
+      : { sourceSizeBytes: safeInteger(record.sourceSizeBytes, 'entity_source_size_invalid') }),
+    ...(record.sourceModifiedAt === undefined
+      ? {}
+      : { sourceModifiedAt: safeInteger(record.sourceModifiedAt, 'entity_source_modified_invalid') }),
     sourceRevision: safeString(
       record.sourceRevision,
       'entity_source_revision_invalid',

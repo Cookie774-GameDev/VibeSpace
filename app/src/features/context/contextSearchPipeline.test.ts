@@ -291,3 +291,18 @@ describe('native Context search index port', () => {
     ).rejects.toThrow('context_search_index_response_invalid');
   });
 });
+
+
+it('keeps legacy staged IPC requests unchanged and carries explicit retention only when provided', async () => {
+  const { invoke } = await import('@tauri-apps/api/core');
+  vi.mocked(invoke).mockReset(); vi.mocked(invoke).mockResolvedValue(undefined);
+  const port = createTauriContextSearchIndexPort();
+  await port.stageRefresh!('account-a', 'map-a', 't'.repeat(32), [], ['old']);
+  expect(invoke).toHaveBeenLastCalledWith('context_search_stage_refresh', { request: {
+    accountId: 'account-a', mapId: 'map-a', transactionId: 't'.repeat(32), documents: [], documentIds: ['old'],
+  }});
+  await port.stageRefresh!('account-a', 'map-a', 't'.repeat(32), [], [], []);
+  expect(invoke).toHaveBeenLastCalledWith('context_search_stage_refresh', { request: {
+    accountId: 'account-a', mapId: 'map-a', transactionId: 't'.repeat(32), documents: [], documentIds: [], retainDocumentIds: [],
+  }});
+});

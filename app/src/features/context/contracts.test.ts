@@ -6,6 +6,7 @@ import {
   CONTEXT_SOURCE_STATUSES,
   parseContextGraphSnapshotV2,
   parseContextSourceV2,
+  parseContextEntityV2,
 } from './contracts';
 
 function snapshotFixture(): Record<string, unknown> {
@@ -390,5 +391,20 @@ describe('Context Map 2.0 contracts', () => {
       ok: false,
       reason: 'edge_self_reference_invalid',
     });
+  });
+});
+
+
+describe('physical source metadata compatibility', () => {
+  const entity = () => (snapshotFixture().entities as Array<Record<string, unknown>>)[0]!;
+  it('accepts legacy missing metadata and preserves actual physical zero/older timestamps', () => {
+    expect(parseContextEntityV2(entity()).ok).toBe(true);
+    const result = parseContextEntityV2({ ...entity(), sourceSizeBytes: 0, sourceModifiedAt: 12 });
+    expect(result).toMatchObject({ ok: true, value: { sourceSizeBytes: 0, sourceModifiedAt: 12 } });
+  });
+  it.each(['sourceSizeBytes', 'sourceModifiedAt'] as const)('rejects invalid %s instead of fabricating an observation', field => {
+    for (const value of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '123', null, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(parseContextEntityV2({ ...entity(), [field]: value }).ok).toBe(false);
+    }
   });
 });

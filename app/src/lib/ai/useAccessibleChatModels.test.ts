@@ -1743,7 +1743,12 @@ describe('useAccessibleChatModels foundry adapter injection', () => {
       const groups = filterModelPickerGroupsForBackend(result.current.groups, backend);
       const model = groups.find((group) => group.provider === 'foundry')?.options[0];
       expect(model?.provider).toBe('foundry');
-      expect(model?.connectionId).toBeUndefined();
+      expect(model?.connectionId).toBe('foundry-local');
+      expect(model?.connection).toMatchObject({
+        id: 'foundry-local',
+        providerId: 'foundry',
+        mode: 'local',
+      });
       expect(model?.modelId).toBe('artifact--job_0-vjmMedLqAeGX');
       expect(
         findBackendModelPickerRoute(
@@ -1751,7 +1756,7 @@ describe('useAccessibleChatModels foundry adapter injection', () => {
           groups.flatMap((group) => group.options),
           backend,
         ),
-      ).toBeUndefined();
+      ).toMatchObject({ connectionId: 'foundry-local', modelId: 'artifact--job_0-vjmMedLqAeGX' });
     }
   });
 
@@ -1772,15 +1777,16 @@ describe('useAccessibleChatModels foundry adapter injection', () => {
     };
     registry.upsert('project-alpha', 'job_beta', artifact, 'Support classifier');
     registry.recordEvaluation('project-alpha', 'job_beta', 'a'.repeat(64), {
-      suite: 'private-dataset-studio',
-      caseCount: 2,
-      baseScore: 0,
-      candidateScore: 1,
+      // Synthetic comparative fixture only; no native evaluation is claimed.
+      suite: 'pinned-validation-reference-v1',
+      caseCount: 1,
+      baseScore: 0.25,
+      candidateScore: 0.75,
       championScore: null,
-      delta: 1,
+      delta: 0.5,
       safetyFailures: [],
       gate: args.gate ?? 'pass',
-      caseEvidence: [],
+      caseEvidence: [{ caseId: 'synthetic-comparison', baseScore: 0.25, candidateScore: 0.75, championScore: null, evidenceHash: 'c'.repeat(64) }],
     });
     if (args.promote && (args.gate ?? 'pass') === 'pass') {
       registry.promote('project-alpha', 'job_beta');

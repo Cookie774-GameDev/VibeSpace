@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../stores/auth';
+import { resolveAccountIdentity } from '../../lib/accountIdentity';
 import { getPlan } from '../../lib/entitlements';
 import type { FoundryResult, ProjectSnapshot, SpecialistDefinition, TrainingJobSnapshot } from './domain';
 import { DeterministicFixtureBackend, type FixtureBackendDependencies } from './fixtureBackend';
@@ -33,7 +34,7 @@ import { FOUNDRY_MODEL_CATALOG, modelCompatibility } from './modelRegistry';
 import { DatasetExamplePreview, DatasetStudioPanel } from './DatasetStudioPanel';
 import { FoundryDeploymentRepository, type FoundryDeploymentRecord } from './deployment';
 import { DeploymentPanel, EvaluationArenaPanel, FixtureEvaluationEvidencePanel, ImprovementPanel } from './FoundryGovernancePanels';
-import { LocalAdapterRegistry, type LocalAdapterRecord } from './adapterRegistry';
+import { hasPassingLocalEvaluation, LocalAdapterRegistry, promotedAdapterForProject, type LocalAdapterRecord } from './adapterRegistry';
 import { RealAdapterRegistryPanel } from './RealAdapterRegistryPanel';
 import { foundryMetadataSyncEnabled, queueFoundryMetadataDeletion, queueFoundryMetadataSync, setFoundryMetadataSyncEnabled } from './metadataSync';
 
@@ -160,6 +161,32 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
   const [deployments] = React.useState(() => new FoundryDeploymentRepository(storage, dependencies.clock, () => dependencies.idFactory('deployment')));
   const [adapterRegistry] = React.useState(() => new LocalAdapterRegistry(storage, dependencies.clock));
   const [snapshot, setSnapshot] = React.useState<ProjectSnapshot | null>(null);
+  const evaluationRevisionRef = React.useRef(0);
+  const evaluationProjectRef = React.useRef<string | null>(null);
+  const evaluationMountedRef = React.useRef(false);
+  const setScopedSnapshot = React.useCallback((next: ProjectSnapshot | null) => {
+    const nextId = next?.project.id ?? null;
+    if (evaluationProjectRef.current !== nextId) {
+      evaluationRevisionRef.current += 1;
+      evaluationProjectRef.current = nextId;
+    }
+    setSnapshot(next);
+  }, []);
+  React.useEffect(() => {
+    evaluationMountedRef.current = true;
+    // Revoke synchronously: React can coalesce A -> B -> A into equal values.
+    const unsubscribe = useAuthStore.subscribe((next, previous) => {
+      if (resolveAccountIdentity(next)?.accountId !== resolveAccountIdentity(previous)?.accountId ||
+          next.workspaceId !== previous.workspaceId || next.projectId !== previous.projectId) {
+        evaluationRevisionRef.current += 1;
+      }
+    });
+    return () => {
+      unsubscribe();
+      evaluationMountedRef.current = false;
+      evaluationRevisionRef.current += 1;
+    };
+  }, []);
   const [projectCatalog, setProjectCatalog] = React.useState<readonly ProjectSnapshot[]>(() => readProjectCatalog(storage));
   const projectCatalogRef = React.useRef(projectCatalog);
   const [error, setError] = React.useState<string | null>(null);
@@ -203,9 +230,9 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
     const restored = backend.restoreProject(loaded.value);
     if (restored.ok) {
       const saved = repository.save(restored.value);
-      if (!saved.ok) setError(saved.error.message); else { setSnapshot(restored.value); persistProjectCatalog([restored.value, ...projectCatalogRef.current.filter((candidate) => candidate.project.id !== restored.value.project.id)]); }
+      if (!saved.ok) setError(saved.error.message); else { setScopedSnapshot(restored.value); persistProjectCatalog([restored.value, ...projectCatalogRef.current.filter((candidate) => candidate.project.id !== restored.value.project.id)]); }
     } else setError(restored.error.message);
-  }, [backend, persistProjectCatalog, repository]);
+  }, [backend, persistProjectCatalog, repository, setScopedSnapshot]);
 
   React.useEffect(() => {
     if (!projectId) return;
@@ -305,8 +332,8 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
     const saved = repository.save(next);
     if (!saved.ok) return setError(saved.error.message);
     persistProjectCatalog([next, ...projectCatalogRef.current.filter((candidate) => candidate.project.id !== next.project.id)]);
-    setSnapshot(next); setConfirmDeleteDraft(false); setError(null);
-  }, [persistProjectCatalog, repository]);
+    setScopedSnapshot(next); setConfirmDeleteDraft(false); setError(null);
+  }, [persistProjectCatalog, repository, setScopedSnapshot]);
   const refresh = React.useCallback((projectId: string) => commit({ ...unwrap(backend.getProject(projectId)) }), [backend, commit]);
   const act = (operation: () => void) => { try { operation() } catch (caught) { setError(caught instanceof Error ? caught.message : 'Foundry operation failed.') } };
 
@@ -432,21 +459,37 @@ const downloadSelectedModel = async () => {
     setNativeRun((current) => current ? { ...current, detail: 'Will stop after the next verified checkpoint.' } : current);
   };
   const useRegisteredAdapterInChat = (record: LocalAdapterRecord) => {
-    if (record.status !== 'promoted') throw new Error('Only the explicitly promoted local adapter can be selected for chat.');
+    if (record.status !== 'promoted' || record.evaluation?.artifactManifestSha256 !== record.artifactManifestSha256 || !hasPassingLocalEvaluation(record.evaluation?.report)) throw new Error('Only an explicitly promoted adapter with current passing evidence can be selected for chat.');
     useAuthStore.getState().setChatModelSelection({ mode: 'single', providerId: 'foundry', modelId: `${record.projectId}--${record.jobId}` });
     setNotice(`Selected ${record.projectName?.trim() || record.jobId} as the local chat champion.`); setError(null);
   };
   const archiveRegisteredAdapter = (record: LocalAdapterRecord) => act(() => setLocalAdapters(adapterRegistry.archive(record.projectId, record.jobId)));
   const probeRegisteredAdapter = async (record: LocalAdapterRecord) => { const result = await generateFromFoundryArtifact({ projectId: record.projectId, jobId: record.jobId, prompt: 'Reply READY.', maxNewTokens: 8 }); setNotice(`Adapter probe succeeded: ${result.text.slice(0, 80)}`); setError(null); };
   const evaluateRegisteredAdapter = async (record: LocalAdapterRecord) => {
-    if (privateEvaluationCases.some((evaluationCase) => !evaluationCase.prompt.trim() || !evaluationCase.expectedCompletion.trim())) throw new Error('Complete or remove every private evaluation case before running it.');
-    if (privateEvaluationCases.some(privateCaseContainsCredential)) throw new Error('Remove credential-shaped text from private evaluation cases before running them.');
-    const champion = localAdapters.find((adapter) => adapter.status === 'promoted' && adapter.jobId !== record.jobId);
-    const result = await evaluateFoundryArtifact({ projectId: record.projectId, jobId: record.jobId, championJobId: champion?.jobId, ...(privateEvaluationCases.length ? { maxCases: privateEvaluationCases.length, cases: privateEvaluationCases } : {}) });
-    setLocalAdapters(adapterRegistry.recordEvaluation(record.projectId, record.jobId, result.artifactManifestSha256, result.report));
-    const benchmark = result.report.championScore === null ? 'base' : 'base and current champion';
-    setNotice(result.report.gate === 'pass' ? `Evaluation passed: ${result.report.candidateScore.toFixed(3)} candidate score (${result.report.delta >= 0 ? '+' : ''}${result.report.delta.toFixed(3)} versus base; compared with ${benchmark}). Explicit approval is still required.` : `Evaluation blocked promotion: ${result.report.candidateScore.toFixed(3)} candidate score (${result.report.delta.toFixed(3)} versus base), ${result.report.safetyFailures.length} safety failure(s).`);
-    setError(null);
+    if (evaluationProjectRef.current !== record.projectId) return;
+    const revision = ++evaluationRevisionRef.current;
+    const isCurrent = () => evaluationMountedRef.current && evaluationRevisionRef.current === revision
+      && evaluationProjectRef.current === record.projectId;
+    const currentCandidate = () => adapterRegistry.list(record.projectId).find((candidate) =>
+      candidate.jobId === record.jobId && candidate.status !== 'archived'
+      && candidate.artifactManifestSha256 === record.artifactManifestSha256);
+    try {
+      if (!currentCandidate()) throw new Error('The selected adapter is no longer available for evaluation.');
+      if (privateEvaluationCases.some((evaluationCase) => !evaluationCase.prompt.trim() || !evaluationCase.expectedCompletion.trim())) throw new Error('Complete or remove every private evaluation case before running it.');
+      if (privateEvaluationCases.some(privateCaseContainsCredential)) throw new Error('Remove credential-shaped text from private evaluation cases before running them.');
+      const champion = promotedAdapterForProject(storage, record.projectId);
+      const result = await evaluateFoundryArtifact({ projectId: record.projectId, jobId: record.jobId, championJobId: champion?.jobId !== record.jobId ? champion?.jobId : undefined, ...(privateEvaluationCases.length ? { maxCases: privateEvaluationCases.length, cases: privateEvaluationCases } : {}) });
+      if (!isCurrent()) return;
+      if (!currentCandidate() || result.artifactManifestSha256 !== record.artifactManifestSha256)
+        throw new Error('The selected adapter changed during evaluation. Run a new evaluation.');
+      const records = adapterRegistry.recordEvaluation(record.projectId, record.jobId, result.artifactManifestSha256, result.report);
+      if (!isCurrent()) return;
+      setLocalAdapters(records);
+      setNotice(`Candidate reference-match score: ${result.report.candidateScore.toFixed(3)} across ${result.report.caseCount} local case(s). Comparison and safety checks were not run; promotion remains blocked.`);
+      setError(null);
+    } catch (caught) {
+      if (isCurrent()) setError(caught instanceof Error ? caught.message : 'Adapter evaluation failed.');
+    }
   };
   const promoteRegisteredAdapter = (record: LocalAdapterRecord) => { setLocalAdapters(adapterRegistry.promote(record.projectId, record.jobId)); setNotice(`${record.jobId} is now the promoted local champion. Earlier champions remain available for rollback.`); setError(null); };
   const activateDeployment = () => act(() => {
@@ -474,7 +517,7 @@ const downloadSelectedModel = async () => {
   const createProject = (specialist: SpecialistDefinition = VIBECODER_TEMPLATE) => act(() => commit(unwrap(backend.createProject(specialist))));
   const createCustomProject = () => act(() => createProject(customSpecialist(customDraft, dependencies.clock())));
   const openCatalogProject = (catalogSnapshot: ProjectSnapshot) => act(() => commit(unwrap(backend.restoreProject(catalogSnapshot))));
-  const createAnotherProject = () => { setSnapshot(null); setShowCustomCreator(false); setShowDatasetStudio(false); setNativeRun(null); setConfirmDeleteDraft(false); setSelectedModelId('fixture-base'); setLicenseApproved(false); setDownloadStatus(null); setPrivateEvaluationCases([]); setError(null); setNotice('Create a new specialist. Existing local projects remain available below.'); };
+  const createAnotherProject = () => { setScopedSnapshot(null); setShowCustomCreator(false); setShowDatasetStudio(false); setNativeRun(null); setConfirmDeleteDraft(false); setSelectedModelId('fixture-base'); setLicenseApproved(false); setDownloadStatus(null); setPrivateEvaluationCases([]); setError(null); setNotice('Create a new specialist. Existing local projects remain available below.'); };
   const deleteActiveDraft = () => act(() => {
     if (!snapshot) return;
     const removedId = snapshot.project.id;
@@ -487,7 +530,7 @@ const downloadSelectedModel = async () => {
     backend.forgetProject(removedId);
     projectCatalogRef.current = result.catalog;
     setProjectCatalog(result.catalog);
-    setSnapshot(null);
+    setScopedSnapshot(null);
     setShowDatasetStudio(false);
     setNativeRun(null);
     setPrivateEvaluationCases([]);
@@ -530,7 +573,7 @@ const downloadSelectedModel = async () => {
         {nativeRun?.phase === 'completed' && nativeRun.detail.startsWith('Verified adapter artifact') && selectedModel.kind === 'downloadable' && <Card className="border-emerald-500/25"><CardHeader><CardTitle>Verified local adapter</CardTitle><CardDescription>The adapter is checksum-verified and registered as a candidate. Run its local evaluation, then explicitly approve it before it can route chat.</CardDescription></CardHeader><CardContent><div className="text-metadata text-muted-foreground">Candidate ID: {projectId}--{nativeRun.jobId}</div></CardContent></Card>}
         <PrivateEvaluationSuite cases={privateEvaluationCases} onChange={setPrivateEvaluationCases} />
         {privateEvaluationCases.length > 0 && <Button variant="outline" onClick={() => setPrivateEvaluationCases([])}>Clear private evaluation suite</Button>}
-        <RealAdapterRegistryPanel records={localAdapters} runtimeReady={Boolean(trainingRuntime?.installed)} onUse={useRegisteredAdapterInChat} onProbe={(record) => void probeRegisteredAdapter(record).catch((caught) => setError(caught instanceof Error ? caught.message : 'Adapter probe failed.'))} onEvaluate={(record) => void evaluateRegisteredAdapter(record).catch((caught) => setError(caught instanceof Error ? caught.message : 'Adapter evaluation failed.'))} onPromote={(record) => act(() => promoteRegisteredAdapter(record))} onArchive={archiveRegisteredAdapter} />
+        <RealAdapterRegistryPanel records={localAdapters} runtimeReady={Boolean(trainingRuntime?.installed)} onUse={useRegisteredAdapterInChat} onProbe={(record) => void probeRegisteredAdapter(record).catch((caught) => setError(caught instanceof Error ? caught.message : 'Adapter probe failed.'))} onEvaluate={(record) => void evaluateRegisteredAdapter(record)} onPromote={(record) => act(() => promoteRegisteredAdapter(record))} onArchive={archiveRegisteredAdapter} />
         {activeJob && <TrainingRegion job={activeJob} active={canAdvance} onAdvance={advance} onResume={resume} />}
         {evaluation && <div role="status" className="sr-only"><span>{evaluation.gate.result === 'pass' ? 'All gates passed' : 'Evaluation gates are blocked'}</span><span>{evaluation.safetyFailures.length} safety failures</span></div>}
         {activeJob?.state === 'completed' && candidate && <EvaluationArenaPanel candidate={candidate} evaluation={evaluation} championVersionId={snapshot.championVersionId} onEvaluate={evaluate} onPromote={promote} />}
@@ -554,7 +597,7 @@ function PrivateEvaluationSuite({ cases, onChange }: { cases: readonly FoundryPr
   const addCase = () => onChange([...cases, { id: `local-case-${crypto.randomUUID()}`, prompt: '', expectedCompletion: '', hidden: true }]);
   const update = (id: string, patch: Partial<FoundryPrivateEvaluationCase>) => onChange(cases.map((evaluationCase) => evaluationCase.id === id ? { ...evaluationCase, ...patch } : evaluationCase));
   const containsCredential = cases.some(privateCaseContainsCredential);
-  return <Card className="border-violet-500/20"><CardHeader><CardTitle>Private Evaluation Suite</CardTitle><CardDescription>Optional local reference cases replace the validation split for real-adapter evaluation. They are never synchronized or shown in evidence reports.</CardDescription></CardHeader><CardContent className="space-y-3">{cases.map((evaluationCase, index) => <div key={evaluationCase.id} className="grid gap-2 rounded-lg border p-3 md:grid-cols-2"><label className="space-y-1"><span className="text-metadata text-muted-foreground">Case {index + 1} prompt</span><textarea value={evaluationCase.prompt} maxLength={16384} onChange={(event) => update(evaluationCase.id, { prompt: event.target.value })} className="min-h-20 w-full rounded-md border border-input bg-background p-2 text-secondary" /></label><label className="space-y-1"><span className="text-metadata text-muted-foreground">Expected completion</span><textarea value={evaluationCase.expectedCompletion} maxLength={12000} onChange={(event) => update(evaluationCase.id, { expectedCompletion: event.target.value })} className="min-h-20 w-full rounded-md border border-input bg-background p-2 text-secondary" /></label><label className="flex items-center gap-2 text-metadata text-muted-foreground"><input type="checkbox" checked={evaluationCase.hidden} onChange={(event) => update(evaluationCase.id, { hidden: event.target.checked })} />Keep this case hidden in evaluation reports</label><Button variant="outline" className="w-fit" onClick={() => onChange(cases.filter((candidate) => candidate.id !== evaluationCase.id))}>Remove case</Button></div>)}{containsCredential && <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-metadata text-destructive">Credential-shaped text is blocked and will not be stored or evaluated.</p>}<div className="flex flex-wrap items-center gap-3"><Button variant="outline" disabled={cases.length >= 32} onClick={addCase}>Add private case</Button><span className="text-metadata text-muted-foreground">{cases.length ? `${cases.length} local case${cases.length === 1 ? '' : 's'} will be used on the next real evaluation.` : 'Without local cases, the immutable validation split is used.'}</span></div></CardContent></Card>;
+  return <Card className="border-violet-500/20"><CardHeader><CardTitle>Private Evaluation Suite</CardTitle><CardDescription>Reviewed local reference cases are required for candidate scoring. Comparison and safety checks are not available. Prompts and expected completions remain local and are not shown in evidence reports.</CardDescription></CardHeader><CardContent className="space-y-3">{cases.map((evaluationCase, index) => <div key={evaluationCase.id} className="grid gap-2 rounded-lg border p-3 md:grid-cols-2"><label className="space-y-1"><span className="text-metadata text-muted-foreground">Case {index + 1} prompt</span><textarea value={evaluationCase.prompt} maxLength={16384} onChange={(event) => update(evaluationCase.id, { prompt: event.target.value })} className="min-h-20 w-full rounded-md border border-input bg-background p-2 text-secondary" /></label><label className="space-y-1"><span className="text-metadata text-muted-foreground">Expected completion</span><textarea value={evaluationCase.expectedCompletion} maxLength={12000} onChange={(event) => update(evaluationCase.id, { expectedCompletion: event.target.value })} className="min-h-20 w-full rounded-md border border-input bg-background p-2 text-secondary" /></label><label className="flex items-center gap-2 text-metadata text-muted-foreground"><input type="checkbox" checked={evaluationCase.hidden} onChange={(event) => update(evaluationCase.id, { hidden: event.target.checked })} />Keep this case hidden in evaluation reports</label><Button variant="outline" className="w-fit" onClick={() => onChange(cases.filter((candidate) => candidate.id !== evaluationCase.id))}>Remove case</Button></div>)}{containsCredential && <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-metadata text-destructive">Credential-shaped text is blocked and will not be stored or evaluated.</p>}<div className="flex flex-wrap items-center gap-3"><Button variant="outline" disabled={cases.length >= 32} onClick={addCase}>Add private case</Button><span className="text-metadata text-muted-foreground">{cases.length ? `${cases.length} local case${cases.length === 1 ? '' : 's'} will be used on the next real evaluation.` : 'Add at least one reviewed private case to evaluate. No validation-split fallback is available.'}</span></div></CardContent></Card>;
 }
 
 function ProjectCatalogPanel({ projects, activeProjectId, onOpen, onCreate }: { projects: readonly ProjectSnapshot[]; activeProjectId?: string; onOpen: (snapshot: ProjectSnapshot) => void; onCreate: () => void }) {

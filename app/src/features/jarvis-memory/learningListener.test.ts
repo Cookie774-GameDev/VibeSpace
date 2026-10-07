@@ -479,7 +479,7 @@ describe('Jarvis learning event listener', () => {
     window.removeEventListener('jarvis:memory-status', onStatus);
   });
 
-  it('cancels stale profile writes across recovery and permits fresh durable work afterward', async () => {
+  it('cancels pre-recovery snapshots while retaining newer manual updates', async () => {
     useJarvisLearningStore.getState().setAccount('account-a');
     useJarvisLearningStore.getState().remember({
       value: 'Keep the durable profile',
@@ -527,7 +527,7 @@ describe('Jarvis learning event listener', () => {
     firstWrite.reject(new Error('write unavailable'));
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
     useJarvisLearningStore.getState().remember({
-      value: 'This reconciliation-time snapshot is stale',
+      value: 'New manual preference during recovery',
       category: 'workflow',
       source: { kind: 'explicit' },
     });
@@ -536,15 +536,18 @@ describe('Jarvis learning event listener', () => {
       expect(useJarvisLearningStore.getState().exportMarkdown()).toContain('durable profile'),
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[1]?.[1]).toContain('New manual preference during recovery');
+    expect(save.mock.calls[1]?.[1]).not.toContain('first optimistic write fails');
+    expect(save.mock.calls[1]?.[1]).not.toContain('queued snapshot is stale');
 
     useJarvisLearningStore.getState().remember({
       value: 'Fresh work after recovery persists',
       category: 'workflow',
       source: { kind: 'explicit' },
     });
-    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2));
-    expect(save.mock.calls[1]?.[1]).toContain('Fresh work after recovery persists');
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(3));
+    expect(save.mock.calls[2]?.[1]).toContain('Fresh work after recovery persists');
   });
 
   it('persists progress before twenty messages without prematurely inferring preferences', async () => {

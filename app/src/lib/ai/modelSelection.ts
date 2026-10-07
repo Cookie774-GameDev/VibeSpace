@@ -1,3 +1,4 @@
+import { FOUNDRY_LOCAL_CONNECTION } from './adapters/nativeCatalog';
 import type { ProviderId } from '@/types';
 import type { Agent } from '@/types';
 import type { PlanId } from '@/lib/entitlements';
@@ -122,7 +123,7 @@ export function normalizeChatModelSelection(raw: unknown): ChatModelSelection {
     if (CONNECTION_METADATA_KEYS.some((key) => key in value)) {
       return EMPTY_CHAT_MODEL_SELECTION;
     }
-    return { mode: 'single', providerId, modelId };
+    return selectionFromOption(providerId, modelId);
   }
   if (value.mode === 'hive') {
     const hiveId = value.hiveId;
@@ -152,7 +153,7 @@ export function migrateLegacyModelSelection(args: {
   }
   const modelId = args.selectedModels[args.defaultProvider]?.trim();
   if (modelId && args.defaultProvider !== 'mock') {
-    return { mode: 'single', providerId: args.defaultProvider, modelId };
+    return selectionFromOption(args.defaultProvider, modelId);
   }
   return EMPTY_CHAT_MODEL_SELECTION;
 }
@@ -444,6 +445,7 @@ export function selectionFromOption(
   connection?: ProviderConnection,
 ): ChatModelSelection {
   const base = { mode: 'single' as const, providerId, modelId: modelId.trim() };
+  connection ??= providerId === 'foundry' ? FOUNDRY_LOCAL_CONNECTION : undefined;
   if (!connection) return base;
   return {
     ...base,

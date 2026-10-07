@@ -9,6 +9,7 @@ import {
   GROQ_API_CONNECTION,
   MISTRAL_API_CONNECTION,
   OLLAMA_LOCAL_CONNECTION,
+  FOUNDRY_LOCAL_CONNECTION,
   OPENAI_API_CONNECTION,
   OPENROUTER_API_CONNECTION,
   QWEN_API_CONNECTION,
@@ -37,6 +38,7 @@ type BaseProviderFamilyId =
   | 'mistral'
   | 'together'
   | 'ollama'
+  | 'foundry'
   | 'opencode';
 
 export type ProviderFamilyId = BaseProviderFamilyId | 'vibespace-kernel-smoke';
@@ -362,6 +364,7 @@ const BASE_PROVIDER_CATALOG: Readonly<
   mistral: family('mistral', 'Mistral', [MISTRAL_API_CONNECTION]),
   together: family('together', 'Together AI', [TOGETHER_API_CONNECTION]),
   ollama: family('ollama', 'Ollama', [OLLAMA_LOCAL_CONNECTION]),
+  foundry: family('foundry', 'Build Your Own AI', [FOUNDRY_LOCAL_CONNECTION]),
   opencode: family('opencode', 'OpenCode Models', [OPENCODE_CLI_CONNECTION], OPENCODE_CLI_SURFACE),
 });
 
@@ -385,6 +388,7 @@ const BASE_PROVIDER_CONNECTIONS: readonly Readonly<ProviderConnection>[] = Objec
   MISTRAL_API_CONNECTION,
   TOGETHER_API_CONNECTION,
   OLLAMA_LOCAL_CONNECTION,
+  FOUNDRY_LOCAL_CONNECTION,
   OPENCODE_CLI_CONNECTION,
 ]);
 

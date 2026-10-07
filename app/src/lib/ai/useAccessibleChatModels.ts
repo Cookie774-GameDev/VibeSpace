@@ -1,3 +1,4 @@
+import { FOUNDRY_LOCAL_CONNECTION } from './adapters/nativeCatalog';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { ProviderId } from '@/types';
 import { useAuthStore } from '@/stores/auth';
@@ -121,7 +122,11 @@ export function isModelPickerRouteCompatibleWithBackend(
   backend: ChatBackend,
 ): boolean {
   // Foundry uses its native command boundary before either CLI dispatch branch.
-  if (route.provider === 'foundry' && !route.connectionId) return true;
+  if (
+    route.provider === 'foundry' &&
+    (!route.connectionId || route.connectionId === FOUNDRY_LOCAL_CONNECTION.id)
+  )
+    return true;
   const isOfficialCodexRoute = route.connectionId === CODEX_CLI_CONNECTION.id;
   const isManagedCodexBridgeRoute = route.connectionId === OPENCODE_CLI_CONNECTION.id;
   return backend === 'codex'
@@ -231,7 +236,8 @@ export function findBackendModelPickerRoute(
   const currentConnectionId =
     typeof selection.connectionId === 'string' ? selection.connectionId : undefined;
   // A local Foundry selection is already exact; do not repeatedly rebind it to a CLI.
-  if (selection.providerId === 'foundry' && !currentConnectionId) return undefined;
+  if (selection.providerId === 'foundry' && currentConnectionId === FOUNDRY_LOCAL_CONNECTION.id)
+    return undefined;
   const preferNativeCodexRoute =
     backend === 'codex' && currentConnectionId === OPENCODE_CLI_CONNECTION.id;
   if (
@@ -382,7 +388,11 @@ export function refreshAccessibleChatModelCatalog(): Promise<void> {
 }
 
 export type OpenCodeCatalogRefreshReason =
-  'initial' | 'requested' | 'scheduled' | 'retry' | 'authority-changed';
+  | 'initial'
+  | 'requested'
+  | 'scheduled'
+  | 'retry'
+  | 'authority-changed';
 
 export interface OpenCodeCatalogEvidence {
   readonly schemaVersion: 1;
@@ -1564,9 +1574,12 @@ export function useAccessibleChatModels() {
   const ollamaSignature = ollamaOptions.map((option) => option.id).join('\0');
 
   const groups = useMemo(() => {
-    const pickerConnections = offlineMode
-      ? PROVIDER_CONNECTIONS.filter((connection) => connection.mode === 'local')
-      : PROVIDER_CONNECTIONS;
+    // Foundry has its own verified artifact catalog below, not a generic discovery probe.
+    const pickerConnections = PROVIDER_CONNECTIONS.filter(
+      (connection) =>
+        connection.id !== FOUNDRY_LOCAL_CONNECTION.id &&
+        (!offlineMode || connection.mode === 'local'),
+    );
     const legacy = buildModelPickerGroups({ apiKeys, offlineMode, plan, defaultLocalModel });
     const modelsByProvider: Record<string, PickerCatalogModel[]> = Object.fromEntries(
       legacy
@@ -1743,6 +1756,8 @@ export function useAccessibleChatModels() {
         ...nativeFoundryOptions.map((model) => ({
           id: `foundry:${model.id}`,
           provider: 'foundry' as ProviderId,
+          connectionId: FOUNDRY_LOCAL_CONNECTION.id,
+          connection: FOUNDRY_LOCAL_CONNECTION,
           modelId: model.id,
           label: model.label,
           available: true,
@@ -1751,6 +1766,8 @@ export function useAccessibleChatModels() {
         ...foundryAdapters.map((record) => ({
           id: `foundry:${record.projectId}--${record.jobId}`,
           provider: 'foundry' as ProviderId,
+          connectionId: FOUNDRY_LOCAL_CONNECTION.id,
+          connection: FOUNDRY_LOCAL_CONNECTION,
           modelId: `${record.projectId}--${record.jobId}`,
           label: record.projectName?.trim()
             ? record.projectName.trim()

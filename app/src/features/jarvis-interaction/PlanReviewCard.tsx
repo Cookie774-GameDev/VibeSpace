@@ -51,7 +51,7 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
   const implementedPlanRef = useRef<string | null>(null);
   const implementationKey = `${chatId}:${messageId}:${plan.id}`;
 
-  const writeStatus = async (status: JarvisPlanReview['status'], allowCompleted = false) => {
+  const readPendingPlan = async (implementationApproval = false) => {
     if (!messageId || !chatId) throw new Error('Plan approval is unavailable.');
     const message = await messageRepo.getById(messageId);
     const persistedPart = message?.parts.find(
@@ -63,12 +63,23 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
       String(message.chat_id) !== chatId ||
       !persistedPart ||
       (persistedPart.plan.status !== 'pending' &&
-        !(allowCompleted && persistedPart.plan.status === 'built')) ||
+        !(implementationApproval && persistedPart.plan.status === 'built')) ||
       !samePlanDefinition(persistedPart.plan, plan)
     ) {
       throw new Error('Plan approval is no longer pending.');
     }
-    await messageRepo.update(messageId, {
+    return message;
+  };
+
+  const writeStatus = async (status: JarvisPlanReview['status'], implementationApproval = false) => {
+    const message = await readPendingPlan(implementationApproval);
+    if (implementationApproval) {
+      await messageRepo.approvePlan(messageId!, {
+        chatId: message.chat_id, planId: plan.id, expectedParts: message.parts,
+      });
+      return;
+    }
+    await messageRepo.update(messageId!, {
       parts: message.parts.map((messagePart) =>
         messagePart.kind === 'plan_review' && messagePart.plan.id === plan.id
           ? { kind: 'plan_review', plan: { ...messagePart.plan, status } }
@@ -93,11 +104,6 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
       }
       await writeStatus('building', explicitImplementation);
       if (explicitImplementation) {
-        await messageRepo.create({
-          chat_id: chatId as never,
-          role: 'user',
-          parts: [{ kind: 'text', text: 'Yes, implement the plan.' }],
-        });
         // Match the existing Agent / Full access picker; retain ordinary
         // provider permissions and approval checks in the runtime.
         setAgentApprovalMode(chatId, 'full');
@@ -139,14 +145,12 @@ export function PlanReviewCard({ part, messageId, chatId }: PlanReviewCardProps)
     setPendingAction('revision');
     setError(null);
     try {
-      await writeStatus('redone');
-      useJarvisInteractionStore.getState().setChatMode(chatId, 'plan');
-      const text = `Redo this plan with this instruction: ${adding ? 'Preserve the existing requirements and add: ' : ''}${revision.trim()}`;
-      await messageRepo.create({
-        chat_id: chatId as never,
-        role: 'user',
-        parts: [{ kind: 'text', text }],
+      const message = await readPendingPlan();
+      const text = await messageRepo.revisePlan(messageId!, {
+        chatId: message.chat_id, planId: plan.id, expectedParts: message.parts,
+        revision: revision.trim(), preserveExistingRequirements: adding,
       });
+      useJarvisInteractionStore.getState().setChatMode(chatId, 'plan');
       window.dispatchEvent(
         new CustomEvent('jarvis:send', {
           detail: {

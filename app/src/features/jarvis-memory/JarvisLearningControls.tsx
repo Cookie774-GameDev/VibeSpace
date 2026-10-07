@@ -58,38 +58,83 @@ export function JarvisLearningControls({
     'idle' | 'running' | 'completed' | 'failed' | 'cancelled'
   >('idle');
 
+  const accountEpoch = React.useRef(0);
+  const [scopeRevision, invalidateScope] = React.useReducer((value: number) => value + 1, 0);
+  React.useLayoutEffect(() => {
+    // Effect replay must refresh handlers invalidated by the preceding cleanup.
+    invalidateScope();
+    const unsubscribe = useJarvisLearningStore.subscribe((state, previous) => {
+      const current = state.profiles[state.activeAccountId];
+      const prior = previous.profiles[previous.activeAccountId];
+      if (
+        state.activeAccountId === previous.activeAccountId &&
+        !(current?.enabled === false && prior?.enabled !== false) &&
+        current?.caoLearningEpoch === prior?.caoLearningEpoch
+      )
+        return;
+      // Observe every account/consent transition, including A -> B -> A in one batch.
+      accountEpoch.current += 1;
+      invalidateScope();
+      setEditingId(undefined);
+      setDraft('');
+      setClearArmed(false);
+      setCheckStatus('idle');
+    });
+    return () => {
+      accountEpoch.current += 1;
+      unsubscribe();
+    };
+  }, []);
+  const renderedEpoch = accountEpoch.current;
+  const isCurrentAccount = () =>
+    accountEpoch.current === renderedEpoch &&
+    useJarvisLearningStore.getState().activeAccountId === activeAccountId;
+
   React.useEffect(() => {
+    let currentSubscription = true;
     const current = getCheckStatus();
     setCheckStatus(
       current.scope?.accountId === activeAccountId || current.state === 'idle'
         ? current.state
         : 'idle',
     );
-    return subscribeCheckStatus((next) => {
-      if (next.scope?.accountId === activeAccountId || next.state === 'idle') {
+    const unsubscribe = subscribeCheckStatus((next) => {
+      if (
+        currentSubscription &&
+        (next.scope?.accountId === activeAccountId || next.state === 'idle')
+      ) {
         setCheckStatus(next.state);
       }
     });
-  }, [activeAccountId, getCheckStatus, subscribeCheckStatus]);
+    return () => {
+      currentSubscription = false;
+      unsubscribe();
+    };
+  }, [activeAccountId, scopeRevision, getCheckStatus, subscribeCheckStatus]);
 
   if (!profile) return null;
   const recent = [...profile.items].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 12);
 
   const beginEdit = (id: string, value: string) => {
+    if (!isCurrentAccount()) return;
     setEditingId(id);
     setDraft(value);
   };
   const saveEdit = () => {
-    if (!editingId || !edit(editingId, { value: draft })) return;
+    if (!isCurrentAccount() || !editingId || !edit(editingId, { value: draft })) return;
     setEditingId(undefined);
     setDraft('');
   };
   const runCheckNow = () => {
-    if (checkStatus === 'running') return;
+    if (!isCurrentAccount() || checkStatus === 'running') return;
     setCheckStatus('running');
     void onRunCheckNow()
-      .then((result) => setCheckStatus(result.status))
-      .catch(() => setCheckStatus('failed'));
+      .then((result) => {
+        if (isCurrentAccount()) setCheckStatus(result.status);
+      })
+      .catch(() => {
+        if (isCurrentAccount()) setCheckStatus('failed');
+      });
   };
 
   return (
@@ -110,7 +155,9 @@ export function JarvisLearningControls({
         <Switch
           aria-label="Jarvis learning enabled"
           checked={profile.enabled}
-          onCheckedChange={setEnabled}
+          onCheckedChange={(enabled) => {
+            if (isCurrentAccount()) setEnabled(enabled);
+          }}
         />
       </header>
 
@@ -149,7 +196,9 @@ export function JarvisLearningControls({
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => undo()}
+            onClick={() => {
+              if (isCurrentAccount()) undo();
+            }}
             disabled={historyCount === 0}
             aria-label="Undo memory change"
           >
@@ -159,7 +208,9 @@ export function JarvisLearningControls({
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => setClearArmed(true)}
+              onClick={() => {
+                if (isCurrentAccount()) setClearArmed(true);
+              }}
               disabled={!recent.length}
               aria-label="Clear all learning"
             >
@@ -172,6 +223,7 @@ export function JarvisLearningControls({
                 variant="ghost"
                 className="text-destructive"
                 onClick={() => {
+                  if (!isCurrentAccount()) return;
                   clear();
                   setClearArmed(false);
                 }}
@@ -248,7 +300,9 @@ export function JarvisLearningControls({
                         size="icon"
                         variant="ghost"
                         className="h-7 w-7"
-                        onClick={() => remove(item.id)}
+                        onClick={() => {
+                          if (isCurrentAccount()) remove(item.id);
+                        }}
                         aria-label={`Remove memory ${item.id}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />

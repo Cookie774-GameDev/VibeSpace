@@ -78,6 +78,23 @@ afterEach(async () => {
 });
 
 describe('production Context persistence service', () => {
+  it('preserves physical file size and mtime separately from entity timestamps on save and reopen', async () => {
+    const service = createContextPersistenceService(database, localStorage);
+    await service.initialize('account-1', 'project-1');
+    const tree = treeFixture();
+    const file = tree.nodes[0]!.children![0]!;
+    file.sizeBytes = 128;
+    file.modifiedAt = 12;
+    await service.saveTree('account-1', tree, { mapId: 'map-source-metadata' });
+    const reopened = createContextPersistenceService(database, localStorage);
+    const state = await reopened.load('account-1', 'project-1');
+    const restored = state.maps[0]!.tree.nodes[0]!.children![0]!;
+    expect(restored).toMatchObject({ sizeBytes: 128, modifiedAt: 12 });
+    const entity = await database.context_entities.get(restored.id);
+    expect(entity!.updatedAt).toBeGreaterThanOrEqual(entity!.createdAt);
+    expect(entity).toMatchObject({ sourceSizeBytes: 128, sourceModifiedAt: 12 });
+  });
+
   it('refreshes a background map without stealing selection and clears only its own opt-in on deletion', async () => {
     const service = createContextPersistenceService(database, localStorage);
     await service.initialize('account-1', 'project-1');
@@ -445,4 +462,77 @@ describe('production Context persistence service', () => {
       maps: [{ tree: { summary: 'Project knowledge.' } }],
     });
   });
+});
+
+describe('durable Context source readiness', () => {
+  it('preserves pending/error across tree hydration and reopen, then publishes ready without changing entities or selection', async () => {
+    const service = createContextPersistenceService(database, localStorage);
+    await service.initialize('account-1', 'project-1');
+    const seed = await service.saveTree('account-1', treeFixture(), {mapId:'pending', sourceStatus:'indexing'});
+    const hydrated = await service.saveTree('account-1', {...treeFixture(), generatedAt: Date.now()+10}, {mapId:'pending', expectedUpdatedAt:seed.maps[0]!.updatedAt});
+    expect(hydrated.maps[0]!.sourceStatus).toBe('indexing');
+    await service.saveTree('account-1', treeFixture('C:/other'), {mapId:'other'});
+    const ids = hydrated.maps[0]!.tree.nodes;
+    const failed = await service.setSourceStatus('account-1','project-1','pending','error',hydrated.maps[0]!.updatedAt);
+    const map = failed.maps.find(map=>map.id==='pending')!;
+    expect(failed.selectedMapId).toBe('other');
+    expect(map.tree.nodes).toEqual(ids);
+    const reopened = createContextPersistenceService(database,localStorage);
+    expect((await reopened.load('account-1','project-1')).maps.find(map=>map.id==='pending')!.sourceStatus).toBe('error');
+    const ready = await reopened.setSourceStatus('account-1','project-1','pending','ready',map.updatedAt);
+    expect(ready.maps.find(map=>map.id==='pending')!.sourceStatus).toBe('ready');
+    expect(ready.selectedMapId).toBe('other');
+    expect(ready.maps.find(map=>map.id==='pending')!.tree.nodes).toEqual(ids);
+    await expect(service.setSourceStatus('account-1','project-1','pending','error',map.updatedAt)).rejects.toThrow('map_changed');
+  });
+  it('rejects foreign and deleted scopes and aborts an in-flight readiness transaction atomically', async () => {
+    const service = createContextPersistenceService(database,localStorage);
+    const state = await service.saveTree('account-1',treeFixture(),{mapId:'pending',sourceStatus:'indexing'});
+    const map = state.maps[0]!;
+    await expect(service.setSourceStatus('foreign','project-1',map.id,'ready',map.updatedAt)).rejects.toThrow();
+    await expect(service.setSourceStatus('account-1','foreign',map.id,'ready',map.updatedAt)).rejects.toThrow();
+    const controller = new AbortController();
+    const hook = () => { controller.abort(); };
+    database.context_sources.hook('updating',hook);
+    await expect(service.setSourceStatus('account-1','project-1',map.id,'ready',map.updatedAt,controller.signal)).rejects.toThrow();
+    database.context_sources.hook('updating').unsubscribe(hook);
+    const after = (await service.load('account-1','project-1')).maps[0]!;
+    expect(after.sourceStatus).toBe('indexing'); expect(after.updatedAt).toBe(map.updatedAt);
+    await service.deleteMap('account-1','project-1',map.id);
+    await expect(service.setSourceStatus('account-1','project-1',map.id,'ready',map.updatedAt)).rejects.toThrow('map_missing');
+  });
+});
+
+it('rolls back seed and hydrated tree writes when their live owner aborts during persistence',async()=>{
+ const service=createContextPersistenceService(database,localStorage);
+ const controller=new AbortController();
+ const hook=()=>{controller.abort();};database.context_maps.hook('creating',hook);
+ await expect(service.saveTree('account-1',treeFixture(),{mapId:'aborted-seed',sourceStatus:'indexing',signal:controller.signal})).rejects.toThrow();
+ database.context_maps.hook('creating').unsubscribe(hook);
+ expect((await service.load('account-1','project-1')).maps).toEqual([]);
+ const state=await service.saveTree('account-1',treeFixture(),{mapId:'pending',sourceStatus:'indexing'});
+ const next=new AbortController();const update=()=>{next.abort();};database.context_entities.hook('updating',update);
+ await expect(service.saveTree('account-1',{...treeFixture(),generatedAt:Date.now()+100}, {mapId:'pending',expectedUpdatedAt:state.maps[0]!.updatedAt,signal:next.signal})).rejects.toThrow();
+ database.context_entities.hook('updating').unsubscribe(update);
+ expect((await service.load('account-1','project-1')).maps[0]).toEqual(state.maps[0]);
+});
+
+it('advances the persisted version even when hydration occurs within the same clock tick',async()=>{
+ const clock=vi.spyOn(Date,'now').mockReturnValue(2_000);
+ try {
+  const service=createContextPersistenceService(database,localStorage);
+  const first=await service.saveTree('account-1',treeFixture(),{mapId:'same-clock',sourceStatus:'indexing'});
+  const previous=first.maps[0]!;
+  const next=await service.saveTree('account-1',treeFixture(),{mapId:previous.id,expectedUpdatedAt:previous.updatedAt});
+  expect(next.maps[0]!.updatedAt).toBeGreaterThan(previous.updatedAt);
+  await expect(service.setSourceStatus('account-1','project-1',previous.id,'ready',previous.updatedAt)).rejects.toThrow('map_changed');
+ } finally {clock.mockRestore();}
+});
+
+it('keeps successful nonlocal imports on their existing ready behavior',async()=>{
+ const service=createContextPersistenceService(database,localStorage);
+ const source={kind:'github_repository' as const,label:'Repository',branchRef:'main',github:{installationId:'installation-fixture',owner:'owner',repository:'repo',resolvedCommitSha:'a'.repeat(40),visibility:'public' as const}};
+ const first=await service.saveTree('account-1',treeFixture(),{mapId:'repository',source,sourceStatus:'error'});
+ const next=await service.saveTree('account-1',treeFixture(),{mapId:'repository',source,expectedUpdatedAt:first.maps[0]!.updatedAt});
+ expect(next.maps[0]!.sourceStatus).toBe('ready');
 });

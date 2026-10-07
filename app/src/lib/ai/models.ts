@@ -529,8 +529,12 @@ export function getAccessibleProviders(
   plan: PlanId = 'free',
   localDefault = '',
 ): ProviderId[] {
+  const foundryAvailable = getFoundryModelOptions().length > 0;
   if (offlineMode) {
-    return localModelsAvailable(localDefault) ? ['ollama', 'local'] : [];
+    return [
+      ...(localModelsAvailable(localDefault) ? (['ollama', 'local'] as const) : []),
+      ...(foundryAvailable ? (['foundry'] as const) : []),
+    ];
   }
 
   const providers: ProviderId[] = [];
@@ -545,6 +549,7 @@ export function getAccessibleProviders(
   if (localModelsAvailable(localDefault)) {
     providers.push('ollama', 'local');
   }
+  if (foundryAvailable) providers.push('foundry');
   return providers;
 }
 
@@ -558,6 +563,10 @@ export function getAccessibleModelOptions(
 ): readonly ModelOption[] {
   const accessible = getAccessibleProviders(apiKeys, offlineMode, plan, localDefault);
   if (!accessible.includes(provider)) return [];
+
+  // Use the same current-account native artifact catalog as the picker. The
+  // native inference boundary still revalidates the exact artifact before use.
+  if (provider === 'foundry') return getFoundryModelOptions();
 
   if (provider === 'ollama' || provider === 'local') {
     return resolveLocalModelNames(localDefault).map((name) => ({

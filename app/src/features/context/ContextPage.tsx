@@ -80,10 +80,11 @@ import {
   getActiveContextPersistenceState,
   restorePersistedContextMap,
   savePersistedContextTree,
+  setPersistedContextSourceStatus,
   selectPersistedContextFile,
   selectPersistedContextMap,
 } from './contextPersistence';
-import { populatePersistedCreatedContextMap } from './contextMapCreationLifecycle';
+import { populatePersistedCreatedContextMap, reconcilePendingContextSearch } from './contextMapCreationLifecycle';
 import { subscribeContextNavigation } from './contextNavigation';
 import type { ContextRecoverySummary } from './contextRecovery';
 import { NightlySecondBrainPanel } from './NightlySecondBrainPanel';
@@ -149,7 +150,7 @@ import {
   updateSiyuanIndexJobStatus,
   type SiyuanIndexJobRecord,
 } from './siyuan/siyuanIndexJobStore';
-import { formatSiyuanJobEta, siyuanOverallProgressPercent, siyuanProgressMatchesMap } from './siyuan/siyuanProgress';
+import { type SiyuanProgressView, projectSiyuanSearchProgress, formatSiyuanJobEta, siyuanOverallProgressPercent, siyuanProgressMatchesMap } from './siyuan/siyuanProgress';
 import {
   approvedCloudSiyuanSummaryIdentity,
   computeSiyuanCloudSummaryScope,
@@ -211,7 +212,7 @@ function SiyuanIndexProgressCard({
   cloudApprovalSaved,
   scopeRefreshPending,
 }: {
-  job: SiyuanIndexJobRecord;
+  job: SiyuanProgressView;
   mapName: string;
   summaryScope: string;
   onPause: () => void;
@@ -242,7 +243,7 @@ function SiyuanIndexProgressCard({
     discovering: 'Discovering allowed files and folders',
     creating_nodes: 'Creating SiYuan nodes',
     summarizing: 'Generating selected summaries',
-    reconciling: 'Reconciling and finalizing',
+    reconciling: job.sourceIndexState ? 'Indexing source text' : 'Reconciling and finalizing',
     completed: siyuanOverallProgressPercent(job) === 100 ? 'Context Map complete' : 'Awaiting confirmed completion',
   };
   const exactPercent = siyuanOverallProgressPercent(job);
@@ -255,8 +256,10 @@ function SiyuanIndexProgressCard({
   );
   const eta = formatSiyuanJobEta(job);
   const checkpointAgeSeconds = Math.max(0, Math.floor((Date.now() - job.updatedAt) / 1_000));
-  const waitingOnSiyuan = job.status === 'running' && checkpointAgeSeconds >= 30;
+  const waitingOnSiyuan = !job.sourceIndexState && job.status === 'running' && checkpointAgeSeconds >= 30;
   const progressState =
+    job.sourceIndexState === 'indexing' ? 'Indexing source text' :
+    job.sourceIndexState === 'error' ? 'Search index needs repair' :
     job.status === 'running'
       ? waitingOnSiyuan
         ? 'Waiting for SiYuan'
@@ -479,7 +482,7 @@ function SiyuanIndexProgressCard({
       ) : null}
       {job.phase !== 'completed' ? (
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {job.status === 'running' ? (
+          {job.status === 'running' && !job.sourceIndexState ? (
             <Button size="sm" variant="secondary" onClick={onPause}>
               Pause
             </Button>
@@ -504,7 +507,7 @@ function SiyuanIndexProgressCard({
               Redo from checkpoint
             </Button>
           ) : null}
-          {job.status === 'failed' || job.status === 'cancelled' ? (
+          {!job.sourceIndexState && (job.status === 'failed' || job.status === 'cancelled') ? (
             <Button size="sm" variant="ghost" onClick={onRestart}>
               Restart safely
             </Button>
@@ -614,6 +617,39 @@ const WARM_CONTEXT_SOURCE_ART: Record<ContextSourceCard['kind'], string> = {
   local_file: '/assets/themes/warm/context/context-file-v1.webp',
   github_repository: '/assets/themes/warm/context/context-repository-v1.webp',
 };
+function bindContextWorkScope(controller: AbortController) {
+  const key = (state: ReturnType<typeof useAuthStore.getState>) => {
+    const identity = resolveAccountIdentity(state);
+    return JSON.stringify([identity?.accountId, identity?.source, state.workspaceId, state.projectId]);
+  };
+  const captured = key(useAuthStore.getState());
+  const unsubscribe = useAuthStore.subscribe((next, previous) => {
+    if (key(next) !== key(previous)) controller.abort('context_scope_changed');
+  });
+  return {
+    assertCurrent() {
+      controller.signal.throwIfAborted();
+      if (key(useAuthStore.getState()) !== captured) throw new Error('context_search_scope_changed');
+    },
+    dispose: unsubscribe,
+  };
+}
+
+async function transitionContextSourceStatus(
+  map: ContextMapRecord, accountId: string | null, workspaceId: string | number | null | undefined,
+  status: 'indexing' | 'error',
+) {
+  const auth = useAuthStore.getState();
+  if (resolveAccountIdentity(auth)?.accountId !== accountId || auth.projectId !== map.projectId ||
+      (auth.workspaceId ?? null) !== (workspaceId ?? null)) throw new Error('context_search_scope_changed');
+  const controller = new AbortController();
+  const boundScope = bindContextWorkScope(controller);
+  try {
+    boundScope.assertCurrent();
+    return await setPersistedContextSourceStatus(map.projectId, map.id, status, map.updatedAt, controller.signal);
+  } finally { boundScope.dispose(); }
+}
+
 const contextSearchIndexPopulation = createContextSearchIndexPopulationPort();
 
 export function ContextPage() {
@@ -904,8 +940,10 @@ export function ContextPage() {
 
   React.useEffect(() => {
     if (
+      generating ||
       !projectId ||
       !selectedMap ||
+      selectedMap.sourceStatus === 'error' ||
       selectedMap.sourceType === 'github_repository' ||
       !indexJobSnapshot ||
       indexJobSnapshot.mapId !== selectedMap.id ||
@@ -922,16 +960,46 @@ export function ContextPage() {
     indexedTreeHydrationRef.current = hydrationKey;
     let active = true;
     const controller = new AbortController();
+    const boundScope = bindContextWorkScope(controller);
+    let pendingMap = selectedMap;
+    const assertCurrent = () => {
+      boundScope.assertCurrent();
+      const auth = useAuthStore.getState();
+      const current = getActiveContextPersistenceState(projectId)?.maps.find(map => map.id === pendingMap.id);
+      if (resolveAccountIdentity(auth)?.accountId !== accountId || auth.projectId !== projectId ||
+          auth.workspaceId !== workspaceId || !current || current.updatedAt !== pendingMap.updatedAt) {
+        throw new Error('context_search_hydration_scope_changed');
+      }
+    };
+    const finishSearch = async (map: ContextMapRecord, persistedAccountId: string) => {
+      pendingMap = map;
+      if (map.sourceStatus === 'indexing') {
+        if (generationAbortRef.current && generationAbortRef.current !== controller) {
+          throw new Error('context_search_hydration_busy');
+        }
+        generationAbortRef.current = controller;
+        await reconcilePendingContextSearch({ accountId: persistedAccountId, map: projectSiyuanMapForContextSearch(map),
+          port: contextSearchIndexPopulation, signal: controller.signal, assertCurrent });
+        assertCurrent();
+        return setPersistedContextSourceStatus(projectId, map.id, 'ready', map.updatedAt, controller.signal);
+      } else {
+        await contextSearchIndexPopulation.repairEmptyMap(persistedAccountId, projectSiyuanMapForContextSearch(map), controller.signal);
+        return null;
+      }
+    };
     void readSiyuanIndexEntries(projectId, selectedMap.id)
       .then(async (entries) => {
-        if (!active || entries.length === 0) return;
+        if (!active || (entries.length === 0 && indexJobSnapshot.indexed !== 0)) return;
         const completedTree = buildProjectContextTreeFromSiyuanIndex(selectedMap.tree, entries);
         if (JSON.stringify(completedTree.nodes) === JSON.stringify(selectedMap.tree.nodes) && completedTree.fileCount === selectedMap.tree.fileCount) {
-          await contextSearchIndexPopulation.repairEmptyMap(accountId!, projectSiyuanMapForContextSearch(selectedMap), controller.signal);
+          await finishSearch(selectedMap, accountId!);
           if (active) setSiyuanTree(completedTree);
           return;
         }
+        assertCurrent();
         const persisted = await savePersistedContextTree(completedTree, {
+          signal: controller.signal,
+          select: false,
           mapId: selectedMap.id,
           requireExisting: true,
           expectedUpdatedAt: selectedMap.updatedAt,
@@ -942,23 +1010,28 @@ export function ContextPage() {
         if (!completedMap || completedMap.tree.fileCount !== completedTree.fileCount) {
           throw new Error('siyuan_context_map_hydration_failed');
         }
-        await contextSearchIndexPopulation.repairEmptyMap(
-          persisted.accountId,
-          projectSiyuanMapForContextSearch(completedMap),
-          controller.signal,
-        );
+        const finalized = await finishSearch(completedMap, persisted.accountId);
         if (!active) return;
-        applyPersistenceState(persisted);
+        applyPersistenceState(finalized ?? persisted);
         setSiyuanTree(completedTree);
       })
-      .catch((error) => {
-        if (!active || controller.signal.aborted) return;
+      .catch(async (error) => {
+        if (controller.signal.aborted) return;
+        if (pendingMap.sourceStatus === 'indexing') {
+          boundScope.assertCurrent();
+          await setPersistedContextSourceStatus(projectId, pendingMap.id, 'error', pendingMap.updatedAt, controller.signal).catch(() => undefined);
+        }
+        if (!active) return;
         indexedTreeHydrationRef.current = '';
         setStatus('SiYuan map data is safe, but Context Search hydration needs repair.');
         toast.error(
           'Context Search hydration needs repair',
           error instanceof Error ? error.message : 'Unknown Context Search hydration error',
         );
+      })
+      .finally(() => {
+        boundScope.dispose();
+        if (generationAbortRef.current === controller) generationAbortRef.current = null;
       });
     return () => {
       active = false;
@@ -967,7 +1040,7 @@ export function ContextPage() {
       // finishes. Keep that exact-map repair alive; `active` and
       // `applyPersistenceState` still prevent stale UI projection.
     };
-  }, [applyPersistenceState, indexJobSnapshot, projectId, selectedMap]);
+  }, [accountId, applyPersistenceState, generating, indexJobSnapshot, projectId, selectedMap, workspaceId]);
   const tree =
     structuralPreview ?? (SIYUAN_CONTEXT_VAULT_ENABLED ? siyuanTree : (selectedMap?.tree ?? null));
   const treeCoverageBounded = tree ? isContextTreeCoverageBounded(tree) : false;
@@ -2189,12 +2262,14 @@ export function ContextPage() {
 
     generationAbortRef.current?.abort('superseded');
     const controller = new AbortController();
+    const boundScope = bindContextWorkScope(controller);
     const indexControl = createSiyuanIndexJobControl();
     generationAbortRef.current = controller;
     indexControlRef.current = indexControl;
     setStructuralPreview(null);
     setGenerating(true);
     setStatus('Starting Context map creation...');
+    let creationMap: ContextMapRecord | null = null;
     try {
       setStoredContextSourceRoot(accountId, projectId, rootDir);
       // Native SiYuan maps must not run the legacy bounded preview generator:
@@ -2214,7 +2289,8 @@ export function ContextPage() {
         setStructuralPreview(null);
         return;
       }
-      const persisted = await savePersistedContextTree(generated);
+      const persisted = await savePersistedContextTree(generated, { sourceStatus: 'indexing', signal: controller.signal });
+      creationMap = persisted.maps.find(map => map.id === persisted.selectedMapId) ?? null;
       let completedPersistence = persisted;
       let indexedFileCount = generated.fileCount;
       setStatus(`Indexing ${generated.fileCount} Context files...`);
@@ -2227,6 +2303,7 @@ export function ContextPage() {
         repairCreatedMap: (persistedAccountId, map, signal) =>
           contextSearchIndexPopulation.repairEmptyMap(persistedAccountId, map, signal),
       });
+      creationMap = persistedMap;
       if (projectId && SIYUAN_CONTEXT_VAULT_ENABLED) {
         setStatus('Adding this map to the SiYuan Context Vault...');
         setSiyuanIndexing(true);
@@ -2272,7 +2349,9 @@ export function ContextPage() {
           snapshot = await productionSiyuanContextMaps.read(projectId, generatedMap);
           if (!snapshot) throw new Error('siyuan_cloud_summary_preflight_snapshot_missing');
         }
+        boundScope.assertCurrent();
         const indexedEntries = await readSiyuanIndexEntries(projectId, persistedMap.id);
+        boundScope.assertCurrent();
         const completedTree = buildProjectContextTreeFromSiyuanIndex(
           {
             ...generated,
@@ -2282,6 +2361,7 @@ export function ContextPage() {
         );
         indexedFileCount = completedTree.fileCount;
         completedPersistence = await savePersistedContextTree(completedTree, {
+          signal: controller.signal,
           mapId: persistedMap.id,
           requireExisting: true,
           expectedUpdatedAt: persistedMap.updatedAt,
@@ -2292,11 +2372,17 @@ export function ContextPage() {
         if (!completedMap || completedMap.tree.fileCount !== indexedFileCount) {
           throw new Error('siyuan_context_map_file_count_persistence_failed');
         }
+        creationMap = completedMap;
         await contextSearchIndexPopulation.populateCreatedMap(
           completedPersistence.accountId,
           projectSiyuanMapForContextSearch(completedMap),
           controller.signal,
         );
+        boundScope.assertCurrent();
+        completedPersistence = await setPersistedContextSourceStatus(
+          projectId, completedMap.id, 'ready', completedMap.updatedAt, controller.signal,
+        );
+        creationMap = completedPersistence.maps.find(map => map.id === completedMap.id) ?? null;
         setSiyuanTree(completedTree);
         setSiyuanIndexing(false);
         setStatus(
@@ -2304,6 +2390,11 @@ export function ContextPage() {
             ? 'SiYuan structure ready. Review the exact cloud summary scope to continue.'
             : 'SiYuan Context Map ready.',
         );
+      }
+      boundScope.assertCurrent();
+      if (creationMap && creationMap.sourceStatus !== 'ready') {
+        completedPersistence = await setPersistedContextSourceStatus(projectId, creationMap.id, 'ready', creationMap.updatedAt, controller.signal);
+        creationMap = completedPersistence.maps.find(map => map.id === creationMap!.id) ?? null;
       }
       const indexedAuth = useAuthStore.getState();
       if (
@@ -2344,6 +2435,10 @@ export function ContextPage() {
       ) {
         return;
       }
+      if (creationMap) {
+        await setPersistedContextSourceStatus(projectId, creationMap.id, 'error', creationMap.updatedAt, controller.signal)
+          .catch(() => undefined); // A newer scope/version must not be overwritten by this failure.
+      }
       const errorMessage =
         err instanceof Error ? err.message : typeof err === 'string' ? err : 'unknown_error';
       devConsole.log({
@@ -2355,6 +2450,7 @@ export function ContextPage() {
       toast.error('Context map creation failed', errorMessage);
       setStatus('Generation failed.');
     } finally {
+      boundScope.dispose();
       const auth = useAuthStore.getState();
       if (
         generationAbortRef.current === controller &&
@@ -2442,7 +2538,9 @@ export function ContextPage() {
   if (focusedMap && SIYUAN_CONTEXT_VAULT_ENABLED && projectId && selectedMap?.status === 'active') {
     const focusedManifest = readSiyuanMapManifest(projectId, selectedMap.id);
     const focusedProgressLabel =
-      indexJobSnapshot?.phase === 'discovering'
+      selectedMap.sourceStatus === 'indexing' ? 'Indexing source text'
+      : selectedMap.sourceStatus === 'error' ? 'Search index needs repair'
+      : indexJobSnapshot?.phase === 'discovering'
         ? 'Discovering allowed files and folders'
         : indexJobSnapshot?.phase === 'summarizing'
           ? `Summarizing ${indexJobSnapshot.summarized.toLocaleString()} / ${indexJobSnapshot.summaryEligible.toLocaleString()}`
@@ -2471,8 +2569,8 @@ export function ContextPage() {
           </div>
           <ContextAutoUpdateCheckbox accountId={accountId} workspaceId={workspaceId ? String(workspaceId) : null} map={selectedMap} />
           {siyuanProgressMatchesMap(indexJobSnapshot, accountId, projectId, selectedMap) && indexJobSnapshot &&
-          indexJobSnapshot.status === 'running' &&
-          indexJobSnapshot.phase !== 'completed' ? (
+          (indexJobSnapshot.status === 'running' || ['indexing', 'error'].includes(selectedMap.sourceStatus ?? '')) &&
+          (indexJobSnapshot.phase !== 'completed' || ['indexing', 'error'].includes(selectedMap.sourceStatus ?? '')) ? (
             <div
               data-siyuan-focused-progress
               className="ml-auto flex shrink-0 items-center gap-2 rounded-full border border-accent-copper/25 bg-accent-copper/10 px-3 py-1.5 text-metadata text-foreground"
@@ -2862,7 +2960,7 @@ export function ContextPage() {
               </div>
               {indexJobSnapshot && projectId && selectedMap && siyuanProgressMatchesMap(indexJobSnapshot, accountId, projectId, selectedMap) ? (
                 <SiyuanIndexProgressCard
-                  job={indexJobSnapshot}
+                  job={projectSiyuanSearchProgress(indexJobSnapshot, selectedMap.sourceStatus)}
                   mapName={selectedMap.name}
                   summaryScope={indexSummaryScope}
                   cloudDisclosure={cloudSummaryDisclosure}
@@ -2912,6 +3010,14 @@ export function ContextPage() {
                     setStatus('Resuming the SiYuan index…');
                   }}
                   onCancel={() => {
+                    if (selectedMap.sourceStatus === 'indexing' && indexJobSnapshot.phase === 'completed') {
+                      indexedTreeHydrationRef.current = `${projectId}:${selectedMap.id}:${indexJobSnapshot.status}:${indexJobSnapshot.updatedAt}`;
+                      generationAbortRef.current?.abort('user_cancelled');
+                      void transitionContextSourceStatus(selectedMap, accountId, workspaceId, 'error')
+                        .catch(error => toast.error('Context Search cancellation needs review', String(error)));
+                      setStatus('Source indexing cancelled. Saved nodes remain recoverable.');
+                      return;
+                    }
                     indexControlRef.current?.cancel();
                     generationAbortRef.current?.abort('user_cancelled');
                     void updateSiyuanIndexJobStatus(
@@ -2922,19 +3028,18 @@ export function ContextPage() {
                     setStatus('SiYuan indexing cancelled. Saved nodes remain recoverable.');
                   }}
                   onRetry={() => {
-                    void updateSiyuanIndexJobStatus(projectId, indexJobSnapshot.mapId, 'running')
-                      .then((job) => {
-                        if (!job) throw new Error('siyuan_index_job_missing');
-                        setIndexJobSnapshot(job);
-                        setIndexResumeNonce((value) => value + 1);
-                        setStatus('Redoing the SiYuan map from saved progress…');
-                      })
-                      .catch((error) => {
-                        toast.error(
-                          'SiYuan redo could not start',
-                          error instanceof Error ? error.message : String(error),
-                        );
-                      });
+                    void (async () => {
+                      if (selectedMap.sourceStatus === 'error') {
+                        indexedTreeHydrationRef.current = '';
+                        await transitionContextSourceStatus(selectedMap, accountId, workspaceId, 'indexing');
+                        if (indexJobSnapshot.phase === 'completed') return;
+                      }
+                      const job = await updateSiyuanIndexJobStatus(projectId, indexJobSnapshot.mapId, 'running');
+                      if (!job) throw new Error('siyuan_index_job_missing');
+                      setIndexJobSnapshot(job);
+                      setIndexResumeNonce((value) => value + 1);
+                      setStatus('Redoing the SiYuan map from saved progress…');
+                    })().catch(error => toast.error('SiYuan redo could not start', String(error)));
                   }}
                   onRestart={() => {
                     void (async () => {
@@ -2948,6 +3053,9 @@ export function ContextPage() {
                       if (!projectId || !restartMap || !manifest) {
                         setStatus('Safe restart needs the current map authority. Repair it first.');
                         return;
+                      }
+                      if (restartMap.sourceStatus === 'error') {
+                        await transitionContextSourceStatus(restartMap, accountId, workspaceId, 'indexing');
                       }
                       const restarted = createSiyuanIndexJob({
                         accountId,
@@ -3447,7 +3555,8 @@ function ContextMapList({
     const selected = map.id === selectedMapId;
     const deleted = map.status === 'deleted';
     const mapFilePath = contextMapBackingFilePath(map);
-    const job = jobSnapshots[map.id];
+    const checkpoint = jobSnapshots[map.id];
+    const job = checkpoint ? projectSiyuanSearchProgress(checkpoint, map.sourceStatus) : undefined;
     const exactFileCountSummary = formatSiyuanIndexCountSummary({
       kind: 'files',
       count: map.tree.fileCount,

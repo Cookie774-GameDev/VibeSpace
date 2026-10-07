@@ -144,6 +144,12 @@ describe('TopBar voice smoke evidence', () => {
     expect(ui.setVoiceModalOpen).toHaveBeenCalledWith(true);
   });
 
+  it('offers a visible typed Voice opening through the existing UI API', () => {
+    renderTopBar(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Type to Jarvis voice' }));
+    expect(ui.setVoiceModalOpen).toHaveBeenCalledWith(true, 'text');
+  });
+
   it('stops the Aura session from the same button without needing a HUD', () => {
     ui.voiceModalOpen = true;
     renderTopBar(false);

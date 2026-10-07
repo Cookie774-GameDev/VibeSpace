@@ -507,7 +507,12 @@ describe('OpenCode Context citation and cancellation boundaries', () => {
       }] : []);
       const tool = createRlmOpenCodeTool({ ...deps, queryService: { ...deps.queryService, search },
         verifiedFallbackCitations: verifyIssued, now: () => 1_000 });
-      await expect(tool.execute(input, protectedLease, undefined, assertCurrent)).resolves.toBe(searchResult);
+      const response = await tool.execute(input, protectedLease, undefined, assertCurrent);
+      expect(response).toMatchObject(searchResult);
+      expect(response).toHaveProperty('canonicalProvenance.evidenceUris', [
+        'vibespace:context/evidence/ptr%3Arlm%3Afallback%3A0%3A64',
+      ]);
+      expect(searchResult).not.toHaveProperty('canonicalProvenance');
       expect(verifyIssued).toHaveBeenCalledWith(searchResult, expect.objectContaining(protectedLease), undefined);
       expect(search).toHaveBeenCalledTimes(1);
       expect(deps.rlmRuntime.investigate).not.toHaveBeenCalled();

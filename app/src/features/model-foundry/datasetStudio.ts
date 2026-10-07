@@ -207,7 +207,8 @@ export async function buildDatasetVersion(drafts: readonly DatasetDraft[], optio
     normalizedGroups.set(normalizedHash, [...(normalizedGroups.get(normalizedHash) ?? []), draftIndex]);
     return { draft, draftIndex, findings, normalizedHash, contentHash: await sha256(combined) };
   }));
-  const duplicateGroups = [...normalizedGroups.entries()].filter(([, indexes]) => indexes.length > 1).map(([normalizedHash, draftIndexes]) => ({ normalizedHash, draftIndexes }));
+  // Hashes resolve concurrently; selection order, not completion order, owns provenance.
+  const duplicateGroups = [...normalizedGroups.entries()].filter(([, indexes]) => indexes.length > 1).map(([normalizedHash, indexes]) => ({ normalizedHash, draftIndexes: [...indexes].sort((left, right) => left - right) }));
   const duplicateIndexes = new Set(duplicateGroups.flatMap(({ draftIndexes }) => draftIndexes.slice(1)));
   const eligible = prepared.filter(({ draftIndex, draft, findings }) => !findings.length && !duplicateIndexes.has(draftIndex) && draft.input.trim() && draft.expectedOutput.trim() && draft.sourceReference.trim() && draft.license.trim());
   if (!eligible.length) throw new Error('No clean, unique, approved examples remain after review.');

@@ -1,16 +1,17 @@
 // @vitest-environment node
 // Production-path regression with isolated synthetic disk/index ports; no native acceptance.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const io = vi.hoisted(() => ({ count: 129, mode: 'empty', queries: 0, writes: 0, reads: 0,
+const io = vi.hoisted(() => ({ includePending: false, sourceStatus: 'ready', count: 129, mode: 'empty', queries: 0, writes: 0, reads: 0,
   hash: '', documents: new Map<string, { documentId: string; body: string }>(), revision: 1, mapId: 'map-recovery',
   readGate: undefined as Promise<void> | undefined, firstRead: undefined as (() => void) | undefined }));
 const content = 'Launch owner Mira. Saffron depot is Delta. Grounded source evidence.';
 vi.mock('@/features/context/contextPersistence', async original => ({
   ...await original<typeof import('@/features/context/contextPersistence')>(),
   loadPersistedContextMaps: async () => [{ id: io.mapId, projectId: 'project-a', rootDir: 'C:/fixture',
-    status: 'active', sourceType: 'local_folder', updatedAt: io.revision,
+    status: 'active', sourceType: 'local_folder', sourceStatus: io.sourceStatus, updatedAt: io.revision,
     tree: { nodes: Array.from({ length: io.count }, (_, i) => ({ id: 'node-' + i, kind: 'file',
-      title: 'source-' + i + '.txt', summary: '', path: 'source-' + i + '.txt' })) } }],
+      title: 'source-' + i + '.txt', summary: '', path: 'source-' + i + '.txt' })) } },
+    ...(io.includePending ? [{id:'pending-other',projectId:'project-a',rootDir:'C:/fixture',status:'active',sourceType:'local_folder',sourceStatus:'indexing',updatedAt:2,tree:{nodes:[]}}] : [])],
 }));
 vi.mock('@/lib/fs', async original => ({ ...await original<typeof import('@/lib/fs')>(),
   statProjectPath: async (path: string, hash: boolean) => io.mode === 'denied'
@@ -54,7 +55,7 @@ const lease = (): RlmContextLease => ({ accountId: 'account-a', workspaceId: 'wo
   expiresAt: Date.now() + 60_000 });
 let sequence = 0;
 beforeEach(async () => { io.mapId = 'map-recovery-' + ++sequence;
-  io.mode = 'empty'; io.documents.clear(); io.queries = 0; io.writes = 0;
+  io.includePending = false; io.sourceStatus = 'ready'; io.mode = 'empty'; io.documents.clear(); io.queries = 0; io.writes = 0;
   io.reads = 0; io.revision = 1; io.count = 129;
   io.readGate = undefined; io.firstRead = undefined;
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
@@ -175,4 +176,16 @@ describe('bounded parallel lexical retrieval over the same synthetic inputs', ()
     }, null, 2));
     expect(maximum).toBeGreaterThan(1); expect(maximum).toBeLessThanOrEqual(4);
   }, 20_000);
+});
+
+it.each(['indexing','error'])('fails closed before index reads or repairs for a %s source', async status => {
+ io.sourceStatus=status;
+ await expect(createProductionRlmContextTool().execute({operation:'search',query:'saffron evidence'},lease())).rejects.toMatchObject({code:'context_index_unavailable'});
+ expect(io.reads).toBe(0);expect(io.writes).toBe(0);expect(io.queries).toBe(0);
+});
+
+it('keeps a selected ready map usable while another overlapping map is pending',async()=>{
+ io.includePending=true;
+ const result=await createProductionRlmContextTool().execute({operation:'search',query:'saffron evidence'},lease()) as {items:unknown[]};
+ expect(result.items.length).toBeGreaterThan(0);
 });

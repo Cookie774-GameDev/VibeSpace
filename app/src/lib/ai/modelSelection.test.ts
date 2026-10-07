@@ -463,3 +463,25 @@ describe('modelSelection', () => {
     }
   });
 });
+
+describe('Foundry exact local connection selection', () => {
+  it('binds a picker selection and its saved legacy form to the native artifact route', () => {
+    for (const selection of [
+      selectionFromOption('foundry', 'artifact--job_verified'),
+      normalizeChatModelSelection({
+        mode: 'single',
+        providerId: 'foundry',
+        modelId: 'artifact--job_verified',
+      }),
+    ]) {
+      expect(selection).toMatchObject({
+        providerId: 'foundry',
+        modelId: 'artifact--job_verified',
+        connectionId: 'foundry-local',
+        connectionMode: 'local',
+        authSource: 'local-artifact',
+        capabilities: { localOnly: true, tools: false },
+      });
+    }
+  });
+});

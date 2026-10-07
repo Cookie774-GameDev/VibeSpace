@@ -413,6 +413,12 @@ export function convertContextMapRecordV1ToSnapshotV2(
       label: node.title,
       ...(node.path ? { path: node.path } : {}),
       ...(node.summary !== '' ? { summary: node.summary } : { summary: '' }),
+      ...(node.sizeBytes === undefined
+        ? {}
+        : { sourceSizeBytes: safeInteger(node.sizeBytes, 'source_size_invalid') }),
+      ...(node.modifiedAt === undefined
+        ? {}
+        : { sourceModifiedAt: safeInteger(node.modifiedAt, 'source_modified_invalid') }),
       sourceRevision,
       provenanceIds: [entityProvenanceId],
       createdAt: entityCreatedAt,

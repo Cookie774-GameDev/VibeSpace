@@ -98,7 +98,9 @@ describe('Composer active-request cancel and resume contract', () => {
     expect(composerSource).not.toContain('buildComposerResumeRequest');
     expect(composerSource).not.toContain('handleSend(request)');
     expect(runtimeSource).toContain('AI resume: hidden same-session continuation');
-    expect(runtimeSource).toContain("modelText: 'Resume'");
+    expect(runtimeSource).toContain('modelText: continuationText');
+    expect(runtimeSource).toContain('resumeContinuationText(originalText, originalReadRoot)');
+    expect(runtimeSource).toContain('resumeOriginalText: originalText');
   });
 
   it('addresses child-agent cancellation through a detail shape the runtime understands', () => {

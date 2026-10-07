@@ -44,6 +44,7 @@ describe('Foundry compiled prompt transport', () => {
     async (backend) => {
       const response = await runAgent({
         agent,
+        connectionId: 'foundry-local',
         backend,
         messages: [{ role: 'user', content: 'A public local test.' }],
       });
@@ -56,6 +57,7 @@ describe('Foundry compiled prompt transport', () => {
   it('sends the compiled system text to the local provider for protected dispatch', async () => {
     await runAgent({
       agent,
+      connectionId: 'foundry-local',
       messages: [{ role: 'user', content: 'Summarize the fixture.' }],
       compiledPrompt: {
         schemaVersion: 1,
@@ -77,11 +79,54 @@ describe('Foundry compiled prompt transport', () => {
   });
 
   it('keeps the agent prompt for ordinary uncompiled requests', async () => {
-    await runAgent({ agent, messages: [{ role: 'user', content: 'Hello' }] });
+    await runAgent({
+      agent,
+      connectionId: 'foundry-local',
+      messages: [{ role: 'user', content: 'Hello' }],
+    });
     expect(foundryRun).toHaveBeenCalledWith(
       expect.objectContaining({
         agent: expect.objectContaining({ system_prompt: 'LEGACY SYSTEM PROMPT' }),
       }),
     );
   });
+});
+
+describe('Foundry rejects mismatched connection authority', () => {
+  it.each([undefined, 'openai-api', 'missing-local-connection'])(
+    'never invokes the local provider with connection %s',
+    async (connectionId) => {
+      foundryRun.mockClear();
+      await expect(
+        runAgent({ agent, connectionId, messages: [{ role: 'user', content: 'Local fixture.' }] }),
+      ).rejects.toThrow(/Foundry.*connection/i);
+      expect(foundryRun).not.toHaveBeenCalled();
+    },
+  );
+});
+
+it('rejects an unsupported tool capability before invoking Foundry', async () => {
+  foundryRun.mockClear();
+  await expect(
+    runAgent({
+      agent,
+      connectionId: 'foundry-local',
+      connectionRequirements: { tools: true },
+      messages: [{ role: 'user', content: 'Local fixture.' }],
+    }),
+  ).rejects.toThrow(/tool/i);
+  expect(foundryRun).not.toHaveBeenCalled();
+});
+
+it('does not route another provider through the Foundry connection', async () => {
+  foundryRun.mockClear();
+  await expect(
+    runAgent({
+      agent: { ...agent, model: { provider: 'openai', model: 'arbitrary-model' } },
+      backend: 'opencode',
+      connectionId: 'foundry-local',
+      messages: [{ role: 'user', content: 'Local fixture.' }],
+    }),
+  ).rejects.toThrow(/match provider connection/i);
+  expect(foundryRun).not.toHaveBeenCalled();
 });

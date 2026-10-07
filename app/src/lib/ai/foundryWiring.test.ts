@@ -44,15 +44,16 @@ describe('foundry provider wiring', () => {
       'Data extractor',
     );
     registry.recordEvaluation('proj-1', 'job_9', 'd'.repeat(64), {
-      suite: 'private-dataset-studio',
+      // Synthetic comparative fixture only; no native evaluation is claimed.
+      suite: 'pinned-validation-reference-v1',
       caseCount: 1,
-      baseScore: 0,
-      candidateScore: 1,
+      baseScore: 0.25,
+      candidateScore: 0.75,
       championScore: null,
-      delta: 1,
+      delta: 0.5,
       safetyFailures: [],
       gate: 'pass',
-      caseEvidence: [],
+      caseEvidence: [{ caseId: 'synthetic-comparison', baseScore: 0.25, candidateScore: 0.75, championScore: null, evidenceHash: 'c'.repeat(64) }],
     });
     registry.promote('proj-1', 'job_9');
 

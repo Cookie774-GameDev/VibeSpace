@@ -1,3 +1,4 @@
+import type { ContextSearchIndexPopulationPort } from './contextSearchIndexing';
 import type { ContextPersistenceState } from './contextPersistence';
 import type { ContextMapRecord, ContextTreeNode, ProjectContextTree } from './tree';
 import { contextEntityIdForTreeNode } from './migration';
@@ -62,4 +63,34 @@ export async function populatePersistedCreatedContextMap(
     await input.repairCreatedMap(input.persisted.accountId, generatedMap, input.signal);
   }
   return { persistedMap, generatedMap };
+}
+
+
+/** Resume only a durably pending/failed source through the existing atomic map lease. */
+export async function reconcilePendingContextSearch(input: {
+  accountId: string;
+  map: ContextMapRecord;
+  port: ContextSearchIndexPopulationPort;
+  signal: AbortSignal;
+  assertCurrent(): void;
+}): Promise<void> {
+  if (input.map.sourceStatus !== 'indexing' && input.map.sourceStatus !== 'error') {
+    throw new Error('context_search_reconciliation_not_pending');
+  }
+  input.signal.throwIfAborted(); input.assertCurrent();
+  const ids: string[] = [];
+  const visit = (nodes: readonly ContextTreeNode[]) => {
+    for (const node of nodes) { if (node.kind === 'file') ids.push(node.id); visit(node.children ?? []); }
+  };
+  visit(input.map.tree.nodes);
+  const transaction = await input.port.stageChangedMap(input.accountId, input.map, ids, [], input.signal, { reconcileMembership: true });
+  try {
+    input.signal.throwIfAborted(); input.assertCurrent();
+    await transaction.commit();
+  } catch (error) {
+    try { await transaction.abort(); } catch (abortError) {
+      throw new AggregateError([error, abortError], 'context_search_reconciliation_abort_failed');
+    }
+    throw error;
+  }
 }

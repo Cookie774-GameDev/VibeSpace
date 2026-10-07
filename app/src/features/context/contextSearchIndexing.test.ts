@@ -584,3 +584,46 @@ describe('bounded Context search index population', () => {
     expect(order).toEqual(['start:map-1', 'end:map-1', 'start:map-2', 'end:map-2']);
   });
 });
+
+
+describe('complete-scan legacy identity reconciliation', () => {
+  function refreshDependencies(contents: Record<string, string> = { 'C:\\repo\\a.txt': 'alpha', 'C:\\repo\\b.txt': 'beta' }) {
+    const deps = dependencies(contents, nativePort(2));
+    deps.port.beginRefresh = vi.fn(async () => 'transaction');
+    deps.port.stageRefresh = vi.fn(async () => {});
+    deps.port.finishRefresh = vi.fn(async () => 0);
+    return deps;
+  }
+  it('refuses retention before any native transaction when changed coverage is partial', async () => {
+    const deps = refreshDependencies();
+    await expect(createContextSearchIndexPopulationPort(deps).stageChangedMap('account-1', map(),
+      ['node-a'], [], undefined, { reconcileMembership: true })).rejects.toThrow('reconciliation_incomplete');
+    expect(deps.port.beginRefresh).not.toHaveBeenCalled(); expect(deps.read).not.toHaveBeenCalled();
+  });
+  it('sends complete membership only after all source reads pass and preserves rollback on cancellation', async () => {
+    const deps = refreshDependencies(); const controller = new AbortController();
+    const transaction = await createContextSearchIndexPopulationPort(deps).stageChangedMap('account-1', map(),
+      ['node-a', 'node-b'], [], controller.signal, { reconcileMembership: true });
+    expect(deps.read).toHaveBeenCalledTimes(2);
+    expect(deps.port.stageRefresh).toHaveBeenLastCalledWith('account-1', 'map-1', 'transaction', [], [], ['node-a', 'node-b']);
+    controller.abort(); await expect(transaction.commit()).rejects.toMatchObject({ name: 'AbortError' });
+    await transaction.abort();
+    expect(deps.port.finishRefresh).toHaveBeenCalledWith('account-1', 'map-1', 'transaction', false);
+    expect(deps.port.finishRefresh).not.toHaveBeenCalledWith('account-1', 'map-1', 'transaction', true);
+    expect(deps.port.deleteDocuments).not.toHaveBeenCalled();
+  });
+  it('never stages retention when a required source read fails', async () => {
+    const deps = refreshDependencies({ 'C:\\repo\\a.txt': 'alpha' });
+    await expect(createContextSearchIndexPopulationPort(deps).stageChangedMap('account-1', map(),
+      ['node-a', 'node-b'], [], undefined, { reconcileMembership: true })).rejects.toThrow('source_invalid');
+    expect(vi.mocked(deps.port.stageRefresh!).mock.calls.every(call => call[5] === undefined)).toBe(true);
+    expect(deps.port.finishRefresh).toHaveBeenCalledWith('account-1', 'map-1', 'transaction', false);
+  });
+  it('retains explicit complete empty membership only for an actually empty map snapshot', async () => {
+    const deps = refreshDependencies();
+    const transaction = await createContextSearchIndexPopulationPort(deps).stageChangedMap('account-1', map([]),
+      [], [], undefined, { reconcileMembership: true });
+    expect(deps.port.stageRefresh).toHaveBeenCalledWith('account-1', 'map-1', 'transaction', [], [], []);
+    expect(deps.read).not.toHaveBeenCalled(); await transaction.commit();
+  });
+});

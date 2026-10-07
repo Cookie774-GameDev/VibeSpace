@@ -4,7 +4,7 @@ import type { ExecutionIdentity } from './gateway/contextGatewayContracts';
 import { routeDefaultContextQuery } from './adaptiveContextRouter';
 import { recordRlmRoute, resolveRlmEnabled } from './rlmPreferenceStore';
 import type { RlmBudget } from './rlmRuntime';
-import { registerToolGatewayFallbackCitations } from '@/lib/harness/toolGatewayCitations';
+import { canonicalContextUri, registerToolGatewayFallbackCitations } from '@/lib/harness/toolGatewayCitations';
 
 export const RLM_OPENCODE_TOOL_NAME = 'vibespace_context' as const;
 export const RLM_HIGH_LEVEL_QUERY = 'query' as const;
@@ -94,6 +94,10 @@ const DEFAULT_RLM_BUDGET: Readonly<RlmBudget> = Object.freeze({
 const SAFE_CORPUS_ID = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,199}$/u;
 const CANONICAL_POSITION = /^(?:0|[1-9][0-9]*)$/u;
 const MAX_LOGICAL_POSITION = 10_000_000_000_000_000n;
+const MAX_CANONICAL_EVIDENCE_URIS = 32;
+const MAX_CANONICAL_PROVENANCE_BYTES = 16 * 1024;
+const MAX_CANONICAL_URI_BYTES = 2 * 1024;
+const MAX_CITATION_INPUTS = 100;
 
 function invalid(): never {
   throw new RlmOpenCodeToolError('invalid_arguments');
@@ -254,15 +258,128 @@ export function createRlmOpenCodeTool(dependencies: {
       }
       return token && token === capturedLease.contextRevision ? token : undefined;
     };
-    const registerVerified = async (result: unknown) => {
+    const withVerifiedCitations = async (result: unknown): Promise<unknown> => {
       if (assertLeaseCurrent) current();
-      if (!assertLeaseCurrent || !dependencies.verifiedFallbackCitations || !current()) return;
+      const object =
+        result && typeof result === 'object' && !Array.isArray(result)
+          ? (result as Record<string, unknown>)
+          : undefined;
+      // This field belongs to the verified host, never to retrieved/source data.
+      let clean = result;
+      if (object && Object.hasOwn(object, 'canonicalProvenance')) {
+        const { canonicalProvenance: _untrusted, ...rest } = object;
+        clean = rest;
+      }
+      if (!object || !assertLeaseCurrent || !dependencies.verifiedFallbackCitations || !current())
+        return clean;
       const citations = await dependencies.verifiedFallbackCitations(result, capturedLease, signal);
       const token = current();
       const scope = citationScope(capturedLease);
-      if (!token || !scope || citations.length === 0) return;
-      registerToolGatewayFallbackCitations(capturedLease.sessionId, [...citations], scope);
+      if (
+        !token ||
+        !scope ||
+        !Array.isArray(citations) ||
+        citations.length === 0 ||
+        citations.length > MAX_CITATION_INPUTS
+      )
+        return clean;
+      const items = Array.isArray(object.items) ? object.items : [object];
+      if (items.length > MAX_CITATION_INPUTS) return clean;
+      const key = (citation: VerifiedRlmFallbackCitation) =>
+        JSON.stringify([
+          citation.pointerId,
+          citation.recordId,
+          citation.sourceRevision,
+          citation.contentHash,
+        ]);
+      const presented = new Set<string>();
+      for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        try {
+          const source = item as { pointer?: ContextPointer; record?: { id?: string } };
+          if (!source.pointer) continue;
+          const pointer = createContextPointer(source.pointer);
+          if (source.record?.id !== pointer.recordId) continue;
+          presented.add(
+            key({
+              pointerId: pointer.id,
+              recordId: pointer.recordId,
+              sourceRevision: pointer.sourceVersion,
+              contentHash: pointer.contentHash,
+            }),
+          );
+        } catch {
+          /* Malformed results cannot grant canonical citation authority. */
+        }
+      }
+      const unique = new Map<string, VerifiedRlmFallbackCitation>();
+      for (const citation of citations) {
+        if (!citation || !presented.has(key(citation))) return clean;
+        const previous = unique.get(citation.pointerId);
+        if (previous && key(previous) !== key(citation)) return clean;
+        unique.set(citation.pointerId, citation);
+      }
+      const admitted: VerifiedRlmFallbackCitation[] = [];
+      const evidenceUris: string[] = [];
+      let truncated = false;
+      for (const citation of unique.values()) {
+        let uri: string;
+        try {
+          uri = canonicalContextUri('evidence', citation.pointerId);
+        } catch {
+          return clean;
+        }
+        const candidate = { evidenceUris: [...evidenceUris, uri], truncated: false };
+        if (
+          evidenceUris.length >= MAX_CANONICAL_EVIDENCE_URIS ||
+          new TextEncoder().encode(uri).byteLength > MAX_CANONICAL_URI_BYTES ||
+          new TextEncoder().encode(JSON.stringify(candidate)).byteLength >
+            MAX_CANONICAL_PROVENANCE_BYTES
+        ) {
+          truncated = true;
+          continue;
+        }
+        admitted.push(citation);
+        evidenceUris.push(uri);
+      }
+      if (!admitted.length) return clean;
       current();
+      const registered = registerToolGatewayFallbackCitations(
+        capturedLease.sessionId,
+        admitted,
+        scope,
+      );
+      current();
+      const confirmed = evidenceUris.filter(
+        (uri) =>
+          Array.isArray(registered) &&
+          registered.some(
+            (item) =>
+              item.purpose === 'citation' &&
+              item.freshness === 'current' &&
+              item.source.kind === 'context_node' &&
+              item.source.trust === 'app_verified' &&
+              item.source.origin === 'app_observed' &&
+              item.source.sensitivity === 'private' &&
+              item.source.accountId === scope.accountId &&
+              item.source.projectId === scope.projectId &&
+              item.source.uri === uri &&
+              admitted.some(
+                (citation) =>
+                  citation.pointerId === item.source.id &&
+                  citation.contentHash === item.source.contentHash &&
+                  canonicalContextUri('evidence', citation.pointerId) === uri,
+              ),
+          ),
+      );
+      if (!confirmed.length) return clean;
+      return Object.freeze({
+        ...(clean as Record<string, unknown>),
+        canonicalProvenance: Object.freeze({
+          evidenceUris: Object.freeze(confirmed),
+          truncated: truncated || confirmed.length !== evidenceUris.length,
+        }),
+      });
     };
     const base = exactKeys(
       rawInput,
@@ -337,8 +454,7 @@ export function createRlmOpenCodeTool(dependencies: {
             signal,
           });
           signal?.throwIfAborted();
-          await registerVerified(result);
-          return result;
+          return withVerifiedCitations(result);
         });
       }
       case 'describe': {
@@ -359,8 +475,7 @@ export function createRlmOpenCodeTool(dependencies: {
           signal,
         });
         signal?.throwIfAborted();
-        await registerVerified(result);
-        return result;
+        return withVerifiedCitations(result);
       }
       case 'open': {
         const args = exactKeys(rawInput, ['operation', 'pointer'], ['maxBytes', 'continuation']);
@@ -374,8 +489,7 @@ export function createRlmOpenCodeTool(dependencies: {
           signal,
         });
         signal?.throwIfAborted();
-        await registerVerified(result);
-        return result;
+        return withVerifiedCitations(result);
       }
       case 'expand': {
         const args = exactKeys(rawInput, ['operation', 'pointer'], ['beforeBytes', 'afterBytes']);
@@ -387,8 +501,7 @@ export function createRlmOpenCodeTool(dependencies: {
           signal,
         });
         signal?.throwIfAborted();
-        await registerVerified(result);
-        return result;
+        return withVerifiedCitations(result);
       }
       case 'address': {
         const args = exactKeys(rawInput, ['operation', 'corpusId', 'position']);
@@ -437,8 +550,7 @@ export function createRlmOpenCodeTool(dependencies: {
               signal,
             });
             signal?.throwIfAborted();
-            await registerVerified(result);
-            return result;
+            return withVerifiedCitations(result);
           });
         }
         return executeRouted('rlm', () =>

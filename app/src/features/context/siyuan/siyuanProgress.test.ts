@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createSiyuanIndexJob } from './siyuanIndexJobStore';
 import {
+  projectSiyuanSearchProgress,
   classifySiyuanCheckpointLiveness,
   estimateSiyuanDiscoveryProgress,
   formatSiyuanEta,
@@ -185,3 +186,15 @@ describe('SiYuan honest progress estimator', () => {
     ).toBe('Recalculating…');
   });
 });
+
+ it.each(['indexing', 'error'])('does not project graph completion as search readiness for %s', sourceStatus => {
+  const base = createSiyuanIndexJob({projectId:'p',mapId:'m',canonicalRoot:'C:/root',policyFingerprint:'policy'});
+  const complete = {...base, phase:'completed' as const,status:'completed' as const,completedAt:100,reconciledAt:99};
+  const view=projectSiyuanSearchProgress(complete,sourceStatus);
+  expect(view.phase).toBe('reconciling');
+  expect(view.status).toBe(sourceStatus==='indexing'?'running':'failed');
+  expect(siyuanOverallProgressPercent(view)).toBeNull();
+  expect(formatSiyuanJobEta(view)).not.toBe('0s');
+  expect(complete.phase).toBe('completed');
+  expect(projectSiyuanSearchProgress(complete,'ready')).toBe(complete);
+ });

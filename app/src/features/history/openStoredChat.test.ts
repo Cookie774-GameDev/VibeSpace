@@ -189,4 +189,112 @@ describe('stored chat navigation', () => {
     await expect(request).resolves.toEqual({ status: 'superseded' });
     expect(deps.activateAndRoute).not.toHaveBeenCalled();
   });
+
+  it.each(['accountId', 'workspaceId', 'projectId'] as const)(
+    'does not restore identity when only %s changes during lookup',
+    async (key) => {
+      const scope = { accountId: 'account-a', workspaceId: 'workspace-a', projectId: 'project-a' };
+      deps.getScope.mockReturnValue(scope);
+      const lookup = deferred<Chat | undefined>();
+      deps.getChat.mockImplementationOnce(() => lookup.promise);
+      const request = createStoredChatNavigator(deps)('chat-a' as ChatId);
+
+      deps.getScope.mockReturnValue({ ...scope, [key]: `${key}-other` });
+      lookup.resolve({ ...chat(), archived: true });
+
+      await expect(request).resolves.toEqual({ status: 'superseded' });
+      expect(restoreArchivedChat).not.toHaveBeenCalled();
+      expect(restoreExactModel).not.toHaveBeenCalled();
+      expect(restoreExactEngine).not.toHaveBeenCalled();
+      expect(activateAndRoute).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['accountId', 'workspaceId', 'projectId'] as const)(
+    'does not activate or restore identity when only %s changes during archive restoration',
+    async (key) => {
+      const scope = { accountId: 'account-a', workspaceId: 'workspace-a', projectId: 'project-a' };
+      deps.getScope.mockReturnValue(scope);
+      deps.getChat.mockResolvedValueOnce({ ...chat(), archived: true });
+      const restoration = deferred<void>();
+      restoreArchivedChat.mockImplementationOnce(() => restoration.promise);
+      const request = createStoredChatNavigator(deps)('chat-a' as ChatId);
+      await vi.waitFor(() => expect(restoreArchivedChat).toHaveBeenCalledWith('chat-a'));
+
+      deps.getScope.mockReturnValue({ ...scope, [key]: `${key}-other` });
+      restoration.resolve();
+
+      await expect(request).resolves.toEqual({ status: 'superseded' });
+      // The already-started restore is not asserted to roll back. This guard
+      // prevents the stale request from changing current provider/UI identity.
+      expect(restoreArchivedChat).toHaveBeenCalledOnce();
+      expect(restoreExactModel).not.toHaveBeenCalled();
+      expect(restoreExactEngine).not.toHaveBeenCalled();
+      expect(activateAndRoute).not.toHaveBeenCalled();
+    },
+  );
+
+  it('lets a newer request win while an earlier archived chat is still restoring', async () => {
+    deps.getChat
+      .mockResolvedValueOnce({ ...chat('chat-older'), archived: true })
+      .mockResolvedValueOnce(chat('chat-newest'));
+    const restoration = deferred<void>();
+    restoreArchivedChat.mockImplementationOnce(() => restoration.promise);
+    const openStoredChat = createStoredChatNavigator(deps);
+    const olderRequest = openStoredChat('chat-older' as ChatId);
+    await vi.waitFor(() => expect(restoreArchivedChat).toHaveBeenCalledWith('chat-older'));
+
+    await expect(openStoredChat('chat-newest' as ChatId)).resolves.toMatchObject({
+      status: 'opened', chatId: 'chat-newest',
+    });
+    restoration.resolve();
+    await expect(olderRequest).resolves.toEqual({ status: 'superseded' });
+
+    expect(restoreExactModel).toHaveBeenCalledOnce();
+    expect(restoreExactEngine).toHaveBeenCalledExactlyOnceWith('chat-newest', {
+      engine: 'browser', providerId: 'chatgpt',
+    });
+    expect(activateAndRoute).toHaveBeenCalledExactlyOnceWith('chat-newest', null);
+  });
+
+  it('does not change provider/UI identity after a restore-write failure and can retry', async () => {
+    deps.getChat.mockResolvedValue({ ...chat(), archived: true });
+    restoreArchivedChat.mockRejectedValueOnce(new Error('synthetic storage failure'));
+    const openStoredChat = createStoredChatNavigator(deps);
+
+    await expect(openStoredChat('chat-a' as ChatId)).resolves.toEqual({ status: 'failed' });
+    expect(restoreExactModel).not.toHaveBeenCalled();
+    expect(restoreExactEngine).not.toHaveBeenCalled();
+    expect(activateAndRoute).not.toHaveBeenCalled();
+
+    await expect(openStoredChat('chat-a' as ChatId)).resolves.toMatchObject({ status: 'opened' });
+    expect(restoreArchivedChat).toHaveBeenCalledTimes(2);
+    expect(activateAndRoute).toHaveBeenCalledExactlyOnceWith('chat-a', null);
+  });
+
+  it('returns a lookup failure without side effects and permits a later successful open', async () => {
+    deps.getChat.mockRejectedValueOnce(new Error('synthetic lookup failure'));
+    const openStoredChat = createStoredChatNavigator(deps);
+
+    await expect(openStoredChat('chat-a' as ChatId)).resolves.toEqual({ status: 'failed' });
+    expect(restoreArchivedChat).not.toHaveBeenCalled();
+    expect(restoreExactModel).not.toHaveBeenCalled();
+    expect(restoreExactEngine).not.toHaveBeenCalled();
+    expect(activateAndRoute).not.toHaveBeenCalled();
+
+    await expect(openStoredChat('chat-a' as ChatId)).resolves.toMatchObject({ status: 'opened' });
+    expect(activateAndRoute).toHaveBeenCalledExactlyOnceWith('chat-a', null);
+  });
+
+  it('reopens a saved non-archived chat without a model binding without substituting one', async () => {
+    deps.getChat.mockResolvedValueOnce({ ...chat(), archived: false, connection: undefined });
+
+    await expect(createStoredChatNavigator(deps)('chat-a' as ChatId)).resolves.toEqual({
+      status: 'opened', chatId: 'chat-a', model: 'none',
+    });
+    expect(restoreArchivedChat).not.toHaveBeenCalled();
+    expect(restoreExactModel).not.toHaveBeenCalled();
+    expect(restoreExactEngine).toHaveBeenCalledOnce();
+    expect(activateAndRoute).toHaveBeenCalledExactlyOnceWith('chat-a', null);
+  });
 });

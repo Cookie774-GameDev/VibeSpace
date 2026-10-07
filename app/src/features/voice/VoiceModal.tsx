@@ -42,6 +42,7 @@ import { modelSupportsVision } from '@/lib/ai/vision';
 import {
   parseVoiceProviderOverrides,
   resolveVoiceProviderSelection,
+  voiceProviderForConnectionId,
 } from './voiceProviderSelection';
 import { captureVoiceScreenAttachment } from './voiceScreenCapture';
 import {
@@ -54,7 +55,11 @@ import { syncVoiceConversationFolder } from './voiceConversationFolder';
 import { createVoiceAgentFlow } from './voiceAgentFlow';
 import { dispatchVoiceMainRequest } from './voiceNativeDelegation';
 import { useJarvisInteractionStore } from '@/features/jarvis-interaction/sessionStore';
-import { readChatReasoningPreference } from '@/features/chat/reasoningSlashStore';
+import {
+  readChatReasoningPreference,
+  writeChatReasoningEffort,
+  writeChatReasoningMode,
+} from '@/features/chat/reasoningSlashStore';
 import { resolveVoiceListenTimeoutMs } from './voiceConversation';
 import { createVoiceSessionBinding, newVoiceSessionId } from './voiceSessionBinding';
 import {
@@ -216,6 +221,7 @@ export function VoiceModal() {
 
 function VoiceModalPanel() {
   const open = useUIStore((state) => state.voiceModalOpen);
+  const textInputMode = useUIStore((state) => state.voiceInputMode === 'text');
   const theme = useUIStore((state) => state.theme);
   const setOpen = useUIStore((state) => state.setVoiceModalOpen);
   const localUserId = useAuthStore((state) => state.localUserId);
@@ -229,7 +235,10 @@ function VoiceModalPanel() {
   const fasterWhisperModel = useAuthStore((state) => state.fasterWhisperModel);
   const chatModelSelection = useAuthStore((state) => state.chatModelSelection);
   const voiceMainAgentProvider = useAuthStore((state) => state.voiceMainAgentProvider);
-  const [activeMainProvider, setActiveMainProvider] = React.useState(voiceMainAgentProvider);
+  const selectedMainProvider = (chatModelSelection.mode === 'single'
+    ? voiceProviderForConnectionId(chatModelSelection.connectionId)
+    : null) ?? voiceMainAgentProvider;
+  const [activeMainProvider, setActiveMainProvider] = React.useState(selectedMainProvider);
   const voiceAccentIntensity = useAuthStore((state) => state.voiceAccentIntensity);
   const voiceStartFreshChat = useAuthStore((state) => state.voiceStartFreshChat);
   const voiceMiniBarEnabled = useAuthStore((state) => state.voiceMiniBarEnabled);
@@ -296,6 +305,10 @@ function VoiceModalPanel() {
   const flushUtteranceRef = React.useRef<(text: string) => void>(() => undefined);
   const voiceFlowActiveRef = React.useRef(false);
   const voiceFlowGenerationRef = React.useRef(0);
+  const scopeRevisionRef = React.useRef(0);
+  const pendingRequestSessionRef = React.useRef<{
+    sessionId: string; accountId: string; chatId: string;
+  } | null>(null);
   const openingIdRef = React.useRef<string | null>(null);
   const openingScopeRef = React.useRef('');
   const providerChatsRef = React.useRef<Record<string, Promise<ChatId | null>>>({});
@@ -309,6 +322,42 @@ function VoiceModalPanel() {
   // Settings voice preview) started - so we can hand the mic back afterwards
   // instead of leaving push-to-talk silently disarmed.
   const resumeListeningAfterSpeechRef = React.useRef(false);
+  React.useEffect(() => {
+    const revokePending = () => {
+      scopeRevisionRef.current += 1;
+      voiceFlowGenerationRef.current += 1;
+      voiceFlowActiveRef.current = false;
+      pendingRequestSessionRef.current = null;
+      turnBusyRef.current = false;
+      setMiniBarText('');
+    };
+    // Observe transitions synchronously. React can coalesce A -> B -> A into
+    // unchanged visible values; a revoked pending turn must not revive with them.
+    const offAuth = useAuthStore.subscribe((next, previous) => {
+      if (resolveAccountIdentity(next)?.accountId !== resolveAccountIdentity(previous)?.accountId ||
+          next.workspaceId !== previous.workspaceId || next.projectId !== previous.projectId) {
+        revokePending();
+      }
+    });
+    const offUi = useUIStore.subscribe((next, previous) => {
+      if ((previous.voiceModalOpen && !next.voiceModalOpen) ||
+          next.voiceInputMode !== previous.voiceInputMode) revokePending();
+    });
+    const offSession = useVoiceStore.subscribe((next) => {
+      const bound = pendingRequestSessionRef.current;
+      const session = next.session;
+      if (bound && (!session || session.sessionId !== bound.sessionId ||
+          session.accountId !== bound.accountId || String(session.chatId) !== bound.chatId)) {
+        revokePending();
+      }
+    });
+    return () => {
+      offAuth(); offUi(); offSession();
+      scopeRevisionRef.current += 1;
+      voiceFlowGenerationRef.current += 1;
+      pendingRequestSessionRef.current = null;
+    };
+  }, []);
   const personaCfg = PERSONAS[persona];
   const modelLabel = React.useMemo(
     () =>
@@ -324,13 +373,13 @@ function VoiceModalPanel() {
       signal?.stop();
       return;
     }
-    if (state === 'listening') void signal.startListening();
+    if (state === 'listening' && !textInputMode) void signal.startListening();
     else if (state === 'speaking') signal.startSpeaking();
     else if (state !== 'thinking') signal.stop();
     return () => {
       if (!useUIStore.getState().voiceModalOpen) signal.stop();
     };
-  }, [open, state]);
+  }, [open, state, textInputMode]);
   const commandCenterHandlers = React.useMemo<JarvisCommandCenterHandlers>(() => {
     const hostPort = commandCenterBinding?.hostPort;
     if (!hostPort) return {};
@@ -533,6 +582,7 @@ function VoiceModalPanel() {
   }, []);
 
   const startListening = React.useCallback(() => {
+    if (useUIStore.getState().voiceInputMode === 'text') return false;
     const supported = VoiceService.isSupported();
     if (!supported) {
       useUIStore.getState().setVoiceListening(false);
@@ -566,19 +616,22 @@ function VoiceModalPanel() {
 
   /** Stop the current spoken reply and hand control straight back to the user. */
   const stopSpeaking = React.useCallback(() => {
+    voiceFlowGenerationRef.current += 1;
+    voiceFlowActiveRef.current = false;
+    pendingRequestSessionRef.current = null;
     manuallyStoppedReplyRef.current = true;
     stopCurrentVoiceResponse();
     speakingRef.current = false;
     streamingReplyRef.current = false;
     turnBusyRef.current = false;
     resumeListeningAfterSpeechRef.current = false;
-    if (useAuthStore.getState().voiceAutoListenOnOpen) {
+    if (useAuthStore.getState().voiceAutoListenOnOpen && !textInputMode) {
       listeningArmedRef.current = true;
       startListening();
     } else {
       useVoiceStore.getState().setState('idle');
     }
-  }, [startListening]);
+  }, [startListening, textInputMode]);
 
   const toggleListening = React.useCallback(() => {
     if (state === 'thinking' || state === 'speaking' || speakingRef.current) {
@@ -617,12 +670,17 @@ function VoiceModalPanel() {
     openingScopeRef.current = '';
     openingIdRef.current = null;
     providerChatsRef.current = {};
-    setActiveMainProvider(useAuthStore.getState().voiceMainAgentProvider);
+    setMiniBarText('');
+    const auth = useAuthStore.getState();
+    setActiveMainProvider((auth.chatModelSelection.mode === 'single'
+      ? voiceProviderForConnectionId(auth.chatModelSelection.connectionId)
+      : null) ?? auth.voiceMainAgentProvider);
   }, [open]);
 
   React.useEffect(() => {
     if (!open) return;
     let disposed = false;
+    const openingRevision = scopeRevisionRef.current;
 
     const requestedIdentity = resolveAccountIdentity(useAuthStore.getState());
     if (!requestedIdentity) {
@@ -651,13 +709,21 @@ function VoiceModalPanel() {
           return;
         }
       }
-      if (disposed) return;
+      if (disposed || scopeRevisionRef.current !== openingRevision) return;
 
       const currentIdentity = resolveAccountIdentity(useAuthStore.getState());
       if (currentIdentity?.accountId !== requestedIdentity.accountId) return;
-      const provider = useAuthStore.getState().voiceMainAgentProvider;
+      const provider = selectedMainProvider;
       const openingScope = JSON.stringify([requestedIdentity.accountId, workspaceId, projectId]);
+      const inheritVisiblePreference = !openingScopeRef.current || openingScopeRef.current === openingScope;
+      const sourceChatId = inheritVisiblePreference ? useUIStore.getState().activeChatId : null;
+      const sourcePreference = sourceChatId ? readChatReasoningPreference(sourceChatId) : null;
       if (openingScopeRef.current !== openingScope) {
+        if (openingScopeRef.current) {
+          setMiniBarText('');
+          voiceFlowGenerationRef.current += 1;
+          voiceFlowActiveRef.current = false;
+        }
         openingScopeRef.current = openingScope;
         openingIdRef.current = newVoiceSessionId();
         providerChatsRef.current = {};
@@ -672,10 +738,19 @@ function VoiceModalPanel() {
         },
       ));
       if (!chatId) delete providerChatsRef.current[provider];
-      if (disposed || !chatId) return;
+      if (disposed || !chatId || scopeRevisionRef.current !== openingRevision) return;
 
-      const confirmedIdentity = resolveAccountIdentity(useAuthStore.getState());
-      if (confirmedIdentity?.accountId !== requestedIdentity.accountId) return;
+      const confirmedAuth = useAuthStore.getState();
+      const confirmedIdentity = resolveAccountIdentity(confirmedAuth);
+      if (confirmedIdentity?.accountId !== requestedIdentity.accountId ||
+          confirmedAuth.workspaceId !== workspaceId || confirmedAuth.projectId !== projectId ||
+          !useUIStore.getState().voiceModalOpen) return;
+      if (openingScopeRef.current !== openingScope || openingIdRef.current !== openingId) return;
+      if (sourcePreference && sourceChatId !== chatId) {
+        writeChatReasoningMode(String(chatId), sourcePreference.mode);
+        writeChatReasoningEffort(String(chatId), sourcePreference.effortOverride);
+      }
+      setActiveMainProvider(provider);
       const currentSession = useVoiceStore.getState().session;
       if (
         currentSession?.chatId === chatId &&
@@ -721,7 +796,7 @@ function VoiceModalPanel() {
     open,
     workspaceId,
     projectId,
-    voiceMainAgentProvider,
+    selectedMainProvider,
     voiceStartFreshChat,
   ]);
 
@@ -731,7 +806,7 @@ function VoiceModalPanel() {
     if (resolveAccountIdentity(auth)?.accountId !== session.accountId) return;
     try {
       const route = resolveVoiceProviderSelection({
-        provider: auth.voiceMainAgentProvider,
+        provider: selectedMainProvider,
         options: accessibleModels,
         preferredSelection: auth.chatModelSelection,
       });
@@ -743,15 +818,16 @@ function VoiceModalPanel() {
     } catch {
       // Discovery can still be loading; a send reports the actionable route error.
     }
-  }, [open, session, chatModelSelection, accessibleModels]);
+  }, [open, session, chatModelSelection, accessibleModels, selectedMainProvider]);
 
   React.useEffect(() => {
     if (!open) return;
-    listeningArmedRef.current = voiceAutoListenOnOpen;
-    if (voiceAutoListenOnOpen) startListening();
+    listeningArmedRef.current = voiceAutoListenOnOpen && !textInputMode;
+    if (voiceAutoListenOnOpen && !textInputMode) startListening();
     else useVoiceStore.getState().setState('idle');
 
-    const handsFree = () => useAuthStore.getState().voiceAutoListenOnOpen;
+    const handsFree = () => useAuthStore.getState().voiceAutoListenOnOpen &&
+      useUIStore.getState().voiceInputMode !== 'text';
 
     const clearUtteranceTimers = () => {
       if (utteranceTimerRef.current !== null) window.clearTimeout(utteranceTimerRef.current);
@@ -848,13 +924,20 @@ function VoiceModalPanel() {
       // lifecycle synchronization has not finished on a fresh open.
       void speakWithSettings('On it.', { allowBackground: true }).catch(() => undefined);
       voiceFlowActiveRef.current = true;
+      pendingRequestSessionRef.current = null;
       const flowGeneration = ++voiceFlowGenerationRef.current;
       const auth = useAuthStore.getState();
       const requestAccountId = resolveAccountIdentity(auth)?.accountId;
+      const visibleChatId = useUIStore.getState().activeChatId;
+      const visibleReasoningPreference = visibleChatId
+        ? readChatReasoningPreference(visibleChatId) : null;
+      let requestSessionId: string | null = null;
       const requestIsCurrent = () => {
         const live = useAuthStore.getState();
         return (
           voiceFlowGenerationRef.current === flowGeneration &&
+          useUIStore.getState().voiceModalOpen &&
+          (requestSessionId === null || useVoiceStore.getState().session?.sessionId === requestSessionId) &&
           resolveAccountIdentity(live)?.accountId === requestAccountId &&
           live.workspaceId === auth.workspaceId &&
           live.projectId === auth.projectId
@@ -864,15 +947,17 @@ function VoiceModalPanel() {
         const parsed = parseVoiceProviderOverrides(text);
         const messageText = (parsed ? parsed.taskText : text).trim();
         if (!messageText) throw new Error('Say a task after the provider instruction.');
-        const mainProvider = parsed?.providers.main ?? auth.voiceMainAgentProvider;
+        const requestedMainProvider = parsed?.providers.main ?? auth.voiceMainAgentProvider;
         const workerProvider = parsed?.providers.worker ?? auth.voiceWorkerProvider;
         // Only Main must be available before this turn is sent. Main may answer
         // directly without a worker; native delegation checks its own route.
         const mainRoute = resolveVoiceProviderSelection({
-          provider: mainProvider,
+          provider: requestedMainProvider,
           options: accessibleModelsRef.current,
           preferredSelection: auth.chatModelSelection,
+          preservePreferredRoute: !parsed?.providers.main,
         });
+        const mainProvider = mainRoute.provider;
         if (parsed?.saveAsDefault) {
           if (parsed.providers.main) auth.setVoiceMainAgentProvider(parsed.providers.main);
           if (parsed.providers.worker) auth.setVoiceWorkerProvider(parsed.providers.worker);
@@ -913,6 +998,10 @@ function VoiceModalPanel() {
           },
           String(chatId),
         );
+        if (visibleReasoningPreference && visibleChatId !== chatId && requestIsCurrent()) {
+          writeChatReasoningMode(String(chatId), visibleReasoningPreference.mode);
+          writeChatReasoningEffort(String(chatId), visibleReasoningPreference.effortOverride);
+        }
         focusVoiceChat(chatId);
 
         const modelCheck = validateSendModelAccess(
@@ -927,6 +1016,10 @@ function VoiceModalPanel() {
         const binding = useVoiceStore.getState().session;
         if (binding?.chatId !== chatId || binding.accountId !== identity.accountId)
           throw new Error(VOICE_BOUND_CHAT_FAILURE);
+        requestSessionId = binding.sessionId;
+        pendingRequestSessionRef.current = {
+          sessionId: binding.sessionId, accountId: binding.accountId, chatId: String(binding.chatId),
+        };
         const scope = {
           accountId: identity.accountId,
           workspaceId: String(auth.workspaceId),
@@ -1040,6 +1133,7 @@ function VoiceModalPanel() {
         .finally(() => {
           if (voiceFlowGenerationRef.current === flowGeneration) {
             voiceFlowActiveRef.current = false;
+            pendingRequestSessionRef.current = null;
             if (!requestIsCurrent()) turnBusyRef.current = false;
           }
         });
@@ -1228,7 +1322,7 @@ function VoiceModalPanel() {
       window.removeEventListener(SPEECH_SYNTHESIS_END_EVENT, onSpeechEnd);
       if (!useUIStore.getState().voiceModalOpen) handleVoiceModuleClosed();
     };
-  }, [open, startListening, voiceAutoListenOnOpen, stopListening]);
+  }, [open, startListening, voiceAutoListenOnOpen, stopListening, textInputMode]);
 
   const runSmokeSttFixture = React.useCallback(async () => {
     if (!KERNEL_SMOKE_ENABLED || smokeSttState === 'transcribing') return;
@@ -1461,13 +1555,13 @@ function VoiceModalPanel() {
             </motion.div>
           )}
         </AnimatePresence>
-        {voiceMiniBarEnabled &&
+        {(voiceMiniBarEnabled || textInputMode) &&
           createPortal(
             <form
               aria-label="Jarvis voice mini bar"
-              hidden
-              aria-hidden="true"
-              {...LEGACY_VOICE_INERT_ATTRIBUTES}
+              hidden={!textInputMode}
+              aria-hidden={!textInputMode}
+              {...(!textInputMode ? LEGACY_VOICE_INERT_ATTRIBUTES : {})}
               onSubmit={(event) => {
                 event.preventDefault();
                 const text = miniBarText.trim();
@@ -1483,6 +1577,7 @@ function VoiceModalPanel() {
                 onChange={(event) => setMiniBarText(event.target.value)}
                 placeholder="Ask Jarvis…"
                 autoComplete="off"
+                autoFocus={textInputMode}
                 className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
               />
               <button
@@ -1492,6 +1587,21 @@ function VoiceModalPanel() {
               >
                 Send
               </button>
+              {textInputMode && (state === 'thinking' || state === 'speaking') && (
+                <button type="button" onClick={stopSpeaking} className="rounded-xl px-3 py-2 text-sm">
+                  Stop reply
+                </button>
+              )}
+              {textInputMode && (
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  aria-label="Close typed Jarvis voice"
+                  className="rounded-xl px-3 py-2 text-sm"
+                >
+                  Close
+                </button>
+              )}
             </form>,
             document.body,
           )}
