@@ -68,6 +68,8 @@ export function createTemporalKnowledgeIndex(
     }
     for (const fact of initial.facts) {
       validateInput(fact);
+      assertTimestamp('fact verification time', fact.lastVerifiedAt);
+      if (fact.validUntil !== null) assertTimestamp('fact validity end', fact.validUntil);
       if (
         facts.has(fact.id) ||
         !['current', 'stale', 'superseded', 'disputed', 'unavailable'].includes(fact.state) ||

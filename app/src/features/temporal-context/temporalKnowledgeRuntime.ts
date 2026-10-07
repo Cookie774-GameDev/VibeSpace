@@ -1,6 +1,7 @@
 import { db, openDb } from '@/lib/db';
 import type { RepositoryRetrievalResult } from '@/features/context/repositoryRetrieval';
 import type { TemporalKnowledgeSnapshot } from './contracts';
+import { createTemporalKnowledgeIndex } from './temporalKnowledge';
 import {
   openTemporalKnowledgeRepository,
   type TemporalKnowledgeStoragePort,
@@ -24,8 +25,22 @@ function isEnvelope(value: unknown): value is StoredTemporalEnvelope {
     value !== null &&
     (value as StoredTemporalEnvelope).schemaVersion === 1 &&
     typeof (value as StoredTemporalEnvelope).snapshot === 'object' &&
-    Array.isArray((value as StoredTemporalEnvelope).idempotencyKeys)
+    (value as StoredTemporalEnvelope).snapshot !== null &&
+    Array.isArray((value as StoredTemporalEnvelope).idempotencyKeys) &&
+    (value as StoredTemporalEnvelope).idempotencyKeys.every(
+      (key) => typeof key === 'string' && key.length > 0,
+    )
   );
+}
+
+function requireEnvelope(
+  value: unknown,
+  scope: { accountId: string; projectId: string },
+): StoredTemporalEnvelope {
+  if (!isEnvelope(value)) throw new Error('Temporal knowledge stored envelope is invalid.');
+  // A stored but rejected row is never permission to initialize or overwrite history.
+  createTemporalKnowledgeIndex(scope, value.snapshot);
+  return value;
 }
 
 async function sha256(value: string): Promise<string> {
@@ -40,14 +55,14 @@ function createDexieTemporalStorage(): TemporalKnowledgeStoragePort {
     async load(scope) {
       await openDb();
       const row = await db.settings.get(storageKey(scope.accountId, scope.projectId));
-      return isEnvelope(row?.value) ? row.value.snapshot : undefined;
+      return row === undefined ? undefined : requireEnvelope(row.value, scope).snapshot;
     },
     async compareAndSwap(input) {
       await openDb();
       return db.transaction('rw', db.settings, async () => {
         const key = storageKey(input.accountId, input.projectId);
         const row = await db.settings.get(key);
-        const envelope = isEnvelope(row?.value) ? row.value : undefined;
+        const envelope = row === undefined ? undefined : requireEnvelope(row.value, input);
         const currentRevision = envelope?.snapshot.revision ?? 0;
         if (envelope?.idempotencyKeys.includes(input.idempotencyKey)) {
           return Object.freeze({

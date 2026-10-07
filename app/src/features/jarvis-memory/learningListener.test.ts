@@ -307,6 +307,12 @@ describe('Jarvis learning event listener', () => {
   });
 
   it('publishes truthful recovery status after hydrating a repaired durable profile', async () => {
+    useJarvisLearningStore.getState().setAccount('account-a');
+    useJarvisLearningStore.getState().remember({
+      value: 'Recovered preference', category: 'workflow', source: { kind: 'explicit' },
+    });
+    const recoveredMarkdown = useJarvisLearningStore.getState().exportMarkdown();
+    useJarvisLearningStore.getState().clearForTests();
     const statuses: string[] = [];
     const onStatus = (event: Event) =>
       statuses.push((event as CustomEvent<{ state: string }>).detail.state);
@@ -316,7 +322,7 @@ describe('Jarvis learning event listener', () => {
       save: async () => undefined,
       load: async () => ({
         path: 'private-path-must-not-be-published',
-        markdown: '# Jarvis Learning\n\n## Preferences\n- Recovered preference',
+        markdown: recoveredMarkdown,
         recovered: true,
         recoverySource: 'backup' as const,
       }),

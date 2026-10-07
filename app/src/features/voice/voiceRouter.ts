@@ -152,10 +152,13 @@ export async function bootstrapJarvisVoiceOnLaunch(): Promise<void> {
 async function speakInstalledVoiceFallback(
   text: string,
   voicePreset: VoicePresetId,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) return;
   try {
     await speakText(text, { voicePreset, engine: 'local' });
   } catch {
+    if (signal?.aborted) return;
     await speakText(text, { voicePreset, engine: 'system' });
   }
 }
@@ -168,46 +171,54 @@ function trimJarvisCache(): void {
   }
 }
 
-async function synthesizeJarvisPhrase(
-  text: string,
-  _preset: VoiceTtsPreset,
-): Promise<{ audio: string; mime: string }> {
-  const invoke = await import('@tauri-apps/api/core')
-    .then((m) => m.invoke as <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>)
-    .catch(() => null);
-  if (!invoke) throw new Error('jarvis_voice_unavailable');
-
-  return invoke<{ audio: string; mime: string }>('jarvis_voice_speak', {
-    text,
-    speed: 1,
-  });
-}
-
 async function getCachedJarvisAudio(
   text: string,
   preset: VoiceTtsPreset,
+  signal?: AbortSignal,
 ): Promise<{ audio: string; mime: string }> {
+  if (signal?.aborted) throw new Error('jarvis_speech_cancelled');
   const key = `${preset}:${text}`;
   let pending = jarvisAudioCache.get(key);
   if (!pending) {
-    pending = synthesizeJarvisPhrase(text, preset);
-    jarvisAudioCache.set(key, pending);
-    trimJarvisCache();
-    pending.catch(() => jarvisAudioCache.delete(key));
+    const invoke = await import('@tauri-apps/api/core')
+      .then((m) => m.invoke as <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>)
+      .catch(() => null);
+    if (signal?.aborted) throw new Error('jarvis_speech_cancelled');
+    if (!invoke) throw new Error('jarvis_voice_unavailable');
+
+    // Cache only admitted synthesis; a stopped importer must not occupy a newer request's slot.
+    pending = jarvisAudioCache.get(key);
+    if (!pending) {
+      const admitted = invoke<{ audio: string; mime: string }>('jarvis_voice_speak', {
+        text,
+        speed: 1,
+      });
+      pending = admitted;
+      jarvisAudioCache.set(key, admitted);
+      trimJarvisCache();
+      admitted.catch(() => {
+        if (jarvisAudioCache.get(key) === admitted) jarvisAudioCache.delete(key);
+      });
+    }
   }
   return pending;
 }
 
 export async function ensureJarvisReadyForSpeech(
   onProgress?: (percent: number) => void,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  if (await jarvisHighLocalProvider.isAvailable()) {
+  if (signal?.aborted) return false;
+  const available = await jarvisHighLocalProvider.isAvailable();
+  if (signal?.aborted) return false;
+  if (available) {
     await jarvisHighLocalProvider.warmup?.();
-    return true;
+    return !signal?.aborted;
   }
   const ok = await ModelManager.ensureJarvisReady((p) => onProgress?.(p.percent));
-  if (!ok) return false;
+  if (!ok || signal?.aborted) return false;
   await jarvisHighLocalProvider.warmup?.();
+  if (signal?.aborted) return false;
   return jarvisHighLocalProvider.isAvailable();
 }
 
@@ -335,7 +346,7 @@ class JarvisStreamingPlayerImpl implements JarvisStreamingPlayer {
     this.ttsPreset = voicePresetToTtsPreset(voicePreset);
     this.ready = (async () => {
       if (await jarvisHighLocalProvider.isAvailable()) return true;
-      return ensureJarvisReadyForSpeech();
+      return ensureJarvisReadyForSpeech(undefined, this.controller.signal);
     })();
   }
 
@@ -379,13 +390,16 @@ class JarvisStreamingPlayerImpl implements JarvisStreamingPlayer {
       next.audio = this.ready
         .then((ready) => {
           if (!ready) throw new Error('jarvis_voice_unavailable');
-          return getCachedJarvisAudio(next.text, this.ttsPreset);
+          return getCachedJarvisAudio(next.text, this.ttsPreset, this.controller.signal);
         })
         .finally(() => {
           this.inFlightSynth = Math.max(0, this.inFlightSynth - 1);
           this.pumpSynthesis();
           this.wake();
         });
+      // Stop can retire queued audio before playback awaits it. Observe its rejection
+      // now, while preserving the original promise for the active playback fallback.
+      void next.audio.catch(() => {});
     }
   }
 
@@ -413,7 +427,7 @@ class JarvisStreamingPlayerImpl implements JarvisStreamingPlayer {
         });
       } catch {
         if (this.stopped || this.controller.signal.aborted) return;
-        await speakInstalledVoiceFallback(item.text, this.voicePreset);
+        await speakInstalledVoiceFallback(item.text, this.voicePreset, this.controller.signal);
       } finally {
         if (this.items[0] === item) this.items.shift();
         this.pumpSynthesis();
@@ -443,72 +457,75 @@ export async function speakWithSettings(
   options: SpeakWithSettingsOptions = {},
 ): Promise<void> {
   const trimmed = (options.text ?? text).trim();
-  if (!trimmed) return;
+  if (!trimmed || options.signal?.aborted) return;
   if (!options.allowBackground && !canVoiceModuleSpeak()) return;
 
   const state = useAuthStore.getState();
   const engine = options.voiceEngine ?? state.voiceEngine ?? 'jarvis';
   const voicePreset = options.voicePreset ?? state.voicePreset ?? 'jarvis-prime';
   const ttsPreset = voicePresetToTtsPreset(voicePreset);
+  // Stop must revoke the request while readiness is still pending, before playback exists.
+  const controller = beginPlaybackAbortScope();
+  const abort = () => controller.abort();
+  options.signal?.addEventListener('abort', abort, { once: true });
 
-  if (trimmed === 'On it.' && engine === 'jarvis' && voicePreset === 'jarvis-prime') {
-    bundledAcknowledgmentAudio?.pause();
-    const audio = new Audio(JARVIS_ACK_ASSET);
-    bundledAcknowledgmentAudio = audio;
-    const stop = () => audio.pause();
-    options.signal?.addEventListener('abort', stop, { once: true });
-    try {
-      await audio.play();
-      return;
-    } catch {
-      // Preserve the selected engine's generated speech fallback.
-    } finally {
-      options.signal?.removeEventListener('abort', stop);
-    }
-  }
-
-  if (engine === 'deepgram') {
-    TtsService.setProvider('deepgram_tts');
-    TtsService.setVoicePreset(ttsPreset);
-    await TtsService.speak(trimmed);
-    return;
-  }
-
-  if (engine === 'jarvis') {
-    if (voicePreset === 'aurora') {
-      await speakInstalledVoiceFallback(trimmed, voicePreset);
-      return;
-    }
-    if (!(await jarvisHighLocalProvider.isAvailable())) {
-      const ready = await ensureJarvisReadyForSpeech();
-      if (!ready) {
-        await speakInstalledVoiceFallback(trimmed, voicePreset);
+  try {
+    if (trimmed === 'On it.' && engine === 'jarvis' && voicePreset === 'jarvis-prime') {
+      bundledAcknowledgmentAudio?.pause();
+      const audio = new Audio(JARVIS_ACK_ASSET);
+      bundledAcknowledgmentAudio = audio;
+      const stop = () => audio.pause();
+      controller.signal.addEventListener('abort', stop, { once: true });
+      try {
+        await audio.play();
         return;
+      } catch {
+        if (controller.signal.aborted) return;
+        // Preserve the selected engine's generated speech fallback.
+      } finally {
+        controller.signal.removeEventListener('abort', stop);
       }
     }
-    const controller = beginPlaybackAbortScope();
-    options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
-    try {
-      const { audio, mime } = await getCachedJarvisAudio(trimmed, ttsPreset);
-      if (controller.signal.aborted) return;
-      await playBase64Audio(audio, mime || 'audio/wav', {
-        volume: 1,
-        signal: controller.signal,
-      });
-    } catch {
-      if (controller.signal.aborted) return;
-      await speakInstalledVoiceFallback(trimmed, voicePreset);
-    } finally {
-      endPlaybackAbortScope(controller);
-    }
-    return;
-  }
 
-  const controller = beginPlaybackAbortScope();
-  options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
-  try {
+    if (engine === 'deepgram') {
+      TtsService.setProvider('deepgram_tts');
+      TtsService.setVoicePreset(ttsPreset);
+      await TtsService.speak(trimmed);
+      return;
+    }
+
+    if (engine === 'jarvis') {
+      if (voicePreset === 'aurora') {
+        await speakInstalledVoiceFallback(trimmed, voicePreset, controller.signal);
+        return;
+      }
+      if (!(await jarvisHighLocalProvider.isAvailable())) {
+        if (controller.signal.aborted) return;
+        const ready = await ensureJarvisReadyForSpeech(undefined, controller.signal);
+        if (controller.signal.aborted) return;
+        if (!ready) {
+          await speakInstalledVoiceFallback(trimmed, voicePreset, controller.signal);
+          return;
+        }
+      }
+      if (controller.signal.aborted) return;
+      try {
+        const { audio, mime } = await getCachedJarvisAudio(trimmed, ttsPreset, controller.signal);
+        if (controller.signal.aborted) return;
+        await playBase64Audio(audio, mime || 'audio/wav', {
+          volume: 1,
+          signal: controller.signal,
+        });
+      } catch {
+        if (controller.signal.aborted) return;
+        await speakInstalledVoiceFallback(trimmed, voicePreset, controller.signal);
+      }
+      return;
+    }
+
     await speakText(trimmed, { voicePreset, engine });
   } finally {
+    options.signal?.removeEventListener('abort', abort);
     endPlaybackAbortScope(controller);
   }
 }

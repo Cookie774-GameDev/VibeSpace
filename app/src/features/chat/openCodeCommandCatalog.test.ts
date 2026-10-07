@@ -137,3 +137,74 @@ describe('OpenCode command catalog', () => {
     )).rejects.toThrow('malformed');
   });
 });
+
+// The generation/directory stays fixed: these are overlapping periodic refreshes.
+it.each([
+  { label: 'older success after newer success', olderFails: false, newerFails: false },
+  { label: 'older failure after newer success', olderFails: true, newerFails: false },
+  { label: 'older success after newer failure', olderFails: false, newerFails: true },
+])('keeps the latest catalog result for $label', async ({ olderFails, newerFails }) => {
+  vi.useFakeTimers();
+  const pending: Array<{ resolve(response: Response): void; reject(error: Error): void }> = [];
+  vi.mocked(nativeOpenCodeRequest).mockReset().mockImplementation(() => new Promise((resolve, reject) => {
+    pending.push({ resolve, reject });
+  }));
+  const response = (name: string) => new Response(JSON.stringify([{ name, source: 'command' }]));
+  const view = renderHook(() => useOpenCodeCommandCatalog('stable-generation', true, 'C:/synthetic-catalog'));
+  try {
+    expect(pending).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(pending).toHaveLength(2);
+    await act(async () => {
+      if (newerFails) pending[1]!.resolve(new Response('Unavailable', { status: 503 }));
+      else pending[1]!.resolve(response('current-command'));
+    });
+    const latest = view.result.current;
+    if (newerFails) {
+      expect(latest.commands).toEqual([]);
+      expect(latest.error).toContain('(503)');
+    } else {
+      expect(latest.commands.map(command => command.name)).toEqual(['current-command']);
+      expect(latest.error).toBeUndefined();
+    }
+    await act(async () => {
+      if (olderFails) pending[0]!.reject(new Error('Older transport failure'));
+      else pending[0]!.resolve(response('stale-command'));
+    });
+    expect(view.result.current).toEqual(latest);
+    // A later genuine refresh still recovers normally after ignored stale IO.
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(pending).toHaveLength(3);
+    await act(async () => pending[2]!.resolve(response('recovered-command')));
+    expect(view.result.current.commands.map(command => command.name)).toEqual(['recovered-command']);
+    expect(view.result.current.error).toBeUndefined();
+    expect(vi.mocked(nativeOpenCodeRequest).mock.calls).toEqual(Array.from({ length: 3 }, () => [
+      'stable-generation', '/command?directory=C%3A%2Fsynthetic-catalog',
+    ]));
+    view.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(nativeOpenCodeRequest).toHaveBeenCalledTimes(3);
+  } finally {
+    view.unmount();
+    vi.useRealTimers();
+  }
+});
+
+it('keeps a useful earlier catalog while the next periodic refresh is still pending', async () => {
+  vi.useFakeTimers();
+  const pending: Array<(response: Response) => void> = [];
+  vi.mocked(nativeOpenCodeRequest).mockReset().mockImplementation(() => new Promise(resolve => pending.push(resolve)));
+  const view = renderHook(() => useOpenCodeCommandCatalog('stable-generation', true));
+  const response = (name: string) => new Response(JSON.stringify([{ name }]));
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(pending).toHaveLength(2);
+    await act(async () => pending[0]!(response('first-valid-command')));
+    expect(view.result.current.commands.map(command => command.name)).toEqual(['first-valid-command']);
+    await act(async () => pending[1]!(response('latest-valid-command')));
+    expect(view.result.current.commands.map(command => command.name)).toEqual(['latest-valid-command']);
+  } finally {
+    view.unmount();
+    vi.useRealTimers();
+  }
+});

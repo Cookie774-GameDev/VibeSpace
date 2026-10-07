@@ -2,6 +2,7 @@ import { createDirectory, readTextFile, writeTextFile } from '@/lib/fs';
 import { getJarvisRootDir, joinPath } from '@/features/files/projectFiles';
 
 import { privateAccountDirectory } from './accountStorage';
+import { parseJarvisLearningMarkdown } from './learningStore';
 
 export interface LearningFileIo {
   resolveRoot: () => Promise<string>;
@@ -15,6 +16,8 @@ export interface LearningFileResult {
   markdown: string;
   recovered: boolean;
   recoverySource: 'backup' | 'temporary' | null;
+  /** True only when primary, backup, and temporary files were all absent. */
+  missing?: boolean;
 }
 
 const EMPTY_LEARNING = '# Jarvis Learning\n\nNo saved learning yet.\n';
@@ -58,7 +61,7 @@ const nativeIo: LearningFileIo = {
   readText: async (path) => {
     const result = await readTextFile(path);
     if (result.ok) return result.content;
-    if (result.error.code === 'not_found' || result.error.code === 'unavailable') return null;
+    if (result.error.code === 'not_found') return null;
     throw new Error(`Could not read private memory (${result.error.code}).`);
   },
   writeText: async (path, value) => {
@@ -143,6 +146,8 @@ async function loadLearningFileUnlocked(
   }
   const backup = await io.readText(target.backup);
   if (valid(backup)) {
+    if (!parseJarvisLearningMarkdown(backup, accountId))
+      throw new Error('Learning recovery profile was rejected.');
     await writeAndVerify(
       io,
       target.primary,
@@ -153,6 +158,8 @@ async function loadLearningFileUnlocked(
   }
   const temporary = await io.readText(target.temporary);
   if (valid(temporary)) {
+    if (!parseJarvisLearningMarkdown(temporary, accountId))
+      throw new Error('Learning recovery profile was rejected.');
     await writeAndVerify(
       io,
       target.primary,
@@ -174,5 +181,6 @@ async function loadLearningFileUnlocked(
     markdown: EMPTY_LEARNING,
     recovered: false,
     recoverySource: null,
+    missing: true,
   };
 }

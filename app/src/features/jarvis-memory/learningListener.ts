@@ -105,6 +105,7 @@ export function startJarvisLearningListener(
   const evidenceRepository = bindings.evidenceRepository;
   const debounceMs = bindings.debounceMs ?? 300;
   const loadingAccounts = new Map<string, number>();
+  const unavailableAccounts = new Set<string>();
   let accountScopeEpoch = 0;
   const evidenceWriteAuthority = createMemoryEvidenceWriteAuthority();
   const profileWriteAuthority = createMemoryEvidenceWriteAuthority();
@@ -173,11 +174,21 @@ export function startJarvisLearningListener(
         if (!isCurrent()) return;
         store.getState().setAccount(accountId);
         const markdown = typeof loaded === 'string' ? loaded : loaded?.markdown;
-        if (markdown) applyDurableProfile(accountId, markdown);
-        else if (pendingControls.has(accountId)) {
+        const missing =
+          loaded === null || (typeof loaded === 'object' && loaded.missing === true);
+        if (!missing) {
+          if (
+            !markdown ||
+            !parseJarvisLearningMarkdown(markdown, accountId) ||
+            !applyDurableProfile(accountId, markdown)
+          ) {
+            throw new Error('memory_profile_hydration_rejected');
+          }
+        } else if (pendingControls.has(accountId)) {
           applyDurableProfile(accountId, store.getState().exportMarkdown());
         }
         if (evidenceRepository) store.getState().hydrateEvidence(accountId, evidence);
+        unavailableAccounts.delete(accountId);
         if (pendingControls.has(accountId)) {
           // Hydration is complete; keep later UI control changes observable during the retry.
           void writeProfile(accountId, store.getState().exportMarkdown(), undefined, true);
@@ -189,6 +200,9 @@ export function startJarvisLearningListener(
       })
       .catch((error) => {
         if (isCurrent()) {
+          unavailableAccounts.add(accountId);
+          // Rejected storage is neither a new account nor permission to restart learning.
+          mutateAutomaticLearning(() => store.getState().setEnabled(false));
           publishStatus(undefined, 'error');
           report(bindings, error);
         }
@@ -220,7 +234,7 @@ export function startJarvisLearningListener(
       store.getState().activeAccountId === active;
     const pending = writeQueue
       .then(async () => {
-        if (!profileWriteAuthority.canWrite(writeToken)) return;
+        if (unavailableAccounts.has(active) || !profileWriteAuthority.canWrite(writeToken)) return;
         const controls = pendingControls.get(active);
         await save(active, markdown);
         const saved = controls ? parseJarvisLearningMarkdown(markdown, active) : null;
@@ -369,7 +383,7 @@ export function startJarvisLearningListener(
     const active = state.activeAccountId;
     if (
       suppressAutomaticProfilePersistence === 0 &&
-      !loadingAccounts.has(active) &&
+      (!loadingAccounts.has(active) || unavailableAccounts.has(active)) &&
       state.profiles[active] !== previous.profiles[active]
     ) {
       const current = state.profiles[active];
@@ -381,7 +395,9 @@ export function startJarvisLearningListener(
         const restored = pending && [...pending.removedIds].some((id) => currentIds.has(id));
         const epochChanged = current.caoLearningEpoch !== prior.caoLearningEpoch;
         const retainManualItems =
-          (recoveringProfiles.get(active) === accountScopeEpoch || pending?.upsertedItems) &&
+          (unavailableAccounts.has(active) ||
+            recoveringProfiles.get(active) === accountScopeEpoch ||
+            pending?.upsertedItems) &&
           bindings.getAccountId().trim() === active;
         const priorItems = new Map(prior.items.map((item) => [item.id, item]));
         const changedItems = retainManualItems
@@ -413,11 +429,14 @@ export function startJarvisLearningListener(
           });
         }
       }
-      persistProfile(active, store.getState().exportMarkdown());
+      // A retry may admit old durable bytes later; retain current intent while writes stay fenced.
+      if (!loadingAccounts.has(active) && !unavailableAccounts.has(active))
+        persistProfile(active, store.getState().exportMarkdown());
     }
     if (
       suppressAutomaticProfilePersistence === 0 &&
       active &&
+      !unavailableAccounts.has(active) &&
       !loadingAccounts.has(active) &&
       state.evidence[active] !== previous.evidence[active]
     ) {

@@ -2851,7 +2851,7 @@ export function Composer({
         ? current
         : next,
     );
-  }, [filteredSlashCommandsSignature, selectedSlashCmd, slashCtx]);
+  }, [filteredSlashCommandsSignature, selectedSlashCmd, selectedSlashCommandKey, slashCtx]);
 
   // Auto-grow the textarea up to MAX_HEIGHT, then enable internal scroll
   useEffect(() => {

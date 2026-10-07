@@ -128,14 +128,25 @@ export function useOpenCodeCommandCatalog(
       return () => { active = false; };
     }
     setState({ generation, workingDirectory: directory, commands: EMPTY_COMMANDS });
-    const refresh = () => void fetchOpenCodeCommandCatalog(generation, nativeOpenCodeRequest, directory).then(
-      (commands) => {
-        if (active) setState({ generation, workingDirectory: directory, commands });
-      },
-      (error: unknown) => {
-        if (active) setState({ generation, workingDirectory: directory, commands: EMPTY_COMMANDS, error: boundedError(error) });
-      },
-    );
+    let nextRefresh = 0;
+    let newestSettledRefresh = 0;
+    const refresh = () => {
+      const refreshId = ++nextRefresh;
+      void fetchOpenCodeCommandCatalog(generation, nativeOpenCodeRequest, directory).then(
+        (commands) => {
+          if (active && refreshId > newestSettledRefresh) {
+            newestSettledRefresh = refreshId;
+            setState({ generation, workingDirectory: directory, commands });
+          }
+        },
+        (error: unknown) => {
+          if (active && refreshId > newestSettledRefresh) {
+            newestSettledRefresh = refreshId;
+            setState({ generation, workingDirectory: directory, commands: EMPTY_COMMANDS, error: boundedError(error) });
+          }
+        },
+      );
+    };
     refresh();
     const timer = window.setInterval(refresh, COMMAND_CATALOG_TTL_MS);
     return () => {
