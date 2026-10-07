@@ -147,6 +147,7 @@ import {
   readSiyuanIndexEntries,
   readSiyuanIndexJob,
   resumeSiyuanSummaryJobWithSameCloudRoute,
+  retryCompletedSiyuanSourceIndex,
   updateSiyuanIndexJobStatus,
   type SiyuanIndexJobRecord,
 } from './siyuan/siyuanIndexJobStore';
@@ -258,6 +259,7 @@ function SiyuanIndexProgressCard({
   const checkpointAgeSeconds = Math.max(0, Math.floor((Date.now() - job.updatedAt) / 1_000));
   const waitingOnSiyuan = !job.sourceIndexState && job.status === 'running' && checkpointAgeSeconds >= 30;
   const progressState =
+    job.status === 'cancelled' ? 'Cancelled' :
     job.sourceIndexState === 'indexing' ? 'Indexing source text' :
     job.sourceIndexState === 'error' ? 'Search index needs repair' :
     job.status === 'running'
@@ -268,9 +270,7 @@ function SiyuanIndexProgressCard({
         ? 'Failed · repair needed'
         : job.status === 'paused'
           ? 'Paused · progress saved'
-          : job.status === 'cancelled'
-            ? 'Cancelled'
-            : exactPercent === 100 ? 'Complete' : 'Completion needs review';
+          : exactPercent === 100 ? 'Complete' : 'Completion needs review';
   const elapsed =
     elapsedSeconds < 60
       ? `${elapsedSeconds}s`
@@ -502,7 +502,7 @@ function SiyuanIndexProgressCard({
               Resume
             </Button>
           ) : null}
-          {job.status === 'failed' ? (
+          {job.status === 'failed' || (job.status === 'cancelled' && job.sourceIndexState) ? (
             <Button size="sm" variant="secondary" onClick={onRetry}>
               Redo from checkpoint
             </Button>
@@ -3029,6 +3029,58 @@ export function ContextPage() {
                   }}
                   onRetry={() => {
                     void (async () => {
+                      if (indexJobSnapshot.phase === 'completed' && indexJobSnapshot.status === 'cancelled') {
+                        const controller = new AbortController();
+                        const boundScope = bindContextWorkScope(controller);
+                        let retryMap = selectedMap;
+                        const manifest = readSiyuanMapManifest(projectId, selectedMap.id);
+                        const manifestVersion = JSON.stringify(manifest);
+                        const assertCurrent = () => {
+                          boundScope.assertCurrent();
+                          const auth = useAuthStore.getState();
+                          if (resolveAccountIdentity(auth)?.accountId !== accountId ||
+                            auth.projectId !== projectId || (auth.workspaceId ?? null) !== (workspaceId ?? null)) {
+                            throw new Error('siyuan_source_retry_authority_changed');
+                          }
+                          const state = getActiveContextPersistenceState(projectId);
+                          const current = state?.maps.find(map => map.id === retryMap.id);
+                          if (state?.accountId !== accountId || state.selectedMapId !== retryMap.id ||
+                            !current || current.updatedAt !== retryMap.updatedAt ||
+                            JSON.stringify(readSiyuanMapManifest(projectId, retryMap.id)) !== manifestVersion ||
+                            manifest?.status !== 'ready' || !manifest.rootDocumentId || !manifest.notebookId ||
+                            !hasSiyuanMapJobAuthority(current, manifest, indexJobSnapshot, accountId)) {
+                            throw new Error('siyuan_source_retry_authority_changed');
+                          }
+                        };
+                        const observeSelection = () => {
+                          if (getActiveContextPersistenceState(projectId)?.selectedMapId !== retryMap.id)
+                            controller.abort('context_selection_changed');
+                        };
+                        window.addEventListener('jarvis:context-tree-updated', observeSelection);
+                        try {
+                          assertCurrent();
+                          if (generationAbortRef.current && !generationAbortRef.current.signal.aborted)
+                            throw new Error('context_search_hydration_busy');
+                          generationAbortRef.current = controller;
+                          if (retryMap.sourceStatus === 'error') {
+                            const state = await setPersistedContextSourceStatus(projectId, retryMap.id, 'indexing', retryMap.updatedAt, controller.signal);
+                            const updated = state.maps.find(map => map.id === retryMap.id);
+                            if (!updated) throw new Error('siyuan_source_retry_authority_changed');
+                            retryMap = updated;
+                          }
+                          assertCurrent();
+                          const job = await retryCompletedSiyuanSourceIndex(indexJobSnapshot, { signal: controller.signal, assertCurrent });
+                          assertCurrent();
+                          indexedTreeHydrationRef.current = '';
+                          setIndexJobSnapshot(job);
+                          setStatus('Retrying Context Search from the saved graph…');
+                        } finally {
+                          if (generationAbortRef.current === controller) generationAbortRef.current = null;
+                          window.removeEventListener('jarvis:context-tree-updated', observeSelection);
+                          boundScope.dispose();
+                        }
+                        return;
+                      }
                       if (selectedMap.sourceStatus === 'error') {
                         indexedTreeHydrationRef.current = '';
                         await transitionContextSourceStatus(selectedMap, accountId, workspaceId, 'indexing');

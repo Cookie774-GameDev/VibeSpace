@@ -3,9 +3,9 @@ import { canonicalSiyuanAuthorityRoot } from './siyuanPathAuthority';
 /** View projection from the persisted Context source state, never a job checkpoint. */
 export type SiyuanProgressView = SiyuanIndexJobRecord & { sourceIndexState?: 'indexing' | 'error' };
 export function projectSiyuanSearchProgress(job: SiyuanIndexJobRecord, sourceStatus?: string): SiyuanProgressView {
-  if (job.phase !== 'completed' || job.status !== 'completed' || !['indexing', 'error'].includes(sourceStatus ?? '')) return job;
+  if (job.phase !== 'completed' || !['completed', 'cancelled'].includes(job.status) || !['indexing', 'error'].includes(sourceStatus ?? '')) return job;
   return { ...job, sourceIndexState: sourceStatus as 'indexing' | 'error',
-    phase: 'reconciling', status: sourceStatus === 'error' ? 'failed' : 'running',
+    phase: 'reconciling', status: job.status === 'cancelled' ? 'cancelled' : sourceStatus === 'error' ? 'failed' : 'running',
     completedAt: null, estimatedPercent: null, estimatedEtaSeconds: null };
 }
 

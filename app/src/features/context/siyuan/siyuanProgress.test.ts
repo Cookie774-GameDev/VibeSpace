@@ -198,3 +198,15 @@ describe('SiYuan honest progress estimator', () => {
   expect(complete.phase).toBe('completed');
   expect(projectSiyuanSearchProgress(complete,'ready')).toBe(complete);
  });
+
+it.each(['indexing', 'error'])('keeps a cancelled completed graph recoverable while source state is %s', sourceStatus => {
+  const base = createSiyuanIndexJob({projectId:'p',mapId:'m',canonicalRoot:'C:/root',policyFingerprint:'policy'});
+  const cancelled = {...base, phase:'completed' as const,status:'cancelled' as const,completedAt:null,reconciledAt:99};
+  const view = projectSiyuanSearchProgress(cancelled, sourceStatus);
+  expect(view.phase).toBe('reconciling');
+  expect(view.status).toBe('cancelled');
+  expect(view.sourceIndexState).toBe(sourceStatus);
+  expect(siyuanOverallProgressPercent(view)).toBeNull();
+  expect(cancelled.phase).toBe('completed');
+  expect(projectSiyuanSearchProgress(cancelled, 'ready')).toBe(cancelled);
+});

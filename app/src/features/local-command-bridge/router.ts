@@ -225,6 +225,21 @@ function uncachedTypoCandidate(token) {
 
 function tokenize(text, baseOffset = 0, correct = true) {
   const source = normalizeApostrophes(text.toLowerCase());
+  let originalStarts;
+  let originalEnds;
+  if (source.length !== text.length) {
+    originalStarts = new Uint32Array(source.length);
+    originalEnds = new Uint32Array(source.length);
+    let foldedOffset = 0;
+    let originalOffset = 0;
+    for (const character of text) {
+      const foldedEnd = foldedOffset + character.toLowerCase().length;
+      originalStarts.fill(originalOffset, foldedOffset, foldedEnd);
+      originalEnds.fill(originalOffset + character.length, foldedOffset, foldedEnd);
+      foldedOffset = foldedEnd;
+      originalOffset += character.length;
+    }
+  }
   const out = [];
   WORD_RE.lastIndex = 0;
   let match;
@@ -238,8 +253,8 @@ function tokenize(text, baseOffset = 0, correct = true) {
       distance: correction.distance,
       intentConflict: correction.intentConflict === true,
       providerConflict: correction.providerConflict === true,
-      start: baseOffset + match.index,
-      end: baseOffset + match.index + raw.length,
+      start: baseOffset + (originalStarts?.[match.index] ?? match.index),
+      end: baseOffset + (originalEnds?.[match.index + raw.length - 1] ?? match.index + raw.length),
     });
   }
   return out;
@@ -344,7 +359,8 @@ function allSequenceKeys(tokens, sequenceGroups) {
 function sentenceSpans(text) {
   const spans = [];
   let start = 0;
-  let quote = null;
+  const ranges = quoteRanges(text);
+  let quoteIndex = 0;
   let escaped = false;
   const push = (end) => {
     const raw = text.slice(start, end);
@@ -370,12 +386,9 @@ function sentenceSpans(text) {
       escaped = true;
       continue;
     }
-    if (ch === '"' || ch.charCodeAt(0) === 96 || ch === '\u201c' || ch === '\u201d') {
-      if (!quote) quote = ch === '\u201c' ? '\u201d' : ch;
-      else if (ch === quote || (quote === '\u201d' && ch === '\u201d')) quote = null;
-      continue;
-    }
-    if (!quote && (ch === '.' || ch === '!' || ch === '?' || ch === ';' || ch === '\n')) {
+    while (quoteIndex < ranges.length && i >= ranges[quoteIndex].end) quoteIndex += 1;
+    if (quoteIndex < ranges.length && i >= ranges[quoteIndex].start) continue;
+    if (ch === '.' || ch === '!' || ch === '?' || ch === ';' || ch === '\n') {
       if (ch === '.' && /\d/u.test(text[i - 1] ?? '') && /\d/u.test(text[i + 1] ?? '')) {
         continue;
       }
@@ -547,6 +560,7 @@ function splitConnectors(span) {
 
 function quoteRanges(text) {
   const ranges = [];
+  const lastSingleQuote = { "'": text.lastIndexOf("'"), '\u2019': text.lastIndexOf('\u2019') };
   let open = null;
   let start = -1;
   for (let i = 0; i < text.length; i += 1) {
@@ -555,8 +569,17 @@ function quoteRanges(text) {
       i += 1;
       continue;
     }
-    if (!open && (ch === '"' || ch.charCodeAt(0) === 96 || ch === '\u201c')) {
-      open = ch === '\u201c' ? '\u201d' : ch;
+    const apostrophe = ch === "'" || ch === '\u2018' || ch === '\u2019';
+    const wordBefore = /[\p{L}\p{N}]/u.test(text[i - 1] ?? '');
+    const wordAfter = /[\p{L}\p{N}]/u.test(text[i + 1] ?? '');
+    if (apostrophe && wordBefore && (!open || wordAfter)) continue;
+    if (apostrophe && open === ch && /s/iu.test(text[i - 1] ?? '') && lastSingleQuote[ch] > i) {
+      const followingWord = /^\s+([\p{L}]+)/u.exec(text.slice(i + 1, i + 65))?.[1]?.toLowerCase();
+      // Keep a plural possessive inside its enclosing quotation; clause connectors close it.
+      if (followingWord && !['and', 'then', 'also', 'plus', 'but', 'instead'].includes(followingWord)) continue;
+    }
+    if (!open && (ch === '"' || ch.charCodeAt(0) === 96 || ch === '\u201c' || apostrophe)) {
+      open = ch === '\u201c' ? '\u201d' : ch === '\u2018' ? '\u2019' : ch;
       start = i;
     } else if (open && ch === open) {
       ranges.push({ start, end: i + 1 });
@@ -575,6 +598,18 @@ function insideQuote(span, ranges) {
 
 function firstAction(tokens) {
   return findAnySequence(tokens, ACTION_SEQUENCES);
+}
+
+function firstCommandStart(tokens, action) {
+  let index = action?.index ?? tokens.length;
+  for (let i = 0; i < index; i += 1) {
+    const aliases = DIRECT_ALIASES_BY_FIRST.get(tokens[i].value) ?? [];
+    if (aliases.some((entry) => sequenceAt(tokens, entry.sequence, i))) {
+      index = i;
+      break;
+    }
+  }
+  return tokens[index]?.start ?? -1;
 }
 
 function stripLeadingWrappers(normalized) {
@@ -619,6 +654,10 @@ function speechAct(span, ranges) {
   const originalPreview = span.text.slice(0, 220);
   const originalTokens = tokenize(originalPreview, span.start, false);
   const originalAction = firstAction(originalTokens);
+  const actionStart = firstCommandStart(originalTokens, originalAction);
+  if (ranges.some((range) => actionStart >= range.start && actionStart < range.end)) {
+    return { status: 'reject', reason: 'quoted' };
+  }
   const actionChar = originalAction
     ? originalTokens[originalAction.index]?.start - span.start
     : Number.POSITIVE_INFINITY;
@@ -659,6 +698,17 @@ function speechAct(span, ranges) {
 
   const tokens = directStart ? tokenize(stripped, 0, false) : tokenize(stripped, 0, true);
   const strippedAction = firstAction(tokens);
+  if (ranges.length) {
+    // Map the admitted token through removed wrappers, beyond the preliminary preview.
+    const commandStart = firstCommandStart(tokens, strippedAction);
+    const commandIndex = Math.max(0, tokens.findIndex((token) => token.start === commandStart));
+    const wrapperCount = tokenize(normalized.slice(0, normalized.length - stripped.length), 0, false).length;
+    const sourceTokens = tokenize(span.text, span.start, false);
+    const sourceStart = sourceTokens[wrapperCount + commandIndex]?.start ?? -1;
+    if (ranges.some((range) => sourceStart >= range.start && sourceStart < range.end)) {
+      return { status: 'reject', reason: 'quoted' };
+    }
+  }
   return {
     status: 'candidate',
     normalized: stripped,
@@ -1146,10 +1196,16 @@ function frameForExactAlias(text) {
   return commandFromFrame({ text, start: 0, end: text.length }, speech);
 }
 
-function fastPath(text) {
+function fastPath(text, ranges) {
   if (text.length > 256 || /[\n;]/u.test(text)) return null;
   const exact = exactAliasCommand(text);
   if (!exact) return null;
+  if (ranges.length) {
+    const tokens = tokenize(text, 0, false);
+    const action = firstAction(tokens);
+    const start = firstCommandStart(tokens, action);
+    if (ranges.some((range) => start >= range.start && start < range.end)) return null;
+  }
   const frame = frameForExactAlias(text);
   if (frame.status !== 'command') return null;
 
@@ -1200,10 +1256,10 @@ export function routeLocalCommand(text: unknown): LocalRouteResult {
     });
   }
 
-  const fast = fastPath(text);
-  if (fast) return fast;
-
   const ranges = quoteRanges(text);
+  // Exact-alias normalization removes quote marks; retain quoted-action admission checks.
+  const fast = fastPath(text, ranges);
+  if (fast) return fast;
   const rawClauses = sentenceSpans(text).flatMap(splitConnectors).slice(0, MAX_CLAUSES);
   const accepted = [];
   const ambiguous = [];

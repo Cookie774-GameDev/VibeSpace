@@ -1230,6 +1230,72 @@ export async function updateSiyuanIndexJobStatus(
   return updated;
 }
 
+/** Explicitly retry only the source derivative of this unchanged, completed graph. */
+export async function retryCompletedSiyuanSourceIndex(
+  expected: Readonly<SiyuanIndexJobRecord>,
+  authority: Readonly<{ signal: AbortSignal; assertCurrent: () => void; now?: number }>,
+): Promise<SiyuanIndexJobRecord> {
+  const captured = structuredClone(expected);
+  const assertCurrent = () => {
+    authority.signal.throwIfAborted();
+    authority.assertCurrent();
+  };
+  assertCurrent();
+  if (
+    captured.schemaVersion !== 1 ||
+    captured.scope !== siyuanIndexJobScope(captured.projectId, captured.mapId) ||
+    captured.phase !== 'completed' || captured.status !== 'cancelled' ||
+    !Number.isSafeInteger(captured.updatedAt) || !Number.isSafeInteger(captured.startedAt) ||
+    captured.updatedAt < 0 || captured.startedAt < 0 ||
+    !Number.isSafeInteger(captured.cursor) || !Number.isSafeInteger(captured.frontierLength) ||
+    captured.frontierLength < 0 || captured.cursor !== captured.frontierLength ||
+    (captured.pendingNativeNodeIds?.length ?? 0) !== 0
+  ) throw new Error('siyuan_source_retry_checkpoint_invalid');
+  const database = await openDatabase();
+  if (!database) throw new Error('siyuan_index_job_storage_unavailable');
+  let transaction: IDBTransaction | undefined;
+  let done: Promise<void> | undefined;
+  const abort = () => {
+    try { transaction?.abort(); } catch { /* A completed transaction cannot be aborted. */ }
+  };
+  try {
+    assertCurrent();
+    transaction = database.transaction(JOB_STORE, 'readwrite');
+    done = transactionDone(transaction);
+    authority.signal.addEventListener('abort', abort, { once: true });
+    const store = transaction.objectStore(JOB_STORE);
+    const current = await requestResult(store.get(captured.scope)) as SiyuanIndexJobRecord | undefined;
+    assertCurrent();
+    if (!current || (current.accountId ?? null) !== (captured.accountId ?? null) ||
+      !(['schemaVersion', 'scope', 'projectId', 'mapId', 'canonicalRoot', 'policyFingerprint',
+        'startedAt', 'updatedAt', 'phase', 'status', 'reconciledAt', 'indexed', 'createdNodes',
+        'cursor', 'frontierLength'] as const).every(key => current[key] === captured[key]) ||
+      (current.pendingNativeNodeIds?.length ?? 0) !== 0) {
+      throw new Error('siyuan_source_retry_checkpoint_changed');
+    }
+    const resumedAt = Math.max(captured.updatedAt + 1, authority.now ?? Date.now());
+    if (!Number.isSafeInteger(resumedAt)) throw new Error('siyuan_source_retry_checkpoint_invalid');
+    const updated: SiyuanIndexJobRecord = {
+      ...current, status: 'completed', pauseReason: null,
+      updatedAt: resumedAt, completedAt: current.completedAt ?? resumedAt,
+      startupDisposition: null, startupDispositionAt: null,
+    };
+    assertCurrent();
+    await requestResult(store.put(updated));
+    assertCurrent();
+    await done;
+    assertCurrent();
+    return updated;
+  } catch (error) {
+    abort();
+    await done?.catch(() => undefined);
+    throw error;
+  } finally {
+    authority.signal.removeEventListener('abort', abort);
+    database.close();
+  }
+}
+
 export async function setSiyuanIndexJobStartupDisposition(
   projectId: string,
   mapId: string,

@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   archiveAndReplaceSiyuanIndexJob,
   archiveAndRestartSiyuanSummaryJobForCloud,
@@ -21,6 +21,7 @@ import {
   setSiyuanIndexJobStartupDisposition,
   siyuanIndexJobScope,
   updateSiyuanIndexJobStatus,
+  retryCompletedSiyuanSourceIndex,
 } from './siyuanIndexJobStore';
 
 async function resetDatabase(): Promise<void> {
@@ -31,6 +32,76 @@ async function resetDatabase(): Promise<void> {
     request.onblocked = () => reject(new Error('database_delete_blocked'));
   });
 }
+
+describe('explicit completed-graph source retry', () => {
+  beforeEach(resetDatabase);
+  async function seed() {
+    const job = { ...createSiyuanIndexJob({ accountId: 'retry-account', projectId: 'retry-project',
+      mapId: 'retry-map', canonicalRoot: 'C:/owned', policyFingerprint: 'retry-policy', now: 100 }),
+      phase: 'completed' as const, status: 'cancelled' as const, cursor: 1, frontierLength: 1,
+      indexed: 1, createdNodes: 1, reconciledAt: 100, summarized: 1, summaryEligible: 1,
+      inputTokens: 3, outputTokens: 2, totalTokens: 5 };
+    await checkpointSiyuanIndexJob({ job, appendedEntries: [{ nodeId: 'owned-node', parentNodeId: null,
+      title: 'owned.txt', kind: 'file', relativePath: 'owned.txt', sourcePointer: 'C:/owned/owned.txt',
+      summary: 'Saved summary', sizeBytes: 42, modifiedAt: 1 }], summaryUsage: {
+        nodeId: 'owned-node', sourceModifiedAt: 1, sourceSizeBytes: 42, providerId: 'synthetic',
+        connectionId: 'synthetic', modelId: 'synthetic', inputTokens: 3, outputTokens: 2,
+        totalTokens: 5, provenance: 'reported', completedAt: 100,
+      } });
+    return job;
+  }
+
+  it('changes only explicit retry job state while preserving saved entries and another scope', async () => {
+    const job = await seed();
+    const entries = await readSiyuanIndexEntries(job.projectId, job.mapId);
+    const usage = await readSiyuanSummaryUsage(job.projectId, job.mapId);
+    const other = { ...job, mapId: 'other-map', scope: siyuanIndexJobScope(job.projectId, 'other-map') };
+    await checkpointSiyuanIndexJob({ job: other });
+    const expectedOther = await readSiyuanIndexJob(other.projectId, other.mapId);
+    const retried = await retryCompletedSiyuanSourceIndex(job, { signal: new AbortController().signal, assertCurrent() {}, now: 100 });
+    expect(retried).toMatchObject({ status: 'completed', phase: 'completed', updatedAt: 101, completedAt: 101 });
+    expect(await readSiyuanIndexEntries(job.projectId, job.mapId)).toEqual(entries);
+    expect(await readSiyuanSummaryUsage(job.projectId, job.mapId)).toEqual(usage);
+    expect(await readSiyuanIndexJob(other.projectId, other.mapId)).toEqual(expectedOther);
+    await expect(retryCompletedSiyuanSourceIndex(job, { signal: new AbortController().signal, assertCurrent() {} })).rejects.toThrow(/checkpoint_changed/);
+  });
+
+  it.each(['updatedAt', 'startedAt', 'accountId', 'mapId', 'canonicalRoot', 'policyFingerprint'] as const)(
+    'refuses a mismatched expected %s', async (field) => {
+      const job = await seed();
+      const expected = { ...job, [field]: typeof job[field] === 'number' ? Number(job[field]) + 1 : 'foreign' };
+      const before = await readSiyuanIndexJob(job.projectId, job.mapId);
+      await expect(retryCompletedSiyuanSourceIndex(expected, { signal: new AbortController().signal, assertCurrent() {} })).rejects.toThrow();
+      expect(await readSiyuanIndexJob(job.projectId, job.mapId)).toEqual(before);
+    },
+  );
+
+  it('rolls back when live authority fails immediately after the put is queued', async () => {
+    const job = await seed();
+    const before = await readSiyuanIndexJob(job.projectId, job.mapId);
+    let checks = 0;
+    await expect(retryCompletedSiyuanSourceIndex(job, { signal: new AbortController().signal,
+      assertCurrent() { if (++checks === 5) throw new Error('scope revoked'); },
+    })).rejects.toThrow('scope revoked');
+    expect(await readSiyuanIndexJob(job.projectId, job.mapId)).toEqual(before);
+  });
+
+  it('aborts the actual transaction on a lease signal after queuing its write', async () => {
+    const job = await seed();
+    const before = await readSiyuanIndexJob(job.projectId, job.mapId);
+    const controller = new AbortController();
+    const original = IDBObjectStore.prototype.put;
+    const put = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function(this: IDBObjectStore, value, key) {
+      const result = original.call(this, value, key);
+      if (this.name === 'jobs') controller.abort('account ABA');
+      return result;
+    });
+    try {
+      await expect(retryCompletedSiyuanSourceIndex(job, { signal: controller.signal, assertCurrent() {} })).rejects.toBeDefined();
+    } finally { put.mockRestore(); }
+    expect(await readSiyuanIndexJob(job.projectId, job.mapId)).toEqual(before);
+  });
+});
 
 describe('durable SiYuan index jobs', () => {
   beforeEach(resetDatabase);
