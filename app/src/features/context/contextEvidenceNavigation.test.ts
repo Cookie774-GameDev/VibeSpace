@@ -30,6 +30,7 @@ const scope: ContextEvidenceLinkScope = {
   projectId: 'nav-project',
   chatId: 'nav-chat',
   worktreeId: 'C:/owned',
+  projectRoot: 'C:/owned',
 };
 const input = {
   chatId: scope.chatId,
@@ -169,6 +170,39 @@ async function ticket() {
 }
 
 describe('fresh Context evidence navigation intent', () => {
+  it('refuses a UI-root change since issuance before any source revalidation',async()=>{
+    setStoredProjectRoot(scope.projectId,'D:/new-root');
+    await expect(nav.open(input)).rejects.toMatchObject({code:'unavailable'});
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(useUIStore.getState().route).toBe('chat');
+  });
+  it('accepts explicit absent UI root while retaining its runtime identity',async()=>{
+    await database.settings.where('key').startsWith('context-evidence-link-v2:').delete();
+    await createContextEvidenceLinkStore(database).retain({...scope,projectRoot:null,worktreeId:'/'},
+      {runId:'nav-run',requestId:'nav-request',attemptNumber:1},[target],
+      {signal:new AbortController().signal,assertCurrent(){}});
+    setStoredProjectRoot(scope.projectId,'');
+    const done=nav.open(input);const issued=await ticket();
+    expect(revalidate.mock.calls[0]?.[0].scope.worktreeId).toBe('/');
+    issued.complete();await done;
+  });
+
+  it('separates issuer runtime worktree from an unchanged UI project root', async () => {
+    await database.settings.where('key').startsWith('context-evidence-link-v2:').delete();
+    const projectRoot = 'D:/VibeSpace-Testing/Chat01-CH31-fixtures';
+    const issuedScope = { ...scope, worktreeId: '/', projectRoot };
+    await createContextEvidenceLinkStore(database).retain(issuedScope,
+      {runId:'nav-run',requestId:'nav-request',attemptNumber:1}, [target],
+      {signal:new AbortController().signal,assertCurrent() {}});
+    setStoredProjectRoot(scope.projectId, projectRoot);
+    const done = nav.open(input);
+    const issued = await ticket();
+    expect(useUIStore.getState().route).toBe('context');
+    expect(revalidate.mock.calls[0]?.[0].scope.worktreeId).toBe('/');
+    issued.complete();
+    await done;
+  });
+
   it('joins the persisted message/backing and yields one-use guarded selection only', async () => {
     const done = nav.open(input);
     const issued = await ticket();
@@ -194,7 +228,7 @@ describe('fresh Context evidence navigation intent', () => {
     'archived-chat',
   ] as const)('refuses %s before a navigation grant', async (reason) => {
     if (reason === 'missing-backing')
-      await database.settings.where('key').startsWith('context-evidence-link-v1:').delete();
+      await database.settings.where('key').startsWith('context-evidence-link-v2:').delete();
     if (reason === 'wrong-chat')
       await database.messages.update(input.messageId as MessageId, {
         chat_id: 'foreign-chat' as ChatId,

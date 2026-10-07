@@ -1,3 +1,4 @@
+import { setStoredProjectRoot, projectStorageKey, ROOT_PREFIX } from '@/features/files/projectFiles';
 import {
   captureToolGatewayAuthorityClaim,
   captureToolGatewaySessionLease,
@@ -13,6 +14,7 @@ import { createJarvisDb, type JarvisDexie } from '@/lib/db';
 import { TEST_INDEXED_DB, uniqueTestDbName } from '@/test/indexedDb';
 import { canonicalContextUri } from '@/lib/harness/toolGatewayCitations';
 import {
+  captureContextEvidenceProjectRoot,
   createContextEvidenceLinkStore,
   CONTEXT_EVIDENCE_LINK_LIMITS,
   type ContextEvidenceLinkScope,
@@ -25,6 +27,7 @@ const scope: ContextEvidenceLinkScope = {
   workspaceId: 'workspace-A',
   projectId: 'project-A',
   chatId: 'chat-A',
+  projectRoot: null,
 };
 const origin = { runId: 'run-A', requestId: 'request-A', attemptNumber: 1 };
 const target = (id = 'pointer-A'): ContextEvidenceLinkTarget => ({
@@ -71,7 +74,7 @@ describe('local issuer-backed Context evidence records', () => {
     await store.retain(scope, origin, [target()], authority());
     const first = await store.lookup(scope, target().uri);
     expect(first).toMatchObject({
-      kind: 'context-evidence-link-v1',
+      kind: 'context-evidence-link-v2',
       scope,
       origin,
       target: target(),
@@ -200,7 +203,7 @@ it('preserves unknown-version records without interpreting them as empty', async
   const store = createContextEvidenceLinkStore(database, () => now);
   await store.retain(scope, origin, [target()], authority());
   const [row] = await database.settings.toArray();
-  await database.settings.put({ ...row!, value: { ...(row!.value as object), version: 2 } });
+  await database.settings.put({ ...row!, value: { ...(row!.value as object), version: 999 } });
   const original = await database.settings.toArray();
   expect(await store.lookup(scope, target().uri)).toBeUndefined();
   await expect(store.retain(scope, origin, [target()], authority())).rejects.toThrow('collision');
@@ -358,4 +361,99 @@ it('refuses internally inconsistent source hashes and future-dated records', asy
   now -= 1;
   expect(await store.lookup(scope, target().uri)).toBeUndefined();
   expect(await database.settings.count()).toBe(1);
+});
+
+
+describe('v2 navigation root and runtime identity separation', () => {
+  it('finds only the exact UI root while preserving the independently supplied runtime identity', async () => {
+    const store = createContextEvidenceLinkStore(database, () => now);
+    const issued = {...scope, projectRoot:'D:/owned-files',worktreeId:'/'};
+    await store.retain(issued,origin,[target()],authority());
+    const {worktreeId: _runtime, ...navigation} = issued;
+    expect((await store.lookup(navigation,target().uri))?.scope).toEqual(issued);
+    expect(await store.lookup({...navigation,projectRoot:'D:/other'},target().uri)).toBeUndefined();
+    expect(await store.lookup({...navigation,projectRoot:'d:/owned-files'},target().uri)).toBeUndefined();
+    expect(await store.lookup({...navigation,projectRoot:'D:\\owned-files'},target().uri)).toBeUndefined();
+    expect(await store.lookup({...issued,worktreeId:'D:/other-runtime'},target().uri)).toBeUndefined();
+  });
+  it('never overwrites the same navigation key from another runtime identity', async () => {
+    const store = createContextEvidenceLinkStore(database, () => now);
+    const issued = {...scope,projectRoot:'D:/owned-files',worktreeId:'/'};
+    await store.retain(issued,origin,[target()],authority());
+    const before=await database.settings.toArray();
+    await expect(store.retain({...issued,worktreeId:'D:/other-runtime'},origin,[target()],authority())).rejects.toThrow('collision');
+    expect(await database.settings.toArray()).toEqual(before);
+  });
+  it.each([undefined, '', ' ', 12, 'C:/bad\nroot', 'x'.repeat(2049)])('rejects malformed or missing UI-root binding %s',async(projectRoot)=>{
+    const store=createContextEvidenceLinkStore(database,()=>now);
+    const malformed={...scope,projectRoot} as unknown as ContextEvidenceLinkScope;
+    await expect(store.retain(malformed,origin,[target()],authority())).rejects.toThrow('invalid');
+    expect(await database.settings.count()).toBe(0);
+  });
+  it('explicit null is an absent root and is different from any configured root',async()=>{
+    const store=createContextEvidenceLinkStore(database,()=>now);
+    await store.retain({...scope,projectRoot:null,worktreeId:'/'},origin,[target()],authority());
+    expect((await store.lookup(scope,target().uri))?.scope.projectRoot).toBeNull();
+    expect(await store.lookup({...scope,projectRoot:'/'},target().uri)).toBeUndefined();
+  });
+  it('preserves legacy and missing-root records but never grants navigation from them',async()=>{
+    const store=createContextEvidenceLinkStore(database,()=>now);
+    await store.retain(scope,origin,[target()],authority());
+    const [row]=(await database.settings.toArray());
+    const record=row!.value as Record<string,unknown>;
+    const {projectRoot:_root,...oldScope}=scope;
+    await database.settings.put({...row!,value:{...record,kind:'context-evidence-link-v1',version:1,scope:oldScope}});
+    expect(await store.lookup(scope,target().uri)).toBeUndefined();
+    await database.settings.put({...row!,value:{...record,scope:oldScope}});
+    expect(await store.lookup(scope,target().uri)).toBeUndefined();
+    expect(await database.settings.count()).toBe(1);
+  });
+  it('counts both legacy and current records against the original account cap',async()=>{
+    const store=createContextEvidenceLinkStore(database,()=>now);
+    await store.retain(scope,origin,[target()],authority());
+    const [row]=await database.settings.toArray();
+    const legacyPrefix=row!.key.split(':').slice(0,2).join(':').replace('v2','v1')+':';
+    await database.settings.bulkPut(Array.from({length:CONTEXT_EVIDENCE_LINK_LIMITS.perAccount-1},(_,i)=>({
+      key:legacyPrefix+'owned-'+i,value:{ownedSynthetic:true},updated_at:now,
+    })));
+    await expect(store.retain(scope,origin,[target('new-pointer')],authority())).rejects.toThrow('capacity');
+    expect(await database.settings.count()).toBe(CONTEXT_EVIDENCE_LINK_LIMITS.perAccount);
+  });
+  it('counts a mixed legacy/current population against the original global cap',async()=>{
+    const store=createContextEvidenceLinkStore(database,()=>now);
+    await store.retain(scope,origin,[target()],authority());
+    await database.settings.bulkPut(Array.from({length:CONTEXT_EVIDENCE_LINK_LIMITS.total-1},(_,i)=>({
+      key:`context-evidence-link-v${i%2?1:2}:other-account:owned-${i}`,value:{ownedSynthetic:true},updated_at:now,
+    })));
+    await expect(store.retain(scope,origin,[target('new-pointer')],authority())).rejects.toThrow('capacity');
+    expect(await database.settings.count()).toBe(CONTEXT_EVIDENCE_LINK_LIMITS.total);
+  });
+});
+
+describe('issuance UI-root lease',()=>{
+  it('captures absent root explicitly and permanently revokes same-window ABA',()=>{
+    setStoredProjectRoot('root-test','');
+    const lease=captureContextEvidenceProjectRoot('root-test');
+    try {
+      expect(lease.projectRoot).toBeNull();
+      setStoredProjectRoot('root-test','D:/B');
+      setStoredProjectRoot('root-test','');
+      expect(lease.signal.aborted).toBe(true);
+      expect(()=>lease.assertCurrent()).toThrow();
+    } finally {lease.dispose();}
+  });
+  it('ignores unrelated root/settings events and rejects delayed relevant storage ABA',()=>{
+    setStoredProjectRoot('root-test','D:/A');
+    const lease=captureContextEvidenceProjectRoot('root-test');
+    try {
+      setStoredProjectRoot('other-project','D:/unrelated');
+      window.dispatchEvent(new StorageEvent('storage',{key:'unrelated-setting',oldValue:'A',newValue:'B'}));
+      expect(()=>lease.assertCurrent()).not.toThrow();
+      window.dispatchEvent(new StorageEvent('storage',{
+        key:projectStorageKey(ROOT_PREFIX,'root-test'),oldValue:'D:/A',newValue:'D:/B',
+      }));
+      expect(lease.signal.aborted).toBe(true);
+      expect(()=>lease.assertCurrent()).toThrow();
+    } finally {lease.dispose();}
+  });
 });

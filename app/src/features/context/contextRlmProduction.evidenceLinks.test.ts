@@ -1,3 +1,7 @@
+import { waitFor } from '@testing-library/react';
+import { setStoredProjectRoot, projectStorageKey, ROOT_PREFIX } from '@/features/files/projectFiles';
+import { useUIStore } from '@/stores/ui';
+import { createContextEvidenceNavigation } from './contextEvidenceNavigation';
 // @vitest-environment jsdom
 // Synthetic production-gateway fixture only. This is not a native or user-map receipt.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -53,6 +57,7 @@ const fixture = vi.hoisted(() => ({
   lexicalCalls: 0,
   childCalls: 0,
   runNonce: 0,
+  runtimeWorktree: '',
   nativeToolMessageIds: true,
   includeProtectedAttempt: true,
   toolMessageId: 'msg_native_fixture',
@@ -351,7 +356,7 @@ function gatewayCall(tool: ToolGatewayTool, args: Record<string, unknown>, signa
       tool,
       args,
       directory: root,
-      worktree: root,
+      worktree: fixture.runtimeWorktree || root,
     }),
     signal,
   );
@@ -456,6 +461,50 @@ async function initializeFixture() {
 }
 
 describe('issuer-backed durable evidence link association', () => {
+  it('issues and dereferences with distinct runtime worktree and UI-root identities',async()=>{
+    const projectRoot='D:/VibeSpace-Testing/Chat01-CH31-fixtures';
+    setStoredProjectRoot('project-fixture',projectRoot);
+    fixture.runtimeWorktree='/';
+    const result=await gatewayCall('vibespace_context_search',{query:'Atlas steward',limit:2});
+    expect(result.ok).toBe(true);
+    const references=consumeToolGatewayContextCitationItems('session-fixture');
+    const rows=await evidenceDatabase.settings.where('key').startsWith('context-evidence-link-v2:').toArray();
+    const record=rows[0]!.value as import('./contextEvidenceLinks').ContextEvidenceLinkRecord;
+    expect(record).toMatchObject({version:2,scope:{worktreeId:'/',projectRoot}});
+    const reference=references.find(item=>item.source.uri===record.target.uri)!;
+    expect(reference).toBeDefined();
+    await evidenceDatabase.projects.put({id:'project-fixture',workspace_id:'workspace-fixture',name:'Owned',created_at:1,updated_at:1} as never);
+    await evidenceDatabase.chats.put({id:'chat-fixture',workspace_id:'workspace-fixture',project_id:'project-fixture',title:'Owned',mode:'chat',active_agent_ids:[],created_at:1,updated_at:1} as never);
+    await evidenceDatabase.messages.put({id:'message-fixture',chat_id:'chat-fixture',role:'assistant',parts:[{kind:'jarvis_source_ref',source:reference.source}],created_at:1,updated_at:1} as never);
+    await evidenceDatabase.context_maps.put({...fixture.maps[0] as object,accountId:'account-fixture'} as never);
+    useUIStore.setState({activeChatId:'chat-fixture',route:'chat'});
+    const navigation=createContextEvidenceNavigation({database:evidenceDatabase,revalidate:createProductionContextEvidenceRevalidator()});
+    try {
+      const pending=navigation.open({chatId:'chat-fixture',messageId:'message-fixture',uri:record.target.uri});
+      let ticket: ReturnType<typeof navigation.take>;
+      await waitFor(()=>{ticket??=navigation.take('project-fixture');expect(ticket).toBeDefined();});
+      expect(useUIStore.getState().route).toBe('context');
+      expect(ticket!.target).toMatchObject({mapId,entityId:record.target.entityId,path:record.target.sourcePath});
+      ticket!.complete();await pending;
+    } finally {navigation.dispose();}
+  });
+  it.each(['same-window-ABA','delayed-storage-ABA','unrelated-root'] as const)(
+    'captures UI-root continuity before held issuance: %s',async(change)=>{
+      setStoredProjectRoot('project-fixture','D:/A');
+      fixture.holdStat=async()=>{
+        fixture.holdStat=undefined;
+        if(change==='same-window-ABA'){
+          setStoredProjectRoot('project-fixture','D:/B');setStoredProjectRoot('project-fixture','D:/A');
+        }else if(change==='delayed-storage-ABA'){
+          window.dispatchEvent(new StorageEvent('storage',{key:projectStorageKey(ROOT_PREFIX,'project-fixture'),oldValue:'D:/A',newValue:'D:/B'}));
+        }else setStoredProjectRoot('unrelated-project','D:/B');
+      };
+      await gatewayCall('vibespace_context_search',{query:'Atlas steward',limit:2});
+      const rows=await evidenceDatabase.settings.where('key').startsWith('context-evidence-link-v2:').toArray();
+      if(change==='unrelated-root')expect(rows.length).toBeGreaterThan(0);
+      else expect(rows).toHaveLength(0);
+    });
+
   beforeEach(async () => {
     clearToolGatewayAuthorityForTests();
     clearToolGatewayContextCitationItems();
@@ -470,6 +519,8 @@ describe('issuer-backed durable evidence link association', () => {
     fixture.toolMessageId = 'msg_native_fixture';
     fixture.turnRequestId = 'turn-fixture';
     sequence = 0;
+    fixture.runtimeWorktree = '';
+    setStoredProjectRoot('project-fixture','');
     await evidenceDatabase.settings.clear();
     await initializeFixture();
   });
@@ -493,7 +544,7 @@ describe('issuer-backed durable evidence link association', () => {
     expect(consumeToolGatewayContextCitationItems('session-fixture')).toEqual([]);
     const stored = await evidenceDatabase.settings
       .where('key')
-      .startsWith('context-evidence-link-v1:')
+      .startsWith('context-evidence-link-v2:')
       .toArray();
     expect(stored).toHaveLength(uris.length);
     expect(
@@ -514,7 +565,7 @@ describe('issuer-backed durable evidence link association', () => {
         .canonicalProvenance.evidenceUris;
       const rows = await evidenceDatabase.settings
         .where('key')
-        .startsWith('context-evidence-link-v1:')
+        .startsWith('context-evidence-link-v2:')
         .toArray();
       expect(
         uris.every((uri) =>
@@ -532,7 +583,7 @@ describe('issuer-backed durable evidence link association', () => {
     expect(uris.length).toBeGreaterThan(0);
     const rows = await evidenceDatabase.settings
       .where('key')
-      .startsWith('context-evidence-link-v1:')
+      .startsWith('context-evidence-link-v2:')
       .toArray();
     expect(
       uris.every((uri) =>
@@ -605,7 +656,7 @@ describe('issuer-backed durable evidence link association', () => {
     expect(await evidenceDatabase.settings.count()).toBe(0);
   });
 
-  it.each(['session-release', 'account-ABA', 'selected-map-ABA'] as const)(
+  it.each(['session-release', 'account-ABA', 'selected-map-ABA', 'project-root-ABA', 'project-root-storage-ABA'] as const)(
     'rolls back an acknowledged write after %s following put success',
     async (transition) => {
       const put = evidenceDatabase.settings.put.bind(evidenceDatabase.settings);
@@ -618,6 +669,15 @@ describe('issuer-backed durable evidence link association', () => {
           if (transition === 'account-ABA') {
             useAuthStore.setState({ localUserId: 'foreign' });
             useAuthStore.setState({ localUserId: 'account-fixture' });
+          }
+          if (transition === 'project-root-ABA') {
+            setStoredProjectRoot('project-fixture','D:/replacement');
+            setStoredProjectRoot('project-fixture','');
+          }
+          if (transition === 'project-root-storage-ABA') {
+            window.dispatchEvent(new StorageEvent('storage',{
+              key:projectStorageKey(ROOT_PREFIX,'project-fixture'),oldValue:null,newValue:'D:/replacement',
+            }));
           }
           if (transition === 'selected-map-ABA') {
             fixture.selectedMapId = 'different-map';

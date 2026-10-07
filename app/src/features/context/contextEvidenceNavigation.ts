@@ -11,7 +11,7 @@ import type { ChatId, MessageId, ProjectId } from '@/types/common';
 import { contextSelectionSettingKey } from './migration';
 import {
   createContextEvidenceLinkStore,
-  type ContextEvidenceLinkScope,
+  type ContextEvidenceNavigationScope,
 } from './contextEvidenceLinks';
 import type {
   createProductionContextEvidenceRevalidator,
@@ -43,7 +43,7 @@ export interface ContextEvidenceNavigationOptions {
   timeoutMs?: number;
 }
 
-function captureScope(chatId: string): ContextEvidenceLinkScope | undefined {
+function captureScope(chatId: string): ContextEvidenceNavigationScope | undefined {
   const auth = useAuthStore.getState(),
     account = resolveAccountIdentity(auth);
   if (
@@ -53,14 +53,14 @@ function captureScope(chatId: string): ContextEvidenceLinkScope | undefined {
     useUIStore.getState().activeChatId !== chatId
   )
     return undefined;
-  const worktreeId = getStoredProjectRoot(auth.projectId).trim();
+  const projectRoot = getStoredProjectRoot(auth.projectId) || null;
   return Object.freeze({
     accountId: account.accountId,
     accountSource: account.source,
     workspaceId: String(auth.workspaceId),
     projectId: String(auth.projectId),
     chatId,
-    ...(worktreeId ? { worktreeId } : {}),
+    projectRoot,
   });
 }
 const identityPart = (value: unknown): value is string =>
@@ -90,7 +90,7 @@ export function createContextEvidenceNavigation(options: ContextEvidenceNavigati
   let epoch = 0;
   type Operation = {
     epoch: number;
-    scope: ContextEvidenceLinkScope;
+    scope: ContextEvidenceNavigationScope;
     controller: AbortController;
     settled: boolean;
     consumed: boolean;
@@ -264,7 +264,7 @@ export function createContextEvidenceNavigation(options: ContextEvidenceNavigati
         )
           throw new ContextEvidenceNavigationError('unavailable');
         const target = await revalidate({
-          scope,
+          scope: record.scope,
           target: record.target,
           signal: operation.controller.signal,
           assertCurrent: () => check(operation),

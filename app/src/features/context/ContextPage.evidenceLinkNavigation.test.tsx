@@ -81,6 +81,7 @@ const scope = {
   projectId: 'page-project',
   chatId: 'page-chat',
   worktreeId: 'C:/owned-page',
+  projectRoot: 'C:/owned-page',
 };
 function Shell() {
   const route = useUIStore((state) => state.route);
@@ -249,7 +250,7 @@ it('opens the exact source node through the actual chip, route mount and guarded
 });
 
 it('keeps historical missing backing inside the app without route or selection changes', async () => {
-  await database.settings.where('key').startsWith('context-evidence-link-v1:').delete();
+  await database.settings.where('key').startsWith('context-evidence-link-v2:').delete();
   render(<Shell />);
   fireEvent.click(screen.getByRole('button', { name: 'Open verified Context source' }));
   await act(async () => {

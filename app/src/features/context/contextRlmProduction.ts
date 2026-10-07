@@ -2,7 +2,7 @@ import { assertContextLocalFilePath, contextLocalFileScopeFingerprint, readConte
 import { type JarvisDexie } from '@/lib/db';
 import { captureToolGatewaySessionLease, readToolGatewaySessionAuthority, readToolGatewayTurnIdentity } from '@/lib/harness/toolGatewayAuthority';
 import { canonicalContextUri } from '@/lib/harness/toolGatewayCitations';
-import { createContextEvidenceLinkStore, type ContextEvidenceLinkTarget } from './contextEvidenceLinks';
+import { captureContextEvidenceProjectRoot, createContextEvidenceLinkStore, type ContextEvidenceLinkTarget } from './contextEvidenceLinks';
 import {
   readTextFileSample,
   statProjectPath,
@@ -3280,6 +3280,9 @@ export function createProductionRlmContextTool(options: Readonly<{evidenceLinkDa
   return Object.freeze({
     name: RLM_OPENCODE_TOOL_NAME,
     async execute(rawInput: unknown, lease: RlmContextLease, signal?: AbortSignal, assertLeaseCurrent?: AssertRlmLeaseCurrent) {
+      // Capture before any asynchronous source work; a root ABA permanently revokes retention.
+      const navigationRoot = lease.projectId ? captureContextEvidenceProjectRoot(lease.projectId) : undefined;
+      try {
       const capturedLease = Object.freeze({ ...lease,
         ...(lease.canonicalBinding ? { canonicalBinding: Object.freeze({ ...lease.canonicalBinding }) } : {}),
         ...(lease.executionIdentity ? { executionIdentity: Object.freeze({ ...lease.executionIdentity }) } : {}),
@@ -3471,8 +3474,9 @@ export function createProductionRlmContextTool(options: Readonly<{evidenceLinkDa
             const controller = new AbortController();
             const abort = () => controller.abort();
             child.signal.addEventListener('abort',abort,{once:true});
+            navigationRoot?.signal.addEventListener('abort',abort,{once:true});
             signal?.addEventListener('abort',abort,{once:true});
-            if (child.signal.aborted || signal?.aborted) abort();
+            if (child.signal.aborted || signal?.aborted || navigationRoot?.signal.aborted) abort();
             const selectedSnapshot = () => {
               const state = getActiveContextPersistenceState(capturedLease.projectId!);
               return state?.accountId === capturedLease.accountId && state.selectedMapId === capturedLease.selectedMapId
@@ -3481,6 +3485,7 @@ export function createProductionRlmContextTool(options: Readonly<{evidenceLinkDa
             const expectedSnapshot = selectedSnapshot();
             const check = () => {
               controller.signal.throwIfAborted();
+              navigationRoot?.assertCurrent();
               if (!current() || !expectedSnapshot || selectedSnapshot() !== expectedSnapshot) throw new Error('context_evidence_link_scope_changed');
             };
             const onMapChange = () => { try { check(); } catch { abort(); } };
@@ -3495,6 +3500,7 @@ export function createProductionRlmContextTool(options: Readonly<{evidenceLinkDa
                 if (targets && targets.length === pointers.length) {
                   await evidenceLinks.retain({accountId:capturedLease.accountId,accountSource:claim.scope.accountSource,
                     workspaceId:capturedLease.workspaceId,projectId:capturedLease.projectId,chatId:capturedLease.chatId,
+                    projectRoot:navigationRoot!.projectRoot,
                     ...(capturedLease.worktreeId ? {worktreeId:capturedLease.worktreeId} : {})}, binding,targets,
                     {signal:controller.signal,assertCurrent:check});
                   check();
@@ -3508,6 +3514,7 @@ export function createProductionRlmContextTool(options: Readonly<{evidenceLinkDa
               clearTimeout(expiry);
               if (typeof window !== 'undefined') window.removeEventListener('jarvis:context-tree-updated',onMapChange);
               child.signal.removeEventListener('abort',abort);
+              navigationRoot?.signal.removeEventListener('abort',abort);
               signal?.removeEventListener('abort',abort);
               child.dispose();
             }
@@ -3535,6 +3542,9 @@ export function createProductionRlmContextTool(options: Readonly<{evidenceLinkDa
             }
           }
         } catch { /* Unavailable proof stays unavailable; no fallback authority. */ }
+      }
+      } finally {
+        navigationRoot?.dispose();
       }
     },
   });
