@@ -275,10 +275,17 @@ export function createRemoteMcpSetupRuntime(
           return;
         }
         const tools = await manager.listTools(request.id);
+        if (connection.disconnecting || connections.get(request.id) !== connection) {
+          await release().catch(() => undefined);
+          return;
+        }
         const catalog = typeof adapter.getCatalog === 'function'
           ? await adapter.getCatalog()
           : undefined;
-        if (connections.get(request.id) !== connection) return;
+        if (connection.disconnecting || connections.get(request.id) !== connection) {
+          await release().catch(() => undefined);
+          return;
+        }
         connection.state = 'connected';
         connection.tools = frozenTools(tools, [], catalog);
         connection.resources = Object.freeze([...(catalog?.resources ?? [])]);

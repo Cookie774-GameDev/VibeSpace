@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createRemoteMcpSetupRuntime } from './remoteSetupRuntime';
 import { McpServerManager, type McpServerAdapter } from './serverManager';
+import { createMcpSdkClientAdapter, type McpSdkClientPort } from './mcpSdkClientAdapter';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 function setupHarness(options: { failDiscovery?: boolean } = {}) {
   const release = vi.fn(async (): Promise<void> => undefined);
@@ -51,6 +53,145 @@ function setupHarness(options: { failDiscovery?: boolean } = {}) {
 }
 
 describe('remote MCP setup runtime', () => {
+  it.each(['current', 'discovery', 'catalog'] as const)(
+    'P02 keeps SDK catalog handoff within its connection lifetime (%s)',
+    async (boundary) => {
+      const disconnect = boundary !== 'current';
+      let discovered!: () => void;
+      let releaseDiscovery!: () => void;
+      let closing!: () => void;
+      let releaseClose!: () => void;
+      const discoveredBoundary = new Promise<void>((resolve) => {
+        discovered = resolve;
+      });
+      const discoveryGate = new Promise<void>((resolve) => {
+        releaseDiscovery = resolve;
+      });
+      const closingBoundary = new Promise<void>((resolve) => {
+        closing = resolve;
+      });
+      const closeGate = new Promise<void>((resolve) => {
+        releaseClose = resolve;
+      });
+      const clients: McpSdkClientPort[] = [];
+      const adapter = createMcpSdkClientAdapter({
+        id: 'p02-server',
+        endpoint: 'https://mcp.example.test/rpc',
+        transportFactory: () => ({}) as Transport,
+        clientFactory: () => {
+          const first = clients.length === 0;
+          const client: McpSdkClientPort = {
+            connect: vi.fn(async () => undefined),
+            close: vi.fn(async () => {
+              if (first) {
+                closing();
+                await closeGate;
+              }
+            }),
+            ping: vi.fn(async () => ({})),
+            getServerCapabilities: () => ({ tools: {} }),
+            listTools: vi.fn(async () => ({
+              tools: [
+                {
+                  name: 'repo.read',
+                  description: 'Read synthetic repository metadata',
+                  inputSchema: {
+                    type: 'object',
+                    properties: {},
+                    additionalProperties: false,
+                  },
+                  annotations: { readOnlyHint: true },
+                },
+              ],
+            })),
+            listResources: vi.fn(async () => ({ resources: [] })),
+            listPrompts: vi.fn(async () => ({ prompts: [] })),
+            callTool: vi.fn(async () => ({ content: [] })),
+          };
+          clients.push(client);
+          return client;
+        },
+      });
+      const originalCatalog = adapter.getCatalog.bind(adapter);
+      const getCatalog = vi.spyOn(adapter, 'getCatalog');
+      if (boundary === 'catalog') {
+        getCatalog.mockImplementation(async (signal) => {
+          const catalog = await originalCatalog(signal);
+          discovered();
+          await discoveryGate;
+          return catalog;
+        });
+      }
+      const manager = new McpServerManager();
+      const runtime = createRemoteMcpSetupRuntime({
+        manager: {
+          register: manager.register.bind(manager),
+          start: manager.start.bind(manager),
+          listTools: async (id) => {
+            const tools = await manager.listTools(id);
+            if (boundary !== 'catalog') {
+              discovered();
+              await discoveryGate;
+            }
+            return tools;
+          },
+          setToolExposure: manager.setToolExposure.bind(manager),
+          invoke: manager.invoke.bind(manager),
+        },
+        createAdapter: () => adapter,
+        authorize: () => ({
+          endpoint: 'https://mcp.example.test/rpc',
+          intent: 'connect_external_mcp',
+          expiresAt: 10_000,
+        }),
+      });
+      const snapshots: string[][] = [];
+      const unsubscribe = runtime.subscribe(() =>
+        snapshots.push(runtime.getSnapshot().map((row) => row.state)),
+      );
+      const connecting = runtime.connect({
+        id: 'p02-server',
+        endpoint: 'https://mcp.example.test/rpc',
+        confirmedByUser: true,
+      });
+      let disconnecting: Promise<void> | undefined;
+      try {
+        await discoveredBoundary;
+        expect(clients).toHaveLength(1);
+        if (disconnect) {
+          disconnecting = runtime.disconnect('p02-server');
+          await closingBoundary;
+        }
+        releaseDiscovery();
+        // Drain this synthetic callback turn while native close remains held.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        if (disconnect) {
+          if (boundary === 'discovery') expect.soft(getCatalog).not.toHaveBeenCalled();
+          else expect.soft(getCatalog).toHaveBeenCalledOnce();
+          expect.soft(clients).toHaveLength(1);
+          expect.soft(snapshots.flat()).not.toContain('connected');
+        } else {
+          await connecting;
+          expect(getCatalog).toHaveBeenCalledOnce();
+          expect(runtime.getSnapshot()[0]).toMatchObject({ state: 'connected', exposedTools: [] });
+          expect(runtime.getSnapshot()[0]?.tools[0]).toMatchObject({
+            name: 'repo.read',
+            classification: 'read',
+          });
+        }
+      } finally {
+        releaseDiscovery();
+        releaseClose();
+        await Promise.allSettled([connecting, ...(disconnecting ? [disconnecting] : [])]);
+        await runtime.disconnect('p02-server');
+        await Promise.all(clients.map((client) => client.close()));
+        unsubscribe();
+      }
+      expect(runtime.getSnapshot()).toEqual([]);
+      expect(manager.discover()).toEqual([]);
+    },
+  );
+
   it('does no network or registration work before explicit connect', () => {
     const harness = setupHarness();
 

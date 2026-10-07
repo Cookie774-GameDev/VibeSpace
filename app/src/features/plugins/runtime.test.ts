@@ -953,6 +953,164 @@ describe('account-scoped plugin runtime', () => {
     });
   });
 
+  it.each([
+    ['credential read', 'account switch'],
+    ['credential read', 'account ABA'],
+    ['credential read', 'runtime invalidation'],
+    ['final validation', 'account switch'],
+    ['final validation', 'account ABA'],
+    ['final validation', 'runtime invalidation'],
+  ] as const)(
+    'P01 refuses read-only dispatch after held %s and %s',
+    async (boundary, revocation) => {
+      const test = fixture();
+      await test.runtime.management.saveCredential({
+        accountId: 'account-a',
+        pluginId: 'github',
+        fieldId: 'token',
+        value: 'synthetic-read-lifetime',
+      });
+      const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+        'github.identity',
+      )!.executor;
+      if (registration.kind !== 'plugin_tool') throw new Error('expected plugin tool');
+      let entered!: () => void;
+      let release!: () => void;
+      const enteredBoundary = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      if (boundary === 'credential read') {
+        vi.mocked(test.credentialAdapter.readExistingCredential).mockImplementationOnce(
+          async () => {
+            entered();
+            await gate;
+            return 'synthetic-read-lifetime';
+          },
+        );
+      } else {
+        const revalidate = vi.mocked(test.credentialAuthorization.revalidateLocked);
+        const original = revalidate.getMockImplementation()!;
+        let calls = 0;
+        revalidate.mockImplementation(async (request) => {
+          const decision = await original(request);
+          if (++calls === 2) {
+            entered();
+            await gate;
+          }
+          return decision;
+        });
+      }
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValue(
+          new Response(JSON.stringify({ login: 'fixture-owner', public_repos: 0 }), {
+            status: 200,
+          }),
+        );
+      const pending = test.runtime.registeredTools
+        .execute({
+          accountId: 'account-a',
+          registration,
+          params: {},
+          context: {
+            source: 'ai',
+            accountId: 'account-a',
+            runId: 'run-p01',
+            requestId: 'request-p01',
+            approvalId: 'approval-p01',
+            attemptNumber: 1,
+          },
+        })
+        .then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        );
+      await enteredBoundary;
+      expect(fetchSpy).not.toHaveBeenCalled();
+      if (revocation === 'runtime invalidation') test.runtime.canonicalArtifacts.invalidateAll();
+      else {
+        test.setActiveAccountId('account-b');
+        test.runtime.canonicalArtifacts.invalidateAccount('account-a');
+        if (revocation === 'account ABA') test.setActiveAccountId('account-a');
+      }
+      release();
+      const settled = await pending;
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(settled).toHaveProperty('error');
+    },
+  );
+
+  it.each(['current owner', 'account switch', 'account ABA', 'runtime invalidation'] as const)(
+    'P01 publishes a held read-only response only for the %s',
+    async (revocation) => {
+      const test = fixture();
+      await test.runtime.management.saveCredential({
+        accountId: 'account-a',
+        pluginId: 'github',
+        fieldId: 'token',
+        value: 'synthetic-read-lifetime',
+      });
+      const registration = createJarvisActionCatalog(DEFAULT_JARVIS_ACTION_REGISTRATIONS).resolve(
+        'github.identity',
+      )!.executor;
+      if (registration.kind !== 'plugin_tool') throw new Error('expected plugin tool');
+      let entered!: () => void;
+      let release!: () => void;
+      const enteredResponse = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        entered();
+        await gate;
+        return new Response(JSON.stringify({ login: 'fixture-owner', public_repos: 0 }), {
+          status: 200,
+        });
+      });
+      const pending = test.runtime.registeredTools
+        .execute({
+          accountId: 'account-a',
+          registration,
+          params: {},
+          context: {
+            source: 'ai',
+            accountId: 'account-a',
+            runId: 'run-p01',
+            requestId: 'request-p01',
+            approvalId: 'approval-p01',
+            attemptNumber: 1,
+          },
+        })
+        .then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        );
+      await enteredResponse;
+      if (revocation === 'runtime invalidation') test.runtime.canonicalArtifacts.invalidateAll();
+      else if (revocation !== 'current owner') {
+        test.setActiveAccountId('account-b');
+        test.runtime.canonicalArtifacts.invalidateAccount('account-a');
+        if (revocation === 'account ABA') test.setActiveAccountId('account-a');
+      }
+      release();
+      const settled = await pending;
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      if (revocation === 'current owner')
+        expect(settled).toMatchObject({
+          value: {
+            ok: true,
+            data: { login: 'fixture-owner' },
+          },
+        });
+      else expect(settled).toHaveProperty('error');
+    },
+  );
+
   it('executes only a canonical fixed plugin-tool executor identity with no model target fields', async () => {
     const source: JarvisRegisteredActionDefinition = {
       id: 'mock.ping',

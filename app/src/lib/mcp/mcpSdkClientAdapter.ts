@@ -120,7 +120,7 @@ function parseTool(value: unknown): McpSdkToolDescriptor | null {
   return {
     name,
     title: optionalText(item.title),
-    description: text(item.description),
+    description: item.description === undefined ? undefined : text(item.description),
     inputSchema: canonicalSchema(item.inputSchema),
     classification: classifyTool(item),
   }

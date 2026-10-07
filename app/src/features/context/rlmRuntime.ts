@@ -94,6 +94,9 @@ export interface RlmRuntimeResult extends RlmSynthesis {
     }>;
     budget: Readonly<RlmBudget>;
     budgetExhausted: boolean;
+    /** Retrieval-page/query coverage, independent of canonical URI metadata limits. */
+    retrievalCoverage?: Readonly<{ requestedQueries: number; executedQueries: number;
+      matchedQueries: number; omittedQueries: number; searchTruncated: boolean; openedSources: number }>;
   }>;
 }
 
@@ -215,7 +218,11 @@ function trimUtf8(value: string, maximumBytes: number): string {
   return new TextDecoder().decode(bytes.slice(0, maximumBytes));
 }
 
-function retrievalQuery(question: string): string {
+function hasExplicitSourcePath(question: string): boolean {
+  return /\bsource\s+(?:file|path)\s+[`"']?(?:[\w.-]+[\\/])+[\w.-]+\.[\w]+/iu.test(question);
+}
+
+function semanticRetrievalQuestion(question: string): string {
   // Keep run metadata and tool-policy instructions for the child, but do not
   // let those lines displace source terms in the bounded physical search.
   const semanticQuestion = question.split(/\r?\n/u).map((line) => {
@@ -229,10 +236,40 @@ function retrievalQuery(question: string): string {
   ).filter((line) =>
     !/^Use only (?:the )?(?:active )?SiYuan Context Map\b.*\bvibespace_context\b/iu.test(line),
   ).join(' ').trim() || question;
+  return semanticQuestion;
+}
+
+// Keep existing literal and code-symbol precedence when broad anchors coexist.
+function preciseRetrievalQuery(question: string): string | undefined {
+  const bracketed = question.match(/\[([^\]]{1,1024})\]/u)?.[1]?.trim();
+  const normalized = bracketed?.replace(/\s+/gu, ' ');
+  if (normalized) return !normalized.includes('"') ? `"${normalized}"` : normalized;
+  const symbol = question.match(/`([A-Za-z_][A-Za-z0-9_]{2,127})`/u)?.[1];
+  if (symbol && symbol.length >= 6 && !/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/u.test(symbol)) {
+    return symbol;
+  }
+  return undefined;
+}
+
+function retrievalQueries(question: string): string[] {
+  const semantic = semanticRetrievalQuestion(question);
+  // Explicit paths, literals and precise symbols retain the original planner's
+  // precedence. Multi-anchor coverage applies after those source constraints.
+  if (hasExplicitSourcePath(semantic) || preciseRetrievalQuery(semantic)) {
+    return [retrievalQuery(question)];
+  }
+  const anchors = [...new Set(semantic.match(/\b[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+\b/gu) ?? [])];
+  // Independent explicit anchors may live in different files. Combining them
+  // into one literal AND query, or keeping only the first, loses that coverage.
+  return anchors.length > 1 ? anchors : [retrievalQuery(question)];
+}
+
+function retrievalQuery(question: string): string {
+  const semanticQuestion = semanticRetrievalQuestion(question);
   // An explicitly requested source must survive semantic query shortening.
   // The repository validates named paths; prose such as "Focus on" remains a
   // retrieval hint and continues through the existing symbol/macro strategy.
-  if (/\bsource\s+(?:file|path)\s+[`"']?(?:[\w.-]+[\\/])+[\w.-]+\.[\w]+/iu.test(semanticQuestion)) {
+  if (hasExplicitSourcePath(semanticQuestion)) {
     return semanticQuestion;
   }
   // Routing instructions are not source facts. Preserve the full factual
@@ -250,16 +287,9 @@ function retrievalQuery(question: string): string {
     const factualQuestion = semanticQuestion.match(/\b(?:and\s+answer|before\s+answering)\s*:\s*(.+)$/iu)?.[1]?.trim();
     if (factualQuestion) return factualQuestion;
   }
-  const bracketed = semanticQuestion.match(/\[([^\]]{1,1024})\]/u)?.[1]?.trim();
-  const normalized = bracketed?.replace(/\s+/gu, ' ');
-  if (normalized) return !normalized.includes('"') ? `"${normalized}"` : normalized;
-  // A precise code symbol is a stronger source anchor than surrounding chat
-  // instructions, run markers, or requests for citations. Keep the full
-  // question for child analysis; only the physical retrieval query narrows.
+  const preciseQuery = preciseRetrievalQuery(semanticQuestion);
+  if (preciseQuery) return preciseQuery;
   const symbol = semanticQuestion.match(/`([A-Za-z_][A-Za-z0-9_]{2,127})`/u)?.[1];
-  if (symbol && symbol.length >= 6 && !/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/u.test(symbol)) {
-    return symbol;
-  }
   // Providers sometimes remove backticks and append an unverified file guess.
   // A C-style macro in the question is a more stable index anchor than that
   // guessed path; the child still receives the complete original question.
@@ -473,31 +503,39 @@ export function createRlmRuntime(dependencies: {
 
     try {
       if (signal.aborted) throw abortError(signal, timedOut);
-      const searchQuery = retrievalQuery(input.question);
-      // Leave room in the bounded tool budget for a source follow-up. Opening
-      // every search hit consumed all twelve calls before the child analysis
-      // could reach decisive nearby branches in large mapped files.
-      // A compact one- or two-symbol probe has a sharper index rank; four
-      // sources leave more of the tool and wall budget for reading the branch.
+      const requestedQueries = retrievalQueries(input.question);
+      const multipleAnchors = requestedQueries.length > 1;
+      // Each independent probe reserves one open/expand call. Six probes and
+      // the existing tool/byte/child budgets keep broad requests bounded.
+      const queries = multipleAnchors
+        ? requestedQueries.slice(0, Math.min(6, Math.max(1, Math.floor(budget.maxToolCalls / 2))))
+        : requestedQueries;
+      const searchQuery = queries[0];
       const searchCap = searchQuery.trim().split(/\s+/u).length <= 2 ? 4 : 6;
-      const initialSearchLimit = Math.min(searchCap, Math.max(1, budget.maxToolCalls - 3));
+      const initialSearchLimit = multipleAnchors ? 1 : Math.min(searchCap, Math.max(1, budget.maxToolCalls - 3));
+      const items: ContextSearchItem[] = [];
+      const seenPointers = new Set<string>();
+      let searchTruncated = false;
+      let matchedQueries = 0;
       event('root_started', 0, `run=${runId}`);
-      usage.toolCalls += 1;
-      const found = await abortable(
-        () => invokeTool('search', () => dependencies.contextTools.search({
-          scope: input.scope,
-          query: searchQuery,
-          limit: initialSearchLimit,
-          signal,
-        })),
-        signal,
-        () => timedOut,
-      );
-      event(
-        'search_completed',
-        0,
-        `strategy=exact_anchor query=${searchQuery} hits=${found.items.length}`,
-      );
+      for (const query of queries) {
+        usage.toolCalls += 1;
+        const page = await abortable(
+          () => invokeTool('search', () => dependencies.contextTools.search({
+            scope: input.scope, query, limit: initialSearchLimit, signal,
+          })), signal, () => timedOut,
+        );
+        searchTruncated ||= page.truncated;
+        if (page.items.length > 0) matchedQueries += 1;
+        for (const item of page.items) {
+          const key = JSON.stringify(createContextPointer(item.pointer));
+          if (!seenPointers.has(key)) { seenPointers.add(key); items.push(item); }
+        }
+        event('search_completed', 0,
+          `strategy=exact_anchor query=${query} hits=${page.items.length} truncated=${String(page.truncated)}`);
+      }
+      const found = { items, truncated: searchTruncated };
+      const omittedQueries = requestedQueries.length - queries.length;
 
       const evidence: ContextOpenResult[] = [];
       for (const item of found.items as readonly ContextSearchItem[]) {
@@ -670,6 +708,7 @@ export function createRlmRuntime(dependencies: {
       budgetExhausted =
         budgetExhausted ||
         found.truncated ||
+        omittedQueries > 0 ||
         evidence.length < found.items.length ||
         usage.openBytes >= budget.maxOpenBytes ||
         usage.toolCalls >= budget.maxToolCalls ||
@@ -686,6 +725,8 @@ export function createRlmRuntime(dependencies: {
           usage: Object.freeze({ ...usage }),
           budget,
           budgetExhausted,
+          retrievalCoverage: Object.freeze({ requestedQueries: requestedQueries.length, executedQueries: queries.length,
+            matchedQueries, omittedQueries, searchTruncated, openedSources: evidence.length }),
         }),
       };
     } catch (error) {

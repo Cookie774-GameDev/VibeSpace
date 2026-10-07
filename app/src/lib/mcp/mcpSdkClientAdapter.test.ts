@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import { ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js'
+import { McpServerManager } from './serverManager'
 import {
   createMcpSdkClientAdapter,
   createMcpCancellationFetch,
@@ -39,6 +41,46 @@ function harness() {
 }
 
 describe('MCP SDK client adapter', () => {
+  it.each([
+    ['omitted', undefined, true, true],
+    ['null', null, false, false],
+    ['nonstring', 42, false, false],
+    ['empty', '', true, false],
+    ['whitespace', '  \n ', true, false],
+    ['valid', 'Read synthetic fixture', true, true],
+  ] as const)('P03 preserves manager description policy for %s metadata', async (
+    _label, description, protocolValid, discoveryValid,
+  ) => {
+    const descriptor = {
+      name: 'fixture.read',
+      ...(description === undefined ? {} : { description }),
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    }
+    // Null/nonstring metadata would be rejected by the installed SDK itself;
+    // the injected port also proves the manager remains fail-closed beneath it.
+    expect(ListToolsResultSchema.safeParse({ tools: [descriptor] }).success).toBe(protocolValid)
+    const { adapter, client } = harness()
+    vi.mocked(client.listTools).mockResolvedValue({ tools: [descriptor] })
+    const manager = new McpServerManager()
+    manager.register(adapter, { kind: 'external_mcp', exposure: { mode: 'none' } })
+    try {
+      if (discoveryValid) {
+        const tools = await manager.listTools(adapter.id)
+        expect(tools).toHaveLength(1)
+        expect(tools[0]).toMatchObject({
+          name: 'fixture.read',
+          description: description === undefined ? 'No description provided.' : description,
+        })
+      } else {
+        await expect(manager.listTools(adapter.id)).rejects.toThrow('Invalid MCP tool description.')
+      }
+      expect(manager.status(adapter.id).exposedTools).toEqual([])
+      expect(client.callTool).not.toHaveBeenCalled()
+    } finally {
+      await manager.stopAll()
+    }
+  })
+
   it('rejects a POST cancelled before transport headers finish preparing it', async () => {
     const base = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }))
     const send = createMcpCancellationFetch(base)

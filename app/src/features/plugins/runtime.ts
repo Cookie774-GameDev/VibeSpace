@@ -2051,6 +2051,13 @@ export function createAccountScopedPluginRuntime(input: {
         context,
       });
       if (!tool.readOnly) throw safeFailure('approval_bound_execution_required');
+      const generation = captureArtifactGeneration(accountId);
+      const assertCurrentRead = () => {
+        if (!generation || !artifactGenerationIsCurrent(accountId, generation)) {
+          throw safeFailure('credential_grant_stale');
+        }
+      };
+      assertCurrentRead();
       if (manifest.id === 'canva') {
         const locators = locatorsFor(manifest);
         const authorizations = await authorizeLocators({
@@ -2065,6 +2072,7 @@ export function createAccountScopedPluginRuntime(input: {
             authorizations,
             locks,
           });
+          assertCurrentRead();
           const result = canonicalPluginResult(
             await runPreparedTool({
               manifest,
@@ -2089,6 +2097,7 @@ export function createAccountScopedPluginRuntime(input: {
             });
             if (!decision.authorized) throw safeFailure(decision.reason);
           }
+          assertCurrentRead();
           return result;
         });
       }
@@ -2099,7 +2108,10 @@ export function createAccountScopedPluginRuntime(input: {
         authority: input.credentialAuthorization,
         adapter: input.credentialAdapter,
       });
-      return canonicalPluginResult(
+      // Credential authority can outlive this runtime/account generation.
+      // Recheck after awaited reads and again before publishing their result.
+      assertCurrentRead();
+      const result = canonicalPluginResult(
         await runPreparedTool({
           manifest,
           tool,
@@ -2108,6 +2120,8 @@ export function createAccountScopedPluginRuntime(input: {
           signal: context.signal ?? AbortSignal.timeout(12_000),
         }),
       );
+      assertCurrentRead();
+      return result;
     },
     async startPrepared({
       accountId,
