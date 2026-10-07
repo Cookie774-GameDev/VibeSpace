@@ -1089,6 +1089,7 @@ async function executePersistentOpenCode(
       worktreeId: req.worktreeId,
       toolGatewayAuthority: req.toolGatewayAuthority,
       prompt: promptForOpenCode(req.messages),
+      ...(req.protectedAttempt ? { protectedAttempt: req.protectedAttempt } : {}),
       ...(promptParts ? { parts: promptParts } : {}),
       modelId: qualifiedModel,
       historyPrompt: req.messages.filter((message) => message.role !== 'system').length > 1

@@ -986,7 +986,7 @@ describe('canonical OpenCode AI routing', () => {
     warn.mockRestore();
   });
 
-  it('preserves protected prompt, exact connection, scope, signal and evidence hooks', async () => {
+  it('preserves protected prompt, attempt, exact connection, scope, signal and evidence hooks', async () => {
     const controller = new AbortController();
     openCodeSend.mockImplementationOnce((request) =>
       (async function* () {
@@ -1010,6 +1010,7 @@ describe('canonical OpenCode AI routing', () => {
     expect(openCodeSend).toHaveBeenCalledWith(
       expect.objectContaining({
         requestId: protectedAttempt.requestId,
+        protectedAttempt,
         connection: expect.objectContaining({ id: 'openai-api', adapterId: 'opencode-cli' }),
         systemPrompt: compiledPrompt.systemText,
         modelId: 'openai/gpt-protected',

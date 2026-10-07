@@ -1,3 +1,5 @@
+import { runAgent } from '@/lib/ai/router';
+import type { Agent } from '@/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const nativeOpenCodeMocks = vi.hoisted(() => ({
@@ -1264,6 +1266,88 @@ describe('persistent OpenCode question transport authority', () => {
 
     abort.abort();
     await iterator.return?.();
+  });
+
+  const joinedRouterRequest = () => {
+    const protectedAttempt = { accountId: 'account-question-test', runId: 'run-router-join', requestId: 'request-router-join', attemptNumber: 1 };
+    const agent: Agent = { id: 'agent_router_join' as Agent['id'], slug: 'router-join', name: 'Synthetic router join',
+      description: 'Synthetic source-only fixture', system_prompt: 'Use the exact fixture.',
+      model: { provider: 'openai', model: 'gpt-question-test' }, tools_allowed: [], memory_scope: 'workspace',
+      capabilities: [], builtin: true, created_at: 1, updated_at: 1 };
+    return { agent, connectionId: 'opencode-cli', chatId: 'chat-router-join',
+      accountId: protectedAttempt.accountId, workspaceId: 'workspace-question-test', projectId: 'project-question-test',
+      workingDirectory: 'C:\\workspace', requestId: protectedAttempt.requestId, protectedAttempt,
+      compiledPrompt: { schemaVersion: 1, layers: [], systemText: 'Synthetic protected prompt', promptHash: 'b'.repeat(64),
+        identityVersion: 1, profileRevisionId: 'synthetic-profile', diagnostics: { totalChars: 26, omittedSourceRefs: [], warnings: [] } },
+      tools: { vibespace_context: true }, messages: [{ role: 'user', content: 'Synthetic joined route.' }] } satisfies Parameters<typeof runAgent>[0];
+  };
+  const prepareJoinedRouter = () => {
+    useAuthStore.setState({ localUserId: 'account-question-test', cloudSession: null,
+      workspaceId: 'workspace-question-test' as WorkspaceId, projectId: 'project-question-test' as ProjectId,
+      offlineMode: false, apiKeys: {}, chatModelSelection: { mode: 'none' } });
+    configureManagedQuestionTransport([{ type: 'session.idle', properties: { sessionID: 'ses_question_exact' } }]);
+  };
+
+  it('joins the protected router call to the real OpenCode native-message binding', async () => {
+    prepareJoinedRouter();
+    const request = joinedRouterRequest();
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let binding: ReturnType<typeof readToolGatewayTurnIdentity> = null;
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (args[1].includes('/prompt_async')) binding = readToolGatewayTurnIdentity('ses_question_exact', 'msg_router_join');
+      return original(...args);
+    });
+    await runAgent(request);
+    expect(binding).toEqual({ requestId: request.requestId, chatId: request.chatId, protectedAttempt: request.protectedAttempt });
+    expect(readToolGatewayTurnIdentity('ses_question_exact', 'msg_router_join')).toBeNull();
+  });
+
+  it.each(['absent', 'request-mismatch', 'foreign-account', 'invalid-chat', 'invalid-run', 'invalid-attempt'] as const)(
+    'refuses the protected router binding with %s authority before prompt dispatch', async (mode) => {
+      prepareJoinedRouter();
+      const request: Parameters<typeof runAgent>[0] = joinedRouterRequest();
+      if (mode === 'absent') delete request.protectedAttempt;
+      if (mode === 'request-mismatch') request.requestId = 'different-request';
+      if (mode === 'invalid-chat') request.chatId = ' ';
+      if (mode === 'foreign-account') request.protectedAttempt = { ...request.protectedAttempt!, accountId: 'foreign-account' };
+      if (mode === 'invalid-run') request.protectedAttempt = { ...request.protectedAttempt!, runId: '' };
+      if (mode === 'invalid-attempt') request.protectedAttempt = { ...request.protectedAttempt!, attemptNumber: 0 };
+      await expect(runAgent(request)).rejects.toThrow();
+      expect(nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/prompt_async'))).toBe(false);
+      expect(readToolGatewayTurnIdentity('ses_question_exact', 'msg_router_join')).toBeNull();
+    },
+  );
+
+  it.each(['account-ABA', 'abort'] as const)('refuses a stale protected router binding after %s while native catalog awaits', async (mode) => {
+    prepareJoinedRouter();
+    const controller = new AbortController();
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let revoked = false;
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (!revoked && args[1].startsWith('/config/providers')) {
+        revoked = true;
+        if (mode === 'abort') controller.abort();
+        else { useAuthStore.setState({ localUserId: 'foreign-account' }); useAuthStore.setState({ localUserId: 'account-question-test' }); }
+      }
+      return original(...args);
+    });
+    await expect(runAgent({ ...joinedRouterRequest(), signal: controller.signal })).rejects.toThrow();
+    expect(revoked).toBe(true);
+    expect(nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/prompt_async'))).toBe(false);
+    expect(readToolGatewayTurnIdentity('ses_question_exact', 'msg_router_join')).toBeNull();
+  });
+
+  it('does not synthesize a protected attempt for an ordinary unprotected router call', async () => {
+    prepareJoinedRouter();
+    const { protectedAttempt: _attempt, compiledPrompt: _prompt, ...request } = joinedRouterRequest();
+    const original = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let binding: ReturnType<typeof readToolGatewayTurnIdentity> = null;
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (args[1].includes('/prompt_async')) binding = readToolGatewayTurnIdentity('ses_question_exact', 'msg_router_join');
+      return original(...args);
+    });
+    await runAgent(request);
+    expect(binding).toEqual({ requestId: request.requestId, chatId: request.chatId });
   });
 
   it('authorizes an immediate tool call before prompt acknowledgement and releases the binding', async () => {
