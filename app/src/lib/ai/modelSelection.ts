@@ -7,7 +7,7 @@ import type { ParsedStackSlashCommand } from '@/lib/ai/stacks/classifier';
 import { classifyStackTask, parseStackSlashCommand } from '@/lib/ai/stacks/classifier';
 import { isHiveProductEnabled } from '@/lib/features/hiveProductGate';
 import { canRoutePromotedAdapter } from '@/features/model-foundry/adapterRegistry';
-import { getProviderDisplayName } from './providerRegistry';
+import { getProviderDisplayName, PROVIDER_REGISTRY } from './providerRegistry';
 import { getAccessibleModelOptions, getAccessibleProviders, type ModelOption } from './models';
 import { getModelLabelForProvider } from './providerModelCatalog';
 import { coerceToExposedPreset, stepsForPreset } from './stacks/presets';
@@ -15,7 +15,8 @@ import { isProviderConnected, type ProviderConnectionContext } from './providerR
 import { agentUsesDefaultProvider } from './agentProviderOptions';
 import { describeVisionRequirement, selectionSupportsVision } from './vision';
 import type { ConnectionMode, ProviderCapabilities, ProviderConnection } from './adapters/types';
-import { getProviderConnectionDescriptor } from './adapters/catalog';
+import { getProviderConnectionDescriptor, OPENCODE_CLI_CONNECTION } from './adapters/catalog';
+import { openCodeModelRouteOwner } from './catalog/canonicalModelCatalog';
 import { getDiscoveredConnectionModels } from './connectionCatalog';
 import { isKernelSmokeBindingActive, KERNEL_SMOKE_PROVIDER_ID } from './providers/kernelSmoke';
 import { isProtectedJarvisAgent } from '@/lib/jarvis/identity';
@@ -344,7 +345,26 @@ export function validateChatModelSelection(
       if (!exactConnection.enabled) {
         return { ok: false, message: `Provider connection is disabled: ${selection.connectionId}` };
       }
-      if (exactConnection.providerId !== selection.providerId) {
+      // OpenCode owns transport; its qualified model retains its registered provider.
+      let qualifiedOpenCodeOwner = false;
+      if (
+        exactConnection.id === OPENCODE_CLI_CONNECTION.id &&
+        selection.modelId.includes('/')
+      ) {
+        let modelOwner: string;
+        try {
+          modelOwner = openCodeModelRouteOwner(selection.modelId);
+        } catch {
+          return {
+            ok: false,
+            message: 'The selected connection does not match this model provider.',
+          };
+        }
+        qualifiedOpenCodeOwner = PROVIDER_REGISTRY.some(
+          (entry) => entry.id === selection.providerId && entry.id === modelOwner,
+        );
+      }
+      if (exactConnection.providerId !== selection.providerId && !qualifiedOpenCodeOwner) {
         return {
           ok: false,
           message: 'The selected connection does not match this model provider.',
