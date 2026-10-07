@@ -17,7 +17,7 @@ import { resolveVoiceProviderSelection } from './voiceProviderSelection';
 import { createVoiceSessionBinding } from './voiceSessionBinding';
 import type { ChatId } from '@/types';
 import type { ModelPickerOption } from '@/lib/ai/useAccessibleChatModels';
-import { CODEX_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
+import { CODEX_CLI_CONNECTION, OPENCODE_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
 
 type VoiceHandler = (payload?: unknown) => void;
 type MockVoiceChatTarget = {
@@ -347,6 +347,128 @@ describe('VoiceModal hands-free turn-taking', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+
+  it('RDY02 retains the exact unsent typed draft when real route admission rejects', async () => {
+    const previous = vi.mocked(resolveVoiceProviderSelection).getMockImplementation()!;
+    const actual = await vi.importActual<typeof import('./voiceProviderSelection')>('./voiceProviderSelection');
+    vi.mocked(resolveVoiceProviderSelection).mockImplementation(actual.resolveVoiceProviderSelection);
+    try {
+      useAuthStore.setState({ chatModelSelection: selectionFromOption(
+        'openai', 'openai/gpt-6-luna', OPENCODE_CLI_CONNECTION,
+      ) });
+      useUIStore.getState().setVoiceModalOpen(true, 'text');
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      const input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+      const draft = '  Recover this unsent typed request.  ';
+      fireEvent.change(input, { target: { value: draft } });
+      fireEvent.submit(screen.getByRole('form', { name: 'Jarvis voice mini bar' }));
+      await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith('Voice message failed',
+        'The selected OpenCode model is unavailable. Choose an available OpenCode model.'));
+      expect(messageRepo.create).not.toHaveBeenCalled();
+      expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+      expect(VoiceService.startListening).not.toHaveBeenCalled();
+      expect(input).toHaveProperty('value', draft);
+    } finally { vi.mocked(resolveVoiceProviderSelection).mockImplementation(previous); }
+  });
+
+  it.each(['unchanged', 'newer edit', 'draft ABA'] as const)(
+    'RDY02 clears only the committed draft revision: %s',
+    async (change) => {
+      let finish!: (value: unknown) => void;
+      const pending = new Promise(resolve => { finish = resolve; });
+      vi.mocked(messageRepo.create).mockImplementationOnce(() => pending as ReturnType<typeof messageRepo.create>);
+      useUIStore.getState().setVoiceModalOpen(true, 'text');
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      const input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+      const draft = 'Original committed draft: ' + change;
+      fireEvent.change(input, { target: { value: draft } });
+      fireEvent.submit(screen.getByRole('form', { name: 'Jarvis voice mini bar' }));
+      await waitFor(() => expect(messageRepo.create).toHaveBeenCalledOnce());
+      expect.soft(input).toHaveProperty('value', draft);
+      if (change !== 'unchanged') fireEvent.change(input, { target: { value: 'Newer edited draft' } });
+      if (change === 'draft ABA') fireEvent.change(input, { target: { value: draft } });
+      await act(async () => { finish({ id: 'committed-draft-' + change }); await pending; });
+      await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce());
+      expect(input).toHaveProperty('value', change === 'unchanged' ? '' : change === 'draft ABA' ? draft : 'Newer edited draft');
+      expect(messageRepo.create).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('RDY02 keeps an unsaved draft after persistence failure', async () => {
+    vi.mocked(messageRepo.create).mockRejectedValueOnce(new Error('Synthetic persistence failure'));
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    const input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+    fireEvent.change(input, { target: { value: 'Uncommitted persistence failure draft' } });
+    fireEvent.submit(screen.getByRole('form', { name: 'Jarvis voice mini bar' }));
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalled());
+    expect(messageRepo.create).toHaveBeenCalledOnce();
+    expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+    expect(input).toHaveProperty('value', 'Uncommitted persistence failure draft');
+  });
+
+  it('RDY02 acknowledges an accepted duplicate without creating or dispatching another message', async () => {
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    const input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+    const form = screen.getByRole('form', { name: 'Jarvis voice mini bar' });
+    const draft = 'Unique already accepted RDY02 duplicate';
+    fireEvent.change(input, { target: { value: draft } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce());
+    await waitFor(() => expect(useVoiceStore.getState().state).toBe('idle'));
+    expect(input).toHaveProperty('value', '');
+    fireEvent.change(input, { target: { value: draft } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(input).toHaveProperty('value', ''));
+    expect(messageRepo.create).toHaveBeenCalledOnce();
+    expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce();
+  });
+
+  it('RDY02 clears a persisted draft even when subsequent dispatch is refused', async () => {
+    vi.mocked(dispatchVoiceMainRequest).mockResolvedValueOnce({
+      status: 'failed', code: 'runtime_rejected', message: 'Synthetic rejected dispatch',
+    });
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    render(<VoiceModal />);
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+    const input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+    fireEvent.change(input, { target: { value: 'Durable but not dispatched draft' } });
+    fireEvent.submit(screen.getByRole('form', { name: 'Jarvis voice mini bar' }));
+    await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce());
+    await waitFor(() => expect(input).toHaveProperty('value', ''));
+    expect(messageRepo.create).toHaveBeenCalledOnce();
+  });
+
+  it.each(['cancel', 'close and reopen'] as const)(
+    'RDY02 does not clear newer typed input after %s while persistence settles',
+    async (action) => {
+      let finish!: (value: unknown) => void;
+      const pending = new Promise(resolve => { finish = resolve; });
+      vi.mocked(messageRepo.create).mockImplementationOnce(() => pending as ReturnType<typeof messageRepo.create>);
+      useUIStore.getState().setVoiceModalOpen(true, 'text');
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Type to Jarvis voice' }), { target: { value: 'Old cancelled draft: ' + action } });
+      fireEvent.submit(screen.getByRole('form', { name: 'Jarvis voice mini bar' }));
+      await waitFor(() => expect(messageRepo.create).toHaveBeenCalledOnce());
+      if (action === 'cancel') fireEvent.click(screen.getByRole('button', { name: 'Stop reply' }));
+      else {
+        fireEvent.click(screen.getByRole('button', { name: 'Close typed Jarvis voice' }));
+        act(() => useUIStore.getState().setVoiceModalOpen(true, 'text'));
+        await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      }
+      const input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+      fireEvent.change(input, { target: { value: 'New draft after ' + action } });
+      await act(async () => { finish({ id: 'old-cancelled-message' }); await pending; });
+      expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+      expect(input).toHaveProperty('value', 'New draft after ' + action);
+    },
+  );
 
   it('opens the compact typed Voice input visibly without arming capture', async () => {
     useUIStore.getState().setVoiceModalOpen(false);

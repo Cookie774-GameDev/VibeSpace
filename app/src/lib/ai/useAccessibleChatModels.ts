@@ -6,6 +6,7 @@ import type { ChatBackend } from './backend/chatBackend';
 import {
   getProviderDisplayName,
   getProviderRegistryEntry,
+  PROVIDER_REGISTRY,
   isLocalProvider,
 } from './providerRegistry';
 import {
@@ -55,6 +56,7 @@ import {
 } from './providers/kernelSmoke';
 import {
   canonicalModelId,
+  openCodeModelRouteOwner,
   canonicalProviderModelId,
   logicalProviderModelId,
   dedupeModelMetadata,
@@ -929,11 +931,6 @@ function isDirectOpenAiRoute(option: ModelPickerOption): boolean {
   return segments.length === 2 && segments[0] === 'openai';
 }
 
-function openCodeRouteOwner(option: ModelPickerOption): string {
-  const owner = upstreamProviderId(option.modelId) || 'other';
-  return owner === 'qwen-coding-plan' ? 'qwen' : owner;
-}
-
 function openCodeProviderGroupLabel(owner: string): string {
   if (owner === 'openrouter') return 'OpenRouter Models';
   if (owner === 'qwen') return 'Qwen Models';
@@ -982,7 +979,7 @@ function partitionOpenCodePickerGroup(group: ModelPickerGroup): ModelPickerGroup
 
   const routesByOwner = new Map<string, ModelPickerOption[]>();
   for (const route of unconsumed.values()) {
-    const owner = openCodeRouteOwner(route);
+    const owner = openCodeModelRouteOwner(route.modelId);
     const routes = routesByOwner.get(owner) ?? [];
     routes.push(route);
     routesByOwner.set(owner, routes);
@@ -1049,9 +1046,17 @@ export function buildConnectionPickerGroups(args: {
         : state.auth !== 'unauthenticated';
 
     for (const model of models) {
+      // The CLI connection owns transport; a verified qualified route owns the model provider.
+      // Retain unmapped routes rather than guessing a declared provider from a model label.
+      const modelOwner = connection.id === OPENCODE_CLI_CONNECTION.id && model.id.includes('/')
+        ? openCodeModelRouteOwner(model.id)
+        : undefined;
+      const modelProvider = modelOwner
+        ? PROVIDER_REGISTRY.find((entry) => entry.id === modelOwner)?.id
+        : undefined;
       group.options.push({
         id: `${connection.id}:${model.id}`,
-        provider: connection.providerId as ProviderId,
+        provider: modelProvider ?? (connection.providerId as ProviderId),
         modelId: model.id,
         label: model.label,
         connection,

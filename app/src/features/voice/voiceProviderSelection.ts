@@ -1,6 +1,8 @@
 import { CODEX_CLI_CONNECTION, OPENCODE_CLI_CONNECTION } from '@/lib/ai/adapters/catalog';
 import { selectionFromOption, type ChatModelSelection } from '@/lib/ai/modelSelection';
 import type { ModelPickerOption } from '@/lib/ai/useAccessibleChatModels';
+import { openCodeModelRouteOwner } from '@/lib/ai/catalog/canonicalModelCatalog';
+import { PROVIDER_REGISTRY } from '@/lib/ai/providerRegistry';
 
 export type VoiceAgentProvider = 'codex' | 'opencode';
 export type VoiceAgentRole = 'main' | 'worker';
@@ -47,6 +49,25 @@ function providerLabel(provider: VoiceAgentProvider): 'Codex' | 'OpenCode' {
   return provider === 'codex' ? 'Codex' : 'OpenCode';
 }
 
+function matchesPreferredProvider(
+  option: ModelPickerOption,
+  preferred: Extract<ChatModelSelection, { mode: 'single' }>,
+): boolean {
+  if (option.provider === preferred.providerId) return true;
+  // Older picker rows persisted the transport owner. Accept only the same verified
+  // qualified route's registered model owner; this does not rewrite saved defaults.
+  if (
+    preferred.providerId !== OPENCODE_CLI_CONNECTION.providerId ||
+    preferred.connectionId !== OPENCODE_CLI_CONNECTION.id ||
+    option.connectionId !== OPENCODE_CLI_CONNECTION.id ||
+    option.modelId !== preferred.modelId ||
+    !option.modelId.includes('/')
+  ) return false;
+  const owner = openCodeModelRouteOwner(option.modelId);
+  const registered = PROVIDER_REGISTRY.find((entry) => entry.id === owner);
+  return registered !== undefined && registered.id === option.provider;
+}
+
 /**
  * Resolve a voice agent's provider through the same live accessible model routes
  * shown by the chat model picker. No provider or model route is synthesized.
@@ -78,8 +99,8 @@ export function resolveVoiceProviderSelection(input: {
       ? routes.find(
           (option) =>
             option.connectionId === preferred.connectionId &&
-            option.provider === preferred.providerId &&
-            option.modelId === preferred.modelId,
+            option.modelId === preferred.modelId &&
+            matchesPreferredProvider(option, preferred),
         )
       : undefined;
   if (

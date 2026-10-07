@@ -107,6 +107,8 @@ const SESSION_REGISTRY_KEY = 'vibespace.opencode-session-registry.v1';
 const ACCEPTED_TURN_REGISTRY_KEY = 'vibespace.opencode-accepted-turns.v1';
 const AUTH_CACHE_TTL_MS = 60_000;
 const MODEL_CACHE_TTL_MS = 60_000;
+// Match the picker's existing failure retry while retaining bounded negative caching.
+const EMPTY_MODEL_CACHE_TTL_MS = 15_000;
 const TURN_IDLE_POLL_MS = 500;
 const TURN_NO_EVIDENCE_GRACE_MS = 2_000;
 const TURN_IDLE_FAILED_TOOL_GRACE_MS = 5_000;
@@ -1912,7 +1914,7 @@ export function createOpenCodeToolCallTracker(): (callId: string) => string {
 }
 
 export function createGenerationSafeAsyncCache<Key, Value>(
-  ttlMs: number,
+  ttlMs: number | ((value: Value) => number),
 ): Readonly<{
   get: (key: Key, loader: () => Promise<Value>, force?: boolean) => Promise<Value>;
   peek: (key: Key) => Value | undefined;
@@ -1924,7 +1926,11 @@ export function createGenerationSafeAsyncCache<Key, Value>(
   return Object.freeze({
     get(key, loader, force = false): Promise<Value> {
       const cached = cache.get(key);
-      if (!force && cached && Date.now() - cached.loadedAt < ttlMs)
+      if (
+        !force &&
+        cached &&
+        Date.now() - cached.loadedAt < (typeof ttlMs === 'function' ? ttlMs(cached.value) : ttlMs)
+      )
         return Promise.resolve(cached.value);
       const active = loads.get(key);
       if (!force && active?.generation === generation) return active.promise;
@@ -1955,7 +1961,7 @@ export function createGenerationSafeAsyncCache<Key, Value>(
 }
 
 const modelCatalogs = createGenerationSafeAsyncCache<string, readonly OpenCodeLiveModel[]>(
-  MODEL_CACHE_TTL_MS,
+  (models) => (models.length === 0 ? EMPTY_MODEL_CACHE_TTL_MS : MODEL_CACHE_TTL_MS),
 );
 
 async function liveModels(

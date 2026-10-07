@@ -112,6 +112,12 @@ export function canonicalModelId(modelId: string): string {
   return canonicalIdentifier(modelId);
 }
 
+/** Existing OpenCode route-owner identity, including its explicit Qwen plan alias. */
+export function openCodeModelRouteOwner(modelId: string): string {
+  const owner = canonicalModelId(modelId).split('/').filter(Boolean)[0] ?? 'other';
+  return owner === 'qwen-coding-plan' ? 'qwen' : owner;
+}
+
 function simpleRecordScore(record: Readonly<SimpleModelCatalogRecord>): number {
   const source = record.source ? SOURCE_PRIORITY[record.source] : 0;
   const available = record.available === false ? 0 : 1_000_000;

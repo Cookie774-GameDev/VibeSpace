@@ -1261,62 +1261,206 @@ impl Drop for ExportScratch {
     }
 }
 
-fn open_export_directory(parent: &Path) -> Result<fs::File, String> {
+struct ExportDirectory {
+    path: PathBuf,
+    file: fs::File,
+}
+
+fn open_export_directory_file(path: &Path) -> Result<fs::File, String> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        options.custom_flags(0x0200_0000).share_mode(3); // Directory handle; deny directory deletion/rename.
+        // BACKUP_SEMANTICS | OPEN_REPARSE_POINT: inspect the named directory
+        // itself, and deny delete/rename while its handle remains open.
+        options.custom_flags(0x0220_0000).share_mode(3);
     }
-    options.open(parent).map_err(|error| format!("Could not retain export directory: {error}"))
+    let file = options
+        .open(path)
+        .map_err(|error| format!("Could not retain export directory: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("Could not inspect export directory: {error}"))?;
+    if !metadata.is_dir() || export_metadata_is_link(&metadata) {
+        return Err("Export directory must not be a link or reparse point.".into());
+    }
+    Ok(file)
+}
+
+fn open_export_directories(parent: &Path) -> Result<Vec<ExportDirectory>, String> {
+    #[cfg(target_os = "windows")]
+    let paths = parent
+        .ancestors()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    #[cfg(not(target_os = "windows"))]
+    let paths = vec![parent];
+    let mut retained = Vec::new();
+    for path in paths {
+        retained.push(ExportDirectory {
+            path: path.to_path_buf(),
+            file: open_export_directory_file(path)?,
+        });
+    }
+    Ok(retained)
+}
+
+#[cfg(target_os = "windows")]
+fn export_directory_identity(file: &fs::File) -> Result<(u64, [u8; 16]), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
+    };
+    let mut identity = FILE_ID_INFO::default();
+    unsafe {
+        GetFileInformationByHandleEx(
+            HANDLE(file.as_raw_handle()),
+            FileIdInfo,
+            (&mut identity as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    }
+    .map_err(|error| format!("Could not verify retained export directory identity: {error}"))?;
+    Ok((identity.VolumeSerialNumber, identity.FileId.Identifier))
+}
+
+fn revalidate_export_directories(directories: &[ExportDirectory]) -> Result<(), String> {
+    for directory in directories {
+        let retained = directory
+            .file
+            .metadata()
+            .map_err(|error| format!("Could not inspect retained export directory: {error}"))?;
+        let named = fs::symlink_metadata(&directory.path)
+            .map_err(|_| "Export directory changed during writing.")?;
+        if !retained.is_dir()
+            || export_metadata_is_link(&retained)
+            || !named.is_dir()
+            || export_metadata_is_link(&named)
+        {
+            return Err(
+                "Export directory changed or became a reparse point during writing.".into(),
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if retained.dev() != named.dev() || retained.ino() != named.ino() {
+                return Err("Export directory changed during writing.".into());
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let current = open_export_directory_file(&directory.path)?;
+            if export_directory_identity(&directory.file)? != export_directory_identity(&current)? {
+                return Err("Export directory no longer matches its retained handle.".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
-fn publish_export_handle(file: &fs::File, directory: &fs::File, name: &std::ffi::OsStr) -> Result<(), String> {
+fn publish_export_handle(
+    file: &fs::File,
+    directory: &fs::File,
+    destination: &Path,
+) -> Result<(), String> {
     use std::ffi::{c_char, c_int, CString};
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
     unsafe extern "C" {
-        fn linkat(old_dir: c_int, old_path: *const c_char, new_dir: c_int,
-            new_path: *const c_char, flags: c_int) -> c_int;
+        fn linkat(
+            old_dir: c_int,
+            old_path: *const c_char,
+            new_dir: c_int,
+            new_path: *const c_char,
+            flags: c_int,
+        ) -> c_int;
     }
     let source = CString::new(format!("/proc/self/fd/{}", file.as_raw_fd())).unwrap();
+    let name = destination
+        .file_name()
+        .ok_or("Export filename is missing.")?;
     let destination = CString::new(name.as_bytes()).map_err(|_| "Export filename contains NUL.")?;
     // Linux documents this descriptor-backed link as the unprivileged alternative
     // to AT_EMPTY_PATH. The destination is relative to the retained directory;
     // linkat never replaces an existing entry. No scratch pathname is resolved.
-    let result = unsafe { linkat(-100, source.as_ptr(), directory.as_raw_fd(), destination.as_ptr(), 0x400) };
+    let result = unsafe {
+        linkat(
+            -100,
+            source.as_ptr(),
+            directory.as_raw_fd(),
+            destination.as_ptr(),
+            0x400,
+        )
+    };
     if result != 0 {
-        return Err(format!("Could not publish the retained export file without overwriting: {}", std::io::Error::last_os_error()));
+        return Err(format!(
+            "Could not publish the retained export file without overwriting: {}",
+            std::io::Error::last_os_error()
+        ));
     }
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn publish_export_handle(file: &fs::File, directory: &fs::File, name: &std::ffi::OsStr) -> Result<(), String> {
+fn publish_export_handle(
+    file: &fs::File,
+    _directory: &fs::File,
+    destination: &Path,
+) -> Result<(), String> {
     use std::os::windows::{ffi::OsStrExt, io::AsRawHandle};
     use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::Storage::FileSystem::{SetFileInformationByHandle, FileRenameInfo, FILE_RENAME_INFO};
-    let name = name.encode_wide().collect::<Vec<_>>();
-    let name_bytes = name.len().checked_mul(2).ok_or("Export filename is too long.")?;
+    use windows::Win32::Storage::FileSystem::{
+        FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
+    };
+    let name = destination.as_os_str().encode_wide().collect::<Vec<_>>();
+    let name_bytes = name
+        .len()
+        .checked_mul(2)
+        .ok_or("Export filename is too long.")?;
     let buffer_bytes = std::mem::offset_of!(FILE_RENAME_INFO, FileName)
-        .checked_add(name_bytes).and_then(|size| size.checked_add(2)).ok_or("Export filename is too long.")?;
+        .checked_add(name_bytes)
+        .and_then(|size| size.checked_add(2))
+        .ok_or("Export filename is too long.")?;
     let buffer_len = u32::try_from(buffer_bytes).map_err(|_| "Export filename is too long.")?;
     // usize backing gives the C header its required pointer alignment. Zeroing the
     // union selects ReplaceIfExists=false; the following UTF-16 name is bounded.
     let mut storage = vec![0_usize; buffer_bytes.div_ceil(std::mem::size_of::<usize>())];
     let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
     unsafe {
-        (*info).RootDirectory = HANDLE(directory.as_raw_handle());
+        // The Windows0.61.3 native matrix requires this absolute-path/NULL pair.
+        // Source identity remains the retained file handle; ancestor handles below
+        // keep the validated destination namespace stable.
+        (*info).RootDirectory = HANDLE::default();
         (*info).FileNameLength = name_bytes as u32;
-        std::ptr::copy_nonoverlapping(name.as_ptr(), std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(), name.len());
-        SetFileInformationByHandle(HANDLE(file.as_raw_handle()), FileRenameInfo, info.cast(), buffer_len)
-    }.map_err(|error| format!("Could not publish the retained export file without overwriting: {error}"))
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
+            name.len(),
+        );
+        SetFileInformationByHandle(
+            HANDLE(file.as_raw_handle()),
+            FileRenameInfo,
+            info.cast(),
+            buffer_len,
+        )
+    }
+    .map_err(|error| {
+        format!("Could not publish the retained export file without overwriting: {error}")
+    })
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-fn publish_export_handle(_file: &fs::File, _directory: &fs::File, _name: &std::ffi::OsStr) -> Result<(), String> {
+fn publish_export_handle(
+    _file: &fs::File,
+    _directory: &fs::File,
+    _destination: &Path,
+) -> Result<(), String> {
     Err("Verified weight ZIP publication is not supported on this platform.".into())
 }
 
@@ -1331,12 +1475,24 @@ fn write_export_atomically(
     }
     static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let destination = checked_export_destination(destination, extension, protected_root)?;
-    let parent = destination.parent().ok_or("Export destination has no parent directory.")?;
-    let directory = open_export_directory(parent)?;
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "Export clock is unavailable.".to_string())?.as_nanos();
+    let parent = destination
+        .parent()
+        .ok_or("Export destination has no parent directory.")?;
+    // Windows absolute publication retains every ancestor, not just the leaf directory.
+    let directories = open_export_directories(parent)?;
+    let directory = &directories
+        .last()
+        .ok_or("Export directory is missing.")?
+        .file;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "Export clock is unavailable.".to_string())?
+        .as_nanos();
     let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temporary = parent.join(format!(".vibespace-export-{}-{nonce}-{sequence}.tmp", std::process::id()));
+    let temporary = parent.join(format!(
+        ".vibespace-export-{}-{nonce}-{sequence}.tmp",
+        std::process::id()
+    ));
     let mut options = fs::OpenOptions::new();
     options.write(true).read(true).create_new(true);
     #[cfg(target_os = "windows")]
@@ -1346,21 +1502,21 @@ fn write_export_atomically(
         // Exclusive sharing prevents name replacement or external writes while open.
         options.access_mode(0xC001_0000).share_mode(0);
     }
-    let file = options.open(&temporary)
+    let file = options
+        .open(&temporary)
         .map_err(|error| format!("Could not create export scratch file: {error}"))?;
-    let mut scratch = ExportScratch { path: temporary, file, published: false };
+    let mut scratch = ExportScratch {
+        path: temporary,
+        file,
+        published: false,
+    };
     write(&mut scratch.file)?;
-    scratch.file.sync_all().map_err(|error| format!("Could not finish artifact export: {error}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let retained = directory.metadata().map_err(|error| format!("Could not inspect retained export directory: {error}"))?;
-        let named = fs::symlink_metadata(parent).map_err(|_| "Export directory changed during writing.")?;
-        if !named.is_dir() || retained.dev() != named.dev() || retained.ino() != named.ino() {
-            return Err("Export directory changed during writing.".into());
-        }
-    }
-    publish_export_handle(&scratch.file, &directory, destination.file_name().ok_or("Export filename is missing.")?)?;
+    scratch
+        .file
+        .sync_all()
+        .map_err(|error| format!("Could not finish artifact export: {error}"))?;
+    revalidate_export_directories(&directories)?;
+    publish_export_handle(&scratch.file, directory, &destination)?;
     scratch.published = true;
     Ok(())
 }
@@ -1690,6 +1846,28 @@ mod tests {
         let result = export_training_artifact(missing, "full", &"0".repeat(64), 1,
             missing, missing, || panic!("Unsupported weight export must not publish"));
         assert!(result.unwrap_err().contains("not supported on this platform"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn artifact_export_windows_retains_parent_and_ancestor_names() {
+        let root = scratch_dir("export-ancestor-locks");
+        let private = root.join("private");
+        let ancestor = root.join("chosen");
+        let parent = ancestor.join("parent");
+        fs::create_dir_all(&private).unwrap();
+        fs::create_dir_all(&parent).unwrap();
+        let destination = parent.join("result.zip");
+        write_export_atomically(&destination, "zip", &private, |file| {
+            file.write_all(b"verified synthetic bytes").unwrap();
+            assert!(fs::rename(&parent, ancestor.join("changed-parent")).is_err());
+            assert!(fs::rename(&ancestor, root.join("changed-ancestor")).is_err());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"verified synthetic bytes");
+        assert!(parent.is_dir());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

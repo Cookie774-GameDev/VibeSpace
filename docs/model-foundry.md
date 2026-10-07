@@ -168,7 +168,10 @@ rejected. On Windows and Linux, a changed job or copy error prevents final
 publication. The selected
 destination must be a new file: exports never replace an existing file, even
 if it appears during the copy. The file actually written and verified stays open through publication. Windows
-renames that retained handle with replacement disabled; Linux links its open
+renames that retained handle with replacement disabled using an absolute canonical
+destination and a null rename root. It retains every destination ancestor with
+delete/rename sharing disabled, opens directories without following reparse points,
+and rechecks directory identities and reparse state before publication. Linux links its open
 descriptor into the retained destination directory with no replacement. A
 scratch filename replacement cannot become the successful exported source.
 Windows error cleanup marks the retained handle for deletion; Unix cleanup

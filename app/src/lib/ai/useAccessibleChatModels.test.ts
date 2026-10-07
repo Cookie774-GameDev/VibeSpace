@@ -863,7 +863,7 @@ describe('useAccessibleChatModels', () => {
       ).toBe(false);
       expect(subscription.find((option) => option.modelId.endsWith('codex-spark'))).toMatchObject({
         id: 'opencode-cli:openai/gpt-5.3-codex-spark',
-        provider: OPENCODE_CLI_CONNECTION.providerId as ModelPickerOption['provider'],
+        provider: 'openai',
         variants: ['medium'],
         available: true,
       });

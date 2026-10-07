@@ -242,7 +242,12 @@ function VoiceModalPanel() {
   const voiceAccentIntensity = useAuthStore((state) => state.voiceAccentIntensity);
   const voiceStartFreshChat = useAuthStore((state) => state.voiceStartFreshChat);
   const voiceMiniBarEnabled = useAuthStore((state) => state.voiceMiniBarEnabled);
-  const [miniBarText, setMiniBarText] = React.useState('');
+  const [miniBarText, setMiniBarTextValue] = React.useState('');
+  const miniBarDraftRevisionRef = React.useRef(0);
+  const setMiniBarText = React.useCallback((value: string) => {
+    miniBarDraftRevisionRef.current += 1;
+    setMiniBarTextValue(value);
+  }, []);
   const { flatOptions: accessibleModels } = useAccessibleChatModels();
   const accessibleModelsRef = React.useRef(accessibleModels);
   accessibleModelsRef.current = accessibleModels;
@@ -302,7 +307,7 @@ function VoiceModalPanel() {
   const speakingRef = React.useRef(false);
   const streamingReplyRef = React.useRef(false);
   const manuallyStoppedReplyRef = React.useRef(false);
-  const flushUtteranceRef = React.useRef<(text: string) => void>(() => undefined);
+  const flushUtteranceRef = React.useRef<(text: string, onCommitted?: () => void) => void>(() => undefined);
   const voiceFlowActiveRef = React.useRef(false);
   const voiceFlowGenerationRef = React.useRef(0);
   const scopeRevisionRef = React.useRef(0);
@@ -905,7 +910,7 @@ function VoiceModalPanel() {
       clearUtteranceTimers();
     };
 
-    const flushUtterance = (textOverride?: string) => {
+    const flushUtterance = (textOverride?: string, onCommitted?: () => void) => {
       clearUtteranceTimers();
       if (turnBusyRef.current || voiceFlowActiveRef.current) return;
 
@@ -1055,6 +1060,7 @@ function VoiceModalPanel() {
                 parts: [{ kind: 'text', text: input.text }],
               });
               if (!saved?.id) throw new Error(VOICE_MESSAGE_SAVE_FAILURE);
+              if (requestIsCurrent()) onCommitted?.();
               void syncVoiceConversationFolder(input.chatId, scope);
               return String(saved.id);
             },
@@ -1102,6 +1108,8 @@ function VoiceModalPanel() {
         )
           return;
         if (receipt.status === 'accepted') {
+          // A duplicate accepted request can reuse an already durable message.
+          if (requestIsCurrent()) onCommitted?.();
           if (!receipt.duplicate) setActiveMainProvider(mainProvider);
           setVoiceFlowStatus(
             receipt.duplicate
@@ -1138,7 +1146,7 @@ function VoiceModalPanel() {
           }
         });
     };
-    flushUtteranceRef.current = (text: string) => flushUtterance(text);
+    flushUtteranceRef.current = (text, onCommitted) => flushUtterance(text, onCommitted);
 
     const schedulePartial = (text: string) => {
       pendingPartialRef.current = text;
@@ -1271,7 +1279,7 @@ function VoiceModalPanel() {
     const onStreamingEnd = () => {
       streamingReplyRef.current = false;
       speakingRef.current = false;
-      flushUtteranceRef.current = (text: string) => flushUtterance(text);
+      flushUtteranceRef.current = (text, onCommitted) => flushUtterance(text, onCommitted);
       if (manuallyStoppedReplyRef.current) return;
       scheduleRestartAfterReply();
     };
@@ -1566,8 +1574,10 @@ function VoiceModalPanel() {
                 event.preventDefault();
                 const text = miniBarText.trim();
                 if (!text || turnBusyRef.current || voiceFlowActiveRef.current) return;
-                flushUtteranceRef.current(text);
-                setMiniBarText('');
+                const submittedRevision = miniBarDraftRevisionRef.current;
+                flushUtteranceRef.current(text, () => {
+                  if (miniBarDraftRevisionRef.current === submittedRevision) setMiniBarText('');
+                });
               }}
               className="fixed bottom-5 left-1/2 z-[120] flex w-[min(34rem,calc(100vw-2rem))] -translate-x-1/2 items-center gap-2 rounded-2xl border border-white/20 bg-background/75 p-2 text-foreground shadow-2xl shadow-black/20 backdrop-blur-xl"
             >
