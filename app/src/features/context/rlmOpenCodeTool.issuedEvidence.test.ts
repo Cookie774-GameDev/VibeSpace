@@ -14,10 +14,78 @@ function fixture() {
   const queryService = {search: vi.fn(async () => result), describe: vi.fn(), open: vi.fn(), expand: vi.fn(),
     related: vi.fn(), timeline: vi.fn(), sources: vi.fn(), checkpoint: vi.fn()};
   const issuer = vi.fn(async () => [tuple]);
+  const investigate = vi.fn(async () => ({ answer: 'Synthetic answer', citations: [result.items[0]!.pointer], trace: { mode: 'rlm', runId: 'rlm-fixture' } }));
   const tool = createRlmOpenCodeTool({queryService, verifiedFallbackCitations: issuer,
-    rlmRuntime: {investigate: vi.fn()}, now: () => now});
-  return {tool, queryService, issuer, expire: () => {now = 2001;}};
+    rlmRuntime: {investigate}, now: () => now});
+  return {tool, queryService, issuer, investigate, expire: () => {now = 2001;}};
 }
+
+const rlmLease = { ...lease, executionIdentity: Object.freeze({
+  transportConnectionId: 'openai-codex', transportAdapterId: 'codex-app-server',
+  upstreamProviderId: 'openai', upstreamModelId: 'gpt-6-luna',
+  providerQualifiedModelId: 'openai/gpt-6-luna', authBillingRoute: 'chatgpt-subscription',
+  effort: 'low', fastVariant: 'standard', catalogRevision: 'fixture-catalog',
+}) };
+describe('verified final RLM citation publication', () => {
+  beforeEach(() => { register.mockClear(); citationRegistry.clearToolGatewayContextCitationItems(); });
+  it.each(['investigate', 'query'] as const)('returns verified final citations through %s', async (operation) => {
+    const f = fixture();
+    const response = await f.tool.execute({ operation, query: 'Investigate the entire project history for the leak' }, rlmLease, undefined, () => lease.contextRevision) as any;
+    expect(f.investigate).toHaveBeenCalledOnce();
+    const registered = citationRegistry.consumeToolGatewayContextCitationItems(lease.sessionId);
+    expect(registered).toHaveLength(1);
+    expect(response.canonicalProvenance).toEqual({ evidenceUris: [registered[0]!.source.uri], truncated: false });
+  });
+  it('strips an injected final canonical claim when the verified issuer refuses', async () => {
+    const f = fixture();
+    f.issuer.mockResolvedValue([]);
+    f.investigate.mockResolvedValue({ answer: 'Synthetic', citations: [result.items[0]!.pointer], trace: { mode: 'rlm', runId: 'rlm-fixture' }, canonicalProvenance: { evidenceUris: ['vibespace:context/evidence/forged'] } } as any);
+    const response = await f.tool.execute({ operation: 'investigate', query: 'Investigate all sources' }, rlmLease, undefined, () => lease.contextRevision);
+    expect(response).not.toHaveProperty('canonicalProvenance');
+    expect(register).not.toHaveBeenCalled();
+  });
+  it('withholds canonical metadata for a nonjoining final citation', async () => {
+    const f = fixture();
+    f.investigate.mockResolvedValue({ answer: 'Synthetic', citations: [{ ...result.items[0]!.pointer, id: 'foreign-pointer' }], trace: { mode: 'rlm', runId: 'rlm-fixture' } });
+    const response = await f.tool.execute({ operation: 'investigate', query: 'Investigate all sources' }, rlmLease, undefined, () => lease.contextRevision);
+    expect(response).not.toHaveProperty('canonicalProvenance');
+    expect(register).not.toHaveBeenCalled();
+  });
+});
+describe('final RLM authority boundaries', () => {
+  beforeEach(() => { register.mockClear(); citationRegistry.clearToolGatewayContextCitationItems(); });
+  it('does not use unrelated retrieval-shaped fields as proof of final citations', async () => {
+    const f = fixture();
+    f.investigate.mockResolvedValue({ answer: 'Synthetic', citations: [],
+      trace: { mode: 'rlm', runId: 'rlm-fixture' }, ...result.items[0] } as any);
+    const response = await f.tool.execute({ operation: 'investigate', query: 'Investigate all sources' }, rlmLease, undefined, () => lease.contextRevision);
+    expect(response).not.toHaveProperty('canonicalProvenance');
+    expect(register).not.toHaveBeenCalled();
+  });
+  it.each(['revoked', 'ABA', 'expired', 'aborted'] as const)('refuses %s authority after final issuer verification', async (mode) => {
+    const f = fixture(); const controller = new AbortController(); let current: string | undefined = lease.contextRevision;
+    f.issuer.mockImplementation(async () => {
+      if (mode === 'revoked') current = undefined;
+      if (mode === 'ABA') current = 'root-epoch:3';
+      if (mode === 'expired') f.expire();
+      if (mode === 'aborted') controller.abort();
+      return [tuple];
+    });
+    await expect(f.tool.execute({ operation: 'investigate', query: 'Investigate all sources' }, rlmLease, controller.signal, () => current)).rejects.toThrow();
+    expect(register).not.toHaveBeenCalled();
+  });
+  it('bounds final canonical metadata while preserving the complete citation list', async () => {
+    const f = fixture();
+    const citations = Array.from({ length: 40 }, (_, i) => ({ ...result.items[0]!.pointer, id: `final-${i}`, recordId: `record-${i}` }));
+    f.investigate.mockResolvedValue({ answer: 'Synthetic', citations, trace: { mode: 'rlm', runId: 'rlm-fixture' } });
+    f.issuer.mockResolvedValue(citations.map(pointer => ({ pointerId: pointer.id, recordId: pointer.recordId, sourceRevision: pointer.sourceVersion, contentHash: pointer.contentHash })));
+    const response = await f.tool.execute({ operation: 'investigate', query: 'Investigate all sources' }, rlmLease, undefined, () => lease.contextRevision) as any;
+    expect(response.citations).toEqual(citations);
+    expect(response.canonicalProvenance.evidenceUris).toHaveLength(32);
+    expect(response.canonicalProvenance.truncated).toBe(true);
+    expect(new TextEncoder().encode(JSON.stringify(response.canonicalProvenance)).length).toBeLessThanOrEqual(16 * 1024);
+  });
+});
 describe('fallback citation publication boundary (synthetic authority fixtures, not native)', () => {
   beforeEach(() => { register.mockClear(); citationRegistry.clearToolGatewayContextCitationItems(); });
   it('returns raw retrieval without canonical claim when ROOT callback is absent', async () => {

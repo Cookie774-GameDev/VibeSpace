@@ -3092,6 +3092,8 @@ export function createProductionRlmContextTool() {
       const scope = scopeOf(capturedLease);
       const captures: object[] = [];
       const citationResults = new WeakMap<object, readonly VerifiedRlmFallbackCitation[]>();
+      const openedCitationPointers = new Map<string, VerifiedRlmFallbackCitation>();
+      const citationPointerKey = (pointer: ContextPointer) => JSON.stringify(createContextPointer(pointer));
       let captureInvalid = false;
       let terminal: RlmTerminalReceipt | undefined;
       let membershipRevision: string | undefined;
@@ -3132,9 +3134,14 @@ export function createProductionRlmContextTool() {
         if (!current()) { captureInvalid = true; return; }
         if (!capture || captures.length >= 128) { captureInvalid = true; return; }
         captures.push(capture);
-        citationResults.set(result, Object.freeze(items.map(({pointer, record}) => Object.freeze({
+        const tuples = Object.freeze(items.map(({pointer, record}) => Object.freeze({
           pointerId: pointer.id, recordId: record.id, sourceRevision: pointer.sourceVersion, contentHash: pointer.contentHash,
-        }))));
+        })));
+        citationResults.set(result, tuples);
+        // Final synthesis cites opened evidence, never merely a model-supplied pointer.
+        if (shaped.pointer && shaped.record) {
+          openedCitationPointers.set(citationPointerKey(shaped.pointer), tuples[0]!);
+        }
       };
       const withCapture = (service: typeof queryService) => Object.freeze({
         ...service,
@@ -3193,9 +3200,19 @@ export function createProductionRlmContextTool() {
               synthesize: synthesizeEvidencePack, partitionSize: 2,
               onTerminalReceipt: receipt => { terminal = receipt; },
             });
-            return runtime.investigate(usesRegisteredCodexChild(request.executionIdentity)
+            const result = await runtime.investigate(usesRegisteredCodexChild(request.executionIdentity)
               ? { ...request, budget: { ...request.budget, maxConcurrentSubcalls: Math.min(1, request.budget.maxConcurrentSubcalls) } }
               : request);
+            if (current() && terminal?.status === 'completed' && terminal.runId === result.trace.runId) {
+              const tuples: VerifiedRlmFallbackCitation[] = [];
+              for (const pointer of result.citations) {
+                const tuple = openedCitationPointers.get(citationPointerKey(pointer));
+                if (!tuple) { captureInvalid = true; return result; }
+                tuples.push(tuple);
+              }
+              citationResults.set(result, Object.freeze(tuples));
+            }
+            return result;
           },
         },
         async traceLookup(runId, currentLease) {

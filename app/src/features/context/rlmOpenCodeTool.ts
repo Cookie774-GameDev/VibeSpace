@@ -258,7 +258,7 @@ export function createRlmOpenCodeTool(dependencies: {
       }
       return token && token === capturedLease.contextRevision ? token : undefined;
     };
-    const withVerifiedCitations = async (result: unknown): Promise<unknown> => {
+    const withVerifiedCitations = async (result: unknown, shape: 'retrieval' | 'rlm' = 'retrieval'): Promise<unknown> => {
       if (assertLeaseCurrent) current();
       const object =
         result && typeof result === 'object' && !Array.isArray(result)
@@ -283,7 +283,7 @@ export function createRlmOpenCodeTool(dependencies: {
         citations.length > MAX_CITATION_INPUTS
       )
         return clean;
-      const items = Array.isArray(object.items) ? object.items : [object];
+      const items = shape === 'retrieval' ? (Array.isArray(object.items) ? object.items : [object]) : [];
       if (items.length > MAX_CITATION_INPUTS) return clean;
       const key = (citation: VerifiedRlmFallbackCitation) =>
         JSON.stringify([
@@ -293,6 +293,16 @@ export function createRlmOpenCodeTool(dependencies: {
           citation.contentHash,
         ]);
       const presented = new Set<string>();
+      if (shape === 'rlm') {
+        if (!Array.isArray(object.citations) || object.citations.length > MAX_CITATION_INPUTS) return clean;
+        for (const candidate of object.citations) {
+          try {
+            const pointer = createContextPointer(candidate as ContextPointer);
+            presented.add(key({ pointerId: pointer.id, recordId: pointer.recordId,
+              sourceRevision: pointer.sourceVersion, contentHash: pointer.contentHash }));
+          } catch { return clean; }
+        }
+      }
       for (const item of items) {
         if (!item || typeof item !== 'object') continue;
         try {
@@ -420,15 +430,15 @@ export function createRlmOpenCodeTool(dependencies: {
         const rlmEnabled = resolveRlmEnabled({ workspaceId: lease.workspaceId, chatId: lease.chatId }).enabled;
         const decision = routeDefaultContextQuery(question, { rlmAvailable: rlmEnabled });
         if (decision.mode === 'rlm') {
-          return executeRouted('rlm', () =>
-            dependencies.rlmRuntime.investigate({
+          return executeRouted('rlm', async () =>
+            withVerifiedCitations(await dependencies.rlmRuntime.investigate({
               question,
               scope,
               executionIdentity: leaseExecutionIdentity(lease),
               budget: rlmBudget,
               signal,
               decision,
-            }, capturedLease),
+            }, capturedLease), 'rlm'),
           );
         }
         if (decision.mode === 'direct') {
@@ -553,14 +563,14 @@ export function createRlmOpenCodeTool(dependencies: {
             return withVerifiedCitations(result);
           });
         }
-        return executeRouted('rlm', () =>
-          dependencies.rlmRuntime.investigate({
+        return executeRouted('rlm', async () =>
+          withVerifiedCitations(await dependencies.rlmRuntime.investigate({
             question: text(args.query),
             scope,
             executionIdentity: leaseExecutionIdentity(lease),
             budget: rlmBudget,
             signal,
-          }, capturedLease),
+          }, capturedLease), 'rlm'),
         );
       }
     }
