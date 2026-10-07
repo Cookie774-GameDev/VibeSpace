@@ -1787,7 +1787,10 @@ export function ContextPage() {
         .finally(() => {handling=undefined;if(active) applyPending();});
     };
     const stop = contextEvidenceNavigation.subscribe(applyPending);
-    applyPending();
+    // StrictMode replays the initial effect before this microtask. Only the
+    // surviving consumer may claim the one-use ticket; real claimed work still
+    // revokes immediately in cleanup.
+    queueMicrotask(applyPending);
     return () => {active=false;stop();handling?.fail();};
   },[applyPersistenceState,projectId]);
 

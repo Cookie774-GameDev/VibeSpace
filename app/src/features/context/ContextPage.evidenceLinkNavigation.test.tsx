@@ -23,6 +23,8 @@ const io = vi.hoisted(() => ({
   heldSelection: undefined as Promise<void> | undefined,
   selectingA: false,
   selectCalls: [] as string[],
+  selectionSignals: [] as AbortSignal[],
+  openResults: [] as string[],
 }));
 vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
   useAccessibleChatModels: () => ({ groups: [], flatOptions: [], loading: false }),
@@ -51,6 +53,7 @@ vi.mock('./contextPersistence', async (original) => ({
   ) => {
     io.selectCalls.push(mapId);
     if (guard && mapId === 'page-map-A') {
+      io.selectionSignals.push(guard.signal);
       io.selectingA = true;
       await io.heldSelection;
     }
@@ -60,7 +63,10 @@ vi.mock('./contextPersistence', async (original) => ({
 vi.mock('./contextEvidenceNavigation', async (original) => ({
   ...(await original<typeof import('./contextEvidenceNavigation')>()),
   contextEvidenceNavigation: {
-    open: (input: Parameters<NonNullable<typeof io.nav>['open']>[0]) => io.nav!.open(input),
+    open: (input: Parameters<NonNullable<typeof io.nav>['open']>[0]) => io.nav!.open(input).then(
+      () => { io.openResults.push('completed'); },
+      (error) => { io.openResults.push(String(error)); throw error; },
+    ),
     take: (projectId: string | null) => io.nav!.take(projectId),
     subscribe: (listener: () => void) => io.nav!.subscribe(listener),
     cancel: () => io.nav?.cancel(),
@@ -102,6 +108,8 @@ beforeEach(async () => {
   io.heldSelection = undefined;
   io.selectingA = false;
   io.selectCalls = [];
+  io.selectionSignals = [];
+  io.openResults = [];
   useAuthStore.setState({
     localUserId: scope.accountId,
     cloudSession: null,
@@ -236,8 +244,8 @@ afterEach(async () => {
   localStorage.clear();
 });
 
-it('opens the exact source node through the actual chip, route mount and guarded persistence', async () => {
-  render(<Shell />);
+it.each([false, true])('opens the exact source node through the actual chip, route mount and guarded persistence (StrictMode=%s)', async (strictMode) => {
+  render(strictMode ? <React.StrictMode><Shell /></React.StrictMode> : <Shell />);
   fireEvent.click(screen.getByRole('button', { name: 'Open verified Context source' }));
   await waitFor(() =>
     expect(screen.getByText('Opened linked-file.txt from chat Context.')).toBeTruthy(),
@@ -318,4 +326,93 @@ it('a newer actual source-node choice defeats a held evidence-link selection', a
     'page-map-B',
   );
   expect(screen.queryByText('Opened linked-file.txt from chat Context.')).toBeNull();
+});
+
+
+it('a real StrictMode consumer unmount immediately revokes an already consumed held ticket', async () => {
+  let release!: () => void;
+  io.heldSelection = new Promise((resolve) => { release = resolve; });
+  const mounted = render(<React.StrictMode><Shell /></React.StrictMode>);
+  fireEvent.click(screen.getByRole('button', {name:'Open verified Context source'}));
+  await waitFor(() => expect(io.selectingA).toBe(true));
+  expect(io.selectionSignals).toHaveLength(1);
+  expect(io.selectionSignals[0]!.aborted).toBe(false);
+  mounted.unmount();
+  expect(io.selectionSignals[0]!.aborted).toBe(true);
+  await act(async () => { release(); await new Promise(resolve => setTimeout(resolve,10)); });
+  expect((await io.service!.load(scope.accountId,scope.projectId)).selectedMapId).toBe('page-map-B');
+});
+
+
+type CitationScopeChange = 'route' | 'account' | 'root';
+function interruptCitationScope(change: CitationScopeChange) {
+  if (change === 'route') useUIStore.getState().setRoute('chat');
+  if (change === 'account') useAuthStore.setState({localUserId:'other-page-account'});
+  if (change === 'root') setStoredProjectRoot(scope.projectId,'C:/other-project-root');
+}
+function ChangeScopeBeforeClaim({change}: {change:CitationScopeChange}) {
+  const route = useUIStore(state => state.route);
+  React.useEffect(() => {
+    if (route === 'context') interruptCitationScope(change);
+  }, [change, route]);
+  return <Shell />;
+}
+
+it.each(['route','account','root'] as const)(
+  'a %s change before the queued initial claim prevents any source selection', async (change) => {
+    render(<React.StrictMode><ChangeScopeBeforeClaim change={change} /></React.StrictMode>);
+    fireEvent.click(screen.getByRole('button',{name:'Open verified Context source'}));
+    await waitFor(() => expect(io.openResults).toHaveLength(1));
+    expect(io.openResults[0]).not.toBe('completed');
+    expect(io.selectCalls).toEqual([]);
+    expect((await io.service!.load(scope.accountId,scope.projectId)).selectedMapId).toBe('page-map-B');
+  },
+);
+
+it.each(['route','account','root'] as const)(
+  'a %s change after a StrictMode claim revokes held selection immediately', async (change) => {
+    let release!: () => void;
+    io.heldSelection=new Promise(resolve => {release=resolve;});
+    render(<React.StrictMode><Shell /></React.StrictMode>);
+    fireEvent.click(screen.getByRole('button',{name:'Open verified Context source'}));
+    await waitFor(() => expect(io.selectingA).toBe(true));
+    expect(io.selectionSignals).toHaveLength(1);
+    expect(io.selectionSignals[0]!.aborted).toBe(false);
+    act(() => interruptCitationScope(change));
+    expect(io.selectionSignals[0]!.aborted).toBe(true);
+    await act(async () => {release();await new Promise(resolve=>setTimeout(resolve,10));});
+    expect(io.openResults[0]).not.toBe('completed');
+    expect((await io.service!.load(scope.accountId,scope.projectId)).selectedMapId).toBe('page-map-B');
+  },
+);
+
+it('a real unmount before the queued initial claim cannot consume or revive after expiry',async()=>{
+  io.nav!.dispose();
+  const state = await io.service!.load(scope.accountId,scope.projectId);
+  const map = state.maps.find(map=>map.id==='page-map-A')!;
+  io.nav=createContextEvidenceNavigation({database,timeoutMs:150,revalidate:async(input)=>{
+    input.assertCurrent();
+    return {accountId:scope.accountId,projectId:scope.projectId,mapId:map.id,
+      entityId:map.tree.nodes[0]!.id,path:`${scope.worktreeId}/linked-file.txt`,mapUpdatedAt:map.updatedAt};
+  }});
+  function UnmountContextBeforeClaim() {
+    const route=useUIStore(state=>state.route);
+    const [removed,setRemoved]=React.useState(false);
+    React.useLayoutEffect(()=>{if(route==='context')setRemoved(true);},[route]);
+    return removed ? null : <Shell />;
+  }
+  const mounted=render(<React.StrictMode><UnmountContextBeforeClaim /></React.StrictMode>);
+  fireEvent.click(screen.getByRole('button',{name:'Open verified Context source'}));
+  await waitFor(()=>expect(useUIStore.getState().route).toBe('context'));
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,10));});
+  expect(mounted.container.innerHTML).toBe('');
+  expect(io.selectCalls).toEqual([]);
+  expect((await io.service!.load(scope.accountId,scope.projectId)).selectedMapId).toBe('page-map-B');
+  await waitFor(()=>expect(io.openResults).toHaveLength(1));
+  expect(io.openResults[0]).toContain('context_evidence_navigation_unavailable');
+  mounted.unmount();
+  render(<React.StrictMode><ContextPage /></React.StrictMode>);
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,10));});
+  expect(io.selectCalls).toEqual([]);
+  expect((await io.service!.load(scope.accountId,scope.projectId)).selectedMapId).toBe('page-map-B');
 });
