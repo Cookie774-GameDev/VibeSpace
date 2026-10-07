@@ -253,7 +253,18 @@ export function BuildYourOwnAIHub({
   const [trainingCalibrationBusy, setTrainingCalibrationBusy] = React.useState(false);
   const [requestedStorageRoot, setRequestedStorageRoot] = React.useState<string | null>(null);
   const [confirmRemoveModelId, setConfirmRemoveModelId] = React.useState<string | null>(null);
-  const [busyJobId, setBusyJobId] = React.useState<string | null>(null);
+  const pendingJobIds = React.useRef(new Set<string>());
+  const [busyJobIds, setBusyJobIds] = React.useState<ReadonlySet<string>>(() => new Set());
+  const beginJobAction = (jobId: string) => {
+    if (pendingJobIds.current.has(jobId)) return false;
+    pendingJobIds.current.add(jobId);
+    setBusyJobIds(new Set(pendingJobIds.current));
+    return true;
+  };
+  const finishJobAction = (jobId: string) => {
+    pendingJobIds.current.delete(jobId);
+    setBusyJobIds(new Set(pendingJobIds.current));
+  };
   const [confirmDeleteJobId, setConfirmDeleteJobId] = React.useState<string | null>(null);
   const [renameJobId, setRenameJobId] = React.useState<string | null>(null);
   const [renameDraft, setRenameDraft] = React.useState('');
@@ -972,7 +983,7 @@ export function BuildYourOwnAIHub({
     job: FoundryJob,
     extra: Record<string, unknown> = {},
   ) => {
-    setBusyJobId(job.id);
+    if (!beginJobAction(job.id)) return;
     setError('');
     const beforeRequest = jobsRef.current;
     try {
@@ -1002,12 +1013,12 @@ export function BuildYourOwnAIHub({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setBusyJobId(null);
+      finishJobAction(job.id);
     }
   };
 
   const exportArtifact = async (job: FoundryJob) => {
-    setBusyJobId(job.id);
+    if (!beginJobAction(job.id)) return;
     setError('');
     try {
       const { save } = await import('@tauri-apps/plugin-dialog');
@@ -1025,7 +1036,7 @@ export function BuildYourOwnAIHub({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setBusyJobId(null);
+      finishJobAction(job.id);
     }
   };
 
@@ -2355,7 +2366,7 @@ export function BuildYourOwnAIHub({
                         <Button
                           type="button"
                           variant="ghost"
-                          disabled={busyJobId === job.id}
+                          disabled={busyJobIds.has(job.id)}
                           onClick={() => void runJobAction('model_foundry_cancel_job', job)}
                         >
                           Cancel
@@ -2365,7 +2376,7 @@ export function BuildYourOwnAIHub({
                         <Button
                           type="button"
                           variant="ghost"
-                          disabled={busyJobId === job.id}
+                          disabled={busyJobIds.has(job.id)}
                           onClick={() => void runJobAction('model_foundry_retry_job', job)}
                         >
                           Retry
@@ -2375,7 +2386,7 @@ export function BuildYourOwnAIHub({
                         <Button
                           type="button"
                           variant="accent"
-                          disabled={busyJobId === job.id}
+                          disabled={busyJobIds.has(job.id)}
                           onClick={() => void runJobAction('model_foundry_resume_job', job)}
                         >
                           Resume from checkpoint
@@ -2387,7 +2398,7 @@ export function BuildYourOwnAIHub({
                             <Button
                               type="button"
                               variant="destructive"
-                              disabled={busyJobId === job.id}
+                              disabled={busyJobIds.has(job.id)}
                               onClick={() => void runJobAction('model_foundry_delete_job', job)}
                             >
                               Delete artifact and local data
@@ -2414,7 +2425,7 @@ export function BuildYourOwnAIHub({
                           <Button
                             type="button"
                             variant="ghost"
-                            disabled={busyJobId === job.id}
+                            disabled={busyJobIds.has(job.id)}
                             onClick={() => {
                               setRenameJobId(job.id);
                               setRenameDraft(job.name);
@@ -2425,7 +2436,7 @@ export function BuildYourOwnAIHub({
                           <Button
                             type="button"
                             variant="ghost"
-                            disabled={busyJobId === job.id}
+                            disabled={busyJobIds.has(job.id)}
                             onClick={() =>
                               void runJobAction('model_foundry_duplicate_artifact', job, {
                                 name: `${job.name} Copy`,
@@ -2437,7 +2448,7 @@ export function BuildYourOwnAIHub({
                           <Button
                             type="button"
                             variant="ghost"
-                            disabled={busyJobId === job.id}
+                            disabled={busyJobIds.has(job.id)}
                             onClick={() => void runJobAction('model_foundry_retrain_artifact', job)}
                           >
                             Retrain as v{(job.version ?? 1) + 1}
@@ -2445,7 +2456,7 @@ export function BuildYourOwnAIHub({
                           <Button
                             type="button"
                             variant="ghost"
-                            disabled={busyJobId === job.id}
+                            disabled={busyJobIds.has(job.id)}
                             onClick={() => void exportArtifact(job)}
                           >
                             Export
@@ -2464,7 +2475,7 @@ export function BuildYourOwnAIHub({
                         <Button
                           type="button"
                           variant="accent"
-                          disabled={!renameDraft.trim() || busyJobId === job.id}
+                          disabled={!renameDraft.trim() || busyJobIds.has(job.id)}
                           onClick={() => {
                             void runJobAction('model_foundry_rename_artifact', job, {
                               name: renameDraft.trim(),

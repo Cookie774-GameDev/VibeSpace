@@ -96,9 +96,10 @@ export async function recordRepositoryTemporalKnowledge(input: Readonly<{
           fact.predicate === 'repository_content_hash' &&
           (fact.state === 'current' || fact.state === 'disputed'),
       );
+    // Include the predecessor so returning content gets a new fact while history stays intact.
     const factId = `temporal_repo_${(
       await sha256(
-        `${input.accountId}\u0000${input.projectId}\u0000${item.evidence.entityId}\u0000${item.evidence.contentHash}`,
+        `${input.accountId}\u0000${input.projectId}\u0000${item.evidence.entityId}\u0000${item.evidence.contentHash}${current ? `\u0000${current.id}` : ''}`,
       )
     ).slice(0, 32)}`;
     const fact = {

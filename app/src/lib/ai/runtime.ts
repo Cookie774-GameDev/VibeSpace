@@ -3611,7 +3611,7 @@ export interface SteerDetail {
   clientUserMessageId?: string;
   /** Called when the steer cannot be accepted without changing its exact scope. */
   onRejected?: () => void;
-  /** Native acceptance is unknown or confirmed but local persistence failed; do not retry. */
+  /** Native acceptance is uncertain, or a saved follow-up cannot dispatch safely; do not retry. */
   onBlocked?: () => void;
 }
 
@@ -3630,25 +3630,49 @@ export async function dispatchRuntimeSteerHandoff(input: {
   dispatchSend: (detail: SendDetail) => void;
   awaitPreviousTurn?: () => Promise<void>;
   onAccepted?: SteerDetail['onAccepted'];
+  onBlocked?: SteerDetail['onBlocked'];
+  isAuthorized?: () => boolean;
 }): Promise<MessageId> {
   await input.awaitPreviousTurn?.();
+  if (input.isAuthorized?.() === false) throw new Error('followup_authority_changed');
+  const originalReadRoot = extractExplicitReadRoot(
+    input.activeSend.resumeOriginalText ?? input.activeSend.modelText ?? input.activeSend.text,
+  );
+  // Use the fresh instruction without losing a narrower read-only filesystem scope.
+  const modelText = originalReadRoot
+    ? `"${originalReadRoot}" please inspect only this original read-only scope. ${input.text}`
+    : undefined;
+  if (originalReadRoot && extractExplicitReadRoot(modelText!) !== originalReadRoot) {
+    throw new Error('followup_read_scope_changed');
+  }
   const userMessage = await input.appendUserMessage({
     chat_id: input.chatId as ChatId,
     role: 'user',
     parts: [{ kind: 'text', text: input.text }],
   });
+  // A persisted row is not permission to dispatch after authority changes.
+  // Keep its queue item blocked for review rather than authorizing a duplicate retry.
+  if (input.isAuthorized?.() === false) {
+    try { input.onBlocked?.(); } catch { /* The saved row remains authoritative. */ }
+    return userMessage.id;
+  }
   const nextSend: SendDetail = {
     ...input.activeSend,
+    // The replacement is a fresh turn; the interrupted run's grant is spent.
+    approveAllForRun: false,
+    modelText,
+    resumeOriginalText: undefined,
+    resumeOfCancellationKey: undefined,
     chatId: input.chatId,
     cancellationKey: userMessage.id,
     text: input.text,
   };
+  input.dispatchSend(nextSend);
   try {
     input.onAccepted?.(userMessage.id);
   } catch {
     // The durable message remains authoritative even if its UI acknowledgement unmounts.
   }
-  input.dispatchSend(nextSend);
   return userMessage.id;
 }
 
@@ -5927,7 +5951,19 @@ export function startRuntimeListener(
     backend?: ChatBackend;
     policy?: ResumePolicySnapshot;
   }>();
-  const pendingSteersByChatId = new Map<string, SteerDetail & { send: SendDetail }>();
+  const pendingSteersByChatId = new Map<string, SteerDetail & {
+    send: SendDetail;
+    policy: ResumePolicySnapshot;
+    scopeEpoch: number;
+  }>();
+  let followupScopeEpoch = 0;
+  const activeFollowupScopeEpochs = new WeakMap<AbortController, number>();
+  const followupScopeKey = (state: ReturnType<typeof useAuthStore.getState>) => JSON.stringify([
+    resolveAccountIdentity(state), state.localUserId, state.workspaceId, state.projectId,
+  ]);
+  const stopFollowupScopeObserver = useAuthStore.subscribe((next, previous) => {
+    if (followupScopeKey(next) !== followupScopeKey(previous)) followupScopeEpoch++;
+  });
   const canonicalCancellations = new Map<MessageId, () => Promise<unknown>>();
   const canonicalCancellationOwners = new Map<AbortController, () => Promise<unknown>>();
   const activeSendTasks = new Set<Promise<void>>();
@@ -6127,6 +6163,19 @@ export function startRuntimeListener(
     }
   };
 
+  const retainsFollowupAuthority = (
+    chatId: string, policy: ResumePolicySnapshot | undefined, scopeEpoch: number | undefined,
+  ): boolean => {
+    const state = useAuthStore.getState();
+    return !runtimeStopped && Boolean(policy?.accountId) && scopeEpoch === followupScopeEpoch &&
+      resolveAccountIdentity(state)?.accountId === policy?.accountId &&
+      (state.workspaceId ?? null) === policy?.workspaceId &&
+      (state.projectId ?? null) === policy?.projectId &&
+      useJarvisInteractionStore.getState().modeForChat(chatId) === policy?.mode &&
+      readPermissionAccess(chatId).access === policy?.access &&
+      readAgentApprovalMode(chatId) === policy?.approval;
+  };
+
   const dispatchAcceptedSteer = async (chatId: string): Promise<void> => {
     const pending = pendingSteersByChatId.get(chatId);
     if (!pending || (controllersByChatId.get(chatId)?.size ?? 0) > 0) return;
@@ -6140,6 +6189,9 @@ export function startRuntimeListener(
         appendUserMessage: bindings.appendMessage,
         dispatchSend: (detail) => window.dispatchEvent(new CustomEvent(sendEventName, { detail })),
         onAccepted: pending.onAccepted,
+        onBlocked: pending.onBlocked,
+        isAuthorized: () => retainsFollowupAuthority(chatId, pending.policy, pending.scopeEpoch) &&
+          (controllersByChatId.get(chatId)?.size ?? 0) === 0,
       });
     } catch (error) {
       safelyRejectSteer(pending);
@@ -6349,6 +6401,7 @@ export function startRuntimeListener(
         : captureToolGatewayAuthorityClaim();
     activeControllers.add(controller);
     activeSendDetails.set(controller, { ...detail });
+    activeFollowupScopeEpochs.set(controller, followupScopeEpoch);
     activeResumePolicies.set(controller, Object.freeze({
       accountId: resolveAccountIdentity(authState)?.accountId ?? null,
       workspaceId: authState.workspaceId ?? null,
@@ -6389,7 +6442,7 @@ export function startRuntimeListener(
           queueMicrotask(() =>
             window.dispatchEvent(new CustomEvent(sendEventName, { detail: next })),
           );
-        } else if (!runtimeStopped) void dispatchAcceptedSteer(releasedChatId);
+        } else if (!runtimeStopped) void trackListenerOwnedTask(dispatchAcceptedSteer(releasedChatId));
       }
     };
     // Preparation is already cancellable work; expose Stop before any native/context wait.
@@ -10263,7 +10316,15 @@ export function startRuntimeListener(
       });
       return;
     }
-    pendingSteersByChatId.set(chatId, { ...detail, chatId, text, send: { ...active[0]! } });
+    const policy = controller ? activeResumePolicies.get(controller) : undefined;
+    const scopeEpoch = controller ? activeFollowupScopeEpochs.get(controller) : undefined;
+    if (!policy || scopeEpoch === undefined || !retainsFollowupAuthority(chatId, policy, scopeEpoch)) {
+      safelyRejectSteer(detail);
+      return;
+    }
+    pendingSteersByChatId.set(chatId, {
+      ...detail, chatId, text, send: { ...active[0]! }, policy, scopeEpoch,
+    });
     devConsole.log({
       channel: 'ai',
       level: 'info',
@@ -10308,6 +10369,7 @@ export function startRuntimeListener(
     window.removeEventListener(steerEventName, handleSteer as EventListener);
     window.removeEventListener(queueEventName, handleQueue as EventListener);
     stopPromptForgeContextBridge();
+    stopFollowupScopeObserver();
     for (const pending of pendingSteersByChatId.values()) safelyRejectSteer(pending);
     pendingSteersByChatId.clear();
     for (const queued of queuedNativeDelegations.values()) {

@@ -2426,6 +2426,305 @@ describe('startRuntimeListener agent routing', () => {
     }
   });
 
+  it.each(['transformed', 'resumed'] as const)('uses the fresh follow-up instruction after a %s original turn', async origin => {
+    const previous = useAuthStore.getState();
+    useAuthStore.setState({ localUserId: 'runtime-test-account', workspaceId: 'followup-workspace-a' as never,
+      projectId: 'followup-project-a' as never });
+    const harness = kernelRuntimeBindings(agent('agent_followup_scope', 'apple', 'Answer clearly.'));
+    const chatId = String(harness.chatId);
+    useJarvisInteractionStore.getState().setChatMode(chatId, 'ask');
+    setAgentApprovalMode(chatId, 'review');
+    setPermissionAccess(chatId, 'read');
+    const release = deferred<void>();
+    mocks.waitForPersistentOpenCodeChatRelease.mockReturnValue(release.promise);
+    mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const accepted = vi.fn();
+    const rejected = vi.fn();
+    const dispatched: SendDetail[] = [];
+    const observeSend = (event: Event) => dispatched.push((event as CustomEvent<SendDetail>).detail);
+    window.addEventListener('jarvis:send', observeSend);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: { chatId,
+        text: origin === 'resumed' ? 'Resume' : 'Original harmless task.',
+        modelText: 'Original transformed instruction only.', cancellationKey: 'msg_kernel_user',
+        ...(origin === 'resumed' ? { resumeOriginalText: 'Earlier unrelated intent.', resumeOfCancellationKey: 'earlier_run' } : {}),
+        interactionMode: 'ask', accessLevel: 'read-only', agentApprovalMode: 'review' } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:steer', { detail: { chatId,
+        text: 'Explicit follow-up after release.', onAccepted: accepted, onRejected: rejected } }));
+      await vi.waitFor(() => expect(mocks.waitForPersistentOpenCodeChatRelease).toHaveBeenCalledOnce());
+      expect(harness.bindings.appendMessage.mock.calls.filter(([row]) => row.role === 'user')).toHaveLength(0);
+      expect(dispatched).toHaveLength(1);
+      release.resolve();
+      await vi.waitFor(() => expect(accepted.mock.calls.length + rejected.mock.calls.length).toBe(1));
+      await stop.whenIdle();
+      const userWrites = harness.bindings.appendMessage.mock.calls.filter(([row]) => row.role === 'user');
+      expect(accepted).toHaveBeenCalledOnce();
+      expect(rejected).not.toHaveBeenCalled();
+      expect(userWrites).toHaveLength(1);
+      expect(dispatched).toHaveLength(2);
+      expect(dispatched[1]).toMatchObject({ chatId, text: 'Explicit follow-up after release.',
+        interactionMode: 'ask', accessLevel: 'read-only', agentApprovalMode: 'review' });
+      expect(mocks.runAgent).toHaveBeenCalledTimes(2);
+      const request = mocks.runAgent.mock.calls[1]![0];
+      expect(request.messages.at(-1)?.content).toBe('Explicit follow-up after release.');
+      expect(dispatched[1]!.modelText).toBeUndefined();
+      expect(dispatched[1]!.resumeOriginalText).toBeUndefined();
+      expect(dispatched[1]!.resumeOfCancellationKey).toBeUndefined();
+    } finally {
+      release.resolve(); stop(); await stop.whenIdle();
+      window.removeEventListener('jarvis:send', observeSend);
+      useAuthStore.setState({ localUserId: previous.localUserId, workspaceId: previous.workspaceId,
+        projectId: previous.projectId });
+    }
+  });
+  it.each([
+    { label: 'bounded read', text: 'Summarize the relevant filenames.', allowed: true },
+    { label: 'mutation', text: 'Delete the synthetic marker.', allowed: false },
+    { label: 'unrecognized multiline', text: 'Summarize\nthe relevant filenames.', allowed: false },
+  ])('preserves the original explicit read root on follow-up: $label', async ({ text, allowed }) => {
+    const actual = await vi.importActual<typeof import('./context')>('./context');
+    mocks.extractExplicitReadRoot.mockImplementation(actual.extractExplicitReadRoot);
+    const root = 'C:\\synthetic-original-read-root';
+    const original = `${root} please inspect the original folder.`;
+    expect(actual.extractExplicitReadRoot(original)).toBe(root);
+    const appendUserMessage = vi.fn<RuntimeBindings['appendMessage']>(async row => ({
+      ...row, id: 'followup_root_message' as MessageId, created_at: 2, updated_at: 2,
+    }));
+    const dispatchSend = vi.fn();
+    const accepted = vi.fn();
+    const task = dispatchRuntimeSteerHandoff({ chatId: 'followup_root', text,
+      activeSend: { chatId: 'followup_root', text: 'Resume', modelText: resumeContinuationText(original, root),
+        resumeOriginalText: original, resumeOfCancellationKey: 'original_read_turn',
+        interactionMode: 'ask', accessLevel: 'read-only' },
+      appendUserMessage, dispatchSend, onAccepted: accepted });
+    if (!allowed) {
+      await expect(task).rejects.toThrow('followup_read_scope_changed');
+      expect(appendUserMessage).not.toHaveBeenCalled();
+      expect(dispatchSend).not.toHaveBeenCalled();
+      expect(accepted).not.toHaveBeenCalled();
+      return;
+    }
+    await task;
+    expect(dispatchSend).toHaveBeenCalledOnce();
+    const sent = dispatchSend.mock.calls[0]![0] as SendDetail;
+    expect(sent).toMatchObject({ text, interactionMode: 'ask', accessLevel: 'read-only', approveAllForRun: false });
+    expect(actual.extractExplicitReadRoot(sent.modelText!)).toBe(root);
+    expect(sent.modelText).toContain(text);
+    expect(sent.modelText).not.toContain('Continue the interrupted response');
+    expect(sent.resumeOriginalText).toBeUndefined();
+    expect(sent.resumeOfCancellationKey).toBeUndefined();
+  });
+
+  it('a follow-up does not reuse the original one-run approval grant', async () => {
+    const previous = useAuthStore.getState();
+    useAuthStore.setState({ localUserId: 'runtime-test-account', workspaceId: 'followup-workspace-a' as never,
+      projectId: 'followup-project-a' as never });
+    const harness = kernelRuntimeBindings(agent('agent_followup_scope', 'apple', 'Answer clearly.'));
+    const chatId = String(harness.chatId);
+    useJarvisInteractionStore.getState().setChatMode(chatId, 'agent');
+    setAgentApprovalMode(chatId, 'review');
+    setPermissionAccess(chatId, 'full');
+    const release = deferred<void>();
+    mocks.waitForPersistentOpenCodeChatRelease.mockReturnValue(release.promise);
+    mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const accepted = vi.fn();
+    const rejected = vi.fn();
+    const dispatched: SendDetail[] = [];
+    const observeSend = (event: Event) => dispatched.push((event as CustomEvent<SendDetail>).detail);
+    window.addEventListener('jarvis:send', observeSend);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: { chatId,
+        text: 'Original harmless task.', cancellationKey: 'msg_kernel_user',
+        interactionMode: 'agent', accessLevel: 'full', agentApprovalMode: 'review', approveAllForRun: true } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:steer', { detail: { chatId,
+        text: 'Explicit follow-up after release.', onAccepted: accepted, onRejected: rejected } }));
+      await vi.waitFor(() => expect(mocks.waitForPersistentOpenCodeChatRelease).toHaveBeenCalledOnce());
+      expect(harness.bindings.appendMessage.mock.calls.filter(([row]) => row.role === 'user')).toHaveLength(0);
+      expect(dispatched).toHaveLength(1);
+      release.resolve();
+      await vi.waitFor(() => expect(accepted.mock.calls.length + rejected.mock.calls.length).toBe(1));
+      await stop.whenIdle();
+      const userWrites = harness.bindings.appendMessage.mock.calls.filter(([row]) => row.role === 'user');
+      expect(accepted).toHaveBeenCalledOnce();
+      expect(rejected).not.toHaveBeenCalled();
+      expect(userWrites).toHaveLength(1);
+      expect(dispatched).toHaveLength(2);
+      expect(dispatched[1]).toMatchObject({ chatId, text: 'Explicit follow-up after release.',
+        interactionMode: 'agent', accessLevel: 'full', agentApprovalMode: 'review' });
+      expect(mocks.runAgent).toHaveBeenCalledTimes(2);
+      expect(dispatched[1]!.approveAllForRun).toBe(false);
+      expect(mocks.runAgent.mock.calls[0]![0].approveAllForRun).toBe(true);
+      expect(mocks.runAgent.mock.calls[1]![0].approveAllForRun).toBe(false);
+    } finally {
+      release.resolve(); stop(); await stop.whenIdle();
+      window.removeEventListener('jarvis:send', observeSend);
+      useAuthStore.setState({ localUserId: previous.localUserId, workspaceId: previous.workspaceId,
+        projectId: previous.projectId });
+    }
+  });
+  it.each([
+    'unchanged', 'account', 'workspace', 'project', 'account ABA', 'mode', 'access', 'approval', 'listener stopped',
+  ] as const)('keeps delayed OpenCode follow-up bound to its original authority: %s', async (change) => {
+    const previous = useAuthStore.getState();
+    useAuthStore.setState({ localUserId: 'runtime-test-account', workspaceId: 'followup-workspace-a' as never,
+      projectId: 'followup-project-a' as never });
+    const harness = kernelRuntimeBindings(agent('agent_followup_scope', 'apple', 'Answer clearly.'));
+    const chatId = String(harness.chatId);
+    useJarvisInteractionStore.getState().setChatMode(chatId, 'ask');
+    setAgentApprovalMode(chatId, 'review');
+    setPermissionAccess(chatId, 'read');
+    const release = deferred<void>();
+    mocks.waitForPersistentOpenCodeChatRelease.mockReturnValue(release.promise);
+    mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const accepted = vi.fn();
+    const rejected = vi.fn();
+    const dispatched: SendDetail[] = [];
+    const observeSend = (event: Event) => dispatched.push((event as CustomEvent<SendDetail>).detail);
+    window.addEventListener('jarvis:send', observeSend);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: { chatId,
+        text: 'Original harmless task.', cancellationKey: 'msg_kernel_user',
+        interactionMode: 'ask', accessLevel: 'read-only', agentApprovalMode: 'review' } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:steer', { detail: { chatId,
+        text: 'Explicit follow-up after release.', onAccepted: accepted, onRejected: rejected } }));
+      await vi.waitFor(() => expect(mocks.waitForPersistentOpenCodeChatRelease).toHaveBeenCalledOnce());
+      expect(harness.bindings.appendMessage.mock.calls.filter(([row]) => row.role === 'user')).toHaveLength(0);
+      expect(dispatched).toHaveLength(1);
+      if (change === 'account' || change === 'account ABA') useAuthStore.setState({ localUserId: 'followup-account-b' });
+      if (change === 'account ABA') useAuthStore.setState({ localUserId: 'runtime-test-account' });
+      if (change === 'workspace') useAuthStore.setState({ workspaceId: 'followup-workspace-b' as never });
+      if (change === 'project') useAuthStore.setState({ projectId: 'followup-project-b' as never });
+      if (change === 'mode') useJarvisInteractionStore.getState().setChatMode(chatId, 'agent');
+      if (change === 'access') setPermissionAccess(chatId, 'full');
+      if (change === 'approval') setAgentApprovalMode(chatId, 'full');
+      if (change === 'listener stopped') stop();
+      release.resolve();
+      await vi.waitFor(() => expect(accepted.mock.calls.length + rejected.mock.calls.length).toBe(1));
+      await stop.whenIdle();
+      const userWrites = harness.bindings.appendMessage.mock.calls.filter(([row]) => row.role === 'user');
+      if (change === 'unchanged') {
+        expect(accepted).toHaveBeenCalledOnce();
+        expect(rejected).not.toHaveBeenCalled();
+        expect(userWrites).toHaveLength(1);
+        expect(dispatched).toHaveLength(2);
+        expect(dispatched[1]).toMatchObject({ chatId, text: 'Explicit follow-up after release.',
+          interactionMode: 'ask', accessLevel: 'read-only', agentApprovalMode: 'review' });
+        expect(mocks.runAgent).toHaveBeenCalledTimes(2);
+      } else {
+        expect(rejected).toHaveBeenCalledOnce();
+        expect(accepted).not.toHaveBeenCalled();
+        expect(userWrites).toHaveLength(0);
+        expect(dispatched).toHaveLength(1);
+        expect(mocks.runAgent).toHaveBeenCalledOnce();
+      }
+    } finally {
+      release.resolve(); stop(); await stop.whenIdle();
+      window.removeEventListener('jarvis:send', observeSend);
+      useAuthStore.setState({ localUserId: previous.localUserId, workspaceId: previous.workspaceId,
+        projectId: previous.projectId });
+    }
+  });
+
+  it.each(['account', 'workspace', 'project'] as const)(
+    'rejects OpenCode follow-up before cancellation after original %s changes', async change => {
+      const previous = useAuthStore.getState();
+      useAuthStore.setState({ localUserId: 'runtime-test-account', workspaceId: 'followup-workspace-a' as never,
+        projectId: 'followup-project-a' as never });
+      const harness = kernelRuntimeBindings(agent('agent_followup_before_scope', 'apple', 'Answer clearly.'));
+      let originalSignal!: AbortSignal;
+      mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+        originalSignal = input.signal;
+        input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      }));
+      const accepted = vi.fn();
+      const rejected = vi.fn();
+      const stop = trackListener(startRuntimeListener(harness.bindings));
+      try {
+        window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
+          chatId: harness.chatId, text: 'Keep this task running.', cancellationKey: 'msg_kernel_user' } }));
+        await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+        if (change === 'account') useAuthStore.setState({ localUserId: 'followup-account-b' });
+        if (change === 'workspace') useAuthStore.setState({ workspaceId: 'followup-workspace-b' as never });
+        if (change === 'project') useAuthStore.setState({ projectId: 'followup-project-b' as never });
+        window.dispatchEvent(new CustomEvent('jarvis:steer', { detail: { chatId: harness.chatId,
+          text: 'A different scope must not replace this task.', onAccepted: accepted, onRejected: rejected } }));
+        expect(rejected).toHaveBeenCalledOnce();
+        expect(accepted).not.toHaveBeenCalled();
+        expect(originalSignal.aborted).toBe(false);
+        expect(mocks.waitForPersistentOpenCodeChatRelease).not.toHaveBeenCalled();
+        expect(harness.bindings.appendMessage.mock.calls.filter(([row]) => row.role === 'user')).toHaveLength(0);
+      } finally {
+        stop(); await stop.whenIdle();
+        useAuthStore.setState({ localUserId: previous.localUserId, workspaceId: previous.workspaceId,
+          projectId: previous.projectId });
+      }
+    },
+  );
+
+  it('blocks the saved OpenCode follow-up for review when authority changes during persistence', async () => {
+    const previous = useAuthStore.getState();
+    useAuthStore.setState({ localUserId: 'runtime-test-account', workspaceId: 'followup-workspace-a' as never,
+      projectId: 'followup-project-a' as never });
+    const harness = kernelRuntimeBindings(agent('agent_followup_persist_scope', 'apple', 'Answer clearly.'));
+    const saveGate = deferred<void>();
+    const savedRows: Message[] = [];
+    const append = harness.bindings.appendMessage.getMockImplementation()!;
+    harness.bindings.appendMessage.mockImplementation(async message => {
+      const row = await append(message);
+      if (row.role === 'user') {
+        savedRows.push(row);
+        await saveGate.promise;
+      }
+      return row;
+    });
+    mocks.runAgent.mockImplementationOnce(input => new Promise((_resolve, reject) => {
+      input.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const accepted = vi.fn();
+    const rejected = vi.fn();
+    const blocked = vi.fn();
+    const sends: SendDetail[] = [];
+    const observeSend = (event: Event) => sends.push((event as CustomEvent<SendDetail>).detail);
+    window.addEventListener('jarvis:send', observeSend);
+    const stop = trackListener(startRuntimeListener(harness.bindings));
+    try {
+      window.dispatchEvent(new CustomEvent('jarvis:send', { detail: { chatId: harness.chatId,
+        text: 'Original task.', cancellationKey: 'msg_kernel_user' } }));
+      await vi.waitFor(() => expect(mocks.runAgent).toHaveBeenCalledOnce());
+      window.dispatchEvent(new CustomEvent('jarvis:steer', { detail: { chatId: harness.chatId,
+        text: 'Saved but not dispatched.', onAccepted: accepted, onRejected: rejected, onBlocked: blocked } }));
+      await vi.waitFor(() => expect(savedRows).toHaveLength(1));
+      useAuthStore.setState({ localUserId: 'followup-account-b' });
+      saveGate.resolve();
+      await vi.waitFor(() => expect(blocked).toHaveBeenCalledOnce());
+      await stop.whenIdle();
+      expect(accepted).not.toHaveBeenCalled();
+      expect(rejected).not.toHaveBeenCalled();
+      expect(savedRows).toHaveLength(1);
+      expect(savedRows[0]).toMatchObject({ chat_id: harness.chatId, role: 'user',
+        parts: [{ kind: 'text', text: 'Saved but not dispatched.' }] });
+      expect(sends).toHaveLength(1);
+      expect(mocks.runAgent).toHaveBeenCalledOnce();
+    } finally {
+      saveGate.resolve(); stop(); await stop.whenIdle();
+      window.removeEventListener('jarvis:send', observeSend);
+      useAuthStore.setState({ localUserId: previous.localUserId, workspaceId: previous.workspaceId,
+        projectId: previous.projectId });
+    }
+  });
+
   it('waits for the OpenCode request release before persisting and dispatching explicit follow-up', async () => {
     const gate = deferred<void>();
     const appendUserMessage = vi.fn(async (message) => ({ ...message,
@@ -14846,6 +15145,10 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     expect(dispatchSend).toHaveBeenCalledOnce();
     expect(dispatchSend).toHaveBeenCalledWith({
       ...activeSend,
+      approveAllForRun: false,
+      modelText: undefined,
+      resumeOriginalText: undefined,
+      resumeOfCancellationKey: undefined,
       chatId,
       cancellationKey: 'msg_steer_replacement',
       text: 'Prioritize the renderer regression and report it first.',

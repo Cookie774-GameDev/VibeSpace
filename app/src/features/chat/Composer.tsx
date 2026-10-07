@@ -5647,7 +5647,7 @@ export function Composer({
             queuedInterruptInFlightRef.current = null;
             toast.error(
               'Steer needs review',
-              'Codex may have received this message. Do not retry it until you verify the thread.',
+              'This message was saved or may have reached the provider. Review the thread before retrying.',
             );
           },
         },
