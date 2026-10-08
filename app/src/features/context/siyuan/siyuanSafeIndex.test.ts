@@ -29,7 +29,7 @@ async function resetDurableJobs(): Promise<void> {
   });
 }
 
-function map(): ContextMapRecord {
+function map(): ContextMapRecord & { projectId: string } {
   return {
     id: 'map-1',
     projectId: 'project-1',

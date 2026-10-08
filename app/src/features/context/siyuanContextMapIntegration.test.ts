@@ -40,7 +40,7 @@ import { useAuthStore } from '@/stores/auth';
 import { siyuanOverallProgressPercent } from './siyuan/siyuanProgress';
 import * as indexJobStore from './siyuan/siyuanIndexJobStore';
 
-function map(): ContextMapRecord {
+function map(): ContextMapRecord & { projectId: string } {
   return {
     id: 'map-1',
     projectId: 'project-1',
