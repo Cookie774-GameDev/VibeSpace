@@ -1878,10 +1878,10 @@ export function ContextPage() {
   }, [rootNode, selectedId, tree]);
 
   React.useEffect(() => {
-    if (!tree) {
-      setSelectedId(null);
-      return;
-    }
+    // A same-map read can temporarily clear the displayed tree. Keep the
+    // selected entity until the next tree validates it; scope changes reset
+    // selection separately, and a different tree still falls back to its root.
+    if (!tree) return;
     setSelectedId((current) => {
       if (current === PROJECT_ROOT_NODE_ID) return current;
       if (current && findContextNode(tree, current)) return current;

@@ -105,6 +105,8 @@ import { createContextEvidenceNavigation } from './contextEvidenceNavigation';
 import { createContextEvidenceLinkStore } from './contextEvidenceLinks';
 import { ContextPage } from './ContextPage';
 import { MessagePart } from '@/features/chat/MessagePart';
+import { PageRouter } from '@/components/layout/PageRouter';
+import { SidebarContextTree } from './SidebarContextTree';
 
 let database: JarvisDexie;
 let part: Part;
@@ -623,4 +625,78 @@ it('cannot publish an old snapshot when the project changes during display equiv
   await act(async () => { comparison.resolve(); });
   expect(screen.queryByRole('heading', { name: 'linked-file.txt' })).toBeNull();
   expect(screen.queryByText('SiYuan Context Map ready.')).toBeNull();
+});
+
+
+function ActualLazyRouteShell({ sidebar }: { sidebar: boolean }) {
+  const route = useUIStore((state) => state.route);
+  return <>
+    {sidebar ? <SidebarContextTree navOpen onOpenContext={() => useUIStore.getState().setRoute('context')} /> : null}
+    {route === 'chat' ? (
+      <MessagePart part={part} allParts={[part]} chatId={scope.chatId} messageId={'page-message' as MessageId} />
+    ) : <PageRouter />}
+  </>;
+}
+
+it.each([false, true])('retains the cited entity through actual lazy PageRouter mounting (sidebar=%s)', async (sidebar) => {
+  const { map } = await prepareNativeSnapshot();
+  const read = deferred();
+  io.readGate = read.promise;
+  const before = await database.context_maps.get(map.id);
+  render(<React.StrictMode><ActualLazyRouteShell sidebar={sidebar} /></React.StrictMode>);
+  if (sidebar) await screen.findByRole('button', { name: /Map A/ });
+  fireEvent.click(screen.getByRole('button', { name: 'Open verified Context source' }));
+  await waitFor(() => expect(io.openResults).toEqual(['completed']));
+  await waitFor(() => expect(io.readStarted).toContain(map.id));
+  await act(async () => { read.resolve(); });
+  await waitFor(() => expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+  expect(screen.getByRole('heading', { name: 'linked-file.txt' })).toBeTruthy();
+  expect(await database.context_maps.get(map.id)).toEqual(before);
+});
+
+it('retains a cited file after a same-map persistence publication through the actual route', async () => {
+  const { map } = await prepareNativeSnapshot();
+  const read = deferred();
+  io.readGate = read.promise;
+  render(<React.StrictMode><ActualLazyRouteShell sidebar /></React.StrictMode>);
+  await screen.findByRole('button', { name: /Map A/ });
+  fireEvent.click(screen.getByRole('button', { name: 'Open verified Context source' }));
+  await waitFor(() => expect(io.openResults).toEqual(['completed']));
+  await waitFor(() => expect(io.readStarted).toContain(map.id));
+  await act(async () => { read.resolve(); });
+  await waitFor(() => expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+  expect(screen.getByRole('heading', { name: 'linked-file.txt' })).toBeTruthy();
+  const before = await database.context_maps.get(map.id);
+  const readCount = io.readStarted.length;
+  // A real load republishes an equivalent durable map using fresh objects.
+  // It must not turn a previously selected source into the project root.
+  await act(async () => { await io.service!.load(scope.accountId, scope.projectId); });
+  await waitFor(() => expect(io.readStarted.length).toBeGreaterThan(readCount));
+  await waitFor(() => expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+  expect(await database.context_maps.get(map.id)).toEqual(before);
+  expect(screen.getByRole('heading', { name: 'linked-file.txt' })).toBeTruthy();
+});
+
+it('drops the old cited selection when a genuinely changed native tree removes its entity', async () => {
+  const { map, rawTree } = await prepareNativeSnapshot();
+  const read = deferred();
+  io.readGate = read.promise;
+  render(<React.StrictMode><ActualLazyRouteShell sidebar /></React.StrictMode>);
+  await screen.findByRole('button', { name: /Map A/ });
+  fireEvent.click(screen.getByRole('button', { name: 'Open verified Context source' }));
+  await waitFor(() => expect(io.openResults).toEqual(['completed']));
+  await waitFor(() => expect(io.readStarted).toContain(map.id));
+  await act(async () => { read.resolve(); });
+  await waitFor(() => expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+  expect(screen.getByRole('heading', { name: 'linked-file.txt' })).toBeTruthy();
+  io.readTrees[map.id] = { ...rawTree, nodes: [{
+    id: 'replacement-node', title: 'replacement.txt', kind: 'file',
+    path: 'replacement.txt', summary: 'A genuinely changed native tree', sizeBytes: 8, modifiedAt: 2,
+  }] };
+  const count = io.readStarted.length;
+  await act(async () => { await io.service!.load(scope.accountId, scope.projectId); });
+  await waitFor(() => expect(io.readStarted.length).toBeGreaterThan(count));
+  await waitFor(() => expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+  expect(screen.queryByRole('heading', { name: 'linked-file.txt' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'replacement.txt' })).toBeTruthy();
 });

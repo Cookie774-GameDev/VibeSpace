@@ -66,11 +66,17 @@ export function createTelemetryWithdrawalQueue(storage: TelemetryStorage, transp
       publish();
       return true;
     },
-    flush(accountId: string | null): Promise<AccountTelemetryResult | undefined> {
+    flush(
+      accountId: string | null,
+      canDispatch: () => boolean = () => true,
+    ): Promise<AccountTelemetryResult | undefined> {
+      // A different account's transport may keep this request waiting past its
+      // caller's lifetime. Recheck admission after that wait, before any I/O.
+      if (!canDispatch()) return Promise.resolve(undefined);
       if (inFlight)
         return inFlightAccount === accountId
           ? inFlight
-          : inFlight.then(() => this.flush(accountId));
+          : inFlight.then(() => this.flush(accountId, canDispatch));
       const entry = pending.find((candidate) => candidate.accountId === accountId);
       if (!entry) return Promise.resolve(undefined);
       inFlightAccount = entry.accountId;

@@ -119,3 +119,57 @@ it('ignores corrupt queue data without making requests', async () => {
   await queue.flush('a');
   expect(send).not.toHaveBeenCalled();
 });
+
+it('preserves a withdrawal when its caller no longer admits dispatch', async () => {
+  const send = vi.fn(async (): Promise<AccountTelemetryResult> => ({ ok: true, state }));
+  const queue = createTelemetryWithdrawalQueue(storage(), send);
+  queue.enqueue('a');
+  expect(await queue.flush('a', () => false)).toBeUndefined();
+  expect(send).not.toHaveBeenCalled();
+  expect(queue.getSnapshot().pending.map((entry) => entry.accountId)).toEqual(['a']);
+  await queue.flush('a');
+  expect(send).toHaveBeenCalledOnce();
+  expect(queue.getSnapshot().pending).toEqual([]);
+});
+
+it('does not revoke an already dispatched withdrawal when its caller retires', async () => {
+  let finish!: (result: AccountTelemetryResult) => void;
+  let admitted = true;
+  const send = vi.fn(
+    () =>
+      new Promise<AccountTelemetryResult>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const queue = createTelemetryWithdrawalQueue(storage(), send);
+  queue.enqueue('a');
+  const work = queue.flush('a', () => admitted);
+  admitted = false;
+  finish({ ok: true, state });
+  expect(await work).toEqual({ ok: true, state });
+  expect(send).toHaveBeenCalledOnce();
+  expect(queue.getSnapshot().pending).toEqual([]);
+  expect(createTelemetryWithdrawalQueue(storage(), send).getSnapshot().pending).toEqual([]);
+});
+
+
+it('admits only the fresh caller when retired and fresh owners wait for the same account', async () => {
+  let finish!: (result: AccountTelemetryResult) => void;
+  let oldAlive = true;
+  const send = vi.fn((id: string): Promise<AccountTelemetryResult> => id === 'a'
+    ? new Promise((resolve) => { finish = resolve; })
+    : Promise.resolve({ ok: true, state }));
+  const queue = createTelemetryWithdrawalQueue(storage(), send);
+  queue.enqueue('a');
+  queue.enqueue('b');
+  const first = queue.flush('a');
+  const retired = queue.flush('b', () => oldAlive);
+  const fresh = queue.flush('b', () => true);
+  oldAlive = false;
+  finish({ ok: true, state });
+  expect(await retired).toBeUndefined();
+  expect(await fresh).toEqual({ ok: true, state });
+  await first;
+  expect(send.mock.calls.map(([id]) => id)).toEqual(['a', 'b']);
+  expect(queue.getSnapshot().pending).toEqual([]);
+});

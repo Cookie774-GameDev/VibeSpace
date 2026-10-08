@@ -9,7 +9,7 @@ import {
 } from './codexGoalCommand';
 import { restoredConversationPrompt } from './restoredConversationPrompt';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
-import { codexTurnLease } from './codexTurnLease';
+import { codexDiagnosticRequestId, codexTurnLease } from './codexTurnLease';
 import { registerLiveCodexRlmParent } from './codexRlmParentBinding';
 import {
   CODEX_CONTEXT_TOOL,
@@ -40,6 +40,7 @@ import {
   buildCodexTurnInterruptRequest,
   buildCodexTurnStartRequest,
   validateCodexModelListResponse,
+  summarizeCodexModelValidation,
   validateCodexSkillsListResponse,
   isCodexSkillsChangedNotification,
   validateCodexThreadStartResponse,
@@ -850,7 +851,7 @@ function createCodexFrameReader(
 async function listCodexModels(
   dependencies: CodexPersistentDependencies,
 ): Promise<readonly ProviderDiscoveredModel[]> {
-  const release = await codexTurnLease.acquire();
+  const release = await codexTurnLease.acquire(undefined, { kind: 'model-catalog' });
   let generation: string | undefined;
   let iterator: AsyncIterator<NativeFrame> | undefined;
   const streamAbort = new AbortController();
@@ -933,7 +934,7 @@ async function listCodexSkills(
   ), 1_000);
   let release: () => void;
   try {
-    release = await codexTurnLease.acquire(leaseAbort.signal);
+    release = await codexTurnLease.acquire(leaseAbort.signal, { kind: 'skills-catalog' });
   } finally {
     clearTimeout(leaseTimeout);
   }
@@ -1002,7 +1003,7 @@ async function listCodexSkills(
 async function listCodexMcpServerStatus(
   dependencies: CodexPersistentDependencies,
 ): Promise<readonly CodexMcpServerConnectionStatus[]> {
-  const release = await codexTurnLease.acquire();
+  const release = await codexTurnLease.acquire(undefined, { kind: 'mcp-status' });
   let generation: string | undefined;
   let iterator: AsyncIterator<NativeFrame> | undefined;
   const streamAbort = new AbortController();
@@ -1117,6 +1118,36 @@ async function validateModelCapability(
       cursor = validation.cursor;
       continue;
     }
+    // Deliberately outside model.prepare.*: these local identity diagnostics
+    // are not a new optional-telemetry operation class or a native-frame log.
+    try {
+      const summary = summarizeCodexModelValidation(response, exactIdentity.model);
+      const correlation = {
+        requestId: codexDiagnosticRequestId(baseRequestId),
+        ...(/^codex-generation-[A-Za-z0-9_-]{20}$/u.test(generation)
+          ? { generation, runtimeGeneration: generation } : {}),
+      };
+      // Only existing fixed-field identifiers are durable. The code is built
+      // from validator enums/counts, never error prose or a serialized frame.
+      appActivityLog.record('harness.codex.model-validation', 'failed', {
+        ...correlation,
+        page: page + 1,
+        reason: validation.reason,
+        field: validation.field,
+        ...summary,
+        model: summary.expectedModel,
+        result: { code: `${validation.reason}.${validation.field}` },
+        eventType: `catalog-page.${page + 1}.rows.${summary.rowCount ?? 'unknown'}.sample.${summary.inspectedRows}.invalid.${summary.malformedModelRows}.matches.${summary.matchingModelRows}.next.${Number(summary.hasNextPage)}.truncated.${Number(summary.modelsTruncated)}`,
+      });
+      for (const model of summary.returnedModels) {
+        const redacted = model === '[redacted-model-id]';
+        appActivityLog.record('harness.codex.model-observation', 'observed', {
+          ...correlation,
+          ...(!redacted ? { model } : {}),
+          eventType: `catalog-model.${redacted ? 'redacted' : 'returned'}.page-${page + 1}`,
+        });
+      }
+    } catch { /* Diagnostics cannot replace the original fail-closed rejection. */ }
     throw new Error('Codex model capability mismatch: ' + validation.field + '.');
   }
   throw new Error('Codex model capability pagination exceeded its safe bound.');
@@ -2181,7 +2212,9 @@ export function createCodexPersistentAdapter(
     }) => listCodexSkills(dependencies, workingDirectory, forceReload),
     listMcpServerStatus: () => listCodexMcpServerStatus(dependencies),
     send: async function* (request: ProviderRequest) {
-      const release = await prepare(request, 'lease', () => codexTurnLease.acquire(request.signal));
+      const release = await prepare(request, 'lease', () => codexTurnLease.acquire(request.signal, {
+        kind: 'turn', requestId: request.requestId,
+      }));
       let contextTool: CodexContextToolBridge | null = null;
       try {
         await prepare(request, 'recover', () => codexTurnLease.recover(dependencies.stop));

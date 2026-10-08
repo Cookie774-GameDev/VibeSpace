@@ -9,6 +9,7 @@ import {
   resolveCodexExecutable,
 } from './codexPersistent';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+import { toPersistedActivity } from '@/lib/diagnostics/activityLogPersistence';
 import { codexTurnLease } from './codexTurnLease';
 
 const connection: ProviderConnection = {
@@ -43,6 +44,73 @@ const codexRoute = Object.freeze({
   providerId: 'openai' as const,
   modelId: 'opencode-go/deepseek-v4-flash-vision-exp',
 });
+
+it.each(['missing', 'malformed', 'duplicate'] as const)(
+  'records bounded model-validation evidence for %s without changing rejection or logging private data',
+  async (variant) => {
+    const before = appActivityLog.snapshot().sequence;
+    const requestId = 'jreq_12345678-1234-4234-8234-123456789abc';
+    const selected = { model: 'gpt-6-luna', supportedReasoningEfforts: [], serviceTiers: [] };
+    const rows = variant === 'missing'
+      ? [{ ...selected, model: 'gpt-other', description: 'PRIVATE_RESPONSE_PROSE' }]
+      : variant === 'duplicate' ? [selected, selected] : [null];
+    async function* rejectedFrames() {
+      yield { id: `${requestId}_model_1`, result: {
+        data: rows, nextCursor: null, auth: 'PRIVATE_AUTH', private: 'PRIVATE_RESPONSE_PROSE',
+      } };
+    }
+    const write = vi.fn(async () => undefined);
+    const adapter = createCodexPersistentAdapter({
+      findExecutable: async () => ({ executableId: 'trusted-codex' }),
+      start: async () => ({ generation: 'codex-generation-abcdefghijklmnopqrst' }),
+      frames: () => ({ stream: rejectedFrames(), ready: Promise.resolve() }),
+      write,
+      stop: async () => true,
+    });
+    const consume = async () => {
+      for await (const _event of adapter.send!({
+        requestId, connection, codexRoute: { ...codexRoute, modelId: selected.model },
+        chatId: 'diagnostic-chat', prompt: 'PRIVATE_PROMPT_DO_NOT_LOG', systemPrompt: 'PRIVATE_POLICY',
+        modelId: selected.model, workingDirectory: 'C:\\PRIVATE_WORKSPACE', interactionMode: 'ask',
+      })) { /* Validation must still fail before turn/start. */ }
+    };
+    await expect(consume()).rejects.toThrow('Codex model capability mismatch: model.');
+    expect(write.mock.calls).toHaveLength(1);
+    const diagnostics = appActivityLog.snapshot(before).events
+      .filter((event) => event.kind === 'harness.codex.model-validation');
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({ phase: 'failed', data: {
+      requestId, generation: 'codex-generation-abcdefghijklmnopqrst', page: 1,
+      field: 'model', reason: variant === 'missing' ? 'capability_mismatch' : 'invalid_response',
+      expectedModel: 'gpt-6-luna', matchingModelRows: variant === 'duplicate' ? 2 : 0,
+      malformedModelRows: variant === 'malformed' ? 1 : 0,
+    } });
+    expect(toPersistedActivity(diagnostics[0]!)).toMatchObject({
+      requestId, runtimeGeneration: 'codex-generation-abcdefghijklmnopqrst',
+      model: 'gpt-6-luna',
+      resultCode: `${variant === 'missing' ? 'capability_mismatch' : 'invalid_response'}.model`,
+      eventType: expect.stringContaining('catalog-page.1.rows.'),
+    });
+    const modelRows = appActivityLog.snapshot(before).events
+      .filter((event) => event.kind === 'harness.codex.model-observation').map(toPersistedActivity);
+    expect(modelRows).toHaveLength(1);
+    expect(modelRows[0]).toMatchObject({
+      requestId, runtimeGeneration: 'codex-generation-abcdefghijklmnopqrst',
+      ...(variant === 'malformed' ? { eventType: 'catalog-model.redacted.page-1' }
+        : { model: variant === 'missing' ? 'gpt-other' : 'gpt-6-luna' }),
+    });
+    const leases = appActivityLog.snapshot(before).events.filter((event) => event.kind === 'harness.codex.lease');
+    expect(leases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: 'requested', data: expect.objectContaining({ kind: 'turn', requestId }) }),
+      expect.objectContaining({ phase: 'acquired', data: expect.objectContaining({ kind: 'turn', requestId }) }),
+      expect.objectContaining({ phase: 'released', data: expect.objectContaining({ kind: 'turn', requestId }) }),
+    ]));
+    expect(leases.map(toPersistedActivity)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId, callId: expect.stringMatching(/^codex-lease-\d+$/u), eventType: 'lease.turn.acquired' }),
+    ]));
+    expect(JSON.stringify([...diagnostics, ...leases])).not.toContain('PRIVATE_');
+  },
+);
 
 it.each([
   { resumed: false, earlyUsage: false },

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCodexApprovalResponse,
   buildCodexModelListRequest,
+  summarizeCodexModelValidation,
   buildCodexQuestionResponse,
   buildCodexSkillsListRequest,
   buildCodexSkillsRefreshRequest,
@@ -713,6 +714,60 @@ describe('Codex app-server model capability protocol', () => {
     ],
     serviceTiers: [{ id: 'priority', name: 'Fast', description: 'Increased request priority' }],
   };
+
+  it('summarizes exact model rows without changing their validation outcome', () => {
+    const response = { id: 'models_1', result: { data: [model, model], nextCursor: null } };
+    expect(validateCodexModelListResponse(response, 'models_1', IDENTITY)).toEqual({
+      ok: false, reason: 'invalid_response', field: 'model',
+    });
+    expect(summarizeCodexModelValidation(response, IDENTITY.model)).toEqual({
+      expectedModel: 'gpt-5.6-sol', rowCount: 2, inspectedRows: 2, malformedModelRows: 0,
+      matchingModelRows: 2, returnedModels: ['gpt-5.6-sol'],
+      modelsTruncated: false, hasNextPage: false, dataShape: 'array',
+    });
+  });
+
+  it('distinguishes missing selected models from malformed rows in bounded diagnostics', () => {
+    const missing = { result: { data: [{ model: 'gpt-other' }], nextCursor: 'opaque-private-cursor' } };
+    expect(summarizeCodexModelValidation(missing, 'gpt-selected')).toMatchObject({
+      matchingModelRows: 0, malformedModelRows: 0, returnedModels: ['gpt-other'], hasNextPage: true,
+    });
+    expect(summarizeCodexModelValidation({ result: { data: [null, {}, { model: 12 }] } }, 'gpt-selected'))
+      .toMatchObject({ rowCount: 3, malformedModelRows: 3, matchingModelRows: 0 });
+    expect(summarizeCodexModelValidation({ result: { data: 'PRIVATE_RESPONSE' } }, 'gpt-selected'))
+      .toMatchObject({ rowCount: null, dataShape: 'invalid', returnedModels: [] });
+  });
+
+  it('never includes credentials, paths, response prose or opaque cursor contents in diagnostics', () => {
+    const secret = `sk-proj-${'A'.repeat(70)}`;
+    const response = { id: 'PRIVATE_RESPONSE_ID', result: {
+      data: [
+        { model: secret, description: 'PRIVATE_RESPONSE_BODY' },
+        { model: 'C:/Users/private/model', supportedReasoningEfforts: [{ description: secret }] },
+        { model: '/home/private/model' },
+        { model: 'relative/private/path' },
+        { model: 'gpt-6-luna', private: secret },
+      ],
+      nextCursor: secret,
+    } };
+    const diagnostic = summarizeCodexModelValidation(response, secret);
+    expect(diagnostic.expectedModel).toBe('[redacted-model-id]');
+    expect(diagnostic.returnedModels).toContain('gpt-6-luna');
+    const text = JSON.stringify(diagnostic);
+    for (const forbidden of [secret, 'C:/Users', '/home/', 'relative/private', 'PRIVATE_RESPONSE', 'description']) {
+      expect(text).not.toContain(forbidden);
+    }
+  });
+
+  it('bounds catalog diagnostic rows and identifiers without truncating validation input', () => {
+    const response = { result: { data: Array.from({ length: 101 }, (_, i) => ({ model: `gpt-fixture-${i}` })), nextCursor: null } };
+    const diagnostic = summarizeCodexModelValidation(response, 'gpt-fixture-0');
+    expect(diagnostic.rowCount).toBe(101);
+    expect(diagnostic.inspectedRows).toBe(100);
+    expect(diagnostic.returnedModels).toHaveLength(32);
+    expect(diagnostic.modelsTruncated).toBe(true);
+    expect(response.result.data).toHaveLength(101);
+  });
 
   it('requests the complete official model page without inventing a catalog', () => {
     expect(buildCodexModelListRequest({ requestId: 'models_1' })).toEqual({

@@ -1,3 +1,5 @@
+import { applySecretPolicy } from '@/lib/security/secretDetector';
+
 export interface CodexBackendIdentity {
   modelProvider: string;
   model: string;
@@ -453,6 +455,51 @@ export function buildCodexModelListRequest(input: Readonly<CodexModelListRequest
       limit: MAX_MODEL_PAGE,
       includeHidden: true,
     },
+  };
+}
+
+function diagnosticModelId(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 128 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._+-]*(?:\/[A-Za-z0-9][A-Za-z0-9._+-]*){0,2}$/u.test(value)) {
+    return '[redacted-model-id]';
+  }
+  // Qualified public provider/model names are useful; an arbitrary slash path
+  // is not diagnostic authority. This only filters logging, never model routing.
+  if (value.includes('/') &&
+      !/^(?:openai|opencode-go|anthropic|openrouter|deepseek|google|xai)\//u.test(value)) {
+    return '[redacted-model-id]';
+  }
+  return applySecretPolicy(value, 'redact').decision === 'allowed' ? value : '[redacted-model-id]';
+}
+
+/** Bounded local evidence only: never retain frames, descriptions, paths or cursors. */
+export function summarizeCodexModelValidation(value: unknown, expectedModel: string) {
+  const result = recordOf(recordOf(value)?.result);
+  const data = result?.data;
+  const rows = Array.isArray(data) ? data : [];
+  const inspected = rows.slice(0, MAX_MODEL_PAGE);
+  const identifiers = new Set<string>();
+  let malformedModelRows = 0;
+  let matchingModelRows = 0;
+  let modelsTruncated = rows.length > MAX_MODEL_PAGE;
+  for (const row of inspected) {
+    const model = recordOf(row)?.model;
+    if (typeof model !== 'string' || !SAFE_IDENTIFIER.test(model)) malformedModelRows += 1;
+    if (model === expectedModel) matchingModelRows += 1;
+    const safe = diagnosticModelId(model);
+    if (!identifiers.has(safe) && identifiers.size >= 32) modelsTruncated = true;
+    else identifiers.add(safe);
+  }
+  return {
+    expectedModel: diagnosticModelId(expectedModel),
+    rowCount: Array.isArray(data) ? data.length : null,
+    inspectedRows: inspected.length,
+    malformedModelRows,
+    matchingModelRows,
+    returnedModels: [...identifiers],
+    modelsTruncated,
+    hasNextPage: typeof result?.nextCursor === 'string' && result.nextCursor.length > 0,
+    dataShape: Array.isArray(data) ? 'array' as const : data === undefined ? 'missing' as const : 'invalid' as const,
   };
 }
 
