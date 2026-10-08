@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui';
@@ -10,6 +10,8 @@ import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import { getChatActivityEvents } from './activity/activityStore';
 import { Composer } from './Composer';
+import * as instantCommands from './composerInstantCommand';
+import { checkpointNotesComposer, notesComposerKey, readNotesComposerDraft } from '@/features/notes/notesComposerDraft';
 
 const liveQueryFixture = vi.hoisted(() => ({ emptyArray: [] as unknown[] }));
 vi.mock('dexie-react-hooks', () => ({
@@ -31,6 +33,8 @@ vi.mock('./HarnessReadinessGate', async (importOriginal) => {
 });
 
 const originalAuth = useAuthStore.getState();
+const draftScope = { accountId: 'connect-draft-fixture-owner', projectId: 'project-1' };
+const draftStorageKey = () => `vibespace:composer-draft:v1:${notesComposerKey(draftScope, 'chat-connect')}`;
 
 function renderComposer() {
   return render(
@@ -57,10 +61,13 @@ describe('Composer secure /connect integration', () => {
     });
     sessionStorage.clear();
     useAuthStore.setState({
+      localUserId: draftScope.accountId as never,
+      cloudSession: null,
       workspaceId: 'workspace-1' as never,
       projectId: 'project-1' as never,
     });
     useUIStore.setState({ settingsOpen: false, activeChatId: 'chat-connect' as never });
+    checkpointNotesComposer(draftScope, 'chat-connect', '', []);
     await db.messages
       .where('chat_id')
       .equals('chat-connect' as never)
@@ -69,13 +76,11 @@ describe('Composer secure /connect integration', () => {
 
   afterEach(() => {
     cleanup();
+    checkpointNotesComposer(draftScope, 'chat-connect', '', []);
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     sessionStorage.clear();
-    useAuthStore.setState({
-      workspaceId: originalAuth.workspaceId,
-      projectId: originalAuth.projectId,
-    });
+    useAuthStore.setState(originalAuth);
   });
 
   it('discovers and keyboard-selects bare /connect as an immediate local Providers action', async () => {
@@ -166,9 +171,89 @@ describe('Composer secure /connect integration', () => {
     );
     expect(warning).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(warning.mock.calls)).not.toContain('sk-private');
-    expect((input as HTMLTextAreaElement).value).toBe('');
+    await waitFor(() => expect((input as HTMLTextAreaElement).value === '').toBe(true));
+    expect(readNotesComposerDraft(draftScope, 'chat-connect').text === '').toBe(true);
+    expect(localStorage.getItem(draftStorageKey())).toBeNull();
     expect(useUIStore.getState().settingsOpen).toBe(false);
     expect(sessionStorage.length).toBe(0);
     expect(create).not.toHaveBeenCalled();
   });
+
+  it('never checkpoints the sensitive command body before Send and retains note references', async () => {
+    const reference = { ...draftScope, id: 'owned-note', title: 'Owned reference', revision: '1' };
+    checkpointNotesComposer(draftScope, 'chat-connect', '', [reference]);
+    renderComposer();
+    const input = screen.getByRole('textbox', { name: 'Message' });
+    const sensitive = '/connect ' + ['sk', 'x'].join('-');
+    fireEvent.change(input, { target: { value: sensitive } });
+    await waitFor(() => expect(readNotesComposerDraft(draftScope, 'chat-connect').text === '').toBe(true));
+    const saved = readNotesComposerDraft(draftScope, 'chat-connect');
+    expect(saved.references).toEqual([reference]);
+    expect(Boolean(localStorage.getItem(draftStorageKey())?.includes(sensitive))).toBe(false);
+    // The user can edit unsent text; checkpointing must not rewrite the live input.
+    expect((input as HTMLTextAreaElement).value === sensitive).toBe(true);
+  });
+
+  it('does not restore rejected sensitive text when this Composer remounts', async () => {
+    const warning = vi.spyOn(toast, 'warning');
+    const view = renderComposer();
+    const sensitive = '/connect ' + ['sk', 'short'].join('-');
+    const input = screen.getByRole('textbox', { name: 'Message' });
+    fireEvent.change(input, { target: { value: sensitive } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(warning).toHaveBeenCalledOnce());
+    await waitFor(() => expect((input as HTMLTextAreaElement).value === '').toBe(true));
+    view.unmount();
+    renderComposer();
+    expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value === '').toBe(true);
+    expect(localStorage.getItem(draftStorageKey())).toBeNull();
+  });
+
+  it('preserves an ordinary invalid provider draft without a transcript or model dispatch', async () => {
+    const warning = vi.spyOn(toast, 'warning');
+    const create = vi.spyOn(messageRepo, 'create');
+    const modelSend = vi.fn(); window.addEventListener('jarvis:send', modelSend);
+    try {
+      renderComposer(); create.mockClear();
+      const ordinary = '/connect unsupported-provider';
+      const input = screen.getByRole('textbox', { name: 'Message' });
+      fireEvent.change(input, { target: { value: ordinary } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(warning).toHaveBeenCalledOnce());
+      expect((input as HTMLTextAreaElement).value).toBe(ordinary);
+      expect(readNotesComposerDraft(draftScope, 'chat-connect').text).toBe(ordinary);
+      expect(create).not.toHaveBeenCalled(); expect(modelSend).not.toHaveBeenCalled();
+      expect(useUIStore.getState().settingsOpen).toBe(false);
+    } finally { window.removeEventListener('jarvis:send', modelSend); }
+  });
+
+  it.each(['newer-draft', 'edit-aba', 'scope-aba'] as const)(
+    'does not clear a %s owned draft when an earlier sensitive rejection settles', async scenario => {
+      let reject!: (result: instantCommands.ComposerInstantCommandResult) => void;
+      const pending = new Promise<instantCommands.ComposerInstantCommandResult>(resolve => { reject = resolve; });
+      const submit = vi.spyOn(instantCommands, 'submitComposerInstantCommand').mockReturnValue(pending);
+      const warning = vi.spyOn(toast, 'warning');
+      renderComposer();
+      const input = screen.getByRole('textbox', { name: 'Message' });
+      const sensitive = '/connect ' + ['sk', 'short'].join('-');
+      fireEvent.change(input, { target: { value: sensitive } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+      const newer = 'A newer ordinary draft remains owned by the user.';
+      if (scenario !== 'scope-aba') {
+        fireEvent.change(input, { target: { value: newer } });
+        if (scenario === 'edit-aba') fireEvent.change(input, { target: { value: sensitive } });
+      } else {
+        act(() => {
+          useAuthStore.setState({ projectId: 'other-project' as never });
+          useAuthStore.setState({ projectId: draftScope.projectId as never });
+        });
+      }
+      await act(async () => { reject({ handled: true, ok: false, message: 'Choose one supported provider in Settings.' }); });
+      await waitFor(() => expect(warning).toHaveBeenCalledOnce());
+      expect((input as HTMLTextAreaElement).value === (scenario === 'newer-draft' ? newer : sensitive)).toBe(true);
+      expect(Boolean(localStorage.getItem(draftStorageKey())?.includes(sensitive))).toBe(false);
+    },
+  );
+
 });

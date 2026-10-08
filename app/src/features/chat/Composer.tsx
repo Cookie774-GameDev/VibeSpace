@@ -294,6 +294,7 @@ import {
 import { buildVibeSpaceReferenceRequest, classifySlashCommand } from './slashCommandRouting';
 import {
   isComposerInstantCommandSource,
+  isSensitiveConnectDraft,
   submitComposerInstantCommand,
 } from './composerInstantCommand';
 import {
@@ -1479,7 +1480,12 @@ export function Composer({
   }, [notesDraftKey]);
   useEffect(() => {
     if (notesDraftStateKey === notesDraftKey)
-      checkpointNotesComposer(noteScope, String(chatId), text, attachedNotes);
+      checkpointNotesComposer(
+        noteScope,
+        String(chatId),
+        isSensitiveConnectDraft(text) ? '' : text,
+        attachedNotes,
+      );
   }, [notesDraftStateKey, notesDraftKey, text, attachedNotes]);
   const attachedNotesRef = useRef(attachedNotes);
   attachedNotesRef.current = attachedNotes;
@@ -3558,6 +3564,19 @@ export function Composer({
       if (instantCommandInFlightRef.current) return true;
       instantCommandInFlightRef.current = true;
       setSlashCtx(null);
+      const sensitiveDraft = isSensitiveConnectDraft(trimmed);
+      const submittedView = providerOverrideViewRef.current;
+      const submittedDraftRevision = handoffDraftEditRevisionRef.current;
+      let sensitiveScopeRevoked = false;
+      const unsubscribeSensitiveScope = sensitiveDraft
+        ? useAuthStore.subscribe((next, previous) => {
+            // Observe even a scope A -> B -> A transition batched by React.
+            if (resolveAccountIdentity(next)?.accountId !== resolveAccountIdentity(previous)?.accountId ||
+                next.workspaceId !== previous.workspaceId || next.projectId !== previous.projectId) {
+              sensitiveScopeRevoked = true;
+            }
+          })
+        : undefined;
       try {
         const instantPersistedChatId = chatId as ChatId;
         const instantPersistedText = originalUserText;
@@ -3649,13 +3668,21 @@ export function Composer({
           setAttachedNotes([]);
         }
         if (!instantCommandResult.handled || !instantCommandResult.ok) {
+          if (sensitiveDraft && !sensitiveScopeRevoked && submittedView.mounted &&
+              providerOverrideViewRef.current === submittedView &&
+              handoffDraftEditRevisionRef.current === submittedDraftRevision) {
+            // Only the submitted sensitive body is retired. Notes/attachments
+            // and every newer or foreign-scope draft keep their ownership.
+            setText('');
+          }
           toast.warning(
             'Invalid command',
             instantCommandResult.handled ? instantCommandResult.message : 'Unknown command.',
           );
-          // Preserve a failed local request and its attachments for correction.
+          // Ordinary failed local requests and their attachments remain editable.
         }
       } finally {
+        unsubscribeSensitiveScope?.();
         instantCommandInFlightRef.current = false;
       }
       return true;

@@ -2,6 +2,7 @@ import { InstantCommandEntryBoundary } from '@/features/instant-command';
 import type { InstantCommandReceipt } from '@/features/instant-command/receipt';
 import { NAVIGATION_COMMAND_INPUTS } from '@/features/instant-command/catalog/navigation';
 import { parseOpenCodeLaunch } from '@/features/instant-command/openCodeLaunch';
+import { hasDetectedSecret } from '@/lib/security/secretDetector';
 
 export const COMPOSER_INSTANT_SLASH_COMMANDS = Object.freeze([
   'connect',
@@ -46,6 +47,15 @@ function slashCommand(source: string): ComposerInstantSlashCommand | undefined {
   const match = /^\/([^\s/]+)(?:\s|$)/u.exec(source.trim());
   const command = match?.[1]?.toLowerCase();
   return command && COMMANDS.has(command) ? (command as ComposerInstantSlashCommand) : undefined;
+}
+
+/** Sensitive command drafts are not a credential-entry or durable storage surface. */
+export function isSensitiveConnectDraft(source: string): boolean {
+  if (slashCommand(source) !== 'connect') return false;
+  // /connect accepts only a closed provider/connection ID. Retain its original
+  // short credential-marker rejection without weakening the global detector's
+  // thresholds for ordinary prose and unrelated drafts.
+  return /\bsk-[A-Za-z0-9_-]+\b/iu.test(source) || hasDetectedSecret(source);
 }
 
 export function isComposerInstantCommandSource(source: string): boolean {

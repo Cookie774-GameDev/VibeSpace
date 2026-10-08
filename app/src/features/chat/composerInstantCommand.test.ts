@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as composerInstantCommands from './composerInstantCommand';
+import { hasDetectedSecret } from '@/lib/security/secretDetector';
 
 import { InstantCommandEntryBoundary } from '@/features/instant-command';
 import { createInstantCommandReceipt } from '@/features/instant-command/receipt';
@@ -166,5 +168,38 @@ describe('Composer Instant Command bridge', () => {
         pending.boundary,
       ),
     ).resolves.toEqual({ handled: false });
+  });
+});
+
+
+describe('sensitive connect draft checkpoint boundary', () => {
+  const shortMarker = ['sk', 'x'].join('-');
+  it.each([
+    ['short credential marker', '/connect ' + shortMarker],
+    ['provider plus credential marker', '/connect openai ' + shortMarker],
+    ['quoted credential argument', '/connect "' + shortMarker + '"'],
+    ['case and leading whitespace', '  /CONNECT ' + shortMarker],
+    ['generic credential assignment', '/connect api_key=synthetic_only_value'],
+  ])('excludes only an actual connect draft with %s', (_label, source) => {
+    expect(composerInstantCommands.isSensitiveConnectDraft?.(source)).toBe(true);
+  });
+
+  it.each([
+    ['bare connect', '/connect'],
+    ['supported provider', '/connect openai'],
+    ['supported subscription connection', '/connect openai-codex'],
+    ['ordinary unknown provider', '/connect unsupported-provider'],
+    ['quoted command', '"/connect ' + shortMarker + '"'],
+    ['ordinary explanation', 'Explain /connect ' + shortMarker],
+    ['negated command', 'Do not /connect ' + shortMarker],
+    ['different slash command', '/settings ' + shortMarker],
+    ['similar command name', '/connection ' + shortMarker],
+  ])('preserves %s outside the sensitive connect boundary', (_label, source) => {
+    expect(composerInstantCommands.isSensitiveConnectDraft?.(source)).toBe(false);
+  });
+
+  it('does not broaden the global detector to recognize short placeholders everywhere', () => {
+    expect(hasDetectedSecret(shortMarker)).toBe(false);
+    expect(composerInstantCommands.isSensitiveConnectDraft?.('/connect ' + shortMarker)).toBe(true);
   });
 });
