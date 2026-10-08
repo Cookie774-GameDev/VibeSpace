@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type {
@@ -37,6 +37,8 @@ import {
   replaceSiyuanIndexJob,
 } from './siyuan/siyuanIndexJobStore';
 import { useAuthStore } from '@/stores/auth';
+import { siyuanOverallProgressPercent } from './siyuan/siyuanProgress';
+import * as indexJobStore from './siyuan/siyuanIndexJobStore';
 
 function map(): ContextMapRecord {
   return {
@@ -2609,6 +2611,9 @@ describe('SiYuan Context Map integration', () => {
         list,
       });
       expect(list).toHaveBeenCalledOnce();
+      const completed = (await readSiyuanIndexJob('project-1', record.id))!;
+      expect(completed).toMatchObject({ status: 'completed', indexed: 1, createdNodes: 1, pendingNativeNodeIds: [] });
+      expect(siyuanOverallProgressPercent(completed)).toBe(100);
     } finally {
       if (previousInternals === undefined) {
         delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -2734,5 +2739,149 @@ describe('SiYuan Context Map integration', () => {
         (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = previousInternals;
       }
     }
+  });
+});
+
+
+describe('fresh integration completion receipt', () => {
+  let previousInternals: unknown;
+  beforeEach(() => {
+    localStorage.clear();
+    useAuthStore.setState({localUserId:'account-1', cloudSession:null, workspaceId:'workspace-1' as never, projectId:'project-1' as never});
+    previousInternals=(window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;
+    (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__={};
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if(previousInternals===undefined)delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;
+    else (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__=previousInternals;
+  });
+  function gate() {
+    let resolve!:()=>void;
+    return {promise:new Promise<void>(done=>{resolve=done;}),release:()=>resolve()};
+  }
+  const policy={mode:'none' as const,selectedExtensions:[],selectedPaths:[]};
+  function oneFileOptions(record:ContextMapRecord) {
+    return {accountId:'account-1',summaryPolicy:policy,list:vi.fn(async(path:string)=>({ok:true as const,path,entries:[{
+      name:'one.txt',path:`${record.rootDir}/one.txt`,isDir:false,size:4,modifiedMs:1,
+    }]}))};
+  }
+
+  it.each(['completed','failed','cancelled'] as const)('keeps pending native ACK below100 and handles %s without premature completion',async outcome=>{
+    const record={...map(),id:`c06-ack-${outcome}`};const native=port();const integration=createSiyuanContextMapIntegration(native);
+    const started=gate(),ack=gate(),controller=new AbortController();
+    native.appendManagedBlocks=vi.fn(async()=>{started.release();await ack.promise;if(outcome==='failed')throw new Error('fixture_native_ack_failed');return ['nested-file-block'];});
+    const running=integration.sync(record.projectId,record,{accountId:'account-1',summaryPolicy:policy,signal:controller.signal,list:async(path)=>({ok:true,path,entries:path===record.rootDir.replaceAll('\\','/')
+      ? [{name:'src',path:`${record.rootDir}/src`,isDir:true,modifiedMs:1}]
+      : [{name:'one.txt',path:`${record.rootDir}/src/one.txt`,isDir:false,size:4,modifiedMs:1}]})}).then(value=>({value,error:null}),error=>({value:null,error}));
+    try {
+      await started.promise;
+      const held=(await readSiyuanIndexJob(record.projectId,record.id))!;
+      expect(held.pendingNativeNodeIds).toHaveLength(1);
+      expect(held.reconciledAt).toBeNull();
+      expect(siyuanOverallProgressPercent(held)).not.toBe(100);
+      if(outcome==='cancelled') {
+        await indexJobStore.updateSiyuanIndexJobStatus(record.projectId,record.id,'cancelled');
+        controller.abort('fixture_cancelled');
+      }
+      ack.release();const result=await running;const job=(await readSiyuanIndexJob(record.projectId,record.id))!;
+      if(outcome==='completed') {
+        expect(result.error).toBeNull();expect(job.pendingNativeNodeIds).toEqual([]);
+        expect(siyuanOverallProgressPercent(job)).toBe(100);
+      } else {
+        expect(result.error).toBeTruthy();expect(job.status).toBe(outcome);
+        expect(job.completedAt).toBeNull();expect(job.reconciledAt).toBeNull();
+        expect(siyuanOverallProgressPercent(job)).not.toBe(100);
+      }
+    } finally {ack.release();await running;}
+  });
+
+  it('preserves genuine reconciliation time when a completed job is reused',async()=>{
+    const record={...map(),id:'c06-reused'};const integration=createSiyuanContextMapIntegration(port());const options=oneFileOptions(record);
+    await integration.sync(record.projectId,record,options);
+    const first=(await readSiyuanIndexJob(record.projectId,record.id))!;
+    expect(first.reconciledAt).not.toBeNull();
+    await integration.sync(record.projectId,record,options);
+    const reused=(await readSiyuanIndexJob(record.projectId,record.id))!;
+    expect(options.list).toHaveBeenCalledOnce();expect(reused.reconciledAt).toBe(first.reconciledAt);
+    expect(siyuanOverallProgressPercent(reused)).toBe(100);
+  });
+
+  it.each(['after-scan','before-completion'] as const)('refuses a replaced fresh job at %s',async boundary=>{
+    const record={...map(),id:`c06-replaced-${boundary}`};const originalRead=indexJobStore.readSiyuanIndexJob;
+    let replaced=false;let replacementStartedAt=0;
+    vi.spyOn(indexJobStore,'readSiyuanIndexJob').mockImplementation(async(projectId,mapId)=>{
+      const current=await originalRead(projectId,mapId);
+      if(!replaced && mapId===record.id && current?.status==='running' && current.indexed===1 && current.createdNodes===(boundary==='after-scan'?0:1) && current.pendingNativeNodeIds.length===0) {
+        replaced=true;replacementStartedAt=current.startedAt+1;
+        const replacement={...current,startedAt:replacementStartedAt};
+        await checkpointSiyuanIndexJob({job:replacement},{forceStatus:true});
+        return replacement;
+      }
+      return current;
+    });
+    await expect(createSiyuanContextMapIntegration(port()).sync(record.projectId,record,oneFileOptions(record))).rejects.toThrow('siyuan_index_job_changed');
+    const job=(await originalRead(record.projectId,record.id))!;
+    expect(replaced).toBe(true);expect(job.startedAt).toBe(replacementStartedAt);
+    expect(job.reconciledAt).toBeNull();expect(siyuanOverallProgressPercent(job)).not.toBe(100);
+  });
+
+  it.each(['pending','count','frontier','failed'] as const)('refuses final durable %s drift before fresh completion',async drift=>{
+    const record={...map(),id:`c06-final-${drift}`};const originalRead=indexJobStore.readSiyuanIndexJob;let changed=false;
+    vi.spyOn(indexJobStore,'readSiyuanIndexJob').mockImplementation(async(projectId,mapId)=>{
+      const current=await originalRead(projectId,mapId);
+      if(!changed && mapId===record.id && current?.status==='running' && current.createdNodes===1 && current.pendingNativeNodeIds.length===0) {
+        changed=true;const next={...current};
+        if(drift==='pending')next.pendingNativeNodeIds=['awaiting-native-ack'];
+        if(drift==='count')next.createdNodes=0;
+        if(drift==='frontier')next.frontierLength=current.cursor+1;
+        if(drift==='failed')next.failed=1;
+        await checkpointSiyuanIndexJob({job:next},{forceStatus:true});return next;
+      }
+      return current;
+    });
+    await expect(createSiyuanContextMapIntegration(port()).sync(record.projectId,record,oneFileOptions(record))).rejects.toThrow('siyuan_native_node_reconciliation_incomplete');
+    const job=(await originalRead(record.projectId,record.id))!;
+    expect(changed).toBe(true);expect(job.reconciledAt).toBeNull();expect(job.completedAt).toBeNull();
+    expect(siyuanOverallProgressPercent(job)).not.toBe(100);
+  });
+
+  it.each(['generation','pending'] as const)('refuses %s replacement between final read and terminal checkpoint commit',async drift=>{
+    const record={...map(),id:`c06-commit-${drift}`};const originalCheckpoint=indexJobStore.checkpointSiyuanIndexJob;
+    let changed=false;let replacementStartedAt=0;
+    vi.spyOn(indexJobStore,'checkpointSiyuanIndexJob').mockImplementation(async(checkpoint,options)=>{
+      if(!changed && checkpoint.job.mapId===record.id && checkpoint.job.phase==='completed') {
+        changed=true;const current=(await readSiyuanIndexJob(record.projectId,record.id))!;
+        const replacement={...current};
+        if(drift==='generation')replacement.startedAt++;
+        else replacement.pendingNativeNodeIds=['new-pending-after-final-read'];
+        replacementStartedAt=replacement.startedAt;
+        await originalCheckpoint({job:replacement},{forceStatus:true});
+      }
+      return originalCheckpoint(checkpoint,options);
+    });
+    await expect(createSiyuanContextMapIntegration(port()).sync(record.projectId,record,oneFileOptions(record))).rejects.toThrow();
+    const job=(await readSiyuanIndexJob(record.projectId,record.id))!;
+    expect(changed).toBe(true);expect(job.startedAt).toBe(replacementStartedAt);
+    if(drift==='pending')expect(job.pendingNativeNodeIds).toEqual(['new-pending-after-final-read']);
+    expect(job.reconciledAt).toBeNull();expect(job.completedAt).toBeNull();
+    expect(siyuanOverallProgressPercent(job)).not.toBe(100);
+  });
+
+  it('refuses cancellation during the final durable read before publication',async()=>{
+    const record={...map(),id:'c06-final-read-abort'};const originalRead=indexJobStore.readSiyuanIndexJob;const controller=new AbortController();
+    let interrupted=false;
+    vi.spyOn(indexJobStore,'readSiyuanIndexJob').mockImplementation(async(projectId,mapId)=>{
+      const current=await originalRead(projectId,mapId);
+      if(!interrupted && mapId===record.id && current?.status==='running' && current.createdNodes===1 && current.pendingNativeNodeIds.length===0) {
+        interrupted=true;controller.abort('fixture_final_read_revoked');
+      }
+      return current;
+    });
+    await expect(createSiyuanContextMapIntegration(port()).sync(record.projectId,record,{...oneFileOptions(record),signal:controller.signal})).rejects.toThrow();
+    const job=(await originalRead(record.projectId,record.id))!;
+    expect(interrupted).toBe(true);expect(job.reconciledAt).toBeNull();expect(job.completedAt).toBeNull();
+    expect(siyuanOverallProgressPercent(job)).not.toBe(100);
+    expect(readSiyuanMapManifest(record.projectId,record.id)?.status).not.toBe('ready');
   });
 });

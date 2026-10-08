@@ -41,6 +41,7 @@ import {
   buildProjectContextTreeFromSiyuanIndex,
   scanSiyuanFilesystemIndex,
   type SiyuanIndexJobControl,
+  type SiyuanIndexJobGeneration,
   type SiyuanDirectoryLister,
   type SiyuanSafeIndexEntry,
   type SiyuanSafeIndex,
@@ -672,6 +673,14 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
       ? await readSiyuanIndexJob(projectId, record.id)
       : null;
     assertLocalFileJobScope(record, manifest, durableJob);
+    const freshScanOwner: { generation: SiyuanIndexJobGeneration | null } = { generation: null };
+    const assertFreshScanOwner = (job: SiyuanIndexJobRecord | null) => {
+      const generation = freshScanOwner.generation;
+      if (generation && (!job || (Object.keys(generation) as (keyof SiyuanIndexJobGeneration)[])
+        .some(key => job[key] !== generation[key]))) {
+        throw new Error('siyuan_index_job_changed');
+      }
+    };
     const needsResumeReconciliation = Boolean(
       durableJob &&
       (options.forceReconcile === true || (durableJob.reconciledAt ?? 0) < rendererStartedAt),
@@ -698,6 +707,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
           control: options.control,
           excludedPaths: manifest.sourcePolicy.excludedPaths,
           onProgress: options.onIndexProgress,
+          onDurableJobCreated: generation => { freshScanOwner.generation = generation; },
           durableJob:
             options.forceReconcile === true
               ? undefined
@@ -935,6 +945,8 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
     }
     const previouslyBoundNodeIds = new Set(Object.keys(bindings));
     durableJob = nativeFilesystemAvailable ? await readSiyuanIndexJob(projectId, record.id) : null;
+    options.signal?.throwIfAborted();
+    assertFreshScanOwner(durableJob);
     if (durableJob) {
       const resumeNow = Date.now();
       const phaseChanged = durableJob.phase !== 'creating_nodes';
@@ -1691,8 +1703,23 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
     });
     await options.control?.checkpoint(options.signal);
     if (options.signal?.aborted) throw new Error('siyuan_index_cancelled');
+    let freshReconciledAt: number | null = null;
+    let freshExpectedCurrent: SiyuanIndexJobRecord | null = null;
     if (durableJob) {
       const latestJob = await readSiyuanIndexJob(projectId, record.id);
+      options.signal?.throwIfAborted();
+      assertFreshScanOwner(durableJob);
+      assertFreshScanOwner(latestJob);
+      if (freshScanOwner.generation) {
+        const current = latestJob!;
+        if (current.pendingNativeNodeIds.length !== 0 || current.failed !== 0 ||
+          current.cursor !== current.frontierLength || current.indexed !== index.entries.length ||
+          current.createdNodes !== index.entries.length) {
+          throw new Error('siyuan_native_node_reconciliation_incomplete');
+        }
+        freshReconciledAt = current.reconciledAt ?? durableJob.reconciledAt;
+        freshExpectedCurrent = current;
+      }
       if (latestJob && latestJob.status !== 'running') {
         throw new Error(
           latestJob.status === 'cancelled' ? 'siyuan_index_cancelled' : 'siyuan_index_paused',
@@ -1704,18 +1731,23 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
     // again instead of becoming stranded as completed behind an old manifest.
     writeSiyuanMapManifest(readyManifest);
     if (durableJob) {
+      const completedAt = Date.now();
       await checkpointSiyuanIndexJob({
         job: {
           ...durableJob,
           phase: 'completed',
           status: 'completed',
           createdNodes: index.entries.length,
-          updatedAt: Date.now(),
-          completedAt: Date.now(),
+          // A fresh scan has now received every native/binding ACK. Its own
+          // generation may record this boundary without a redundant rescan.
+          reconciledAt: freshScanOwner.generation
+            ? (freshReconciledAt ?? completedAt) : durableJob.reconciledAt,
+          updatedAt: completedAt,
+          completedAt,
           estimatedPercent: 100,
           estimatedEtaSeconds: 0,
         },
-      });
+      }, freshExpectedCurrent ? { expectedCurrent: freshExpectedCurrent, signal: options.signal } : undefined);
       const finalizedJob = await readSiyuanIndexJob(projectId, record.id);
       if (finalizedJob && finalizedJob.status !== 'completed') {
         writeSiyuanMapManifest(updateSiyuanMapManifest(readyManifest, { status: 'paused' }));
@@ -2071,7 +2103,7 @@ export function createSiyuanContextMapIntegration(port: ProductionSiyuanRlmPort)
             currentJob?.status === 'paused';
           const interrupted =
             effectiveOptions.signal?.aborted ||
-            (error instanceof Error && error.message === 'siyuan_index_cancelled');
+            (error instanceof Error && ['siyuan_index_cancelled', 'siyuan_index_job_changed', 'siyuan_index_checkpoint_changed'].includes(error.message));
           if (!userCancelled && !summaryPaused && !interrupted) {
             if (currentJob?.status === 'running') {
               await updateSiyuanIndexJobStatus(exactProjectId, record.id, 'failed');

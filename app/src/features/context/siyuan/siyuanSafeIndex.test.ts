@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContextMapRecord } from '../tree';
 import {
   buildProjectContextTreeFromSiyuanIndex,
@@ -9,6 +9,7 @@ import {
   projectSiyuanMapForContextSearch,
   scanSiyuanFilesystemIndex,
   siyuanIndexPolicyFingerprint,
+  type SiyuanIndexJobGeneration,
 } from './siyuanSafeIndex';
 import {
   checkpointSiyuanIndexJob,
@@ -898,5 +899,45 @@ describe('SiYuan safe read-only index', () => {
     const waiting = control.checkpoint(controller.signal);
     controller.abort('renderer_reload');
     await expect(waiting).rejects.toThrow('siyuan_index_cancelled');
+  });
+});
+
+
+describe('new durable scan generation receipt', () => {
+  beforeEach(resetDurableJobs);
+  it('emits one immutable persisted generation only for a newly created durable job',async()=>{
+    const record=map();const generations:SiyuanIndexJobGeneration[]=[];
+    const list=vi.fn(async(path:string)=>{
+      expect(generations).toHaveLength(1);
+      const stored=(await readSiyuanIndexJob(record.projectId,record.id))!;
+      expect(stored.startedAt).toBe(generations[0]!.startedAt);
+      return {ok:true as const,path,entries:[{name:'one.txt',path:`${record.rootDir}/one.txt`,isDir:false,size:4,modifiedMs:1}]};
+    });
+    const options={durableJob:{accountId:null,projectId:record.projectId,mapId:record.id},list,
+      onDurableJobCreated:(generation:SiyuanIndexJobGeneration)=>generations.push(generation)};
+    const policy={mode:'none' as const,selectedExtensions:[],selectedPaths:[]};
+    await scanSiyuanFilesystemIndex(record,policy,options);
+    const captured=JSON.stringify(generations[0]);
+    expect(Object.isFrozen(generations[0])).toBe(true);
+    expect(Object.keys(generations[0]!).sort()).toEqual(['accountId','canonicalRoot','mapId','policyFingerprint','projectId','schemaVersion','scope','startedAt'].sort());
+    await scanSiyuanFilesystemIndex(record,policy,options);
+    expect(generations).toHaveLength(1);expect(JSON.stringify(generations[0])).toBe(captured);
+    expect(list).toHaveBeenCalledOnce();
+  });
+  it('does not emit a durable generation for an ephemeral scan',async()=>{
+    const created=vi.fn();
+    await scanSiyuanFilesystemIndex(map(),{mode:'none',selectedExtensions:[],selectedPaths:[]},{
+      onDurableJobCreated:created,list:async path=>({ok:true,path,entries:[]}),
+    });
+    expect(created).not.toHaveBeenCalled();
+  });
+  it('does not emit a generation or persist a job for a pre-aborted scan',async()=>{
+    const created=vi.fn(),controller=new AbortController();controller.abort();
+    await expect(scanSiyuanFilesystemIndex(map(),{mode:'none',selectedExtensions:[],selectedPaths:[]},{
+      signal:controller.signal,onDurableJobCreated:created,
+      durableJob:{accountId:null,projectId:'project-1',mapId:'map-1'},
+      list:async path=>({ok:true,path,entries:[]}),
+    })).rejects.toThrow('siyuan_index_cancelled');
+    expect(created).not.toHaveBeenCalled();expect(await readSiyuanIndexJob('project-1','map-1')).toBeNull();
   });
 });

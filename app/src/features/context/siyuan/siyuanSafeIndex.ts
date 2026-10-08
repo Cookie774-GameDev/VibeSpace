@@ -45,6 +45,11 @@ export interface SiyuanSafeIndexEntry {
   summaryState?: 'completed' | 'skipped' | 'failed';
 }
 
+/** Immutable ownership receipt for a job created by this scanner invocation. */
+export type SiyuanIndexJobGeneration = Readonly<Pick<SiyuanIndexJobRecord,
+  'schemaVersion' | 'scope' | 'accountId' | 'projectId' | 'mapId' |
+  'canonicalRoot' | 'policyFingerprint' | 'startedAt'>>;
+
 export interface SiyuanSafeIndex {
   entries: SiyuanSafeIndexEntry[];
   excluded: number;
@@ -596,6 +601,7 @@ export async function scanSiyuanFilesystemIndex(
     stat?: (path: string, includeSha256: boolean, options: { root: string; strictProjectBoundary: true }) => Promise<FsPathStatResult>;
     excludedPaths?: readonly string[];
     durableJob?: Readonly<{ accountId: string | null; projectId: string; mapId: string }>;
+    onDurableJobCreated?: (generation: SiyuanIndexJobGeneration) => void;
   }> = {},
 ): Promise<SiyuanSafeIndex> {
   if (options.signal?.aborted) throw new Error('siyuan_index_cancelled');
@@ -727,6 +733,21 @@ export async function scanSiyuanFilesystemIndex(
         policyFingerprint,
       });
       await replaceSiyuanIndexJob(durableRecord, queue[0]);
+      if (options.onDurableJobCreated) {
+        const generation: SiyuanIndexJobGeneration = Object.freeze({
+          schemaVersion: durableRecord.schemaVersion, scope: durableRecord.scope,
+          accountId: durableRecord.accountId, projectId: durableRecord.projectId,
+          mapId: durableRecord.mapId, canonicalRoot: durableRecord.canonicalRoot,
+          policyFingerprint: durableRecord.policyFingerprint, startedAt: durableRecord.startedAt,
+        });
+        const persisted = await readSiyuanIndexJob(projectId, mapId);
+        options.signal?.throwIfAborted();
+        if (!persisted || (Object.keys(generation) as (keyof SiyuanIndexJobGeneration)[])
+          .some(key => persisted[key] !== generation[key])) {
+          throw new Error('siyuan_index_job_changed');
+        }
+        options.onDurableJobCreated(generation);
+      }
     }
   }
 

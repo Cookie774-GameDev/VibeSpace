@@ -1543,3 +1543,56 @@ describe('durable SiYuan index jobs', () => {
     expect(accountForSiyuanRendererOfflineTime(job, 900, 1_500).pausedMs).toBe(0);
   });
 });
+
+
+describe('atomic guarded completion checkpoint',()=>{
+  beforeEach(resetDatabase);
+  async function seedGuarded() {
+    const job={...createSiyuanIndexJob({accountId:'guard-account',projectId:'guard-project',mapId:'guard-map',canonicalRoot:'C:/guarded',policyFingerprint:'guard-policy',now:100}),
+      phase:'creating_nodes' as const,cursor:1,frontierLength:1,indexed:1,createdNodes:1};
+    await checkpointSiyuanIndexJob({job});return (await readSiyuanIndexJob(job.projectId,job.mapId))!;
+  }
+  function terminal(job:Awaited<ReturnType<typeof seedGuarded>>) {
+    return {...job,status:'completed' as const,phase:'completed' as const,reconciledAt:200,completedAt:200,updatedAt:200,estimatedPercent:100};
+  }
+  it('commits a matching row and captures its expected data before awaits',async()=>{
+    const expected=await seedGuarded();const expectedCopy=structuredClone(expected);
+    const completion=checkpointSiyuanIndexJob({job:terminal(expected)},{expectedCurrent:expected,signal:new AbortController().signal});
+    expected.startedAt++;
+    await completion;
+    expect(await readSiyuanIndexJob(expected.projectId,expected.mapId)).toEqual(terminal(expectedCopy));
+  });
+  it.each(['generation','pending','count','effort','paused','missing','aborted'] as const)('rejects %s without any partial derivative or job writes',async drift=>{
+    const expected=await seedGuarded();const controller=new AbortController();const changed={...expected};
+    if(drift==='generation')changed.startedAt++;
+    if(drift==='pending')changed.pendingNativeNodeIds=['unacknowledged'];
+    if(drift==='count')changed.createdNodes=0;
+    if(drift==='effort')changed.summaryEffort='high';
+    if(drift==='paused')changed.status='paused';
+    if(drift==='missing')await resetDatabase();
+    else await checkpointSiyuanIndexJob({job:changed},{forceStatus:true});
+    if(drift==='aborted')controller.abort('guard-revoked');
+    const before=await readSiyuanIndexJob(expected.projectId,expected.mapId);
+    await expect(checkpointSiyuanIndexJob({job:terminal(expected),
+      appendedEntries:[{nodeId:'never-written',parentNodeId:null,title:'never.txt',kind:'file',relativePath:'never.txt',sourcePointer:'C:/guarded/never.txt',summary:null,sizeBytes:4,modifiedAt:1}],
+      appendedDirectories:[{path:'C:/guarded/never',relativePath:'never',parentNodeId:null}],
+      summaryUsage:{nodeId:'never-written',sourceModifiedAt:1,sourceSizeBytes:4,providerId:'fixture',connectionId:'fixture',modelId:'fixture',inputTokens:1,outputTokens:1,totalTokens:2,provenance:'reported',completedAt:200},
+    },{expectedCurrent:expected,signal:controller.signal})).rejects.toThrow();
+    expect(await readSiyuanIndexJob(expected.projectId,expected.mapId)).toEqual(before);
+    expect(await readSiyuanIndexEntries(expected.projectId,expected.mapId)).toEqual([]);
+    expect(await readSiyuanIndexFrontier(expected.projectId,expected.mapId)).toEqual([]);
+    expect(await readSiyuanSummaryUsage(expected.projectId,expected.mapId)).toEqual([]);
+  });
+  it('rolls back when cancellation follows the queued guarded put',async()=>{
+    const expected=await seedGuarded();const controller=new AbortController();const original=IDBObjectStore.prototype.put;
+    const put=vi.spyOn(IDBObjectStore.prototype,'put').mockImplementation(function(this:IDBObjectStore,value,key){
+      const result=original.call(this,value,key);
+      if(this.name==='jobs' && value?.phase==='completed')controller.abort('after-put');
+      return result;
+    });
+    try {
+      await expect(checkpointSiyuanIndexJob({job:terminal(expected)},{expectedCurrent:expected,signal:controller.signal})).rejects.toThrow();
+      expect(await readSiyuanIndexJob(expected.projectId,expected.mapId)).toEqual(expected);
+    } finally {put.mockRestore();}
+  });
+});

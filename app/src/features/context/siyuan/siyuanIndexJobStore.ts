@@ -1152,21 +1152,52 @@ function protectSiyuanJobLifecycle(
 
 export async function checkpointSiyuanIndexJob(
   checkpoint: SiyuanIndexCheckpoint,
-  options: Readonly<{ forceStatus?: boolean }> = {},
+  options: Readonly<{
+    forceStatus?: boolean;
+    expectedCurrent?: Readonly<SiyuanIndexJobRecord>;
+    signal?: AbortSignal;
+  }> = {},
 ): Promise<void> {
+  const expected = options.expectedCurrent
+    ? { ...structuredClone(options.expectedCurrent), summaryEffort: options.expectedCurrent.summaryEffort ?? null }
+    : null;
+  if (expected && options.forceStatus) throw new Error('siyuan_index_checkpoint_guard_invalid');
+  options.signal?.throwIfAborted();
   const database = await openDatabase();
-  if (!database) return;
+  if (!database) {
+    if (expected) throw new Error('siyuan_index_job_storage_unavailable');
+    return;
+  }
+  let transaction: IDBTransaction | undefined;
+  let done: Promise<void> | undefined;
+  const abort = () => {
+    try { transaction?.abort(); } catch { /* The transaction may already be terminal. */ }
+  };
   try {
-    const transaction = database.transaction(
+    options.signal?.throwIfAborted();
+    transaction = database.transaction(
       [JOB_STORE, ENTRY_STORE, FRONTIER_STORE, SUMMARY_USAGE_STORE],
       'readwrite',
     );
+    done = transactionDone(transaction);
+    options.signal?.addEventListener('abort', abort, { once: true });
     const jobStore = transaction.objectStore(JOB_STORE);
     const current = options.forceStatus
       ? null
       : ((await requestResult(jobStore.get(checkpoint.job.scope))) as
           | SiyuanIndexJobRecord
           | undefined);
+    options.signal?.throwIfAborted();
+    if (expected) {
+      // The public read normalizes this optional field to null; compare the
+      // same representation without discarding a genuine effort change.
+      const comparable = current && { ...current, summaryEffort: current.summaryEffort ?? null };
+      const keys = Object.keys(expected) as (keyof SiyuanIndexJobRecord)[];
+      if (!comparable || Object.keys(comparable).length !== keys.length ||
+        keys.some(key => JSON.stringify(comparable[key]) !== JSON.stringify(expected[key]))) {
+        throw new Error('siyuan_index_checkpoint_changed');
+      }
+    }
     const job = options.forceStatus
       ? checkpoint.job
       : protectSiyuanJobLifecycle(current, checkpoint.job);
@@ -1198,8 +1229,13 @@ export async function checkpointSiyuanIndexJob(
         scope: job.scope,
       } satisfies StoredSummaryUsage);
     }
-    await transactionDone(transaction);
+    await done;
+  } catch (error) {
+    abort();
+    await done?.catch(() => undefined);
+    throw error;
   } finally {
+    options.signal?.removeEventListener('abort', abort);
     database.close();
   }
 }
