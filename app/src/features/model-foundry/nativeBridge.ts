@@ -11,6 +11,7 @@
 
 import { isTauri } from '../../lib/utils';
 import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+import { getLocalTrainingWorkerStatus, installLocalTrainingWorker, type LocalTrainingWorkerStatus } from './trainingRuntime';
 
 export interface FoundryHardwareProfile {
   readonly native: boolean;
@@ -337,52 +338,53 @@ export async function prepareFoundryRuntime(): Promise<FoundryWorkerRuntimeStatu
   );
 }
 
-export async function getFoundryTrainingRuntimeStatus(): Promise<FoundryTrainingRuntimeStatus> {
-  if (!isTauri)
-    return {
-      installed: false,
-      qloraInstalled: false,
-      detail: 'Real LoRA training is available only in the desktop app.',
-    };
-  const status = await readWorkerStatus();
+function studioTrainingRuntimeStatus(status: LocalTrainingWorkerStatus): FoundryTrainingRuntimeStatus {
+  const core = status.installed && status.attested && status.methods.includes('full');
+  const lora = core && status.methods.includes('lora');
   return {
-    installed: status.installed && status.attested && status.methods.includes('full'),
-    qloraInstalled: status.installed && status.attested && status.methods.includes('full') && status.methods.includes('qlora'),
-    detail:
-      status.reason ??
-      (status.installed && status.attested && status.methods.includes('full')
-        ? 'Local training runtime is installed.'
+    installed: lora,
+    qloraInstalled: lora && status.methods.includes('qlora'),
+    detail: status.reason ?? (lora
+      ? 'Local training runtime is installed.'
+      : core ? 'Full training is ready; Studio LoRA is unavailable.'
         : 'Local training runtime is not installed yet.'),
   };
+}
+
+export async function getFoundryTrainingRuntimeStatus(): Promise<FoundryTrainingRuntimeStatus> {
+  return studioTrainingRuntimeStatus(await getLocalTrainingWorkerStatus());
 }
 
 export async function installFoundryTrainingDependencies(
   includeQlora = false,
 ): Promise<FoundryTrainingRuntimeStatus> {
-  if (!isTauri) throw new Error('Real LoRA training is available only in the desktop app.');
-  const status = await invoke<CurrentTrainingWorkerStatus>(
-    'model_foundry_install_training_worker',
-    { includeQlora },
-  );
-  return {
-    installed: status.installed && status.attested && status.methods.includes('full'),
-    qloraInstalled: status.installed && status.attested && status.methods.includes('full') && status.methods.includes('qlora'),
-    detail:
-      status.reason ??
-      (status.installed && status.attested && status.methods.includes('full')
-        ? 'Local training runtime is installed.'
-        : 'Local training runtime installation failed.'),
-  };
+  return studioTrainingRuntimeStatus(await installLocalTrainingWorker({ includeQlora }));
+}
+
+// Match Rust str::trim's Unicode White_Space set. JavaScript trim differs:
+// Rust removes NEL (U+0085) and preserves BOM (U+FEFF). Shared vectors pin this.
+function canonicalDatasetText(value: string): string {
+  if (typeof value !== 'string') throw new Error('Training examples require text fields.');
+  const trimmed = value.replace(/^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/gu, '');
+  if (!trimmed) throw new Error('Training examples require non-empty text fields.');
+  for (const character of trimmed) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      throw new Error('Training examples contain an invalid Unicode surrogate.');
+  }
+  return trimmed;
 }
 
 function serializeDatasetJsonl(examples: readonly FoundryNativeTrainingExample[]): string {
-  return examples
-    .map((example) => JSON.stringify({ prompt: example.prompt, completion: example.completion }))
-    .join('\n');
+  return examples.map((example) => JSON.stringify({
+    prompt: canonicalDatasetText(example.prompt),
+    response: canonicalDatasetText(example.completion),
+  })).join('\n');
 }
 
 export async function startFoundryTraining(
   request: FoundryNativeTrainingRequest,
+  canDispatch?: () => boolean,
 ): Promise<FoundryNativeTrainingStart> {
   if (!isTauri) throw new Error('Real LoRA training is available only in the desktop app.');
   if (!request.datasetApproved)
@@ -395,7 +397,17 @@ export async function startFoundryTraining(
   }
   const datasetJsonl = serializeDatasetJsonl(request.trainExamples);
   const validationDatasetJsonl = serializeDatasetJsonl(request.validationExamples);
-  const created = await invoke<CurrentFoundryJob>('model_foundry_start_training', {
+  const [datasetPayloadSha256, validationPayloadSha256] = await Promise.all([
+    sha256Hex(datasetJsonl), sha256Hex(validationDatasetJsonl),
+  ]);
+  const core = await import('@tauri-apps/api/core');
+  // Hashing and module loading may outlive the UI's captured scope. No await
+  // or observer runs between this final admission check and native dispatch.
+  if (canDispatch && !canDispatch()) {
+    return { started: false, projectId: request.projectId, jobId: request.jobId,
+      jobDir: 'private-application-directory' };
+  }
+  const created = await core.invoke<CurrentFoundryJob>('model_foundry_start_training', {
     request: {
       schemaVersion: 2,
       projectId: request.projectId,
@@ -412,6 +424,8 @@ export async function startFoundryTraining(
       sourcePaths: [],
       datasetJsonl,
       validationDatasetJsonl,
+      datasetPayloadSha256,
+      validationPayloadSha256,
       datasetVersionId: request.datasetVersionId,
       datasetManifestHash: request.datasetManifestHash,
       datasetFingerprint: request.datasetFingerprint,

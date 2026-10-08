@@ -1,3 +1,4 @@
+import canonicalVectors from './inlineDatasetCanonicalV2.fixture.json';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { invokeMock, listenMock } = vi.hoisted(() => ({
@@ -58,10 +59,10 @@ describe('Model Foundry TrainingRequestV2 bridge', () => {
         schemaVersion: 2,
         projectId: 'project-1',
         datasetVersionId: 'dataset-v3',
-        datasetJsonl: JSON.stringify({ prompt: 'Train prompt', completion: 'Train completion' }),
+        datasetJsonl: JSON.stringify({ prompt: 'Train prompt', response: 'Train completion' }),
         validationDatasetJsonl: JSON.stringify({
           prompt: 'Validation prompt',
-          completion: 'Validation completion',
+          response: 'Validation completion',
         }),
         trainingConfig: request.trainingConfig,
         targetModules: ['q_proj', 'v_proj'],
@@ -153,4 +154,97 @@ describe('native training event contract consumed by Foundry Studio', () => {
       method: 'lora', name: 'Foreign', version: 1, storageBytes: 24 }]);
     await expect(inspectFoundryArtifact('project-a', 'foreign-job')).rejects.toThrow(/project/i);
   });
+});
+
+
+describe('separate logical identity and canonical training payload digests', () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue({ id: 'job_native_digest' });
+  });
+
+  const request = (): FoundryNativeTrainingRequest => ({
+    projectId: 'project-1', jobId: 'requested-job', modelId: 'smollm2-135m-instruct',
+    datasetVersionId: 'dataset-v3', datasetManifestHash: 'a'.repeat(64),
+    datasetFingerprint: 'b'.repeat(64), datasetApproved: true,
+    trainExamples: [{ prompt: '  Say hi  ', completion: ' Hello. ' }],
+    validationExamples: [{ prompt: 'Color?', completion: 'blue' }],
+    trainingConfig: { method: 'lora', computeDevice: 'gpu', seed: 7, epochs: 3,
+      batchSize: 1, gradientAccumulation: 1, maxSequenceLength: 256,
+      learningRate: 0.00002, loraRank: 8, loraAlpha: 16, loraDropout: 0 },
+  });
+
+  it('retains logical provenance while committing the exact canonical bytes of each split', async () => {
+    const input = request();
+    await startFoundryTraining(input);
+    expect(invokeMock).toHaveBeenCalledWith('model_foundry_start_training', {
+      request: expect.objectContaining({
+        schemaVersion: 2,
+        datasetVersionId: input.datasetVersionId,
+        datasetManifestHash: input.datasetManifestHash,
+        datasetFingerprint: input.datasetFingerprint,
+        datasetJsonl: '{"prompt":"Say hi","response":"Hello."}',
+        validationDatasetJsonl: '{"prompt":"Color?","response":"blue"}',
+        datasetPayloadSha256: '9c400c28703586fc716233ab30678181bc718e43006f3a30e7f0933cd2c0a30f',
+        validationPayloadSha256: '9a68a7b44c11e37bcf9d53271f47ddc86078ff33e58c50e30c4490eb8328a411',
+      }),
+    });
+  });
+  it.each(canonicalVectors.vectors.filter((vector) => 'expectedCanonicalJsonl' in vector))(
+    'matches the shared canonical byte vector $id', async (vector) => {
+      const rows = vector.inputJsonl.split('\n').filter((line) => line.trim().length > 0)
+        .map((line) => JSON.parse(line) as Record<string, string>);
+      const input = request();
+      await startFoundryTraining({ ...input,
+        trainExamples: rows.map((row) => ({ prompt: row.prompt!,
+          completion: Object.hasOwn(row, 'response') ? row.response! : row.completion! })),
+      });
+      expect(invokeMock.mock.calls[0]?.[1]).toMatchObject({ request: {
+        datasetJsonl: vector.expectedCanonicalJsonl,
+        datasetPayloadSha256: vector.expectedCanonicalSha256,
+        datasetFingerprint: input.datasetFingerprint,
+      } });
+    },
+  );
+
+  it.each([
+    ['empty prompt after Rust whitespace trim', '\u0085', 'Valid response'],
+    ['lone leading surrogate', '\ud800', 'Valid response'],
+    ['lone trailing surrogate', 'Valid prompt', '\udfff'],
+    ['empty completion', 'Valid prompt', '  '],
+  ])('rejects %s before native submission', async (_name, prompt, completion) => {
+    await expect(startFoundryTraining({ ...request(), trainExamples: [{ prompt: prompt!, completion: completion! }] }))
+      .rejects.toThrow();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('pins C0 control escaping without changing interior text or adding a final newline', async () => {
+    await startFoundryTraining({ ...request(), trainExamples: [{
+      prompt: 'a\u0000\b\f\n\r\t\u001fb', completion: 'B',
+    }] });
+    expect(invokeMock.mock.calls[0]?.[1].request.datasetJsonl)
+      .toBe('{"prompt":"a\\u0000\\b\\f\\n\\r\\t\\u001fb","response":"B"}');
+  });
+
+  it('rechecks preparation ownership after the native IPC module finishes loading', async () => {
+    vi.resetModules();
+    let release!: () => void;
+    let entered = false;
+    let current = true;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    vi.doMock('@tauri-apps/api/core', async () => {
+      entered = true; await held; return { invoke: invokeMock };
+    });
+    try {
+      const fresh = await import('./nativeBridge');
+      const result = fresh.startFoundryTraining(request(), () => current);
+      await vi.waitFor(() => expect(entered).toBe(true));
+      current = false; release();
+      await expect(result).resolves.toMatchObject({ started: false });
+      expect(invokeMock).not.toHaveBeenCalled();
+    } finally {
+      release(); vi.doMock('@tauri-apps/api/core', () => ({ invoke: invokeMock })); vi.resetModules();
+    }
+  });
+
 });

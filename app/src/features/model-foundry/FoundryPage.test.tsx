@@ -1,7 +1,21 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FoundryPage } from './FoundryPage';
 import { InMemoryStorageAdapter } from './localRepository';
+
+vi.mock('./trainingRuntime', async (original) => ({
+  ...await original<typeof import('./trainingRuntime')>(),
+  listVerifiedTrainingModels: async () => [{
+    id: 'smollm2-135m-instruct', label: 'SmolLM2 135M Instruct',
+    sourceId: 'HuggingFaceTB/SmolLM2-135M-Instruct',
+    revision: '12fd25f77366fa6b3b4b768ec3050bf629380bac',
+    license: 'apache-2.0', licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0', gated: false,
+    parametersB: 0.135, downloadBytes: 272437573, expectedRamGb: 4, expectedVramGb: 2,
+    contextTokens: 8192, precision: 'BF16 safetensors', modalities: ['text'], speed: 'fast',
+    quality: 'efficient', cpuPractical: true, installed: false, verified: false,
+    installedBytes: 0, status: 'not-installed', localOnly: true,
+  }],
+}));
 
 const NOW = '2026-07-13T12:00:00.000Z';
 
@@ -115,12 +129,12 @@ describe('FoundryPage fixture vertical slice', () => {
     expect(within(screen.getByRole('region', { name: 'Training job' })).getByText('Interrupted')).toBeTruthy();
   });
 
-  it('requires explicit license approval for a pinned real model download', () => {
+  it('requires explicit license approval for a pinned real model download', async () => {
     renderFoundry();
     fireEvent.click(screen.getByRole('button', { name: 'Create VibeCoder' }));
     fireEvent.click(screen.getByRole('button', { name: /SmolLM2 135M Instruct/ }));
 
-    expect(screen.getByText(/Revision a91318be/)).toBeTruthy();
+    expect(await screen.findByText(/Revision 12fd25f7/)).toBeTruthy();
     expect(screen.getByText('Real local mode · setup required')).toBeTruthy();
     expect(screen.queryByText(/Truthful simulation/)).not.toBeTruthy();
     expect(screen.getByText(/Remote model code stays disabled/)).toBeTruthy();

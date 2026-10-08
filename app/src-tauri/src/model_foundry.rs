@@ -101,12 +101,23 @@ pub struct StartRequest {
     dataset_manifest_hash: Option<String>,
     #[serde(default)]
     dataset_fingerprint: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present_payload_digest", skip_serializing_if = "Option::is_none")]
+    dataset_payload_sha256: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present_payload_digest", skip_serializing_if = "Option::is_none")]
+    validation_payload_sha256: Option<String>,
     #[serde(default)]
     training_config: Option<crate::model_foundry_training::TrainingConfiguration>,
     #[serde(default)]
     target_modules: Option<Vec<String>>,
     #[serde(default)]
     training_examples: Vec<SupervisedMediaExample>,
+}
+
+// Omitted optional digests select the legacy contract; explicit null is invalid
+// and must not silently downgrade a caller that supplied a new digest field.
+fn deserialize_present_payload_digest<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where D: serde::Deserializer<'de> {
+    String::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -961,6 +972,50 @@ fn canonicalize_inline_dataset(
         return Err("Inline dataset must contain at least one example.".into());
     }
     Ok(canonical.join("\n"))
+}
+
+/// New inline callers bind canonical worker bytes separately from the logical
+/// Studio dataset fingerprint. Legacy callers without either new field retain
+/// their existing raw-wire fingerprint validation and source-selection path.
+fn canonicalize_reviewed_inline_datasets(
+    request: &StartRequest,
+) -> Result<Option<(String, String)>, String> {
+    let (training_digest, validation_digest) = match (
+        request.dataset_payload_sha256.as_deref(),
+        request.validation_payload_sha256.as_deref(),
+    ) {
+        (None, None) => return Ok(None),
+        (Some(training), Some(validation)) => (training, validation),
+        _ => return Err("Inline payload digests must include both training and validation.".into()),
+    };
+    if request.schema_version != Some(2) || parsed_method(&request.method)? != FoundryMethod::Weight {
+        return Err("Inline payload digests require a schema-2 weight-training request.".into());
+    }
+    if !request.source_paths.is_empty() || !request.training_examples.is_empty() {
+        return Err("Inline payload digests cannot be combined with picker sources or media.".into());
+    }
+    for digest in [training_digest, validation_digest] {
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+            return Err("Inline payload digests must be lowercase 64-character SHA-256 values.".into());
+        }
+    }
+    let dataset = request.dataset_jsonl.as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Inline payload digests require an approved training dataset.".to_string())?;
+    let validation = request.validation_dataset_jsonl.as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Inline payload digests require an approved validation dataset.".to_string())?;
+    // Keep the existing raw byte/record/count limits and canonicalization rules.
+    // Neither split is written until both canonical digests have been checked.
+    let canonical_training = canonicalize_inline_dataset(dataset, None)?;
+    let canonical_validation = canonicalize_inline_dataset(validation, None)?;
+    if format!("{:x}", Sha256::digest(canonical_training.as_bytes())) != training_digest {
+        return Err("Inline training payload SHA-256 does not match the canonical data.".into());
+    }
+    if format!("{:x}", Sha256::digest(canonical_validation.as_bytes())) != validation_digest {
+        return Err("Inline validation payload SHA-256 does not match the canonical data.".into());
+    }
+    Ok(Some((canonical_training, canonical_validation)))
 }
 
 fn split_training_dataset(dataset: &Path) -> Result<(String, String), String> {
@@ -1828,6 +1883,7 @@ pub fn model_foundry_start_training(
             requirements,
         )?;
     }
+    let reviewed_payloads = canonicalize_reviewed_inline_datasets(&request)?;
     let inline_dataset = request
         .dataset_jsonl
         .as_deref()
@@ -1855,18 +1911,18 @@ pub fn model_foundry_start_training(
         if method != FoundryMethod::Weight {
             return Err("Inline Dataset Studio exports are only valid for weight training.".into());
         }
-        let canonical_dataset =
-            canonicalize_inline_dataset(dataset, request.dataset_fingerprint.as_deref())?;
+        let (canonical_dataset, canonical_validation) = match reviewed_payloads {
+            Some(payloads) => payloads,
+            None => {
+                let training = canonicalize_inline_dataset(dataset, request.dataset_fingerprint.as_deref())?;
+                let validation = request.validation_dataset_jsonl.as_deref()
+                    .map(str::trim).filter(|value| !value.is_empty())
+                    .ok_or_else(|| "TrainingRequestV2 requires an approved validation dataset.".to_string())?;
+                (training, canonicalize_inline_dataset(validation, None)?)
+            }
+        };
         canonicalized = Some(canonical_dataset);
-        let validation_dataset = request
-            .validation_dataset_jsonl
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                "TrainingRequestV2 requires an approved validation dataset.".to_string()
-            })?;
-        canonicalized_validation = Some(canonicalize_inline_dataset(validation_dataset, None)?);
+        canonicalized_validation = Some(canonical_validation);
         Vec::new()
     } else if request.source_paths.is_empty() && !request.training_examples.is_empty() {
         Vec::new()
@@ -3616,6 +3672,172 @@ mod tests {
 
         assert!(prepare_chat_from_job_dir(&root, "job_123456", "Review release", Some(4)).is_err());
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn reviewed_inline_request() -> StartRequest {
+        serde_json::from_value(serde_json::json!({
+            "schemaVersion": 2, "projectId": "public-project", "name": "Public contract fixture",
+            "description": "Public authored data", "purpose": "Contract test", "instructions": null,
+            "baseModelId": "smollm2-135m-instruct", "method": "lora", "sourcePaths": [], "localOnly": true,
+            "datasetJsonl": "{\"prompt\":\"  Say hi  \",\"completion\":\" Hello. \"}",
+            "validationDatasetJsonl": "{\"prompt\":\"Color?\",\"completion\":\"blue\"}",
+            "datasetVersionId": "public-v1", "datasetManifestHash": "a".repeat(64),
+            "datasetFingerprint": "b".repeat(64),
+            "datasetPayloadSha256": "9c400c28703586fc716233ab30678181bc718e43006f3a30e7f0933cd2c0a30f",
+            "validationPayloadSha256": "9a68a7b44c11e37bcf9d53271f47ddc86078ff33e58c50e30c4490eb8328a411"
+        })).unwrap()
+    }
+
+    #[test]
+    fn inline_payload_shared_vectors_pin_rust_unicode_and_json_bytes() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../src/features/model-foundry/inlineDatasetCanonicalV2.fixture.json"
+        )).unwrap();
+        let vectors = fixture["vectors"].as_array().unwrap();
+        assert_eq!(vectors.len(), 16);
+        for vector in vectors {
+            let raw = vector["inputJsonl"].as_str().unwrap();
+            let actual = canonicalize_inline_dataset(raw, None);
+            if let Some(expected) = vector["expectedCanonicalJsonl"].as_str() {
+                let canonical = actual.unwrap_or_else(|error| panic!("{}: {error}", vector["id"]));
+                assert_eq!(canonical, expected, "{}", vector["id"]);
+                assert_eq!(format!("{:x}", Sha256::digest(canonical.as_bytes())),
+                    vector["expectedCanonicalSha256"].as_str().unwrap(), "{}", vector["id"]);
+                let mut request = reviewed_inline_request();
+                request.dataset_jsonl = Some(raw.into());
+                request.dataset_payload_sha256 = Some(vector["expectedCanonicalSha256"].as_str().unwrap().into());
+                assert_eq!(canonicalize_reviewed_inline_datasets(&request).unwrap().unwrap().0,
+                    canonical, "{}", vector["id"]);
+            } else {
+                assert!(actual.is_err(), "{}", vector["id"]);
+            }
+        }
+    }
+
+    #[test]
+    fn inline_payload_pins_c0_control_escaping_and_no_final_newline() {
+        let dataset = serde_json::json!({"prompt": "a\0\u{0008}\u{000c}\n\r\t\u{001f}b", "completion": "B"}).to_string();
+        let canonical = canonicalize_inline_dataset(&dataset, None).unwrap();
+        assert_eq!(canonical, r#"{"prompt":"a\u0000\b\f\n\r\t\u001fb","response":"B"}"#);
+    }
+
+    #[test]
+    fn inline_payload_preserves_logical_identity_and_verifies_both_canonical_splits() {
+        let request = reviewed_inline_request();
+        // Retain the exact original counterexample: logical manifest identity is
+        // not the SHA of the raw train wire payload expected by the legacy path.
+        assert!(canonicalize_inline_dataset(request.dataset_jsonl.as_deref().unwrap(),
+            request.dataset_fingerprint.as_deref()).is_err());
+        let (train, validation) = canonicalize_reviewed_inline_datasets(&request).unwrap().unwrap();
+        assert_eq!(train, "{\"prompt\":\"Say hi\",\"response\":\"Hello.\"}");
+        assert_eq!(validation, "{\"prompt\":\"Color?\",\"response\":\"blue\"}");
+        let saved = serde_json::to_value(&request).unwrap();
+        assert_eq!(saved["datasetFingerprint"], "b".repeat(64));
+        assert_eq!(saved["datasetManifestHash"], "a".repeat(64));
+        assert_eq!(saved["datasetVersionId"], "public-v1");
+    }
+
+    #[test]
+    fn inline_payload_rejects_train_validation_and_row_order_tampering() {
+        let mut train = reviewed_inline_request();
+        train.dataset_jsonl = Some("{\"prompt\":\"Say hi\",\"response\":\"Hello!\"}".into());
+        assert!(canonicalize_reviewed_inline_datasets(&train).unwrap_err().contains("training payload"));
+        let mut validation = reviewed_inline_request();
+        validation.validation_dataset_jsonl = Some("{\"prompt\":\"Color?\",\"response\":\"red\"}".into());
+        assert!(canonicalize_reviewed_inline_datasets(&validation).unwrap_err().contains("validation payload"));
+        let mut ordered = reviewed_inline_request();
+        ordered.dataset_jsonl = Some("{\"prompt\":\"A\",\"response\":\"B\"}\n{\"prompt\":\"C\",\"response\":\"D\"}".into());
+        ordered.dataset_payload_sha256 = Some("70e3bfb0619144118df6ea969d12ee0c84129ff70d0c1a512c20425e12e7a8ce".into());
+        assert!(canonicalize_reviewed_inline_datasets(&ordered).is_ok());
+        ordered.dataset_jsonl = Some("{\"prompt\":\"C\",\"response\":\"D\"}\n{\"prompt\":\"A\",\"response\":\"B\"}".into());
+        assert!(canonicalize_reviewed_inline_datasets(&ordered).is_err());
+        let mut swapped = reviewed_inline_request();
+        std::mem::swap(&mut swapped.dataset_payload_sha256, &mut swapped.validation_payload_sha256);
+        assert!(canonicalize_reviewed_inline_datasets(&swapped).is_err());
+    }
+
+    #[test]
+    fn inline_payload_rejects_one_missing_or_malformed_digest() {
+        for missing_train in [true, false] {
+            let mut request = reviewed_inline_request();
+            if missing_train { request.dataset_payload_sha256 = None; }
+            else { request.validation_payload_sha256 = None; }
+            assert!(canonicalize_reviewed_inline_datasets(&request).is_err());
+        }
+        for invalid in [String::new(), "A".repeat(64), "g".repeat(64), "a".repeat(63),
+            "a".repeat(65), format!(" {}", "a".repeat(64))] {
+            for train in [true, false] {
+                let mut request = reviewed_inline_request();
+                if train { request.dataset_payload_sha256 = Some(invalid.clone()); }
+                else { request.validation_payload_sha256 = Some(invalid.clone()); }
+                assert!(canonicalize_reviewed_inline_datasets(&request).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn inline_payload_rejects_inapplicable_or_conflicting_request_fields() {
+        for version in [None, Some(1), Some(3)] {
+            let mut request = reviewed_inline_request(); request.schema_version = version;
+            assert!(canonicalize_reviewed_inline_datasets(&request).is_err());
+        }
+        for value in [None, Some(String::new()), Some(" \n ".into())] {
+            let mut train = reviewed_inline_request(); train.dataset_jsonl = value.clone();
+            assert!(canonicalize_reviewed_inline_datasets(&train).is_err());
+            let mut validation = reviewed_inline_request(); validation.validation_dataset_jsonl = value;
+            assert!(canonicalize_reviewed_inline_datasets(&validation).is_err());
+        }
+        let mut paths = reviewed_inline_request(); paths.source_paths = vec!["synthetic.jsonl".into()];
+        assert!(canonicalize_reviewed_inline_datasets(&paths).is_err());
+        let mut media = reviewed_inline_request(); media.training_examples = vec![SupervisedMediaExample {
+            path: "synthetic.png".into(), media_type: "image".into(), prompt: "A".into(), response: "B".into(), planned_frames: 1,
+        }];
+        assert!(canonicalize_reviewed_inline_datasets(&media).is_err());
+        let mut knowledge = reviewed_inline_request(); knowledge.method = "knowledge".into();
+        assert!(canonicalize_reviewed_inline_datasets(&knowledge).is_err());
+    }
+
+    #[test]
+    fn inline_payload_rejects_explicit_null_and_non_string_digest_fields() {
+        for field in ["datasetPayloadSha256", "validationPayloadSha256"] {
+            for invalid in [serde_json::Value::Null, serde_json::json!(42),
+                serde_json::json!(false), serde_json::json!([]), serde_json::json!({})] {
+                let mut wire = serde_json::to_value(reviewed_inline_request()).unwrap();
+                wire[field] = invalid;
+                assert!(serde_json::from_value::<StartRequest>(wire).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn inline_payload_preserves_legacy_no_new_fields_behavior() {
+        let mut request = reviewed_inline_request();
+        request.dataset_payload_sha256 = None; request.validation_payload_sha256 = None;
+        assert!(canonicalize_reviewed_inline_datasets(&request).unwrap().is_none());
+        request.schema_version = None; request.dataset_jsonl = None;
+        request.source_paths = vec!["synthetic.jsonl".into()];
+        assert!(canonicalize_reviewed_inline_datasets(&request).unwrap().is_none());
+        let saved = serde_json::to_value(&request).unwrap();
+        assert!(saved.get("datasetPayloadSha256").is_none());
+        assert!(saved.get("validationPayloadSha256").is_none());
+    }
+
+    #[test]
+    fn inline_payload_new_contract_retains_original_resource_bounds() {
+        let oversized = [
+            (format!("{{\"prompt\":\"A\",\"response\":\"B\"}}{}", " ".repeat(MAX_INLINE_DATASET_BYTES)), "5 MB"),
+            (vec!["{\"prompt\":\"A\",\"response\":\"B\"}"; MAX_INLINE_DATASET_EXAMPLES + 1].join("\n"), "20000"),
+            (format!("{{\"prompt\":\"A\",\"response\":\"{}\"}}", "x".repeat(MAX_INLINE_RECORD_BYTES)), "64 KiB"),
+            (format!("{{\"prompt\":\"A\",\"response\":\"{}\"}}", "é".repeat(MAX_INLINE_RECORD_BYTES / 2 + 1)), "64 KiB"),
+        ];
+        for (dataset, expected) in oversized {
+            for training in [true, false] {
+                let mut request = reviewed_inline_request();
+                if training { request.dataset_jsonl = Some(dataset.clone()); }
+                else { request.validation_dataset_jsonl = Some(dataset.clone()); }
+                assert!(canonicalize_reviewed_inline_datasets(&request).unwrap_err().contains(expected));
+            }
+        }
     }
 
     #[test]

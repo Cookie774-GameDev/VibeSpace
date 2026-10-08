@@ -1,0 +1,97 @@
+{
+  "status": "AUTHORED_GOLDEN_SPEC_NOT_RUN_AGAINST_PRODUCT",
+  "proposed_rule": "Existing Rust str::trim plus serde_json::Value normalized prompt/response key order, LF joins, no trailing LF",
+  "important": "Use Rust str::lines semantics (LF/CRLF), not Python splitlines on Unicode NEL. Never use JavaScript trim blindly: it removes BOM and retains NEL differently.",
+  "vectors": [
+    {
+      "id": "ascii-completion",
+      "inputJsonl": "{\"prompt\":\"  Say hi  \",\"completion\":\" Hello. \"}",
+      "expectedCanonicalJsonl": "{\"prompt\":\"Say hi\",\"response\":\"Hello.\"}",
+      "expectedCanonicalSha256": "9c400c28703586fc716233ab30678181bc718e43006f3a30e7f0933cd2c0a30f"
+    },
+    {
+      "id": "reversed-keys",
+      "inputJsonl": "{\"response\":\"blue\",\"prompt\":\"Color?\"}",
+      "expectedCanonicalJsonl": "{\"prompt\":\"Color?\",\"response\":\"blue\"}",
+      "expectedCanonicalSha256": "9a68a7b44c11e37bcf9d53271f47ddc86078ff33e58c50e30c4490eb8328a411"
+    },
+    {
+      "id": "blank-crlf-lines",
+      "inputJsonl": "\r\n  {\"prompt\":\"A\",\"completion\":\"B\"} \r\n\r\n{\"prompt\":\"C\",\"response\":\"D\"}\n",
+      "expectedCanonicalJsonl": "{\"prompt\":\"A\",\"response\":\"B\"}\n{\"prompt\":\"C\",\"response\":\"D\"}",
+      "expectedCanonicalSha256": "70e3bfb0619144118df6ea969d12ee0c84129ff70d0c1a512c20425e12e7a8ce"
+    },
+    {
+      "id": "unicode-astral",
+      "inputJsonl": "{\"prompt\":\" caf\u00e9 \ud83d\ude00 \",\"response\":\" gr\u00fc\u00df dich \"}",
+      "expectedCanonicalJsonl": "{\"prompt\":\"caf\u00e9 \ud83d\ude00\",\"response\":\"gr\u00fc\u00df dich\"}",
+      "expectedCanonicalSha256": "ade931aebaf4ae03681c01ab9063d0c7c2c3bb01a07d419aae861d9e24a8ac37"
+    },
+    {
+      "id": "nel-trim",
+      "inputJsonl": "{\"prompt\":\"\u0085hello\u0085\",\"response\":\"\u0085world\u0085\"}",
+      "expectedCanonicalJsonl": "{\"prompt\":\"hello\",\"response\":\"world\"}",
+      "expectedCanonicalSha256": "c027283cf10fefd025adb79e0cecc46dcfe05d9608364b48d913a95ff861f8cd"
+    },
+    {
+      "id": "bom-preserved-inside-value",
+      "inputJsonl": "{\"prompt\":\"\ufeffhello\ufeff\",\"response\":\"world\"}",
+      "expectedCanonicalJsonl": "{\"prompt\":\"\ufeffhello\ufeff\",\"response\":\"world\"}",
+      "expectedCanonicalSha256": "87806f2d4b2699c07ad19ee389e902955423ddc0d45ee9076129b343192f3936"
+    },
+    {
+      "id": "internal-crlf",
+      "inputJsonl": "{\"prompt\":\"line1\\r\\nline2\",\"completion\":\"A\\nB\"}",
+      "expectedCanonicalJsonl": "{\"prompt\":\"line1\\r\\nline2\",\"response\":\"A\\nB\"}",
+      "expectedCanonicalSha256": "21085bfda8b9c50238b375d7fe3de4f4e52a04097ff605302bec24438c3b9c13"
+    },
+    {
+      "id": "quotes-backslashes",
+      "inputJsonl": "{\"prompt\":\"Say \\\"hi\\\"\",\"response\":\"C:\\\\synthetic\"}",
+      "expectedCanonicalJsonl": "{\"prompt\":\"Say \\\"hi\\\"\",\"response\":\"C:\\\\synthetic\"}",
+      "expectedCanonicalSha256": "374adfe9e8a5f17c5a0fadd372e53ad0b9bcce9e4881b727fd625a0bf83a1a05"
+    },
+    {
+      "id": "extra-metadata",
+      "inputJsonl": "{\"prompt\":\"A\",\"completion\":\"B\",\"license\":\"user-owned\",\"tags\":[\"public\"]}",
+      "expectedCanonicalJsonl": "{\"prompt\":\"A\",\"response\":\"B\"}",
+      "expectedCanonicalSha256": "62ae824315b2d9617e1bebdad0620ad5c7b404c9ee8fb5b8756d9e3780a82041"
+    },
+    {
+      "id": "response-precedence",
+      "inputJsonl": "{\"prompt\":\"A\",\"response\":\"B\",\"completion\":\"C\"}",
+      "expectedCanonicalJsonl": "{\"prompt\":\"A\",\"response\":\"B\"}",
+      "expectedCanonicalSha256": "62ae824315b2d9617e1bebdad0620ad5c7b404c9ee8fb5b8756d9e3780a82041"
+    },
+    {
+      "id": "missing-prompt",
+      "inputJsonl": "{\"completion\":\"B\"}",
+      "expectedReject": "missing prompt"
+    },
+    {
+      "id": "empty-after-nel-trim",
+      "inputJsonl": "{\"prompt\":\"\u0085\",\"response\":\"B\"}",
+      "expectedReject": "empty prompt"
+    },
+    {
+      "id": "empty-response-does-not-fallback",
+      "inputJsonl": "{\"prompt\":\"A\",\"response\":\" \",\"completion\":\"B\"}",
+      "expectedReject": "empty response"
+    },
+    {
+      "id": "array-row",
+      "inputJsonl": "[\"A\",\"B\"]",
+      "expectedReject": "non-object row"
+    },
+    {
+      "id": "lone-leading-surrogate",
+      "inputJsonl": "{\"prompt\":\"\\ud800\",\"response\":\"B\"}",
+      "expectedReject": "invalid Unicode surrogate"
+    },
+    {
+      "id": "malformed-json",
+      "inputJsonl": "{\"prompt\":\"A\",",
+      "expectedReject": "malformed JSON"
+    }
+  ]
+}
