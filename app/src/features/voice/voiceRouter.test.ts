@@ -409,3 +409,15 @@ describe('voice module lifecycle', () => {
     expect(h.speakText).not.toHaveBeenCalled();
   });
 });
+
+
+it('retiring an old streaming owner leaves its replacement registered', () => {
+  const oldSession = { haltPlayback: vi.fn() };
+  const replacement = { haltPlayback: vi.fn() };
+  registerActiveStreamingVoiceSession(oldSession as never);
+  registerActiveStreamingVoiceSession(replacement as never);
+  registerActiveStreamingVoiceSession(null, oldSession as never);
+  stopAllVoiceOutput();
+  expect(oldSession.haltPlayback).not.toHaveBeenCalled();
+  expect(replacement.haltPlayback).toHaveBeenCalledOnce();
+});

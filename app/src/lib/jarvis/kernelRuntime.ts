@@ -3598,11 +3598,17 @@ export function createJarvisKernelRuntime(
       state.playbackResultSource = await finishEngine('playback', playback, result.playback);
       return result;
     } finally {
-      for (const registration of registrations) registration.dispose();
-      for (const release of activeReceiptReleases) release();
-      unregisterPlayback();
-      unregisterTts();
-      controller.dispose();
+      try {
+        // Local audio cutoff is immediate. Retain this handle's owners until
+        // its already-requested durable cancellation can reach them.
+        if (state.cancellationOperation) await state.cancellationOperation;
+      } finally {
+        for (const registration of registrations) registration.dispose();
+        for (const release of activeReceiptReleases) release();
+        unregisterPlayback();
+        unregisterTts();
+        controller.dispose();
+      }
     }
   };
 

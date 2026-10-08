@@ -70,7 +70,11 @@ export function syncVoiceModuleOpenState(isOpen: boolean): void {
   handleVoiceModuleClosed();
 }
 
-export function registerActiveStreamingVoiceSession(session: StreamingVoiceSession | null): void {
+export function registerActiveStreamingVoiceSession(
+  session: StreamingVoiceSession | null,
+  expectedOwner?: StreamingVoiceSession,
+): void {
+  if (expectedOwner && activeStreamingSession !== expectedOwner) return;
   activeStreamingSession = session;
 }
 

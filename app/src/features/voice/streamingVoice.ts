@@ -140,6 +140,11 @@ export class StreamingVoiceSession {
     this.jarvisStream?.stop();
   }
 
+  /** An explicit stop of this session, independent of panel/global engine state. */
+  wasStopped(): boolean {
+    return this.stopped;
+  }
+
   stop(): void {
     registerActiveStreamingVoiceSession(null);
     this.haltPlayback();
@@ -284,10 +289,12 @@ export function createCanonicalVoicePlaybackAdapter() {
               mode: 'direct_answer',
             });
             actualResult = makeResult(
-              aborted ? 'stopped' : canVoiceModuleSpeak() ? 'completed' : 'unavailable',
+              aborted || session.wasStopped()
+                ? 'stopped'
+                : canVoiceModuleSpeak() ? 'completed' : 'unavailable',
             );
           } catch {
-            actualResult = makeResult(aborted ? 'stopped' : 'failed');
+            actualResult = makeResult(aborted || session.wasStopped() ? 'stopped' : 'failed');
           } finally {
             settled = true;
           }
@@ -297,9 +304,16 @@ export function createCanonicalVoicePlaybackAdapter() {
           return candidate === actualResult && Object.isFrozen(candidate);
         },
         abort() {
-          if (settled || disposed || aborted) return 'already_exited' as const;
+          if (disposed || aborted) return 'already_exited' as const;
+          // Immediate local Stop/Close can finish audio before durable intent
+          // reaches this still-owned controller. Only its verified stopped
+          // result can acknowledge that later delivery; natural end cannot.
+          if (settled && !(
+            actualResult?.playback.state === 'degraded' &&
+            actualResult.playback.reason === 'stopped'
+          )) return 'already_exited' as const;
           aborted = true;
-          session?.stop();
+          if (!session?.wasStopped()) session?.stop();
           return 'signal_delivered' as const;
         },
         dispose() {
@@ -307,8 +321,9 @@ export function createCanonicalVoicePlaybackAdapter() {
           disposed = true;
           if (started && !settled) {
             aborted = true;
-            session?.stop();
-          } else registerActiveStreamingVoiceSession(null);
+            if (!session?.wasStopped()) session?.stop();
+          }
+          if (session) registerActiveStreamingVoiceSession(null, session);
         },
       });
       return controller;
