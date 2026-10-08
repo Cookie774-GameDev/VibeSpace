@@ -125,8 +125,8 @@ class OneTimeTokenStore:
             if nonce in self._used:
                 return False
             if len(self._used) >= self._max_entries:
-                oldest = min(self._used, key=self._used.get)
-                self._used.pop(oldest, None)
+                # Keep consumed nonces until expiry; eviction would permit replay.
+                return False
             self._used[nonce] = expires_at
             return True
 

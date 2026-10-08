@@ -128,6 +128,141 @@ describe('Model Foundry native chat bridge', () => {
     ).rejects.toThrow(/verified|mismatched/i);
   });
 
+  it('keeps a held verified completion usable when only the display name changes in flight', async () => {
+    const captured = {
+      artifactId: 'job_0-vjmMedLqAeGX', modelName: 'Before ordinary Rename',
+      artifactSha256: 'e'.repeat(64), version: 1, method: 'full', text: 'Public synthetic answer.', inputTokens: 7, outputTokens: 4,
+    };
+    let currentJob = {
+      id: captured.artifactId, name: captured.modelName, version: captured.version,
+      method: captured.method, status: 'completed', artifactVerified: true,
+      artifactSha256: 'e'.repeat(64),
+    };
+    let release!: (value: typeof captured) => void;
+    const held = new Promise<typeof captured>((resolve) => { release = resolve; });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'model_foundry_chat') return held;
+      if (command === 'model_foundry_list_jobs') return Promise.resolve([{ ...currentJob }]);
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+    const result = generateFromFoundryArtifact({ projectId: 'artifact', jobId: captured.artifactId,
+      prompt: 'Public synthetic request.' });
+    await vi.waitFor(() => expect(invokeMock.mock.calls.some(([command]) => command === 'model_foundry_chat')).toBe(true));
+    currentJob = { ...currentJob, name: 'After ordinary Rename' };
+    release(captured);
+    await expect(result).resolves.toMatchObject({ text: captured.text, artifactManifestSha256: 'e'.repeat(64) });
+  });
+
+  it.each([
+    { label: 'changed version', patch: { version: 2 } },
+    { label: 'changed method', patch: { method: 'lora' } },
+    { label: 'revoked verification', patch: { artifactVerified: false } },
+    { label: 'nonterminal replacement', patch: { status: 'training' } },
+    { label: 'invalid manifest digest', patch: { artifactSha256: 'invalid' } },
+  ])('keeps the completion identity guard for $label', async ({ patch }) => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string) => {
+      const result = await original(command);
+      return command === 'model_foundry_list_jobs'
+        ? result.map((job: Record<string, unknown>) => ({ ...job, ...patch }))
+        : result;
+    });
+    await expect(generateFromFoundryArtifact({ projectId: 'artifact', jobId: 'job_0-vjmMedLqAeGX',
+      prompt: 'Public synthetic request.' })).rejects.toThrow(/unverified|mismatched/i);
+  });
+
+  it.each(['full', 'lora', 'qlora'])('accepts an unchanged hash-bound %s completion', async (method) => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string) => {
+      const result = await original(command);
+      return command === 'model_foundry_chat'
+        ? { ...result, method, artifactSha256: 'e'.repeat(64) }
+        : result.map((job: Record<string, unknown>) => ({ ...job, method }));
+    });
+    await expect(generateFromFoundryArtifact({ projectId: 'artifact', jobId: 'job_0-vjmMedLqAeGX',
+      prompt: 'Public synthetic request.' })).resolves.toMatchObject({ artifactManifestSha256: 'e'.repeat(64) });
+  });
+
+  it('keeps legacy name equality when the response omits digest evidence', async () => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string) => {
+      const result = await original(command);
+      return command === 'model_foundry_list_jobs'
+        ? result.map((job: Record<string, unknown>) => ({ ...job, name: 'Renamed without native digest evidence' }))
+        : result;
+    });
+    await expect(generateFromFoundryArtifact({ projectId: 'artifact', jobId: 'job_0-vjmMedLqAeGX',
+      prompt: 'Public synthetic request.' })).rejects.toThrow(/unverified|mismatched/i);
+  });
+
+  it('requires legacy name equality when digest evidence exists only on the prototype', async () => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string) => {
+      const result = await original(command);
+      return command === 'model_foundry_chat'
+        ? Object.assign(Object.create({ artifactSha256: 'e'.repeat(64) }), result)
+        : result.map((job: Record<string, unknown>) => ({ ...job, name: 'Renamed without own digest evidence' }));
+    });
+    await expect(generateFromFoundryArtifact({ projectId: 'artifact', jobId: 'job_0-vjmMedLqAeGX',
+      prompt: 'Public synthetic request.' })).rejects.toThrow(/unverified|mismatched/i);
+  });
+
+  it('ignores an inherited digest for a legacy response whose own names match', async () => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string) => {
+      const result = await original(command);
+      return command === 'model_foundry_chat'
+        ? Object.assign(Object.create({ artifactSha256: 'different-inherited-value' }), result)
+        : result;
+    });
+    await expect(generateFromFoundryArtifact({ projectId: 'artifact', jobId: 'job_0-vjmMedLqAeGX',
+      prompt: 'Public synthetic request.' })).resolves.toMatchObject({ artifactManifestSha256: 'e'.repeat(64) });
+  });
+
+  it('rejects a changed current digest even when every display field still matches', async () => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string) => {
+      const result = await original(command);
+      return command === 'model_foundry_chat'
+        ? { ...result, artifactSha256: 'd'.repeat(64) }
+        : result;
+    });
+    await expect(generateFromFoundryArtifact({ projectId: 'artifact', jobId: 'job_0-vjmMedLqAeGX',
+      prompt: 'Public synthetic request.' })).rejects.toThrow(/unverified|mismatched/i);
+  });
+
+  it.each([
+    { label: 'explicit undefined', digest: undefined }, { label: 'null', digest: null },
+    { label: 'empty', digest: '' }, { label: 'uppercase', digest: 'E'.repeat(64) },
+    { label: 'short', digest: 'e'.repeat(63) }, { label: 'nonhex', digest: 'x'.repeat(64) },
+    { label: 'number', digest: 123 }, { label: 'object', digest: { sha256: 'e'.repeat(64) } },
+  ])('rejects present $label digest without falling back to legacy labels', async ({ digest }) => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string) => {
+      const result = await original(command);
+      return command === 'model_foundry_chat' ? { ...result, artifactSha256: digest } : result;
+    });
+    await expect(generateFromFoundryArtifact({ projectId: 'artifact', jobId: 'job_0-vjmMedLqAeGX',
+      prompt: 'Public synthetic request.' })).rejects.toThrow(/incomplete|mismatched/i);
+  });
+
+  it.each([
+    { label: 'empty current name', patch: { name: '' } },
+    { label: 'whitespace current name', patch: { name: '   ' } },
+    { label: 'invalid current name', patch: { name: null } },
+    { label: 'changed project', patch: { projectId: 'another-project' } },
+  ])('keeps $label invalid for a matching verified digest', async ({ patch }) => {
+    const original = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (command: string) => {
+      const result = await original(command);
+      return command === 'model_foundry_chat'
+        ? { ...result, artifactSha256: 'e'.repeat(64) }
+        : result.map((job: Record<string, unknown>) => ({ ...job, projectId: 'owned-project', ...patch }));
+    });
+    await expect(generateFromFoundryArtifact({ projectId: 'owned-project', jobId: 'job_0-vjmMedLqAeGX',
+      prompt: 'Public synthetic request.' })).rejects.toThrow(/unverified|mismatched/i);
+  });
+
   it('forwards structured chat roles so the user-query guard sees only the actual user turn', async () => {
     const systemPrompt = 'Follow the saved agent instructions carefully. '.repeat(120);
     const messages = [

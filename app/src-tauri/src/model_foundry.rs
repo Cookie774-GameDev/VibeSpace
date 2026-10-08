@@ -245,6 +245,7 @@ pub struct FoundryChatMessage {
 #[serde(rename_all = "camelCase")]
 pub struct FoundryChatResponse {
     artifact_id: String,
+    artifact_sha256: String,
     model_name: String,
     version: u32,
     method: String,
@@ -2286,8 +2287,6 @@ pub async fn model_foundry_chat(
             .map_err(|_| "Model Foundry artifact was not found.".to_string())?,
     )
     .map_err(|error| format!("Model Foundry job metadata is invalid: {error}"))?;
-    let model_name = job.name.clone();
-    let version = job.version;
     let method = job.method.clone();
     let base_model_id = job.base_model_id.clone();
     let normalized_messages = messages
@@ -2310,15 +2309,25 @@ pub async fn model_foundry_chat(
     })
     .await
     .map_err(|error| format!("Model Foundry inference worker failed: {error}"))??;
-    Ok(FoundryChatResponse {
+    Ok(weight_chat_response(artifact_id, job, result))
+}
+
+fn weight_chat_response(
+    artifact_id: String,
+    job: FoundryJob,
+    result: crate::model_foundry_training::FoundryInferenceResult,
+) -> FoundryChatResponse {
+    FoundryChatResponse {
         artifact_id,
-        model_name,
-        version,
-        method,
+        // This digest is the already-verified inference artifact, not job metadata.
+        artifact_sha256: result.artifact_sha256,
+        model_name: job.name,
+        version: job.version,
+        method: job.method,
         text: result.text,
         input_tokens: result.input_tokens,
         output_tokens: result.output_tokens,
-    })
+    }
 }
 
 #[tauri::command]
@@ -2625,12 +2634,20 @@ pub fn model_foundry_duplicate_artifact(
     job_id: String,
     name: String,
 ) -> Result<FoundryJob, String> {
+    duplicate_artifact_with_root(&job_id, &name, || foundry_root(&app))
+}
+
+fn duplicate_artifact_with_root(
+    job_id: &str,
+    name: &str,
+    resolve_root: impl FnOnce() -> Result<PathBuf, String>,
+) -> Result<FoundryJob, String> {
     let source_id = validated_job_id(job_id.trim())?;
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 80 {
         return Err("Model name must contain 1 to 80 characters.".into());
     }
-    let jobs_root = foundry_root(&app)?.join("jobs");
+    let jobs_root = resolve_root()?.join("jobs");
     let source_dir = jobs_root.join(source_id);
     let source_job: FoundryJob = serde_json::from_slice(
         &fs::read(source_dir.join("job.json"))
@@ -2872,6 +2889,106 @@ mod tests {
         };
         fs::write(job_dir.join("job.json"), serde_json::to_vec(&job).unwrap()).unwrap();
         (root, job_dir, job)
+    }
+
+    #[test]
+    fn weight_chat_response_serializes_verified_digest_instead_of_recorded_job_hash() {
+        for method in ["full", "lora", "qlora"] {
+            let (root, job_dir, mut job) = artifact_export_fixture(method);
+            let evidence = crate::model_foundry_training::verify_training_artifact_for_method(
+                &job_dir.join("weight-artifact"), method,
+            ).unwrap();
+            let verified_digest = evidence.sha256;
+            job.artifact_sha256 = Some("f".repeat(64));
+            let result = crate::model_foundry_training::FoundryInferenceResult {
+                artifact_sha256: verified_digest.clone(), text: "Public synthetic answer.".into(),
+                input_tokens: 7, output_tokens: 4,
+            };
+            let response = weight_chat_response(job.id.clone(), job, result);
+            let value = serde_json::to_value(response).unwrap();
+            assert_eq!(value["artifactSha256"], verified_digest);
+            assert_ne!(value["artifactSha256"], "f".repeat(64));
+            assert_eq!(value["artifactId"], "job_export");
+            assert_eq!(value["method"], method);
+            assert_eq!(value["version"], 1);
+            assert_eq!(value["inputTokens"], 7);
+            assert_eq!(value["outputTokens"], 4);
+            assert!(value.get("artifact_sha256").is_none());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn weight_chat_response_keeps_immutable_digest_across_metadata_only_rename() {
+        let (root, job_dir, job) = artifact_export_fixture("full");
+        let evidence = crate::model_foundry_training::verify_training_artifact_for_method(
+            &job_dir.join("weight-artifact"), "full",
+        ).unwrap();
+        let renamed = rename_artifact_from_root(&root.join("private"), &job.id, "New display name").unwrap();
+        let result = crate::model_foundry_training::FoundryInferenceResult {
+            artifact_sha256: evidence.sha256, text: "Public synthetic answer.".into(),
+            input_tokens: 7, output_tokens: 4,
+        };
+        let response = weight_chat_response(job.id.clone(), job, result);
+        assert_ne!(response.model_name, renamed.name);
+        assert_eq!(Some(response.artifact_sha256), renamed.artifact_sha256);
+        assert_eq!(response.artifact_id, renamed.id);
+        assert_eq!(response.version, renamed.version);
+        assert_eq!(response.method, renamed.method);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn assert_duplicate_copies_declared_artifact(method: &str) {
+        let (root, job_dir, source) = artifact_export_fixture(method);
+        let source_job_before = fs::read(job_dir.join("job.json")).unwrap();
+        let artifact_name = if method == "knowledge" { "knowledge-artifact.json" } else { "weight-artifact/model.safetensors" };
+        let source_payload_before = fs::read(job_dir.join(artifact_name)).unwrap();
+        let result = duplicate_artifact_with_root(&source.id, "Independent synthetic copy", || Ok(root.join("private")));
+        assert_eq!(fs::read(job_dir.join("job.json")).unwrap(), source_job_before);
+        assert_eq!(fs::read(job_dir.join(artifact_name)).unwrap(), source_payload_before);
+        if let Ok(copy) = &result {
+            assert_ne!(copy.id, source.id);
+            assert_eq!(copy.name, "Independent synthetic copy");
+            assert_eq!(copy.method, source.method);
+            assert_eq!(copy.base_model_id, source.base_model_id);
+            assert_eq!(copy.project_id, source.project_id);
+            assert_eq!(copy.status, "completed");
+            assert!(copy.artifact_verified);
+            let copy_path = PathBuf::from(copy.artifact_path.as_ref().unwrap());
+            assert_ne!(copy_path, PathBuf::from(source.artifact_path.as_ref().unwrap()));
+            assert!(copy_path.starts_with(root.join("private/jobs").join(&copy.id)));
+            if method == "knowledge" {
+                assert_eq!(validate_artifact(&copy_path).unwrap().model_name, copy.name);
+            } else {
+                assert_eq!(fs::read(copy_path.join("model.safetensors")).unwrap(), source_payload_before);
+                let evidence = crate::model_foundry_training::verify_training_artifact_for_method(&copy_path, method).unwrap();
+                assert_eq!(Some(evidence.sha256), copy.artifact_sha256);
+                assert_eq!(evidence.storage_bytes, copy.storage_bytes);
+                assert_eq!(copy.artifact_sha256, source.artifact_sha256);
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+        result.expect("Duplicate should copy its declared verified artifact method");
+    }
+
+    #[test]
+    fn artifact_duplicate_full_uses_weight_directory_without_mutating_source() {
+        assert_duplicate_copies_declared_artifact("full");
+    }
+
+    #[test]
+    fn artifact_duplicate_lora_uses_weight_directory_without_mutating_source() {
+        assert_duplicate_copies_declared_artifact("lora");
+    }
+
+    #[test]
+    fn artifact_duplicate_qlora_uses_weight_directory_without_mutating_source() {
+        assert_duplicate_copies_declared_artifact("qlora");
+    }
+
+    #[test]
+    fn artifact_duplicate_knowledge_retains_its_existing_method_route() {
+        assert_duplicate_copies_declared_artifact("knowledge");
     }
 
     fn assert_weight_rename_preserves_payload(method: &str) {

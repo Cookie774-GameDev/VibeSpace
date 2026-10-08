@@ -776,6 +776,7 @@ struct InferenceRequest {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FoundryInferenceResult {
+    pub(crate) artifact_sha256: String,
     pub(crate) text: String,
     pub(crate) input_tokens: u64,
     pub(crate) output_tokens: u64,
@@ -2509,7 +2510,7 @@ pub(crate) fn run_foundry_inference(
     if artifact.parent() != Some(job_dir.as_path()) {
         return Err("Model Foundry weight artifact escaped its private job directory.".into());
     }
-    verify_training_artifact_for_method(&artifact, method)?;
+    let artifact_evidence = verify_training_artifact_for_method(&artifact, method)?;
 
     let request_path = job_dir.join(format!("inference-{request_id}.request.json"));
     let response_path = job_dir.join(format!("inference-{request_id}.response.json"));
@@ -2585,6 +2586,7 @@ pub(crate) fn run_foundry_inference(
                 .map_err(|error| format!("Could not read local inference evidence: {error}"))?;
         let response = validate_inference_receipt(&response_bytes, method, None)?;
         Ok(FoundryInferenceResult {
+            artifact_sha256: artifact_evidence.sha256,
             text: response.text,
             input_tokens: response.input_tokens,
             output_tokens: response.output_tokens,

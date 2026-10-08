@@ -59,6 +59,19 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function lifecycleTurnId(params: Record<string, unknown> | undefined): string | undefined {
+  const id = recordOf(params?.turn)?.id;
+  // Only canonical opaque turn IDs belong in lifecycle metadata. Do not guess
+  // from an item/alias, accept private paths, or retain credential-shaped text.
+  return typeof id === 'string' &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u.test(id) &&
+    !/^(?:sk-|gh[pousr]_|github_pat_|AIza|Bearer)/i.test(id) &&
+    params?.itemId === undefined &&
+    (params?.turnId === undefined || params.turnId === id)
+    ? id
+    : undefined;
+}
+
 function stringList(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value) || value.length > 16) return undefined;
   const rows = value.filter((row): row is string => typeof row === 'string' && SAFE_IDENTIFIER.test(row));
@@ -353,7 +366,10 @@ export async function* nativeCodexFrames(
         rendererReceivedMonotonicMs,
         eventType: safeId(frame.method) ?? 'unknown',
         sessionId: safeId(params?.threadId),
-        callId: safeId(params?.itemId),
+        callId:
+          frame.method === 'turn/started' || frame.method === 'turn/completed'
+            ? lifecycleTurnId(params)
+            : safeId(params?.itemId),
       });
       push({ kind: 'frame', frame });
     } else if (message?.kind === 'done') {

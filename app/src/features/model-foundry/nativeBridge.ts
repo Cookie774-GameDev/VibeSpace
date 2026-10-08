@@ -492,6 +492,7 @@ type FoundryChatMessage = { role: 'system' | 'user' | 'assistant'; content: stri
 
 interface NativeFoundryChatResponse {
   artifactId: string; modelName: string; version: number; method: 'lora' | 'qlora' | 'full';
+  artifactSha256?: string;
   text: string; inputTokens: number; outputTokens: number;
 }
 
@@ -574,7 +575,10 @@ async function chatWithArtifact(
     failureCategory = 'response-invalid';
     if (!response || response.artifactId !== artifactId || typeof response.modelName !== 'string' ||
         !response.modelName.trim() || !Number.isInteger(response.version) || response.version < 1 ||
-        !['lora', 'qlora', 'full'].includes(response.method) || typeof response.text !== 'string' ||
+        !['lora', 'qlora', 'full'].includes(response.method) ||
+        (Object.prototype.hasOwnProperty.call(response, 'artifactSha256') &&
+          (typeof response.artifactSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(response.artifactSha256))) ||
+        typeof response.text !== 'string' ||
         !response.text.trim() || !Number.isSafeInteger(response.inputTokens) || response.inputTokens < 0 ||
         !Number.isSafeInteger(response.outputTokens) || response.outputTokens < 1) {
       throw new Error('Model Foundry returned mismatched or incomplete inference evidence.');
@@ -615,7 +619,11 @@ export async function generateFromFoundryArtifact(args: {
   if (args.signal?.aborted) throw abortedFoundryInference();
   const job = Array.isArray(jobs) ? jobs.find((entry) => entry.id === args.jobId) : undefined;
   if (!job || job.status !== 'completed' || job.artifactVerified !== true ||
-      job.name !== response.modelName || job.version !== response.version || job.method !== response.method ||
+      typeof job.name !== 'string' || !job.name.trim() ||
+      (Object.prototype.hasOwnProperty.call(response, 'artifactSha256')
+        ? job.artifactSha256 !== response.artifactSha256
+        : job.name !== response.modelName) ||
+      job.version !== response.version || job.method !== response.method ||
       typeof job.artifactSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(job.artifactSha256) ||
       (args.projectId !== 'artifact' && job.projectId !== args.projectId)) {
     throw new Error('Model Foundry returned mismatched or unverified artifact identity.');

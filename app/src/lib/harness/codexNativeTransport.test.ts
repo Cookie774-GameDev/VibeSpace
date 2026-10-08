@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+import { toPersistedActivity } from '@/lib/diagnostics/activityLogPersistence';
+import { optionalActivityEvent } from '@/features/telemetry/telemetryExporter';
 import {
   nativeCodexFrames,
   resolveNativeCodexRoute,
@@ -14,6 +17,127 @@ const nativeFrame = (frame: Record<string, unknown>) => ({
   sequence: ++nativeSequence,
   nativeHandoffWallUs: 1_789_300_000_000_000 + nativeSequence,
   nativeHandoffMonotonicUs: 1_000 + nativeSequence,
+});
+
+async function observeNativeFrames(expected: Record<string, unknown>[]) {
+  const after = appActivityLog.snapshot().sequence;
+  let receive!: (value: unknown) => void;
+  const invoke = vi.fn(async (command: string) => {
+    if (command !== 'codex_app_server_stream') return;
+    for (const frame of expected) receive(nativeFrame(frame));
+    receive({ kind: 'done' });
+  });
+  const bridge = async () => ({
+    invoke,
+    channel: (handler: (value: unknown) => void) => {
+      receive = handler;
+      return { onmessage: handler };
+    },
+  });
+  const frames = [];
+  for await (const frame of nativeCodexFrames('identity-generation', undefined, bridge))
+    frames.push(frame);
+  expect(frames).toEqual(expected);
+  frames.forEach((frame, index) => expect(frame).toBe(expected[index]));
+  const events = appActivityLog.snapshot(after).events.filter((event) => event.kind === 'native.codex.frame');
+  expect(events).toHaveLength(expected.length);
+  expect(invoke.mock.calls.map(([command]) => command)).toEqual(['codex_app_server_stream']);
+  return events;
+}
+
+describe('native Codex lifecycle identity metadata', () => {
+  it('retains exact canonical turn identities with their thread, generation and native sequence after persistence', async () => {
+    const expected = ['turn-1', '0199f304-067b-7774-92f1-c103a97ab031'].flatMap((id) =>
+      ['turn/started', 'turn/completed'].map((method) => ({
+        method,
+        params: {
+          threadId: 'thread-1',
+          turn: { id, items: [{ content: 'synthetic-private-output' }] },
+          prompt: 'synthetic-private-prompt',
+          path: '/synthetic/private/path',
+        },
+      })),
+    );
+    const events = await observeNativeFrames(expected);
+    events.forEach((event, index) => {
+      const identity = {
+        eventType: expected[index].method,
+        sessionId: 'thread-1',
+        callId: expected[index].params.turn.id,
+        runtimeGeneration: 'identity-generation',
+      };
+      expect(event.data).toMatchObject(identity);
+      const persisted = toPersistedActivity(event);
+      expect(persisted).toMatchObject(identity);
+      expect(persisted.nativeSequence).toBeGreaterThan(0);
+      expect(persisted.nativeHandoffWallUs).toBeGreaterThan(0);
+      expect(persisted.rendererReceivedAt).toBeGreaterThan(0);
+      if (index) expect(persisted.nativeSequence).toBe(toPersistedActivity(events[index - 1]).nativeSequence! + 1);
+      expect(JSON.stringify([event, persisted])).not.toContain('synthetic-private');
+      expect(JSON.stringify([event, persisted])).not.toContain('/synthetic/private/path');
+      expect(optionalActivityEvent(event, { appVersion: 'test', platform: 'windows' })).toBeNull();
+      expect(optionalActivityEvent({ ...event, phase: 'completed' }, { appVersion: 'test', platform: 'windows' })).toBeNull();
+    });
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['empty', ''],
+    ['number', 123],
+    ['object', { value: 'turn-1' }],
+    ['whitespace', 'turn 1'],
+    ['control', 'turn-1\n'],
+    ['oversized', 't'.repeat(257)],
+    ['path', 'private/path'],
+    ['drive path', 'C:/private/path'],
+    ['email', 'person@example.invalid'],
+    ['confusable', 'ｔurn-1'],
+    ['credential prefix', 'sk-synthetic-placeholder'],
+    ['GitHub prefix', 'ghp_synthetic-placeholder'],
+    ['GitHub PAT prefix', 'github_pat_synthetic-placeholder'],
+    ['Google prefix', 'AIzasynthetic-placeholder'],
+    ['bearer prefix', 'Bearer-synthetic-placeholder'],
+  ])('omits %s turn identity from memory and persistence without altering the frame', async (_label, id) => {
+    const events = await observeNativeFrames(['turn/started', 'turn/completed'].map((method) => ({
+      method,
+      params: { threadId: 'thread-1', turn: { id } },
+    })));
+    for (const event of events) {
+      expect(event.data).not.toHaveProperty('callId');
+      expect(toPersistedActivity(event).callId).toBeUndefined();
+    }
+  });
+
+  it('omits conflicting aliases and item identities rather than mislabelling either as a lifecycle turn', async () => {
+    const params = [
+      { turn: { id: 'turn-1' }, turnId: 'turn-2' },
+      { turn: { id: 'turn-1' }, itemId: 'item-1' },
+      { turnId: 'turn-1' },
+      { turn: ['turn-1'] },
+    ];
+    const events = await observeNativeFrames(params.flatMap((value) =>
+      ['turn/started', 'turn/completed'].map((method) => ({ method, params: value })),
+    ));
+    for (const event of events) {
+      expect(event.data).not.toHaveProperty('callId');
+      expect(toPersistedActivity(event).callId).toBeUndefined();
+    }
+  });
+
+  it('preserves existing item identifiers and never promotes nested turn identities on unrelated methods', async () => {
+    const events = await observeNativeFrames([
+      { method: 'item/commandExecution/outputDelta', params: { itemId: 'item-1', turnId: 'turn-1', delta: 'output' } },
+      { method: 'item/completed', params: { itemId: 'item-1', turn: { id: 'turn-1' } } },
+      { method: 'thread/started', params: { turn: { id: 'turn-1' } } },
+    ]);
+    expect(events.map((event) => toPersistedActivity(event).callId)).toEqual(['item-1', 'item-1', undefined]);
+  });
+
+  it('accepts a matching optional turn alias and the maximum bounded opaque identity', async () => {
+    const id = 't'.repeat(256);
+    const events = await observeNativeFrames([{ method: 'turn/started', params: { turn: { id }, turnId: id } }]);
+    expect(toPersistedActivity(events[0]).callId).toBe(id);
+  });
 });
 
 describe('native Codex app-server transport', () => {
