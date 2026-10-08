@@ -490,7 +490,7 @@ export async function speakWithSettings(
     if (engine === 'deepgram') {
       TtsService.setProvider('deepgram_tts');
       TtsService.setVoicePreset(ttsPreset);
-      await TtsService.speak(trimmed);
+      await TtsService.speak(trimmed, { failureMode: 'reject' });
       return;
     }
 

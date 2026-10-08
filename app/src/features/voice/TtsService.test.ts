@@ -36,6 +36,8 @@ vi.mock('./providers/deepgramTts', () => ({
 }));
 
 import { TtsService } from './TtsService';
+import { FALLBACK_MESSAGES } from './voicePlans';
+import { prepareForSpeech } from './textCleanup';
 
 describe('TtsService', () => {
   beforeEach(() => {
@@ -97,5 +99,189 @@ describe('TtsService', () => {
     TtsService.setProvider('jarvis_local');
     await TtsService.speak('   ');
     expect(h.jarvis.speakChunk).not.toHaveBeenCalled();
+  });
+  it('rejects strict full-chain exhaustion after exactly one existing notice', async () => {
+    h.jarvis.speakChunk.mockRejectedValue(new Error('synthetic local failure'));
+    h.system.speakChunk.mockRejectedValue(new Error('synthetic system failure'));
+    const notices: string[] = [];
+    const off = TtsService.onNotice((notice) => notices.push(notice));
+    try {
+      await expect(
+        TtsService.speak('Strict reply.', {
+          provider: 'openai_tts',
+          raw: true,
+          failureMode: 'reject',
+        }),
+      ).rejects.toMatchObject({ name: 'TtsPlaybackError', code: 'providers_exhausted' });
+      expect(notices).toEqual([FALLBACK_MESSAGES.allFailed]);
+      expect(TtsService.getStatus()).toBe('idle');
+      expect(h.openai.speakChunk).toHaveBeenCalledTimes(1);
+      expect(h.jarvis.speakChunk).toHaveBeenCalledTimes(1);
+      expect(h.system.speakChunk).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+    }
+  });
+
+  it('keeps legacy testVoice exhaustion notify-only', async () => {
+    h.jarvis.speakChunk.mockRejectedValue(new Error('synthetic local failure'));
+    h.system.speakChunk.mockRejectedValue(new Error('synthetic system failure'));
+    TtsService.setProvider('openai_tts');
+    const notices: string[] = [];
+    const off = TtsService.onNotice((notice) => notices.push(notice));
+    try {
+      await expect(TtsService.testVoice()).resolves.toBeUndefined();
+      expect(notices).toEqual([FALLBACK_MESSAGES.allFailed]);
+    } finally {
+      off();
+    }
+  });
+
+  it('rejects strict exhaustion when all providers are unavailable without speaking', async () => {
+    h.openai.isAvailable.mockResolvedValue(false);
+    h.jarvis.isAvailable.mockResolvedValue(false);
+    h.system.isAvailable.mockResolvedValue(false);
+    await expect(
+      TtsService.speak('Unavailable reply.', {
+        provider: 'openai_tts',
+        raw: true,
+        failureMode: 'reject',
+      }),
+    ).rejects.toMatchObject({ code: 'providers_exhausted' });
+    expect(h.openai.speakChunk).not.toHaveBeenCalled();
+    expect(h.jarvis.speakChunk).not.toHaveBeenCalled();
+    expect(h.system.speakChunk).not.toHaveBeenCalled();
+  });
+
+  it('strict replies retain successful first and later fallback completion', async () => {
+    await expect(
+      TtsService.speak('Local reply.', {
+        provider: 'jarvis_local',
+        raw: true,
+        failureMode: 'reject',
+      }),
+    ).resolves.toBeUndefined();
+    expect(h.jarvis.speakChunk).toHaveBeenCalledTimes(1);
+    expect(h.system.speakChunk).not.toHaveBeenCalled();
+    h.jarvis.speakChunk.mockRejectedValueOnce(new Error('synthetic local failure'));
+    await expect(
+      TtsService.speak('Fallback reply.', {
+        provider: 'openai_tts',
+        raw: true,
+        failureMode: 'reject',
+      }),
+    ).resolves.toBeUndefined();
+    expect(h.openai.speakChunk).toHaveBeenCalledTimes(1);
+    expect(h.jarvis.speakChunk).toHaveBeenCalledTimes(2);
+    expect(h.system.speakChunk).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures strict failure mode per call and stops before later queued chunks', async () => {
+    let release!: (ready: boolean) => void;
+    h.openai.isAvailable.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        }),
+    );
+    h.jarvis.speakChunk.mockRejectedValue(new Error('synthetic local failure'));
+    h.system.speakChunk.mockRejectedValue(new Error('synthetic system failure'));
+    const options: Parameters<typeof TtsService.speak>[1] = {
+      provider: 'openai_tts',
+      failureMode: 'reject',
+    };
+    const text = 'This synthetic sentence makes a long reply for the queue. '.repeat(80);
+    expect(prepareForSpeech(text).length).toBeGreaterThan(1);
+    const pending = TtsService.speak(text, options);
+    const assertion = expect(pending).rejects.toMatchObject({ code: 'providers_exhausted' });
+    options.failureMode = 'notify';
+    release(true);
+    await assertion;
+    expect(h.openai.speakChunk).toHaveBeenCalledTimes(1);
+    expect(h.jarvis.speakChunk).toHaveBeenCalledTimes(1);
+    expect(h.system.speakChunk).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop during a failing strict attempt resolves without trying later providers', async () => {
+    let reject!: (error: Error) => void;
+    h.openai.speakChunk.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, no) => {
+          reject = no;
+        }),
+    );
+    const pending = TtsService.speak('Stopped reply.', {
+      provider: 'openai_tts',
+      raw: true,
+      failureMode: 'reject',
+    });
+    await vi.waitFor(() => expect(h.openai.speakChunk).toHaveBeenCalledTimes(1));
+    TtsService.stop();
+    reject(new Error('synthetic failure after cancellation'));
+    await expect(pending).resolves.toBeUndefined();
+    expect(h.jarvis.speakChunk).not.toHaveBeenCalled();
+    expect(h.system.speakChunk).not.toHaveBeenCalled();
+  });
+
+  it('a newer speak call retires the old strict attempt without inheriting its failure', async () => {
+    let rejectOld!: (error: Error) => void;
+    h.openai.speakChunk.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectOld = reject;
+        }),
+    );
+    const old = TtsService.speak('Old reply.', {
+      provider: 'openai_tts',
+      raw: true,
+      failureMode: 'reject',
+    });
+    await vi.waitFor(() => expect(h.openai.speakChunk).toHaveBeenCalledTimes(1));
+    const fresh = TtsService.speak('Fresh reply.', { provider: 'jarvis_local', raw: true });
+    rejectOld(new Error('late old failure'));
+    await expect(old).resolves.toBeUndefined();
+    await expect(fresh).resolves.toBeUndefined();
+    expect(h.jarvis.speakChunk).toHaveBeenCalledTimes(1);
+    expect(h.system.speakChunk).not.toHaveBeenCalled();
+  });
+
+  it('strict failure does not retry old text when a fresh healthy call arrives', async () => {
+    h.jarvis.speakChunk.mockRejectedValueOnce(new Error('synthetic local failure'));
+    h.system.speakChunk.mockRejectedValueOnce(new Error('synthetic system failure'));
+    await expect(
+      TtsService.speak('Failed old reply.', {
+        provider: 'openai_tts',
+        raw: true,
+        failureMode: 'reject',
+      }),
+    ).rejects.toMatchObject({ code: 'providers_exhausted' });
+    await expect(
+      TtsService.speak('Fresh reply.', {
+        provider: 'jarvis_local',
+        raw: true,
+        failureMode: 'reject',
+      }),
+    ).resolves.toBeUndefined();
+    expect(h.jarvis.speakChunk).toHaveBeenLastCalledWith('Fresh reply.', expect.any(Object));
+    expect(h.openai.speakChunk).toHaveBeenCalledTimes(1);
+  });
+  it('keeps cancellation from an exhaustion notice stopped rather than rethrowing strict failure', async () => {
+    h.jarvis.speakChunk.mockRejectedValue(new Error('synthetic local failure'));
+    h.system.speakChunk.mockRejectedValue(new Error('synthetic system failure'));
+    const off = TtsService.onNotice((notice) => {
+      if (notice === FALLBACK_MESSAGES.allFailed) TtsService.stop();
+    });
+    try {
+      await expect(
+        TtsService.speak('Cancelled on notice.', {
+          provider: 'openai_tts',
+          raw: true,
+          failureMode: 'reject',
+        }),
+      ).resolves.toBeUndefined();
+      expect(TtsService.getStatus()).toBe('idle');
+    } finally {
+      off();
+    }
   });
 });

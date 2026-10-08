@@ -33,6 +33,17 @@ export interface SpeakOptions extends CleanupOptions {
   volume?: number;
   /** Skip cleanup/chunking (e.g. cached phrases). */
   raw?: boolean;
+  /** Reply receipts require rejection on exhaustion; previews keep notice-only behavior. */
+  failureMode?: 'notify' | 'reject';
+}
+
+export class TtsPlaybackError extends Error {
+  readonly code = 'providers_exhausted';
+
+  constructor() {
+    super('tts_providers_exhausted');
+    this.name = 'TtsPlaybackError';
+  }
 }
 
 export interface DeepgramPromoSnapshot {
@@ -168,6 +179,7 @@ class TtsServiceImpl {
   async speak(text: string, options: SpeakOptions = {}): Promise<void> {
     const preset = options.preset ?? this.preset;
     const requested = options.provider ?? this.provider;
+    const failureMode = options.failureMode ?? 'notify';
 
     // Stop anything currently playing — new command interrupts old (no overlap).
     this.stop();
@@ -192,7 +204,14 @@ class TtsServiceImpl {
         }
         if (signal.aborted) break;
         const chunk = this.queue.shift()!;
-        await this.speakChunkWithFallback(chunk, requested, preset, signal, options.volume);
+        await this.speakChunkWithFallback(
+          chunk,
+          requested,
+          preset,
+          signal,
+          options.volume,
+          failureMode,
+        );
       }
     } finally {
       if (!signal.aborted) this.setStatus('idle');
@@ -206,6 +225,7 @@ class TtsServiceImpl {
     preset: VoiceTtsPreset,
     signal: AbortSignal,
     volume?: number,
+    failureMode: SpeakOptions['failureMode'] = 'notify',
   ): Promise<void> {
     const chain = this.fallbackChain(requested);
     let lastErr: unknown = null;
@@ -229,7 +249,10 @@ class TtsServiceImpl {
       }
     }
     // Whole chain failed.
-    if (!signal.aborted) this.notify(FALLBACK_MESSAGES.allFailed);
+    if (!signal.aborted) {
+      this.notify(FALLBACK_MESSAGES.allFailed);
+      if (failureMode === 'reject' && !signal.aborted) throw new TtsPlaybackError();
+    }
   }
 
   private notifyDowngrade(requested: VoiceProviderId, used: VoiceProviderId, err: unknown): void {

@@ -304,9 +304,20 @@ describe('voice module gate', () => {
     vi.clearAllMocks();
     await speakWithSettings('Use my selected voice.');
     expect(TtsService.setProvider).toHaveBeenCalledWith('deepgram_tts');
-    expect(TtsService.speak).toHaveBeenCalledWith('Use my selected voice.');
+    expect(TtsService.speak).toHaveBeenCalledWith('Use my selected voice.', {
+      failureMode: 'reject',
+    });
     expect(h.ensureJarvisReady).not.toHaveBeenCalled();
     expect(h.speakText).not.toHaveBeenCalled();
+  });
+  it('propagates strict selected-engine exhaustion without silently claiming playback', async () => {
+    useAuthStore.setState({ voiceEngine: 'deepgram' });
+    const failure = new Error('synthetic strict exhaustion');
+    vi.mocked(TtsService.speak).mockRejectedValueOnce(failure);
+    await expect(speakWithSettings('Reply needing actual playback.')).rejects.toBe(failure);
+    expect(TtsService.speak).toHaveBeenLastCalledWith('Reply needing actual playback.', {
+      failureMode: 'reject',
+    });
   });
 });
 
