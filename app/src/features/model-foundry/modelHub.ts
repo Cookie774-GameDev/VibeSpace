@@ -1,4 +1,29 @@
+import trainingModelCatalog from '../../../src-tauri/workers/model_foundry/training-models.json';
+
 export type TrainingMethod = 'knowledge' | 'lora' | 'qlora' | 'full';
+
+/** Current native worker safety ceiling; a catalogue bound, never a prompt-fit proof. */
+export const FOUNDRY_NATIVE_CONTEXT_CEILING = 16_384;
+export interface FoundryContextMetadata {
+  contextWindowTokens: number;
+  contextMetadataSource: 'foundry_catalog_ceiling';
+}
+
+export function foundryNativeContextCeiling(declared: unknown): number | undefined {
+  return typeof declared === 'number' && Number.isSafeInteger(declared) && declared >= 2
+    ? Math.min(declared, FOUNDRY_NATIVE_CONTEXT_CEILING)
+    : undefined;
+}
+
+function foundryCatalogueContext(baseModelId: unknown): FoundryContextMetadata | undefined {
+  if (typeof baseModelId !== 'string') return undefined;
+  const declared = trainingModelCatalog.models.find((model) => model.id === baseModelId)?.contextTokens;
+  const ceiling = foundryNativeContextCeiling(declared);
+  return ceiling === undefined ? undefined : {
+    contextWindowTokens: ceiling, contextMetadataSource: 'foundry_catalog_ceiling',
+  };
+}
+
 export type SourceUse = 'retrieval' | 'fine_tuning' | 'multimodal' | 'evaluation' | 'unsupported';
 
 export interface HardwareProfile {
@@ -877,6 +902,8 @@ export function foundryModelOptions(jobs: unknown): Array<{
   label: string;
   subtitle: string;
   method: TrainingMethod;
+  contextWindowTokens?: number;
+  contextMetadataSource?: 'foundry_catalog_ceiling';
 }> {
   if (!Array.isArray(jobs)) return [];
   return (jobs as FoundryJob[])
@@ -901,6 +928,7 @@ export function foundryModelOptions(jobs: unknown): Array<{
         id: nativeArtifactModelId(job.id),
         label: job.name,
         method: job.method,
+        ...(job.method === 'knowledge' ? {} : foundryCatalogueContext(job.baseModelId)),
         subtitle: `Verified local ${artifactKind} · ${baseModel?.label ?? job.baseModelId}`,
       };
     });

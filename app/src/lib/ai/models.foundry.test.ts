@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
 import { useAuthStore } from '@/stores/auth';
 import { foundryModelOptions } from '@/features/model-foundry/modelHub';
 import { validateSendModelAccess } from './modelSelection';
+import { optimizeKernelRuntimeContext } from './runtimeTokenOptimization';
+import type { JarvisRuntimeContextBlock } from '@/lib/jarvis/runtimeContextCandidates';
 import {
   getOllamaModelOptions,
   getAccessibleModelOptions,
@@ -9,6 +12,7 @@ import {
   getFoundryModelOptions,
   syncDiscoveredOllamaModels,
   syncFoundryModelOptions,
+  useFoundryModelOptions,
 } from './models';
 
 afterEach(() => {
@@ -174,5 +178,95 @@ describe('native Foundry picker-to-send availability', () => {
         [],
       ),
     ).toMatchObject({ ok: true });
+  });
+});
+
+
+describe('Foundry context ceilings', () => {
+  const row = { id: 'artifact--job_context', label: 'Public context model', method: 'full',
+    contextWindowTokens: 8192, contextMetadataSource: 'foundry_catalog_ceiling' as const };
+  it('carries capped catalogue provenance through the actual job-to-accessible-picker path', () => {
+    const options = foundryModelOptions([{ id: 'job_context', name: row.label,
+      baseModelId: 'qwen2.5-0.5b-instruct', method: 'full', status: 'completed',
+      artifactVerified: true, artifactPath: 'C:/synthetic/weight-artifact' }]);
+    syncFoundryModelOptions(options);
+    expect(getAccessibleModelOptions('foundry', {}, false, '', 'free')).toContainEqual({
+      provider: 'foundry', id: row.id, label: row.label, contextWindowTokens: 16384,
+      contextMetadataSource: 'foundry_catalog_ceiling',
+    });
+  });
+  it('updates the mounted picker when only catalogue capacity metadata changes', async () => {
+    const view = renderHook(() => useFoundryModelOptions());
+    try {
+      await act(async () => { await vi.dynamicImportSettled(); });
+      act(() => syncFoundryModelOptions([row]));
+      expect(view.result.current[0]).toMatchObject({ contextWindowTokens: 8192,
+        contextMetadataSource: 'foundry_catalog_ceiling' });
+      act(() => syncFoundryModelOptions([{ ...row, contextWindowTokens: 16384 }]));
+      expect(view.result.current[0]).toMatchObject({ contextWindowTokens: 16384,
+        contextMetadataSource: 'foundry_catalog_ceiling' });
+    } finally { view.unmount(); }
+  });
+  it.each([
+    { label: 'no provenance', patch: { contextMetadataSource: undefined } },
+    { label: 'foreign provenance', patch: { contextMetadataSource: 'unverified' } },
+    { label: 'negative capacity', patch: { contextWindowTokens: -1 } },
+    { label: 'oversized capacity', patch: { contextWindowTokens: 32768 } },
+    { label: 'fractional capacity', patch: { contextWindowTokens: 8192.5 } },
+    { label: 'NaN capacity', patch: { contextWindowTokens: NaN } },
+  ])('does not publish $label as known Foundry capacity', ({ patch }) => {
+    const malformed = { ...row, ...patch } as unknown as Parameters<typeof syncFoundryModelOptions>[0][number];
+    syncFoundryModelOptions([malformed]);
+    expect(getFoundryModelOptions()[0]).not.toHaveProperty('contextWindowTokens');
+    expect(getFoundryModelOptions()[0]).not.toHaveProperty('contextMetadataSource');
+  });
+  it.each(['off', 'normal'] as const)('keeps required inputs and the user-selected model with optimizer %s', async (mode) => {
+    syncFoundryModelOptions([row]);
+    const option = getFoundryModelOptions()[0]!;
+    const blocks = [
+      { key: 'project', text: 'Required public project instructions.', score: 1 },
+      { key: 'explicit_files', text: 'Exact public user attachment.', score: 0 },
+      { key: 'repository_context', text: 'Repeated optional public reference.', score: 0.1 },
+      { key: 'repository_context', text: 'Repeated optional public reference.', score: 0.2 },
+    ] satisfies JarvisRuntimeContextBlock[];
+    const messages = [{ role: 'user' as const, content: 'Keep this latest public request exact.' }];
+    const result = await optimizeKernelRuntimeContext({ mode, providerId: option.provider,
+      modelId: option.id, modelContextLimit: option.contextWindowTokens,
+      systemPrompt: 'Required policy stays exact.', requestedOutputTokens: 320, blocks, messages });
+    expect(result.messages).toEqual(messages);
+    expect(result.blocks.slice(0, 2)).toEqual(blocks.slice(0, 2));
+    expect(getFoundryModelOptions()[0]?.id).toBe(row.id);
+    if (mode === 'off') {
+      expect(result.blocks).toBe(blocks);
+      expect(result.receipt).toBeNull();
+    } else {
+      expect(result.blocks).toEqual(blocks.slice(0, 3));
+      expect(result.receipt).toMatchObject({ modelId: row.id, modelChanged: false });
+    }
+  });
+  it('lets the existing enabled optimizer refuse oversized required policy rather than removing it', async () => {
+    syncFoundryModelOptions([row]);
+    const option = getFoundryModelOptions()[0]!;
+    await expect(optimizeKernelRuntimeContext({ mode: 'normal', providerId: option.provider,
+      modelId: option.id, modelContextLimit: option.contextWindowTokens, requestedOutputTokens: 320,
+      systemPrompt: 'Protected policy remains exact. '.repeat(3000),
+      blocks: [{ key: 'project', text: 'Public project instructions stay present.', score: 1 }],
+      messages: [{ role: 'user', content: 'Latest public request.' }],
+    })).rejects.toMatchObject({ name: 'TokenOptimizationOverflowError',
+      receipt: expect.objectContaining({ fitsContext: false, modelChanged: false }) });
+    expect(getFoundryModelOptions()[0]?.id).toBe(row.id);
+  });
+
+  it('keeps capacity scoped to its account and leaves the selected model identity untouched', () => {
+    const prior = useAuthStore.getState().localUserId;
+    try {
+      useAuthStore.setState({ localUserId: 'context-owner-a' });
+      syncFoundryModelOptions([row]);
+      expect(getFoundryModelOptions()[0]).toMatchObject({ id: row.id, provider: 'foundry', contextWindowTokens: 8192 });
+      useAuthStore.setState({ localUserId: 'context-owner-b' });
+      expect(getFoundryModelOptions()).toEqual([]);
+      syncFoundryModelOptions([row], 'context-owner-a');
+      expect(getFoundryModelOptions()).toEqual([]);
+    } finally { useAuthStore.setState({ localUserId: prior }); }
   });
 });

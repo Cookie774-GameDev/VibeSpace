@@ -31,6 +31,7 @@ import {
   emptyTrainingMeasurement,
   formatFoundryStorageBytes,
   foundryModelOptions,
+  foundryNativeContextCeiling,
   isModelInstalled,
   loadJobs,
   mayStartTraining,
@@ -1447,7 +1448,10 @@ export function BuildYourOwnAIHub({
                           </p>
                           <p className="mt-1 break-all font-mono text-metadata text-muted-foreground">
                             {verified.sourceId} · revision {verified.revision.slice(0, 12)} ·{' '}
-                            {verified.contextTokens.toLocaleString()} context · Apache-2.0 ·{' '}
+                            {foundryNativeContextCeiling(verified.contextTokens) === undefined
+                              ? 'Context capacity unavailable'
+                              : `${foundryNativeContextCeiling(verified.contextTokens)!.toLocaleString()} native context ceiling (${verified.contextTokens.toLocaleString()} catalogue)`}
+                            {' · '}Exact request fit is checked before model loading.{' · '}Apache-2.0 ·{' '}
                             {verified.licenseUrl}
                           </p>
                         </>

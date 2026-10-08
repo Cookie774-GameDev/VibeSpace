@@ -683,3 +683,26 @@ describe('model foundry domain', () => {
     expect(formatFoundryStorageBytes(5 * 1024 * 1024)).toBe('5.0 MB');
   });
 });
+
+
+describe('Foundry context ceilings', () => {
+  const job = { id: 'job_context', name: 'Public context model', method: 'full', status: 'completed',
+    artifactVerified: true, artifactPath: 'C:/synthetic/weight-artifact' };
+  it.each([
+    { baseModelId: 'smollm2-135m-instruct', expected: 8192 },
+    { baseModelId: 'qwen2.5-0.5b-instruct', expected: 16384 },
+    { baseModelId: 'smolvlm2-256m-video-instruct', expected: 16384 },
+  ])('retains the capped canonical catalogue ceiling for $baseModelId', ({ baseModelId, expected }) => {
+    expect(foundryModelOptions([{ ...job, baseModelId }])[0]).toMatchObject({
+      contextWindowTokens: expected, contextMetadataSource: 'foundry_catalog_ceiling',
+    });
+  });
+  it('omits an unknown base and knowledge-route context rather than inventing capacity', () => {
+    for (const entry of [{ ...job, baseModelId: 'unknown-base' },
+      { ...job, baseModelId: 'smollm2-135m-instruct', method: 'knowledge' }]) {
+      const option = foundryModelOptions([entry])[0];
+      expect(option).not.toHaveProperty('contextWindowTokens');
+      expect(option).not.toHaveProperty('contextMetadataSource');
+    }
+  });
+});

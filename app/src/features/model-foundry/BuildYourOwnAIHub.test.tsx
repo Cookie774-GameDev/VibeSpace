@@ -514,6 +514,26 @@ describe('BuildYourOwnAIHub', () => {
     expect(screen.getByText(/Storage recommendation: D:\\VibeSpace-Model-Foundry/)).toBeTruthy();
   });
 
+  it('Foundry context ceilings: shows the native cap and catalogue provenance without claiming fit', async () => {
+    const larger = { ...verifiedModel, id: 'qwen2.5-0.5b-instruct', label: 'Qwen 2.5 0.5B Instruct',
+      sourceId: 'Qwen/Qwen2.5-0.5B-Instruct', contextTokens: 32768 };
+    const ready: LocalTrainingWorkerStatus = {
+      installed: true, attested: true, localOnly: true, protocol: 1, sourceSha256: 'a'.repeat(64),
+      python: 'python', methods: ['full'], modalities: ['text'], precisions: ['bf16'], reason: null,
+    };
+    getTrainingWorkerStatus.mockResolvedValue(ready);
+    render(<BuildYourOwnAIHub open onOpenChange={vi.fn()} trainingWorker={ready}
+      verifiedTrainingModels={[larger]} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Advanced full fine-tuning/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(screen.getByText(/16,384 native context ceiling.*32,768 catalogue/i)).toBeTruthy();
+    expect(screen.getByText(/Exact request fit is checked before model loading/i)).toBeTruthy();
+    expect(installTrainingWorker).not.toHaveBeenCalled();
+    expect(calibrateTraining).not.toHaveBeenCalled();
+    expect(tauriInvoke.mock.calls.some(([command]) => command === 'model_foundry_start_training')).toBe(false);
+  });
+
   it('shows the verified checkpoint catalog for attested weight training', () => {
     render(
       <BuildYourOwnAIHub

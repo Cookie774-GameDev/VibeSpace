@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ProviderId } from '@/types';
 import type { PlanId } from '@/lib/entitlements';
+import { FOUNDRY_NATIVE_CONTEXT_CEILING, type FoundryContextMetadata } from '@/features/model-foundry/modelHub';
 import { useAuthStore } from '@/stores/auth';
 import { OLLAMA_LOCAL_CONNECTION } from './adapters/nativeCatalog';
 import { ANTHROPIC_DEFAULT_MODEL } from './providers/anthropic';
@@ -24,6 +25,8 @@ export interface ModelOption {
   label: string;
   /** Conservative active-catalog context capacity. Omitted when not verified. */
   contextWindowTokens?: number;
+  /** Declared canonical base ceiling after the native cap, not verified prompt fit. */
+  contextMetadataSource?: 'foundry_catalog_ceiling';
   /** Maximum exact input/output USD rate per million tokens from the embedded snapshot. */
   maximumCostPerMillionUsd?: number;
   /** Pricing provenance. Present only for exact model-level embedded metadata. */
@@ -339,7 +342,8 @@ export const CHAT_MODEL_OPTIONS: readonly ModelOption[] = [
 // ── Dynamic Ollama model discovery ──────────────────────────────────────
 
 let _discoveredOllama: string[] = [];
-let _foundryModels: Array<{ id: string; label: string; method?: string }> = [];
+type FoundryModelOption = { id: string; label: string; method?: string } & Partial<FoundryContextMetadata>;
+let _foundryModels: FoundryModelOption[] = [];
 function foundryScope(): string {
   const state = useAuthStore.getState();
   return state.cloudSession?.user_id ?? state.localUserId ?? 'local';
@@ -361,13 +365,21 @@ export function getDiscoveredOllamaModels(): readonly string[] {
 }
 
 export function syncFoundryModelOptions(
-  models: ReadonlyArray<{ id: string; label: string; method?: string }>,
+  models: ReadonlyArray<FoundryModelOption>,
   scope = foundryScope(),
 ): void {
   if (scope !== foundryScope()) return;
   _foundryScope = scope;
   _foundryModels = models
-    .map((model) => ({ id: model.id.trim(), label: model.label.trim(), method: model.method }))
+    .map((model) => ({
+      id: model.id.trim(), label: model.label.trim(), method: model.method,
+      ...(model.id.trim().startsWith('artifact--') && ['full', 'lora', 'qlora'].includes(model.method ?? '') &&
+        model.contextMetadataSource === 'foundry_catalog_ceiling' &&
+        typeof model.contextWindowTokens === 'number' && Number.isSafeInteger(model.contextWindowTokens) &&
+        model.contextWindowTokens >= 2 && model.contextWindowTokens <= FOUNDRY_NATIVE_CONTEXT_CEILING
+        ? { contextWindowTokens: model.contextWindowTokens, contextMetadataSource: model.contextMetadataSource }
+        : {}),
+    }))
     .filter(
       (model, index, all) =>
         /^(?:artifact--|foundry:)[A-Za-z0-9_-]{1,64}$/.test(model.id) &&
@@ -401,7 +413,13 @@ export function getFoundryModelOptions(): ModelOption[] {
   if (_foundryScope !== foundryScope()) return [];
   return _foundryModels
     .filter((model) => model.id.startsWith('artifact--') && model.method !== 'knowledge')
-    .map((model) => ({ provider: 'foundry', id: model.id, label: model.label }));
+    .map((model) => ({
+      provider: 'foundry', id: model.id, label: model.label,
+      ...(model.contextWindowTokens === undefined ? {} : {
+        contextWindowTokens: model.contextWindowTokens,
+        contextMetadataSource: model.contextMetadataSource,
+      }),
+    }));
 }
 
 function hydrateFoundryModelOptions(): Promise<void> {
@@ -471,7 +489,7 @@ export function useFoundryModelOptions(): ModelOption[] {
     () => getFoundryModelOptions(),
     [
       scope,
-      _foundryModels.map((model) => `${model.id}\0${model.label}\0${model.method}`).join('\u0001'),
+      _foundryModels.map((model) => `${model.id}\0${model.label}\0${model.method}\0${model.contextWindowTokens ?? ''}\0${model.contextMetadataSource ?? ''}`).join('\u0001'),
     ],
   );
 }
