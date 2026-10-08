@@ -1695,14 +1695,36 @@ def infer(request_path: str) -> int:
     return 0
 
 
+class InferenceInputOverflow(ValueError):
+    """A complete input cannot fit; never produce an answer from a truncated turn."""
+
+    def __init__(self, input_tokens: int, input_token_budget: int):
+        super().__init__("Inference input exceeds its token budget; no text was truncated.")
+        self.input_tokens = input_tokens
+        self.input_token_budget = input_token_budget
+
+
 def _encode_inference_prompt(tokenizer: Any, processor: Any, prompt: str, max_length: int) -> dict[str, Any]:
-    kwargs = {"return_tensors": "pt", "truncation": True, "max_length": max_length}
+    if isinstance(max_length, bool) or not isinstance(max_length, int) or not 1 <= max_length <= 16384:
+        _fail("Inference input token budget is invalid.")
+    # Every received message may carry required policy or a necessary reference.
+    # Count the identical complete rendered input; neither end may be discarded.
+    kwargs = {"return_tensors": "pt", "truncation": False}
     if getattr(tokenizer, "chat_template", None):
         # apply_chat_template already inserts the template's special tokens.
         kwargs["add_special_tokens"] = False
-    if processor is not None:
-        return processor(text=prompt, images=None, **kwargs)
-    return tokenizer(prompt, **kwargs)
+    encoded = (
+        processor(text=prompt, images=None, **kwargs)
+        if processor is not None
+        else tokenizer(prompt, **kwargs)
+    )
+    shape = getattr(encoded.get("input_ids"), "shape", ())
+    if len(shape) != 2 or int(shape[0]) != 1 or int(shape[-1]) < 1:
+        _fail("Inference tokenizer returned an invalid input shape.")
+    input_tokens = int(shape[-1])
+    if input_tokens > max_length:
+        raise InferenceInputOverflow(input_tokens, max_length)
+    return encoded
 
 
 def _fail(message: str) -> None:
@@ -1809,6 +1831,17 @@ def main() -> int:
         if args.command == "infer" and args.request:
             return infer(args.request)
         _fail("A request path is required.")
+    except InferenceInputOverflow as error:
+        # One allowlisted, content-free diagnostic for the native UI boundary.
+        print(json.dumps({
+            "protocol": PROTOCOL,
+            "localOnly": LOCAL_ONLY,
+            "valid": False,
+            "errorCode": "input_context_overflow",
+            "inputTokens": error.input_tokens,
+            "inputTokenBudget": error.input_token_budget,
+        }, separators=(",", ":")))
+        return 2
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         print(
             json.dumps(

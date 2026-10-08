@@ -9,6 +9,14 @@ from types import SimpleNamespace
 import worker
 
 
+class InputIds(list):
+    # The production inference helper requests one tensor batch. Retain list
+    # operations for the pure training-label assertions while exposing its shape.
+    @property
+    def shape(self):
+        return (1, len(self))
+
+
 class Tokenizer:
     chat_template = "supported"
 
@@ -17,8 +25,10 @@ class Tokenizer:
         return text + ("<assistant>" if add_generation_prompt else "<end>")
 
     def __call__(self, text, truncation=True, max_length=512, **kwargs):
-        ids = list(text.encode())[:max_length]
-        return {"input_ids": ids, "attention_mask": [1] * len(ids)}
+        ids = list(text.encode())
+        if truncation:
+            ids = ids[:max_length]
+        return {"input_ids": InputIds(ids), "attention_mask": [1] * len(ids)}
 
 
 class TextTrainingTests(unittest.TestCase):

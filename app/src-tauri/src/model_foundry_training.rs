@@ -2410,6 +2410,35 @@ pub(crate) fn run_training_worker(
     })
 }
 
+fn inference_worker_failure_message(stdout: &[u8]) -> String {
+    const GENERIC: &str = "The verified local model could not complete inference.";
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct InputOverflow {
+        protocol: u8,
+        local_only: bool,
+        valid: bool,
+        error_code: String,
+        input_tokens: u64,
+        input_token_budget: u64,
+    }
+    // Never expose arbitrary worker output, errors, paths, or prompt text.
+    if stdout.len() > 1024 { return GENERIC.into(); }
+    let Ok(diagnostic) = serde_json::from_slice::<InputOverflow>(stdout) else {
+        return GENERIC.into();
+    };
+    if diagnostic.protocol != WORKER_PROTOCOL || !diagnostic.local_only || diagnostic.valid
+        || diagnostic.error_code != "input_context_overflow"
+        || !(1..=16_384).contains(&diagnostic.input_token_budget)
+        || diagnostic.input_tokens <= diagnostic.input_token_budget
+        || diagnostic.input_tokens > 2_097_152
+    {
+        return GENERIC.into();
+    }
+    format!("Local model input exceeds its context window: {} tokens exceed the {}-token input budget after reserving output. No input was truncated and no answer was generated. Reduce optional context or use a model with a larger context window.",
+        diagnostic.input_tokens, diagnostic.input_token_budget)
+}
+
 pub(crate) fn run_foundry_inference(
     app: &tauri::AppHandle,
     request_id: &str,
@@ -2544,7 +2573,7 @@ pub(crate) fn run_foundry_inference(
             return Err("Local trained-model inference exceeded the safe time limit.".into());
         }
         if !execution.status.success() {
-                    return Err("The verified local model could not complete inference.".into());
+            return Err(inference_worker_failure_message(&execution.stdout));
         }
         let metadata = fs::symlink_metadata(&response_path)
             .map_err(|_| "Local inference returned no completion evidence.".to_string())?;
@@ -2579,6 +2608,40 @@ pub(crate) fn cancel_training_worker(job_id: &str) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inference_input_overflow_maps_only_valid_content_free_diagnostics() {
+        let bytes = br#"{"protocol":1,"localOnly":true,"valid":false,"errorCode":"input_context_overflow","inputTokens":9000,"inputTokenBudget":7872}"#;
+        assert_eq!(super::inference_worker_failure_message(bytes),
+            "Local model input exceeds its context window: 9000 tokens exceed the 7872-token input budget after reserving output. No input was truncated and no answer was generated. Reduce optional context or use a model with a larger context window.");
+    }
+
+    #[test]
+    fn inference_input_overflow_rejects_foreign_malformed_and_unbounded_fields() {
+        let original = serde_json::json!({"protocol":1,"localOnly":true,"valid":false,
+            "errorCode":"input_context_overflow","inputTokens":9000,"inputTokenBudget":7872});
+        let generic = "The verified local model could not complete inference.";
+        for (key, value) in [
+            ("protocol", serde_json::json!(2)), ("localOnly", serde_json::json!(false)),
+            ("valid", serde_json::json!(true)), ("errorCode", serde_json::json!("foreign_error")),
+            ("inputTokens", serde_json::json!(7872)), ("inputTokens", serde_json::json!(0)),
+            ("inputTokens", serde_json::json!(2_097_153)), ("inputTokens", serde_json::json!(-1)),
+            ("inputTokens", serde_json::json!(true)), ("inputTokens", serde_json::json!(1.5)),
+            ("inputTokenBudget", serde_json::json!(0)), ("inputTokenBudget", serde_json::json!(16_385)),
+            ("inputTokenBudget", serde_json::json!("7872")),
+            ("error", serde_json::json!("private-path-or-output-must-not-leak")),
+        ] {
+            let mut changed = original.clone(); changed[key] = value;
+            assert_eq!(super::inference_worker_failure_message(&serde_json::to_vec(&changed).unwrap()), generic, "{key}");
+        }
+        for key in ["protocol", "localOnly", "valid", "errorCode", "inputTokens", "inputTokenBudget"] {
+            let mut changed = original.clone(); changed.as_object_mut().unwrap().remove(key);
+            assert_eq!(super::inference_worker_failure_message(&serde_json::to_vec(&changed).unwrap()), generic, "{key}");
+        }
+        for bytes in [b"not JSON: private-path".to_vec(), vec![b' '; 1025], vec![0xff], b"[]".to_vec()] {
+            assert_eq!(super::inference_worker_failure_message(&bytes), generic);
+        }
+    }
+
     use super::*;
 
     #[test]
