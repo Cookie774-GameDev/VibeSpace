@@ -1,6 +1,7 @@
 /**
  * Minimal base64 → HTMLAudioElement playback with abort + cleanup.
- * Returns a stop() function. Resolves when playback ends (or is aborted).
+ * Returns a stop() function. Resolves when playback ends (or is aborted),
+ * and rejects when media playback fails so callers can use their fallback.
  *
  * Used by Jarvis High and cloud providers. Guards against duplicate playback and
  * leaked object URLs / audio elements.
@@ -11,6 +12,13 @@ import { tapJarvisPlaybackElement } from './jarvisPlaybackEnergy';
 export interface PlaybackOptions {
   volume?: number;
   signal?: AbortSignal;
+}
+
+export class AudioPlaybackError extends Error {
+  constructor(readonly code: 'media_error' | 'play_rejected') {
+    super(`audio_playback_${code}`);
+    this.name = 'AudioPlaybackError';
+  }
 }
 
 function base64ToBlob(b64: string, mime: string): Blob {
@@ -33,49 +41,44 @@ export async function playBase64Audio(
   audio.volume = Math.min(1, Math.max(0, options.volume ?? 1));
   const releaseTap = tapJarvisPlaybackElement(audio);
 
-  let settled = false;
-  const cleanup = () => {
-    releaseTap();
-    try {
-      audio.pause();
-      audio.src = '';
-    } catch {
-      /* ignore */
-    }
-    URL.revokeObjectURL(url);
-  };
-  const stop = () => {
-    if (settled) return;
-    settled = true;
-    cleanup();
-  };
-
-  if (options.signal?.aborted) {
-    stop();
-    return stop;
-  }
-
-  await new Promise<void>((resolve) => {
-    const done = () => {
-      if (settled) {
-        resolve();
-        return;
-      }
+  let stop = () => {};
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: AudioPlaybackError) => {
+      if (settled) return;
       settled = true;
-      cleanup();
-      resolve();
+      audio.removeEventListener('ended', onEnded);
+      audio.removeEventListener('error', onError);
+      options.signal?.removeEventListener('abort', onAbort);
+      releaseTap();
+      try {
+        audio.pause();
+        audio.src = '';
+      } catch {
+        /* ignore */
+      }
+      URL.revokeObjectURL(url);
+      if (error && !options.signal?.aborted) reject(error);
+      else resolve();
     };
-    audio.addEventListener('ended', done, { once: true });
-    audio.addEventListener('error', done, { once: true });
-    options.signal?.addEventListener(
-      'abort',
-      () => {
-        stop();
-        resolve();
-      },
-      { once: true },
-    );
-    audio.play().catch(() => done());
+    const onEnded = () => finish();
+    const onError = () => finish(new AudioPlaybackError('media_error'));
+    const onAbort = () => finish();
+    stop = onAbort;
+
+    if (options.signal?.aborted) {
+      stop();
+      return;
+    }
+
+    audio.addEventListener('ended', onEnded, { once: true });
+    audio.addEventListener('error', onError, { once: true });
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      audio.play().catch(() => finish(new AudioPlaybackError('play_rejected')));
+    } catch {
+      finish(new AudioPlaybackError('play_rejected'));
+    }
   });
 
   return stop;

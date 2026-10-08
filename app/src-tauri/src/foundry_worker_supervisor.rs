@@ -1548,6 +1548,66 @@ pub(crate) fn export_knowledge_json(bytes: &[u8], destination: &Path, protected_
     }
 }
 
+fn open_verified_payload(root: &Path, entry: &TrainingArtifactFile) -> Result<fs::File, String> {
+    validate_export_member(&entry.path)?;
+    let source = root.join(&entry.path);
+    let mut current = root.to_path_buf();
+    for component in entry.path.split('/') {
+        current.push(component);
+        let metadata = fs::symlink_metadata(&current)
+            .map_err(|_| "Artifact export source is missing.".to_string())?;
+        if export_metadata_is_link(&metadata) {
+            return Err("Artifact export source may not contain symbolic links.".into());
+        }
+    }
+    if !source
+        .canonicalize()
+        .map_err(|_| "Artifact export source is missing.".to_string())?
+        .starts_with(root)
+    {
+        return Err("Artifact export source escaped its verified root.".into());
+    }
+    let input = fs::File::open(&source)
+        .map_err(|error| format!("Could not open artifact export source: {error}"))?;
+    let metadata = input
+        .metadata()
+        .map_err(|error| format!("Could not inspect artifact export source: {error}"))?;
+    if !metadata.is_file() || metadata.len() != entry.bytes {
+        return Err("Artifact export source size changed after verification.".into());
+    }
+    Ok(input)
+}
+
+fn stream_verified_payload(
+    input: &mut impl Read, output: &mut impl Write, entry: &TrainingArtifactFile,
+) -> Result<(), String> {
+    let mut digest = Sha256::new();
+    let mut copied = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = input
+            .read(&mut buffer)
+            .map_err(|error| format!("Could not read artifact export source: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        copied = copied
+            .checked_add(count as u64)
+            .ok_or("Artifact export size overflowed.")?;
+        if copied > entry.bytes {
+            return Err("Artifact export source grew after verification.".into());
+        }
+        digest.update(&buffer[..count]);
+        output
+            .write_all(&buffer[..count])
+            .map_err(|error| format!("Could not write artifact payload export: {error}"))?;
+    }
+    if copied != entry.bytes || format!("{:x}", digest.finalize()) != entry.sha256 {
+        return Err("Artifact export source changed after verification.".into());
+    }
+    Ok(())
+}
+
 fn write_weight_archive(
     output: &mut fs::File,
     root: &Path,
@@ -1566,62 +1626,14 @@ fn write_weight_archive(
         .write_all(manifest_bytes)
         .map_err(|error| format!("Could not write artifact manifest export: {error}"))?;
     for entry in &manifest.files {
-        validate_export_member(&entry.path)?;
-        let source = root.join(&entry.path);
-        let mut current = root.to_path_buf();
-        for component in entry.path.split('/') {
-            current.push(component);
-            let metadata = fs::symlink_metadata(&current)
-                .map_err(|_| "Artifact export source is missing.".to_string())?;
-            if export_metadata_is_link(&metadata) {
-                return Err("Artifact export source may not contain symbolic links.".into());
-            }
-        }
-        if !source
-            .canonicalize()
-            .map_err(|_| "Artifact export source is missing.".to_string())?
-            .starts_with(root)
-        {
-            return Err("Artifact export source escaped its verified root.".into());
-        }
-        let mut input = fs::File::open(&source)
-            .map_err(|error| format!("Could not open artifact export source: {error}"))?;
-        let metadata = input
-            .metadata()
-            .map_err(|error| format!("Could not inspect artifact export source: {error}"))?;
-        if !metadata.is_file() || metadata.len() != entry.bytes {
-            return Err("Artifact export source size changed after verification.".into());
-        }
+        let mut input = open_verified_payload(root, entry)?;
         archive
             .start_file(
                 &entry.path,
                 options.large_file(entry.bytes > u32::MAX as u64),
             )
             .map_err(|error| format!("Could not start artifact payload export: {error}"))?;
-        let mut digest = Sha256::new();
-        let mut copied = 0_u64;
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let count = input
-                .read(&mut buffer)
-                .map_err(|error| format!("Could not read artifact export source: {error}"))?;
-            if count == 0 {
-                break;
-            }
-            copied = copied
-                .checked_add(count as u64)
-                .ok_or("Artifact export size overflowed.")?;
-            if copied > entry.bytes {
-                return Err("Artifact export source grew after verification.".into());
-            }
-            digest.update(&buffer[..count]);
-            archive
-                .write_all(&buffer[..count])
-                .map_err(|error| format!("Could not write artifact payload export: {error}"))?;
-        }
-        if copied != entry.bytes || format!("{:x}", digest.finalize()) != entry.sha256 {
-            return Err("Artifact export source changed after verification.".into());
-        }
+        stream_verified_payload(&mut input, &mut archive, entry)?;
     }
     archive
         .finish()
@@ -1629,18 +1641,19 @@ fn write_weight_archive(
     Ok(())
 }
 
-pub(crate) fn export_training_artifact(
-    root: &Path,
-    method: &str,
-    expected_sha256: &str,
-    expected_storage_bytes: u64,
-    destination: &Path,
-    protected_root: &Path,
-    before_publish: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
-    if !cfg!(any(target_os = "linux", target_os = "windows")) {
-        return Err("Verified weight ZIP publication is not supported on this platform.".into());
-    }
+pub(crate) struct VerifiedCopyManifest {
+    protected_root: PathBuf,
+    root: PathBuf,
+    manifest_path: PathBuf,
+    manifest: TrainingArtifactManifest,
+    manifest_bytes: Vec<u8>,
+    manifest_hash: String,
+}
+
+pub(crate) fn prepare_verified_artifact_copy(
+    root: &Path, method: &str, expected_sha256: &str,
+    expected_storage_bytes: u64, protected_root: &Path,
+) -> Result<VerifiedCopyManifest, String> {
     let root = checked_export_source(root, protected_root)?;
     let evidence = verify_training_artifact_for_method(&root, method)?;
     if evidence.sha256 != expected_sha256 || evidence.storage_bytes != expected_storage_bytes {
@@ -1695,6 +1708,36 @@ pub(crate) fn export_training_artifact(
         }
     }
     let manifest_hash = format!("{:x}", Sha256::digest(&manifest_bytes));
+    Ok(VerifiedCopyManifest { protected_root: protected_root.to_path_buf(), root, manifest_path, manifest, manifest_bytes, manifest_hash })
+}
+
+impl VerifiedCopyManifest {
+    pub(crate) fn revalidate_source(&self) -> Result<(), String> {
+        checked_export_source(&self.root, &self.protected_root)?;
+        checked_export_source(&self.manifest_path, &self.protected_root)?;
+        let evidence = verify_training_artifact_for_method(&self.root, &self.manifest.method)?;
+        if evidence.sha256 != self.manifest.sha256 || evidence.storage_bytes != self.manifest.storage_bytes
+            || file_sha256(&self.manifest_path)?.1 != self.manifest_hash {
+            return Err("Source artifact changed during duplication.".into());
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn export_training_artifact(
+    root: &Path,
+    method: &str,
+    expected_sha256: &str,
+    expected_storage_bytes: u64,
+    destination: &Path,
+    protected_root: &Path,
+    before_publish: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        return Err("Verified weight ZIP publication is not supported on this platform.".into());
+    }
+    let VerifiedCopyManifest { root, manifest_path, manifest, manifest_bytes, manifest_hash, .. } =
+        prepare_verified_artifact_copy(root, method, expected_sha256, expected_storage_bytes, protected_root)?;
     write_export_atomically(destination, "zip", protected_root, |file| {
         write_weight_archive(file, &root, &manifest, &manifest_bytes)?;
         checked_export_source(&manifest_path, protected_root)?;
@@ -1705,12 +1748,392 @@ pub(crate) fn export_training_artifact(
     })
 }
 
+// The only selectable commit is job.json. Payloads are independent new files.
+// Linux keeps .duplicate-commit.json as an intentional bounded private copy of
+// the existing job representation: the proven no-replace publisher links its
+// retained handle, so successful publication needs no fallible cleanup afterward.
+const DUPLICATE_COMMIT_RECORD: &str = ".duplicate-commit.json";
+
+struct DuplicateFile { path: PathBuf, file: fs::File }
+
+pub(crate) struct PrivateDuplicate {
+    root: PathBuf,
+    ancestors: Vec<ExportDirectory>,
+    directories: Vec<ExportDirectory>,
+    files: Vec<DuplicateFile>,
+    committed: bool,
+}
+
+impl PrivateDuplicate {
+    pub(crate) fn create(protected_root: &Path, id: &str) -> Result<Self, String> {
+        if !cfg!(any(target_os = "linux", target_os = "windows")) {
+            return Err("Verified artifact duplication is unavailable on this platform.".into());
+        }
+        if !id.starts_with("job_") || !(5..=80).contains(&id.len())
+            || !id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')) {
+            return Err("Invalid duplicate job identifier.".into());
+        }
+        let parent = checked_export_source(&protected_root.join("jobs"), protected_root)?;
+        let ancestors = open_export_directories(&parent)?;
+        revalidate_export_directories(&ancestors)?;
+        let root = parent.join(id);
+        fs::create_dir(&root).map_err(|error| format!("Could not exclusively create duplicate directory: {error}"))?;
+        let file = open_export_directory_file(&root)
+            .map_err(|error| format!("{error}; duplicate cleanup is pending."))?;
+        Ok(Self { root: root.clone(), ancestors, directories: vec![ExportDirectory { path: root, file }],
+            files: Vec::new(), committed: false })
+    }
+
+    pub(crate) fn root(&self) -> &Path { &self.root }
+
+    fn revalidate(&self) -> Result<(), String> {
+        revalidate_export_directories(&self.ancestors)?;
+        revalidate_export_directories(&self.directories)
+    }
+
+    fn ensure_parent(&mut self, relative: &str) -> Result<PathBuf, String> {
+        validate_export_member(relative)?;
+        self.revalidate()?;
+        let destination = self.root.join(relative);
+        let mut directory = self.root.clone();
+        let components = relative.split('/').collect::<Vec<_>>();
+        for component in &components[..components.len() - 1] {
+            directory.push(component);
+            if self.directories.iter().any(|owned| owned.path == directory) { continue; }
+            fs::create_dir(&directory).map_err(|error| format!("Could not exclusively create duplicate payload directory: {error}"))?;
+            let file = open_export_directory_file(&directory)
+                .map_err(|error| format!("{error}; duplicate cleanup is pending."))?;
+            self.directories.push(ExportDirectory { path: directory.clone(), file });
+        }
+        self.revalidate()?;
+        Ok(destination)
+    }
+
+    fn write_owned_file(&mut self, relative: &str, write: impl FnOnce(&mut fs::File) -> Result<(), String>) -> Result<(), String> {
+        self.write_owned_file_with_sync(relative, write, |file| file.sync_all()
+            .map_err(|error| format!("Could not sync duplicate file: {error}")))
+    }
+
+    fn write_owned_file_with_sync(&mut self, relative: &str,
+        write: impl FnOnce(&mut fs::File) -> Result<(), String>,
+        sync: impl FnOnce(&fs::File) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if self.committed || self.files.len() >= MAX_ARTIFACT_FILES + 3 {
+            return Err("Duplicate file collection is unavailable or exceeds its bound.".into());
+        }
+        let path = self.ensure_parent(relative)?;
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // Retain deletion authority over this new file; allow verifier reads,
+            // while denying external writes and replacement until commit/cleanup.
+            options.access_mode(0xC001_0000).share_mode(1);
+        }
+        let file = options.open(&path).map_err(|error| format!("Could not create independent duplicate file: {error}"))?;
+        self.files.push(DuplicateFile { path, file });
+        let file = &mut self.files.last_mut().ok_or("Duplicate file is missing.")?.file;
+        write(file)?;
+        sync(file)?;
+        self.revalidate()
+    }
+
+    pub(crate) fn write_bytes(&mut self, relative: &str, bytes: &[u8]) -> Result<(), String> {
+        if matches!(relative, "job.json" | DUPLICATE_COMMIT_RECORD) {
+            return Err("Duplicate job metadata must be published last.".into());
+        }
+        self.write_owned_file(relative, |file| file.write_all(bytes)
+            .map_err(|error| format!("Could not write duplicate file: {error}")))
+    }
+
+    pub(crate) fn copy_weights(&mut self, verified: &VerifiedCopyManifest,
+        mut after_payload: impl FnMut(&Path) -> Result<(), String>,
+    ) -> Result<TrainingArtifactEvidence, String> {
+        for entry in &verified.manifest.files {
+            let mut input = open_verified_payload(&verified.root, entry)?;
+            self.write_owned_file(&format!("weight-artifact/{}", entry.path), |output|
+                stream_verified_payload(&mut input, output, entry))?;
+            after_payload(&self.root)?;
+        }
+        self.write_bytes(&format!("weight-artifact/{TRAINING_ARTIFACT_MANIFEST}"), &verified.manifest_bytes)?;
+        checked_export_source(&verified.manifest_path, &verified.protected_root)?;
+        if file_sha256(&verified.manifest_path)?.1 != verified.manifest_hash {
+            return Err("Artifact manifest changed during duplication.".into());
+        }
+        let evidence = verify_training_artifact_for_method(&self.root.join("weight-artifact"), &verified.manifest.method)?;
+        if evidence.sha256 != verified.manifest.sha256 || evidence.storage_bytes != verified.manifest.storage_bytes {
+            return Err("Independent duplicate failed artifact verification.".into());
+        }
+        Ok(evidence)
+    }
+
+    pub(crate) fn commit(&mut self, bytes: &[u8], before_publish: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        if bytes.is_empty() || bytes.len() > 1024 * 1024 { return Err("Duplicate job record exceeds its bound.".into()); }
+        self.write_owned_file(DUPLICATE_COMMIT_RECORD, |file| file.write_all(bytes)
+            .map_err(|error| format!("Could not write duplicate commit record: {error}")))?;
+        before_publish()?;
+        self.revalidate()?;
+        for owned in &self.files {
+            let opened = owned.file.metadata().map_err(|_| "Duplicate file ownership is unavailable.")?;
+            let named = fs::symlink_metadata(&owned.path).map_err(|_| "Duplicate file path changed.")?;
+            if !named.is_file() || export_metadata_is_link(&named) { return Err("Duplicate file path was replaced.".into()); }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if opened.dev() != named.dev() || opened.ino() != named.ino() { return Err("Duplicate file path was replaced.".into()); }
+            }
+            #[cfg(target_os = "windows")]
+            {
+                let current = fs::File::open(&owned.path).map_err(|_| "Duplicate file ownership is unavailable.")?;
+                if export_directory_identity(&owned.file)? != export_directory_identity(&current)? { return Err("Duplicate file path was replaced.".into()); }
+                let _ = opened;
+            }
+        }
+        let record = self.files.last().ok_or("Duplicate commit record is missing.")?;
+        use std::io::{Seek, SeekFrom};
+        let mut record_reader = record.file.try_clone().map_err(|_| "Duplicate commit record is unavailable.")?;
+        record_reader.seek(SeekFrom::Start(0)).map_err(|_| "Duplicate commit record is unavailable.")?;
+        let mut actual = Vec::new();
+        record_reader.take(1024 * 1024 + 1).read_to_end(&mut actual).map_err(|_| "Duplicate commit record is unavailable.")?;
+        if actual != bytes { return Err("Duplicate commit record changed before publication.".into()); }
+        let directory = &self.directories.first().ok_or("Duplicate directory is missing.")?.file;
+        publish_export_handle(&record.file, directory, &self.root.join("job.json"))?;
+        // This must be the last fallible operation. Windows moved the retained
+        // record; Linux retained its private bounded source name intentionally.
+        self.committed = true;
+        Ok(())
+    }
+
+    pub(crate) fn cleanup(mut self, before_cleanup: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        if self.committed { return Ok(()); }
+        before_cleanup()?;
+        let mut failures = Vec::new();
+        for owned in self.files.drain(..).rev() {
+            if let Err(error) = remove_duplicate_file(owned) { failures.push(error); }
+        }
+        // Empty-directory removal never recursively deletes a collision winner.
+        for owned in self.directories.drain(..).rev() {
+            if let Err(error) = remove_duplicate_directory(owned) { failures.push(error); }
+        }
+        if failures.is_empty() { Ok(()) } else { Err("Duplicate cleanup is pending; retained or foreign entries were preserved.".into()) }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn mark_duplicate_handle_for_deletion(file: &fs::File) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{SetFileInformationByHandle, FileDispositionInfo, FILE_DISPOSITION_INFO};
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true.into() };
+    unsafe { SetFileInformationByHandle(HANDLE(file.as_raw_handle()), FileDispositionInfo,
+        (&disposition as *const FILE_DISPOSITION_INFO).cast(), std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32) }
+        .map_err(|_| "Duplicate owned-object cleanup is unavailable.".to_string())
+}
+
+fn remove_duplicate_file(owned: DuplicateFile) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    { mark_duplicate_handle_for_deletion(&owned.file) }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let opened = owned.file.metadata().map_err(|_| "Duplicate ownership is unavailable.")?;
+        let named = fs::symlink_metadata(&owned.path).map_err(|_| "Duplicate path changed.")?;
+        if opened.dev() != named.dev() || opened.ino() != named.ino() { return Err("Duplicate path no longer belongs to this copy.".into()); }
+        fs::remove_file(&owned.path).map_err(|_| "Duplicate owned-file cleanup is unavailable.".into())
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    { let _ = owned; Err("Verified duplicate cleanup is unsupported.".into()) }
+}
+
+fn remove_duplicate_directory(owned: ExportDirectory) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        let identity = export_directory_identity(&owned.file)?;
+        let path = owned.path;
+        drop(owned.file); // Release our deny-delete read handle before acquiring deletion authority.
+        let file = fs::OpenOptions::new().read(true).access_mode(0x8001_0000)
+            .custom_flags(0x0220_0000).share_mode(7).open(&path)
+            .map_err(|_| "Duplicate directory cleanup is unavailable.")?;
+        let metadata = file.metadata().map_err(|_| "Duplicate directory ownership is unavailable.")?;
+        if !metadata.is_dir() || export_metadata_is_link(&metadata) || export_directory_identity(&file)? != identity {
+            return Err("Duplicate directory was replaced; cleanup is pending.".into());
+        }
+        mark_duplicate_handle_for_deletion(&file)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let opened = owned.file.metadata().map_err(|_| "Duplicate ownership is unavailable.")?;
+        let named = fs::symlink_metadata(&owned.path).map_err(|_| "Duplicate directory changed.")?;
+        if opened.dev() != named.dev() || opened.ino() != named.ino() { return Err("Duplicate directory no longer belongs to this copy.".into()); }
+        fs::remove_dir(&owned.path).map_err(|_| "Duplicate nonempty directory was preserved; cleanup is pending.".into())
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    { let _ = owned; Err("Verified duplicate cleanup is unsupported.".into()) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+
+    fn copy_fixture_root(label: &str) -> PathBuf {
+        let root = scratch_dir(label); fs::create_dir_all(root.join("private/jobs")).unwrap(); root
+    }
+
+    #[test]
+    fn artifact_duplicate_stream_rejects_short_growing_changed_and_failed_io() {
+        let bytes = b"verified payload";
+        let entry = TrainingArtifactFile { path: "weights.bin".into(), bytes: bytes.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(bytes)) };
+        let mut output = Vec::new();
+        stream_verified_payload(&mut Cursor::new(bytes), &mut output, &entry).unwrap(); assert_eq!(output, bytes);
+        for source in [&bytes[..3], b"verified payload with growth".as_slice(), b"different payload".as_slice()] {
+            assert!(stream_verified_payload(&mut Cursor::new(source), &mut Vec::new(), &entry).is_err());
+        }
+        struct FailedRead;
+        impl Read for FailedRead { fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> { Err(std::io::Error::other("injected read")) } }
+        struct FailedWrite;
+        impl Write for FailedWrite {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> { Err(std::io::Error::other("injected write")) }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        assert!(stream_verified_payload(&mut FailedRead, &mut Vec::new(), &entry).is_err());
+        assert!(stream_verified_payload(&mut Cursor::new(bytes), &mut FailedWrite, &entry).is_err());
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn artifact_duplicate_partial_write_cleans_only_owned_files_and_never_publishes() {
+        let root = copy_fixture_root("copy-partial-write");
+        let mut copy = PrivateDuplicate::create(&root.join("private"), "job_copy").unwrap();
+        let destination = copy.root().to_path_buf();
+        assert!(copy.write_owned_file("weight-artifact/nested/weights.bin", |file| {
+            file.write_all(b"partial").unwrap(); Err("injected disk failure".into())
+        }).is_err());
+        assert!(!destination.join("job.json").exists()); copy.cleanup(|| Ok(())).unwrap();
+        assert!(!destination.exists()); fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn artifact_duplicate_sync_failure_is_not_a_successful_copy() {
+        let root = copy_fixture_root("copy-sync-failure");
+        let mut copy = PrivateDuplicate::create(&root.join("private"), "job_copy").unwrap();
+        let destination = copy.root().to_path_buf();
+        let error = copy.write_owned_file_with_sync("request.json", |file| file.write_all(b"complete but unsynced")
+            .map_err(|error| error.to_string()), |_| Err("injected sync failure".into())).unwrap_err();
+        assert_eq!(error, "injected sync failure"); assert!(!destination.join("job.json").exists());
+        copy.cleanup(|| Ok(())).unwrap(); assert!(!destination.exists()); fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn artifact_duplicate_file_collision_is_never_adopted_or_deleted_by_cleanup() {
+        let root = copy_fixture_root("copy-file-collision");
+        let mut copy = PrivateDuplicate::create(&root.join("private"), "job_copy").unwrap();
+        let destination = copy.root().to_path_buf();
+        fs::write(destination.join("request.json"), b"foreign winner").unwrap();
+        assert!(copy.write_bytes("request.json", b"our content").is_err());
+        assert!(copy.cleanup(|| Ok(())).unwrap_err().contains("cleanup is pending"));
+        assert_eq!(fs::read(destination.join("request.json")).unwrap(), b"foreign winner");
+        assert!(!destination.join("job.json").exists()); fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn artifact_duplicate_commit_is_last_bounded_no_replace_and_uses_exact_retained_record() {
+        let root = copy_fixture_root("copy-commit");
+        let mut copy = PrivateDuplicate::create(&root.join("private"), "job_copy").unwrap();
+        let destination = copy.root().to_path_buf();
+        assert!(copy.write_bytes("job.json", b"premature").is_err());
+        assert!(copy.write_bytes(DUPLICATE_COMMIT_RECORD, b"premature").is_err());
+        assert!(copy.commit(&vec![b'x'; 1024 * 1024 + 1], || Ok(())).is_err());
+        copy.write_bytes("request.json", b"bounded compatible record").unwrap();
+        let record = b"{\"id\":\"job_copy\",\"status\":\"completed\"}";
+        copy.commit(record, || { assert!(!destination.join("job.json").exists()); Ok(()) }).unwrap();
+        assert!(copy.write_bytes("late-write", b"not allowed").is_err());
+        drop(copy);
+        assert_eq!(fs::read(destination.join("job.json")).unwrap(), record);
+        #[cfg(target_os = "linux")]
+        assert_eq!(fs::read(destination.join(DUPLICATE_COMMIT_RECORD)).unwrap(), record);
+        #[cfg(target_os = "windows")]
+        assert!(!destination.join(DUPLICATE_COMMIT_RECORD).exists());
+        assert!(PrivateDuplicate::create(&root.join("private"), "job_copy").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn artifact_duplicate_rejects_replaced_owned_file_directory_and_commit_content() {
+        for case in 0..3 {
+            let root = copy_fixture_root("copy-replaced-owned-entry");
+            let mut copy = PrivateDuplicate::create(&root.join("private"), "job_copy").unwrap();
+            let destination = copy.root().to_path_buf();
+            copy.write_bytes("request.json", b"our record").unwrap();
+            let result = copy.commit(b"{\"id\":\"job_copy\"}", || {
+                match case {
+                    0 => { fs::rename(destination.join("request.json"), root.join("moved-own-record")).unwrap(); fs::write(destination.join("request.json"), b"foreign winner").unwrap(); }
+                    1 => { fs::rename(&destination, root.join("moved-own-directory")).unwrap(); fs::create_dir(&destination).unwrap(); fs::write(destination.join("foreign"), b"foreign winner").unwrap(); }
+                    _ => fs::write(destination.join(DUPLICATE_COMMIT_RECORD), b"changed commit content").unwrap(),
+                }
+                Ok(())
+            });
+            assert!(result.is_err()); assert!(!destination.join("job.json").exists());
+            let cleanup = copy.cleanup(|| Ok(()));
+            if case != 2 { assert!(cleanup.is_err()); } else { cleanup.unwrap(); }
+            if case == 0 { assert_eq!(fs::read(destination.join("request.json")).unwrap(), b"foreign winner"); }
+            if case == 1 { assert_eq!(fs::read(destination.join("foreign")).unwrap(), b"foreign winner"); }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn artifact_duplicate_windows_retains_payload_and_directory_names_through_publication() {
+        let root = copy_fixture_root("copy-retained-windows");
+        let mut copy = PrivateDuplicate::create(&root.join("private"), "job_copy").unwrap();
+        let destination = copy.root().to_path_buf();
+        copy.write_bytes("request.json", b"our record").unwrap();
+        copy.commit(b"{\"id\":\"job_copy\"}", || {
+            assert!(fs::rename(&destination, root.join("moved-directory")).is_err());
+            assert!(fs::rename(destination.join("request.json"), root.join("moved-record")).is_err());
+            assert!(fs::write(destination.join("request.json"), b"foreign writer").is_err());
+            assert!(fs::write(destination.join(DUPLICATE_COMMIT_RECORD), b"foreign writer").is_err()); Ok(())
+        }).unwrap();
+        drop(copy); assert_eq!(fs::read(destination.join("request.json")).unwrap(), b"our record");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn artifact_duplicate_preflight_reuses_method_hash_and_portable_namespace_admission() {
+        for method in ["full", "lora", "qlora"] {
+            let root = copy_fixture_root("copy-manifest-admission"); let source = root.join("private/source");
+            fs::create_dir(&source).unwrap(); fs::write(source.join("weights.bin"), b"tiny weights").unwrap();
+            let evidence = write_and_verify_training_artifact(&source, method).unwrap();
+            assert!(prepare_verified_artifact_copy(&source, "knowledge", &evidence.sha256, evidence.storage_bytes, &root.join("private")).is_err());
+            assert!(prepare_verified_artifact_copy(&source, method, &"f".repeat(64), evidence.storage_bytes, &root.join("private")).is_err());
+            assert!(prepare_verified_artifact_copy(&source, method, &evidence.sha256, evidence.storage_bytes + 1, &root.join("private")).is_err());
+            let verified = prepare_verified_artifact_copy(&source, method, &evidence.sha256, evidence.storage_bytes, &root.join("private")).unwrap();
+            let mut copy = PrivateDuplicate::create(&root.join("private"), "job_copy").unwrap();
+            let copied = copy.copy_weights(&verified, |_| Ok(())).unwrap(); assert_eq!(copied.sha256, evidence.sha256);
+            copy.cleanup(|| Ok(())).unwrap();
+            // Never address a reserved Windows device name on Windows.
+            #[cfg(target_os = "linux")]
+            {
+                fs::remove_file(source.join("weights.bin")).unwrap();
+                fs::write(source.join("CON.txt"), b"not portable").unwrap();
+                let evidence = write_and_verify_training_artifact(&source, method).unwrap();
+                assert!(prepare_verified_artifact_copy(&source, method, &evidence.sha256, evidence.storage_bytes, &root.join("private")).is_err());
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]

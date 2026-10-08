@@ -2629,12 +2629,14 @@ fn rename_artifact_from_root(
 }
 
 #[tauri::command]
-pub fn model_foundry_duplicate_artifact(
+pub async fn model_foundry_duplicate_artifact(
     app: tauri::AppHandle,
     job_id: String,
     name: String,
 ) -> Result<FoundryJob, String> {
-    duplicate_artifact_with_root(&job_id, &name, || foundry_root(&app))
+    tauri::async_runtime::spawn_blocking(move ||
+        duplicate_artifact_with_root(&job_id, &name, || foundry_root(&app)))
+        .await.map_err(|error| format!("Artifact duplication task could not finish: {error}"))?
 }
 
 fn duplicate_artifact_with_root(
@@ -2642,70 +2644,165 @@ fn duplicate_artifact_with_root(
     name: &str,
     resolve_root: impl FnOnce() -> Result<PathBuf, String>,
 ) -> Result<FoundryJob, String> {
-    let source_id = validated_job_id(job_id.trim())?;
+    validated_job_id(job_id.trim())?;
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 80 {
         return Err("Model name must contain 1 to 80 characters.".into());
     }
-    let jobs_root = resolve_root()?.join("jobs");
-    let source_dir = jobs_root.join(source_id);
-    let source_job: FoundryJob = serde_json::from_slice(
-        &fs::read(source_dir.join("job.json"))
-            .map_err(|_| "Model Foundry job was not found.".to_string())?,
-    )
-    .map_err(|error| format!("Model Foundry job metadata is invalid: {error}"))?;
-    if source_job.status != "completed" || !source_job.artifact_verified {
-        return Err("Only a verified completed artifact can be duplicated.".into());
+    duplicate_artifact_controlled(&resolve_root()?, job_id, name, &format!("job_{}", nanoid::nanoid!(14)), |_, _| Ok(()))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DuplicatePoint { Created, PayloadCopied, ArtifactReady, BeforeRequestWrite, BeforeCommitRecord, BeforePublish, Cleanup }
+
+fn read_duplicate_bytes(path: &Path, protected_root: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    let path = crate::model_foundry_training::checked_export_source(path, protected_root)?;
+    let file = fs::File::open(path).map_err(|error| format!("Duplicate source is unavailable: {error}"))?;
+    let metadata = file.metadata().map_err(|_| "Duplicate source metadata is unavailable.")?;
+    if !metadata.is_file() || metadata.len() > limit { return Err("Duplicate source exceeds its bounded regular-file contract.".into()); }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).map_err(|error| format!("Could not read duplicate source: {error}"))?;
+    if bytes.len() as u64 != metadata.len() || bytes.len() as u64 > limit { return Err("Duplicate source changed while reading.".into()); }
+    Ok(bytes)
+}
+
+fn optional_duplicate_request(path: &Path, protected_root: &Path) -> Result<Option<Vec<u8>>, String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Could not inspect duplicate retry record: {error}")),
+        Ok(_) => read_duplicate_bytes(path, protected_root, 64 * 1024 * 1024).map(Some),
     }
-    let mut artifact = validate_artifact(&source_dir.join("knowledge-artifact.json"))?;
-    artifact.model_name = name.to_string();
-    artifact.version = 1;
-    let id = format!("job_{}", nanoid::nanoid!(14));
-    let destination_dir = jobs_root.join(&id);
-    fs::create_dir_all(&destination_dir)
-        .map_err(|error| format!("Could not create duplicate artifact directory: {error}"))?;
-    let artifact_path = destination_dir.join("knowledge-artifact.json");
-    write_atomic(
-        &artifact_path,
-        &serde_json::to_vec_pretty(&artifact)
-            .map_err(|error| format!("Could not encode duplicate artifact: {error}"))?,
-    )?;
-    validate_artifact(&artifact_path)?;
-    let bytes =
-        fs::read(&artifact_path).map_err(|error| format!("Could not reopen artifact: {error}"))?;
-    let timestamp = now();
-    let job = FoundryJob {
-        id,
-        project_id: source_job.project_id,
-        name: name.to_string(),
-        base_model_id: artifact.base_model_id,
-        method: source_job.method,
-        status: "completed".into(),
-        progress: 100,
-        artifact_path: Some(artifact_path.to_string_lossy().into_owned()),
-        artifact_verified: true,
-        artifact_sha256: Some(format!("{:x}", Sha256::digest(&bytes))),
-        storage_bytes: bytes.len() as u64,
-        source_count: artifact.source_count,
-        version: 1,
-        resume_available: false,
-        error: None,
-        created_at: timestamp.clone(),
-        updated_at: timestamp,
-    };
-    write_job(&destination_dir.join("job.json"), &job)?;
-    if let Ok(bytes) = fs::read(source_dir.join("request.json")) {
-        if let Ok(mut request) = serde_json::from_slice::<StartRequest>(&bytes) {
-            request.name = name.to_string();
-            request.version = Some(1);
-            write_atomic(
-                &destination_dir.join("request.json"),
-                &serde_json::to_vec_pretty(&request)
-                    .map_err(|error| format!("Could not encode duplicate retry record: {error}"))?,
-            )?;
+}
+
+fn duplicate_artifact_controlled(
+    protected_root: &Path, job_id: &str, name: &str, destination_id: &str,
+    mut at: impl FnMut(DuplicatePoint, &Path) -> Result<(), String>,
+) -> Result<FoundryJob, String> {
+    use crate::model_foundry_training::{checked_export_source, prepare_verified_artifact_copy, PrivateDuplicate};
+    let source_id = validated_job_id(job_id.trim())?;
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 80 { return Err("Model name must contain 1 to 80 characters.".into()); }
+    validated_job_id(destination_id)?;
+    if destination_id == source_id { return Err("A duplicate requires its own job identity.".into()); }
+    let source_dir = checked_export_source(&protected_root.join("jobs").join(source_id), protected_root)?;
+    let job_path = source_dir.join("job.json");
+    let job_bytes = read_duplicate_bytes(&job_path, protected_root, 1024 * 1024)?;
+    let source_job: FoundryJob = serde_json::from_slice(&job_bytes)
+        .map_err(|error| format!("Model Foundry job metadata is invalid: {error}"))?;
+    if source_job.id != source_id || source_job.status != "completed" || !source_job.artifact_verified
+        || source_job.version == 0 || source_job.name.trim().is_empty() || source_job.base_model_id.trim().is_empty() {
+        return Err("Only the matching verified completed artifact can be duplicated.".into());
+    }
+    let method = parsed_method(&source_job.method)?;
+    let artifact_name = if method == FoundryMethod::Knowledge { "knowledge-artifact.json" } else { "weight-artifact" };
+    let artifact_path = checked_export_source(&source_dir.join(artifact_name), protected_root)?;
+    let recorded_path = source_job.artifact_path.as_deref().ok_or("Duplicate artifact path is missing.")?;
+    if checked_export_source(Path::new(recorded_path), protected_root)? != artifact_path {
+        return Err("Duplicate artifact does not match its recorded job path.".into());
+    }
+    let expected_hash = source_job.artifact_sha256.as_deref().filter(|value| is_sha256(value))
+        .ok_or("Duplicate artifact has no recorded integrity hash.")?;
+    let mut knowledge_original = None;
+    let mut knowledge_copy = None;
+    let weights = if method == FoundryMethod::Weight {
+        Some(prepare_verified_artifact_copy(&artifact_path, &source_job.method, expected_hash, source_job.storage_bytes, protected_root)?)
+    } else {
+        let bytes = read_duplicate_bytes(&artifact_path, protected_root, 64 * 1024 * 1024)?;
+        let mut artifact = validate_artifact_bytes(&bytes)?;
+        if artifact.base_model_id != source_job.base_model_id || artifact.model_name != source_job.name
+            || artifact.version != source_job.version || artifact.source_count != source_job.source_count
+            || bytes.len() as u64 != source_job.storage_bytes || format!("{:x}", Sha256::digest(&bytes)) != expected_hash {
+            return Err("Knowledge duplicate no longer matches its verified job.".into());
         }
+        artifact.model_name = name.to_owned(); artifact.version = 1;
+        knowledge_copy = Some(serde_json::to_vec_pretty(&artifact).map_err(|error| format!("Could not encode duplicate artifact: {error}"))?);
+        knowledge_original = Some(bytes);
+        None
+    };
+    let request_path = source_dir.join("request.json");
+    let original_request = optional_duplicate_request(&request_path, protected_root)?;
+    let copied_request = if let Some(bytes) = &original_request {
+        let request: StartRequest = serde_json::from_slice(bytes).map_err(|error| format!("Private duplicate retry record is invalid: {error}"))?;
+        if !request.local_only || request.method != source_job.method || request.base_model_id != source_job.base_model_id
+            || request.project_id != source_job.project_id || request.name != source_job.name
+            || request.version.unwrap_or(1) != source_job.version || request.schema_version.is_some_and(|value| value != 2) {
+            return Err("Private duplicate retry record does not match the source job.".into());
+        }
+        // Preserve compatible/future metadata rather than dropping unknown keys.
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| "Private duplicate retry record is invalid.")?;
+        value["name"] = name.into(); value["version"] = 1.into();
+        Some(serde_json::to_vec_pretty(&value).map_err(|error| format!("Could not encode duplicate retry record: {error}"))?)
+    } else { None };
+
+    let mut copy = PrivateDuplicate::create(protected_root, destination_id)?;
+    let destination = copy.root().to_path_buf();
+    let result = (|| {
+        at(DuplicatePoint::Created, &destination)?;
+        let (sha256, storage_bytes) = if let Some(weights) = &weights {
+            let evidence = copy.copy_weights(weights, |path| at(DuplicatePoint::PayloadCopied, path))?;
+            (evidence.sha256, evidence.storage_bytes)
+        } else {
+            let bytes = knowledge_copy.as_deref().ok_or("Verified knowledge copy is missing.")?;
+            copy.write_bytes(artifact_name, bytes)?;
+            at(DuplicatePoint::PayloadCopied, &destination)?;
+            let reopened = read_duplicate_bytes(&destination.join(artifact_name), protected_root, 64 * 1024 * 1024)?;
+            validate_artifact_bytes(&reopened)?;
+            if reopened != bytes { return Err("Knowledge duplicate changed after writing.".into()); }
+            (format!("{:x}", Sha256::digest(&reopened)), reopened.len() as u64)
+        };
+        at(DuplicatePoint::ArtifactReady, &destination)?;
+        if let Some(bytes) = &copied_request {
+            at(DuplicatePoint::BeforeRequestWrite, &destination)?;
+            copy.write_bytes("request.json", bytes)?;
+        }
+        let timestamp = now();
+        let job = FoundryJob {
+            id: destination_id.to_owned(), project_id: source_job.project_id.clone(), name: name.to_owned(),
+            base_model_id: source_job.base_model_id.clone(), method: source_job.method.clone(), status: "completed".into(),
+            progress: 100, artifact_path: Some(destination.join(artifact_name).to_string_lossy().into_owned()),
+            artifact_verified: true, artifact_sha256: Some(sha256), storage_bytes, source_count: source_job.source_count,
+            version: 1, resume_available: false, error: None, created_at: timestamp.clone(), updated_at: timestamp,
+        };
+        let encoded = serde_json::to_vec_pretty(&job).map_err(|error| format!("Could not encode duplicate job: {error}"))?;
+        at(DuplicatePoint::BeforeCommitRecord, &destination)?;
+        copy.commit(&encoded, || {
+            at(DuplicatePoint::BeforePublish, &destination)?;
+            if read_duplicate_bytes(&job_path, protected_root, 1024 * 1024)? != job_bytes
+                || optional_duplicate_request(&request_path, protected_root)? != original_request {
+                return Err("Source job or retry record changed during duplication.".into());
+            }
+            if let Some(weights) = &weights {
+                weights.revalidate_source()?;
+                let staged = crate::model_foundry_training::verify_training_artifact_for_method(&destination.join(artifact_name), &job.method)?;
+                if Some(&staged.sha256) != job.artifact_sha256.as_ref() || staged.storage_bytes != job.storage_bytes {
+                    return Err("Staged duplicate changed before publication.".into());
+                }
+            }
+            if let Some(bytes) = &copied_request {
+                if read_duplicate_bytes(&destination.join("request.json"), protected_root, 64 * 1024 * 1024)? != *bytes {
+                    return Err("Staged retry record changed before publication.".into());
+                }
+            }
+            if let Some(original) = &knowledge_original {
+                if read_duplicate_bytes(&destination.join(artifact_name), protected_root, 64 * 1024 * 1024)?.as_slice()
+                    != knowledge_copy.as_deref().ok_or("Verified knowledge copy is missing.")? {
+                    return Err("Staged knowledge duplicate changed before publication.".into());
+                }
+                if read_duplicate_bytes(&artifact_path, protected_root, 64 * 1024 * 1024)? != *original {
+                    return Err("Source knowledge artifact changed during duplication.".into());
+                }
+            }
+            Ok(())
+        })?;
+        Ok(job)
+    })();
+    match result {
+        Ok(job) => Ok(job),
+        Err(error) => match copy.cleanup(|| at(DuplicatePoint::Cleanup, &destination)) {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(format!("{error} {cleanup}")),
+        },
     }
-    Ok(job)
 }
 
 #[tauri::command]
@@ -2936,6 +3033,205 @@ mod tests {
         assert_eq!(response.version, renamed.version);
         assert_eq!(response.method, renamed.method);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn duplicate_request_fixture(job: &FoundryJob) -> serde_json::Value {
+        serde_json::json!({"schemaVersion":2,"projectId":job.project_id,"name":job.name,
+            "description":"Public synthetic metadata","purpose":"Test","instructions":null,
+            "baseModelId":job.base_model_id,"method":job.method,"sourcePaths":[],"localOnly":true,
+            "version":job.version,"datasetJsonl":"{\"prompt\":\"Public synthetic training input\",\"response\":\"Public synthetic answer\"}\n",
+            "futureMetadata":{"fixture":true}})
+    }
+
+    #[test]
+    fn artifact_duplicate_preserves_payloads_request_fields_and_independent_file_ownership() {
+        for method in ["full", "lora", "qlora", "knowledge"] {
+            let (root, source_dir, mut source) = artifact_export_fixture(method);
+            if method != "knowledge" { source.version = 7; write_job(&source_dir.join("job.json"), &source).unwrap(); }
+            let request = duplicate_request_fixture(&source);
+            let request_bytes = serde_json::to_vec_pretty(&request).unwrap();
+            fs::write(source_dir.join("request.json"), &request_bytes).unwrap();
+            let job_bytes = fs::read(source_dir.join("job.json")).unwrap();
+            let source_payload = if method == "knowledge" { "knowledge-artifact.json" } else { "weight-artifact/model.safetensors" };
+            let payload_bytes = fs::read(source_dir.join(source_payload)).unwrap();
+            let mut barriers = 0;
+            let copy = duplicate_artifact_controlled(&root.join("private"), &source.id, "  独立 copy  ", "job_copy", |point, destination| {
+                assert!(!destination.join("job.json").exists(), "publication happened before the final commit");
+                if point == DuplicatePoint::BeforePublish { barriers += 1; }
+                Ok(())
+            }).unwrap();
+            assert_eq!(barriers, 1); assert_eq!(copy.name, "独立 copy"); assert_eq!(copy.version, 1);
+            assert_eq!(copy.project_id, source.project_id); assert_eq!(copy.base_model_id, source.base_model_id);
+            let destination = root.join("private/jobs/job_copy");
+            let mut expected_request = request.clone(); expected_request["name"] = "独立 copy".into(); expected_request["version"] = 1.into();
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&fs::read(destination.join("request.json")).unwrap()).unwrap(), expected_request);
+            assert_eq!(fs::read(source_dir.join("request.json")).unwrap(), request_bytes);
+            assert_eq!(fs::read(source_dir.join("job.json")).unwrap(), job_bytes);
+            if method != "knowledge" {
+                assert_eq!(fs::read(destination.join("weight-artifact/.vibespace-artifact.json")).unwrap(), fs::read(source_dir.join("weight-artifact/.vibespace-artifact.json")).unwrap());
+                assert_eq!(copy.artifact_sha256, source.artifact_sha256); assert_eq!(copy.storage_bytes, source.storage_bytes);
+            } else {
+                let bytes = fs::read(destination.join(source_payload)).unwrap();
+                assert_eq!(bytes.len() as u64, copy.storage_bytes);
+                assert_eq!(Some(format!("{:x}", Sha256::digest(&bytes))), copy.artifact_sha256);
+            }
+            #[cfg(target_os = "linux")]
+            assert_eq!(fs::read(destination.join(".duplicate-commit.json")).unwrap(), fs::read(destination.join("job.json")).unwrap());
+            #[cfg(target_os = "windows")]
+            assert!(!destination.join(".duplicate-commit.json").exists());
+            fs::write(destination.join(source_payload), b"changed independent copy only").unwrap();
+            assert_eq!(fs::read(source_dir.join(source_payload)).unwrap(), payload_bytes);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn artifact_duplicate_rejects_job_identity_and_integrity_drift_before_creation() {
+        for case in 0..13 {
+            let (root, source_dir, mut source) = artifact_export_fixture("full");
+            let source_id = source.id.clone();
+            match case {
+                0 => source.id = "job_another".into(),
+                1 => source.status = "training".into(),
+                2 => source.artifact_verified = false,
+                3 => source.artifact_path = None,
+                4 => source.artifact_path = Some(source_dir.to_string_lossy().into_owned()),
+                5 => source.method = "unsupported".into(),
+                6 => source.artifact_sha256 = None,
+                7 => source.artifact_sha256 = Some("not-a-digest".into()),
+                8 => source.artifact_sha256 = Some("f".repeat(64)),
+                9 => source.storage_bytes += 1,
+                10 => source.version = 0,
+                11 => source.name.clear(),
+                _ => fs::write(source_dir.join("weight-artifact/model.safetensors"), b"tampered source").unwrap(),
+            }
+            write_job(&source_dir.join("job.json"), &source).unwrap();
+            let before = fs::read(source_dir.join("job.json")).unwrap();
+            let payload = fs::read(source_dir.join("weight-artifact/model.safetensors")).unwrap();
+            assert!(duplicate_artifact_controlled(&root.join("private"), &source_id, "Refused", "job_copy", |_, _| Ok(())).is_err(), "case {case}");
+            assert!(!root.join("private/jobs/job_copy").exists());
+            assert_eq!(fs::read(source_dir.join("job.json")).unwrap(), before);
+            assert_eq!(fs::read(source_dir.join("weight-artifact/model.safetensors")).unwrap(), payload);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn artifact_duplicate_rejects_invalid_names_ids_and_bounded_metadata_before_creation() {
+        let (root, source_dir, source) = artifact_export_fixture("full");
+        for (id, name, destination) in [("../escape", "Copy", "job_copy"), (source.id.as_str(), "   ", "job_copy"),
+            (source.id.as_str(), "Copy", source.id.as_str()), (source.id.as_str(), "Copy", "../escape")] {
+            assert!(duplicate_artifact_controlled(&root.join("private"), id, name, destination, |_, _| Ok(())).is_err());
+        }
+        assert!(duplicate_artifact_controlled(&root.join("private"), &source.id, &"x".repeat(81), "job_copy", |_, _| Ok(())).is_err());
+        for bytes in [b"invalid JSON".to_vec(), vec![b' '; 1024 * 1024 + 1]] {
+            fs::write(source_dir.join("job.json"), &bytes).unwrap();
+            assert!(duplicate_artifact_controlled(&root.join("private"), &source.id, "Copy", "job_copy", |_, _| Ok(())).is_err());
+            assert_eq!(fs::read(source_dir.join("job.json")).unwrap(), bytes);
+        }
+        assert!(!root.join("private/jobs/job_copy").exists()); fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_duplicate_rejects_present_invalid_retry_records_but_preserves_missing_legacy() {
+        let (root, source_dir, source) = artifact_export_fixture("full");
+        let original = duplicate_request_fixture(&source);
+        for (key, value) in [("method", serde_json::json!("lora")), ("localOnly", serde_json::json!(false)),
+            ("baseModelId", serde_json::json!("different")), ("projectId", serde_json::json!("different")),
+            ("name", serde_json::json!("different")), ("version", serde_json::json!(2)), ("schemaVersion", serde_json::json!(1))] {
+            let mut changed = original.clone(); changed[key] = value;
+            let bytes = serde_json::to_vec(&changed).unwrap(); fs::write(source_dir.join("request.json"), &bytes).unwrap();
+            assert!(duplicate_artifact_controlled(&root.join("private"), &source.id, "Copy", "job_copy", |_, _| Ok(())).is_err());
+            assert!(!root.join("private/jobs/job_copy").exists()); assert_eq!(fs::read(source_dir.join("request.json")).unwrap(), bytes);
+        }
+        fs::write(source_dir.join("request.json"), b"invalid JSON").unwrap();
+        assert!(duplicate_artifact_controlled(&root.join("private"), &source.id, "Copy", "job_copy", |_, _| Ok(())).is_err());
+        fs::OpenOptions::new().write(true).open(source_dir.join("request.json")).unwrap().set_len(64 * 1024 * 1024 + 1).unwrap();
+        assert!(duplicate_artifact_controlled(&root.join("private"), &source.id, "Copy", "job_copy", |_, _| Ok(())).is_err());
+        fs::remove_file(source_dir.join("request.json")).unwrap();
+        duplicate_artifact_controlled(&root.join("private"), &source.id, "Legacy copy", "job_copy", |_, _| Ok(())).unwrap();
+        assert!(!root.join("private/jobs/job_copy/request.json").exists()); fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_duplicate_all_precommit_faults_cleanup_owned_files_and_preserve_source() {
+        for point in [DuplicatePoint::Created, DuplicatePoint::PayloadCopied, DuplicatePoint::ArtifactReady,
+            DuplicatePoint::BeforeRequestWrite, DuplicatePoint::BeforeCommitRecord, DuplicatePoint::BeforePublish] {
+            let (root, source_dir, source) = artifact_export_fixture("full");
+            fs::write(source_dir.join("request.json"), serde_json::to_vec(&duplicate_request_fixture(&source)).unwrap()).unwrap();
+            let before = fs::read(source_dir.join("job.json")).unwrap();
+            let payload = fs::read(source_dir.join("weight-artifact/model.safetensors")).unwrap();
+            let mut injected = 0; let mut cleanup = 0;
+            let result = duplicate_artifact_controlled(&root.join("private"), &source.id, "Failed copy", "job_copy", |current, destination| {
+                assert!(!destination.join("job.json").exists());
+                if current == DuplicatePoint::Cleanup { cleanup += 1; }
+                if current == point { injected += 1; return Err("injected copy failure".into()); } Ok(())
+            });
+            assert!(result.unwrap_err().contains("injected copy failure")); assert_eq!(injected, 1); assert_eq!(cleanup, 1);
+            assert!(!root.join("private/jobs/job_copy").exists(), "fault {point:?}");
+            assert_eq!(fs::read(source_dir.join("job.json")).unwrap(), before);
+            assert_eq!(fs::read(source_dir.join("weight-artifact/model.safetensors")).unwrap(), payload);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn artifact_duplicate_source_changes_and_staged_tamper_prevent_publication() {
+        for case in 0..4 {
+            let (root, source_dir, source) = artifact_export_fixture("full");
+            let result = duplicate_artifact_controlled(&root.join("private"), &source.id, "Stale copy", "job_copy", |point, destination| {
+                if point == DuplicatePoint::BeforePublish {
+                    match case {
+                        0 => { let mut changed = source.clone(); changed.name = "Concurrent rename".into(); write_job(&source_dir.join("job.json"), &changed)?; }
+                        1 => fs::write(source_dir.join("weight-artifact/model.safetensors"), b"source replaced").unwrap(),
+                        2 => {
+                            let result = fs::write(destination.join("weight-artifact/model.safetensors"), b"staged replaced");
+                            #[cfg(target_os = "windows")]
+                            { assert!(result.is_err()); return Err("retained staged file rejects foreign writers".into()); }
+                            #[cfg(not(target_os = "windows"))]
+                            result.unwrap();
+                        }
+                        _ => fs::write(source_dir.join("request.json"), serde_json::to_vec(&duplicate_request_fixture(&source)).unwrap()).unwrap(),
+                    }
+                } Ok(())
+            });
+            assert!(result.is_err(), "case {case}"); assert!(!root.join("private/jobs/job_copy").exists());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn artifact_duplicate_preserves_initial_and_late_destination_collisions() {
+        let (root, source_dir, source) = artifact_export_fixture("full");
+        let destination = root.join("private/jobs/job_copy");
+        fs::create_dir(&destination).unwrap(); fs::write(destination.join("foreign"), b"collision winner").unwrap();
+        assert!(duplicate_artifact_controlled(&root.join("private"), &source.id, "Copy", "job_copy", |_, _| Ok(())).is_err());
+        assert_eq!(fs::read(destination.join("foreign")).unwrap(), b"collision winner");
+        fs::remove_file(destination.join("foreign")).unwrap(); fs::remove_dir(&destination).unwrap();
+        let source_before = fs::read(source_dir.join("job.json")).unwrap();
+        let error = duplicate_artifact_controlled(&root.join("private"), &source.id, "Copy", "job_copy", |point, path| {
+            if point == DuplicatePoint::BeforePublish { fs::write(path.join("job.json"), b"foreign collision winner").unwrap(); } Ok(())
+        }).unwrap_err();
+        assert!(error.contains("cleanup is pending"));
+        assert_eq!(fs::read(destination.join("job.json")).unwrap(), b"foreign collision winner");
+        assert_eq!(destination.read_dir().unwrap().count(), 1);
+        assert_eq!(fs::read(source_dir.join("job.json")).unwrap(), source_before); fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_duplicate_cleanup_failure_is_truthful_and_next_explicit_copy_is_independent() {
+        let (root, _, source) = artifact_export_fixture("full");
+        let error = duplicate_artifact_controlled(&root.join("private"), &source.id, "Failed", "job_partial", |point, _| {
+            if point == DuplicatePoint::PayloadCopied { return Err("injected copy failure".into()); }
+            if point == DuplicatePoint::Cleanup { return Err("injected cleanup pending".into()); } Ok(())
+        }).unwrap_err();
+        assert!(error.contains("injected copy failure")); assert!(error.contains("cleanup pending"));
+        assert!(!root.join("private/jobs/job_partial/job.json").exists());
+        for id in ["job_fresh1", "job_fresh2"] {
+            let copy = duplicate_artifact_controlled(&root.join("private"), &source.id, "Fresh explicit copy", id, |_, _| Ok(())).unwrap();
+            assert_eq!(copy.id, id); assert_eq!(copy.artifact_sha256, source.artifact_sha256);
+        }
+        assert!(!root.join("private/jobs/job_partial/job.json").exists()); fs::remove_dir_all(root).unwrap();
     }
 
     fn assert_duplicate_copies_declared_artifact(method: &str) {

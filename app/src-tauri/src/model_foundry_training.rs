@@ -14,6 +14,7 @@ use tauri::{Emitter, Manager};
 mod worker_supervisor;
 pub(crate) use worker_supervisor::{verify_training_artifact, verify_training_artifact_for_method};
 pub(crate) use worker_supervisor::{export_knowledge_json, export_training_artifact, checked_export_source};
+pub(crate) use worker_supervisor::{prepare_verified_artifact_copy, PrivateDuplicate};
 #[cfg(test)]
 pub(crate) use worker_supervisor::write_and_verify_training_artifact;
 #[cfg(not(test))]
