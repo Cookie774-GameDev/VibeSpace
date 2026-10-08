@@ -5,6 +5,7 @@ import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { useAgentStore } from '@/stores/agents';
 import { writeChatReasoningEffort } from '@/features/chat/reasoningSlashStore';
+import { checkpointNotesComposer, readNotesComposerDraft } from '@/features/notes/notesComposerDraft';
 import {
   SPEECH_SYNTHESIS_START_EVENT,
   STREAMING_VOICE_END_EVENT,
@@ -346,6 +347,100 @@ describe('VoiceModal hands-free turn-taking', () => {
     clearContextGalaxySnapshotsForTests();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it.each([false, true])(
+    'FOCUS01 preserves the underlying chat, route and draft on typed open/close/reopen (fresh=%s)',
+    async (fresh) => {
+      const actual = await vi.importActual<typeof import('./voiceChatRouting')>('./voiceChatRouting');
+      chatRoutingMocks.focusVoiceChat.mockImplementation(actual.focusVoiceChat);
+      const scope = { accountId: 'account-a', projectId: 'project-a' };
+      const originalChat = `focus-original-${fresh}`;
+      const originalDraft = '  Keep this original Composer draft.  ';
+      checkpointNotesComposer(scope, originalChat, originalDraft, []);
+      useAuthStore.setState({ voiceStartFreshChat: fresh });
+      useUIStore.setState({ activeChatId: originalChat, route: 'account' });
+      useUIStore.getState().setVoiceModalOpen(true, 'text');
+      try {
+        render(<VoiceModal />);
+        await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+        expect.soft(useUIStore.getState().activeChatId).toBe(originalChat);
+        expect.soft(useUIStore.getState().route).toBe('account');
+        expect.soft(readNotesComposerDraft(scope, originalChat)).toEqual({ text: originalDraft, references: [] });
+        fireEvent.click(screen.getByRole('button', { name: 'Close typed Jarvis voice' }));
+        await waitFor(() => expect(useVoiceStore.getState().session).toBeNull());
+        act(() => useUIStore.getState().setVoiceModalOpen(true, 'text'));
+        await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+        expect.soft(useUIStore.getState().activeChatId).toBe(originalChat);
+        expect.soft(useUIStore.getState().route).toBe('account');
+        expect.soft(readNotesComposerDraft(scope, originalChat)).toEqual({ text: originalDraft, references: [] });
+        expect(chatRoutingMocks.ensureJarvisChatForProvider.mock.calls[0]?.[2]).toMatchObject({
+          freshVoiceConversation: fresh,
+        });
+        expect(messageRepo.create).not.toHaveBeenCalled();
+        expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+        expect(VoiceService.startListening).not.toHaveBeenCalled();
+      } finally {
+        checkpointNotesComposer(scope, originalChat, '', []);
+      }
+    },
+  );
+
+  it('FOCUS01 keeps a closed stale opening from taking focus or replacing the reopened session', async () => {
+    const actual = await vi.importActual<typeof import('./voiceChatRouting')>('./voiceChatRouting');
+    chatRoutingMocks.focusVoiceChat.mockImplementation(actual.focusVoiceChat);
+    let finishOld!: (chatId: string) => void;
+    const oldOpening = new Promise<string>((resolve) => { finishOld = resolve; });
+    chatRoutingMocks.ensureJarvisChatForProvider
+      .mockImplementationOnce(() => oldOpening)
+      .mockResolvedValueOnce('focus-new-voice-chat');
+    useUIStore.setState({ activeChatId: 'focus-original-late', route: 'account' });
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    render(<VoiceModal />);
+    await waitFor(() => expect(chatRoutingMocks.ensureJarvisChatForProvider).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: 'Close typed Jarvis voice' }));
+    act(() => useUIStore.getState().setVoiceModalOpen(true, 'text'));
+    await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('focus-new-voice-chat'));
+    const newSessionId = useVoiceStore.getState().session!.sessionId;
+    await act(async () => { finishOld('focus-old-voice-chat'); await oldOpening; });
+    expect(useVoiceStore.getState().session?.sessionId).toBe(newSessionId);
+    expect(useVoiceStore.getState().session?.chatId).toBe('focus-new-voice-chat');
+    expect(useUIStore.getState().activeChatId).toBe('focus-original-late');
+    expect(useUIStore.getState().route).toBe('account');
+    expect(messageRepo.create).not.toHaveBeenCalled();
+    expect(dispatchVoiceMainRequest).not.toHaveBeenCalled();
+    expect(VoiceService.startListening).not.toHaveBeenCalled();
+  });
+
+  it('FOCUS01 focuses the bound voice chat only on a genuine typed Send and preserves the original draft', async () => {
+    const actual = await vi.importActual<typeof import('./voiceChatRouting')>('./voiceChatRouting');
+    chatRoutingMocks.focusVoiceChat.mockImplementation(actual.focusVoiceChat);
+    const scope = { accountId: 'account-a', projectId: 'project-a' };
+    const originalChat = 'focus-original-send';
+    const draft = 'Keep my original chat draft';
+    checkpointNotesComposer(scope, originalChat, draft, []);
+    useUIStore.setState({ activeChatId: originalChat, route: 'account' });
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    try {
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      expect.soft(useUIStore.getState().activeChatId).toBe(originalChat);
+      expect.soft(useUIStore.getState().route).toBe('account');
+      fireEvent.change(screen.getByRole('textbox', { name: 'Type to Jarvis voice' }), {
+        target: { value: 'A genuine typed request' },
+      });
+      fireEvent.submit(screen.getByRole('form', { name: 'Jarvis voice mini bar' }));
+      await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce());
+      expect(messageRepo.create).toHaveBeenCalledOnce();
+      expect(vi.mocked(dispatchVoiceMainRequest).mock.calls[0]?.[0].chatId).toBe('chat_voice');
+      expect(useUIStore.getState().activeChatId).toBe('chat_voice');
+      expect(useUIStore.getState().route).toBe('chat');
+      expect(chatRoutingMocks.focusVoiceChat).toHaveBeenCalledOnce();
+      expect(readNotesComposerDraft(scope, originalChat)).toEqual({ text: draft, references: [] });
+      expect(VoiceService.startListening).not.toHaveBeenCalled();
+    } finally {
+      checkpointNotesComposer(scope, originalChat, '', []);
+    }
   });
 
   it('RDY02 retains the exact unsent typed draft when real route admission rejects', async () => {

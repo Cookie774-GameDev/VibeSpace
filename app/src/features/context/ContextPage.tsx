@@ -1606,7 +1606,7 @@ export function ContextPage() {
           },
         });
       })
-      .then((snapshot) => {
+      .then(async (snapshot) => {
         if (
           forceReconcile &&
           forceScopeReconcileRef.current?.requestId === refreshIntent?.requestId
@@ -1615,7 +1615,14 @@ export function ContextPage() {
           setScopeRefreshPending(false);
         }
         if (!active || !snapshot) return;
-        setSiyuanTree(snapshot.tree);
+        // Native SiYuan snapshots retain index/payload node IDs. An equivalent
+        // durable map has canonical entity IDs used by saved source citations.
+        // Do not let this later read undo completed-index display hydration.
+        const equivalent = await hasEquivalentPersistedContextTree(
+          projectId, selectedMap.id, snapshot.tree, selectedMap.updatedAt, controller.signal,
+        );
+        if (!active) return;
+        setSiyuanTree(equivalent ? selectedMap.tree : snapshot.tree);
         setStatus('SiYuan Context Map ready.');
       })
       .catch(async (error) => {

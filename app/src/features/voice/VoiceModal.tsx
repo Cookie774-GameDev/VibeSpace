@@ -779,7 +779,11 @@ function VoiceModalPanel() {
           },
           String(binding.chatId),
         );
-        focusVoiceChat(binding.chatId);
+        // Opening typed Voice is an overlay, not a request to leave the
+        // current chat. An explicit Send or navigation action focuses it.
+        if (useUIStore.getState().voiceInputMode !== 'text') {
+          focusVoiceChat(binding.chatId);
+        }
         void syncVoiceConversationFolder(String(binding.chatId), {
           accountId: binding.accountId,
           workspaceId: String(workspaceId),

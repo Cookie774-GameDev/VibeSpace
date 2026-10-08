@@ -30,6 +30,11 @@ const io = vi.hoisted(() => ({
   entriesGate: undefined as Promise<void> | undefined,
   jobGate: undefined as Promise<void> | undefined,
   repair: vi.fn(),
+  readTrees: {} as Record<string, ProjectContextTree>,
+  readGate: undefined as Promise<void> | undefined,
+  readStarted: [] as string[],
+  equivalenceGate: undefined as Promise<void> | undefined,
+  equivalenceReads: 0,
 }));
 vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
   useAccessibleChatModels: () => ({ groups: [], flatOptions: [], loading: false }),
@@ -44,7 +49,12 @@ vi.mock('./siyuan/SiyuanVaultSurface', () => ({
 vi.mock('./siyuanContextMapIntegration', () => ({
   productionSiyuanContextMaps: {
     prewarm: async () => {},
-    read: async (_project: unknown, map: { tree: ProjectContextTree }) => ({ tree: map.tree }),
+    read: async (_project: unknown, map: { id: string; tree: ProjectContextTree }) => {
+      const tree = io.readTrees[map.id] ?? map.tree;
+      io.readStarted.push(map.id);
+      await io.readGate;
+      return { tree };
+    },
   },
 }));
 vi.mock('./siyuan/siyuanIndexJobStore', async (original) => ({
@@ -57,8 +67,12 @@ vi.mock('./contextPersistence', async (original) => ({
   ...(await original<typeof import('./contextPersistence')>()),
   ensureContextPersistence: () => io.service!.load('page-account', 'page-project'),
   getActiveContextPersistenceState: () => io.state,
-  hasEquivalentPersistedContextTree: (_project:string,mapId:string,tree:ProjectContextTree,expected:number,signal?:AbortSignal) =>
-    io.service!.hasEquivalentTree('page-account',tree,mapId,expected,signal),
+  hasEquivalentPersistedContextTree: async (_project:string,mapId:string,tree:ProjectContextTree,expected:number,signal?:AbortSignal) => {
+    const equivalent = await io.service!.hasEquivalentTree('page-account',tree,mapId,expected,signal);
+    io.equivalenceReads += 1;
+    await io.equivalenceGate;
+    return equivalent;
+  },
   savePersistedContextTree: (tree:ProjectContextTree,options:any) => io.service!.saveTree('page-account',tree,options),
   selectPersistedContextMap: async (
     projectId: string,
@@ -125,6 +139,11 @@ beforeEach(async () => {
   io.selectionSignals = [];
   io.openResults = [];
   io.job=null;io.entries=[];io.entriesGate=undefined;io.jobGate=undefined;io.repair.mockReset();io.repair.mockResolvedValue({status:"ready",documentCount:1,bodyBytes:4});
+  io.readTrees = {};
+  io.readGate = undefined;
+  io.readStarted = [];
+  io.equivalenceGate = undefined;
+  io.equivalenceReads = 0;
   useAuthStore.setState({
     localUserId: scope.accountId,
     cloudSession: null,
@@ -453,4 +472,155 @@ it('keeps a freshly opened canonical source visible after unchanged index hydrat
   await act(async()=>{await new Promise(resolve=>setTimeout(resolve,20));});
   expect(await database.context_maps.get(map.id)).toEqual(before);
   expect(screen.getByRole('heading',{name:'linked-file.txt'})).toBeTruthy();
+});
+
+
+async function prepareNativeSnapshot() {
+  const { buildProjectContextTreeFromSiyuanIndex } = await import('./siyuan/siyuanSafeIndex');
+  const initial = (await io.service!.load(scope.accountId, scope.projectId)).maps.find(
+    (map) => map.id === 'page-map-A',
+  )!;
+  io.entries = [{
+    nodeId: 'node-file', parentNodeId: null, title: 'linked-file.txt', kind: 'file',
+    relativePath: 'linked-file.txt', sourcePointer: `${scope.worktreeId}/linked-file.txt`,
+    summary: 'Owned source', sizeBytes: 4, modifiedAt: 1,
+  }];
+  const rawTree = buildProjectContextTreeFromSiyuanIndex(initial.tree, io.entries);
+  const state = await io.service!.saveTree(scope.accountId, rawTree, {
+    mapId: initial.id, sourceStatus: 'ready',
+  });
+  const map = state.maps.find((candidate) => candidate.id === initial.id)!;
+  expect(rawTree.nodes[0]!.id).not.toBe(map.tree.nodes[0]!.id);
+  io.job = {
+    schemaVersion: 1, scope: 'fixture', accountId: scope.accountId,
+    projectId: scope.projectId, mapId: map.id, canonicalRoot: map.rootDir,
+    policyFingerprint: 'fixture', status: 'completed', phase: 'completed',
+    pauseReason: null, cursor: 1, frontierLength: 0, indexed: 1, excluded: 0,
+    unreadable: 0, summarized: 0, summaryEligible: 0, createdNodes: 1,
+    failed: 0, skipped: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0,
+    tokenProvenance: 'none', summaryProviderId: null, summaryConnectionId: null,
+    summaryModelId: null, phaseStartedAt: 1, rateSamples: [], discoverySamples: [],
+    estimatedPercent: 100, estimatedEtaSeconds: null, reconciledAt: 1,
+    pendingNativeNodeIds: [], startupDisposition: null, startupDispositionAt: null,
+    pausedMs: 0, startedAt: 1, updatedAt: 2, completedAt: 2,
+  };
+  io.readTrees[map.id] = rawTree;
+  io.nav!.dispose();
+  io.nav = createContextEvidenceNavigation({
+    database,
+    revalidate: async (input) => {
+      input.assertCurrent();
+      return {
+        accountId: scope.accountId, projectId: scope.projectId, mapId: map.id,
+        entityId: map.tree.nodes[0]!.id, path: `${scope.worktreeId}/linked-file.txt`,
+        mapUpdatedAt: map.updatedAt,
+      };
+    },
+  });
+  return { map, rawTree };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+it.each([false, true])('keeps the canonical saved source after a late raw-index SiYuan snapshot (deferred hydration=%s)', async (deferredHydration) => {
+  const { map } = await prepareNativeSnapshot();
+  const read = deferred();
+  const hydration = deferred();
+  io.readGate = read.promise;
+  if (deferredHydration) io.jobGate = hydration.promise;
+  const before = await database.context_maps.get(map.id);
+  render(<React.StrictMode><Shell /></React.StrictMode>);
+  fireEvent.click(screen.getByRole('button', { name: 'Open verified Context source' }));
+  await waitFor(() => expect(io.openResults).toEqual(['completed']));
+  await act(async () => { hydration.resolve(); });
+  await waitFor(() => expect(io.readStarted).toContain(map.id));
+  await waitFor(() => expect(io.repair).toHaveBeenCalled());
+  if (deferredHydration) {
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'linked-file.txt' })).toBeTruthy());
+  }
+  await act(async () => { read.resolve(); });
+  await waitFor(() => expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+  expect(await database.context_maps.get(map.id)).toEqual(before);
+  expect(screen.getByRole('heading', { name: 'linked-file.txt' })).toBeTruthy();
+});
+
+it.each(['summary', 'size', 'title'] as const)('preserves a genuinely changed native snapshot (%s)', async (changedField) => {
+  const { map, rawTree } = await prepareNativeSnapshot();
+  const nativeTree = structuredClone(rawTree);
+  if (changedField === 'summary') nativeTree.nodes[0]!.summary = 'User-edited SiYuan content';
+  if (changedField === 'size') nativeTree.nodes[0]!.sizeBytes = 123;
+  if (changedField === 'title') nativeTree.nodes[0]!.title = 'Native source title';
+  io.readTrees[map.id] = nativeTree;
+  const read = deferred();
+  io.readGate = read.promise;
+  const before = await database.context_maps.get(map.id);
+  render(<ContextPage />);
+  await waitFor(() => expect(io.readStarted).toContain(map.id));
+  await waitFor(() => expect(io.repair).toHaveBeenCalled());
+  await act(async () => { read.resolve(); });
+  await waitFor(() => expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+  fireEvent.click(screen.getByRole('button', { name: nativeTree.nodes[0]!.title }));
+  expect(screen.getByRole('heading', { name: nativeTree.nodes[0]!.title })).toBeTruthy();
+  if (changedField === 'summary') expect(screen.getAllByText('User-edited SiYuan content').length).toBeGreaterThan(0);
+  if (changedField === 'size') expect(screen.getAllByText('123 B').length).toBeGreaterThan(0);
+  expect(await database.context_maps.get(map.id)).toEqual(before);
+});
+
+it('cannot replace a newer Map B view when an old native snapshot resolves', async () => {
+  const { map } = await prepareNativeSnapshot();
+  const read = deferred();
+  io.readGate = read.promise;
+  render(<Shell />);
+  fireEvent.click(screen.getByRole('button', { name: 'Open verified Context source' }));
+  await waitFor(() => expect(io.openResults).toEqual(['completed']));
+  await waitFor(() => expect(io.readStarted).toContain(map.id));
+  io.readGate = undefined;
+  fireEvent.click(screen.getByRole('button', { name: /^Map B/ }));
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Map B' })).toBeTruthy());
+  await act(async () => { read.resolve(); });
+  expect(screen.getByRole('heading', { name: 'Map B' })).toBeTruthy();
+  expect((await io.service!.load(scope.accountId, scope.projectId)).selectedMapId).toBe('page-map-B');
+});
+
+it.each(['project', 'unmount'] as const)('discards a delayed native snapshot after %s revocation', async (transition) => {
+  const { map } = await prepareNativeSnapshot();
+  const read = deferred();
+  io.readGate = read.promise;
+  const mounted = render(<Shell />);
+  fireEvent.click(screen.getByRole('button', { name: 'Open verified Context source' }));
+  await waitFor(() => expect(io.openResults).toEqual(['completed']));
+  await waitFor(() => expect(io.readStarted).toContain(map.id));
+  if (transition === 'project') {
+    await act(async () => { useAuthStore.setState({ projectId: 'another-project' as ProjectId }); });
+  } else {
+    mounted.unmount();
+  }
+  await act(async () => { read.resolve(); });
+  expect(screen.queryByRole('heading', { name: 'linked-file.txt' })).toBeNull();
+  expect(screen.queryByText('SiYuan Context Map ready.')).toBeNull();
+});
+
+
+it('cannot publish an old snapshot when the project changes during display equivalence', async () => {
+  const { map } = await prepareNativeSnapshot();
+  const read = deferred();
+  io.readGate = read.promise;
+  render(<Shell />);
+  fireEvent.click(screen.getByRole('button', { name: 'Open verified Context source' }));
+  await waitFor(() => expect(io.openResults).toEqual(['completed']));
+  await waitFor(() => expect(io.readStarted).toContain(map.id));
+  await waitFor(() => expect(io.repair).toHaveBeenCalled());
+  const readsBefore = io.equivalenceReads;
+  const comparison = deferred();
+  io.equivalenceGate = comparison.promise;
+  await act(async () => { read.resolve(); });
+  await waitFor(() => expect(io.equivalenceReads).toBeGreaterThan(readsBefore));
+  await act(async () => { useAuthStore.setState({ projectId: 'another-project' as ProjectId }); });
+  await act(async () => { comparison.resolve(); });
+  expect(screen.queryByRole('heading', { name: 'linked-file.txt' })).toBeNull();
+  expect(screen.queryByText('SiYuan Context Map ready.')).toBeNull();
 });
