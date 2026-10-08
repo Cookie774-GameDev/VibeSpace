@@ -79,11 +79,16 @@ vi.mock('@/lib/ai/useAccessibleChatModels', () => ({
   useAccessibleChatModels: () => ({ groups: [], flatOptions: [], hasAny: false }),
 }));
 
-vi.mock('@/lib/db', () => ({
-  messageRepo: {
-    create: vi.fn(async () => ({})),
-  },
-}));
+vi.mock('@/lib/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/db')>();
+  return {
+    ...actual,
+    messageRepo: {
+      ...actual.messageRepo,
+      create: vi.fn(async () => ({})),
+    },
+  };
+});
 
 vi.mock('./voiceChatRouting', () => ({
   ensureJarvisChatForVoice: vi.fn(async () => 'chat_voice'),

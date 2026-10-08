@@ -2325,13 +2325,24 @@ async function* sendPersistent(request: ProviderRequest): AsyncGenerator<Provide
       ? undefined
       : await openCodeInstructionFingerprint(request.systemPrompt);
     const sessionReady = appActivityLog.trace('model.prepare.session', timing,
-      () => sessions.sessionForChat(scope, chatId, undefined, instructionFingerprint));
+      () => sessions.sessionForChat(scope, chatId, undefined, instructionFingerprint, request.requestId));
     const [sessionResult, baselineResult, catalogResult] = await awaitOpenCodePreparation(Promise.allSettled([
       sessionReady,
       sessionReady.then((session) => {
         requireActiveRequest();
-        return appActivityLog.trace('model.prepare.history', timing,
-          () => (session.client as PersistentOpenCodeClient).http.messages(session.sessionId));
+        const createdEmpty = sessions.consumeEmptyBaseline(session, request.requestId);
+        return appActivityLog.trace('model.prepare.history', {
+          ...timing,
+          sessionId: session.sessionId,
+          runtimeGeneration: session.runtimeGeneration,
+          sessionOrigin: session.origin,
+          baselineSource: createdEmpty ? 'created-empty' : 'native-history',
+          // Existing fixed-field persistence retains eventType, not arbitrary
+          // extra trace fields. Keep the branch/origin available after restart.
+          eventType: `history-baseline.${session.origin}.${createdEmpty ? 'created-empty' : 'native-history'}`,
+        }, () => createdEmpty
+          ? Promise.resolve([] as readonly OpenCodeMessageRecord[])
+          : (session.client as PersistentOpenCodeClient).http.messages(session.sessionId));
       }),
       appActivityLog.trace('model.prepare.catalog', timing, () => liveModels(scope)),
     ]), request.signal);

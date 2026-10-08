@@ -152,3 +152,25 @@ describe('foundryProvider', () => {
     ).rejects.toThrow('verified Foundry adapter');
   });
 });
+
+describe('Foundry protected-attempt diagnostic binding', () => {
+  it('forwards only opaque attempt correlation to the native bridge', async () => {
+    generate.mockClear();
+    const protectedAttempt = {
+      accountId: 'private-account-must-not-be-diagnostic-metadata',
+      runId: 'jrun_11111111-1111-4111-8111-111111111111',
+      requestId: 'jreq_22222222-2222-4222-8222-222222222222',
+      attemptNumber: 2,
+    };
+    await foundryProvider.run({
+      agent: { model: { provider: 'foundry', model: 'artifact--job_0-vjmMedLqAeGX' },
+        system_prompt: 'Private system instructions.' } as never,
+      messages: [{ role: 'user', content: 'Private input content.' }],
+      protectedAttempt,
+    });
+    expect(generate.mock.calls[0]?.[0].correlation).toEqual({
+      runId: protectedAttempt.runId, requestId: protectedAttempt.requestId, attemptNumber: 2,
+    });
+    expect(generate.mock.calls[0]?.[0].correlation).not.toHaveProperty('accountId');
+  });
+});

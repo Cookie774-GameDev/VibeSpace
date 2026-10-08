@@ -10,6 +10,7 @@
  */
 
 import { isTauri } from '../../lib/utils';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
 
 export interface FoundryHardwareProfile {
   readonly native: boolean;
@@ -98,6 +99,20 @@ export interface FoundryRealArtifactSummary {
   readonly adapterFiles: Readonly<Record<string, string>>;
   readonly metrics: Record<string, unknown>;
   readonly trainingConfig: Record<string, unknown>;
+}
+
+export interface FoundryInferenceCorrelation {
+  readonly runId: string;
+  readonly requestId: string;
+  readonly attemptNumber: number;
+}
+
+function inferenceCorrelationMetadata(correlation?: FoundryInferenceCorrelation) {
+  if (!correlation ||
+      !/^jrun_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(correlation.runId) ||
+      !/^jreq_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(correlation.requestId) ||
+      !Number.isSafeInteger(correlation.attemptNumber) || correlation.attemptNumber < 1) return {};
+  return { runId: correlation.runId, requestId: correlation.requestId, attemptNumber: correlation.attemptNumber };
 }
 
 export interface FoundryArtifactGeneration {
@@ -436,6 +451,12 @@ export async function inspectFoundryArtifact(
   const jobs = await invoke<CurrentFoundryJob[]>('model_foundry_list_jobs');
   const job = jobs.find((entry) => entry.id === jobId);
   if (!job) throw new Error('Model Foundry artifact was not found.');
+  if (job.projectId !== projectId)
+    throw new Error('Model Foundry artifact does not belong to the selected project.');
+  if (job.status !== 'completed' || job.artifactVerified !== true ||
+      typeof job.artifactSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(job.artifactSha256) ||
+      typeof job.artifactPath !== 'string' || !job.artifactPath.trim())
+    throw new Error('Model Foundry artifact is not completed and verified.');
   return {
     projectId,
     jobId: job.id,
@@ -472,6 +493,7 @@ async function chatWithArtifact(
   maxNewTokens?: number,
   messages?: readonly FoundryChatMessage[],
   signal?: AbortSignal,
+  correlation?: FoundryInferenceCorrelation,
 ): Promise<NativeFoundryChatResponse> {
   if (signal?.aborted) throw abortedFoundryInference();
   const core = await import('@tauri-apps/api/core');
@@ -509,33 +531,57 @@ async function chatWithArtifact(
     })();
   };
   signal?.addEventListener('abort', cancel, { once: true });
-  // The chat command performs its own completed-job and full artifact checks.
-  // A separate prepare call repeats an expensive full weight-manifest scan.
-  let response: NativeFoundryChatResponse;
+  // The existing local diagnostic schema persists callId. It names this native
+  // IPC request, allowing its owned inference logs to join the protected run.
+  // This distinct kind is excluded from both optional backend telemetry maps.
+  const metadata = {
+    ...inferenceCorrelationMetadata(correlation),
+    callId: requestId,
+    provider: 'foundry',
+    ...(/^[A-Za-z0-9_-]{1,64}$/.test(artifactId) ? { model: `artifact--${artifactId}` } : {}),
+  };
+  const diagnosticStarted = performance.now();
+  const operationId = appActivityLog.recordMetadata('foundry.inference.native', 'started', {
+    ...metadata, eventType: 'dispatch',
+  });
+  let failureCategory = 'native-rejected';
   try {
-    response = await core.invoke<NativeFoundryChatResponse>('model_foundry_chat', {
+    // Local observers run synchronously and may cancel while recording started.
+    if (signal?.aborted) throw abortedFoundryInference(cancellationError);
+    // The command owns completed-job/full-artifact checks. Do not add another
+    // prepare pass or record request text, output text, paths or native errors.
+    const response = await core.invoke<NativeFoundryChatResponse>('model_foundry_chat', {
       requestId,
       artifactId,
       messages: messages ? [...messages] : [{ role: 'user', content: prompt }],
       maxOutputTokens: maxNewTokens ?? null,
     });
+    if (signal?.aborted) throw abortedFoundryInference(cancellationError);
+    failureCategory = 'response-invalid';
+    if (!response || response.artifactId !== artifactId || typeof response.modelName !== 'string' ||
+        !response.modelName.trim() || !Number.isInteger(response.version) || response.version < 1 ||
+        !['lora', 'qlora', 'full'].includes(response.method) || typeof response.text !== 'string' ||
+        !response.text.trim() || !Number.isSafeInteger(response.inputTokens) || response.inputTokens < 0 ||
+        !Number.isSafeInteger(response.outputTokens) || response.outputTokens < 1) {
+      throw new Error('Model Foundry returned mismatched or incomplete inference evidence.');
+    }
+    appActivityLog.recordMetadata('foundry.inference.native', 'completed', {
+      ...metadata, eventType: 'native-response-accepted',
+    }, operationId, performance.now() - diagnosticStarted);
+    return response;
+  } catch (error) {
+    const cancelled = signal?.aborted || (error instanceof Error && error.name === 'AbortError');
+    appActivityLog.recordMetadata('foundry.inference.native', cancelled ? 'cancelled' : 'failed', {
+      ...metadata, eventType: cancelled ? 'cancelled' : failureCategory,
+    }, operationId, performance.now() - diagnosticStarted);
+    throw error;
   } finally {
-    // Preserve native rejection details: a cleanup failure does not prove closure.
-    // The original native invocation owns worker completion, including after a
-    // successful cancel request. Never publish completion from its boolean alone.
+    // A cancellation acknowledgment does not prove worker closure. The original
+    // native invocation settles before either terminal diagnostics or cleanup.
     settled = true;
     signal?.removeEventListener('abort', cancel);
     if (retryTimer !== undefined) clearTimeout(retryTimer);
   }
-  if (signal?.aborted) throw abortedFoundryInference(cancellationError);
-  if (!response || response.artifactId !== artifactId || typeof response.modelName !== 'string' ||
-      !response.modelName.trim() || !Number.isInteger(response.version) || response.version < 1 ||
-      !['lora', 'qlora', 'full'].includes(response.method) || typeof response.text !== 'string' ||
-      !response.text.trim() || !Number.isSafeInteger(response.inputTokens) || response.inputTokens < 0 ||
-      !Number.isSafeInteger(response.outputTokens) || response.outputTokens < 1) {
-    throw new Error('Model Foundry returned mismatched or incomplete inference evidence.');
-  }
-  return response;
 }
 
 export async function generateFromFoundryArtifact(args: {
@@ -545,10 +591,11 @@ export async function generateFromFoundryArtifact(args: {
   messages?: readonly FoundryChatMessage[];
   maxNewTokens?: number;
   signal?: AbortSignal;
+  correlation?: FoundryInferenceCorrelation;
 }): Promise<FoundryArtifactGeneration> {
   if (!isTauri) throw new Error('Local adapter inference is available only in the desktop app.');
   const response = await chatWithArtifact(
-    args.jobId, args.prompt, args.maxNewTokens, args.messages, args.signal,
+    args.jobId, args.prompt, args.maxNewTokens, args.messages, args.signal, args.correlation,
   );
   const jobs = await invoke<CurrentFoundryJob[]>('model_foundry_list_jobs');
   if (args.signal?.aborted) throw abortedFoundryInference();
@@ -661,6 +708,33 @@ export async function stopFoundryTrainingAfterCheckpoint(
   return cancelFoundryTraining(projectId, jobId);
 }
 
+function trainingJobUpdate(job: CurrentFoundryJob): FoundryWorkerMessage {
+  const phase = typeof job.status === 'string' && job.status.trim() ? job.status : 'unknown';
+  const terminal = ['completed', 'failed', 'cancelled'].includes(phase);
+  return {
+    projectId: job.projectId?.trim() || projectByJobId.get(job.id) || '',
+    jobId: job.id,
+    message: {
+      type: terminal ? 'result' : 'progress',
+      phase,
+      progress: Number.isFinite(job.progress) ? Math.min(1, Math.max(0, job.progress / 100)) : 0,
+      message: job.error || phase.replaceAll('_', ' '),
+    },
+  };
+}
+
+/** One exact-job reconciliation; never starts or retries training. */
+export async function getFoundryTrainingUpdate(
+  projectId: string,
+  jobId: string,
+): Promise<FoundryWorkerMessage> {
+  const jobs = await invoke<CurrentFoundryJob[]>('model_foundry_list_jobs');
+  const job = Array.isArray(jobs) ? jobs.find((entry) => entry.id === jobId) : undefined;
+  if (!job || job.projectId !== projectId)
+    throw new Error('The selected training job is unavailable in its original project.');
+  return trainingJobUpdate(job);
+}
+
 export async function listenFoundryWorkerMessages(
   listener: (event: FoundryWorkerMessage) => void,
 ): Promise<() => void> {
@@ -669,12 +743,7 @@ export async function listenFoundryWorkerMessages(
   const unlisten = await event.listen<CurrentFoundryJob>(
     'model-foundry:job-updated',
     ({ payload }) => {
-      const projectId = payload.projectId?.trim() || projectByJobId.get(payload.id) || '';
-      listener({
-        projectId,
-        jobId: payload.id,
-        message: { type: 'job-updated', status: payload.status, progress: payload.progress },
-      });
+      listener(trainingJobUpdate(payload));
       if (['completed', 'failed', 'cancelled'].includes(payload.status)) {
         projectByJobId.delete(payload.id);
       }

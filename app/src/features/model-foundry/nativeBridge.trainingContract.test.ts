@@ -126,3 +126,31 @@ describe('Model Foundry TrainingRequestV2 bridge', () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 });
+
+describe('native training event contract consumed by Foundry Studio', () => {
+  it.each([
+    ['training', 35, 'progress', null],
+    ['completed', 100, 'result', null],
+    ['failed', 35, 'result', 'Synthetic worker failure'],
+    ['cancelled', 35, 'result', 'Cancelled by the owner'],
+  ])('maps native %s status and percent into the existing UI contract', async (status, progress, type, error) => {
+    const listener = vi.fn();
+    let receive!: (event: { payload: Record<string, unknown> }) => void;
+    listenMock.mockImplementation(async (_name, callback) => { receive = callback; return vi.fn(); });
+    await listenFoundryWorkerMessages(listener);
+    receive({ payload: { id: 'job_native_event', projectId: 'project-1', status, progress, error } });
+    expect(listener).toHaveBeenCalledWith({
+      projectId: 'project-1', jobId: 'job_native_event',
+      message: expect.objectContaining({ type, phase: status, progress: Number(progress) / 100,
+        ...(error ? { message: error } : {}) }),
+    });
+  });
+
+  it('refuses an artifact summary from a foreign project before registration', async () => {
+    const { inspectFoundryArtifact } = await import('./nativeBridge');
+    invokeMock.mockResolvedValue([{ id: 'foreign-job', projectId: 'project-b', status: 'completed',
+      artifactVerified: true, artifactSha256: 'a'.repeat(64), artifactPath: '/synthetic/weights',
+      method: 'lora', name: 'Foreign', version: 1, storageBytes: 24 }]);
+    await expect(inspectFoundryArtifact('project-a', 'foreign-job')).rejects.toThrow(/project/i);
+  });
+});

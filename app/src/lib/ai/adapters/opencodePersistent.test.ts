@@ -101,6 +101,9 @@ import {
 } from '@/lib/harness/toolGatewayAuthority';
 import { useAuthStore } from '@/stores/auth';
 import type { ProjectId, WorkspaceId } from '@/types/common';
+import { openCodeScopeKey } from '@/lib/harness/OpenCodeSessionPool';
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+import { toPersistedActivity } from '@/lib/diagnostics/activityLogPersistence';
 
 const liveModels = parseOpenCodeLiveModels({
   providers: [
@@ -218,6 +221,10 @@ function configureManagedQuestionTransport(
     }
     if (path.includes('/abort')) return jsonResponse(true);
     if (path.includes('/prompt_async')) {
+      // Poll zero models pre-dispatch history. A newly created session may
+      // prove that baseline without reading it; post-dispatch reads must still
+      // observe the provider's response rather than replay the empty baseline.
+      messageReadIndex = Math.max(1, messageReadIndex);
       options.lifecycle?.push('prompt-async');
       return jsonResponse(true);
     }
@@ -309,6 +316,24 @@ function questionProviderRequest(requestId: string, signal?: AbortSignal): Provi
     },
     ...(signal ? { signal } : {}),
   };
+}
+
+async function restoreQuestionSession(request: ProviderRequest): Promise<void> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(request.systemPrompt?.trim() ?? ''));
+  const instructionFingerprint = `sha256:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+  const scopeKey = openCodeScopeKey({
+    accountId: request.accountId!, workspaceId: request.workspaceId,
+    projectId: request.projectId, worktreeId: request.worktreeId,
+    workingDirectory: request.workingDirectory,
+  });
+  localStorage.setItem('vibespace.opencode-session-registry.v1', JSON.stringify({
+    [scopeKey]: {
+      [request.chatId!]: {
+        sessionId: 'ses_question_exact', runtimeGeneration: managedRuntimeMocks.getConnection().generation,
+        instructionFingerprint,
+      },
+    },
+  }));
 }
 
 async function startWaitingQuestion(requestId: string, signal?: AbortSignal) {
@@ -809,6 +834,126 @@ describe('persistent OpenCode question transport authority', () => {
     invalidateOpenCodePersistentCaches();
   });
 
+  it('dispatches a witnessed fresh session without a preflight history read and records its origin', async () => {
+    const transport = nativeOpenCodeMocks.request.getMockImplementation()!;
+    const request = questionProviderRequest('fresh-baseline-witness');
+    const before = appActivityLog.snapshot().sequence;
+    let dispatched = false;
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (args[1].includes('/message?') && !dispatched) throw new Error('preflight history endpoint unavailable');
+      if (args[1].includes('/prompt_async')) dispatched = true;
+      return transport(...args);
+    });
+    const iterator = openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]();
+    try {
+      await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'session', sessionId: 'ses_question_exact' } });
+      expect(dispatched).toBe(true);
+      expect(nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/message?'))).toBe(false);
+      const history = appActivityLog.snapshot(before).events.find((event) => event.kind === 'model.prepare.history' && event.phase === 'started');
+      expect(history?.data).toMatchObject({
+        requestId: request.requestId, sessionId: 'ses_question_exact',
+        runtimeGeneration: managedRuntimeMocks.getConnection().generation,
+        sessionOrigin: 'created', baselineSource: 'created-empty',
+      });
+      expect(toPersistedActivity(history!)).toMatchObject({
+        requestId: request.requestId, sessionId: 'ses_question_exact',
+        runtimeGeneration: managedRuntimeMocks.getConnection().generation,
+        eventType: 'history-baseline.created.created-empty',
+      });
+      const completed = appActivityLog.snapshot(before).events.find((event) => event.kind === 'model.prepare.history' && event.phase === 'completed');
+      expect(toPersistedActivity(completed!).operationId).toBe(history!.operationId);
+    } finally { await iterator.return?.(); }
+  });
+
+  it('keeps restored history failure fatal before prompt dispatch', async () => {
+    const request = questionProviderRequest('restored-history-failure');
+    await restoreQuestionSession(request);
+    const transport = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (args[1].includes('/message?')) throw new Error('restored history unavailable');
+      return transport(...args);
+    });
+    await expect(drain(openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]()))
+      .rejects.toThrow('restored history unavailable');
+    expect(nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/prompt_async'))).toBe(false);
+    expect(nativeOpenCodeMocks.request.mock.calls.some(([, path, init]) => /^\/session(?:\?|$)/u.test(path) && init?.method === 'POST')).toBe(false);
+  });
+
+  it('does not reuse a consumed fresh witness on the next warm turn', async () => {
+    const first = questionProviderRequest('fresh-before-warm');
+    const iterator = openCodePersistentAdapter.send!(first)[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'session' } });
+    await iterator.return?.();
+    const before = appActivityLog.snapshot().sequence;
+    const transport = nativeOpenCodeMocks.request.getMockImplementation()!;
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (args[1].includes('/message?')) throw new Error('warm history unavailable');
+      return transport(...args);
+    });
+    await expect(drain(openCodePersistentAdapter.send!({
+      ...first, requestId: 'warm-must-read-history',
+    })[Symbol.asyncIterator]())).rejects.toThrow('warm history unavailable');
+    expect(nativeOpenCodeMocks.request.mock.calls.filter(([, path]) => path.includes('/prompt_async'))).toHaveLength(1);
+    const history = appActivityLog.snapshot(before).events.find((event) => event.kind === 'model.prepare.history' && event.phase === 'started');
+    expect(history?.data).toMatchObject({
+      requestId: 'warm-must-read-history', sessionId: 'ses_question_exact',
+      runtimeGeneration: managedRuntimeMocks.getConnection().generation,
+      sessionOrigin: 'warm', baselineSource: 'native-history',
+    });
+    expect(toPersistedActivity(history!)).toMatchObject({
+      requestId: 'warm-must-read-history', sessionId: 'ses_question_exact',
+      eventType: 'history-baseline.warm.native-history',
+    });
+  });
+
+  it('never dispatches a late created session after cancellation and requires history on its next turn', async () => {
+    const controller = new AbortController();
+    const request = questionProviderRequest('cancel-before-create', controller.signal);
+    const transport = nativeOpenCodeMocks.request.getMockImplementation()!;
+    let created!: () => void;
+    const started = new Promise<void>((resolve) => { created = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (/^\/session(?:\?|$)/u.test(args[1]) && args[2]?.method === 'POST') {
+        created();
+        await gate;
+      }
+      return transport(...args);
+    });
+    const outcome = drain(openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]())
+      .then(() => undefined, (error: unknown) => error);
+    await started;
+    controller.abort();
+    release();
+    await expect(outcome).resolves.toMatchObject({ name: 'AbortError' });
+    expect(nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/prompt_async'))).toBe(false);
+    nativeOpenCodeMocks.request.mockImplementation(async (...args) => {
+      if (args[1].includes('/message?')) throw new Error('cancelled session history unavailable');
+      return transport(...args);
+    });
+    await expect(drain(openCodePersistentAdapter.send!({
+      ...request, requestId: 'after-cancelled-create', signal: undefined,
+    })[Symbol.asyncIterator]())).rejects.toThrow('cancelled session history unavailable');
+    expect(nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/prompt_async'))).toBe(false);
+  });
+
+  it('does not emit late foreign-session text after a fresh baseline bypass', async () => {
+    configureManagedQuestionTransport([
+      { type: 'message.part.updated', properties: { part: {
+        id: 'foreign-part', messageID: 'foreign-message', sessionID: 'ses_foreign',
+        type: 'text', text: 'Foreign old answer must not leak.',
+      } } },
+      { type: 'session.idle', properties: { sessionID: 'ses_question_exact' } },
+    ]);
+    const events: ProviderEvent[] = [];
+    for await (const event of openCodePersistentAdapter.send!(questionProviderRequest('fresh-foreign-event'))) {
+      events.push(event);
+    }
+    expect(JSON.stringify(events)).not.toContain('Foreign old answer');
+    expect(events.at(-1)).toMatchObject({ type: 'done' });
+  });
+
   it.each([false, true])(
     'restores local history only for an empty provider session: existing=%s',
     async (existing) => {
@@ -840,6 +985,7 @@ describe('persistent OpenCode question transport authority', () => {
         prompt: 'Add duplicate SKUs.',
         historyPrompt,
       };
+      if (existing) await restoreQuestionSession(request);
       await drain(openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]());
       const sent = nativeOpenCodeMocks.request.mock.calls.find(([, path]) =>
         path.includes('/prompt_async'),
@@ -929,15 +1075,17 @@ describe('persistent OpenCode question transport authority', () => {
   });
 
   it.each([null, {}, [null], ['malformed']])('does not restore history from a malformed message baseline: %j', async (value) => {
+    const request = {
+      ...questionProviderRequest('malformed-history'),
+      prompt: 'Current task.', historyPrompt: 'user: Old task.\n\nuser: Current task.',
+    };
+    await restoreQuestionSession(request);
     const original = nativeOpenCodeMocks.request.getMockImplementation()!;
     nativeOpenCodeMocks.request.mockImplementation(async (generation, path, init, timeout) => {
       if (path.includes('/message?')) return new Response(JSON.stringify(value));
       return original(generation, path, init, timeout);
     });
-    await expect(drain(openCodePersistentAdapter.send!({
-      ...questionProviderRequest('malformed-history'),
-      prompt: 'Current task.', historyPrompt: 'user: Old task.\n\nuser: Current task.',
-    })[Symbol.asyncIterator]())).rejects.toThrow(/malformed session history/i);
+    await expect(drain(openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]())).rejects.toThrow(/malformed session history/i);
     expect(nativeOpenCodeMocks.request.mock.calls.some(([, path]) => path.includes('/prompt_async'))).toBe(false);
   });
 
@@ -968,9 +1116,9 @@ describe('persistent OpenCode question transport authority', () => {
         if (path.includes('/abort')) lifecycle.push('abort');
         return transport(...args);
       });
-      const iterator = openCodePersistentAdapter.send!(
-        questionProviderRequest(`request-cancel-${boundary}`, controller.signal),
-      )[Symbol.asyncIterator]();
+      const request = questionProviderRequest(`request-cancel-${boundary}`, controller.signal);
+      if (boundary === 'baseline') await restoreQuestionSession(request);
+      const iterator = openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]();
       const outcome = drain(iterator).then(
         () => undefined,
         (error: unknown) => error,
@@ -2270,7 +2418,9 @@ describe('persistent OpenCode live authority', () => {
         });
       return response;
     });
-    const iterator = openCodePersistentAdapter.send!(questionProviderRequest('stale-recovery'))[
+    const request = questionProviderRequest('stale-recovery');
+    await restoreQuestionSession(request);
+    const iterator = openCodePersistentAdapter.send!(request)[
       Symbol.asyncIterator
     ]();
     try {
@@ -4333,9 +4483,9 @@ describe('persistent OpenCode live authority', () => {
       persistedMessagePolls: [historical, historical, historical],
     });
     const abort = new AbortController();
-    const iterator = openCodePersistentAdapter.send!(
-      questionProviderRequest('request-reused-history-only', abort.signal),
-    )[Symbol.asyncIterator]();
+    const request = questionProviderRequest('request-reused-history-only', abort.signal);
+    await restoreQuestionSession(request);
+    const iterator = openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]();
 
     await expect(iterator.next()).resolves.toMatchObject({
       done: false,
@@ -4434,9 +4584,9 @@ describe('persistent OpenCode live authority', () => {
     });
 
     const events: ProviderEvent[] = [];
-    for await (const event of openCodePersistentAdapter.send!(
-      questionProviderRequest('request-current-turn-recovery'),
-    )) {
+    const request = questionProviderRequest('request-current-turn-recovery');
+    await restoreQuestionSession(request);
+    for await (const event of openCodePersistentAdapter.send!(request)) {
       events.push(event);
       if (event.type === 'done') break;
     }
@@ -4531,9 +4681,9 @@ describe('persistent OpenCode live authority', () => {
       persistedMessagePolls: [historical, current],
     });
     const abort = new AbortController();
-    const iterator = openCodePersistentAdapter.send!(
-      questionProviderRequest('request-busy-tool-first', abort.signal),
-    )[Symbol.asyncIterator]();
+    const request = questionProviderRequest('request-busy-tool-first', abort.signal);
+    await restoreQuestionSession(request);
+    const iterator = openCodePersistentAdapter.send!(request)[Symbol.asyncIterator]();
 
     await expect(iterator.next()).resolves.toMatchObject({
       done: false,

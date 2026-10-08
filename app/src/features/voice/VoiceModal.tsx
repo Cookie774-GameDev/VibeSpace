@@ -9,6 +9,9 @@ import { useAgentStore } from '@/stores/agents';
 import { cn } from '@/lib/utils';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { messageRepo } from '@/lib/db';
+import { canRunLocalCommandWithoutModel, requiresLocalCommandPreflight } from '@/features/local-command-bridge/preModelBridge';
+import { buildLocalTurnReceipt } from '@/features/local-command-bridge/localTurnReceipt';
+import { createVoiceLocalCommandBoundary, type VoiceLocalCommandOutcome } from './voiceLocalCommandBoundary';
 import { useChatMessages } from '@/features/chat/hooks';
 import { ensureJarvisChatForProvider, focusVoiceChat } from './voiceChatRouting';
 import type { ChatId } from '@/types';
@@ -941,6 +944,7 @@ function VoiceModalPanel() {
       const visibleReasoningPreference = visibleChatId
         ? readChatReasoningPreference(visibleChatId) : null;
       let requestSessionId: string | null = null;
+      let localCommandStarted = false;
       const requestIsCurrent = () => {
         const live = useAuthStore.getState();
         return (
@@ -956,6 +960,76 @@ function VoiceModalPanel() {
         const parsed = parseVoiceProviderOverrides(text);
         const messageText = (parsed ? parsed.taskText : text).trim();
         if (!messageText) throw new Error('Say a task after the provider instruction.');
+        const localPreflight = useUIStore.getState().voiceInputMode === 'text' &&
+          requiresLocalCommandPreflight(messageText);
+        let localOutcome: VoiceLocalCommandOutcome | undefined;
+        const runLocalPreflight = async () => {
+          localCommandStarted = true;
+          const interactionId = `voice-local-${crypto.randomUUID()}`;
+          const outcome = await createVoiceLocalCommandBoundary({
+            text: messageText,
+            interactionId,
+            context: {
+              correlationId: interactionId,
+              accountId: requestAccountId ?? '',
+              workspaceId: String(auth.workspaceId ?? ''),
+              projectId: String(auth.projectId ?? ''),
+            },
+            isCurrent: requestIsCurrent,
+          })();
+          const settled = outcome.completedCount + outcome.queuedCount;
+          const partial = settled
+            ? `${outcome.completedCount} local action(s) completed and ${outcome.queuedCount} queued. `
+            : '';
+          if (outcome.status === 'revoked') {
+            // The old action's receipt remains in scoped diagnostics. Never
+            // paint its outcome into a new account or imply it was undone.
+            if (settled && resolveAccountIdentity(useAuthStore.getState())?.accountId === requestAccountId) {
+              toast.error('Voice action stopped', `${partial}The remaining request was stopped; no model request was sent.`);
+            }
+            return null;
+          }
+          if (outcome.status === 'held') {
+            const confirmation = outcome.result.receipts.some((receipt) => receipt.status === 'needs_confirmation');
+            throw new Error(`${partial}${confirmation ? 'Confirm the exact local action before continuing.' : 'The local request needs attention before continuing.'} No model request was sent.`);
+          }
+          return outcome;
+        };
+        const persistLocalTurn = async (chatId: ChatId) => {
+          if (!localOutcome || localOutcome.status !== 'command_only' || !requestIsCurrent()) return;
+          const parts = buildLocalTurnReceipt(localOutcome.result.receipts);
+          if (!parts.length) throw new Error('The completed local action receipt is unavailable.');
+          const saved = await messageRepo.create({
+            chat_id: chatId, role: 'user', parts: [{ kind: 'text', text: messageText }, ...parts],
+          });
+          if (!saved?.id) throw new Error('The local action completed, but its receipt could not be saved. Do not repeat the action automatically.');
+          if (!requestIsCurrent()) return;
+          onCommitted?.();
+          setVoiceFlowStatus(localOutcome.queuedCount ? 'Local action queued' : 'Local action completed');
+          void syncVoiceConversationFolder(String(chatId), {
+            accountId: requestAccountId!, workspaceId: String(auth.workspaceId),
+            projectId: auth.projectId ? String(auth.projectId) : null,
+          });
+          releaseTurnAndRestart();
+        };
+
+        // A pure typed local action needs its bound receipt scope, not a
+        // model route. Provider directives still follow normal validation.
+        if (localPreflight && !parsed && canRunLocalCommandWithoutModel(messageText)) {
+          await providerChatsRef.current[selectedMainProvider];
+          if (!requestIsCurrent()) return;
+          const binding = useVoiceStore.getState().session;
+          if (!binding || binding.accountId !== requestAccountId) throw new Error(VOICE_BOUND_CHAT_FAILURE);
+          requestSessionId = binding.sessionId;
+          pendingRequestSessionRef.current = {
+            sessionId: binding.sessionId, accountId: binding.accountId, chatId: String(binding.chatId),
+          };
+          localOutcome = (await runLocalPreflight()) ?? undefined;
+          if (!localOutcome) return;
+          if (localOutcome?.status !== 'command_only') throw new Error('The local request was held without sending it to a model.');
+          await persistLocalTurn(binding.chatId);
+          return;
+        }
         const requestedMainProvider = parsed?.providers.main ?? auth.voiceMainAgentProvider;
         const workerProvider = parsed?.providers.worker ?? auth.voiceWorkerProvider;
         // Only Main must be available before this turn is sent. Main may answer
@@ -1034,6 +1108,14 @@ function VoiceModalPanel() {
           workspaceId: String(auth.workspaceId),
           projectId: auth.projectId ? String(auth.projectId) : null,
         };
+        if (localPreflight) {
+          localOutcome = (await runLocalPreflight()) ?? undefined;
+          if (!localOutcome) return;
+          if (localOutcome?.status === 'command_only') {
+            await persistLocalTurn(chatId);
+            return;
+          }
+        }
         const request = {
           chatId: String(chatId),
           text: messageText,
@@ -1082,14 +1164,40 @@ function VoiceModalPanel() {
               }
               return captureVoiceScreenAttachment(requestText);
             },
-            dispatchMain: (detail) =>
-              requestIsCurrent()
-                ? dispatchVoiceMainRequest(detail)
-                : Promise.resolve({
-                    status: 'failed' as const,
-                    code: 'runtime_cancelled' as const,
-                    message: 'The voice request scope changed.',
-                  }),
+            dispatchMain: (detail) => {
+              if (!requestIsCurrent()) return Promise.resolve({
+                status: 'failed' as const, code: 'runtime_cancelled' as const,
+                message: 'The voice request scope changed.',
+              });
+              const actionContext = localOutcome?.result.localActionContext;
+              const priorPayload = detail.structuredContext?.payload;
+              if (actionContext && (!detail.structuredContext || !priorPayload || typeof priorPayload !== 'object' || Array.isArray(priorPayload))) return Promise.resolve({
+                status: 'failed' as const, code: 'dispatch_failed' as const,
+                message: 'The local action context could not be attached safely.',
+              });
+              return dispatchVoiceMainRequest({
+                ...detail,
+                ...(localOutcome ? { modelText: localOutcome.result.modelText } : {}),
+                // The flat localCommandContext has an existing 800-character
+                // runtime cap. Preserve Voice guidance there; add real action
+                // receipts to the existing untruncated structured UI context.
+                ...(actionContext && detail.structuredContext ? {
+                  structuredContext: {
+                    ...detail.structuredContext,
+                    payload: {
+                      ...(priorPayload as Record<string, unknown>),
+                      voiceLocalActionResult: {
+                        version: 1,
+                        source: 'vibespace-local-command-bridge',
+                        scope: { chatId: detail.chatId, voiceSessionId: detail.voiceSessionId },
+                        receipts: localOutcome!.result.receipts.map(({ commandId, status }) => ({ commandId, status })),
+                        context: actionContext,
+                      },
+                    },
+                  },
+                } : {}),
+              });
+            },
             reportStatus: (status) => {
               report(status);
               if (useVoiceStore.getState().session?.chatId !== status.chatId) return;
@@ -1139,7 +1247,9 @@ function VoiceModalPanel() {
           toast.error('Voice message failed', message);
           setVoiceFlowStatus(message);
           useVoiceStore.getState().setState('error', message);
-          void speakWithSettings('I could not start the task.').catch(() => undefined);
+          void speakWithSettings(localCommandStarted
+            ? 'The local request needs attention. Check its receipt before retrying.'
+            : 'I could not start the task.').catch(() => undefined);
           releaseTurnAndRestart();
         })
         .finally(() => {

@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent } from '@/types';
 
-const { foundryRun } = vi.hoisted(() => ({ foundryRun: vi.fn() }));
+const { foundryRun, nativeInvoke } = vi.hoisted(() => ({ foundryRun: vi.fn(), nativeInvoke: vi.fn() }));
+
+vi.mock('@tauri-apps/api/core', () => ({ invoke: nativeInvoke }));
+vi.mock('@/lib/utils', async (original) => ({
+  ...await original<typeof import('@/lib/utils')>(), isTauri: true,
+}));
 
 vi.mock('./providers/foundry', () => ({
   foundryProvider: {
@@ -129,4 +134,60 @@ it('does not route another provider through the Foundry connection', async () =>
     }),
   ).rejects.toThrow(/match provider connection/i);
   expect(foundryRun).not.toHaveBeenCalled();
+});
+
+
+import { appActivityLog } from '@/lib/diagnostics/appActivityLog';
+import { toPersistedActivity } from '@/lib/diagnostics/activityLogPersistence';
+
+describe('joined Foundry router provider and native bridge correlation', () => {
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('./providers/foundry')>('./providers/foundry');
+    foundryRun.mockReset(); foundryRun.mockImplementation(actual.foundryProvider.run);
+    nativeInvoke.mockReset();
+    nativeInvoke.mockImplementation(async (command: string) => {
+      if (command === 'model_foundry_chat') return { artifactId: 'verified', modelName: 'Public fixture',
+        version: 1, method: 'full', text: 'READY', inputTokens: 2, outputTokens: 1 };
+      if (command === 'model_foundry_list_jobs') return [{ id: 'verified', name: 'Public fixture',
+        version: 1, method: 'full', status: 'completed', artifactVerified: true, artifactSha256: 'a'.repeat(64) }];
+      throw new Error('Unexpected synthetic native command');
+    });
+  });
+
+  it.each(['codex', 'opencode'] as const)('retains exact deep attempt identity across the real %s-affinity local route', async (backend) => {
+    const protectedAttempt = { accountId: 'private-account-not-for-diagnostics',
+      runId: 'jrun_55555555-5555-4555-8555-555555555555',
+      requestId: 'jreq_66666666-6666-4666-8666-666666666666', attemptNumber: 3 };
+    const before = appActivityLog.snapshot().sequence;
+    const response = await runAgent({ agent, backend, connectionId: 'foundry-local',
+      requestId: protectedAttempt.requestId, protectedAttempt,
+      messages: [{ role: 'user', content: 'Public joined boundary fixture.' }] });
+    expect(response.text).toBe('READY');
+    expect(foundryRun.mock.calls[0]?.[0].protectedAttempt).toEqual(protectedAttempt);
+    const native = nativeInvoke.mock.calls.find(([command]) => command === 'model_foundry_chat')?.[1];
+    const events = appActivityLog.snapshot(before).events.filter((event) => event.kind === 'foundry.inference.native');
+    expect(events.map((event) => event.phase)).toEqual(['started', 'completed']);
+    for (const event of events) {
+      expect(event.data).toMatchObject({ runId: protectedAttempt.runId,
+        requestId: protectedAttempt.requestId, attemptNumber: 3, callId: native.requestId });
+      expect(toPersistedActivity(event)).toMatchObject({ runId: protectedAttempt.runId,
+        requestId: protectedAttempt.requestId, callId: native.requestId });
+      expect(event.data).not.toHaveProperty('accountId');
+    }
+  });
+
+  it('retains ordinary absent-attempt compatibility without inventing durable identities', async () => {
+    const before = appActivityLog.snapshot().sequence;
+    const response = await runAgent({ agent, connectionId: 'foundry-local',
+      messages: [{ role: 'user', content: 'Public unprotected fixture.' }] });
+    expect(response.text).toBe('READY');
+    expect(foundryRun.mock.calls[0]?.[0]).not.toHaveProperty('protectedAttempt');
+    const events = appActivityLog.snapshot(before).events.filter((event) => event.kind === 'foundry.inference.native');
+    expect(events.map((event) => event.phase)).toEqual(['started', 'completed']);
+    for (const event of events) {
+      expect(event.data).not.toHaveProperty('requestId');
+      expect(event.data).not.toHaveProperty('runId');
+      expect(event.data).not.toHaveProperty('attemptNumber');
+    }
+  });
 });

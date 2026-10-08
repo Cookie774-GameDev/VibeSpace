@@ -23,6 +23,15 @@ export interface OpenCodeSessionClient {
   abort(sessionId: string): Promise<void>;
 }
 
+export interface OpenCodeSessionBinding {
+  readonly client: OpenCodeSessionClient;
+  readonly sessionId: string;
+  readonly runtimeGeneration: string;
+  readonly origin: 'created' | 'restored' | 'warm';
+}
+
+type SessionResolution = { sessionId: string; origin: 'created' | 'restored' };
+
 export interface OpenCodeClientFactory {
   connect(handle: OpenCodeRuntimeHandle): Promise<OpenCodeSessionClient>;
 }
@@ -47,7 +56,7 @@ interface RuntimeEntry {
   lastUsedAt: number;
   sessions: Map<string, string>;
   sessionFingerprints: Map<string, string | undefined>;
-  sessionStarting: Map<string, Promise<string>>;
+  sessionStarting: Map<string, Promise<SessionResolution>>;
   disposed: boolean;
 }
 
@@ -88,14 +97,16 @@ export class OpenCodeSessionPool {
   private readonly entries = new Map<string, RuntimeEntry>();
   private readonly starting = new Map<string, Promise<RuntimeEntry>>();
   private readonly scopeEpoch = new Map<string, number>();
-  private readonly chatRequests = new Map<
-    string,
-    Promise<{
-      client: OpenCodeSessionClient;
-      sessionId: string;
-      runtimeGeneration: string;
-    }>
-  >();
+  private readonly chatRequests = new Map<string, Promise<OpenCodeSessionBinding>>();
+  private readonly baselineOwners = new Map<string, object>();
+  private readonly emptyBaselines = new WeakMap<OpenCodeSessionBinding, {
+    requestId: string;
+    requestKey: string;
+    scopeKey: string;
+    chatId: string;
+    entry: RuntimeEntry;
+    owner: object;
+  }>();
   private globalEpoch = 0;
 
   constructor(
@@ -180,6 +191,9 @@ export class OpenCodeSessionPool {
     entry.sessions.clear();
     entry.sessionFingerprints.clear();
     entry.sessionStarting.clear();
+    for (const requestKey of this.baselineOwners.keys()) {
+      if (requestKey.startsWith(`${key}\u0000`)) this.baselineOwners.delete(requestKey);
+    }
     await entry.handle.dispose();
   }
 
@@ -200,7 +214,7 @@ export class OpenCodeSessionPool {
     chatId: string,
     title?: string,
     instructionFingerprint?: string,
-  ): Promise<string> {
+  ): Promise<SessionResolution> {
     if (entry.disposed) throw new Error('HARNESS_SCOPE_DISPOSED');
     const registry = this.options.registry;
     let persistedKey = key;
@@ -229,7 +243,7 @@ export class OpenCodeSessionPool {
         if (registry && persistedKey !== key) {
           await registry.save(key, chatId, persisted).catch(() => undefined);
         }
-        return persisted.sessionId;
+        return { sessionId: persisted.sessionId, origin: 'restored' };
       }
     }
     const created = await entry.client.createSession({ scope: entry.scope, title });
@@ -245,7 +259,7 @@ export class OpenCodeSessionPool {
       runtimeGeneration: entry.handle.generation,
       ...(instructionFingerprint ? { instructionFingerprint } : {}),
     });
-    return created.id;
+    return { sessionId: created.id, origin: 'created' };
   }
 
   /** Public, bounded access to the warm scope client without exposing internal entry state. */
@@ -264,23 +278,26 @@ export class OpenCodeSessionPool {
     chatId: string,
     title?: string,
     instructionFingerprint?: string,
-  ): Promise<{
-    client: OpenCodeSessionClient;
-    sessionId: string;
-    runtimeGeneration: string;
-  }> {
+    baselineRequestId?: string,
+  ): Promise<OpenCodeSessionBinding> {
     const cleanChatId = cleanScopePart(chatId, true);
     if (instructionFingerprint !== undefined && !/^sha256:[a-f0-9]{64}$/u.test(instructionFingerprint)) {
       throw new Error('invalid_harness_instruction_fingerprint');
     }
     const key = openCodeScopeKey(scope);
     const requestKey = `${key}\u0000${cleanChatId}`;
+    const requestId = baselineRequestId === undefined ? undefined : cleanScopePart(baselineRequestId, true);
+    // Any additional acquisition makes a still-unconsumed empty baseline
+    // ambiguous, including callers coalesced into the same creation promise.
+    const owner = {};
+    this.baselineOwners.set(requestKey, owner);
     let request = this.chatRequests.get(requestKey);
     if (!request) {
       request = (async () => {
         const entry = await this.ensureReady(scope);
         if (entry.disposed) throw new Error('HARNESS_SCOPE_DISPOSED');
         let sessionId = entry.sessions.get(cleanChatId);
+        let origin: OpenCodeSessionBinding['origin'] = 'warm';
         if (sessionId && instructionFingerprint !== undefined &&
             entry.sessionFingerprints.get(cleanChatId) !== instructionFingerprint) {
           // Keep the prior server session for history/audit, but bind the next
@@ -297,11 +314,23 @@ export class OpenCodeSessionPool {
             );
             entry.sessionStarting.set(cleanChatId, creating);
           }
-          sessionId = await creating;
+          const resolved = await creating;
+          sessionId = resolved.sessionId;
+          origin = resolved.origin;
         }
         if (entry.disposed) throw new Error('HARNESS_SCOPE_DISPOSED');
         entry.lastUsedAt = this.now();
-        return { client: entry.client, sessionId, runtimeGeneration: entry.handle.generation };
+        const binding: OpenCodeSessionBinding = Object.freeze({
+          client: entry.client, sessionId, runtimeGeneration: entry.handle.generation, origin,
+        });
+        // Only this successful native create, not a restored id or a later
+        // warm lookup, can witness an empty session for its exclusive owner.
+        if (origin === 'created' && requestId) {
+          this.emptyBaselines.set(binding, {
+            requestId, requestKey, scopeKey: key, chatId: cleanChatId, entry, owner,
+          });
+        }
+        return binding;
       })().finally(() => {
         if (this.chatRequests.get(requestKey) === request) this.chatRequests.delete(requestKey);
       });
@@ -310,9 +339,23 @@ export class OpenCodeSessionPool {
     return request;
   }
 
+  /** Consume a creation witness once; false requires an authoritative history read. */
+  consumeEmptyBaseline(session: OpenCodeSessionBinding, requestId: string): boolean {
+    const witness = this.emptyBaselines.get(session);
+    this.emptyBaselines.delete(session);
+    if (!witness || witness.requestId !== requestId) return false;
+    const { entry } = witness;
+    return !entry.disposed && this.entries.get(witness.scopeKey) === entry &&
+      this.baselineOwners.get(witness.requestKey) === witness.owner &&
+      entry.sessions.get(witness.chatId) === session.sessionId &&
+      entry.handle.generation === session.runtimeGeneration &&
+      (!this.supervisor.currentGeneration || this.supervisor.currentGeneration() === session.runtimeGeneration);
+  }
+
   async cancelChat(scope: HarnessScope, chatId: string): Promise<void> {
     const cleanChatId = cleanScopePart(chatId, true);
     const key = openCodeScopeKey(scope);
+    this.baselineOwners.delete(`${key}\u0000${cleanChatId}`);
     const inFlight = this.chatRequests.get(`${key}\u0000${cleanChatId}`);
     if (inFlight) {
       const session = await inFlight.catch(() => undefined);
@@ -333,6 +376,7 @@ export class OpenCodeSessionPool {
 
   async forgetChat(scope: HarnessScope, chatId: string): Promise<void> {
     const key = openCodeScopeKey(scope);
+    this.baselineOwners.delete(`${key}\u0000${chatId.trim()}`);
     this.entries.get(key)?.sessions.delete(chatId.trim());
     this.entries.get(key)?.sessionFingerprints.delete(chatId.trim());
     await this.options.registry?.remove(key, chatId.trim());
@@ -349,6 +393,7 @@ export class OpenCodeSessionPool {
 
   async disposeAll(): Promise<void> {
     this.globalEpoch += 1;
+    this.baselineOwners.clear();
     for (const key of new Set([...this.entries.keys(), ...this.starting.keys()])) {
       this.scopeEpoch.set(key, this.epochFor(key) + 1);
     }

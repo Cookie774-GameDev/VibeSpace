@@ -10,7 +10,10 @@ const messageCreate = vi.hoisted(() => vi.fn(async () => ({ id: 'smoke-message' 
 const voiceHandlers = vi.hoisted(() => new Map<string, Set<(payload?: unknown) => void>>());
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
-vi.mock('@/lib/db', () => ({ messageRepo: { create: messageCreate } }));
+vi.mock('@/lib/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/db')>();
+  return { ...actual, messageRepo: { ...actual.messageRepo, create: messageCreate } };
+});
 vi.mock('@/features/chat/hooks', () => ({ useChatMessages: () => [] }));
 vi.mock('@/features/whats-new', () => ({
   useWhatsNew: () => ({ hasUpdate: false, currentVersion: 'test' }),

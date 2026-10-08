@@ -119,10 +119,13 @@ vi.mock('@/components/ui/toast', () => ({
   },
 }));
 
-vi.mock('@/lib/db', () => {
+vi.mock('@/lib/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/db')>();
   let nextMessage = 0;
   return {
+    ...actual,
     messageRepo: {
+      ...actual.messageRepo,
       create: vi.fn(async () => ({ id: `voice-message-${++nextMessage}` })),
     },
   };

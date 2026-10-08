@@ -1693,6 +1693,7 @@ async function runFoundryDispatch(req: RunAgentRequest): Promise<LLMResponse> {
     temperature: req.temperature,
     max_output_tokens: req.max_output_tokens,
     provider_options: req.provider_options,
+    ...(req.protectedAttempt ? { protectedAttempt: req.protectedAttempt } : {}),
   };
   const response = await foundryProvider.run(llmReq);
   useAgentStore

@@ -25,6 +25,8 @@ import {
   listenFoundryWorkerMessages,
   resumeFoundryTraining,
   startFoundryTraining,
+  getFoundryTrainingUpdate,
+  type FoundryWorkerMessage,
   stopFoundryTrainingAfterCheckpoint,
   type FoundryHardwareProfile,
   type FoundryPrivateEvaluationCase,
@@ -66,11 +68,24 @@ function unwrap<T>(result: FoundryResult<T>): T { if (!result.ok) throw new Erro
 function titleCase(value: string) { return value.charAt(0).toUpperCase() + value.slice(1) }
 
 interface NativeRunState {
+  readonly projectId?: string;
   readonly jobId: string;
   readonly phase: string;
   readonly progress: number;
   readonly terminal: boolean;
   readonly detail: string;
+}
+
+interface NativeRunOwner {
+  projectId: string;
+  jobId: string;
+  revision: number;
+  authorityRevision: number;
+  awaitingStart: boolean;
+  terminal: boolean;
+  verifying: boolean;
+  eventRevision: number;
+  earlyEvents: Map<string, FoundryWorkerMessage>;
 }
 
 function readPersistedNativeRun(storage: StorageAdapter, projectId: string): NativeRunState | null {
@@ -79,7 +94,7 @@ function readPersistedNativeRun(storage: StorageAdapter, projectId: string): Nat
     const candidate = parsed[projectId];
     if (!candidate || typeof candidate !== 'object') return null;
     const run = candidate as Partial<NativeRunState>;
-    return typeof run.jobId === 'string' && typeof run.phase === 'string' && typeof run.progress === 'number' && typeof run.terminal === 'boolean' && typeof run.detail === 'string' ? run as NativeRunState : null;
+    return typeof run.jobId === 'string' && typeof run.phase === 'string' && typeof run.progress === 'number' && typeof run.terminal === 'boolean' && typeof run.detail === 'string' ? { ...run, projectId } as NativeRunState : null;
   } catch { return null; }
 }
 
@@ -179,6 +194,7 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
       if (resolveAccountIdentity(next)?.accountId !== resolveAccountIdentity(previous)?.accountId ||
           next.workspaceId !== previous.workspaceId || next.projectId !== previous.projectId) {
         evaluationRevisionRef.current += 1;
+        nativeAuthorityRevisionRef.current += 1;
       }
     });
     return () => {
@@ -201,6 +217,9 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
   const [runtimeApproval, setRuntimeApproval] = React.useState(false);
   const [runtimeBusy, setRuntimeBusy] = React.useState(false);
   const [nativeRun, setNativeRun] = React.useState<NativeRunState | null>(null);
+  const nativeRunOwnerRef = React.useRef<NativeRunOwner | null>(null);
+  const nativeAuthorityRevisionRef = React.useRef(0);
+  const nativeStartPendingRef = React.useRef(false);
   const [localAdapters, setLocalAdapters] = React.useState<readonly LocalAdapterRecord[]>([]);
   const [privateEvaluationCases, setPrivateEvaluationCases] = React.useState<readonly FoundryPrivateEvaluationCase[]>([]);
   const skipPrivateSuitePersist = React.useRef(false);
@@ -216,6 +235,53 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
   const [customDraft, setCustomDraft] = React.useState({ name: '', purpose: '', input: '', output: '', constraints: '', language: 'English', forbiddenAction: 'invent unsupported facts or actions', commercialIntent: 'personal' as SpecialistDefinition['commercialIntent'], latencyMs: 8000, memoryMb: 1024, threshold: 0.8 });
   const [realConfig, setRealConfig] = React.useState({ method: 'lora' as 'lora' | 'qlora', computeDevice: 'gpu' as const, seed: 7, epochs: 1, batchSize: 1, gradientAccumulation: 4, maxSequenceLength: 256, learningRate: 0.0002, loraRank: 8, loraAlpha: 16, loraDropout: 0.05 });
   const projectId = snapshot?.project.id;
+
+  const persistNativeRun = React.useCallback((ownerProjectId: string, run: NativeRunState) => {
+    try {
+      const parsed = JSON.parse(storage.getItem(NATIVE_RUN_STORAGE_KEY) ?? '{}') as Record<string, NativeRunState>;
+      storage.setItem(NATIVE_RUN_STORAGE_KEY, JSON.stringify({ ...parsed, [ownerProjectId]: { ...run, projectId: ownerProjectId } }));
+    } catch { /* Native job metadata remains the durable authority. */ }
+  }, [storage]);
+  const nativeOwnerCurrent = (owner: NativeRunOwner) => evaluationMountedRef.current &&
+    nativeRunOwnerRef.current === owner && owner.revision === evaluationRevisionRef.current &&
+    owner.authorityRevision === nativeAuthorityRevisionRef.current &&
+    owner.projectId === evaluationProjectRef.current;
+  const consumeNativeUpdate = React.useCallback((owner: NativeRunOwner, event: FoundryWorkerMessage) => {
+    if (!nativeOwnerCurrent(owner) || event.projectId !== owner.projectId) return;
+    if (owner.awaitingStart) {
+      // Native events can beat the command acknowledgment. Bind only after its exact ID arrives.
+      if (owner.earlyEvents.size < 128 || owner.earlyEvents.has(event.jobId)) {
+        const prior = owner.earlyEvents.get(event.jobId);
+        if (prior?.message.type !== 'result') owner.earlyEvents.set(event.jobId, event);
+      }
+      return;
+    }
+    if (event.jobId !== owner.jobId || owner.terminal) return;
+    owner.eventRevision += 1;
+    const message = event.message;
+    const phase = typeof message.phase === 'string' ? message.phase : 'unknown';
+    const progress = typeof message.progress === 'number' && Number.isFinite(message.progress)
+      ? Math.min(1, Math.max(0, message.progress)) : 0;
+    const terminal = message.type === 'result';
+    const detail = typeof message.message === 'string' ? message.message : phase.replaceAll('_', ' ');
+    owner.terminal = terminal;
+    const next = { projectId: owner.projectId, jobId: owner.jobId, phase, progress, detail, terminal };
+    persistNativeRun(owner.projectId, next);
+    setNativeRun(next);
+    if (!terminal || phase !== 'completed' || owner.verifying) return;
+    owner.verifying = true;
+    void inspectFoundryArtifact(owner.projectId, owner.jobId).then((artifact) => {
+      if (!nativeOwnerCurrent(owner)) return;
+      const projectName = projectCatalogRef.current.find((candidate) => candidate.project.id === owner.projectId)?.project.specialist.name;
+      const registered = adapterRegistry.upsert(owner.projectId, owner.jobId, artifact, projectName);
+      setLocalAdapters((current) => [...current.filter((item) => item.projectId !== registered.projectId || item.jobId !== registered.jobId), registered]);
+      const verified = { ...next, detail: `Verified adapter artifact (${Object.keys(artifact.adapterFiles).length} files, ${artifact.manifestSha256.slice(0, 12)}…).` };
+      persistNativeRun(owner.projectId, verified);
+      setNativeRun(verified);
+    }).catch((caught) => {
+      if (nativeOwnerCurrent(owner)) setError(caught instanceof Error ? caught.message : 'Completed artifact verification failed.');
+    });
+  }, [adapterRegistry, persistNativeRun]);
 
   const persistProjectCatalog = React.useCallback((next: readonly ProjectSnapshot[]) => {
     try { writeProjectCatalog(storage, next); } catch { /* The active repository still preserves the current project. */ }
@@ -235,10 +301,21 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
   }, [backend, persistProjectCatalog, repository, setScopedSnapshot]);
 
   React.useEffect(() => {
-    if (!projectId) return;
+    nativeRunOwnerRef.current = null;
+    if (!projectId) { setNativeRun(null); return; }
     const restored = readPersistedNativeRun(storage, projectId);
-    setNativeRun(restored?.terminal ? restored : restored ? { ...restored, phase: 'interrupted', terminal: true, detail: 'The desktop app restarted. Resume from the last verified checkpoint.' } : null);
-  }, [projectId, storage]);
+    setNativeRun(restored);
+    if (!restored) return;
+    const owner: NativeRunOwner = { projectId, jobId: restored.jobId,
+      revision: evaluationRevisionRef.current, authorityRevision: nativeAuthorityRevisionRef.current,
+      awaitingStart: false, terminal: false, verifying: false, eventRevision: 0, earlyEvents: new Map() };
+    nativeRunOwnerRef.current = owner;
+    const readbackRevision = owner.eventRevision;
+    void getFoundryTrainingUpdate(projectId, restored.jobId).then((event) => {
+      if (owner.eventRevision === readbackRevision) consumeNativeUpdate(owner, event);
+    })
+      .catch((caught) => { if (nativeOwnerCurrent(owner)) setError(caught instanceof Error ? caught.message : 'Training status could not be restored.'); });
+  }, [projectId, storage, consumeNativeUpdate]);
 
   React.useEffect(() => {
     if (!projectId) { setPrivateEvaluationCases([]); return; }
@@ -261,13 +338,7 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
     return () => window.removeEventListener('vibespace:foundry-rollback-requested', rollback);
   }, [adapterRegistry, projectId]);
 
-  React.useEffect(() => {
-    if (!projectId || !nativeRun) return;
-    try {
-      const parsed = JSON.parse(storage.getItem(NATIVE_RUN_STORAGE_KEY) ?? '{}') as Record<string, NativeRunState>;
-      storage.setItem(NATIVE_RUN_STORAGE_KEY, JSON.stringify({ ...parsed, [projectId]: nativeRun }));
-    } catch { /* Local run-state persistence is optional. */ }
-  }, [nativeRun, projectId, storage]);
+
 
   React.useEffect(() => {
     if (!projectId) return;
@@ -300,33 +371,15 @@ export function FoundryPage({ storage = browserStorage, dependencies = defaultDe
   }, [storage]);
 
   React.useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     void listenFoundryWorkerMessages((event) => {
-      const message = event.message;
-      const phase = typeof message.phase === 'string' ? message.phase : typeof message.state === 'string' ? message.state : 'working';
-      const progress = typeof message.progress === 'number' ? message.progress : phase === 'completed' ? 1 : 0;
-      const nestedError = message.error && typeof message.error === 'object' ? message.error as Record<string, unknown> : null;
-      const detail = typeof message.message === 'string'
-        ? message.message
-        : typeof nestedError?.message === 'string'
-          ? nestedError.message
-          : phase.replaceAll('_', ' ');
-      setNativeRun((current) => current?.jobId === event.jobId
-        ? { ...current, phase, progress, detail, terminal: message.type === 'result' }
-        : current);
-      if (message.type === 'result' && phase === 'completed') {
-        void inspectFoundryArtifact(event.projectId, event.jobId).then((artifact) => {
-          const projectName = projectCatalogRef.current.find((candidate) => candidate.project.id === event.projectId)?.project.specialist.name;
-          const registered = adapterRegistry.upsert(event.projectId, event.jobId, artifact, projectName);
-          setLocalAdapters((current) => [...current.filter((item) => item.projectId !== registered.projectId || item.jobId !== registered.jobId), registered]);
-          setNativeRun((current) => current?.jobId === event.jobId
-            ? { ...current, detail: `Verified adapter artifact (${Object.keys(artifact.adapterFiles).length} files, ${artifact.manifestSha256.slice(0, 12)}…).`, terminal: true }
-            : current);
-        }).catch((caught) => setError(caught instanceof Error ? caught.message : 'Completed artifact verification failed.'));
-      }
-    }).then((dispose) => { unlisten = dispose; });
-    return () => unlisten?.();
-  }, [adapterRegistry]);
+      if (disposed) return;
+      const owner = nativeRunOwnerRef.current;
+      if (owner) consumeNativeUpdate(owner, event);
+    }).then((dispose) => { if (disposed) dispose(); else unlisten = dispose; });
+    return () => { disposed = true; unlisten?.(); };
+  }, [consumeNativeUpdate]);
 
   const commit = React.useCallback((next: ProjectSnapshot) => {
     const saved = repository.save(next);
@@ -402,45 +455,79 @@ const downloadSelectedModel = async () => {
     finally { setRuntimeBusy(false); }
   };
   const startRealTraining = async () => {
-    if (!projectId || !snapshot?.datasetVersion || selectedModel.kind !== 'downloadable') return;
-    const runtime = await getFoundryTrainingRuntimeStatus();
-    setTrainingRuntime(runtime);
-    if (!runtime.installed) throw new Error('Install the pinned LoRA runtime before starting real training.');
-    if (realConfig.method === 'qlora' && !runtime.qloraInstalled) throw new Error('Install the optional pinned QLoRA add-on before starting a QLoRA run.');
-    if (!downloadStatus?.startsWith('Verified')) throw new Error('Download and verify the complete pinned base-model snapshot first.');
-    const trainExamples = snapshot.datasetVersion.examples.filter((example) => example.split === 'train').map((example) => ({ prompt: example.input, completion: example.expectedOutput }));
-    const validationExamples = snapshot.datasetVersion.examples.filter((example) => example.split === 'validation').map((example) => ({ prompt: example.input, completion: example.expectedOutput }));
-    if (!trainExamples.length || !validationExamples.length) throw new Error('Real training requires an approved dataset version with both train and validation examples.');
-    const approved = snapshot.datasetVersion.scanSummary.status === 'passed'
-      && snapshot.datasetVersion.qualitySummary.status !== 'failed'
-      && snapshot.datasetVersion.licenseReport.status === 'passed'
-      && snapshot.datasetVersion.secretScanReport.status === 'passed';
-    if (!approved) throw new Error('The attached dataset version has not passed every approval gate.');
-    const jobId = `real-${crypto.randomUUID()}`;
-    setNativeRun({ jobId, phase: 'queued', progress: 0, detail: 'Submitting immutable real-training job.', terminal: false });
+    if (!projectId || !snapshot?.datasetVersion || selectedModel.kind !== 'downloadable' || nativeStartPendingRef.current) return;
+    nativeStartPendingRef.current = true;
+    const revision = evaluationRevisionRef.current;
+    const authorityRevision = nativeAuthorityRevisionRef.current;
     try {
-      await startFoundryTraining({
-        projectId,
-        jobId,
-        modelId: selectedModel.id,
-        datasetVersionId: snapshot.datasetVersion.id,
-        datasetManifestHash: snapshot.datasetVersion.manifestHash,
-        datasetFingerprint: snapshot.datasetVersion.fingerprint,
-        datasetApproved: true,
-        trainExamples,
-        validationExamples,
-        trainingConfig: realConfig,
-      });
+      const runtime = await getFoundryTrainingRuntimeStatus();
+      if (!evaluationMountedRef.current || revision !== evaluationRevisionRef.current) return;
+      setTrainingRuntime(runtime);
+      if (!runtime.installed) throw new Error('Install the pinned LoRA runtime before starting real training.');
+      if (realConfig.method === 'qlora' && !runtime.qloraInstalled) throw new Error('Install the optional pinned QLoRA add-on before starting a QLoRA run.');
+      if (!downloadStatus?.startsWith('Verified')) throw new Error('Download and verify the complete pinned base-model snapshot first.');
+      const trainExamples = snapshot.datasetVersion.examples.filter((example) => example.split === 'train').map((example) => ({ prompt: example.input, completion: example.expectedOutput }));
+      const validationExamples = snapshot.datasetVersion.examples.filter((example) => example.split === 'validation').map((example) => ({ prompt: example.input, completion: example.expectedOutput }));
+      if (!trainExamples.length || !validationExamples.length) throw new Error('Real training requires an approved dataset version with both train and validation examples.');
+      const approved = snapshot.datasetVersion.scanSummary.status === 'passed'
+        && snapshot.datasetVersion.qualitySummary.status !== 'failed'
+        && snapshot.datasetVersion.licenseReport.status === 'passed'
+        && snapshot.datasetVersion.secretScanReport.status === 'passed';
+      if (!approved) throw new Error('The attached dataset version has not passed every approval gate.');
+      const jobId = `real-${crypto.randomUUID()}`;
+      const owner: NativeRunOwner = { projectId, jobId, revision, authorityRevision, awaitingStart: true, terminal: false, verifying: false, eventRevision: 0, earlyEvents: new Map() };
+      nativeRunOwnerRef.current = owner;
+      setNativeRun({ projectId, jobId, phase: 'queued', progress: 0, detail: 'Submitting immutable real-training job.', terminal: false });
+      try {
+        const accepted = await startFoundryTraining({
+          projectId,
+          jobId,
+          modelId: selectedModel.id,
+          datasetVersionId: snapshot.datasetVersion.id,
+          datasetManifestHash: snapshot.datasetVersion.manifestHash,
+          datasetFingerprint: snapshot.datasetVersion.fingerprint,
+          datasetApproved: true,
+          trainExamples,
+          validationExamples,
+          trainingConfig: realConfig,
+        });
+        owner.jobId = accepted.jobId;
+        owner.awaitingStart = false;
+        const acceptedRun = { projectId, jobId: accepted.jobId, phase: 'queued', progress: 0,
+          detail: 'Native training job accepted.', terminal: false };
+        if (evaluationMountedRef.current && authorityRevision === nativeAuthorityRevisionRef.current)
+          persistNativeRun(projectId, acceptedRun);
+        if (!nativeOwnerCurrent(owner)) return;
+        setNativeRun(acceptedRun);
+        const early = owner.earlyEvents.get(accepted.jobId);
+        owner.earlyEvents.clear();
+        if (early) consumeNativeUpdate(owner, early);
+        const readbackRevision = owner.eventRevision;
+        void getFoundryTrainingUpdate(projectId, accepted.jobId).then((event) => {
+          if (owner.eventRevision === readbackRevision) consumeNativeUpdate(owner, event);
+        })
+          .catch((caught) => { if (nativeOwnerCurrent(owner) && !owner.terminal) setError(caught instanceof Error ? caught.message : 'Native training status is unavailable.'); });
+      } catch (caught) {
+        if (nativeOwnerCurrent(owner)) {
+          setNativeRun((current) => current?.jobId === jobId ? { ...current, phase: 'failed', terminal: true, detail: caught instanceof Error ? caught.message : 'Could not start real training.' } : current);
+          throw caught;
+        }
+      }
     } catch (caught) {
-      setNativeRun((current) => current?.jobId === jobId ? { ...current, phase: 'failed', terminal: true, detail: caught instanceof Error ? caught.message : 'Could not start real training.' } : current);
-      throw caught;
-    }
+      if (evaluationMountedRef.current && revision === evaluationRevisionRef.current &&
+          authorityRevision === nativeAuthorityRevisionRef.current) throw caught;
+    } finally { nativeStartPendingRef.current = false; }
   };
   const cancelRealTraining = async () => {
-    if (!projectId || !nativeRun || nativeRun.terminal) return;
-    const accepted = await cancelFoundryTraining(projectId, nativeRun.jobId);
-    if (!accepted) throw new Error('The real-training worker is no longer active.');
-    setNativeRun((current) => current ? { ...current, detail: 'Cancellation requested; the worker will stop safely.' } : current);
+    const owner = nativeRunOwnerRef.current;
+    if (!owner || !nativeOwnerCurrent(owner) || owner.awaitingStart || !nativeRun || nativeRun.terminal) return;
+    try {
+      const accepted = await cancelFoundryTraining(owner.projectId, owner.jobId);
+      if (!nativeOwnerCurrent(owner)) return;
+      if (!accepted) throw new Error('The real-training worker is no longer active.');
+      setNativeRun((current) => current?.jobId === owner.jobId
+        ? { ...current, detail: 'Cancellation requested; the worker will stop safely.' } : current);
+    } catch (caught) { if (nativeOwnerCurrent(owner)) throw caught; }
   };
   const resumeRealTraining = async () => {
     if (!projectId || !nativeRun || nativeRun.phase !== 'interrupted') return;

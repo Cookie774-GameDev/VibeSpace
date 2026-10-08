@@ -68,6 +68,11 @@ export const foundryProvider: LLMProvider = {
       messages,
       maxNewTokens: Math.min(512, Math.max(1, req.max_output_tokens ?? 320)),
       signal: req.signal,
+      correlation: req.protectedAttempt ? {
+        runId: req.protectedAttempt.runId,
+        requestId: req.protectedAttempt.requestId,
+        attemptNumber: req.protectedAttempt.attemptNumber,
+      } : undefined,
     });
     if (req.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     req.onChunk?.({ delta: response.text, first: true });
