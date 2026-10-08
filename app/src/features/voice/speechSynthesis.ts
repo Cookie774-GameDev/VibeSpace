@@ -9,6 +9,15 @@ export const VOICE_ACKNOWLEDGEMENT_TEXT = 'Ready.';
 const VOICE_LOAD_TIMEOUT_MS = 2_500;
 const SPEECH_KEEPALIVE_MS = 4_000;
 
+export class SpeechSynthesisCompletionError extends Error {
+  readonly code = 'completion_unobserved';
+
+  constructor() {
+    super('Speech completion was not observed.');
+    this.name = 'SpeechSynthesisCompletionError';
+  }
+}
+
 export interface SpeakTextOptions {
   persona?: PersonaPreset;
   voicePreset?: VoicePresetId;
@@ -245,19 +254,42 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
     let settled = false;
     let timeout = 0;
     let keepAlive = 0;
+    let resumeRetry = 0;
+    let observationStarted = false;
     const settle = (complete: () => void) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timeout);
       window.clearInterval(keepAlive);
+      window.clearTimeout(resumeRetry);
       dispatchSpeechEvent(SPEECH_SYNTHESIS_END_EVENT);
       complete();
     };
-    timeout = window.setTimeout(() => settle(resolve), fallbackMs);
+    const observeCompletion = () => {
+      if (settled) return;
+      if (requestId !== activeSpeechRequestId) {
+        settle(resolve);
+        return;
+      }
+      // The heuristic is not a duration limit: healthy active or queued speech
+      // remains owned until a real end, error, Stop, or request retirement.
+      if (synthesis.speaking || synthesis.pending) return;
+      settle(() => {
+        // The end event can synchronously admit another request. Retired work
+        // must not reject into a caller's fallback and displace its successor.
+        if (requestId !== activeSpeechRequestId) resolve();
+        else reject(new SpeechSynthesisCompletionError());
+      });
+    };
+    timeout = window.setTimeout(() => {
+      observationStarted = true;
+      observeCompletion();
+    }, fallbackMs);
     keepAlive = window.setInterval(() => {
       if (requestId === activeSpeechRequestId && (synthesis.speaking || synthesis.pending)) {
         synthesis.resume();
       }
+      if (observationStarted) observeCompletion();
     }, SPEECH_KEEPALIVE_MS);
     utterance.onend = () => {
       settle(resolve);
@@ -272,11 +304,13 @@ export async function speakText(text: string, options: SpeakTextOptions = {}): P
     dispatchSpeechEvent(SPEECH_SYNTHESIS_START_EVENT);
     synthesis.speak(utterance);
     synthesis.resume();
-    window.setTimeout(() => {
-      if (!settled && requestId === activeSpeechRequestId) {
-        synthesis.resume();
-      }
-    }, 120);
+    if (!settled) {
+      resumeRetry = window.setTimeout(() => {
+        if (!settled && requestId === activeSpeechRequestId) {
+          synthesis.resume();
+        }
+      }, 120);
+    }
   });
 }
 

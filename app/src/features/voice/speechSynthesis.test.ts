@@ -4,6 +4,7 @@ import {
   selectPersonaVoice,
   selectVoiceProfileVoice,
   speakText,
+  stopSpeech,
   SPEECH_SYNTHESIS_END_EVENT,
   SPEECH_SYNTHESIS_START_EVENT,
   VOICE_PREVIEW_TEXT,
@@ -227,3 +228,196 @@ function installSpeechMocks({ voices, onSpeak }: InstallSpeechMocksOptions) {
   });
   return synthesis;
 }
+
+describe('speech completion watchdog ownership', () => {
+  let spoken: MockUtterance[];
+  let synthesis: ReturnType<typeof installSpeechMocks>;
+  beforeEach(() => {
+    stopSpeech();
+    vi.useFakeTimers();
+    useAuthStore.setState({ voicePreset: 'jarvis-prime', voiceEngine: 'system' });
+    spoken = [];
+    synthesis = installSpeechMocks({
+      voices: [voice('David')],
+      onSpeak: (utterance) => spoken.push(utterance),
+    });
+  });
+  afterEach(() => {
+    stopSpeech();
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    Reflect.deleteProperty(window, 'speechSynthesis');
+    Reflect.deleteProperty(globalThis, 'SpeechSynthesisUtterance');
+    vi.restoreAllMocks();
+  });
+  async function begin(text = 'A synthetic reply.') {
+    const promise = speakText(text, { engine: 'system' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spoken.length).toBeGreaterThan(0);
+    return { promise };
+  }
+  const longText = 'This synthetic speech continues naturally beyond the heuristic budget. '.repeat(
+    30,
+  );
+
+  it('waits for the real end of healthy speech beyond20 seconds without cancelling it', async () => {
+    const { promise } = await begin(longText);
+    let settled = false;
+    void promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(21000);
+    const prematurelySettled = settled;
+    expect(synthesis.cancel).toHaveBeenCalledTimes(1);
+    spoken[0].onend?.({} as SpeechSynthesisEvent);
+    await promise;
+    expect(prematurelySettled).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('retains a queued pending utterance beyond the heuristic until its real end', async () => {
+    const { promise } = await begin(longText);
+    synthesis.speaking = false;
+    synthesis.pending = true;
+    let settled = false;
+    void promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(24000);
+    const prematurelySettled = settled;
+    spoken[0].onend?.({} as SpeechSynthesisEvent);
+    await promise;
+    expect(prematurelySettled).toBe(false);
+    expect(synthesis.cancel).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rejects inactive missing completion with a fixed typed error and no extra cancellation', async () => {
+    const { promise } = await begin();
+    const expectedFailure = {
+      name: 'SpeechSynthesisCompletionError',
+      code: 'completion_unobserved',
+    };
+    const outcome = promise.then(
+      () => ({ status: 'resolved' }),
+      (error: unknown) => ({ status: 'rejected', error }),
+    );
+    synthesis.speaking = false;
+    await vi.advanceTimersByTimeAsync(1800);
+    expect(await outcome).toMatchObject({ status: 'rejected', error: expectedFailure });
+    expect(synthesis.cancel).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rechecks an active long utterance after the deadline and fails truthfully once inactive without end', async () => {
+    const { promise } = await begin(longText);
+    const expectedFailure = { code: 'completion_unobserved' };
+    const outcome = promise.then(
+      () => ({ status: 'resolved' }),
+      (error: unknown) => ({ status: 'rejected', error }),
+    );
+    await vi.advanceTimersByTimeAsync(21000);
+    synthesis.speaking = false;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await outcome).toMatchObject({ status: 'rejected', error: expectedFailure });
+    expect(synthesis.cancel).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('treats an actual end as authoritative even while the global engine activity flag lags', async () => {
+    const { promise } = await begin();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(synthesis.speaking).toBe(true);
+    spoken[0].onend?.({} as SpeechSynthesisEvent);
+    await expect(promise).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(24000);
+    expect(synthesis.cancel).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('settles a silently cancelled retired owner without treating its stale active flag as current', async () => {
+    const { promise } = await begin(longText);
+    let settled = false;
+    void promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(21000);
+    const prematurelySettled = settled;
+    stopSpeech();
+    await vi.advanceTimersByTimeAsync(3000);
+    await expect(promise).resolves.toBeUndefined();
+    expect(prematurelySettled).toBe(false);
+    expect(synthesis.cancel).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not cancel a replacement synchronously admitted by an end-event listener', async () => {
+    const { promise } = await begin();
+    const outcome = promise.then(
+      () => ({ status: 'resolved' }),
+      (error: unknown) => ({ status: 'rejected', error }),
+    );
+    synthesis.speaking = false;
+    let replacement: Promise<void> | undefined;
+    const replace = () => {
+      replacement = speakText('Fresh replacement.', { engine: 'system' });
+    };
+    window.addEventListener(SPEECH_SYNTHESIS_END_EVENT, replace, { once: true });
+    await vi.advanceTimersByTimeAsync(1800);
+    expect(await outcome).toMatchObject({ status: 'resolved' });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(spoken).toHaveLength(2);
+    expect(synthesis.cancel).toHaveBeenCalledTimes(2);
+    spoken[1].onend?.({} as SpeechSynthesisEvent);
+    await replacement;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(synthesis.cancel).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('ignores late end and error callbacks after an inactive completion failure', async () => {
+    let ends = 0;
+    const count = () => {
+      ends += 1;
+    };
+    window.addEventListener(SPEECH_SYNTHESIS_END_EVENT, count);
+    try {
+      const { promise } = await begin();
+      const expectedFailure = { code: 'completion_unobserved' };
+      const outcome = promise.then(
+        () => ({ status: 'resolved' }),
+        (error: unknown) => ({ status: 'rejected', error }),
+      );
+      synthesis.speaking = false;
+      await vi.advanceTimersByTimeAsync(1800);
+      expect(await outcome).toMatchObject({ status: 'rejected', error: expectedFailure });
+      spoken[0].onend?.({} as SpeechSynthesisEvent);
+      spoken[0].onerror?.({ error: 'synthesis-failed' } as SpeechSynthesisErrorEvent);
+      expect(ends).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      window.removeEventListener(SPEECH_SYNTHESIS_END_EVENT, count);
+    }
+  });
+  it('clears the owned early resume timer when a real end arrives immediately', async () => {
+    const { promise } = await begin();
+    spoken[0].onend?.({} as SpeechSynthesisEvent);
+    await promise;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
