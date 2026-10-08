@@ -2531,33 +2531,81 @@ pub fn model_foundry_rename_artifact(
     job_id: String,
     name: String,
 ) -> Result<FoundryJob, String> {
+    rename_artifact_from_root(&foundry_root(&app)?, &job_id, &name)
+}
+
+fn rename_artifact_from_root(
+    protected_root: &Path,
+    job_id: &str,
+    name: &str,
+) -> Result<FoundryJob, String> {
+    use crate::model_foundry_training::{
+        checked_export_source, verify_training_artifact_for_method,
+    };
     let job_id = validated_job_id(job_id.trim())?;
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 80 {
         return Err("Model name must contain 1 to 80 characters.".into());
     }
-    let job_dir = foundry_root(&app)?.join("jobs").join(job_id);
-    let job_path = job_dir.join("job.json");
-    let artifact_path = job_dir.join("knowledge-artifact.json");
+    let job_dir = checked_export_source(&protected_root.join("jobs").join(job_id), protected_root)?;
+    let job_path = checked_export_source(&job_dir.join("job.json"), protected_root)?;
+    let metadata = fs::metadata(&job_path)
+        .map_err(|_| "Model Foundry job was not found.".to_string())?;
+    if !metadata.is_file() || metadata.len() > 1024 * 1024 {
+        return Err("Rename job metadata is not a bounded regular file.".into());
+    }
     let mut job: FoundryJob = serde_json::from_slice(
         &fs::read(&job_path).map_err(|_| "Model Foundry job was not found.".to_string())?,
     )
     .map_err(|error| format!("Model Foundry job metadata is invalid: {error}"))?;
-    if job.status != "completed" || !job.artifact_verified {
+    if job.id != job_id || job.status != "completed" || !job.artifact_verified {
         return Err("Only a verified completed artifact can be renamed.".into());
     }
-    let mut artifact = validate_artifact(&artifact_path)?;
-    artifact.model_name = name.to_string();
-    write_atomic(
-        &artifact_path,
-        &serde_json::to_vec_pretty(&artifact)
-            .map_err(|error| format!("Could not encode renamed artifact: {error}"))?,
-    )?;
-    validate_artifact(&artifact_path)?;
-    let bytes =
-        fs::read(&artifact_path).map_err(|error| format!("Could not reopen artifact: {error}"))?;
+    let method = parsed_method(&job.method)?;
+    let artifact_name = match method {
+        FoundryMethod::Knowledge => "knowledge-artifact.json",
+        FoundryMethod::Weight => "weight-artifact",
+    };
+    let artifact_path = checked_export_source(&job_dir.join(artifact_name), protected_root)?;
+    let recorded_path = job.artifact_path.as_deref().ok_or("Rename artifact path is missing.")?;
+    if checked_export_source(Path::new(recorded_path), protected_root)? != artifact_path {
+        return Err("Rename artifact does not match its recorded job path.".into());
+    }
+    let expected_hash = job.artifact_sha256.as_deref()
+        .filter(|value| is_sha256(value))
+        .ok_or("Rename artifact has no recorded integrity hash.")?;
+    match method {
+        FoundryMethod::Knowledge => {
+            let bytes = fs::read(&artifact_path)
+                .map_err(|error| format!("Could not read artifact: {error}"))?;
+            let mut artifact = validate_artifact_bytes(&bytes)?;
+            if artifact.base_model_id != job.base_model_id
+                || artifact.model_name != job.name
+                || artifact.version != job.version
+                || bytes.len() as u64 != job.storage_bytes
+                || format!("{:x}", Sha256::digest(&bytes)) != expected_hash
+            {
+                return Err("Knowledge rename no longer matches its verified job.".into());
+            }
+            artifact.model_name = name.to_string();
+            let renamed_bytes = serde_json::to_vec_pretty(&artifact)
+                .map_err(|error| format!("Could not encode renamed artifact: {error}"))?;
+            write_atomic(&artifact_path, &renamed_bytes)?;
+            validate_artifact(&artifact_path)?;
+            let bytes = fs::read(&artifact_path)
+                .map_err(|error| format!("Could not reopen artifact: {error}"))?;
+            job.artifact_sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
+            job.storage_bytes = bytes.len() as u64;
+        }
+        FoundryMethod::Weight => {
+            let evidence = verify_training_artifact_for_method(&artifact_path, &job.method)?;
+            if evidence.sha256 != expected_hash || evidence.storage_bytes != job.storage_bytes {
+                return Err("Weight rename no longer matches its verified job.".into());
+            }
+            // Names belong to the job/request, not the verified weight payload or manifest.
+        }
+    }
     job.name = name.to_string();
-    job.artifact_sha256 = Some(format!("{:x}", Sha256::digest(&bytes)));
     job.updated_at = now();
     write_job(&job_path, &job)?;
     if let Ok(bytes) = fs::read(job_dir.join("request.json")) {
@@ -2824,6 +2872,158 @@ mod tests {
         };
         fs::write(job_dir.join("job.json"), serde_json::to_vec(&job).unwrap()).unwrap();
         (root, job_dir, job)
+    }
+
+    fn assert_weight_rename_preserves_payload(method: &str) {
+        let (root, job_dir, job) = artifact_export_fixture(method);
+        let artifact = job_dir.join("weight-artifact");
+        let weights_before = fs::read(artifact.join("model.safetensors")).unwrap();
+        let manifest_before = fs::read(artifact.join(".vibespace-artifact.json")).unwrap();
+        let renamed = rename_artifact_from_root(&root.join("private"), &job.id, "  Renamed café model  ").unwrap();
+        assert_eq!(renamed.name, "Renamed café model");
+        assert_eq!(renamed.id, job.id); assert_eq!(renamed.project_id, job.project_id);
+        assert_eq!(renamed.method, job.method); assert_eq!(renamed.base_model_id, job.base_model_id);
+        assert_eq!(renamed.version, job.version); assert_eq!(renamed.artifact_path, job.artifact_path);
+        assert_eq!(renamed.artifact_sha256, job.artifact_sha256); assert_eq!(renamed.storage_bytes, job.storage_bytes);
+        assert_eq!(fs::read(artifact.join("model.safetensors")).unwrap(), weights_before);
+        assert_eq!(fs::read(artifact.join(".vibespace-artifact.json")).unwrap(), manifest_before);
+        assert!(!job_dir.join("knowledge-artifact.json").exists());
+        let saved: FoundryJob = serde_json::from_slice(&fs::read(job_dir.join("job.json")).unwrap()).unwrap();
+        assert_eq!(saved.name, renamed.name);
+        let evidence = crate::model_foundry_training::verify_training_artifact(&artifact).unwrap();
+        assert_eq!(Some(evidence.sha256), job.artifact_sha256);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_rename_full_preserves_verified_payload() { assert_weight_rename_preserves_payload("full"); }
+    #[test]
+    fn artifact_rename_lora_preserves_verified_payload() { assert_weight_rename_preserves_payload("lora"); }
+    #[test]
+    fn artifact_rename_qlora_preserves_verified_payload() { assert_weight_rename_preserves_payload("qlora"); }
+
+    #[test]
+    fn artifact_rename_knowledge_synchronizes_recorded_bytes() {
+        let (root, job_dir, job) = artifact_export_fixture("knowledge");
+        let renamed = rename_artifact_from_root(&root.join("private"), &job.id,
+            "A different and longer knowledge label").unwrap();
+        let bytes = fs::read(job_dir.join("knowledge-artifact.json")).unwrap();
+        assert_eq!(renamed.storage_bytes, bytes.len() as u64);
+        assert_eq!(renamed.artifact_sha256, Some(format!("{:x}", Sha256::digest(&bytes))));
+        assert_eq!(validate_artifact_bytes(&bytes).unwrap().model_name, renamed.name);
+        assert_eq!(renamed.version, job.version); assert_eq!(renamed.base_model_id, job.base_model_id);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_rename_knowledge_can_export_the_renamed_artifact() {
+        let (root, job_dir, job) = artifact_export_fixture("knowledge");
+        let renamed = rename_artifact_from_root(&root.join("private"), &job.id,
+            "Knowledge renamed for export").unwrap();
+        let destination = root.join("renamed.json");
+        export_artifact_from_job_dir(&job_dir, &job.id, destination.to_str().unwrap(), &root.join("private")).unwrap();
+        let artifact = validate_artifact(&destination).unwrap();
+        assert_eq!(artifact.model_name, renamed.name);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_rename_rejects_stale_or_unverified_weight_identity_without_writing() {
+        for boundary in ["id", "hash", "bytes", "method", "unfinished", "unverified"] {
+            let (root, job_dir, mut job) = artifact_export_fixture("full");
+            match boundary {
+                "id" => job.id = "job_wrong".into(),
+                "hash" => job.artifact_sha256 = Some("0".repeat(64)),
+                "bytes" => job.storage_bytes += 1,
+                "method" => job.method = "lora".into(),
+                "unfinished" => job.status = "training".into(),
+                "unverified" => job.artifact_verified = false,
+                _ => unreachable!(),
+            }
+            write_job(&job_dir.join("job.json"), &job).unwrap();
+            let before = fs::read(job_dir.join("job.json")).unwrap();
+            let manifest = fs::read(job_dir.join("weight-artifact/.vibespace-artifact.json")).unwrap();
+            assert!(rename_artifact_from_root(&root.join("private"), "job_export", "Refused rename").is_err(), "{boundary}");
+            assert_eq!(fs::read(job_dir.join("job.json")).unwrap(), before, "{boundary}");
+            assert_eq!(fs::read(job_dir.join("weight-artifact/.vibespace-artifact.json")).unwrap(), manifest, "{boundary}");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn artifact_rename_rejects_tampered_weights_and_foreign_recorded_paths() {
+        for foreign_path in [false, true] {
+            let (root, job_dir, mut job) = artifact_export_fixture("full");
+            if foreign_path {
+                let other = root.join("private/jobs/job_other/weight-artifact");
+                fs::create_dir_all(&other).unwrap();
+                fs::write(other.join("model.safetensors"), b"synthetic weights only").unwrap();
+                fs::write(other.join("config.json"), b"{}").unwrap();
+                crate::model_foundry_training::write_and_verify_training_artifact(&other, "full").unwrap();
+                job.artifact_path = Some(other.to_string_lossy().into_owned());
+                write_job(&job_dir.join("job.json"), &job).unwrap();
+            } else {
+                fs::write(job_dir.join("weight-artifact/model.safetensors"), b"tampered fixture").unwrap();
+            }
+            let before = fs::read(job_dir.join("job.json")).unwrap();
+            assert!(rename_artifact_from_root(&root.join("private"), &job.id, "Refused rename").is_err());
+            assert_eq!(fs::read(job_dir.join("job.json")).unwrap(), before);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn artifact_rename_refuses_invalid_names_and_oversized_job_metadata() {
+        let (root, job_dir, job) = artifact_export_fixture("full");
+        let before = fs::read(job_dir.join("job.json")).unwrap();
+        for name in ["   ".to_string(), "x".repeat(81)] {
+            assert!(rename_artifact_from_root(&root.join("private"), &job.id, &name).is_err());
+            assert_eq!(fs::read(job_dir.join("job.json")).unwrap(), before);
+        }
+        let oversized = vec![b' '; 1024 * 1024 + 1];
+        fs::write(job_dir.join("job.json"), &oversized).unwrap();
+        assert!(rename_artifact_from_root(&root.join("private"), &job.id, "Refused rename").is_err());
+        assert_eq!(fs::read(job_dir.join("job.json")).unwrap(), oversized);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_rename_weight_job_write_failure_never_mutates_verified_payload() {
+        let (root, job_dir, job) = artifact_export_fixture("full");
+        let job_before = fs::read(job_dir.join("job.json")).unwrap();
+        let manifest_before = fs::read(job_dir.join("weight-artifact/.vibespace-artifact.json")).unwrap();
+        fs::create_dir(job_dir.join("job.json.tmp")).unwrap();
+        let error = rename_artifact_from_root(&root.join("private"), &job.id, "Cannot be committed").unwrap_err();
+        assert!(error.contains("persist training job"), "{error}");
+        assert_eq!(fs::read(job_dir.join("job.json")).unwrap(), job_before);
+        assert_eq!(fs::read(job_dir.join("weight-artifact/.vibespace-artifact.json")).unwrap(), manifest_before);
+        assert_eq!(fs::read(job_dir.join("weight-artifact/model.safetensors")).unwrap(), b"synthetic weights only");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_rename_preserves_optional_request_compatibility() {
+        for malformed in [false, true] {
+            let (root, job_dir, job) = artifact_export_fixture("full");
+            let path = job_dir.join("request.json");
+            if malformed { fs::write(&path, b"legacy unreadable request").unwrap(); }
+            else {
+                let mut request = reviewed_inline_request();
+                request.name = job.name.clone(); request.method = job.method.clone();
+                request.base_model_id = job.base_model_id.clone();
+                fs::write(&path, serde_json::to_vec_pretty(&request).unwrap()).unwrap();
+            }
+            let renamed = rename_artifact_from_root(&root.join("private"), &job.id, "Renamed optional request").unwrap();
+            assert_eq!(renamed.name, "Renamed optional request");
+            if malformed { assert_eq!(fs::read(path).unwrap(), b"legacy unreadable request"); }
+            else {
+                let request: StartRequest = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                assert_eq!(request.name, renamed.name);
+                assert_eq!(request.method, job.method); assert_eq!(request.base_model_id, job.base_model_id);
+                assert_eq!(request.dataset_fingerprint.as_deref(), Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

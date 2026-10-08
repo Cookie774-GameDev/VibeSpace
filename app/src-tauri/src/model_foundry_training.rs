@@ -12,7 +12,7 @@ use tauri::{Emitter, Manager};
 
 #[path = "foundry_worker_supervisor.rs"]
 mod worker_supervisor;
-pub(crate) use worker_supervisor::verify_training_artifact;
+pub(crate) use worker_supervisor::{verify_training_artifact, verify_training_artifact_for_method};
 pub(crate) use worker_supervisor::{export_knowledge_json, export_training_artifact, checked_export_source};
 #[cfg(test)]
 pub(crate) use worker_supervisor::write_and_verify_training_artifact;
@@ -23,7 +23,7 @@ use worker_supervisor::drain_bounded;
 use worker_supervisor::{
     configure_hidden_worker_command, configure_worker_environment,
     file_sha256 as artifact_file_sha256, validate_inference_receipt, validate_training_metadata,
-    validate_training_receipt, verify_training_artifact_for_method,
+    validate_training_receipt,
     write_bounded_log, TrainingArtifactEvidence,
     TrainingCatalogFile, TrainingCatalogModel, WorkerRegistry, MAX_WORKER_LOG_BYTES,
     MODEL_MARKER_FILE as TRAINING_MODEL_MARKER, WORKER_PROTOCOL,
