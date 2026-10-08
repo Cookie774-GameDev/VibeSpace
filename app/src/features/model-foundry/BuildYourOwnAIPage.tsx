@@ -136,12 +136,16 @@ function Overview({
   onOpenSection,
   onChooseMethod,
   trainingWorker,
+  trainingWorkerChecking,
+  trainingWorkerError,
 }: {
   jobs: readonly FoundryJob[];
   onCreate(): void;
   onOpenSection(section: SectionId): void;
   onChooseMethod(method: TrainingMethod): void;
   trainingWorker: LocalTrainingWorkerStatus | null;
+  trainingWorkerChecking: boolean;
+  trainingWorkerError: string | null;
 }) {
   const completed = verifiedJobs(jobs);
   return (
@@ -220,7 +224,7 @@ function Overview({
                   className={cn(
                     'inline-flex items-center gap-1 text-metadata',
                     method.method === 'knowledge' ||
-                      (trainingWorker?.attested && trainingWorker.methods.includes(method.method))
+                      (trainingWorker?.installed && trainingWorker.attested && trainingWorker.methods.includes(method.method))
                       ? 'text-accent-copper'
                       : 'text-muted-foreground',
                   )}
@@ -232,7 +236,11 @@ function Overview({
                   )}
                   {method.method === 'knowledge'
                     ? 'No weight training'
-                    : trainingWorker?.attested && trainingWorker.methods.includes(method.method)
+                    : trainingWorkerChecking
+                      ? 'Checking worker'
+                      : trainingWorkerError || !trainingWorker
+                        ? 'Status unknown'
+                        : trainingWorker.installed && trainingWorker.attested && trainingWorker.methods.includes(method.method)
                       ? 'Worker ready'
                       : 'Setup required'}
                 </span>
@@ -451,6 +459,32 @@ export function BuildYourOwnAIPage() {
   );
   const [trainingWorkerBusy, setTrainingWorkerBusy] = React.useState(false);
   const [trainingWorkerError, setTrainingWorkerError] = React.useState<string | null>(null);
+  const [trainingWorkerChecking, setTrainingWorkerChecking] = React.useState(true);
+  const workerInspectionMounted = React.useRef(false);
+  const workerInspectionPending = React.useRef(false);
+  const workerInspectionRevision = React.useRef(0);
+  const inspectTrainingWorker = React.useCallback(async () => {
+    if (!workerInspectionMounted.current || workerInspectionPending.current) return;
+    workerInspectionPending.current = true;
+    const revision = ++workerInspectionRevision.current;
+    const isCurrent = () => workerInspectionMounted.current && workerInspectionRevision.current === revision;
+    setTrainingWorkerChecking(true);
+    setTrainingWorkerError(null);
+    setTrainingWorker(null);
+    try {
+      const status = await getLocalTrainingWorkerStatus();
+      if (isCurrent()) setTrainingWorker(status);
+    } catch (error: unknown) {
+      if (isCurrent()) setTrainingWorkerError(
+        error instanceof Error ? error.message : 'Could not inspect the local training worker.',
+      );
+    } finally {
+      if (isCurrent()) {
+        workerInspectionPending.current = false;
+        setTrainingWorkerChecking(false);
+      }
+    }
+  }, []);
   const [jobs, setJobs] = React.useState<FoundryJob[]>(() =>
     typeof window === 'undefined' ? [] : loadJobs(window.localStorage),
   );
@@ -488,24 +522,24 @@ export function BuildYourOwnAIPage() {
   }, [builderOpen]);
 
   React.useEffect(() => {
-    let cancelled = false;
-    void getLocalTrainingWorkerStatus()
-      .then((status) => {
-        if (!cancelled) setTrainingWorker(status);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setTrainingWorkerError(
-            error instanceof Error ? error.message : 'Could not inspect the local training worker.',
-          );
-        }
-      });
+    workerInspectionMounted.current = true;
+    void inspectTrainingWorker();
     return () => {
-      cancelled = true;
+      workerInspectionMounted.current = false;
+      workerInspectionRevision.current += 1;
+      workerInspectionPending.current = false;
     };
-  }, []);
+  }, [inspectTrainingWorker]);
+
+  React.useEffect(() => {
+    // Reopen a settled snapshot through the canonical read-only inspection.
+    // A still-pending inspection is shared, never duplicated or treated as absence.
+    if (builderOpen) void inspectTrainingWorker();
+  }, [builderOpen, inspectTrainingWorker]);
 
   const setupTrainingWorker = React.useCallback(async () => {
+    if (trainingWorkerChecking || trainingWorkerError || !trainingWorker) return;
+    workerInspectionPending.current = true;
     setTrainingWorkerBusy(true);
     setTrainingWorkerError(null);
     try {
@@ -529,9 +563,10 @@ export function BuildYourOwnAIPage() {
         // Preserve the original setup failure when the follow-up inspection is unavailable.
       }
     } finally {
+      workerInspectionPending.current = false;
       setTrainingWorkerBusy(false);
     }
-  }, [trainingWorker]);
+  }, [trainingWorker, trainingWorkerChecking, trainingWorkerError]);
 
   return (
     <main
@@ -606,6 +641,8 @@ export function BuildYourOwnAIPage() {
               onCreate={() => setBuilderOpen(true)}
               onOpenSection={setSection}
               trainingWorker={trainingWorker}
+              trainingWorkerChecking={trainingWorkerChecking}
+              trainingWorkerError={trainingWorkerError}
               onChooseMethod={(method) => {
                 setInitialMethod(method);
                 setBuilderOpen(true);
@@ -677,13 +714,22 @@ export function BuildYourOwnAIPage() {
               <h2 className="font-medium">Training runtime</h2>
             </div>
             <p className="mt-2 text-secondary text-muted-foreground">
-              {trainingWorkerError ??
+              {trainingWorkerChecking ? 'Checking the verified local training worker…' : trainingWorkerError ??
                 trainingWorker?.reason ??
                 (trainingWorker?.attested
                   ? `Verified local worker · ${trainingWorker.methods.length} weight-training methods`
-                  : 'Inspecting the verified local worker…')}
+                  : 'Local training worker status is unknown. Check before training.')}
             </p>
-            {trainingWorker?.installed && trainingWorker.attested ? (
+            <Button
+              className="mt-3 w-full"
+              variant="outline"
+              size="sm"
+              disabled={trainingWorkerChecking || trainingWorkerBusy}
+              onClick={() => void inspectTrainingWorker()}
+            >
+              Check training runtime
+            </Button>
+            {!trainingWorkerChecking && !trainingWorkerError && trainingWorker && (trainingWorker.installed && trainingWorker.attested ? (
               <div className="mt-3 flex items-center gap-2 text-metadata text-success">
                 <CheckCircle2 className="h-3.5 w-3.5" />
                 Source integrity verified
@@ -707,7 +753,7 @@ export function BuildYourOwnAIPage() {
                     ? 'Repair local worker'
                     : 'Set up local worker'}
               </Button>
-            )}
+            ))}
           </section>
 
           <section className="rounded-xl border border-border bg-card p-4">
@@ -750,6 +796,9 @@ export function BuildYourOwnAIPage() {
         open={builderOpen}
         onOpenChange={setBuilderOpen}
         trainingWorker={trainingWorker}
+        trainingWorkerChecking={trainingWorkerChecking}
+        trainingWorkerError={trainingWorkerError}
+        onCheckTrainingWorker={() => void inspectTrainingWorker()}
         initialMethod={initialMethod}
       />
     </main>

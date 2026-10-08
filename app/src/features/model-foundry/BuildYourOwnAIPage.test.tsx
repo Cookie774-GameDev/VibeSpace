@@ -136,7 +136,7 @@ describe('BuildYourOwnAIPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Close builder' }));
     }
     expect(screen.queryByText('Hardware checked')).toBeNull();
-    expect(screen.getAllByText('Setup required')).toHaveLength(3);
+    expect(await screen.findAllByText('Setup required')).toHaveLength(3);
   });
 
   it('shows the truthful local training runtime state', async () => {

@@ -76,6 +76,9 @@ interface Props {
   onOpenChange(open: boolean): void;
   onActivateArtifact?(job: FoundryJob): void;
   trainingWorker?: LocalTrainingWorkerStatus | null;
+  trainingWorkerChecking?: boolean;
+  trainingWorkerError?: string | null;
+  onCheckTrainingWorker?(): void;
   initialMethod?: TrainingMethod;
   verifiedTrainingModels?: readonly VerifiedTrainingModel[];
 }
@@ -145,6 +148,9 @@ export function BuildYourOwnAIHub({
   onOpenChange,
   onActivateArtifact,
   trainingWorker,
+  trainingWorkerChecking = false,
+  trainingWorkerError = null,
+  onCheckTrainingWorker,
   verifiedTrainingModels,
   initialMethod,
 }: Props) {
@@ -244,6 +250,9 @@ export function BuildYourOwnAIHub({
   );
   const [resolvedTrainingWorker, setResolvedTrainingWorker] =
     React.useState<LocalTrainingWorkerStatus | null>(null);
+  const [localWorkerChecking, setLocalWorkerChecking] = React.useState(trainingWorker === undefined);
+  const [localWorkerError, setLocalWorkerError] = React.useState<string | null>(null);
+  const [workerInspectionRevision, setWorkerInspectionRevision] = React.useState(0);
   const [trainingSetupBusy, setTrainingSetupBusy] = React.useState(false);
   const [trainingSetupError, setTrainingSetupError] = React.useState<string | null>(null);
   const [trainingCalibration, setTrainingCalibration] = React.useState<{
@@ -381,19 +390,39 @@ export function BuildYourOwnAIHub({
       return;
     }
     let cancelled = false;
+    setLocalWorkerChecking(true);
+    setLocalWorkerError(null);
+    setResolvedTrainingWorker(null);
     void getLocalTrainingWorkerStatus()
       .then((status) => {
         if (!cancelled) setResolvedTrainingWorker(status);
       })
-      .catch(() => {
-        if (!cancelled) setResolvedTrainingWorker(null);
-      });
+      .catch((caught: unknown) => {
+        if (!cancelled) setLocalWorkerError(
+          caught instanceof Error ? caught.message : 'Could not inspect the local training worker.',
+        );
+      })
+      .finally(() => { if (!cancelled) setLocalWorkerChecking(false); });
     return () => {
       cancelled = true;
     };
-  }, [open, trainingWorker]);
+  }, [open, trainingWorker, workerInspectionRevision]);
 
-  const effectiveTrainingWorker = resolvedTrainingWorker;
+  const workerChecking = trainingWorker !== undefined ? trainingWorkerChecking : localWorkerChecking;
+  const workerError = trainingWorker !== undefined ? trainingWorkerError : localWorkerError;
+  const workerInspectionReason = workerChecking
+    ? 'Checking the verified local training worker…'
+    : workerError
+      ? `Could not verify the local training worker: ${workerError}`
+      : !resolvedTrainingWorker
+        ? 'Local training worker status is unknown. Check before training.'
+        : null;
+  const effectiveTrainingWorker = workerInspectionReason ? null : resolvedTrainingWorker;
+  const checkTrainingWorker = () => {
+    if (workerChecking || trainingSetupBusy) return;
+    if (onCheckTrainingWorker) onCheckTrainingWorker();
+    else if (trainingWorker === undefined) setWorkerInspectionRevision((current) => current + 1);
+  };
 
   const trainingWorkerCapability = React.useMemo<TrainingWorkerCapability | null>(
     () =>
@@ -477,7 +506,7 @@ export function BuildYourOwnAIHub({
         ...item,
         compatible: item.compatible && plan.available,
         recommended: false,
-        warning: plan.available ? item.warning : plan.reason,
+        warning: workerInspectionReason ?? (plan.available ? item.warning : plan.reason),
       };
     });
     const best = [...planned]
@@ -485,7 +514,7 @@ export function BuildYourOwnAIHub({
       .sort((left, right) => left.model.parametersB - right.model.parametersB)[0];
     if (best) best.recommended = true;
     return planned;
-  }, [availableModels, hardware, method, trainingConfig.computeDevice, trainingWorkerCapability]);
+  }, [availableModels, hardware, method, trainingConfig.computeDevice, trainingWorkerCapability, workerInspectionReason]);
   const validationError = mayStartTraining({
     name,
     model: selectedModel,
@@ -507,6 +536,7 @@ export function BuildYourOwnAIHub({
         : (matchingCalibration?.reason ??
           `Run ${trainingConfig.computeDevice.toUpperCase()} calibration before starting weight training.`);
   const startError =
+    (method !== 'knowledge' ? workerInspectionReason : null) ??
     (method !== 'knowledge' && !selectedVerifiedModel
       ? 'The verified trainable model catalog is unavailable.'
       : validationError) ??
@@ -569,6 +599,7 @@ export function BuildYourOwnAIHub({
   };
 
   const setupWeightTraining = async (includeQlora = true) => {
+    if (workerInspectionReason) return;
     setTrainingSetupBusy(true);
     setTrainingSetupError(null);
     try {
@@ -601,7 +632,9 @@ export function BuildYourOwnAIHub({
   };
 
   const runTrainingCalibration = async () => {
-    if (method === 'knowledge' || !selectedVerifiedModel || !selectedModelInstalled) return;
+    if (method === 'knowledge' || workerInspectionReason || !trainingWorkerCapability?.installed
+      || !trainingWorkerCapability.attested || !trainingWorkerCapability.methods.includes(method)
+      || !selectedVerifiedModel || !selectedModelInstalled) return;
     setTrainingCalibrationBusy(true);
     setError('');
     try {
@@ -1206,7 +1239,7 @@ export function BuildYourOwnAIHub({
                     >
                       <strong>{title}</strong>
                       <span className="mt-1 block text-secondary text-muted-foreground">
-                        {availability.reason ?? copy}
+                        {(id !== 'knowledge' ? workerInspectionReason : null) ?? availability.reason ?? copy}
                       </span>
                     </button>
                   );
@@ -1266,7 +1299,16 @@ export function BuildYourOwnAIHub({
                   </Button>
                 )}
               </section>
-              {(!effectiveTrainingWorker?.attested ||
+              <section className="rounded-lg border border-border p-4" aria-label="Training runtime inspection">
+                {workerInspectionReason && <p role="status" className="text-secondary text-muted-foreground">{workerInspectionReason}</p>}
+                {(onCheckTrainingWorker || trainingWorker === undefined) && (
+                  <Button type="button" variant="outline" className="mt-2"
+                    disabled={workerChecking || trainingSetupBusy} onClick={checkTrainingWorker}>
+                    Check training runtime
+                  </Button>
+                )}
+              </section>
+              {!workerInspectionReason && (!effectiveTrainingWorker?.attested ||
                 (method !== 'knowledge' && !effectiveTrainingWorker.methods.includes(method))) && (
                 <section className="rounded-lg border border-border p-4">
                   <h4 className="font-semibold">Unlock verified weight training</h4>
@@ -2261,7 +2303,9 @@ export function BuildYourOwnAIHub({
                     type="button"
                     variant="outline"
                     className="mt-3"
-                    disabled={trainingCalibrationBusy || !selectedModelInstalled}
+                    disabled={trainingCalibrationBusy || Boolean(workerInspectionReason) || !selectedModelInstalled
+                      || !trainingWorkerCapability?.installed || !trainingWorkerCapability.attested
+                      || !trainingWorkerCapability.methods.includes(method)}
                     onClick={() => void runTrainingCalibration()}
                   >
                     {trainingCalibrationBusy ? 'Calibrating…' : 'Run calibration'}

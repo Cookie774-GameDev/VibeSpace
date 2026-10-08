@@ -311,7 +311,7 @@ describe('BuildYourOwnAIHub', () => {
     expect((lora as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(lora);
     expect(installTrainingWorker).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: /Set up LoRA, QLoRA, and Full/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Set up LoRA, QLoRA, and Full/i }));
     await waitFor(() => expect(installTrainingWorker).toHaveBeenCalledWith({ includeQlora: true }));
   });
 
@@ -332,7 +332,7 @@ describe('BuildYourOwnAIHub', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^QLoRA fine-tuning/i }));
     expect(installTrainingWorker).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: /Set up LoRA, QLoRA, and Full/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Set up LoRA, QLoRA, and Full/i }));
     await waitFor(() => expect(installTrainingWorker).toHaveBeenCalledWith({ includeQlora: true }));
   });
 
