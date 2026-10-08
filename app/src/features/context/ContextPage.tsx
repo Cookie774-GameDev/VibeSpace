@@ -1,4 +1,5 @@
 import { parseContextLocalFileScope, readContextLocalFileScope, type ContextLocalFileScopeV1 } from './contextLocalFileScope';
+import { contextEntityIdForTreeNode } from './migration';
 import { contextEvidenceNavigation, type ContextEvidenceNavigationTicket } from './contextEvidenceNavigation';
 import * as React from 'react';
 import {
@@ -656,6 +657,33 @@ async function transitionContextSourceStatus(
 
 const contextSearchIndexPopulation = createContextSearchIndexPopulationPort();
 
+/** Resolve a saved canonical intent without changing the native display snapshot. */
+export function resolveContextDisplaySelection(
+  map: ContextMapRecord | null,
+  tree: ProjectContextTree,
+  selectedId: string,
+): ContextTreeNode | null {
+  if (!map || map.status !== 'active' || tree.projectId !== map.projectId ||
+    tree.rootDir !== map.rootDir ||
+    (tree.sourceType ?? 'local_folder') !== (map.sourceType ?? 'local_folder') ||
+    JSON.stringify(tree.localFileScope ?? null) !== JSON.stringify(map.localFileScope ?? null)) return null;
+  const nodes = flattenContextNodes(tree.nodes);
+  const member = findContextNode(map.tree, selectedId);
+  if (!member) {
+    // Preserve explicit native-node picks; they need not have been persisted.
+    const direct = nodes.filter(node => node.id === selectedId);
+    return direct.length === 1 ? direct[0]! : null;
+  }
+  // Native IDs and persisted entity IDs are separate namespaces. A projection
+  // requires the current map's exact existing member, never a path-only match.
+  // Count direct and raw aliases together; neither may hide an ambiguity.
+  const projected = nodes.filter(node => node.id === selectedId ||
+    contextEntityIdForTreeNode(map.id, node.id) === selectedId);
+  if (projected.length !== 1) return null;
+  const node = projected[0]!;
+  return node.kind === member.kind && node.path === member.path ? node : null;
+}
+
 export function ContextPage() {
   const projectId = useAuthStore((s) => s.projectId);
   const workspaceId = useAuthStore((s) => s.workspaceId);
@@ -700,7 +728,18 @@ export function ContextPage() {
   const [exclusionDraft, setExclusionDraft] = React.useState('');
   const [customExclusions, setCustomExclusions] = React.useState<string[]>([]);
   const [structuralPreview, setStructuralPreview] = React.useState<ProjectContextTree | null>(null);
-  const [siyuanTree, setSiyuanTree] = React.useState<ProjectContextTree | null>(null);
+  const [siyuanDisplay, setSiyuanDisplay] = React.useState<{
+    accountId: string | null;
+    workspaceId: typeof workspaceId;
+    projectId: string | null;
+    mapId: string;
+    tree: ProjectContextTree;
+  } | null>(null);
+  const setSiyuanTreeForMap = React.useCallback((map: ContextMapRecord, tree: ProjectContextTree) => {
+    // Ownership travels atomically with the snapshot that this caller read.
+    // Equal roots/raw IDs never authorize borrowing another map's display.
+    setSiyuanDisplay({ accountId, workspaceId, projectId: map.projectId, mapId: map.id, tree });
+  }, [accountId, workspaceId]);
   const [mapFlash, setMapFlash] = React.useState(false);
   const [status, setStatus] = React.useState('Ready.');
   const [workspaceSection, setWorkspaceSection] = React.useState<ContextWorkspaceSectionId>('maps');
@@ -773,7 +812,7 @@ export function ContextPage() {
     setGenerating(false);
     setSiyuanIndexing(false);
     setStructuralPreview(null);
-    setSiyuanTree(null);
+    setSiyuanDisplay(null);
     setJarvisUi(buildJarvisContextUi(null));
     lastAppliedFileRef.current = '';
     if (!accountId) return;
@@ -1010,7 +1049,7 @@ export function ContextPage() {
         assertCurrent();
         if (unchanged) {
           await finishSearch(selectedMap, accountId!);
-          if (active) setSiyuanTree(selectedMap.tree);
+          if (active) setSiyuanTreeForMap(selectedMap, selectedMap.tree);
           return;
         }
         assertCurrent();
@@ -1030,7 +1069,7 @@ export function ContextPage() {
         const finalized = await finishSearch(completedMap, persisted.accountId);
         if (!active) return;
         applyPersistenceState(finalized ?? persisted);
-        setSiyuanTree(completedMap.tree);
+        setSiyuanTreeForMap(completedMap, completedMap.tree);
       })
       .catch(async (error) => {
         if (controller.signal.aborted) return;
@@ -1057,7 +1096,11 @@ export function ContextPage() {
       // finishes. Keep that exact-map repair alive; `active` and
       // `applyPersistenceState` still prevent stale UI projection.
     };
-  }, [accountId, applyPersistenceState, generating, indexJobSnapshot, projectId, selectedMap, workspaceId]);
+  }, [accountId, applyPersistenceState, generating, indexJobSnapshot, projectId, selectedMap, setSiyuanTreeForMap, workspaceId]);
+  const siyuanTree = siyuanDisplay && selectedMap &&
+    siyuanDisplay.accountId === accountId && siyuanDisplay.workspaceId === workspaceId &&
+    siyuanDisplay.projectId === projectId && siyuanDisplay.mapId === selectedMap.id
+    ? siyuanDisplay.tree : null;
   const tree =
     structuralPreview ?? (SIYUAN_CONTEXT_VAULT_ENABLED ? siyuanTree : (selectedMap?.tree ?? null));
   const treeCoverageBounded = tree ? isContextTreeCoverageBounded(tree) : false;
@@ -1528,7 +1571,7 @@ export function ContextPage() {
     let active = true;
     const controller = new AbortController();
     const control = createSiyuanIndexJobControl();
-    setSiyuanTree(null);
+    setSiyuanDisplay(null);
     setStatus('Reading this Context Map from SiYuan...');
     void readSiyuanIndexJob(projectId, selectedMap.id)
       .then(async (job) => {
@@ -1622,7 +1665,7 @@ export function ContextPage() {
           projectId, selectedMap.id, snapshot.tree, selectedMap.updatedAt, controller.signal,
         );
         if (!active) return;
-        setSiyuanTree(equivalent ? selectedMap.tree : snapshot.tree);
+        setSiyuanTreeForMap(selectedMap, equivalent ? selectedMap.tree : snapshot.tree);
         setStatus('SiYuan Context Map ready.');
       })
       .catch(async (error) => {
@@ -1671,7 +1714,7 @@ export function ContextPage() {
       // detach React state updates; explicit Pause/Cancel and authority-scope
       // changes remain the operations that stop native indexing work.
     };
-  }, [accountId, generating, indexResumeNonce, projectId, selectedMap, workspaceId]);
+  }, [accountId, generating, indexResumeNonce, projectId, selectedMap, setSiyuanTreeForMap, workspaceId]);
   const activeMapCount = React.useMemo(
     () => maps.filter((map) => map.status === 'active').length,
     [maps],
@@ -1881,8 +1924,8 @@ export function ContextPage() {
   const selected = React.useMemo(() => {
     if (!tree || !selectedId) return null;
     if (selectedId === PROJECT_ROOT_NODE_ID) return rootNode;
-    return findContextNode(tree, selectedId) ?? rootNode ?? tree.nodes[0] ?? null;
-  }, [rootNode, selectedId, tree]);
+    return resolveContextDisplaySelection(selectedMap, tree, selectedId) ?? rootNode ?? tree.nodes[0] ?? null;
+  }, [rootNode, selectedId, selectedMap, tree]);
 
   React.useEffect(() => {
     // A same-map read can temporarily clear the displayed tree. Keep the
@@ -1891,10 +1934,10 @@ export function ContextPage() {
     if (!tree) return;
     setSelectedId((current) => {
       if (current === PROJECT_ROOT_NODE_ID) return current;
-      if (current && findContextNode(tree, current)) return current;
+      if (current && resolveContextDisplaySelection(selectedMap, tree, current)) return current;
       return PROJECT_ROOT_NODE_ID;
     });
-  }, [tree]);
+  }, [selectedMap, tree]);
 
   const selectNode = React.useCallback((nodeId: string) => {
     contextEvidenceNavigation.cancel();
@@ -1950,7 +1993,7 @@ export function ContextPage() {
             return;
           }
           if (canOpenPartialSiyuanSurface(record, manifest, durableJob, accountId)) {
-            setSiyuanTree(record.tree);
+            setSiyuanTreeForMap(record, record.tree);
             setStatus(
               durableJob?.status === 'running'
                 ? 'SiYuan Context Map is still indexing.'
@@ -1974,7 +2017,8 @@ export function ContextPage() {
                 accountId,
                 workspaceId,
               }));
-            setSiyuanTree(snapshot.tree);
+            if (focusedMapOpenGenerationRef.current !== generation) return;
+            setSiyuanTreeForMap(record, snapshot.tree);
             setStatus('SiYuan Context Map ready.');
           }
         } catch (error) {
@@ -1993,7 +2037,7 @@ export function ContextPage() {
       setFocusedMap(true);
       setPreparingMapId(null);
     },
-    [accountId, maps, projectId, selectMap, workspaceId],
+    [accountId, maps, projectId, selectMap, setSiyuanTreeForMap, workspaceId],
   );
 
   const closeFocusedMap = React.useCallback(() => {
@@ -2319,7 +2363,7 @@ export function ContextPage() {
               selectedPaths: summarySelectedPaths,
             },
           });
-          setSiyuanTree(snapshot.tree);
+          setSiyuanTreeForMap(persistedMap, snapshot.tree);
         }
         if (!applyPersistenceState(persisted)) return;
         setSelectedId(PROJECT_ROOT_NODE_ID);
@@ -2349,6 +2393,7 @@ export function ContextPage() {
       projectId,
       workspaceId,
       summaryMode,
+      setSiyuanTreeForMap,
       summarySelectedPaths,
       customExclusions,
     ],
@@ -2522,7 +2567,7 @@ export function ContextPage() {
           projectId, completedMap.id, 'ready', completedMap.updatedAt, controller.signal,
         );
         creationMap = completedPersistence.maps.find(map => map.id === completedMap.id) ?? null;
-        setSiyuanTree(completedTree);
+        setSiyuanTreeForMap(completedMap, completedTree);
         setSiyuanIndexing(false);
         setStatus(
           selectedCloudSummaryRoute
@@ -2615,6 +2660,7 @@ export function ContextPage() {
     selectedSummaryModel,
     summaryModelEffort,
     summaryMode,
+    setSiyuanTreeForMap,
     summarySelectedPaths,
   ]);
 

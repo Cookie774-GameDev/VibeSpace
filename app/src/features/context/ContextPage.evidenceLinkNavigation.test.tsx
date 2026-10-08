@@ -8,12 +8,17 @@ import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
 import type { ChatId, MessageId, ProjectId, WorkspaceId } from '@/types/common';
 import type { ContextPersistenceState, ContextSelectionGuard } from './contextPersistence';
-import type { ProjectContextTree } from './tree';
+import type { ContextMapRecord, ProjectContextTree } from './tree';
+import type { ProductionSiyuanRlmPort, SiyuanManagedDocument } from './siyuanRlmProduction';
+import type { SiyuanContextMapSyncOptions } from './siyuanContextMapIntegration';
 import { setStoredProjectRoot } from '@/features/files/projectFiles';
 import { canonicalContextUri } from '@/lib/harness/toolGatewayCitations';
 import type { Part } from '@/types/chat';
 const io = vi.hoisted(() => ({
   state: null as ContextPersistenceState | null,
+  realIntegration: null as ReturnType<typeof import('./siyuanContextMapIntegration').createSiyuanContextMapIntegration> | null,
+  realJobs: false,
+  populate: vi.fn(),
   service: null as ReturnType<
     typeof import('./contextPersistence').createContextPersistenceService
   > | null,
@@ -49,7 +54,11 @@ vi.mock('./siyuan/SiyuanVaultSurface', () => ({
 vi.mock('./siyuanContextMapIntegration', () => ({
   productionSiyuanContextMaps: {
     prewarm: async () => {},
+    sync: (project: string, map: ContextMapRecord, options: SiyuanContextMapSyncOptions) => io.realIntegration!.sync(project, map, {
+      ...options, list: async path => ({ok: true, path, entries: [{ name: 'shared.txt', path: `${map.rootDir}/shared.txt`, isDir: false, size: 48, modifiedMs: 100 }]}),
+    }),
     read: async (_project: unknown, map: { id: string; tree: ProjectContextTree }) => {
+      if (io.realIntegration) return io.realIntegration.read(String(_project), map as ContextMapRecord);
       const tree = io.readTrees[map.id] ?? map.tree;
       io.readStarted.push(map.id);
       await io.readGate;
@@ -57,12 +66,14 @@ vi.mock('./siyuanContextMapIntegration', () => ({
     },
   },
 }));
-vi.mock('./siyuan/siyuanIndexJobStore', async (original) => ({
-  ...(await original<typeof import('./siyuan/siyuanIndexJobStore')>()),
-  readSiyuanIndexJob: async (_project:string,mapId:string) => {await io.jobGate;return mapId==='page-map-A' ? io.job : null;},
-  readSiyuanIndexEntries: async () => { await io.entriesGate; return io.entries; },
-}));
-vi.mock('./contextSearchIndexing', () => ({createContextSearchIndexPopulationPort:()=>({repairEmptyMap:io.repair})}));
+vi.mock('./siyuan/siyuanIndexJobStore', async (original) => {
+  const actual = await original<typeof import('./siyuan/siyuanIndexJobStore')>();
+  return {...actual,
+    readSiyuanIndexJob: async (project:string,mapId:string) => {if(io.realJobs)return actual.readSiyuanIndexJob(project,mapId);await io.jobGate;return mapId==='page-map-A' ? io.job : null;},
+    readSiyuanIndexEntries: async (project:string,mapId:string) => {if(io.realJobs)return actual.readSiyuanIndexEntries(project,mapId);await io.entriesGate;return io.entries;},
+  };
+});
+vi.mock('./contextSearchIndexing', () => ({createContextSearchIndexPopulationPort:()=>({repairEmptyMap:io.repair,populateCreatedMap:io.populate})}));
 vi.mock('./contextPersistence', async (original) => ({
   ...(await original<typeof import('./contextPersistence')>()),
   ensureContextPersistence: () => io.service!.load('page-account', 'page-project'),
@@ -76,6 +87,7 @@ vi.mock('./contextPersistence', async (original) => ({
     return equivalent;
   },
   savePersistedContextTree: (tree:ProjectContextTree,options:any) => io.service!.saveTree('page-account',tree,options),
+  setPersistedContextSourceStatus: (project:string,mapId:string,status:'indexing'|'ready'|'error',expected:number,signal?:AbortSignal) => io.service!.setSourceStatus('page-account',project,mapId,status,expected,signal),
   selectPersistedContextMap: async (
     projectId: string,
     mapId: string,
@@ -105,7 +117,7 @@ vi.mock('./contextEvidenceNavigation', async (original) => ({
 import { createContextPersistenceService } from './contextPersistence';
 import { createContextEvidenceNavigation } from './contextEvidenceNavigation';
 import { createContextEvidenceLinkStore } from './contextEvidenceLinks';
-import { ContextPage } from './ContextPage';
+import { ContextPage, resolveContextDisplaySelection } from './ContextPage';
 import { MessagePart } from '@/features/chat/MessagePart';
 import { PageRouter } from '@/components/layout/PageRouter';
 import { SidebarContextTree } from './SidebarContextTree';
@@ -138,6 +150,7 @@ function Shell() {
 beforeEach(async () => {
   localStorage.clear();
   io.state = null;
+  io.realIntegration = null;io.realJobs = false;io.populate.mockReset();io.populate.mockResolvedValue({status:'ready',documentCount:1,bodyBytes:48});
   io.heldSelection = undefined;
   io.selectingA = false;
   io.selectCalls = [];
@@ -816,4 +829,236 @@ it.each(['citation','terminal'] as const)('preserves the actual %s selection whe
     await waitFor(()=>expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
     await waitFor(()=>expect(document.querySelector('[data-monochrome-route="context"] [data-monochrome-surface="context-inspector"] h2')?.textContent).toBe('linked-file.txt'));
   } finally {read.resolve();hydration.resolve();}
+});
+
+
+async function retainC07Part(map:ContextMapRecord) {
+  const node=map.tree.nodes.find(node=>node.kind==='file')!;
+  const pointer={id:'c07-pointer',recordId:'c07-record',byteStart:0,byteEnd:4,sourceVersion:`sha256:${'a'.repeat(64)}`,contentHash:'a'.repeat(64)};
+  const uri=canonicalContextUri('evidence',pointer.id);
+  const target={uri,mapId:map.id,entityId:node.id,rootDir:map.rootDir,sourcePath:`${map.rootDir}/${node.path}`,sourceKind:'file_version' as const,membershipRevision:`sha256:${'b'.repeat(64)}`,pointer};
+  await createContextEvidenceLinkStore(database).retain(scope,{runId:'c07-run',requestId:'c07-request',attemptNumber:1},[target],{signal:new AbortController().signal,assertCurrent(){}});
+  part={kind:'jarvis_source_ref',source:{id:pointer.id,kind:'context_node',label:'Open verified Context source',uri,trust:'app_verified',sensitivity:'private'}};
+  await database.messages.update('page-message' as MessageId,{parts:[part]});
+  io.nav!.dispose();
+  io.nav=createContextEvidenceNavigation({database,revalidate:async input=>{
+    input.assertCurrent();
+    return {accountId:scope.accountId,projectId:scope.projectId,mapId:map.id,entityId:node.id,path:target.sourcePath,mapUpdatedAt:map.updatedAt};
+  }});
+}
+
+it.each(['terminal','citation'] as const)('C07 retains the first %s file selection after real create sync payload and durable readiness', async consumer => {
+  // Use the production integration/scanner/checkpoints; only native transport
+  // and filesystem discovery are deterministic boundaries in this code check.
+  const actual = await vi.importActual<typeof import('./siyuanContextMapIntegration')>('./siyuanContextMapIntegration');
+  const jobs = await vi.importActual<typeof import('./siyuan/siyuanIndexJobStore')>('./siyuan/siyuanIndexJobStore');
+  const documents = new Map<string, SiyuanManagedDocument>();
+  let sequence = 0;
+  const port: ProductionSiyuanRlmPort = {
+    searchBlocks: async () => [],
+    getBlock: async (_project, id) => { const document = documents.get(id); if(!document)throw new Error('missing');return document; },
+    listInboundBacklinks: async () => [],
+    readManagedDocument: async (_project, lookup) => [...documents.values()].find(document => document.markdown.includes(lookup.marker)) ?? null,
+    createManagedDocument: async (_project, path, markdown) => {
+      const id = `20261008000000-${String(++sequence).padStart(7,'a')}`;
+      const document = {id, notebookId:'20261008000000-notebk1', path, markdown};documents.set(id,document);return document;
+    },
+    updateManagedDocument: async (_project,id,expected,markdown) => {
+      const document = documents.get(id);if(!document || document.markdown !== expected)throw new Error('siyuan_conflict');
+      const updated={...document,markdown};documents.set(id,updated);return updated;
+    },
+    deleteManagedDocument: async (_project,id) => {documents.delete(id);},
+    createManagedSnapshot: vi.fn(), stopActive: vi.fn(),
+  };
+  io.realIntegration = actual.createSiyuanContextMapIntegration(port);
+  io.realJobs = true;
+  const internals = (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  const hydration=deferred();
+  let clock=1_791_456_000_000;
+  vi.spyOn(Date,'now').mockImplementation(()=>++clock);
+  try {
+    for(const map of io.state!.maps)await io.service!.deleteMap(scope.accountId,scope.projectId,map.id);
+    useUIStore.getState().setRoute('context');
+    render(<React.StrictMode><ActualLazyRouteShell sidebar /></React.StrictMode>);
+    const root=await screen.findByRole('textbox',{name:'Context source folder'});
+    fireEvent.change(root,{target:{value:'C:/owned-c07'}});
+    fireEvent.click(screen.getByRole('radio',{name:'No summaries'}));
+    fireEvent.click(screen.getByRole('button',{name:'Create Map'}));
+    await waitFor(()=>expect(io.state!.maps.find(map=>map.status==='active')?.sourceStatus).toBe('ready'),{timeout:10_000});
+    const created=io.state!.maps.find(map=>map.status==='active')!;
+    await waitFor(()=>expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+    const job=await jobs.readSiyuanIndexJob(scope.projectId,created.id);
+    expect(job).toMatchObject({status:'completed',phase:'completed',indexed:1,createdNodes:1,failed:0,pendingNativeNodeIds:[]});
+    expect(job!.reconciledAt).not.toBeNull();
+    const nativeRoot=[...documents.values()].find(document=>document.markdown.includes(`vibespace-context-map:v1 map=${created.id}`));
+    expect(nativeRoot).toBeTruthy();
+    const payload=/\bpayload=([A-Za-z0-9_-]+)\s*-->/u.exec(nativeRoot!.markdown)![1]!;
+    const nativeTree=JSON.parse(atob(payload.replaceAll('-','+').replaceAll('_','/'))) as ProjectContextTree;
+    const openedFile=created.tree.nodes.find(node=>node.kind==='file')!;
+    const nativeEquivalent=await io.service!.hasEquivalentTree(scope.accountId,nativeTree,created.id,created.updatedAt);
+    const timestampOnlyDiagnostic=await io.service!.hasEquivalentTree(scope.accountId,{...nativeTree,generatedAt:created.tree.generatedAt},created.id,created.updatedAt);
+    expect(nativeEquivalent).toBe(false);
+    expect(timestampOnlyDiagnostic).toBe(true);
+    console.log('C07_CREATE_JOIN',JSON.stringify({mapId:created.id,jobStatus:job!.status,reconciledAt:job!.reconciledAt,nativeEquivalent,timestampOnlyDiagnostic,nativeGeneratedAt:nativeTree.generatedAt,persistedGeneratedAt:created.tree.generatedAt,nativeFileId:nativeTree.nodes[0]?.id,persistedFileId:openedFile.id}));
+    if(consumer==='citation')await retainC07Part(created);
+    await act(async()=>{useUIStore.getState().setRoute('chat');});
+    io.repair.mockImplementation(async()=>{await hydration.promise;return {status:'ready',documentCount:1,bodyBytes:48};});
+    const dependencies=createProductionTerminalCliRuntimeDependencies();
+    const resolved=await dependencies.resolveContextEntity(scope.projectId,openedFile.id);
+    expect(resolved).toMatchObject({mapId:created.id,id:openedFile.id,path:'shared.txt'});
+    if(consumer==='terminal')await act(async()=>{await dependencies.openContextEntity(scope.projectId,resolved!);});
+    else {fireEvent.click(screen.getByRole('button',{name:'Open verified Context source'}));await waitFor(()=>expect(io.openResults).toEqual(['completed']));}
+    await waitFor(()=>expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+    expect(io.state!.selectedMapId).toBe(created.id);
+    if(consumer==='terminal')expect(io.state!.selectedFile).toBe('shared.txt');
+    const transient=currentContextWorkspace();
+    console.log('C07_TRANSIENT',JSON.stringify({consumer,displayId:transient?.tree.nodes[0]?.id,selectedId:transient?.selectedId}));
+    await act(async()=>{hydration.resolve();});
+    if(consumer==='terminal')await waitFor(()=>expect(currentContextWorkspace()?.tree.nodes[0]?.id).toBe(openedFile.id));
+    else expect([nativeTree.nodes[0]!.id,openedFile.id]).toContain(currentContextWorkspace()?.tree.nodes[0]?.id);
+    console.log('C07_OPEN_JOIN',JSON.stringify({consumer,displayId:currentContextWorkspace()?.tree.nodes[0]?.id,selectedId:currentContextWorkspace()?.selectedId,selectedMapId:io.state!.selectedMapId,selectedFile:io.state!.selectedFile,inspector:document.querySelector('[data-monochrome-route="context"] [data-monochrome-surface="context-inspector"] h2')?.textContent}));
+    const displayed=currentContextWorkspace()!;
+    expect(displayed.map.id).toBe(created.id);
+    expect(displayed.selected.path).toBe('shared.txt');
+    expect(displayed.selected).toBe(displayed.tree.nodes[0]);
+    const {contextEntityIdForTreeNode}=await import('./migration');
+    expect(displayed.selected.id===openedFile.id?displayed.selected.id:contextEntityIdForTreeNode(created.id,displayed.selected.id)).toBe(openedFile.id);
+    expect(displayed.selected.summary).toBe(nativeTree.nodes[0]!.summary);
+    expect(displayed.tree.generatedAt).toBe(displayed.selected.id===openedFile.id?created.tree.generatedAt:nativeTree.generatedAt);
+    await waitFor(()=>expect(document.querySelector('[data-monochrome-route="context"] [data-monochrome-surface="context-inspector"] h2')?.textContent).toBe('shared.txt'));
+  } finally {
+    hydration.resolve();
+    cleanup();
+    if(internals===undefined)delete (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__;
+    else (window as unknown as Record<string,unknown>).__TAURI_INTERNALS__=internals;
+    io.realIntegration=null;io.realJobs=false;
+  }
+},15_000);
+
+
+it.each(['owned', 'canonical', 'native-manual', 'title', 'summary', 'size', 'mtime', 'generatedAt',
+  'wrong-project', 'wrong-root', 'wrong-map', 'wrong-source', 'omitted-github-kind', 'omitted-file-kind', 'legacy-folder-kind', 'local-file', 'wrong-local-scope', 'inactive',
+  'missing-member', 'deleted-native', 'kind', 'path', 'duplicate', 'canonical-raw-collision', 'canonical-kind', 'canonical-path', 'foreign-id'] as const)(
+  'C07 projects only exact owned display identity (%s)', async scenario => {
+    const map=structuredClone(io.state!.maps.find(map=>map.id==='page-map-A')!);
+    const member=map.tree.nodes[0]!;
+    const native:ProjectContextTree={...map.tree,generatedAt:1,nodes:[{
+      id:'node-file',kind:'file',title:'Native title',summary:'Native text',path:'linked-file.txt',sizeBytes:4,modifiedAt:1,
+    }]};
+    const node=native.nodes[0]!;
+    let selectedId=member.id;
+    if(scenario==='canonical')node.id=member.id;
+    if(scenario==='native-manual')selectedId=node.id;
+    if(scenario==='title')node.title='New native title';
+    if(scenario==='summary')node.summary='New native summary';
+    if(scenario==='size')node.sizeBytes=99;
+    if(scenario==='mtime')node.modifiedAt=99;
+    if(scenario==='generatedAt')native.generatedAt=999;
+    if(scenario==='wrong-project')native.projectId='other-project';
+    if(scenario==='wrong-root')native.rootDir='C:/other-root';
+    if(scenario==='wrong-map')map.id='page-map-B';
+    if(scenario==='wrong-source')native.sourceType='github_repository';
+    if(scenario==='omitted-github-kind'){map.sourceType='github_repository';delete native.sourceType;}
+    if(scenario==='omitted-file-kind'){map.sourceType='local_file';delete native.sourceType;}
+    if(scenario==='legacy-folder-kind')delete native.sourceType;
+    if(scenario==='local-file'){map.sourceType='local_file';native.sourceType='local_file';map.localFileScope={version:1,rootDir:map.rootDir,filePath:map.rootDir+'/linked-file.txt'};native.localFileScope={...map.localFileScope};}
+    if(scenario==='wrong-local-scope')native.localFileScope={version:1,rootDir:native.rootDir,filePath:native.rootDir+'/other.txt'};
+    if(scenario==='inactive')map.status='deleted';
+    if(scenario==='missing-member')map.tree.nodes=[];
+    if(scenario==='deleted-native')native.nodes=[];
+    if(scenario==='kind')node.kind='note';
+    if(scenario==='path')node.path='renamed.txt';
+    if(scenario==='duplicate')native.nodes.push({...node});
+    if(scenario==='canonical-raw-collision')native.nodes.push({...node,id:member.id});
+    if(scenario==='canonical-kind'){node.id=member.id;node.kind='note';}
+    if(scenario==='canonical-path'){node.id=member.id;node.path='renamed.txt';}
+    if(scenario==='foreign-id')node.id='page-map-B:node-file';
+    const before=structuredClone({map,native});
+    const selected=resolveContextDisplaySelection(map,native,selectedId);
+    const positive=['owned','canonical','native-manual','title','summary','size','mtime','generatedAt','legacy-folder-kind','local-file'].includes(scenario);
+    expect(selected).toBe(positive?node:null);
+    expect({map,native}).toEqual(before);
+    if(positive) {
+      const {nodeToAttachment}=await import('./tree');
+      expect(nodeToAttachment(native,selected!)).toEqual(nodeToAttachment(native,node));
+      expect(selected!.id).toBe(node.id);
+    }
+  },
+);
+
+// Commit-time observer only: read the same workspace that owns the visible DOM.
+function currentContextWorkspace() {
+  const element=document.querySelector('[data-monochrome-surface="context-inspector"]');
+  if(!element)return null;
+  const key=Object.keys(element).find(key=>key.startsWith('__reactFiber$'));
+  if(!key)return null;
+  type Fiber={return:Fiber|null;alternate:Fiber|null;type?:{name?:string};memoizedProps:any;stateNode?:{current?:Fiber}};
+  let fiber=(element as unknown as Record<string,Fiber>)[key]!;
+  let root=fiber;while(root.return)root=root.return;
+  if(root.stateNode?.current!==root && fiber.alternate)fiber=fiber.alternate;
+  while(fiber && fiber.type?.name!=='ContextMapWorkspace')fiber=fiber.return!;
+  return fiber?.memoizedProps as {map:ContextMapRecord;tree:ProjectContextTree;selected:import('./tree').ContextTreeNode;selectedId:string}|undefined;
+}
+
+it.each(['terminal','citation'] as const)('C07 never associates a held native tree with another same-root map (%s)', async consumer=>{
+  const raw=(name:string):ProjectContextTree=>({version:1,projectId:scope.projectId,rootDir:scope.worktreeId,generatedAt:1,
+    model:'siyuan-managed-v1',fileCount:1,totalBytes:4,summary:name,nodes:[{id:'same-raw-id',kind:'file',title:name,path:'shared.txt',summary:name,sizeBytes:4,modifiedAt:1}]});
+  for(const id of ['page-map-A','page-map-B']) {
+    const tree=raw(id==='page-map-A'?'Native A only':'Native B only');
+    await io.service!.saveTree(scope.accountId,{...tree,generatedAt:2},{mapId:id,sourceStatus:'ready'});
+    io.readTrees[id]=tree;
+  }
+  await io.service!.selectFile(scope.accountId,scope.projectId,'shared.txt',{
+    mapId:'page-map-A',entityId:io.state!.maps.find(map=>map.id==='page-map-A')!.tree.nodes[0]!.id,
+  });
+  const commits:Array<{mapId:string;title:string;treeTitle:string}>=[];
+  const mapB=io.state!.maps.find(map=>map.id==='page-map-B')!;
+  await retainC07Part(mapB);
+  useUIStore.getState().setRoute('context');
+  render(<React.Profiler id="C07-owners" onRender={()=>{
+    const props=currentContextWorkspace();if(props)commits.push({mapId:props.map.id,title:props.selected.title,treeTitle:props.tree.nodes[0]!.title});
+  }}><ContextPage/><MessagePart part={part} allParts={[part]} chatId={scope.chatId} messageId={'page-message' as MessageId}/></React.Profiler>);
+  await screen.findByRole('heading',{name:'Native A only'});
+  const held=deferred();io.readGate=held.promise;
+  try {
+    if(consumer==='citation') {
+      fireEvent.click(screen.getByRole('button',{name:'Open verified Context source'}));
+      await waitFor(()=>expect(io.openResults).toEqual(['completed']));
+    } else {
+      const dependencies=createProductionTerminalCliRuntimeDependencies();
+      const resolved=(await dependencies.resolveContextEntity(scope.projectId,mapB.tree.nodes[0]!.id))!;
+      await act(async()=>{await dependencies.openContextEntity(scope.projectId,resolved);});
+    }
+    await waitFor(()=>expect(io.readStarted).toContain(mapB.id));
+    await act(async()=>{held.resolve();});
+    await screen.findByRole('heading',{name:'Native B only'});
+    console.log('C07_OWNER_COMMITS',JSON.stringify(commits));
+    expect(commits.filter(commit=>commit.mapId===mapB.id && commit.treeTitle==='Native A only')).toEqual([]);
+  } finally {held.resolve();}
+});
+
+
+it('C07 does not adopt a held snapshot after workspace ABA before the current owner reads', async()=>{
+  const {map}=await prepareNativeSnapshot();
+  await io.service!.selectFile(scope.accountId,scope.projectId,'linked-file.txt',{mapId:map.id,entityId:map.tree.nodes[0]!.id});
+  const old=deferred(),fresh=deferred();io.readGate=old.promise;io.jobGate=old.promise;
+  useUIStore.getState().setRoute('context');
+  render(<React.StrictMode><ActualLazyRouteShell sidebar/></React.StrictMode>);
+  try {
+    await act(async()=>{old.resolve();});
+    await screen.findByRole('heading',{name:'linked-file.txt'});
+    const reads=io.readStarted.length;
+    io.readGate=old.promise;
+    // New gates distinguish the departed owner from the returning owner.
+    const departed=deferred();io.readGate=departed.promise;
+    await act(async()=>{useAuthStore.setState({workspaceId:'c07-away' as WorkspaceId});});
+    await waitFor(()=>expect(io.readStarted.length).toBeGreaterThan(reads));
+    io.readGate=fresh.promise;
+    await act(async()=>{useAuthStore.setState({workspaceId:scope.workspaceId as WorkspaceId});});
+    await act(async()=>{departed.resolve();});
+    expect(currentContextWorkspace()).toBeNull();
+    await act(async()=>{fresh.resolve();});
+    await screen.findByRole('heading',{name:'linked-file.txt'});
+  } finally {old.resolve();fresh.resolve();}
 });
