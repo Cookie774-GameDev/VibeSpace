@@ -14,14 +14,16 @@ describe('Voice module scale', () => {
 });
 
 describe('VoiceModal MonoChrome appearance', () => {
-  it('keeps the voice panel and mini bar hidden across themes', () => {
+  it('hides the legacy panel and exposes the mini bar only in typed mode across themes', () => {
     const css = readFileSync(resolve(__dirname, 'voice-module.css'), 'utf8');
 
     expect(panelClass).not.toMatch(/\b(?:jarvis-glass-panel|border|bg-elevated|backdrop-blur)\b/);
     expect(source).toMatch(/id="jarvis-panel"[\s\S]*?hidden[\s\S]*?aria-hidden="true"/);
     expect(source).toMatch(
-      /aria-label="Jarvis voice mini bar"[\s\S]*?hidden[\s\S]*?aria-hidden="true"/,
+      /aria-label="Jarvis voice mini bar"[\s\S]*?hidden=\{!textInputMode\}[\s\S]*?aria-hidden=\{!textInputMode\}/,
     );
+    expect(source).toContain('{...(!textInputMode ? LEGACY_VOICE_INERT_ATTRIBUTES : {})}');
+    expect(source).toContain('(voiceMiniBarEnabled || textInputMode) &&');
     expect(source).toContain('data-vibespace-owned-chrome="voice"');
     expect(css).toMatch(
       /#jarvis-panel\[hidden\][\s\S]*?form\[aria-label='Jarvis voice mini bar'\]\[hidden\][\s\S]*?display:\s*none\s*!important/,

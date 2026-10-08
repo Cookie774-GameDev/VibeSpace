@@ -2265,6 +2265,8 @@ describe('startRuntimeListener agent routing', () => {
 
   beforeEach(() => {
     resetTurnStoreForTests();
+    // Clearing storage alone leaves prior synthetic chat modes in memory.
+    useJarvisInteractionStore.setState({ modesByChat: {} });
     mocks.listOpenCodeModels.mockReset();
     vi.clearAllMocks();
     resetDiscoveredConnectionModelsForTests();

@@ -28,6 +28,7 @@ const EXPECTED_MATRIX = {
   'mistral-api': 'native-system',
   'together-api': 'native-system',
   'ollama-local': 'native-system',
+  'foundry-local': 'native-system',
   'opencode-cli': 'prefixed-preamble',
 } as const;
 
@@ -94,7 +95,7 @@ function connection(strategy: ProviderConnection['promptTransport']): Readonly<P
 
 describe('provider prompt strategy catalog', () => {
   it('pins the exact current connection matrix', () => {
-    expect(PROVIDER_CONNECTIONS).toHaveLength(20);
+    expect(PROVIDER_CONNECTIONS).toHaveLength(21);
     expect(
       Object.fromEntries(PROVIDER_CONNECTIONS.map((item) => [item.id, item.promptTransport])),
     ).toEqual(EXPECTED_MATRIX);
