@@ -319,33 +319,72 @@ it('retains a failed text index durably and retries only through explicit scoped
   expect(io.sync).toHaveBeenCalledOnce();
 }, 15_000);
 
-it('aborts a source-index owner on workspace ABA and refuses late readiness', async () => {
-  await startCreationAndFinishGraph();
-  await act(async () => {
-    syncGate.resolve();
+it.each([false, true])('revokes the creation owner across workspace ABA and binds fresh hydration (revokeFresh=%s)', async (revokeFresh) => {
+  const freshStageGate = deferred();
+  let freshStageScope: { accountId: string; workspaceId: string; projectId: string } | undefined;
+  io.stage.mockImplementation(async () => {
+    freshStageScope = { accountId: auth.localUserId, workspaceId: auth.workspaceId, projectId: auth.projectId };
+    await freshStageGate.promise;
+    return { commit: io.commit, abort: io.abort };
   });
-  await waitFor(() =>
-    expect(io.populate.mock.calls.some((call) => call[1].tree.fileCount === 1)).toBe(true),
-  );
-  const signal = io.populate.mock.calls.find(
-    (call) => call[1].tree.fileCount === 1,
-  )![2] as AbortSignal;
-  const ownedListeners = [...io.authListeners];
-  const before = { ...auth };
-  auth.workspaceId = 'another-workspace';
-  for (const listener of io.authListeners) listener({ ...auth }, before);
-  const middle = { ...auth };
-  auth.workspaceId = before.workspaceId;
-  for (const listener of io.authListeners) listener({ ...auth }, middle);
-  expect(signal.aborted).toBe(true);
-  await act(async () => {
-    indexGate.resolve();
-  });
-  expect(io.state!.maps[0]!.sourceStatus).toBe('indexing');
-  expect(io.stage).not.toHaveBeenCalled();
-  await waitFor(() =>
-    expect(ownedListeners.every((listener) => !io.authListeners.has(listener))).toBe(true),
-  );
+  try {
+    await startCreationAndFinishGraph();
+    await act(async () => { syncGate.resolve(); });
+    await waitFor(() =>
+      expect(io.populate.mock.calls.some((call) => call[1].tree.fileCount === 1)).toBe(true),
+    );
+    const population = io.populate.mock.calls.find((call) => call[1].tree.fileCount === 1)!;
+    const creationSignal = population[2] as AbortSignal;
+    const mapId = population[1].id;
+    const ownedListeners = [...io.authListeners];
+    const before = { ...auth };
+    auth.workspaceId = 'another-workspace';
+    for (const listener of io.authListeners) listener({ ...auth }, before);
+    const middle = { ...auth };
+    auth.workspaceId = before.workspaceId;
+    for (const listener of io.authListeners) listener({ ...auth }, middle);
+    expect(creationSignal.aborted).toBe(true);
+    await act(async () => { indexGate.resolve(); });
+
+    // Returning to the same scope may reconcile its durable completed job,
+    // but that is a new owner, never permission to revive the aborted one.
+    await waitFor(() => expect(io.stage).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(ownedListeners.every((listener) => !io.authListeners.has(listener))).toBe(true),
+    );
+    const staged = io.stage.mock.calls[0]!;
+    const freshSignal = staged[4] as AbortSignal;
+    expect(staged[0]).toBe(before.localUserId);
+    expect(staged[1]).toMatchObject({ id: mapId, projectId: before.projectId, sourceStatus: 'indexing' });
+    expect(freshStageScope).toEqual({ accountId: before.localUserId, workspaceId: before.workspaceId, projectId: before.projectId });
+    expect(freshSignal).not.toBe(creationSignal);
+    expect(freshSignal.aborted).toBe(false);
+    expect(io.state!.maps.find((map) => map.id === mapId)!.sourceStatus).toBe('indexing');
+    expect(io.commit).not.toHaveBeenCalled();
+
+    if (revokeFresh) {
+      const current = { ...auth };
+      auth.workspaceId = 'revoked-fresh-workspace';
+      for (const listener of io.authListeners) listener({ ...auth }, current);
+      expect(freshSignal.aborted).toBe(true);
+      await act(async () => { freshStageGate.resolve(); });
+      await waitFor(() => expect(io.abort).toHaveBeenCalledOnce());
+      expect(io.commit).not.toHaveBeenCalled();
+      expect(io.state!.maps.find((map) => map.id === mapId)!.sourceStatus).toBe('indexing');
+    } else {
+      await act(async () => { freshStageGate.resolve(); });
+      await waitFor(() => expect(io.commit).toHaveBeenCalledOnce());
+      await waitFor(() =>
+        expect(io.state!.maps.find((map) => map.id === mapId)!.sourceStatus).toBe('ready'),
+      );
+      expect(freshSignal.aborted).toBe(false);
+      expect(io.abort).not.toHaveBeenCalled();
+    }
+    expect(creationSignal.aborted).toBe(true);
+    expect(io.stage).toHaveBeenCalledOnce();
+  } finally {
+    freshStageGate.resolve();
+  }
 }, 15_000);
 
 it('cancels text indexing without cancelling the completed graph or publishing late readiness', async () => {

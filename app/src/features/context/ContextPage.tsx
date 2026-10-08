@@ -1714,11 +1714,11 @@ export function ContextPage() {
     }
   }, [selectedMap]);
   const selectFilePath = React.useCallback(
-    async (path: string, notify = true, persist = true): Promise<boolean> => {
+    async (path: string, notify = true, persist = true, mapId?: string): Promise<boolean> => {
       const clean = path.trim();
       if (!clean) return false;
       const targetMap = maps.find(
-        (map) => map.status === 'active' && findContextFileNodeByPath(map.tree, clean),
+        (map) => map.status === 'active' && (!mapId || map.id === mapId) && findContextFileNodeByPath(map.tree, clean),
       );
       const targetNode = targetMap ? findContextFileNodeByPath(targetMap.tree, clean) : null;
       if (!targetMap || !targetNode) {
@@ -1749,11 +1749,20 @@ export function ContextPage() {
   );
 
   React.useEffect(() => {
-    const stored = getActiveContextPersistenceState(projectId)?.selectedFile ?? '';
-    if (!stored || stored === lastAppliedFileRef.current) return;
-    void selectFilePath(stored, false, false).then((selected) => {
-      if (selected) lastAppliedFileRef.current = stored;
+    const state = getActiveContextPersistenceState(projectId);
+    const stored = state?.selectedFile;
+    const mapId = state?.selectedMapId;
+    if (!stored || !mapId) {
+      lastAppliedFileRef.current = '';
+      return;
+    }
+    const selectionKey = JSON.stringify([mapId, stored]);
+    if (selectionKey === lastAppliedFileRef.current) return;
+    let active = true;
+    void selectFilePath(stored, false, false, mapId).then((selected) => {
+      if (active && selected) lastAppliedFileRef.current = selectionKey;
     });
+    return () => { active = false; };
   }, [projectId, selectFilePath]);
 
   React.useEffect(() => {
@@ -1762,9 +1771,7 @@ export function ContextPage() {
       if (!detail?.path) return;
       if ((detail.projectId ?? null) !== (projectId ?? null)) return;
       contextEvidenceNavigation.cancel();
-      void selectFilePath(detail.path).then((selected) => {
-        if (selected) lastAppliedFileRef.current = detail.path!;
-      });
+      void selectFilePath(detail.path);
     };
     window.addEventListener('jarvis:context:select-file', onSelectFile as EventListener);
     return () =>

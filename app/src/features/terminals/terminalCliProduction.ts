@@ -520,7 +520,12 @@ export function createProductionTerminalCliRuntimeDependencies(
       return resolvePersistedTerminalContextEntity(await activeMaps(projectId), target);
     },
     async openContextEntity(projectId, selected) {
-      if (selected.path) await selectPersistedContextFile(projectId, selected.path);
+      if (selected.path) {
+        await selectPersistedContextFile(projectId, selected.path, {
+          mapId: selected.mapId,
+          entityId: selected.id,
+        });
+      }
       useUIStore.getState().setRoute('context');
     },
     async refreshContextMap(projectId, mapId) {

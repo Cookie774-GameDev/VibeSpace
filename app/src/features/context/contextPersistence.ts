@@ -19,6 +19,7 @@ import {
 import {
   contextNodeFilePath,
   findContextFileNodeByPath,
+  findContextNode,
   type ContextMapRecord,
   type ContextNodeKind,
   type ContextTreeNode,
@@ -42,6 +43,11 @@ export interface ContextSelectionGuard {
   expectedMapUpdatedAt: number;
   expectedKnowledgeRevision: number;
   validateOwnership?(database: JarvisDexie): Promise<boolean>;
+}
+
+export interface ContextFileSelectionTarget {
+  mapId: string;
+  entityId: string;
 }
 
 export interface ContextPersistenceService {
@@ -75,6 +81,7 @@ export interface ContextPersistenceService {
     accountId: string,
     projectId: string | null,
     path: string,
+    target?: ContextFileSelectionTarget,
   ): Promise<ContextPersistenceState>;
 }
 
@@ -694,9 +701,36 @@ export function createContextPersistenceService(
       return load(accountId, projectId);
     },
 
-    async selectFile(accountId, projectId, path) {
-      const state = await load(accountId, projectId);
+    async selectFile(accountId, projectId, path, target) {
       const clean = path.trim();
+      if (target) {
+        const { mapId, entityId } = target;
+        assertIdentity(accountId, projectId);
+        // Keep the resolved entity qualified through the same transaction that
+        // writes selection. A stale target must never fall back to a path peer.
+        await database.transaction('rw', [database.context_maps, database.context_sources,
+          database.context_entities, database.context_edges, database.context_provenance,
+          database.settings], async () => {
+          const snapshot = await repository.getSnapshot(accountId, mapId);
+          if (!snapshot || snapshot.map.projectId !== projectId || snapshot.map.status !== 'active') {
+            fail('selected_file_missing');
+          }
+          const owner = mapFromSnapshot(snapshot);
+          const resolved = findContextNode(owner.tree, entityId);
+          const node = findContextFileNodeByPath(owner.tree, clean);
+          // Symbols and notes have always opened their containing file. Keep
+          // that projection inside the resolved map without weakening file IDs.
+          const resolvedFile = resolved?.kind === 'file' ? resolved
+            : resolved?.path ? findContextFileNodeByPath(owner.tree, resolved.path) : null;
+          if (!node || node.id !== resolvedFile?.id) fail('selected_file_missing');
+          await writeSelection(accountId, projectId, owner.id, {
+            mapId: owner.id,
+            relativePath: node.path!,
+          });
+        });
+        return load(accountId, projectId);
+      }
+      const state = await load(accountId, projectId);
       const owner = state.maps.find(
         (map) => map.status === 'active' && findContextFileNodeByPath(map.tree, clean),
       );
@@ -1021,10 +1055,11 @@ export async function restorePersistedContextMap(
 export async function selectPersistedContextFile(
   projectId: string | null,
   path: string,
+  target?: ContextFileSelectionTarget,
 ): Promise<ContextPersistenceState> {
   const initialized = await ensureContextPersistence(projectId);
   assertActiveIdentity(initialized.accountId);
-  const selected = await getProductionService().selectFile(initialized.accountId, projectId, path);
+  const selected = await getProductionService().selectFile(initialized.accountId, projectId, path, target);
   assertActiveIdentity(initialized.accountId);
   return selected;
 }

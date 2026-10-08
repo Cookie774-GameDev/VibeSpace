@@ -700,3 +700,72 @@ it('drops the old cited selection when a genuinely changed native tree removes i
   expect(screen.queryByRole('heading', { name: 'linked-file.txt' })).toBeNull();
   expect(screen.getByRole('button', { name: 'replacement.txt' })).toBeTruthy();
 });
+
+async function prepareOverlappingSavedFile() {
+  const original = await io.service!.load(scope.accountId, scope.projectId);
+  const target = original.maps[1]!;
+  const other = original.maps[0]!;
+  for (const map of [target, other]) {
+    await io.service!.saveTree(scope.accountId, {
+      version: 1, projectId: scope.projectId, rootDir: map.rootDir,
+      generatedAt: 1, model: 'siyuan-managed-v1', fileCount: 1, totalBytes: 4,
+      summary: 'Owned C04 source', nodes: [{id:'c04-file',kind:'file',path:'shared.txt',
+        title:map.id===target.id?'C04 target source':'C04 other source',summary:'',sizeBytes:4,modifiedAt:1}],
+    }, {mapId:map.id,name:map.name,sourceStatus:'ready'});
+  }
+  const selected = await io.service!.selectFile(scope.accountId, scope.projectId, `${target.rootDir}/shared.txt`);
+  expect(selected.selectedMapId).toBe(target.id);
+  expect(selected.selectedFile).toBe('shared.txt');
+  return { target, other };
+}
+
+it('restores the saved file within its persisted map when another map shares the relative path', async () => {
+  await prepareOverlappingSavedFile();
+  useUIStore.getState().setRoute('context');
+  render(<React.StrictMode><ActualLazyRouteShell sidebar /></React.StrictMode>);
+  await waitFor(() => expect(document.querySelector('[data-monochrome-route="context"] [data-monochrome-surface="context-inspector"] h2')?.textContent).toBe('C04 target source'));
+});
+
+it('restores a new saved map selection even when its relative file path is unchanged', async () => {
+  const { other } = await prepareOverlappingSavedFile();
+  useUIStore.getState().setRoute('context');
+  render(<React.StrictMode><ActualLazyRouteShell sidebar /></React.StrictMode>);
+  const heading = () => document.querySelector('[data-monochrome-route="context"] [data-monochrome-surface="context-inspector"] h2')?.textContent;
+  await waitFor(() => expect(heading()).toBe('C04 target source'));
+  await act(async () => {
+    const selected=await io.service!.selectFile(scope.accountId,scope.projectId,`${other.rootDir}/shared.txt`);
+    expect(selected.selectedMapId).toBe(other.id);
+    expect(selected.selectedFile).toBe('shared.txt');
+  });
+  await waitFor(() => expect(heading()).toBe('C04 other source'));
+});
+
+it('clears a restored source when the active project scope is revoked', async () => {
+  await prepareOverlappingSavedFile();
+  useUIStore.getState().setRoute('context');
+  render(<React.StrictMode><ActualLazyRouteShell sidebar /></React.StrictMode>);
+  await waitFor(() => expect(screen.getByRole('heading',{name:'C04 target source',exact:true})).toBeTruthy());
+  await act(async () => useAuthStore.getState().setProjectId('c04-foreign-project' as ProjectId));
+  await waitFor(() => {
+    expect(screen.queryByRole('heading',{name:'C04 target source',exact:true})).toBeNull();
+    expect(screen.queryByRole('heading',{name:'C04 other source',exact:true})).toBeNull();
+  });
+});
+
+
+it('restores the same saved file after an intervening map-only selection cleared it', async () => {
+  const { target, other } = await prepareOverlappingSavedFile();
+  useUIStore.getState().setRoute('context');
+  render(<React.StrictMode><ActualLazyRouteShell sidebar /></React.StrictMode>);
+  const heading = () => document.querySelector('[data-monochrome-route="context"] [data-monochrome-surface="context-inspector"] h2')?.textContent;
+  await waitFor(() => expect(heading()).toBe('C04 target source'));
+  await act(async () => {
+    const selected=await io.service!.selectMap(scope.accountId,scope.projectId,other.id);
+    expect(selected.selectedFile).toBeNull();
+  });
+  await waitFor(() => expect(heading()).not.toBe('C04 target source'));
+  await act(async () => {
+    await io.service!.selectFile(scope.accountId,scope.projectId,`${target.rootDir}/shared.txt`);
+  });
+  await waitFor(() => expect(heading()).toBe('C04 target source'));
+});

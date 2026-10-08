@@ -698,3 +698,54 @@ it('aborts a successful selection put before commit and preserves the previous m
     spy.mockRestore();
   }
 });
+
+
+describe('qualified Context file selection', () => {
+  it.each([false, true])('retains an exact map/entity for an overlapping path (sameRoot=%s)', async sameRoot => {
+    const service = createContextPersistenceService(database, localStorage);
+    await service.initialize('account-1', 'project-1');
+    await service.saveTree('account-1', treeFixture('C:/qualified/A'), {mapId:'qualified-a'});
+    await service.saveTree('account-1', treeFixture(sameRoot?'C:/qualified/A':'C:/qualified/B'), {mapId:'qualified-b'});
+    const state=await service.load('account-1','project-1');
+    const target=state.maps[1]!;
+    const node=target.tree.nodes[0]!.children![0]!;
+    const selected=await service.selectFile('account-1','project-1',node.path!,{mapId:target.id,entityId:node.id});
+    expect(selected.selectedMapId).toBe(target.id);
+    expect(selected.selectedFile).toBe(node.path);
+  });
+
+  it.each(['foreign-account','foreign-project','wrong-map','missing-entity','inactive-map','mismatched-path'] as const)(
+    'refuses a qualified %s without writing selection or falling back',async change=>{
+      const service=createContextPersistenceService(database,localStorage);
+      await service.initialize('account-1','project-1');
+      await service.saveTree('account-1',treeFixture('C:/qualified/A'),{mapId:'qualified-a'});
+      await service.saveTree('account-1',treeFixture('C:/qualified/B'),{mapId:'qualified-b'});
+      const state=await service.load('account-1','project-1');
+      const target=state.maps.find(map=>map.id==='qualified-a')!;
+      const node=target.tree.nodes[0]!.children![0]!;
+      if(change==='inactive-map')await service.deleteMap('account-1','project-1',target.id);
+      const before=await database.settings.toArray();
+      await expect(service.selectFile(change==='foreign-account'?'other-account':'account-1',
+        change==='foreign-project'?'other-project':'project-1',change==='mismatched-path'?'missing.txt':node.path!,
+        {mapId:change==='wrong-map'?'qualified-b':target.id,entityId:change==='missing-entity'?'missing-entity':node.id},
+      )).rejects.toThrow();
+      expect(await database.settings.toArray()).toEqual(before);
+    },
+  );
+});
+
+
+it('does not project an exact file ID onto another file node with the same path',async()=>{
+  const service=createContextPersistenceService(database,localStorage);
+  await service.initialize('account-1','project-1');
+  const tree=treeFixture();
+  const original=tree.nodes[0]!.children![0]!;
+  tree.nodes[0]!.children!.push({...original,id:'second-file'});
+  tree.fileCount=2;
+  const saved=await service.saveTree('account-1',tree,{mapId:'duplicate-file-nodes'});
+  const map=saved.maps[0]!;
+  const second=map.tree.nodes[0]!.children![1]!;
+  const settings=await database.settings.toArray();
+  await expect(service.selectFile('account-1','project-1',second.path!,{mapId:map.id,entityId:second.id})).rejects.toThrow();
+  expect(await database.settings.toArray()).toEqual(settings);
+});
