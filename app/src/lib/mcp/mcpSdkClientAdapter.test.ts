@@ -214,3 +214,73 @@ describe('MCP SDK client adapter', () => {
     await expect(server.invoke('read', 'raw')).rejects.toThrow('must be an object')
   })
 })
+
+it('MCP startup ownership keeps an old adapter handle from stopping its replacement session',async()=>{
+  const closed:boolean[]=[];
+  const adapter=createMcpSdkClientAdapter({id:'owned-handles',endpoint:'https://offline.example.test/mcp',
+    clientFactory:()=>{const id=closed.length;closed.push(false);return {
+      connect:async()=>{},close:async()=>{closed[id]=true;},ping:async()=>{if(closed[id])throw Error('closed');return {};},
+      listTools:async()=>({tools:[]}),listResources:async()=>({resources:[]}),listPrompts:async()=>({prompts:[]}),callTool:async()=>({content:[]}),
+    };},transportFactory:()=>({}) as Transport,
+  });
+  const first=await adapter.start();await first.stop();
+  const replacement=await adapter.start();
+  try {
+    expect(await replacement.health()).toBe(true);
+    await first.stop();
+    await expect(first.invoke('read',{})).rejects.toThrow('disconnected');
+    await expect(first.listTools()).rejects.toThrow('disconnected');
+    console.log('MCP_HANDLE_BOUNDARY',JSON.stringify({closed,replacementHealthy:await replacement.health()}));
+    expect(await replacement.health()).toBe(true);
+    expect(closed).toEqual([true,false]);
+  } finally {await replacement.stop();}
+});
+
+
+it('MCP startup cancellation refuses an already aborted owner before constructing a client',async()=>{
+  const factory=vi.fn();const controller=new AbortController();controller.abort();
+  const adapter=createMcpSdkClientAdapter({id:'pre-aborted',endpoint:'https://offline.example.test/mcp',clientFactory:factory,transportFactory:()=>({}) as Transport});
+  await expect(adapter.start(controller.signal)).rejects.toMatchObject({name:'AbortError'});
+  expect(factory).not.toHaveBeenCalled();
+});
+
+it('MCP startup cancellation closes late initialization without publishing it',async()=>{
+  const {adapter,client}=harness();const controller=new AbortController();
+  let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});
+  vi.mocked(client.connect).mockImplementation(async(_transport,options)=>{expect(options?.signal).toBe(controller.signal);await held;});
+  const starting=adapter.start(controller.signal);
+  try {
+    await vi.waitFor(()=>expect(client.connect).toHaveBeenCalledOnce());
+    controller.abort();await Promise.resolve();await Promise.resolve();
+    expect(client.close).toHaveBeenCalledOnce();
+    release();
+    await expect(starting).rejects.toMatchObject({name:'AbortError'});
+    expect(client.listTools).not.toHaveBeenCalled();expect(client.callTool).not.toHaveBeenCalled();
+    expect(client.close).toHaveBeenCalledOnce();
+  } finally {release();await starting.catch(()=>undefined);}
+});
+
+it('MCP startup cleanup closes a failed initializer and allows a fresh attempt',async()=>{
+  const {adapter,client}=harness();vi.mocked(client.connect).mockRejectedValueOnce(new Error('fixture initialization failed'));
+  await expect(adapter.start()).rejects.toThrow('fixture initialization failed');
+  expect(client.close).toHaveBeenCalledOnce();
+  const next=await adapter.start();expect(await next.health()).toBe(true);await next.stop();
+  expect(client.close).toHaveBeenCalledTimes(2);
+});
+
+it('MCP startup ownership keeps a late old catalog failure from clearing the replacement catalog',async()=>{
+  let rejectOld!:(error:Error)=>void;let created=0;let freshLists=0;
+  const adapter=createMcpSdkClientAdapter({id:'catalog-owners',endpoint:'https://offline.example.test/mcp',transportFactory:()=>({}) as Transport,
+    clientFactory:()=>{const id=++created;return {connect:async()=>{},close:async()=>{},ping:async()=>({}),
+      getServerCapabilities:()=>({tools:{}}),listTools:async()=>{if(id===1)return new Promise<{tools:readonly unknown[]}>((_resolve,reject)=>{rejectOld=reject;});freshLists++;return {tools:[{name:'fresh',description:'Fresh fixture',inputSchema:{type:'object'}}]};},
+      listResources:async()=>({resources:[]}),listPrompts:async()=>({prompts:[]}),callTool:async()=>({content:[]})};},
+  });
+  const old=await adapter.start();const pending=old.listTools();const oldOutcome=pending.catch(error=>error);
+  await vi.waitFor(()=>expect(rejectOld).toBeTypeOf('function'));await old.stop();
+  const fresh=await adapter.start();
+  try {
+    expect((await fresh.listTools())[0]?.name).toBe('fresh');
+    rejectOld(new Error('departed catalog failed'));expect(await oldOutcome).toBeInstanceOf(Error);
+    expect((await fresh.listTools())[0]?.name).toBe('fresh');expect(freshLists).toBe(1);
+  } finally {rejectOld(new Error('cleanup'));await oldOutcome;await fresh.stop();}
+});

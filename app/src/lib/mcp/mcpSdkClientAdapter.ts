@@ -48,7 +48,7 @@ interface McpSdkPage<T> {
 }
 
 export interface McpSdkClientPort {
-  connect(transport: Transport): Promise<void>
+  connect(transport: Transport, options?: Readonly<{ signal?: AbortSignal }>): Promise<void>
   close(): Promise<void>
   getServerCapabilities?(): Readonly<Record<string, unknown>> | undefined
   ping(options?: Readonly<{ signal?: AbortSignal }>): Promise<unknown>
@@ -284,9 +284,12 @@ export function createMcpSdkClientAdapter(options: McpSdkClientAdapterOptions): 
   let client: McpSdkClientPort | null = null
   let startPromise: Promise<McpServerClient> | null = null
   let catalogPromise: Promise<McpSdkCatalog> | null = null
+  let generation = 0
 
-  const start = async (): Promise<McpServerClient> => {
+  const start = async (signal?: AbortSignal): Promise<McpServerClient> => {
+    signal?.throwIfAborted()
     if (startPromise) return startPromise
+    const owner = ++generation
     startPromise = (async () => {
       const [clientModule, transportModule] = await Promise.all([
         options.clientFactory
@@ -296,6 +299,7 @@ export function createMcpSdkClientAdapter(options: McpSdkClientAdapterOptions): 
           ? Promise.resolve(null)
           : import('@modelcontextprotocol/sdk/client/streamableHttp.js'),
       ])
+      signal?.throwIfAborted()
       const nextClient =
         options.clientFactory?.() ??
         (new clientModule!.Client({
@@ -307,18 +311,42 @@ export function createMcpSdkClientAdapter(options: McpSdkClientAdapterOptions): 
         (new transportModule!.StreamableHTTPClientTransport(endpoint, {
           fetch: createMcpCancellationFetch(),
         }) as Transport)
-      await nextClient.connect(transport)
+      let closePromise: Promise<void> | undefined
+      const closeOwned = () => {
+        if (generation === owner) {
+          generation += 1
+          client = null
+          startPromise = null
+          catalogPromise = null
+        }
+        closePromise ??= Promise.resolve().then(() => nextClient.close())
+        return closePromise
+      }
+      const abort = () => { void closeOwned().catch(() => undefined) }
+      signal?.addEventListener('abort', abort, { once: true })
+      try {
+        signal?.throwIfAborted()
+        await nextClient.connect(transport, { signal })
+        signal?.throwIfAborted()
+        if (generation !== owner) throw new Error('MCP SDK startup ownership changed')
+      } catch (error) {
+        await closeOwned().catch(() => undefined)
+        throw error
+      } finally { signal?.removeEventListener('abort', abort) }
       client = nextClient
       const server: McpServerClient = {
-        listTools: async (signal) => (await getCatalog(signal)).tools.map((tool) => ({
-          name: tool.name,
-          title: tool.title,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        })),
+        listTools: async (signal) => {
+          if (generation !== owner || client !== nextClient) throw new Error('MCP SDK client is disconnected')
+          return (await getCatalog(signal, nextClient)).tools.map((tool) => ({
+            name: tool.name,
+            title: tool.title,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+          }))
+        },
         invoke: async (toolName, input, invokeOptions) => {
           const active = client
-          if (!active) throw new Error('MCP SDK client is disconnected')
+          if (!active || active !== nextClient || generation !== owner) throw new Error('MCP SDK client is disconnected')
           const args = record(input)
           if (!args) throw new Error('MCP tool arguments must be an object')
           return active.callTool(
@@ -329,7 +357,7 @@ export function createMcpSdkClientAdapter(options: McpSdkClientAdapterOptions): 
         },
         health: async () => {
           const active = client
-          if (!active) return false
+          if (!active || active !== nextClient || generation !== owner) return false
           try {
             await active.ping()
             return true
@@ -337,30 +365,27 @@ export function createMcpSdkClientAdapter(options: McpSdkClientAdapterOptions): 
             return false
           }
         },
-        stop: async () => {
-          const active = client
-          client = null
-          startPromise = null
-          catalogPromise = null
-          if (active) await active.close()
-        },
+        stop: closeOwned,
       }
       return server
     })().catch((error) => {
-      client = null
-      startPromise = null
-      catalogPromise = null
+      if (generation === owner) {
+        client = null
+        startPromise = null
+        catalogPromise = null
+      }
       throw error
     })
     return startPromise
   }
 
-  const getCatalog = async (signal?: AbortSignal): Promise<McpSdkCatalog> => {
-    await start()
-    if (catalogPromise) return catalogPromise
+  const getCatalog = async (signal?: AbortSignal, expectedClient?: McpSdkClientPort): Promise<McpSdkCatalog> => {
+    if (!expectedClient) await start()
     const active = client
-    if (!active) throw new Error('MCP SDK client is disconnected')
-    catalogPromise = (async () => {
+    if (!active || (expectedClient && active !== expectedClient)) throw new Error('MCP SDK client is disconnected')
+    if (catalogPromise) return catalogPromise
+    const catalogGeneration = generation
+    const pendingCatalog = (async () => {
       const capabilities = active.getServerCapabilities?.()
       const tools = await collectPages(
         async (cursor) => {
@@ -387,13 +412,15 @@ export function createMcpSdkClientAdapter(options: McpSdkClientAdapterOptions): 
             },
             parsePrompt,
           )
+      if (client !== active || generation !== catalogGeneration) throw new Error('MCP SDK client is disconnected')
       const catalog = { tools, resources, prompts }
       return { ...catalog, schemaFingerprint: fingerprintMcpSdkCatalog(catalog) }
     })().catch((error) => {
-      catalogPromise = null
+      if (catalogPromise === pendingCatalog) catalogPromise = null
       throw error
     })
-    return catalogPromise
+    catalogPromise = pendingCatalog
+    return pendingCatalog
   }
 
   return { id: options.id, start, getCatalog }

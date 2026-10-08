@@ -1310,3 +1310,37 @@ describe('MCP server lifecycle manager', () => {
     expect(manager.discover()).toEqual([]);
   });
 });
+
+
+it('MCP startup cancellation closes a returned client during pending health admission',async()=>{
+  const manager=new McpServerManager();
+  let release!:()=>void;
+  const pending=new Promise<boolean>(resolve=>{release=()=>resolve(true);});
+  const health=vi.fn(()=>pending);
+  const stop=vi.fn(async()=>{release();});
+  manager.register({id:'pending-health',start:async()=>({listTools:async()=>[],invoke:async()=>({}),health,stop})});
+  const starting=manager.start('pending-health');
+  let stopping:Promise<void>|undefined;
+  try {
+    await vi.waitFor(()=>expect(health).toHaveBeenCalledOnce());
+    stopping=manager.stop('pending-health');
+    await Promise.resolve();await Promise.resolve();
+    expect(stop).toHaveBeenCalledOnce();
+    await Promise.all([starting,stopping]);
+    expect(manager.status('pending-health')).toMatchObject({state:'stopped',healthy:false,exposedTools:[]});
+  } finally {release();await Promise.allSettled([starting,...(stopping?[stopping]:[])]);await manager.stopAll();}
+});
+
+
+it('MCP startup cancellation rejects a late client from the stopped generation before health or discovery',async()=>{
+  const manager=new McpServerManager();let signal:AbortSignal|undefined;let release!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});const health=vi.fn(async()=>true),listTools=vi.fn(async()=>[tool('late.read')]),stop=vi.fn(async()=>{});
+  manager.register({id:'late-owned-start',start:async captured=>{signal=captured;await held;return {health,listTools,stop,invoke:async()=>({})};}});
+  const starting=manager.start('late-owned-start');let stopping:Promise<void>|undefined;
+  try {
+    await vi.waitFor(()=>expect(signal).toBeDefined());stopping=manager.stop('late-owned-start');expect(signal!.aborted).toBe(true);
+    release();await Promise.all([starting,stopping]);
+    expect(health).not.toHaveBeenCalled();expect(listTools).not.toHaveBeenCalled();expect(stop).toHaveBeenCalledOnce();
+    expect(manager.status('late-owned-start')).toMatchObject({state:'stopped',healthy:false,exposedTools:[]});
+  } finally {release();await Promise.allSettled([starting,...(stopping?[stopping]:[])]);await manager.stopAll();}
+});

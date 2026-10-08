@@ -71,7 +71,7 @@ export interface McpInvocationAudit {
 
 export interface McpServerAdapter {
   id: string;
-  start: () => Promise<McpServerClient>;
+  start: (signal?: AbortSignal) => Promise<McpServerClient>;
 }
 
 export type McpServerState = 'stopped' | 'starting' | 'running' | 'unhealthy' | 'failed';
@@ -100,6 +100,7 @@ interface ManagedServer {
   toolsDiscoveredAt?: number;
   discovery?: ManagedDiscovery;
   startPromise?: Promise<McpServerStatus>;
+  startController?: AbortController;
   idleTimer?: ReturnType<typeof setTimeout>;
   lastUsedAt?: number;
   error?: string;
@@ -707,6 +708,17 @@ export class McpServerManager {
     if (server.startPromise) return server.startPromise;
 
     const generation = server.generation;
+    const controller = new AbortController();
+    server.startController = controller;
+    let startingClient: McpServerClient | undefined;
+    let closePromise: Promise<void> | undefined;
+    const closeStartingClient = () => {
+      if (!startingClient) return Promise.resolve();
+      closePromise ??= Promise.resolve().then(() => startingClient!.stop()).catch(() => undefined);
+      return closePromise;
+    };
+    const abortStartup = () => { void closeStartingClient(); };
+    controller.signal.addEventListener('abort', abortStartup, { once: true });
     server.state = 'starting';
     server.error = undefined;
     server.startPromise = (async () => {
@@ -717,13 +729,21 @@ export class McpServerManager {
         const staleClient = server.client;
         server.client = undefined;
         if (staleClient) await staleClient.stop().catch(() => undefined);
-        const client = await server.adapter.start();
+        controller.signal.throwIfAborted();
+        const client = await server.adapter.start(controller.signal);
+        startingClient = client;
+        if (controller.signal.aborted || server.generation !== generation) {
+          await closeStartingClient();
+          server.state = 'stopped';
+          server.error = undefined;
+          return this.status(id);
+        }
         if (!(await client.health())) {
-          await client.stop().catch(() => undefined);
+          await closeStartingClient();
           throw new Error('health check failed');
         }
-        if (server.generation !== generation) {
-          await client.stop().catch(() => undefined);
+        if (server.generation !== generation || controller.signal.aborted) {
+          await closeStartingClient();
           server.state = 'stopped';
           server.error = undefined;
           return this.status(id);
@@ -733,6 +753,7 @@ export class McpServerManager {
         this.touch(id, server);
         return this.status(id);
       } catch (error) {
+        await closeStartingClient();
         if (server.generation !== generation) {
           server.client = undefined;
           server.state = 'stopped';
@@ -744,6 +765,8 @@ export class McpServerManager {
         server.error = errorMessage(error);
         throw new Error(`MCP server '${id}' failed to start: ${server.error}`);
       } finally {
+        controller.signal.removeEventListener('abort', abortStartup);
+        if (server.startController === controller) server.startController = undefined;
         server.startPromise = undefined;
       }
     })();
@@ -756,6 +779,7 @@ export class McpServerManager {
     const pendingStart = server.startPromise;
     const pendingDiscovery = server.discovery?.promise;
     server.generation += 1;
+    server.startController?.abort(new DOMException('MCP server stopped during startup.', 'AbortError'));
     if (server.idleTimer) clearTimeout(server.idleTimer);
     server.idleTimer = undefined;
     const client = server.client;

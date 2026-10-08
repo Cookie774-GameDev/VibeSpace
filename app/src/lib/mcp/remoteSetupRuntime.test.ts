@@ -1,8 +1,11 @@
+import {Client} from '@modelcontextprotocol/sdk/client/index.js';
+import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {LATEST_PROTOCOL_VERSION} from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRemoteMcpSetupRuntime } from './remoteSetupRuntime';
 import { McpServerManager, type McpServerAdapter } from './serverManager';
-import { createMcpSdkClientAdapter, type McpSdkClientPort } from './mcpSdkClientAdapter';
+import { createMcpSdkClientAdapter, createMcpCancellationFetch, type McpSdkClientPort } from './mcpSdkClientAdapter';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 function setupHarness(options: { failDiscovery?: boolean } = {}) {
@@ -423,4 +426,67 @@ describe('remote MCP setup runtime', () => {
     });
     expect(JSON.stringify(snapshot)).not.toContain('live-secret');
   });
+});
+
+it.each([null,'initialize','notifications/initialized','ping'] as const)('MCP startup cancellation settles an owned disconnect with held phase=%s',async held=>{
+  vi.useFakeTimers();
+  let release!:()=>void;
+  let initializedStarted=false;
+  const initialized=new Promise<void>(resolve=>{release=resolve;});
+  if(!held)release();
+  const calls:string[]=[];
+  const fetchPort:typeof fetch=async(_url,init)=>{
+    if(init?.method==='GET')return new Response(null,{status:405});
+    if(init?.method==='DELETE')return new Response(null,{status:202});
+    const message=JSON.parse(String(init?.body));calls.push(message.method);
+    if(message.method==='notifications/initialized' && !held)initializedStarted=true;
+    if(message.method===held){
+      initializedStarted=true;
+      const signal=init?.signal;
+      if(signal?.aborted)throw new DOMException('Aborted','AbortError');
+      let detach=()=>{};
+      try {
+        await new Promise<void>((resolve,reject)=>{
+          const abort=()=>reject(new DOMException('Aborted','AbortError'));
+          signal?.addEventListener('abort',abort,{once:true});detach=()=>signal?.removeEventListener('abort',abort);
+          void initialized.then(resolve,reject);
+        });
+      } finally {detach();}
+      return new Response(null,{status:202});
+    }
+    if(message.method==='notifications/initialized')return new Response(null,{status:202});
+    const result=message.method==='initialize'?{protocolVersion:LATEST_PROTOCOL_VERSION,capabilities:{tools:{}},serverInfo:{name:'offline-owned',version:'1'}}
+      :message.method==='tools/list'?{tools:[{name:'fixture.read',description:'Read fixture',inputSchema:{type:'object',properties:{}},annotations:{readOnlyHint:true}}]}:{};
+    return new Response(JSON.stringify({jsonrpc:'2.0',id:message.id,result}),{headers:{'content-type':'application/json'}});
+  };
+  const manager=new McpServerManager();
+  const runtime=createRemoteMcpSetupRuntime({manager,
+    createAdapter:options=>createMcpSdkClientAdapter({id:options.id,endpoint:options.endpoint,
+      clientFactory:()=>new Client({name:'offline-vibespace',version:'1'}),
+      transportFactory:url=>new StreamableHTTPClientTransport(url,{fetch:createMcpCancellationFetch(fetchPort)}),
+    }),
+  });
+  let connectedSettled=false,disconnectSettled=false;
+  const connecting=runtime.connect({id:'offline-startup',endpoint:'https://offline.example.test/mcp',confirmedByUser:true}).finally(()=>{connectedSettled=true;});
+  let disconnecting:Promise<void>|undefined;
+  try {
+    for(let i=0;i<25&&!initializedStarted;i++)await vi.advanceTimersByTimeAsync(0);
+    expect(initializedStarted).toBe(true);
+    if(!held){await connecting;expect(runtime.getSnapshot()[0]?.state).toBe('connected');expect(runtime.getSnapshot()[0]?.exposedTools).toEqual([]);}
+    else expect(runtime.getSnapshot()[0]?.state).toBe('connecting');
+    disconnecting=runtime.disconnect('offline-startup').finally(()=>{disconnectSettled=true;});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(disconnectSettled).toBe(true);
+    if(held)expect(calls).not.toContain('tools/list');
+    await vi.advanceTimersByTimeAsync(120_000);
+    console.log('MCP_STARTUP_BOUNDARY',JSON.stringify({held,virtualElapsedMs:120000,connectedSettled,disconnectSettled,state:runtime.getSnapshot()[0]?.state,manager:manager.discover(),methods:calls}));
+    expect(disconnectSettled).toBe(true);
+    expect(runtime.getSnapshot()).toEqual([]);
+  } finally {
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.allSettled([connecting,...(disconnecting?[disconnecting]:[])]);
+    await manager.stopAll();
+    vi.useRealTimers();
+  }
 });
