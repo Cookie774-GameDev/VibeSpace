@@ -169,6 +169,44 @@ function preserveBroadRelativeOutputAssertions(candidate: string): boolean {
   );
 }
 
+function isDescriptiveSlashCompound(text: string, start: number, end: number): boolean {
+  const candidate = text.slice(start, end);
+  // A prose-role exception is deliberately narrower than a path allowlist.
+  // Explicit wrappers, path syntax and output roots retain ordinary verification.
+  if (
+    !/^[A-Za-z]+\/[A-Za-z]+$/u.test(candidate) ||
+    /[`"']/u.test(text[start - 1] ?? '') ||
+    preserveBroadRelativeOutputAssertions(candidate)
+  ) {
+    return false;
+  }
+  const before = text.slice(Math.max(0, start - 96), start);
+  const after = text.slice(end, Math.min(text.length, end + 96));
+  if (
+    DIRECT_LOCATION_CONNECTOR.test(before) ||
+    /\b(?:file|folder|directory|path|location|artifact|output|document|report)\s*$/iu.test(
+      before,
+    ) ||
+    OUTPUT_ASSERTION.test(before) ||
+    /\bproduced\b/iu.test(before) ||
+    REVERSE_OUTPUT_ACTION.test(after)
+  ) {
+    return false;
+  }
+  // Here the following noun is the object, rather than the slash term itself.
+  if (/^[ \t]+(?:definitions?|terminology|semantics|tradeoffs?|trade-offs?)\b/iu.test(after)) {
+    return true;
+  }
+  // Conventional I/O in a resource predicate, not a claimed output destination.
+  return (
+    candidate === 'I/O' &&
+    /\b(?:export|import|disk|network)\s*$/iu.test(before) &&
+    /^[ \t]+(?:(?:may|might|can|could|will|would|should|must)[ \t]+)?(?:still[ \t]+)?(?:starve|compete|consume|saturate|block|delay|throttle)\b/iu.test(
+      after,
+    )
+  );
+}
+
 function overlaps(
   left: Readonly<{ start: number; end: number }>,
   right: Readonly<{ start: number; end: number }>,
@@ -258,6 +296,7 @@ function filterDirectReferences(
     if (replacements.some((replacement) => overlaps(location, replacement))) continue;
     const candidate = prose.slice(location.start, location.end);
     if (isPermittedReference([candidate], permitted)) continue;
+    if (isDescriptiveSlashCompound(prose, location.start, location.end)) continue;
     if (
       !isOutputLocationClaim(prose, location.start, location.end, {
         preserveBroadAssertions: preserveBroadRelativeOutputAssertions(candidate),

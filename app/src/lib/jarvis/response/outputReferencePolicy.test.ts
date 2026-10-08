@@ -73,3 +73,67 @@ describe('output location source operands', () => {
     expect(absolute.violationCodes).toEqual(['unverified_output_location:0']);
   });
 });
+
+describe('descriptive slash compounds are prose rather than output locations', () => {
+  it.each([
+    'Heavy export I/O may starve indexing while an archive is streamed.',
+    'Concurrent export I/O may still starve indexing or interactive work.',
+    'Publish inclusion/exclusion definitions before reviewing the release.',
+    'Describe input/output terminology and review the tradeoffs.',
+  ])('preserves a descriptive noun use exactly: %s', (text) => {
+    expect(assess(text)).toMatchObject({ text, violationCodes: [] });
+  });
+
+  it.each([
+    'Created I/O.',
+    'Saved inclusion/exclusion.',
+    'Published inclusion/exclusion definitions.',
+    'Produced inclusion/exclusion definitions.',
+    'I produced input/output terminology.',
+    'I/O was created.',
+    'inclusion/exclusion was saved.',
+    'Publish `inclusion/exclusion` definitions.',
+    'Publish "inclusion/exclusion" definitions.',
+    'Publish inclusion/exclusion.txt definitions.',
+    'Publish ./inclusion/exclusion definitions.',
+    'Publish /inclusion/exclusion definitions.',
+    'Publish inclusion\\exclusion definitions.',
+    'Publish reports/output definitions.',
+    'Publish the file inclusion/exclusion definitions.',
+    'Saved the report at inclusion/exclusion definitions.',
+    'Created reports/output.',
+  ])('retains unverified real-path and completed-output protection: %s', (text) => {
+    const result = assess(text);
+    expect(result.text).toContain('[unverified output location omitted]');
+    expect(result.violationCodes).toContain('unverified_output_location:0');
+  });
+
+  it.each(['public', 'private', 'restricted', 'secret'] as const)(
+    'retains existing %s source-reference permission semantics',
+    (sensitivity) => {
+      const text = 'Created C:\\workspace\\reports\\out.md.';
+      const result = enforceJarvisOutputReferencePolicy(tokenizeJarvisResponse(text), [
+        {
+          id: 'synthetic-output',
+          kind: 'artifact',
+          label: 'Synthetic output',
+          uri: 'C:\\workspace\\reports\\out.md',
+          accountId: 'synthetic-account',
+          trust: 'app_verified',
+          sensitivity,
+        },
+      ]);
+      const displayed = restoreJarvisStructuredRegions(
+        result.proseWithPlaceholders,
+        result.structuredRegions,
+      );
+      if (sensitivity === 'restricted' || sensitivity === 'secret') {
+        expect(displayed).toContain('[unverified output location omitted]');
+        expect(result.violationCodes).toContain('unverified_output_location:0');
+      } else {
+        expect(displayed).toBe(text);
+        expect(result.violationCodes).toEqual([]);
+      }
+    },
+  );
+});
