@@ -20,10 +20,17 @@ function requireVerifier() {
   return verifyPonytailUpstream;
 }
 
-function makeFixture({ includeUpstream = true, missing = [], changes = {}, gitMetadata } = {}) {
+function makeFixture({
+  includeUpstream = true,
+  missing = [],
+  changes = {},
+  gitMetadata,
+  repoRoot = path.resolve('fixture-repo'),
+  availableFallback = false,
+} = {}) {
   assert.ok(PONYTAIL_PIN, 'verifier module must export its pinned baseline');
-  const repoRoot = path.resolve('fixture-repo');
   const upstreamRoot = path.join(repoRoot, 'app', 'third_party', 'ponytail');
+  const fallbackRoot = path.resolve(repoRoot, '..', 'work', 'ponytail');
   const generated = 'fixture Ponytail instructions\n';
   const sourceText = {
     upstreamSkill: '# fixture skill\r\n',
@@ -94,6 +101,7 @@ function makeFixture({ includeUpstream = true, missing = [], changes = {}, gitMe
   };
   const files = new Map();
   const exists = new Set(includeUpstream ? [upstreamRoot] : []);
+  if (availableFallback) exists.add(fallbackRoot);
   if (includeUpstream && gitMetadata) exists.add(path.join(upstreamRoot, '.git'));
   for (const [key, value] of Object.entries(paths)) {
     if (missing.includes(key)) continue;
@@ -103,6 +111,11 @@ function makeFixture({ includeUpstream = true, missing = [], changes = {}, gitMe
       : path.join(repoRoot, key.slice('repo/'.length));
     files.set(fullPath, Buffer.from(changedValue, 'utf8'));
     exists.add(fullPath);
+    if (availableFallback && key.startsWith('upstream/')) {
+      const fallbackPath = path.join(fallbackRoot, key.slice('upstream/'.length));
+      files.set(fallbackPath, Buffer.from(changedValue, 'utf8'));
+      exists.add(fallbackPath);
+    }
   }
 
   const reads = [];
@@ -121,7 +134,7 @@ function makeFixture({ includeUpstream = true, missing = [], changes = {}, gitMe
       return result;
     },
   };
-  return { repoRoot, upstreamRoot, pin, io, reads, generated };
+  return { repoRoot, upstreamRoot, fallbackRoot, pin, io, reads, generated };
 }
 
 test('exports the offline Ponytail verifier API', () => {
@@ -137,7 +150,12 @@ test('normalizes Windows line endings before hashing text artifacts', () => {
 
 test('fails honestly when the vendored root is missing without falling back to work checkouts', () => {
   const verify = requireVerifier();
-  const fixture = makeFixture({ includeUpstream: false });
+  const fixture = makeFixture({
+    includeUpstream: false,
+    repoRoot: path.resolve('fixture-work-checkout-repo'),
+    availableFallback: true,
+  });
+  assert.equal(fixture.io.exists(fixture.fallbackRoot), true);
   let builderCalled = false;
   const report = verify({
     repoRoot: fixture.repoRoot,
@@ -155,7 +173,29 @@ test('fails honestly when the vendored root is missing without falling back to w
   assert.equal(report.checks.find((check) => check.id === 'upstream-root').status, 'fail');
   assert.equal(report.checks.find((check) => check.id === 'installed.skill').status, 'pass');
   assert.equal(builderCalled, false);
-  assert.ok(fixture.reads.every((candidate) => !candidate.includes('work')));
+  const assertInstalledReads = (reads) =>
+    assert.deepEqual(
+      reads
+        .map((candidate) => path.relative(fixture.repoRoot, candidate).split(path.sep).join('/'))
+        .sort(),
+      [
+        'app/.jarvis/skills/ponytail/SKILL.md',
+        'app/.jarvis/skills/ponytail/LICENSE.txt',
+        'app/.jarvis/skills/ponytail/full-instructions.md',
+        'app/.jarvis/skills/ponytail/UPSTREAM.md',
+        'app/.jarvis/skills/ponytail-audit/SKILL.md',
+        'app/.jarvis/skills/ponytail-audit/UPSTREAM.md',
+      ].sort(),
+    );
+  assertInstalledReads(fixture.reads);
+  for (const forbidden of [
+    path.join(fixture.fallbackRoot, 'skills', 'ponytail', 'SKILL.md'),
+    path.join(fixture.upstreamRoot, 'skills', 'ponytail', 'SKILL.md'),
+  ]) {
+    assert.throws(() => assertInstalledReads([...fixture.reads, forbidden]), {
+      code: 'ERR_ASSERTION',
+    });
+  }
 });
 
 test('passes only when pinned upstream files, installed artifacts, provenance, and builder output agree', () => {

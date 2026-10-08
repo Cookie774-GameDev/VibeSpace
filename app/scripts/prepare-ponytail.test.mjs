@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -213,6 +214,51 @@ test('check-only refuses missing or stale output without writing it', () => {
       /Generated Ponytail artifact is stale/u,
     );
     assert.equal(readFileSync(target, 'utf8'), 'stale');
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('a CRLF checkout keeps the generated Ponytail module canonical for strict check-only', async () => {
+  const fixture = createFixture();
+  try {
+    const relativeTarget = 'app/src/lib/ai/ponytail.generated.ts';
+    const target = path.join(fixture.root, relativeTarget);
+    const artifact = createPonytailArtifact({
+      upstreamRoot: fixture.upstreamRoot,
+      pin: fixture.pin,
+      runBuilder: () => fixture.fullInstructions,
+    });
+    const expectedContents = await renderPonytailModule(artifact);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, expectedContents, 'utf8');
+    writeFileSync(
+      path.join(fixture.root, '.gitattributes'),
+      readFileSync(new URL('../../.gitattributes', import.meta.url)),
+    );
+    const unrelatedContents = 'unrelated first line\nunrelated second line\n';
+    writeFileSync(path.join(fixture.root, 'unrelated.txt'), unrelatedContents, 'utf8');
+    const git = (...args) =>
+      execFileSync(
+        'git',
+        ['-C', fixture.root, '-c', 'core.autocrlf=true', '-c', 'core.safecrlf=false', ...args],
+        { stdio: 'pipe' },
+      );
+    git('init', '--quiet');
+    git('add', '--', '.gitattributes', relativeTarget, 'unrelated.txt');
+    const checkout = path.join(fixture.root, 'checkout');
+    git('checkout-index', '--all', `--prefix=${checkout.replaceAll('\\', '/')}/`);
+    assert.equal(
+      readFileSync(path.join(checkout, 'unrelated.txt'), 'utf8'),
+      unrelatedContents.replaceAll('\n', '\r\n'),
+    );
+    const checkedOutTarget = path.join(checkout, relativeTarget);
+    assert.equal(readFileSync(checkedOutTarget, 'utf8'), expectedContents);
+    assert.equal(
+      writePonytailModule({ target: checkedOutTarget, expectedContents, checkOnly: true }).status,
+      'checked',
+    );
+    assert.equal(readFileSync(checkedOutTarget, 'utf8'), expectedContents);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

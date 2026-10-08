@@ -1,2 +1,3 @@
 /app/src-tauri/vendor/espeak-rs-sys-0.2.0/** -text
 /docs/oss/licenses/GPL-3.0-or-later-espeak-ng.txt -text
+/app/src/lib/ai/ponytail.generated.ts text eol=lf
