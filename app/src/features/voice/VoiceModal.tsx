@@ -852,7 +852,12 @@ function VoiceModalPanel() {
         listeningArmedRef.current = true;
         restartListening();
       } else {
-        useVoiceStore.getState().setState('idle');
+        // Main acceptance releases turn admission, not playback. Streaming may
+        // already own the flush callback; keep Send visibly unavailable until
+        // the existing speech-end or explicit Stop path releases that state.
+        useVoiceStore.getState().setState(
+          speakingRef.current || streamingReplyRef.current ? 'speaking' : 'idle',
+        );
       }
     };
 

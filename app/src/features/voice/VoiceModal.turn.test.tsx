@@ -14,6 +14,7 @@ import * as instantCommandExecution from '@/features/instant-command/execute';
 import { createInstantCommandReceipt } from '@/features/instant-command/receipt';
 import {
   SPEECH_SYNTHESIS_START_EVENT,
+  SPEECH_SYNTHESIS_END_EVENT,
   STREAMING_VOICE_END_EVENT,
   STREAMING_VOICE_START_EVENT,
 } from './speechSynthesis';
@@ -359,6 +360,82 @@ describe('VoiceModal hands-free turn-taking', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+
+  it.each([
+    ['streaming', STREAMING_VOICE_START_EVENT, STREAMING_VOICE_END_EVENT],
+    ['speech', SPEECH_SYNTHESIS_START_EVENT, SPEECH_SYNTHESIS_END_EVENT],
+  ])('READINESS02 retains %s readiness if playback starts before Main acceptance', async (label, startEvent, endEvent) => {
+    const original = vi.mocked(dispatchVoiceMainRequest).getMockImplementation()!;
+    vi.mocked(dispatchVoiceMainRequest).mockImplementationOnce(async (detail) => {
+      window.dispatchEvent(new CustomEvent(startEvent));
+      return { status: 'accepted' as const, chatId: detail.chatId, cancellationKey: String(detail.cancellationKey) };
+    });
+    useUIStore.getState().setVoiceModalOpen(true, 'text');
+    try {
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      const input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+      const submit = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+      fireEvent.change(input, { target: { value: `READINESS02 first ${label} task` } });
+      fireEvent.click(submit);
+      await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce());
+      await waitFor(() => expect(input).toHaveProperty('value', ''));
+      await act(async () => { await Promise.resolve(); });
+      const nextText = `"open settings" ${label} readiness recovery`;
+      fireEvent.change(input, { target: { value: nextText } });
+      expect.soft(useVoiceStore.getState().state).toBe('speaking');
+      expect.soft(submit.disabled).toBe(true);
+      fireEvent.click(submit);
+      expect.soft(dispatchVoiceMainRequest).toHaveBeenCalledOnce();
+      expect.soft(input).toHaveProperty('value', nextText);
+      act(() => window.dispatchEvent(new CustomEvent(endEvent)));
+      await waitFor(() => expect(useVoiceStore.getState().state).toBe('idle'), { timeout: VOICE_REPLY_COOLDOWN_MS + 1_000 });
+      expect(submit.disabled).toBe(false);
+      fireEvent.click(submit);
+      await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledTimes(2));
+      expect(VoiceService.startListening).not.toHaveBeenCalled();
+    } finally { vi.mocked(dispatchVoiceMainRequest).mockImplementation(original); }
+  });
+
+  it.each(['nonstreaming', 'stop', 'close/reopen'])(
+    'READINESS02 preserves subsequent typed admission after %s', async (mode) => {
+      useUIStore.getState().setVoiceModalOpen(true, 'text');
+      render(<VoiceModal />);
+      await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+      let input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+      fireEvent.change(input, { target: { value: `READINESS02 first ${mode} control` } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledOnce());
+      await waitFor(() => expect(input).toHaveProperty('value', ''));
+      await act(async () => { await Promise.resolve(); });
+      if (mode !== 'nonstreaming') {
+        act(() => window.dispatchEvent(new CustomEvent(STREAMING_VOICE_START_EVENT)));
+        expect(useVoiceStore.getState().state).toBe('speaking');
+        if (mode === 'stop') {
+          // The production streaming session emits end when its active playback
+          // is halted. Keep that real event contract at this injected boundary.
+          routerMocks.stopCurrentVoiceResponse.mockImplementationOnce(async () => {
+            window.dispatchEvent(new CustomEvent(STREAMING_VOICE_END_EVENT));
+          });
+          fireEvent.click(screen.getByRole('button', { name: 'Stop reply' }));
+          expect(routerMocks.stopCurrentVoiceResponse).toHaveBeenCalledOnce();
+        } else {
+          fireEvent.click(screen.getByRole('button', { name: 'Close typed Jarvis voice' }));
+          expect(useUIStore.getState().voiceModalOpen).toBe(false);
+          act(() => useUIStore.getState().setVoiceModalOpen(true, 'text'));
+          await waitFor(() => expect(useVoiceStore.getState().session?.chatId).toBe('chat_voice'));
+          input = screen.getByRole('textbox', { name: 'Type to Jarvis voice' });
+        }
+      }
+      expect(useVoiceStore.getState().state).toBe('idle');
+      fireEvent.change(input, { target: { value: `READINESS02 next ${mode} control` } });
+      const submit = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+      expect(submit.disabled).toBe(false);
+      fireEvent.click(submit);
+      await waitFor(() => expect(dispatchVoiceMainRequest).toHaveBeenCalledTimes(2));
+      expect(VoiceService.startListening).not.toHaveBeenCalled();
+    },
+  );
 
   it('LOCAL01 typed open/close does not invoke command authority, network or a model', async () => {
     const execute = vi.spyOn(instantCommandExecution, 'executeInstantCommandWithReceipt');
