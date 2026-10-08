@@ -70,7 +70,8 @@ describe('Context Map focused user-testing repairs', () => {
 
   it('populates the physical search index before presenting a new local map as ready', () => {
     const source = readFileSync(resolve('src/features/context/ContextPage.tsx'), 'utf8');
-    const saveIndex = source.indexOf('const persisted = await savePersistedContextTree(generated)');
+    const createIndex = source.indexOf('const makeSkillTree = React.useCallback(');
+    const saveIndex = source.indexOf('const persisted = await savePersistedContextTree(generated, {', createIndex);
     const populateIndex = source.indexOf('await populatePersistedCreatedContextMap({', saveIndex);
     const applyIndex = source.indexOf(
       'if (!applyPersistenceState(completedPersistence)) return',
@@ -81,8 +82,12 @@ describe('Context Map focused user-testing repairs', () => {
     expect(source).toContain(
       "import { createContextSearchIndexPopulationPort } from './contextSearchIndexing';",
     );
-    expect(saveIndex).toBeGreaterThan(-1);
+    expect(createIndex).toBeGreaterThan(-1);
+    expect(saveIndex).toBeGreaterThan(createIndex);
     expect(populateIndex).toBeGreaterThan(saveIndex);
+    expect(source.slice(saveIndex, populateIndex)).toContain(
+      "sourceStatus: 'indexing', signal: controller.signal",
+    );
     expect(applyIndex).toBeGreaterThan(populateIndex);
     expect(readyIndex).toBeGreaterThan(applyIndex);
     expect(source).toContain('populatePersistedCreatedContextMap({');
