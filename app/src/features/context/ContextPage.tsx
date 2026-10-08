@@ -91,6 +91,7 @@ import {
 import { populatePersistedCreatedContextMap, reconcilePendingContextSearch } from './contextMapCreationLifecycle';
 import { subscribeContextNavigation } from './contextNavigation';
 import type { ContextRecoverySummary } from './contextRecovery';
+import { ContextRecoveryNotice } from './ContextRecoveryNotice';
 import { NightlySecondBrainPanel } from './NightlySecondBrainPanel';
 import { ContextAutoUpdateCheckbox } from './ContextAutoUpdateCheckbox';
 import { isContextAutoUpdateRunning } from './contextAutoUpdate';
@@ -701,7 +702,14 @@ export function ContextPage() {
     sourcePickerGenerationRef.current += 1;
   }, []);
   const [maps, setMaps] = React.useState<ContextMapRecord[]>([]);
-  const [recovery, setRecovery] = React.useState<ContextRecoverySummary | null>(null);
+  const [recovery, setRecovery] = React.useState<{
+    accountId: string;
+    workspaceId: typeof workspaceId;
+    projectId: string | null;
+    summary: ContextRecoverySummary;
+  } | null>(null);
+  const scopedRecovery = recovery?.accountId === accountId && recovery.workspaceId === workspaceId &&
+    recovery.projectId === projectId ? recovery.summary : null;
   const [selectedMapId, setSelectedMapId] = React.useState<string | null>(null);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [generating, setGenerating] = React.useState(false);
@@ -778,12 +786,14 @@ export function ContextPage() {
         return false;
       }
       setMaps([...state.maps]);
-      setRecovery(state.recovery);
+      setRecovery(state.recovery ? {
+        accountId: state.accountId, workspaceId, projectId: state.projectId, summary: state.recovery,
+      } : null);
       setSelectedMapId(state.selectedMapId);
       setSelectedId((current) => current ?? (state.selectedMapId ? PROJECT_ROOT_NODE_ID : null));
       return true;
     },
-    [],
+    [workspaceId],
   );
 
   React.useEffect(() => {
@@ -2699,6 +2709,8 @@ export function ContextPage() {
     [openFolderPicker],
   );
 
+  const recoveryNotice = scopedRecovery ? <ContextRecoveryNotice recovery={scopedRecovery} /> : null;
+
   if (preparingMapId && SIYUAN_CONTEXT_VAULT_ENABLED) {
     const preparingMap = maps.find((map) => map.id === preparingMapId);
     return (
@@ -2715,6 +2727,7 @@ export function ContextPage() {
             {preparingMap?.name ?? 'SiYuan Context Map'}
           </h1>
         </header>
+        {recoveryNotice ? <div className="shrink-0 p-3">{recoveryNotice}</div> : null}
         <div className="min-h-0 flex-1">
           <SiyuanVaultLoading stage="checking" />
         </div>
@@ -2774,6 +2787,7 @@ export function ContextPage() {
             </div>
           ) : null}
         </header>
+        {recoveryNotice ? <div className="shrink-0 p-3">{recoveryNotice}</div> : null}
         <div className="relative min-h-0 flex-1">
           <SiyuanVaultSurface
             projectId={projectId}
@@ -2793,8 +2807,10 @@ export function ContextPage() {
         data-monochrome-route="context"
         data-sakura-route="context"
         data-context-focused-map
-        className="h-full min-h-0 w-full overflow-hidden bg-background p-3"
+        className="flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden bg-background p-3"
       >
+        {recoveryNotice}
+        <div className="min-h-0 flex-1">
         <ContextMapWorkspace
           accountId={accountId}
           tree={tree}
@@ -2815,6 +2831,7 @@ export function ContextPage() {
           focused
           onExitFocus={closeFocusedMap}
         />
+        </div>
       </div>
     );
   }
@@ -2864,6 +2881,7 @@ export function ContextPage() {
             </Button>
           </div>
 
+          {recoveryNotice}
           <ContextWorkspaceNavigation active={workspaceSection} onSelect={selectWorkspaceSection} />
           {selectedMap ? <ContextAutoUpdateCheckbox accountId={accountId} workspaceId={workspaceId ? String(workspaceId) : null} map={selectedMap} /> : null}
 

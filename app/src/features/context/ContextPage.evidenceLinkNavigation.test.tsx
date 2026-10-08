@@ -16,6 +16,7 @@ import { canonicalContextUri } from '@/lib/harness/toolGatewayCitations';
 import type { Part } from '@/types/chat';
 const io = vi.hoisted(() => ({
   state: null as ContextPersistenceState | null,
+  persistenceGate: undefined as Promise<void> | undefined,
   realIntegration: null as ReturnType<typeof import('./siyuanContextMapIntegration').createSiyuanContextMapIntegration> | null,
   realJobs: false,
   populate: vi.fn(),
@@ -76,7 +77,11 @@ vi.mock('./siyuan/siyuanIndexJobStore', async (original) => {
 vi.mock('./contextSearchIndexing', () => ({createContextSearchIndexPopulationPort:()=>({repairEmptyMap:io.repair,populateCreatedMap:io.populate})}));
 vi.mock('./contextPersistence', async (original) => ({
   ...(await original<typeof import('./contextPersistence')>()),
-  ensureContextPersistence: () => io.service!.load('page-account', 'page-project'),
+  ensureContextPersistence: () => {
+    const gate = io.persistenceGate;
+    return gate ? gate.then(() => io.service!.load('page-account', 'page-project'))
+      : io.service!.load('page-account', 'page-project');
+  },
   getActiveContextPersistenceState: () => io.state,
   loadPersistedContextMaps: async (projectId:string) => (await io.service!.load('page-account',projectId)).maps,
   selectPersistedContextFile: (projectId:string,path:string,target?:{mapId:string;entityId:string}) => io.service!.selectFile('page-account',projectId,path,target),
@@ -150,6 +155,7 @@ function Shell() {
 beforeEach(async () => {
   localStorage.clear();
   io.state = null;
+  io.persistenceGate = undefined;
   io.realIntegration = null;io.realJobs = false;io.populate.mockReset();io.populate.mockResolvedValue({status:'ready',documentCount:1,bodyBytes:48});
   io.heldSelection = undefined;
   io.selectingA = false;
@@ -1061,4 +1067,105 @@ it('C07 does not adopt a held snapshot after workspace ABA before the current ow
     await act(async()=>{fresh.resolve();});
     await screen.findByRole('heading',{name:'linked-file.txt'});
   } finally {old.resolve();fresh.resolve();}
+});
+
+it('C09 displays the scoped recovery notice when real persistence quarantines an incomplete graph', async () => {
+  const ownedEntity = (await database.context_entities.where('mapId').equals('page-map-A').toArray())[0]!;
+  await database.context_entities.update(ownedEntity.id, { summary: 'C09_QUARANTINED_PAYLOAD_SENTINEL' });
+  await database.context_sources.where('mapId').equals('page-map-A').delete();
+  const state = await io.service!.load(scope.accountId, scope.projectId);
+  expect(state.maps.map(map => map.id)).toEqual(['page-map-B']);
+  expect(state.recovery).toMatchObject({ issueCount: 1 });
+  expect(state.recovery!.options.map(option => option.id)).toEqual(['retry', 'restore_backup', 'export_then_discard']);
+  const quarantined = await database.context_quarantine.toArray();
+  expect(quarantined).toHaveLength(1);
+  expect(quarantined[0]).toMatchObject({ accountId: scope.accountId, mapId: 'page-map-A' });
+  const preservedPayload = structuredClone(quarantined[0]!.raw);
+  render(<ContextPage />);
+  await screen.findByRole('button', { name: /^Map B/ });
+  console.log('C09_RECOVERY_JOIN', JSON.stringify({
+    account: state.accountId, project: state.projectId, issueCount: state.recovery?.issueCount,
+    mapIds: state.maps.map(map => map.id), noticeCount: screen.queryAllByRole('status', { name: 'Context recovery options' }).length,
+  }));
+  expect(screen.queryByText('C09_QUARANTINED_PAYLOAD_SENTINEL')).toBeNull();
+  expect((await database.context_quarantine.toArray())[0]!.raw).toEqual(preservedPayload);
+  expect(await screen.findByRole('status', { name: 'Context recovery options' })).toBeTruthy();
+});
+
+
+async function quarantineC09Map() {
+  await database.context_sources.where('mapId').equals('page-map-A').delete();
+  const state = await io.service!.load(scope.accountId, scope.projectId);
+  expect(state.recovery?.issueCount).toBe(1);
+  return state;
+}
+
+it('C09 keeps a healthy page free of recovery warnings', async () => {
+  const state = await io.service!.load(scope.accountId, scope.projectId);
+  expect(state.recovery).toBeNull();
+  render(<ContextPage />);
+  await screen.findByRole('button', { name: /^Map B/ });
+  expect(screen.queryByRole('status', { name: 'Context recovery options' })).toBeNull();
+});
+
+it('C09 keeps the scoped informational notice visible when focusing a healthy neighbor', async () => {
+  await quarantineC09Map();
+  render(<ContextPage />);
+  await screen.findByRole('status', { name: 'Context recovery options' });
+  fireEvent.click(await screen.findByRole('button', { name: /^Map B/ }));
+  await screen.findByRole('button', { name: 'Back to Context Maps' });
+  expect(screen.getAllByRole('status', { name: 'Context recovery options' })).toHaveLength(1);
+  expect(screen.queryByRole('button', { name: /Restore backup|Retry recovery|Export then discard/ })).toBeNull();
+});
+
+it.each(['account', 'project', 'workspace'] as const)('C09 hides prior recovery immediately across %s ownership and a held late read, including return ABA', async dimension => {
+  await quarantineC09Map();
+  const commits: Array<{ account: string | null; workspace: unknown; project: unknown; notices: number }> = [];
+  render(<React.Profiler id="c09-owner" onRender={() => {
+    const state = useAuthStore.getState();
+    commits.push({ account: state.localUserId, workspace: state.workspaceId, project: state.projectId,
+      notices: screen.queryAllByRole('status', { name: 'Context recovery options' }).length });
+  }}><ContextPage /></React.Profiler>);
+  await screen.findByRole('status', { name: 'Context recovery options' });
+  let release!: () => void;
+  io.persistenceGate = new Promise<void>(resolve => { release = resolve; });
+  await act(async () => {
+    if (dimension === 'account') useAuthStore.setState({ localUserId: 'c09-foreign-account' });
+    if (dimension === 'project') useAuthStore.setState({ projectId: 'c09-foreign-project' as ProjectId });
+    if (dimension === 'workspace') useAuthStore.setState({ workspaceId: 'c09-foreign-workspace' as WorkspaceId, projectId: 'c09-foreign-project' as ProjectId });
+  });
+  expect(screen.queryByRole('status', { name: 'Context recovery options' })).toBeNull();
+  await act(async () => { release(); await new Promise(resolve => setTimeout(resolve, 10)); });
+  expect(screen.queryByRole('status', { name: 'Context recovery options' })).toBeNull();
+  const foreign = commits.filter(commit => commit.account !== scope.accountId || commit.workspace !== scope.workspaceId || commit.project !== scope.projectId);
+  expect(foreign.length).toBeGreaterThan(0);
+  expect(foreign.every(commit => commit.notices === 0)).toBe(true);
+  io.persistenceGate = undefined;
+  await act(async () => { useAuthStore.setState({ localUserId: scope.accountId, workspaceId: scope.workspaceId as WorkspaceId, projectId: scope.projectId as ProjectId }); });
+  await screen.findByRole('status', { name: 'Context recovery options' });
+  expect((await database.context_quarantine.toArray())).toHaveLength(1);
+});
+
+
+it('C09 hides an old summary on a workspace-only transition before the next scoped read completes', async () => {
+  await quarantineC09Map();
+  const commits: Array<{ workspace: unknown; notices: number }> = [];
+  render(<React.Profiler id="c09-workspace" onRender={() => {
+    commits.push({ workspace: useAuthStore.getState().workspaceId,
+      notices: screen.queryAllByRole('status', { name: 'Context recovery options' }).length });
+  }}><ContextPage /></React.Profiler>);
+  await screen.findByRole('status', { name: 'Context recovery options' });
+  let release!: () => void;
+  io.persistenceGate = new Promise<void>(resolve => { release = resolve; });
+  await act(async () => { useAuthStore.setState({ workspaceId: 'c09-other-workspace' as WorkspaceId }); });
+  expect(screen.queryByRole('status', { name: 'Context recovery options' })).toBeNull();
+  const foreign = commits.filter(commit => commit.workspace !== scope.workspaceId);
+  expect(foreign.length).toBeGreaterThan(0);
+  expect(foreign.every(commit => commit.notices === 0)).toBe(true);
+  await act(async () => {
+    useAuthStore.setState({ workspaceId: scope.workspaceId as WorkspaceId });
+    io.persistenceGate = undefined;
+    release();
+  });
+  await screen.findByRole('status', { name: 'Context recovery options' });
 });

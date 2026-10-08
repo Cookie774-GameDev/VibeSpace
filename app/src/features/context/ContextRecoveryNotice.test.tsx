@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ContextRecoveryNotice } from './ContextRecoveryNotice';
 
 describe('ContextRecoveryNotice', () => {
-  it('shows every safe recovery choice without exposing quarantined payloads', () => {
+  it('reports preserved recovery options without claiming available actions or exposing payloads', () => {
     render(
       <ContextRecoveryNotice
         recovery={{
@@ -30,6 +30,10 @@ describe('ContextRecoveryNotice', () => {
     );
 
     expect(screen.getByRole('status').textContent).toMatch(/2 records need recovery/i);
+    expect(screen.getByText('Context records need recovery')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('Recovery actions are not available in this view.');
+    expect(screen.queryAllByRole('button')).toEqual([]);
+    expect(screen.getByRole('list', { name: 'Recorded recovery options' })).toBeTruthy();
     expect(screen.getByText('Retry recovery')).toBeTruthy();
     expect(screen.getByText('Restore backup')).toBeTruthy();
     expect(screen.getByText('Export then discard')).toBeTruthy();
