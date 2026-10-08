@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { JARVIS_ALL_ABOUT_ME_SOURCE_ID } from './promptCompiler';
+import { JARVIS_ALL_ABOUT_ME_SOURCE_ID, compileJarvisPrompt } from './promptCompiler';
+import { createHash } from 'node:crypto';
+import { buildJarvisContextPack } from './contextPack';
+import { createJarvisRequestEnvelope, type JarvisRequestInput } from './requestEnvelope';
+import { OpenCodeSessionPool } from '@/lib/harness/OpenCodeSessionPool';
+import { processJarvisResponse } from './response/pipeline';
+import { projectJarvisEnvelopeToMessageParts } from './kernelMessageProjection';
 import {
   buildJarvisRuntimeContextCandidates,
   type JarvisRuntimeContextBlockKey,
@@ -264,4 +270,198 @@ describe('buildJarvisRuntimeContextCandidates', () => {
 
     expect(candidates).toEqual([]);
   });
+});
+
+const scope = { accountId: 'synthetic-account', workspaceId: 'synthetic-workspace',
+  projectId: 'synthetic-project', workingDirectory: 'C:/synthetic-project' };
+const firstRequest = 'jreq_11111111-1111-4111-8111-111111111111';
+const nextRequest = 'jreq_22222222-2222-4222-8222-222222222222';
+
+async function compile(requestId: string, change: { body?: string; instruction?: string; model?: string; mode?: 'ask' | 'plan' } = {}) {
+  const candidates = buildJarvisRuntimeContextCandidates({
+    accountId: scope.accountId, projectId: scope.projectId, requestId, observedAt: 100,
+    blocks: [{ key: 'project', text: change.body ?? 'Synthetic project keeps its approved read-only scope.' }],
+  });
+  const context = await buildJarvisContextPack({ accountId: scope.accountId, candidates, maxChars: 16384 });
+  expect(context.items).toHaveLength(1);
+  expect(context.exclusions).toHaveLength(0);
+  const input: JarvisRequestInput = {
+    attempt: { kind: 'initial', requestId, runId: 'synthetic-run', attemptNumber: 1 },
+    accountId: scope.accountId, workspaceId: scope.workspaceId, projectId: scope.projectId,
+    chatId: 'synthetic-chat', agent: { id: 'synthetic-jarvis', slug: 'jarvis', builtin: true },
+    surface: 'typed_chat', interactionMode: change.mode ?? 'ask', responseModeHint: 'direct_answer',
+    identity: { identityVersion: 1, coreHash: 'synthetic-core', responseContractHash: 'synthetic-contract' },
+    profile: { profileId: 'synthetic-profile', revisionId: 'synthetic-revision',
+      customInstructions: change.instruction ?? 'Explain using the admitted evidence.', memoryScope: 'profile' },
+    model: { connectionId: 'synthetic-connection', providerId: 'synthetic-provider',
+      modelId: change.model ?? 'synthetic-model', connectionMode: 'native-api',
+      capabilities: { tools: true, vision: false }, effectiveTemperature: 0.2, capturedAt: 101 },
+    capabilities: { capturedAt: 100, tools: [], plugins: [], mcps: [], terminals: [], agents: [],
+      entitlements: { source: 'server', planId: 'synthetic-plan', capabilities: [], verifiedAt: 98, expiresAt: 198 } },
+    context, outputContract: { preserveStructuredBlocks: true, allowActionBlocks: true,
+      allowPlanBlocks: true, allowQuestionBlocks: true, allowPermissionBlocks: true,
+      voiceDelivery: 'validated_stream' },
+    userText: 'Explain the current admitted project context.', messageHistory: [], createdAt: 102,
+  };
+  const envelope = await createJarvisRequestEnvelope(input);
+  const compiled = compileJarvisPrompt(envelope);
+  const fingerprint = `sha256:${createHash('sha256').update(compiled.systemText.trim(), 'utf8').digest('hex')}`;
+  expect(fingerprint).toBe(`sha256:${compiled.promptHash}`);
+  return { compiled, fingerprint, context, envelope };
+}
+
+function poolHarness() {
+  let created = 0;
+  const client = { createSession: async () => ({ id: `synthetic-session-${++created}` }),
+    abort: async () => undefined };
+  const pool = new OpenCodeSessionPool({ currentGeneration: () => 'synthetic-generation',
+    start: async () => ({ generation: 'synthetic-generation', dispose: async () => undefined }) },
+    { connect: async () => client });
+  return { pool, created: () => created };
+}
+
+describe('request-only context identity versus OpenCode session continuity', () => {
+  it('control: equal envelopes keep their fingerprint and one warm session', async () => {
+    const a = await compile(firstRequest), b = await compile(firstRequest);
+    expect(a.fingerprint).toBe(b.fingerprint);
+    const { pool, created } = poolHarness();
+    try {
+      const first = await pool.sessionForChat(scope, 'synthetic-chat', undefined, a.fingerprint);
+      const next = await pool.sessionForChat(scope, 'synthetic-chat', undefined, b.fingerprint);
+      expect(next.sessionId).toBe(first.sessionId);
+      expect(next.origin).toBe('warm');
+      expect(created()).toBe(1);
+    } finally { await pool.disposeAll(); }
+  });
+
+  it('keeps rendered source identity stable across request IDs while request envelopes remain distinct', async () => {
+    const a = await compile(firstRequest), b = await compile(nextRequest);
+    expect(a.envelope.requestId).not.toBe(b.envelope.requestId);
+    expect(a.context.items[0]!.excerpt).toBe(b.context.items[0]!.excerpt);
+    expect(a.context.items[0]!.source.id).toBe(b.context.items[0]!.source.id);
+    expect(a.compiled.systemText).toBe(b.compiled.systemText);
+    expect(a.compiled.layers.map(layer => layer.contentHash)).toEqual(b.compiled.layers.map(layer => layer.contentHash));
+  });
+
+  it('unchanged authorized context with a new request identity reuses its session', async () => {
+    const a = await compile(firstRequest), b = await compile(nextRequest);
+    const { pool, created } = poolHarness();
+    try {
+      const first = await pool.sessionForChat(scope, 'synthetic-chat', undefined, a.fingerprint);
+      const next = await pool.sessionForChat(scope, 'synthetic-chat', undefined, b.fingerprint);
+      expect(next.sessionId).toBe(first.sessionId);
+      expect(next.origin).toBe('warm');
+      expect(created()).toBe(1);
+    } finally { await pool.disposeAll(); }
+  });
+
+  it.each([
+    ['context body', { body: 'The synthetic authorized context has actually changed.' }],
+    ['instructions', { instruction: 'Use a different genuine approved instruction.' }],
+    ['selected model', { model: 'synthetic-model-two' }],
+    ['authority mode', { mode: 'plan' }],
+  ] as const)('control: genuine %s change still rotates', async (_name, change) => {
+    const a = await compile(firstRequest), b = await compile(firstRequest, change);
+    expect(a.fingerprint).not.toBe(b.fingerprint);
+    const { pool, created } = poolHarness();
+    try {
+      const first = await pool.sessionForChat(scope, 'synthetic-chat', undefined, a.fingerprint);
+      const next = await pool.sessionForChat(scope, 'synthetic-chat', undefined, b.fingerprint);
+      expect(next.sessionId).not.toBe(first.sessionId);
+      expect(created()).toBe(2);
+    } finally { await pool.disposeAll(); }
+  });
+});
+
+
+describe('ordinary context source identity scope and consumers', () => {
+  const input = { accountId: 'owner-a', projectId: 'project-a', requestId: 'first-request',
+    observedAt: 100, blocks: [{ key: 'project' as const, text: 'Exact synthetic project body.' }] };
+
+  it('retains current observation metadata while semantic IDs ignore request/time changes', () => {
+    const a = buildJarvisRuntimeContextCandidates(input)[0]!;
+    const b = buildJarvisRuntimeContextCandidates({ ...input, requestId: 'next-request', observedAt: 200 })[0]!;
+    expect(a.source.id).toBe(b.source.id);
+    expect(a.source.observedAt).toBe(100);
+    expect(b.source.observedAt).toBe(200);
+    expect(b.excerpt).toBe(input.blocks[0]!.text);
+    expect(b.source.id).toMatch(/^jsource_runtime_project_[a-f0-9]{64}$/u);
+    expect(b.source.id).not.toContain(input.accountId);
+    expect(b.source.id).not.toContain(input.projectId);
+    expect(b.source.id).not.toContain(input.blocks[0]!.text);
+    expect(b.source.uri).toBeUndefined();
+  });
+
+  it('binds IDs to exact account, project, block semantics and body, including whitespace', () => {
+    const id = (value: Parameters<typeof buildJarvisRuntimeContextCandidates>[0]) =>
+      buildJarvisRuntimeContextCandidates(value)[0]!.source.id;
+    const ids = [id(input), id({ ...input, accountId: 'owner-b' }),
+      id({ ...input, projectId: 'project-b' }), id({ ...input, projectId: undefined }),
+      id({ ...input, blocks: [{ key: 'project', text: input.blocks[0]!.text + ' ' }] }),
+      id({ ...input, blocks: [{ key: 'plugin_context', text: input.blocks[0]!.text }] })];
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('retains distinct same-key bodies in conflicts and message source projection', async () => {
+    const candidates = buildJarvisRuntimeContextCandidates({ ...input, blocks: [
+      { key: 'project', text: 'Synthetic body A.' }, { key: 'project', text: 'Synthetic body B.' },
+    ] });
+    expect(candidates[0]!.source.id).not.toBe(candidates[1]!.source.id);
+    const pack = await buildJarvisContextPack({ accountId: input.accountId, maxChars: 1000,
+      candidates: candidates.map(candidate => ({ ...candidate, conflict: { groupId: 'synthetic-conflict' } })) });
+    expect(pack.items).toHaveLength(2);
+    for (const item of pack.items) {
+      expect(item.conflict).toMatchObject({ status: 'unresolved', groupId: 'synthetic-conflict' });
+      expect(new Set(item.conflict!.sourceIds)).toEqual(new Set(candidates.map(candidate => candidate.source.id)));
+    }
+    const current = await compile(nextRequest);
+    const envelope = await createJarvisRequestEnvelope({ ...current.envelope,
+      attempt: { kind: 'initial', requestId: nextRequest, runId: 'consumer-run', attemptNumber: 1 },
+      context: pack, accountId: input.accountId, projectId: input.projectId });
+    const response = await processJarvisResponse({ text: 'The supplied project descriptions differ.',
+      provider: envelope.model, completedAt: 103,
+      verifiedFacts: { modelState: 'authenticated', plugins: [], mcps: [] } }, envelope,
+      { repair: async () => { throw new Error('Synthetic response must not need repair'); } });
+    expect(response.sourceRefs).toEqual(pack.items.map(item => item.source));
+    expect(response.sourceRefs.every(source => source.accountId === envelope.accountId &&
+      source.projectId === envelope.projectId)).toBe(true);
+    const projected = projectJarvisEnvelopeToMessageParts({ response, artifacts: [] });
+    const refs = projected.filter(part => part.kind === 'jarvis_source_ref');
+    expect(refs).toHaveLength(2);
+    expect(new Set(refs.map(part => part.source.id))).toEqual(new Set(candidates.map(candidate => candidate.source.id)));
+  });
+
+  it('does not admit a foreign account just because content is identical', async () => {
+    const foreign = buildJarvisRuntimeContextCandidates({ ...input, accountId: 'foreign-owner' });
+    const pack = await buildJarvisContextPack({ accountId: input.accountId, candidates: foreign, maxChars: 1000 });
+    expect(pack.items).toEqual([]);
+    expect(pack.exclusions).toEqual([{ source: foreign[0]!.source, reason: 'account_mismatch' }]);
+  });
+
+  it('keeps the All About Me special ID and exact bounded retrieved references unchanged', () => {
+    const pointer = { id: 'jrepo_0123456789abcdef', label: 'Fixture source', uri: 'src/fixture.ts',
+      observedAt: 90, contentHash: 'a'.repeat(64) };
+    const blocks = [{ key: 'all_about_me' as const, text: 'Synthetic approved profile.' },
+      { key: 'repository_context' as const, text: 'const fixture = true;', source: pointer }];
+    const a = buildJarvisRuntimeContextCandidates({ ...input, blocks });
+    const b = buildJarvisRuntimeContextCandidates({ ...input, requestId: 'different-request', observedAt: 999, blocks });
+    expect(a[0]!.source.id).toBe(JARVIS_ALL_ABOUT_ME_SOURCE_ID);
+    expect(b[0]!.source.id).toBe(JARVIS_ALL_ABOUT_ME_SOURCE_ID);
+    expect(a[1]!.source).toEqual(b[1]!.source);
+    expect(a[1]!.source).toMatchObject(pointer);
+    expect(a[1]!.purpose).toBe('citation');
+  });
+
+  it.each(['accountId', 'workspaceId', 'projectId', 'worktreeId', 'workingDirectory'] as const)(
+    'retains OpenCode %s scope isolation with identical semantic prompt', async key => {
+      const a = await compile(firstRequest);
+      const { pool, created } = poolHarness();
+      try {
+        const first = await pool.sessionForChat(scope, 'synthetic-chat', undefined, a.fingerprint);
+        const next = await pool.sessionForChat({ ...scope, [key]: 'different-synthetic-scope' },
+          'synthetic-chat', undefined, a.fingerprint);
+        expect(next.sessionId).not.toBe(first.sessionId);
+        expect(created()).toBe(2);
+      } finally { await pool.disposeAll(); }
+    });
 });

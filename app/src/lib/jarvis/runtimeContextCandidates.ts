@@ -1,6 +1,6 @@
 import type { JarvisSourceKind, JarvisSourceRef } from './contracts';
 import type { JarvisContextCandidate } from './contextPack';
-import { JARVIS_ALL_ABOUT_ME_SOURCE_ID } from './promptCompiler';
+import { JARVIS_ALL_ABOUT_ME_SOURCE_ID, sha256Hex } from './promptCompiler';
 import { deepFreezeJarvisCopy } from './requestEnvelope';
 
 export type JarvisRuntimeContextBlockKey =
@@ -253,8 +253,30 @@ const DEFINITIONS = Object.freeze({
   },
 } as const satisfies Readonly<Record<JarvisRuntimeContextBlockKey, RuntimeContextDefinition>>);
 
-function sourceId(requestId: string, key: JarvisRuntimeContextBlockKey): string {
-  return key === 'all_about_me' ? JARVIS_ALL_ABOUT_ME_SOURCE_ID : `jsource_${requestId}_${key}`;
+function sourceId(
+  accountId: string,
+  projectId: string | undefined,
+  block: Readonly<JarvisRuntimeContextBlock>,
+): string {
+  if (block.key === 'all_about_me') return JARVIS_ALL_ABOUT_ME_SOURCE_ID;
+  const definition = DEFINITIONS[block.key];
+  // This is source metadata, never a permission or a lookup capability. Keep
+  // current observation/request ownership in their existing envelope fields,
+  // but do not rotate native sessions merely because the same body was read
+  // by a new request. Exact content and source semantics still change identity.
+  const digest = sha256Hex(JSON.stringify([
+    'vibespace.runtime-context-source.v1',
+    accountId,
+    projectId ?? null,
+    block.key,
+    definition.kind,
+    definition.trust,
+    definition.origin,
+    definition.purpose,
+    block.text,
+  ]));
+  // Preserve the existing different-key lexical tie ordering in context packs.
+  return `jsource_runtime_${block.key}_${digest}`;
 }
 
 type BoundedRetrievedSource = NonNullable<JarvisRuntimeContextBlock['source']>;
@@ -326,7 +348,7 @@ export function buildJarvisRuntimeContextCandidates(input: {
         : null;
     return {
       source: {
-        id: boundedSource?.id ?? sourceId(input.requestId, block.key),
+        id: boundedSource?.id ?? sourceId(input.accountId, input.projectId, block),
         kind: definition.kind,
         label: boundedSource?.label ?? definition.label,
         ...(boundedSource ? { uri: boundedSource.uri } : {}),
