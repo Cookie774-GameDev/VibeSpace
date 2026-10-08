@@ -744,11 +744,11 @@ it('clears a restored source when the active project scope is revoked', async ()
   await prepareOverlappingSavedFile();
   useUIStore.getState().setRoute('context');
   render(<React.StrictMode><ActualLazyRouteShell sidebar /></React.StrictMode>);
-  await waitFor(() => expect(screen.getByRole('heading',{name:'C04 target source',exact:true})).toBeTruthy());
+  await waitFor(() => expect(screen.getByRole('heading',{name:'C04 target source'})).toBeTruthy());
   await act(async () => useAuthStore.getState().setProjectId('c04-foreign-project' as ProjectId));
   await waitFor(() => {
-    expect(screen.queryByRole('heading',{name:'C04 target source',exact:true})).toBeNull();
-    expect(screen.queryByRole('heading',{name:'C04 other source',exact:true})).toBeNull();
+    expect(screen.queryByRole('heading',{name:'C04 target source'})).toBeNull();
+    expect(screen.queryByRole('heading',{name:'C04 other source'})).toBeNull();
   });
 });
 
