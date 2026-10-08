@@ -465,7 +465,17 @@ export function createContextPersistenceService(
         parser: 'context-tree-v2-persistence',
       });
       signal?.throwIfAborted();
-      return graphContentIdentity(snapshot) === graphContentIdentity(proposed);
+      // A displayed tree carries no verification receipt. Reconstruction must
+      // preserve the authoritative source metadata, not synthesize freshness.
+      const comparisonSources = proposed.sources.map((source) => {
+        const stored = snapshot.sources.find((candidate) => candidate.id === source.id);
+        if (!stored) return source;
+        const comparison = { ...source };
+        if (stored.lastVerifiedAt === undefined) delete comparison.lastVerifiedAt;
+        else comparison.lastVerifiedAt = stored.lastVerifiedAt;
+        return comparison;
+      });
+      return graphContentIdentity(snapshot) === graphContentIdentity({ ...proposed, sources: comparisonSources });
     },
 
     async initialize(accountId, projectId) {

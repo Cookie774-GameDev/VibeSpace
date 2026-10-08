@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createJarvisDb, type JarvisDexie } from '@/lib/db';
 import { TEST_INDEXED_DB, uniqueTestDbName } from '@/test/indexedDb';
 import { createContextPersistenceService } from './contextPersistence';
+import { createContextGraphRepository } from './repository';
+import type { ContextGraphSnapshotV2 } from './contracts';
 import { currentMembershipDigest } from './contextIssuedEvidenceRegistry';
 import type { ContextMapRecord, ProjectContextTree } from './tree';
 
@@ -110,4 +112,43 @@ it('never treats a replacement local-file scope as equivalent',async()=>{
   expect(await service.hasEquivalentTree(accountId,single,current.id,current.updatedAt)).toBe(true);
   const replacement={...single,localFileScope:{...fileScope,filePath:'C:/single/other.txt'}};
   expect(await service.hasEquivalentTree(accountId,replacement,current.id,current.updatedAt)).toBe(false);
+});
+
+
+it('compares a real indexing-to-ready source without inventing a verification receipt',async()=>{
+  const indexed=await service.saveTree(accountId,tree,{mapId,sourceStatus:'indexing'});
+  const ready=await service.setSourceStatus(accountId,scope.projectId,mapId,'ready',indexed.maps[0]!.updatedAt);
+  const repository=createContextGraphRepository(database);
+  const before=await repository.getSnapshot(accountId,mapId);
+  expect(before!.sources[0]!.status).toBe('ready');
+  expect(before!.sources[0]).not.toHaveProperty('lastVerifiedAt');
+  expect(await service.hasEquivalentTree(accountId,tree,mapId,ready.maps[0]!.updatedAt)).toBe(true);
+  expect(await repository.getSnapshot(accountId,mapId)).toEqual(before);
+});
+
+it('preserves a genuine stored verification time instead of replacing it with generation time',async()=>{
+  const repository=createContextGraphRepository(database);
+  const original=(await repository.getSnapshot(accountId,mapId))!;
+  const verified=structuredClone(original) as ContextGraphSnapshotV2;
+  verified.sources[0]!.lastVerifiedAt=tree.generatedAt+500;
+  verified.map.knowledgeRevision++;
+  verified.map.updatedAt++;
+  await repository.putSnapshot(accountId,verified,{expectedKnowledgeRevision:original.map.knowledgeRevision});
+  const before=await repository.getSnapshot(accountId,mapId);
+  expect(await service.hasEquivalentTree(accountId,tree,mapId,before!.map.updatedAt)).toBe(true);
+  expect(await repository.getSnapshot(accountId,mapId)).toEqual(before);
+  expect(before!.sources[0]!.lastVerifiedAt).toBe(tree.generatedAt+500);
+});
+
+it.each(['generatedAt','modifiedAt','size','summary'] as const)('still rejects genuine %s changes after indexing-to-ready',async field=>{
+  const indexed=await service.saveTree(accountId,tree,{mapId,sourceStatus:'indexing'});
+  const ready=await service.setSourceStatus(accountId,scope.projectId,mapId,'ready',indexed.maps[0]!.updatedAt);
+  const next=structuredClone(tree);
+  if(field==='generatedAt')next.generatedAt++;
+  if(field==='modifiedAt')next.nodes[0]!.children![0]!.modifiedAt!++;
+  if(field==='size'){next.nodes[0]!.children![0]!.sizeBytes!++;next.totalBytes++;}
+  if(field==='summary')next.nodes[0]!.children![0]!.summary='Changed content';
+  const before=await createContextGraphRepository(database).getSnapshot(accountId,mapId);
+  expect(await service.hasEquivalentTree(accountId,next,mapId,ready.maps[0]!.updatedAt)).toBe(false);
+  expect(await createContextGraphRepository(database).getSnapshot(accountId,mapId)).toEqual(before);
 });

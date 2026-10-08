@@ -67,6 +67,8 @@ vi.mock('./contextPersistence', async (original) => ({
   ...(await original<typeof import('./contextPersistence')>()),
   ensureContextPersistence: () => io.service!.load('page-account', 'page-project'),
   getActiveContextPersistenceState: () => io.state,
+  loadPersistedContextMaps: async (projectId:string) => (await io.service!.load('page-account',projectId)).maps,
+  selectPersistedContextFile: (projectId:string,path:string,target?:{mapId:string;entityId:string}) => io.service!.selectFile('page-account',projectId,path,target),
   hasEquivalentPersistedContextTree: async (_project:string,mapId:string,tree:ProjectContextTree,expected:number,signal?:AbortSignal) => {
     const equivalent = await io.service!.hasEquivalentTree('page-account',tree,mapId,expected,signal);
     io.equivalenceReads += 1;
@@ -107,6 +109,7 @@ import { ContextPage } from './ContextPage';
 import { MessagePart } from '@/features/chat/MessagePart';
 import { PageRouter } from '@/components/layout/PageRouter';
 import { SidebarContextTree } from './SidebarContextTree';
+import { createProductionTerminalCliRuntimeDependencies } from '@/features/terminals/terminalCliProduction';
 
 let database: JarvisDexie;
 let part: Part;
@@ -477,7 +480,7 @@ it('keeps a freshly opened canonical source visible after unchanged index hydrat
 });
 
 
-async function prepareNativeSnapshot() {
+async function prepareNativeSnapshot(indexingThenReady = false) {
   const { buildProjectContextTreeFromSiyuanIndex } = await import('./siyuan/siyuanSafeIndex');
   const initial = (await io.service!.load(scope.accountId, scope.projectId)).maps.find(
     (map) => map.id === 'page-map-A',
@@ -488,9 +491,13 @@ async function prepareNativeSnapshot() {
     summary: 'Owned source', sizeBytes: 4, modifiedAt: 1,
   }];
   const rawTree = buildProjectContextTreeFromSiyuanIndex(initial.tree, io.entries);
-  const state = await io.service!.saveTree(scope.accountId, rawTree, {
-    mapId: initial.id, sourceStatus: 'ready',
+  const saved = await io.service!.saveTree(scope.accountId, rawTree, {
+    mapId: initial.id, sourceStatus: indexingThenReady ? 'indexing' : 'ready',
   });
+  const indexedMap = saved.maps.find(candidate => candidate.id === initial.id)!;
+  const state = indexingThenReady
+    ? await io.service!.setSourceStatus(scope.accountId, scope.projectId, initial.id, 'ready', indexedMap.updatedAt)
+    : saved;
   const map = state.maps.find((candidate) => candidate.id === initial.id)!;
   expect(rawTree.nodes[0]!.id).not.toBe(map.tree.nodes[0]!.id);
   io.job = {
@@ -768,4 +775,45 @@ it('restores the same saved file after an intervening map-only selection cleared
     await io.service!.selectFile(scope.accountId,scope.projectId,`${target.rootDir}/shared.txt`);
   });
   await waitFor(() => expect(heading()).toBe('C04 target source'));
+});
+
+
+it.each(['citation','terminal'] as const)('opens the actual %s source after indexing-to-ready without a metadata-only graph write',async consumer=>{
+  const {map}=await prepareNativeSnapshot(true);
+  const before=await database.context_maps.get(map.id);
+  const sourcesBefore=await database.context_sources.toArray();
+  render(<React.StrictMode><ActualLazyRouteShell sidebar /></React.StrictMode>);
+  if(consumer==='citation')fireEvent.click(screen.getByRole('button',{name:'Open verified Context source'}));
+  else {
+    const dependencies=createProductionTerminalCliRuntimeDependencies();
+    const resolved=await dependencies.resolveContextEntity(scope.projectId,map.tree.nodes[0]!.id);
+    expect(resolved).toMatchObject({mapId:map.id,id:map.tree.nodes[0]!.id,path:'linked-file.txt'});
+    await act(async()=>{await dependencies.openContextEntity(scope.projectId,resolved!);});
+  }
+  await waitFor(()=>expect(io.readStarted).toContain(map.id));
+  await waitFor(()=>expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+  await waitFor(()=>expect(document.querySelector('[data-monochrome-route="context"] [data-monochrome-surface="context-inspector"] h2')?.textContent).toBe('linked-file.txt'));
+  expect(await database.context_maps.get(map.id)).toEqual(before);
+  expect(await database.context_sources.toArray()).toEqual(sourcesBefore);
+});
+
+it.each(['citation','terminal'] as const)('preserves the actual %s selection when native read precedes completed-job hydration after readiness',async consumer=>{
+  const {map}=await prepareNativeSnapshot(true);
+  const read=deferred(),hydration=deferred();
+  io.readGate=read.promise;io.entriesGate=hydration.promise;
+  try {
+    render(<React.StrictMode><ActualLazyRouteShell sidebar /></React.StrictMode>);
+    if(consumer==='citation') {
+      fireEvent.click(screen.getByRole('button',{name:'Open verified Context source'}));
+      await waitFor(()=>expect(io.openResults).toEqual(['completed']));
+    } else {
+      const dependencies=createProductionTerminalCliRuntimeDependencies();
+      const resolved=(await dependencies.resolveContextEntity(scope.projectId,map.tree.nodes[0]!.id))!;
+      await act(async()=>{await dependencies.openContextEntity(scope.projectId,resolved);});
+    }
+    await waitFor(()=>expect(io.readStarted).toContain(map.id));
+    await act(async()=>{read.resolve();});
+    await waitFor(()=>expect(screen.getByText('SiYuan Context Map ready.')).toBeTruthy());
+    await waitFor(()=>expect(document.querySelector('[data-monochrome-route="context"] [data-monochrome-surface="context-inspector"] h2')?.textContent).toBe('linked-file.txt'));
+  } finally {read.resolve();hydration.resolve();}
 });
