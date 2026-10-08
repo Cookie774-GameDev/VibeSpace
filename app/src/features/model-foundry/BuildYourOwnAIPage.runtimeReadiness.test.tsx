@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BuildYourOwnAIPage } from './BuildYourOwnAIPage';
+import type { LocalTrainingWorkerStatus } from './trainingRuntime';
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
@@ -16,7 +17,7 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-const ready = { installed: true, attested: true, protocol: 1, sourceSha256: 'a'.repeat(64),
+const ready: LocalTrainingWorkerStatus = { installed: true, attested: true, localOnly: true, protocol: 1, sourceSha256: 'a'.repeat(64),
   python: 'synthetic-private-python', methods: ['full'], modalities: ['text'], precisions: ['fp32'],
   reason: 'Full training is ready; optional capabilities unavailable: lora, qlora.' };
 const absent = { ...ready, installed: false, attested: false, python: null, methods: [],
