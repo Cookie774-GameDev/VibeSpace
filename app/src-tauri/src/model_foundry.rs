@@ -3250,9 +3250,13 @@ mod tests {
             assert_eq!(copy.project_id, source.project_id);
             assert_eq!(copy.status, "completed");
             assert!(copy.artifact_verified);
-            let copy_path = PathBuf::from(copy.artifact_path.as_ref().unwrap());
-            assert_ne!(copy_path, PathBuf::from(source.artifact_path.as_ref().unwrap()));
-            assert!(copy_path.starts_with(root.join("private/jobs").join(&copy.id)));
+            let copy_path = PathBuf::from(copy.artifact_path.as_ref().unwrap()).canonicalize().unwrap();
+            let source_path = PathBuf::from(source.artifact_path.as_ref().unwrap()).canonicalize().unwrap();
+            let expected_directory = root.join("private/jobs").join(&copy.id).canonicalize().unwrap();
+            assert_ne!(copy_path, source_path);
+            assert!(copy_path.starts_with(&expected_directory));
+            let expected_artifact = if method == "knowledge" { "knowledge-artifact.json" } else { "weight-artifact" };
+            assert_eq!(copy_path, expected_directory.join(expected_artifact).canonicalize().unwrap());
             if method == "knowledge" {
                 assert_eq!(validate_artifact(&copy_path).unwrap().model_name, copy.name);
             } else {
