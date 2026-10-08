@@ -15,6 +15,7 @@ vi.mock('@/features/model-foundry/adapterRegistry', () => ({ canRoutePromotedAda
 vi.mock('@/lib/utils', () => ({ isTauri: true }));
 
 import { foundryProvider } from './foundry';
+import { optimizeKernelRuntimeContext } from '../runtimeTokenOptimization';
 
 describe('foundryProvider', () => {
   beforeEach(() => {
@@ -174,3 +175,29 @@ describe('Foundry protected-attempt diagnostic binding', () => {
     expect(generate.mock.calls[0]?.[0].correlation).not.toHaveProperty('accountId');
   });
 });
+
+describe('Foundry planner/provider output-reserve agreement', () => {
+  it('uses the same default allowance for planning and the actual native bridge request', async () => {
+    generate.mockClear();
+    const input = { providerId: 'foundry', modelId: 'artifact--job_budget_join',
+      contextMetadataSource: 'foundry_catalog_ceiling' as const, modelContextLimit: 8192,
+      mode: 'normal' as const, systemPrompt: 'Required public policy.', blocks: [],
+      messages: [{ role: 'user' as const, content: 'Public request.' }] };
+    const planned = await optimizeKernelRuntimeContext(input);
+    await foundryProvider.run({ agent: { model: { provider: 'foundry', model: input.modelId },
+      system_prompt: input.systemPrompt } as never, messages: [...planned.messages] });
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0]?.[0].maxNewTokens).toBe(320);
+    expect(planned.receipt!.outputTokenLimit).toBe(generate.mock.calls[0]?.[0].maxNewTokens);
+  });
+});
+
+it.each([[undefined, 320], [1, 1], [64, 64], [320, 320], [512, 512], [8192, 512], [0, 1]])(
+  'keeps native provider output formula unchanged for %s', async (requested, expected) => {
+    generate.mockClear();
+    await foundryProvider.run({ agent: { model: { provider: 'foundry', model: 'artifact--job_formula' },
+      system_prompt: 'Public policy.' } as never, messages: [{ role: 'user', content: 'Public request.' }],
+      max_output_tokens: requested });
+    expect(generate.mock.calls[0]?.[0].maxNewTokens).toBe(expected);
+  },
+);

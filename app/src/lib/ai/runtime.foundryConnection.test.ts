@@ -141,16 +141,21 @@ afterEach(() => {
 
 describe('Foundry selected artifact through the installed kernel and native bridge', () => {
   it.each([
-    { backend: 'opencode', evidence: 'valid' },
-    { backend: 'codex', evidence: 'valid' },
-    { backend: 'opencode', evidence: 'foreign-artifact' },
-    { backend: 'opencode', evidence: 'unverified-artifact' },
-    { backend: 'opencode', evidence: 'stale-version' },
-    { backend: 'opencode', evidence: 'revoked-account' },
-    { backend: 'opencode', evidence: 'missing-binding' },
+    { backend: 'opencode', evidence: 'valid', optimizer: 'off', outputOverride: undefined },
+    { backend: 'codex', evidence: 'valid', optimizer: 'off', outputOverride: undefined },
+    { backend: 'opencode', evidence: 'foreign-artifact', optimizer: 'off', outputOverride: undefined },
+    { backend: 'opencode', evidence: 'unverified-artifact', optimizer: 'off', outputOverride: undefined },
+    { backend: 'opencode', evidence: 'stale-version', optimizer: 'off', outputOverride: undefined },
+    { backend: 'opencode', evidence: 'revoked-account', optimizer: 'off', outputOverride: undefined },
+    { backend: 'opencode', evidence: 'missing-binding', optimizer: 'off', outputOverride: undefined },
+    { backend: 'opencode', evidence: 'valid', optimizer: 'normal', outputOverride: undefined },
+    { backend: 'opencode', evidence: 'valid', optimizer: 'normal', outputOverride: 64 },
+    { backend: 'opencode', evidence: 'revoked-preparation-account', optimizer: 'normal', outputOverride: undefined },
+    { backend: 'opencode', evidence: 'aba-preparation-account', optimizer: 'normal', outputOverride: undefined },
+    { backend: 'opencode', evidence: 'aborted-preparation', optimizer: 'normal', outputOverride: undefined },
   ] as const)(
-    'uses the exact local connection with $backend and $evidence native evidence',
-    async ({ backend, evidence }) => {
+    'uses the exact local connection with $backend and $evidence native evidence, optimizer $optimizer and override $outputOverride',
+    async ({ backend, evidence, optimizer, outputOverride }) => {
       // Native I/O and unrelated empty Context/storage fixture ports are injected.
       // Kernel, connection resolution, router,
       // Foundry provider, bridge validation and journal commit are production code.
@@ -251,6 +256,7 @@ describe('Foundry selected artifact through the installed kernel and native brid
           await database.messages.update(id, patch);
         },
       };
+      let releaseCapabilities: (() => void) | undefined;
       const disposeHost = await installJarvisKernelRuntimeHost({
         db: database,
         bindKernelActions: () =>
@@ -261,7 +267,16 @@ describe('Foundry selected artifact through the installed kernel and native brid
             executeAutoApprovedSafe: vi.fn(),
           }) as never,
         capabilitySnapshots: {
-          getForAccount: async () => ({
+          getForAccount: async () => {
+            if (evidence === 'revoked-preparation-account')
+              useAuthStore.setState({ localUserId: 'new-current-account-during-preparation' });
+            if (evidence === 'aba-preparation-account') {
+              useAuthStore.setState({ localUserId: 'temporary-other-account-during-preparation' });
+              useAuthStore.setState({ localUserId: accountId });
+            }
+            if (evidence === 'aborted-preparation')
+              await new Promise<void>(resolve => { releaseCapabilities = resolve; });
+            return {
             capturedAt: 1,
             tools: [],
             plugins: [],
@@ -269,12 +284,14 @@ describe('Foundry selected artifact through the installed kernel and native brid
             terminals: [],
             agents: [],
             entitlements: { source: 'unavailable', capabilities: [] },
-          }),
+          }; },
         },
       });
       const stop = startRuntimeListener(bindings, { jarvisKernelMode: 'kernel' });
       eventCalls.push(...eventSpy.mock.calls.map(([event]) => event));
       try {
+        expect(await database.jarvis_runs.count()).toBe(0);
+        const sendStartedAt = Date.now();
         window.dispatchEvent(
           new CustomEvent('jarvis:send', {
             detail: {
@@ -283,9 +300,41 @@ describe('Foundry selected artifact through the installed kernel and native brid
               cancellationKey: userId,
               accountId,
               interactionMode: 'ask',
+              tokenOptimizationMode: optimizer,
+              ...(outputOverride === undefined ? {} : { tokenOptimizationOutputLimit: outputOverride }),
             },
           }),
         );
+        if (evidence === 'aborted-preparation') {
+          await vi.waitFor(() => expect(releaseCapabilities).toBeTypeOf('function'));
+          window.dispatchEvent(new CustomEvent('jarvis:cancel', { detail: { chatId, cancellationKey: userId } }));
+          releaseCapabilities!();
+          await stop.whenIdle();
+          expect(ports.invoke.mock.calls.filter(([command]) => command === 'model_foundry_chat')).toHaveLength(0);
+          expect(await database.jarvis_runs.toArray()).toHaveLength(0);
+          return;
+        }
+        if (evidence === 'revoked-preparation-account' || evidence === 'aba-preparation-account') {
+          await stop.whenIdle();
+          if (evidence === 'revoked-preparation-account') expect(getFoundryModelOptions()).toEqual([]);
+          else expect(useAuthStore.getState().localUserId).toBe(accountId);
+          expect(ports.invoke.mock.calls.filter(([command]) => command === 'model_foundry_chat')).toHaveLength(0);
+          const scopedRuns = await database.jarvis_runs.toArray();
+          const scopedEvents = await database.jarvis_events.toArray();
+          const projection = { originalAccountId: accountId, currentAccountId: useAuthStore.getState().localUserId,
+            originalChatId: chatId, sendStartedAt,
+            runs: scopedRuns.map(run => ({ id: run.id, accountId: run.account_id, chatId: run.chat_id,
+              status: run.status, createdAt: run.created_at, updatedAt: run.updated_at,
+              completedAt: run.completed_at, transportAttempts: run.transport_attempts })),
+            events: scopedEvents.map(event => ({ runId: event.run_id, seq: event.seq,
+              type: event.type, status: event.status, idempotencyKey: event.idempotency_key,
+              title: event.title, summary: event.safe_summary, createdAt: event.created_at })),
+            errors: ports.log.mock.calls.map(([entry]) => entry)
+              .filter(entry => entry.level === 'error').map(entry => entry.message),
+          };
+          expect(scopedRuns, JSON.stringify(projection)).toHaveLength(0);
+          return;
+        }
         if (evidence === 'revoked-account') {
           await vi.waitFor(() =>
             expect(
@@ -314,6 +363,7 @@ describe('Foundry selected artifact through the installed kernel and native brid
         }
         const runs = await database.jarvis_runs.toArray();
         expect(runs).toHaveLength(1);
+        expect(runs[0]).toMatchObject({ account_id: accountId, chat_id: chatId });
         const stored = JSON.stringify(runs[0]);
         if (evidence !== 'missing-binding') expect(stored).toContain('foundry-local');
         else
@@ -327,6 +377,13 @@ describe('Foundry selected artifact through the installed kernel and native brid
         expect(chatCall).toHaveLength(evidence === 'missing-binding' ? 0 : 1);
         if (evidence !== 'missing-binding')
           expect(chatCall[0]?.[1]).toMatchObject({ artifactId: artifact.id });
+        if (optimizer === 'normal') {
+          expect(chatCall[0]?.[1]).toMatchObject({ artifactId: artifact.id, maxOutputTokens: 320 });
+          const nativeMessages = chatCall[0]?.[1]?.messages as Array<{ role: string; content: string }>;
+          expect(nativeMessages.find(message => message.role === 'system')?.content).toContain('Interaction mode: ask');
+          expect(nativeMessages.find(message => message.role === 'system')?.content).toContain('Model-visible action schemas: disabled');
+          expect(nativeMessages.at(-1)).toMatchObject({ role: 'user', content: 'Return a short local answer.' });
+        }
         expect(ports.network).not.toHaveBeenCalled();
         const messages = await database.messages.where('chat_id').equals(chatId).toArray();
         expect(

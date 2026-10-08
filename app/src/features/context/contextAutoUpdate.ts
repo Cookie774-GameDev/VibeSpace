@@ -2,7 +2,7 @@ import { contextLocalFileScopeFingerprint, readContextLocalFileScope } from './c
 import { db, openDb } from '@/lib/db';
 import { resolveAccountIdentity } from '@/lib/accountIdentity';
 import { useAuthStore } from '@/stores/auth';
-import { captureContextPersistenceScope } from './contextPersistence';
+import { captureContextPersistenceScope, type ContextTreeCommitReceipt } from './contextPersistence';
 import { createContextSearchIndexPopulationPort } from './contextSearchIndexing';
 import { productionSiyuanContextMaps } from './siyuanContextMapIntegration';
 import { readSiyuanMapManifest } from './siyuan/siyuanMapManifest';
@@ -191,7 +191,8 @@ export interface ContextAutoUpdatePorts {
     index: SiyuanSafeIndex,
     signal: AbortSignal,
   ): Promise<ProjectContextTree>;
-  saveTree(map: ContextMapRecord, tree: ProjectContextTree): Promise<ContextMapRecord>;
+  saveTree(map: ContextMapRecord, tree: ProjectContextTree, signal?: AbortSignal, onCommitted?: (receipt: ContextTreeCommitReceipt) => void): Promise<ContextMapRecord>;
+  prepareRollback?(map: ContextMapRecord): Promise<(savedUpdatedAt: number) => Promise<void>>;
   saveSetting(setting: ContextAutoUpdateSetting, recovery?: {
     observed: ContextAutoUpdateSetting;
     map: ContextMapRecord;
@@ -201,153 +202,165 @@ export interface ContextAutoUpdatePorts {
 }
 
 /** Two matching metadata observations batch saved edits; bodies are only read for changed files. */
-export function createContextAutoUpdater(ports: ContextAutoUpdatePorts) {
+export function createContextAutoUpdater(ports: ContextAutoUpdatePorts, scope?: ContextAutoUpdateScope) {
+  const capturedScope = scope ? { ...scope } : undefined;
   let pendingSignature = '';
   let pendingSince = 0;
   let inFlight: Promise<'idle' | 'waiting' | 'updated'> | null = null;
-  const tick = async (signal: AbortSignal): Promise<'idle' | 'waiting' | 'updated'> => {
-    const setting = await ports.readSetting();
-    if (!setting?.enabled || !ports.active() || signal.aborted) return 'idle';
-    const map = await ports.readMap();
-    if (!map || map.status !== 'active' || ports.fingerprint(map) !== setting.fingerprint)
-      return 'idle';
-    const guard = async () => {
-      const current = await ports.readSetting();
-      const latest = await ports.readMap();
-      if (
-        signal.aborted ||
-        !ports.active() ||
-        !current?.enabled ||
-        current.consentRevision !== setting.consentRevision ||
-        current.fingerprint !== setting.fingerprint ||
-        !latest ||
-        latest.status !== 'active' ||
-        latest.updatedAt !== map.updatedAt ||
-        ports.fingerprint(latest) !== setting.fingerprint
-      )
-        throw new Error('context_auto_update_scope_changed');
-    };
-    readContextLocalFileScope(map);
-    const index = await ports.scan(map, signal);
-    // A partial discovery cannot authorize removing files absent from its result.
-    if (index.unreadable > 0) throw new Error('context_auto_update_discovery_incomplete');
-    await guard();
-    assertSiyuanLocalFileEntries(map, index.entries);
-    const metadata = contextAutoMetadata(index);
-    // This is the last committed physical-source checkpoint, not a projection
-    // revision. Rehydrating the same map must not discard source metadata.
-    const baseline = setting.baseline ?? treeMetadata(map.tree);
-    const migrateIndexIdentity = setting.indexIdentityVersion !== 1 || !setting.baseline;
-    const delta = contextAutoDelta(baseline, metadata);
-    if (!migrateIndexIdentity && !delta.changed.length && !delta.deleted.length) {
-      pendingSignature = '';
-      if (setting.status === 'failed' && setting.error === 'context_auto_update_scope_changed') {
-        await ports.saveSetting({ ...setting, status: 'watching', error: undefined }, {
-          observed: setting, map, signal,
-        });
-      }
+  const run = async (signal: AbortSignal, manual: boolean): Promise<'idle' | 'waiting' | 'updated'> => {
+    const setting = manual ? null : await ports.readSetting();
+    if (!manual && (!setting?.enabled || !ports.active() || signal.aborted)) return 'idle';
+    const owner = capturedScope ?? setting;
+    if (!owner || !ports.active() || signal.aborted) throw new Error('context_auto_update_scope_changed');
+    const key = contextAutoUpdateKey(owner);
+    // The lease covers discovery, staging and compensation across updater instances.
+    // In particular, awaiting stage is too late to acquire ownership.
+    if (updatingScopes.has(key)) {
+      if (manual) throw new Error('context_auto_update_busy');
       return 'idle';
     }
-    const signature = JSON.stringify(metadata);
-    if (signature !== pendingSignature) {
-      pendingSignature = signature;
-      pendingSince = ports.now();
-      return 'waiting';
-    }
-    if (ports.now() - pendingSince < 1_500) return 'waiting';
-    const fileIds = new Set(
-      index.entries.filter((entry) => entry.kind === 'file').map((entry) => entry.nodeId),
-    );
-    const previousFileIds = new Set(
-      baseline.filter((entry) => entry.kind === 'file').map((entry) => entry.id),
-    );
-    const nextMap = {
-      ...map,
-      tree: buildProjectContextTreeFromSiyuanIndex(map.tree, index.entries),
-    };
-    // Initial population indexes the persisted V2 entity IDs. Refreshes must
-    // use that same identity, while SiYuan bindings keep their filesystem IDs.
-    const canonicalId = (id: string) => contextEntityIdForTreeNode(map.id, id);
-    const canonicalNodes = (nodes: ContextTreeNode[]): ContextTreeNode[] =>
-      nodes.map((node) => ({
-        ...node,
-        id: canonicalId(node.id),
-        ...(node.children ? { children: canonicalNodes(node.children) } : {}),
-      }));
-    const transaction = await ports.stage(
-      { ...nextMap, tree: { ...nextMap.tree, nodes: canonicalNodes(nextMap.tree.nodes) } },
-      (migrateIndexIdentity ? [...fileIds] : delta.changed.filter((id) => fileIds.has(id))).map(
-        canonicalId,
-      ),
-      migrateIndexIdentity
-        ? []
-        : delta.deleted.filter((id) => previousFileIds.has(id)).map(canonicalId),
-      signal,
-      migrateIndexIdentity ? { reconcileMembership: true } : undefined,
-    );
-    let saved: ContextMapRecord | null = null;
-    let committed = false;
+    updatingScopes.add(key);
     try {
-      await guard();
-      const tree = await ports.sync(map, index, signal);
-      await guard();
-      // Check again after native/model-free graph reconciliation and before publication.
-      saved = await ports.saveTree(map, { ...tree, generatedAt: ports.now() });
-      const current = await ports.readSetting();
-      const latest = await ports.readMap();
-      if (
-        signal.aborted ||
-        !ports.active() ||
-        !current?.enabled ||
-        current.consentRevision !== setting.consentRevision ||
-        !latest ||
-        latest.status !== 'active' ||
-        latest.updatedAt !== saved.updatedAt ||
-        ports.fingerprint(latest) !== setting.fingerprint
-      )
-        throw new Error('context_auto_update_scope_changed');
-      await transaction.commit();
-      committed = true;
-      await ports.saveSetting({
-        ...setting,
-        baseline: metadata,
-        baselineMapRevision: saved.updatedAt,
-        indexIdentityVersion: 1,
-        status: 'watching',
-        lastSuccessAt: ports.now(),
-        error: undefined,
-      });
-      pendingSignature = '';
-      return 'updated';
-    } catch (error) {
-      if (!committed) {
-        const failures: unknown[] = [error];
-        try {
-          await transaction.abort();
-        } catch (abortError) {
-          failures.push(abortError);
-        }
-        if (saved) {
-          try {
-            await ports.saveTree(saved, map.tree);
-          } catch (restoreError) {
-            failures.push(restoreError);
-          }
-        }
-        if (failures.length > 1)
-          throw new AggregateError(failures, 'context_auto_update_rollback_needs_review');
+      const map = await ports.readMap();
+      if (!map || map.status !== 'active' || map.id !== owner.mapId || map.projectId !== owner.projectId ||
+          (!manual && ports.fingerprint(map) !== setting!.fingerprint)) {
+        if (manual) throw new Error('context_auto_update_scope_changed');
+        return 'idle';
       }
-      throw error;
+      const fingerprint = ports.fingerprint(map);
+      const guard = async (expectedRevision = map.updatedAt) => {
+        const current = manual ? null : await ports.readSetting();
+        const latest = await ports.readMap();
+        if (
+          signal.aborted || !ports.active() ||
+          (!manual && (!current?.enabled || current.consentRevision !== setting!.consentRevision ||
+            current.fingerprint !== fingerprint)) ||
+          !latest || latest.status !== 'active' || latest.id !== owner.mapId || latest.projectId !== owner.projectId ||
+          latest.updatedAt !== expectedRevision || ports.fingerprint(latest) !== fingerprint
+        ) throw new Error('context_auto_update_scope_changed');
+      };
+      if (manual) await guard();
+      readContextLocalFileScope(map);
+      const index = await ports.scan(map, signal);
+      // A partial discovery cannot authorize removing files absent from its result.
+      if (index.unreadable > 0) throw new Error('context_auto_update_discovery_incomplete');
+      await guard();
+      assertSiyuanLocalFileEntries(map, index.entries);
+      const metadata = contextAutoMetadata(index);
+      // This is the last committed physical-source checkpoint, not a projection
+      // revision. Rehydrating the same map must not discard source metadata.
+      const baseline = setting?.baseline ?? treeMetadata(map.tree);
+      const migrateIndexIdentity = manual || setting?.indexIdentityVersion !== 1 || !setting.baseline;
+      const delta = contextAutoDelta(baseline, metadata);
+      if (!migrateIndexIdentity && !delta.changed.length && !delta.deleted.length) {
+        pendingSignature = '';
+        if (setting?.status === 'failed' && setting.error === 'context_auto_update_scope_changed') {
+          await ports.saveSetting({ ...setting, status: 'watching', error: undefined }, {
+            observed: setting, map, signal,
+          });
+        }
+        return 'idle';
+      }
+      const signature = JSON.stringify(metadata);
+      if (!manual && signature !== pendingSignature) {
+        pendingSignature = signature;
+        pendingSince = ports.now();
+        return 'waiting';
+      }
+      if (!manual && ports.now() - pendingSince < 1_500) return 'waiting';
+      const fileIds = new Set(
+        index.entries.filter((entry) => entry.kind === 'file').map((entry) => entry.nodeId),
+      );
+      const previousFileIds = new Set(
+        baseline.filter((entry) => entry.kind === 'file').map((entry) => entry.id),
+      );
+      const nextMap = {
+        ...map,
+        tree: buildProjectContextTreeFromSiyuanIndex(map.tree, index.entries),
+      };
+      // Initial population indexes the persisted V2 entity IDs. Refreshes must
+      // use that same identity, while SiYuan bindings keep their filesystem IDs.
+      const canonicalId = (id: string) => contextEntityIdForTreeNode(map.id, id);
+      const canonicalNodes = (nodes: ContextTreeNode[]): ContextTreeNode[] =>
+        nodes.map((node) => ({
+          ...node,
+          id: canonicalId(node.id),
+          ...(node.children ? { children: canonicalNodes(node.children) } : {}),
+        }));
+      const restore = await ports.prepareRollback?.(map);
+      await guard();
+      const transaction = await ports.stage(
+        { ...nextMap, tree: { ...nextMap.tree, nodes: canonicalNodes(nextMap.tree.nodes) } },
+        (migrateIndexIdentity ? [...fileIds] : delta.changed.filter((id) => fileIds.has(id))).map(
+          canonicalId,
+        ),
+        migrateIndexIdentity
+          ? []
+          : delta.deleted.filter((id) => previousFileIds.has(id)).map(canonicalId),
+        signal,
+        migrateIndexIdentity ? { reconcileMembership: true } : undefined,
+      );
+      let saved: ContextMapRecord | null = null;
+      const saveReceipt: { current: ContextTreeCommitReceipt | null } = { current: null };
+      let committed = false;
+      try {
+        await guard();
+        const tree = await ports.sync(map, index, signal);
+        await guard();
+        // Check again after native/model-free graph reconciliation and before publication.
+        saved = await ports.saveTree(map, { ...tree, generatedAt: ports.now() }, signal, receipt => {
+          if (receipt.accountId === owner.accountId && receipt.projectId === owner.projectId &&
+              receipt.mapId === map.id && receipt.updatedAt > map.updatedAt) saveReceipt.current = receipt;
+        });
+        await guard(saved.updatedAt);
+        await transaction.commit();
+        committed = true;
+        if (setting) await ports.saveSetting({
+          ...setting,
+          baseline: metadata,
+          baselineMapRevision: saved.updatedAt,
+          indexIdentityVersion: 1,
+          status: 'watching',
+          lastSuccessAt: ports.now(),
+          error: undefined,
+        });
+        pendingSignature = '';
+        return 'updated';
+      } catch (error) {
+        if (!committed) {
+          const failures: unknown[] = [error];
+          try {
+            await transaction.abort();
+          } catch (abortError) {
+            failures.push(abortError);
+          }
+          const savedUpdatedAt = saveReceipt.current?.updatedAt ?? saved?.updatedAt;
+          if (savedUpdatedAt !== undefined) {
+            try {
+              if (restore) await restore(savedUpdatedAt);
+              else if (saved) await ports.saveTree(saved, map.tree);
+              else throw new Error('context_auto_update_rollback_receipt_unavailable');
+            } catch (restoreError) {
+              failures.push(restoreError);
+            }
+          }
+          if (failures.length > 1)
+            throw new AggregateError(failures, 'context_auto_update_rollback_needs_review');
+        }
+        throw error;
+      }
+    } finally {
+      updatingScopes.delete(key);
     }
   };
+  const start = (signal: AbortSignal, manual: boolean) => {
+    if (inFlight) return manual ? Promise.reject(new Error('context_auto_update_busy')) : inFlight;
+    inFlight = run(signal, manual).finally(() => { inFlight = null; });
+    return inFlight;
+  };
   return {
-    tick(signal: AbortSignal) {
-      if (inFlight) return inFlight;
-      inFlight = tick(signal).finally(() => {
-        inFlight = null;
-      });
-      return inFlight;
-    },
+    tick: (signal: AbortSignal) => start(signal, false),
+    refresh: (signal: AbortSignal) => start(signal, true),
   };
 }
 
@@ -384,7 +397,7 @@ export async function createProductionContextAutoUpdater(scope: ContextAutoUpdat
       });
     },
     async stage(map, changed, deleted, signal, options) {
-      const transaction = await search.stageChangedMap(
+      return search.stageChangedMap(
         scope.accountId,
         projectSiyuanMapForContextSearch(map),
         changed,
@@ -392,24 +405,6 @@ export async function createProductionContextAutoUpdater(scope: ContextAutoUpdat
         signal,
         options,
       );
-      const key = contextAutoUpdateKey(scope);
-      updatingScopes.add(key);
-      return {
-        async commit() {
-          try {
-            await transaction.commit();
-          } finally {
-            updatingScopes.delete(key);
-          }
-        },
-        async abort() {
-          try {
-            await transaction.abort();
-          } finally {
-            updatingScopes.delete(key);
-          }
-        },
-      };
     },
     async sync(map, index, signal) {
       return (
@@ -423,11 +418,17 @@ export async function createProductionContextAutoUpdater(scope: ContextAutoUpdat
         })
       ).tree;
     },
-    async saveTree(map, tree) {
+    async prepareRollback(map) {
+      const restore = await persistence.captureMapRestore(map.id, map.updatedAt);
+      return async savedUpdatedAt => { await restore(savedUpdatedAt); };
+    },
+    async saveTree(map, tree, signal, onCommitted) {
       const state = await persistence.saveExistingTree(tree, {
         mapId: map.id,
         name: map.name,
         expectedUpdatedAt: map.updatedAt,
+        signal,
+        onCommitted,
         select: false,
         source: {
           kind: 'local_folder',
@@ -499,5 +500,5 @@ export async function createProductionContextAutoUpdater(scope: ContextAutoUpdat
       });
       notify();
     },
-  });
+  }, scope);
 }

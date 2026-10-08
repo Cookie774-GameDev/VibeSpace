@@ -28,6 +28,8 @@ export interface TokenOptimizationReceipt {
   excludedCount: number;
   fitsContext: boolean;
   overflowTokens: number;
+  /** Conservative overflow remains an estimate until the local worker checks the complete input. */
+  nativeValidationPending?: true;
   inclusions: readonly Readonly<
     SafeContextReceiptItem & {
       reason: ContextInclusionReason;

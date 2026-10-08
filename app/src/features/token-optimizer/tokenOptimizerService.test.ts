@@ -480,3 +480,78 @@ describe('Token Optimizer service', () => {
     expect(result.receipt.tokenizerSource).toBe('none');
   });
 });
+
+describe('native Foundry conservative estimate admission', () => {
+  const request = {
+    mode: 'normal' as const, providerId: 'foundry', modelId: 'artifact--job_registered',
+    contextMetadataSource: 'foundry_catalog_ceiling' as const,
+    modelContextLimit: 8192, requestedOutputTokens: 320,
+    segments: [{ id: 'policy', kind: 'system_instruction' as const,
+      text: 'Public required policy. '.repeat(2000), relevance: 1, protected: true,
+      reason: 'Required policy remains complete.' }],
+  };
+  const conservative = () => createTokenOptimizerService(createTokenizerRegistry([]));
+
+  it('retains conservative overflow and exact optional-dedup accounting without claiming fit', async () => {
+    const optional = { id: 'first', kind: 'documentation' as const, text: 'Public optional reference.',
+      relevance: 0.5, protected: false, reason: 'Public context.' };
+    const result = await conservative().optimize({ ...request,
+      segments: [...request.segments, optional, { ...optional, id: 'duplicate' }] });
+    expect(result.selectedSegments).toEqual([...request.segments, optional]);
+    expect(result.receipt).toMatchObject({ nativeValidationPending: true, fitsContext: false,
+      tokenizerSource: 'conservative_estimate', selectedCount: 2, excludedCount: 1,
+      estimatedTokensSaved: new TextEncoder().encode(optional.text).byteLength });
+    expect(result.receipt.overflowTokens).toBeGreaterThan(0);
+    expect(JSON.stringify(result.receipt)).not.toContain('Public required policy.');
+    expect(JSON.stringify(result.receipt)).not.toContain('Public optional reference.');
+  });
+
+  it.each([
+    { label: 'missing provenance', patch: { contextMetadataSource: undefined } },
+    { label: 'other provider', patch: { providerId: 'openai' } },
+    { label: 'legacy adapter', patch: { modelId: 'project--job_registered' } },
+    { label: 'knowledge route', patch: { modelId: 'foundry:job_registered' } },
+    { label: 'unsafe native ID', patch: { modelId: 'artifact--../escape' } },
+    { label: 'oversized native ID', patch: { modelId: 'artifact--' + 'x'.repeat(65) } },
+    { label: 'unusable capacity', patch: { modelContextLimit: 1 } },
+    { label: 'uncapped capacity', patch: { modelContextLimit: 32768 } },
+  ])('keeps $label overflow strict', async ({ patch }) => {
+    await expect(conservative().optimize({ ...request, ...patch })).rejects.toMatchObject({
+      name: 'TokenOptimizationOverflowError', receipt: expect.objectContaining({ fitsContext: false }),
+    });
+  });
+
+  it.each(['exact_local', 'provider_native', 'mixed'] as const)(
+    'keeps %s overflows strict even for registered native artifacts', async (source) => {
+      let call = 0;
+      const service = createTokenOptimizerService({ async estimateText() {
+        call += 1;
+        return { tokens: 10000, source: source === 'mixed'
+          ? call === 1 ? 'exact_local' as const : 'conservative_estimate' as const
+          : source, tokenizerId: 'public-test-counter' };
+      } });
+      await expect(service.optimize({ ...request,
+        segments: [...request.segments, { ...request.segments[0]!, id: 'latest', kind: 'latest_user_message' }] }))
+        .rejects.toMatchObject({ name: 'TokenOptimizationOverflowError',
+          receipt: expect.objectContaining({ tokenizerSource: source, fitsContext: false }) });
+    },
+  );
+
+  it('does not qualify an empty/none estimate set for native deferral', async () => {
+    await expect(conservative().optimize({ ...request, segments: [], modelContextLimit: 2 }))
+      .rejects.toMatchObject({ name: 'TokenOptimizationOverflowError',
+        receipt: expect.objectContaining({ tokenizerSource: 'none', fitsContext: false }) });
+  });
+
+  it.each([NaN, Infinity, -1, 1.5])('retains invalid-limit rejection for %s', async (modelContextLimit) => {
+    await expect(conservative().optimize({ ...request, modelContextLimit })).rejects.toThrow();
+  });
+
+  it('preserves Off and aborted semantics', async () => {
+    const result = await conservative().optimize({ ...request, mode: 'off' });
+    expect(result.selectedSegments).toEqual(request.segments);
+    expect(result.receipt).not.toHaveProperty('nativeValidationPending');
+    await expect(conservative().optimize({ ...request, signal: AbortSignal.abort() }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+  });
+});

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { optimizeKernelRuntimeContext } from './runtimeTokenOptimization';
+import { JARVIS_IDENTITY_POLICY } from '@/lib/jarvis/identity';
 import type { JarvisRuntimeContextBlock } from '@/lib/jarvis/runtimeContextCandidates';
 
 const base = {
@@ -68,5 +69,47 @@ describe('kernel token optimization admission', () => {
     await expect(
       optimizeKernelRuntimeContext({ ...base, mode: 'saver', signal: AbortSignal.abort() }),
     ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+});
+
+// Public policy plus synthetic task only. No private native prompt is reconstructed.
+describe('registered native Foundry planning versus authoritative native input validation', () => {
+  const foundryInput = {
+    providerId: 'foundry', modelId: 'artifact--job_budget_probe',
+    contextMetadataSource: 'foundry_catalog_ceiling' as const,
+    modelContextLimit: 8192, mode: 'normal' as const,
+    systemPrompt: 'Preserve this public policy exactly.',
+    blocks: [{ key: 'explicit_files' as const, text: 'Public required attachment.' }],
+    messages: [{ role: 'user' as const, content: 'Return the public code CL-041.' }],
+  };
+
+  it('plans the native default320 reserve for a known Foundry artifact instead of consuming its entire window', async () => {
+    const result = await optimizeKernelRuntimeContext(foundryInput);
+    expect(result.receipt).toMatchObject({ outputTokenLimit: 320, fitsContext: true });
+    expect(result.messages).toEqual(foundryInput.messages);
+    expect(result.blocks).toEqual(foundryInput.blocks);
+  });
+
+  it('retains a conservative overflow as an estimate while preserving every required byte for the native guard', async () => {
+    const systemPrompt = [JARVIS_IDENTITY_POLICY.responseContract, JARVIS_IDENTITY_POLICY.identityCore].join('\n\n');
+    expect(new TextEncoder().encode(systemPrompt).byteLength).toBeGreaterThan(8192);
+    const result = await optimizeKernelRuntimeContext({ ...foundryInput, systemPrompt, requestedOutputTokens: 320 });
+    expect(result.messages).toEqual(foundryInput.messages);
+    expect(result.blocks).toEqual(foundryInput.blocks);
+    expect(result.receipt).toMatchObject({ mode: 'normal', tokenizerSource: 'conservative_estimate',
+      outputTokenLimit: 320, fitsContext: false, nativeValidationPending: true, estimatedTokensSaved: 0, excludedCount: 0 });
+    expect(result.receipt!.overflowTokens).toBeGreaterThan(0);
+  });
+
+  it('does not treat a public UTF-8 upper bound as a measured tokenizer count', async () => {
+    const systemPrompt = [JARVIS_IDENTITY_POLICY.responseContract, JARVIS_IDENTITY_POLICY.identityCore].join('\n\n');
+    await expect(optimizeKernelRuntimeContext({ ...foundryInput,
+      contextMetadataSource: undefined, modelId: 'artifact--unknown_probe', systemPrompt, requestedOutputTokens: 320,
+    })).rejects.toMatchObject({ name: 'TokenOptimizationOverflowError', receipt: expect.objectContaining({
+      tokenizerSource: 'conservative_estimate',
+      estimatedInputTokensBefore: new TextEncoder().encode(systemPrompt).byteLength
+        + new TextEncoder().encode(foundryInput.blocks[0]!.text).byteLength
+        + new TextEncoder().encode('[user]\n' + foundryInput.messages[0]!.content).byteLength,
+    }) });
   });
 });

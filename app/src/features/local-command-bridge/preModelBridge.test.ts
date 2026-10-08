@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createInstantCommandReceipt } from '@/features/instant-command/receipt';
-import { LocalCommandPreModelBridge } from './preModelBridge';
+import { LocalCommandPreModelBridge, requiresLocalCommandPreflight } from './preModelBridge';
+import { routeLocalCommand } from './router';
+import { createHash } from 'node:crypto';
 import type { InstantCommandReceipt } from '@/features/instant-command/receipt';
 import type {
   InstantCommand,
@@ -36,6 +38,108 @@ function receipt(
 }
 
 describe('pre-model local command bridge', () => {
+  it('keeps the exact native B06 narrative draft out of local-action preflight', async () => {
+    // Public synthetic failed-send body, preserved byte for byte from the native receipt.
+    const text =
+      'Continue the same public fictional Alder Exchange workshop planning conversation. Use the established facts and decisions from earlier turns, and state clearly when this turn changes or withdraws a prior hypothetical. Do not use tools, retrieve external material, or claim an external action. Do not invent missing facts.\n\nIn exactly one primary-prose section between the literal whole-line markers <<<PRIMARY_PROSE>>> and <<<END_PRIMARY_PROSE>>>, give original, substantive analysis of 260-340 useful words and at least 1,400 characters. Explain your reasoning and tradeoffs, then update the decision register. Avoid tables or copied text inside the section.\n\nTurn 6: The Cedar Room closure is withdrawn. Rebuild the provisional plan from the original baseline plus the accessibility and topic-order preferences. Mark which prior branch is superseded.';
+    expect(new TextEncoder().encode(text).byteLength).toBe(852);
+    expect(createHash('sha256').update(text, 'utf8').digest('hex')).toBe(
+      '2a8775058f16dbcf6615a0d92074a2e95507358fc8170be9cea38559be904fbc',
+    );
+    const execute = vi.fn();
+    const bridge = new LocalCommandPreModelBridge({ execute });
+    const result = await bridge.process({
+      text,
+      interactionId: 'interaction-b06-public-narrative',
+      context: context('interaction-b06-public-narrative'),
+    });
+    expect(result.holdModel).toBe(false);
+    expect(requiresLocalCommandPreflight(text)).toBe(false);
+    expect(routeLocalCommand(text).ambiguous).toEqual([]);
+    expect(result.modelText).toBe(text);
+    expect(result.detectedCommands).toEqual([]);
+    expect(result.receipts).toEqual([]);
+    expect(result.localActionContext).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each(['turn off schedule weekly', 'Turn 6: turn off schedule weekly'])(
+    'retains a genuine turn-off command and its existing unsupported-adapter boundary: %s',
+    async (text) => {
+      const execute = vi.fn();
+      const bridge = new LocalCommandPreModelBridge({ execute });
+      const result = await bridge.process({
+        text,
+        interactionId: 'interaction-labelled-schedule',
+        context: context('interaction-labelled-schedule'),
+      });
+      expect(routeLocalCommand(text).commands).toMatchObject([{ id: 'schedule.disable' }]);
+      expect(result.unsupportedCommands).toMatchObject([{ id: 'schedule.disable' }]);
+      expect(requiresLocalCommandPreflight(text)).toBe(false);
+      expect(execute).not.toHaveBeenCalled();
+      expect(result.holdModel).toBe(false);
+      expect(result.modelText).toBe(text);
+      expect(result.receipts).toEqual([]);
+    },
+  );
+
+  it('retains the approval hold for a numbered labelled mapped command', async () => {
+    const text = 'Turn 6: open a Claude terminal';
+    const execute = vi.fn(
+      async (_command: InstantCommand, executionContext: InstantCommandExecutionContext) =>
+        receipt('terminal.open', executionContext.correlationId, 'needs_confirmation'),
+    );
+    const bridge = new LocalCommandPreModelBridge({ execute });
+    const result = await bridge.process({
+      text,
+      interactionId: 'interaction-labelled-confirmation',
+      context: context('interaction-labelled-confirmation'),
+    });
+    expect(requiresLocalCommandPreflight(text)).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result.holdModel).toBe(true);
+    expect(result.modelText).toBe(text);
+    expect(result.receipts).toMatchObject([
+      { commandId: 'terminal.open', status: 'needs_confirmation' },
+    ]);
+    expect(result.localActionContext).toBeUndefined();
+  });
+
+  it('keeps a numbered labelled genuine command at the caller boundary', async () => {
+    const text = 'Turn 6: open a Claude terminal';
+    const execute = vi.fn(
+      async (_command: InstantCommand, executionContext: InstantCommandExecutionContext) =>
+        receipt('terminal.open', executionContext.correlationId),
+    );
+    const bridge = new LocalCommandPreModelBridge({ execute });
+    const result = await bridge.process({
+      text,
+      interactionId: 'interaction-labelled-terminal',
+      context: context('interaction-labelled-terminal'),
+    });
+    expect(requiresLocalCommandPreflight(text)).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]![0]).toMatchObject({ kind: 'open-agent-cli', provider: 'claude' });
+    expect(result.holdModel).toBe(false);
+    expect(result.receipts).toMatchObject([{ commandId: 'terminal.open', status: 'completed' }]);
+  });
+
+  it('holds a numbered labelled ambiguous command even alongside narrative prose', async () => {
+    const text = 'Turn 6: open codec. The Cedar Room closure is withdrawn.';
+    const execute = vi.fn();
+    const bridge = new LocalCommandPreModelBridge({ execute });
+    const result = await bridge.process({
+      text,
+      interactionId: 'interaction-labelled-ambiguous',
+      context: context('interaction-labelled-ambiguous'),
+    });
+    expect(requiresLocalCommandPreflight(text)).toBe(true);
+    expect(result.holdModel).toBe(true);
+    expect(result.modelText).toBe(text);
+    expect(result.receipts).toMatchObject([{ status: 'needs_clarification' }]);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it.each(['open codec', 'open codez', 'open clode', 'open settings and open codec'])(
     'holds the ambiguous local command %s before any executor or model dispatch',
     async (text) => {

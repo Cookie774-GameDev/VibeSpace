@@ -103,3 +103,20 @@ describe('Token Optimize standalone UI', () => {
     );
   });
 });
+
+it('shows conservative native validation pending without claiming a measured fit', () => {
+  const receipt: TokenOptimizationReceipt = {
+    mode: 'normal', providerId: 'foundry', modelId: 'artifact--job_public', modelChanged: false,
+    tokenizerSource: 'conservative_estimate', outputTokenLimit: 320,
+    estimatedInputTokensBefore: 10467, estimatedInputTokensAfter: 10467,
+    estimatedTokensSaved: 0, selectedCount: 1, excludedCount: 0,
+    fitsContext: false, overflowTokens: 2595, nativeValidationPending: true,
+    inclusions: [{ segmentRef: 'segment-1', kind: 'system_instruction', tokens: 10467, reason: 'protected' }],
+    exclusions: [],
+  };
+  render(<TokenOptimizationReceiptView receipt={receipt} />);
+  expect(screen.getByRole('alert').textContent).toContain('Estimated context exceeds this model by 2,595 tokens.');
+  expect(screen.getByRole('alert').textContent).toContain('The local model checks the complete input before generation.');
+  expect(screen.getByRole('alert').textContent).toContain('Required content was preserved.');
+  expect(screen.queryByText(/measured fit/i)).toBeNull();
+});

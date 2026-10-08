@@ -77,6 +77,7 @@ export async function optimizeKernelRuntimeContext(
     blocks: readonly JarvisRuntimeContextBlock[];
     messages: readonly LLMMessage[];
     modelContextLimit?: number;
+    contextMetadataSource?: 'foundry_catalog_ceiling';
     requestedOutputTokens?: number;
     signal?: AbortSignal;
   },
@@ -91,6 +92,7 @@ export async function optimizeKernelRuntimeContext(
     systemPrompt: input.systemPrompt,
     messages: input.messages,
     modelContextLimit: input.modelContextLimit,
+    ...(input.contextMetadataSource === undefined ? {} : { contextMetadataSource: input.contextMetadataSource }),
     requestedOutputTokens: input.requestedOutputTokens,
     signal: input.signal,
     contextSegments: input.blocks.map((block, index) => ({

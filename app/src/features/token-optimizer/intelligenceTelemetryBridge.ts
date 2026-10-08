@@ -72,7 +72,8 @@ export function tokenOptimizationReceiptToTelemetry(
     attributes: Object.freeze({
       mode: receipt.mode,
       tokenizerSource: receipt.tokenizerSource,
-      resultState: receipt.fitsContext ? 'fits_context' : 'protected_overflow',
+      resultState: receipt.nativeValidationPending ? 'native_validation_pending'
+        : receipt.fitsContext ? 'fits_context' : 'protected_overflow',
     }),
   });
 }

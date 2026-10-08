@@ -6,6 +6,7 @@ import type {
 } from './contracts';
 import type { TokenOptimizationReceipt, TokenizerSourceSummary } from './optimizationReport';
 import { isProtectedContext } from './protectedContent';
+import { hasNativeFoundryContextValidation } from '@/lib/ai/providers/foundryRequestLimits';
 
 export interface TokenOptimizationSegment {
   id: string;
@@ -23,6 +24,7 @@ export interface TokenOptimizerRequest {
   providerId: string;
   modelId: string;
   modelContextLimit: number;
+  contextMetadataSource?: 'foundry_catalog_ceiling';
   requestedOutputTokens: number;
   segments: readonly TokenOptimizationSegment[];
   allowProviderTokenCountTransport?: boolean;
@@ -179,6 +181,14 @@ export function createTokenOptimizerService(tokenizers: TokenizerRegistry): Toke
         checkedTokenAdd(estimatedInputTokensAfter, outputTokenLimit) - modelContextLimit,
       );
       const fitsContext = overflowTokens === 0;
+      // A UTF-8 upper bound is not a measured model-token count. Only a
+      // registered native weight route has the exact, no-truncation guard.
+      const nativeValidationPending = !fitsContext && request.mode !== 'off' &&
+        estimated.length > 0 && estimated.every(({ estimate }) => estimate.source === 'conservative_estimate') &&
+        hasNativeFoundryContextValidation({
+          providerId: request.providerId, modelId: request.modelId, modelContextLimit,
+          contextMetadataSource: request.contextMetadataSource,
+        });
       const segmentRefs = new Map(
         request.segments.map((segment, index) => [segment.id, `segment-${index + 1}` as const]),
       );
@@ -196,6 +206,7 @@ export function createTokenOptimizerService(tokenizers: TokenizerRegistry): Toke
         excludedCount: excludedIndexes.length,
         fitsContext,
         overflowTokens,
+        ...(nativeValidationPending ? { nativeValidationPending: true as const } : {}),
         inclusions: Object.freeze(
           selectedIndexes.map((index) => {
             const { segment, estimate } = estimated[index]!;
@@ -223,7 +234,7 @@ export function createTokenOptimizerService(tokenizers: TokenizerRegistry): Toke
         ),
       });
 
-      if (!fitsContext && request.mode !== 'off') {
+      if (!fitsContext && request.mode !== 'off' && !nativeValidationPending) {
         throw new TokenOptimizationOverflowError(receipt);
       }
 

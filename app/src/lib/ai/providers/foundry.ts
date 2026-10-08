@@ -3,6 +3,7 @@ import { llmContentToText } from '../types';
 import { generateFromFoundryArtifact } from '@/features/model-foundry/nativeBridge';
 import { canRoutePromotedAdapter } from '@/features/model-foundry/adapterRegistry';
 import { isTauri } from '@/lib/utils';
+import { resolveFoundryMaxNewTokens } from './foundryRequestLimits';
 
 const MODEL_ID = /^([A-Za-z0-9_-]{1,64})--([A-Za-z0-9_-]{1,64})$/;
 
@@ -66,7 +67,7 @@ export const foundryProvider: LLMProvider = {
       jobId,
       prompt,
       messages,
-      maxNewTokens: Math.min(512, Math.max(1, req.max_output_tokens ?? 320)),
+      maxNewTokens: resolveFoundryMaxNewTokens(req.max_output_tokens),
       signal: req.signal,
       correlation: req.protectedAttempt ? {
         runId: req.protectedAttempt.runId,

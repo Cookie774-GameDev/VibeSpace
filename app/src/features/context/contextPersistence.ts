@@ -51,6 +51,8 @@ export interface ContextFileSelectionTarget {
 }
 
 export interface ContextPersistenceService {
+  /** Capture last-good graph bytes; compensation may replace only the next owned revision. */
+  captureMapRestore(accountId: string, projectId: string | null, mapId: string, expectedUpdatedAt: number): Promise<(savedUpdatedAt: number) => Promise<ContextPersistenceState>>;
   loadMap(accountId: string, projectId: string | null, mapId: string): Promise<ContextMapRecord | null>;
   initialize(accountId: string, projectId: string | null): Promise<ContextPersistenceState>;
   hasEquivalentTree(accountId: string, tree: ProjectContextTree, mapId: string, expectedUpdatedAt: number, signal?: AbortSignal): Promise<boolean>;
@@ -85,7 +87,17 @@ export interface ContextPersistenceService {
   ): Promise<ContextPersistenceState>;
 }
 
+export type ContextTreeCommitReceipt = Readonly<{
+  accountId: string;
+  projectId: string | null;
+  mapId: string;
+  updatedAt: number;
+  knowledgeRevision: number;
+}>;
+
 export interface ContextTreeSaveOptions {
+  /** Internal synchronous durable-commit receipt, before post-commit reads/cancellation checks. */
+  onCommitted?: (receipt: ContextTreeCommitReceipt) => void;
   signal?: AbortSignal;
   sourceStatus?: 'indexing' | 'ready' | 'error';
   /** Background refresh must preserve the user's current map selection. */
@@ -422,25 +434,50 @@ export function createContextPersistenceService(
 
   // A bound live owner can revoke a pending IDB commit, including after a
   // queued write succeeds. Repository CAS and optional selection share the transaction.
-  const withAbortableWrite = async <T>(signal: AbortSignal | undefined, write: () => Promise<T>, additionalTables: readonly ('messages' | 'chats' | 'projects')[] = []): Promise<T> => {
-    if (!signal) return write();
-    signal.throwIfAborted();
+  const withAbortableWrite = async <T>(signal: AbortSignal | undefined, write: () => Promise<T>, additionalTables: readonly ('messages' | 'chats' | 'projects')[] = [], onCommitted?: () => void): Promise<T> => {
+    if (!signal && !onCommitted) return write();
+    signal?.throwIfAborted();
     let detachAbort = () => {};
     try {
       return await database.transaction('rw', [database.context_maps, database.context_sources,
         database.context_entities, database.context_edges, database.context_provenance, database.settings, ...additionalTables.map(name => database[name])], async transaction => {
+        if (onCommitted) {
+          let owner: import('dexie').Transaction = transaction;
+          while (owner.parent) owner = owner.parent;
+          owner.on('complete', onCommitted);
+        }
         const abort = () => transaction.abort();
-        signal.addEventListener('abort', abort, {once:true});
-        detachAbort = () => signal.removeEventListener('abort', abort);
-        signal.throwIfAborted();
+        signal?.addEventListener('abort', abort, {once:true});
+        detachAbort = () => signal?.removeEventListener('abort', abort);
+        signal?.throwIfAborted();
         const result = await write();
-        signal.throwIfAborted();
+        signal?.throwIfAborted();
         return result;
       });
     } finally { detachAbort(); }
   };
 
   const service: ContextPersistenceService = {
+    async captureMapRestore(accountId, projectId, mapId, expectedUpdatedAt) {
+      assertIdentity(accountId, projectId);
+      const snapshot = await repository.getSnapshot(accountId, mapId);
+      if (!snapshot || snapshot.map.projectId !== projectId || snapshot.map.status !== 'active') fail('map_missing');
+      if (snapshot.map.updatedAt !== expectedUpdatedAt) fail('map_changed');
+      const original = structuredClone(snapshot) as ContextGraphSnapshotV2;
+      return async savedUpdatedAt => {
+        const current = await repository.getSnapshot(accountId, mapId);
+        if (!current || current.map.projectId !== projectId || current.map.status !== 'active') fail('map_missing');
+        if (current.map.updatedAt !== savedUpdatedAt || savedUpdatedAt <= expectedUpdatedAt ||
+            current.map.knowledgeRevision !== original.map.knowledgeRevision + 1) fail('map_changed');
+        const restored = structuredClone(original);
+        restored.map.updatedAt = Math.max(Date.now(), current.map.updatedAt + 1);
+        restored.map.knowledgeRevision = current.map.knowledgeRevision + 1;
+        // Do not re-import a canonical projection or manufacture source verification.
+        // Repository CAS refuses an intervening owner inside the write transaction.
+        await repository.putSnapshot(accountId, restored, { expectedKnowledgeRevision: current.map.knowledgeRevision });
+        return load(accountId, projectId);
+      };
+    },
     async loadMap(accountId, projectId, mapId) {
       assertIdentity(accountId, projectId);
       const snapshot = await repository.getSnapshot(accountId, mapId);
@@ -513,6 +550,7 @@ export function createContextPersistenceService(
     load,
 
     async saveTree(accountId, tree, options = {}) {
+      const onCommitted = options.onCommitted;
       options.signal?.throwIfAborted();
       assertIdentity(accountId, tree.projectId);
       const current = await load(accountId, tree.projectId);
@@ -604,7 +642,10 @@ export function createContextPersistenceService(
           expectedKnowledgeRevision: existing?.map.knowledgeRevision ?? 0,
         });
         if (options.select !== false) await writeSelection(accountId, tree.projectId, mapId);
-      });
+      }, [], onCommitted ? () => onCommitted(Object.freeze({
+        accountId, projectId: snapshot.map.projectId, mapId,
+        updatedAt: snapshot.map.updatedAt, knowledgeRevision: snapshot.map.knowledgeRevision,
+      })) : undefined);
       options.signal?.throwIfAborted();
       return load(accountId, tree.projectId);
     },
@@ -914,6 +955,7 @@ export async function ensureContextPersistence(
 export interface CapturedContextPersistenceScope {
   readonly accountId: string;
   readonly projectId: string | null;
+  captureMapRestore(mapId: string, expectedUpdatedAt: number): Promise<(savedUpdatedAt: number) => Promise<ContextPersistenceState>>;
   load(): Promise<ContextPersistenceState>;
   loadMap(mapId: string): Promise<ContextMapRecord | null>;
   saveExistingTree(
@@ -941,6 +983,14 @@ export async function captureContextPersistenceScope(
   return Object.freeze({
     accountId,
     projectId,
+    captureMapRestore: async (mapId: string, expectedUpdatedAt: number) => {
+      const restore = await getProductionService().captureMapRestore(accountId, projectId, mapId, expectedUpdatedAt);
+      return async (savedUpdatedAt: number) => {
+        const restored = await restore(savedUpdatedAt);
+        await queuePersistedMapMetadataSafely(accountId, mapId);
+        return restored;
+      };
+    },
     load: () => getProductionService().load(accountId, projectId),
     loadMap: (mapId: string) => getProductionService().loadMap(accountId, projectId, mapId),
     saveExistingTree: async (

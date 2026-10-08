@@ -42,6 +42,7 @@ import {
   createTerminalCliContextSourceService,
   TerminalCliContextSourceError,
 } from './terminalCliContextSources';
+import { createProductionContextAutoUpdater } from '@/features/context/contextAutoUpdate';
 import { productionContextGateway } from '@/features/context/gateway/productionContextGateway';
 import {
   authorizeTerminalContextBridgeIdentity,
@@ -529,48 +530,70 @@ export function createProductionTerminalCliRuntimeDependencies(
       useUIStore.getState().setRoute('context');
     },
     async refreshContextMap(projectId, mapId) {
-      const map = await selectedMap(projectId, mapId);
-      if (map.sourceType === 'local_file') {
-        return sourceOperation(async () => {
-          await openDb();
-          const state = await ensureContextPersistence(projectId);
-          await productionSourceService().refreshLocalFile({
-            accountId: state.accountId,
-            projectId,
-            mapId: map.id,
-          });
-          const refreshed = (await reloadPersistedContextMaps(projectId)).find(
-            (candidate) => candidate.id === map.id,
-          );
-          if (!refreshed) {
-            throw new TerminalCliRuntimeServiceError(
-              'internal_error',
-              'The Context Map refresh did not produce a persisted map.',
+      const auth = useAuthStore.getState();
+      const identity = getActiveAccountIdentity();
+      if (!identity || !auth.workspaceId || String(auth.projectId) !== projectId) {
+        throw new TerminalCliRuntimeServiceError('conflict', 'The Context refresh scope is no longer active.');
+      }
+      const controller = new AbortController();
+      const current = () => {
+        const next = useAuthStore.getState();
+        const account = getActiveAccountIdentity();
+        return account?.accountId === identity.accountId && account.source === identity.source &&
+          next.workspaceId === auth.workspaceId && next.projectId === auth.projectId;
+      };
+      // Bind before the first await: a leave-and-return transition still revokes this request.
+      const unsubscribe = useAuthStore.subscribe(() => { if (!current()) controller.abort(); });
+      try {
+        const map = await selectedMap(projectId, mapId);
+        controller.signal.throwIfAborted();
+        if (map.sourceType === 'local_file') {
+          return sourceOperation(async () => {
+            await openDb();
+            const state = await ensureContextPersistence(projectId);
+            await productionSourceService().refreshLocalFile({
+              accountId: state.accountId,
+              projectId,
+              mapId: map.id,
+            });
+            const refreshed = (await reloadPersistedContextMaps(projectId)).find(
+              (candidate) => candidate.id === map.id,
             );
-          }
-          return descriptor(refreshed);
+            if (!refreshed) {
+              throw new TerminalCliRuntimeServiceError(
+                'internal_error',
+                'The Context Map refresh did not produce a persisted map.',
+              );
+            }
+            return descriptor(refreshed);
+          });
+        }
+        if (!map.rootDir || map.sourceType === 'github_repository') {
+          throw new TerminalCliRuntimeServiceError(
+            'conflict',
+            'This Context source cannot be refreshed from the local terminal runtime.',
+          );
+        }
+        const updater = await createProductionContextAutoUpdater({
+          accountId: identity.accountId,
+          workspaceId: String(auth.workspaceId),
+          projectId,
+          mapId: map.id,
         });
+        controller.signal.throwIfAborted();
+        if (await updater.refresh(controller.signal) !== 'updated') {
+          throw new TerminalCliRuntimeServiceError('conflict', 'The Context refresh did not complete.');
+        }
+        controller.signal.throwIfAborted();
+        const refreshed = (await reloadPersistedContextMaps(projectId)).find(candidate => candidate.id === map.id);
+        controller.signal.throwIfAborted();
+        if (!current() || !refreshed || refreshed.status !== 'active') {
+          throw new TerminalCliRuntimeServiceError('conflict', 'The Context refresh scope is no longer active.');
+        }
+        return descriptor(refreshed);
+      } finally {
+        unsubscribe();
       }
-      if (!map.rootDir || map.sourceType === 'github_repository') {
-        throw new TerminalCliRuntimeServiceError(
-          'conflict',
-          'This Context source cannot be refreshed from the local terminal runtime.',
-        );
-      }
-      const tree = await generateProjectContextTree({
-        projectId,
-        rootDir: map.rootDir,
-        provider: 'local',
-      });
-      const state = await savePersistedContextTree(tree, { mapId: map.id, name: map.name });
-      const refreshed = state.maps.find((candidate) => candidate.id === map.id);
-      if (!refreshed) {
-        throw new TerminalCliRuntimeServiceError(
-          'internal_error',
-          'The Context Map refresh did not produce a persisted map.',
-        );
-      }
-      return descriptor(refreshed);
     },
     async createContextMap(projectId, input) {
       if (input.sourceKind === 'file') {

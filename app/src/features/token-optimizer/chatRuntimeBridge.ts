@@ -12,6 +12,7 @@ import {
   type TokenOptimizationSegment,
 } from './tokenOptimizerService';
 import { createTokenizerRegistry } from './tokenizerRegistry';
+import { resolveFoundryMaxNewTokens } from '@/lib/ai/providers/foundryRequestLimits';
 
 const FALLBACK_CONTEXT_WINDOW_TOKENS = 32_768;
 const DEFAULT_REQUESTED_OUTPUT_TOKENS = 8_192;
@@ -21,6 +22,7 @@ export interface ChatTokenOptimizationRequest {
   readonly providerId: string;
   readonly modelId: string;
   readonly modelContextLimit?: number;
+  readonly contextMetadataSource?: 'foundry_catalog_ceiling';
   readonly requestedOutputTokens?: number;
   readonly systemPrompt?: string;
   readonly contextSegments?: readonly Readonly<{
@@ -173,8 +175,9 @@ async function optimizeWith(
   // exact optional duplicates; protected content and conversation history
   // remain in order. Provider-reported usage remains authoritative for the
   // serialized request sent to the model.
-  const outputAllowance =
-    Number.isSafeInteger(request.requestedOutputTokens) && request.requestedOutputTokens! >= 0
+  const outputAllowance = request.providerId === 'foundry'
+    ? resolveFoundryMaxNewTokens(request.requestedOutputTokens)
+    : Number.isSafeInteger(request.requestedOutputTokens) && request.requestedOutputTokens! >= 0
       ? request.requestedOutputTokens
       : undefined;
   const measured = await optimizer.optimize({
@@ -183,6 +186,7 @@ async function optimizeWith(
     modelId: request.modelId,
     modelContextLimit: safeLimit(request.modelContextLimit, FALLBACK_CONTEXT_WINDOW_TOKENS),
     requestedOutputTokens: outputAllowance ?? DEFAULT_REQUESTED_OUTPUT_TOKENS,
+    ...(request.contextMetadataSource === undefined ? {} : { contextMetadataSource: request.contextMetadataSource }),
     segments,
     allowProviderTokenCountTransport: request.allowProviderTokenCountTransport === true,
     ...(request.signal ? { signal: request.signal } : {}),

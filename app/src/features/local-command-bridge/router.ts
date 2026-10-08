@@ -639,6 +639,12 @@ function stripLeadingWrappers(normalized) {
 
 function speechAct(span, ranges) {
   if (insideQuote(span, ranges)) return { status: 'reject', reason: 'quoted' };
+  // A numbered conversation heading is not the imperative verb "turn".
+  // Check before normalize() removes the colon. splitConnectors() has already
+  // separated any following real command, whose own span still needs admission.
+  if (/^turn[ \t]+\d+[ \t]*:(?:[ \t]+|$)/iu.test(span.text)) {
+    return { status: 'reject', reason: 'not-imperative' };
+  }
   const normalized = normalize(span.text);
   if (!normalized) return { status: 'reject', reason: 'empty' };
 

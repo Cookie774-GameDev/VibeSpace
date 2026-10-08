@@ -161,7 +161,9 @@ export function TokenOptimizationReceiptView({
       {!receipt.fitsContext ? (
         <p className="token-opt-overflow" role="alert">
           Estimated context exceeds this model by {formatCount(receipt.overflowTokens)} tokens.
-          Nothing was removed.
+          {receipt.nativeValidationPending
+            ? ' The local model checks the complete input before generation. Required content was preserved.'
+            : ' Nothing was removed.'}
         </p>
       ) : null}
 

@@ -370,6 +370,7 @@ import {
   type TokenOptimizationMode,
 } from '@/features/token-optimizer';
 import { getModelOptions } from './models';
+import { resolveFoundryMaxNewTokens } from './providers/foundryRequestLimits';
 import {
   optimizeKernelRuntimeContext,
   isProtectedTokenOptimizationContext,
@@ -5247,6 +5248,7 @@ async function createRuntimeShadowTurn(input: {
 
 async function createRuntimeKernelTurn(input: {
   host: InstalledJarvisKernelRuntimeHost;
+  assertPreparationCurrent(): void;
   agent: Agent;
   chatId: ChatId | string;
   voiceAccountId?: string;
@@ -5320,6 +5322,9 @@ async function createRuntimeKernelTurn(input: {
   if (input.tokenOptimization && input.tokenOptimization.mode !== 'off') {
     // Optimize admitted, bounded data; never count or reintroduce legacy prompt
     // blocks that the canonical context gate already rejected or truncated.
+    const selectedBudgetModel = getModelOptions(input.agent.model.provider).find(
+      ({ id }) => id === input.model.modelId,
+    );
     const optimized = await optimizeKernelRuntimeContext({
       mode: input.tokenOptimization.mode,
       providerId: input.model.providerId,
@@ -5343,13 +5348,15 @@ async function createRuntimeKernelTurn(input: {
         score: item.score,
       })),
       messages,
-      modelContextLimit: getModelOptions(input.agent.model.provider).find(
-        ({ id }) => id === input.model.modelId,
-      )?.contextWindowTokens,
-      requestedOutputTokens: resolveOptimizedOutputLimit(
-        input.tokenOptimization.mode,
-        input.tokenOptimization.outputTokens,
-      ),
+      modelContextLimit: selectedBudgetModel?.contextWindowTokens,
+      ...(selectedBudgetModel?.contextMetadataSource === undefined ? {} : {
+        contextMetadataSource: selectedBudgetModel.contextMetadataSource,
+      }),
+      // The canonical provider request currently has no max_output_tokens;
+      // its real local allowance is the provider default, not a UI-only hint.
+      requestedOutputTokens: input.model.providerId === 'foundry'
+        ? resolveFoundryMaxNewTokens(undefined)
+        : resolveOptimizedOutputLimit(input.tokenOptimization.mode, input.tokenOptimization.outputTokens),
       signal: input.tokenOptimization.signal,
     });
     const kept = new Set(optimized.blocks.map((block) => block.source!.id));
@@ -5378,6 +5385,9 @@ async function createRuntimeKernelTurn(input: {
   ) {
     throw new Error('canonical_voice_session_scope_revoked');
   }
+  // Preparation may await context/token accounting while the original scope is revoked.
+  // Refuse before the first journal write; allocation's own transaction is a separate boundary.
+  input.assertPreparationCurrent();
   const run = await input.host.journal.allocateRun({
     id: runId,
     accountId,
@@ -6410,6 +6420,18 @@ export function startRuntimeListener(
       access: readPermissionAccess(String(chatId)).access,
       approval: readAgentApprovalMode(String(chatId)),
     }));
+    const assertPreparationCurrent = (): void => {
+      controller.signal.throwIfAborted();
+      const policy = activeResumePolicies.get(controller);
+      const current = useAuthStore.getState();
+      if (runtimeStopped || !activeControllers.has(controller) || !policy?.accountId ||
+        activeFollowupScopeEpochs.get(controller) !== followupScopeEpoch ||
+        resolveAccountIdentity(current)?.accountId !== policy.accountId ||
+        (current.workspaceId ?? null) !== policy.workspaceId ||
+        (current.projectId ?? null) !== policy.projectId) {
+        throw new Error('canonical_preparation_scope_revoked');
+      }
+    };
     const chatControllers = controllersByChatId.get(String(chatId)) ?? new Set<AbortController>();
     chatControllers.add(controller);
     controllersByChatId.set(String(chatId), chatControllers);
@@ -8213,6 +8235,7 @@ export function startRuntimeListener(
             });
             const turn = await createRuntimeKernelTurn({
               host,
+              assertPreparationCurrent,
               agent: finalAgent,
               chatId,
               ...(chatRecord?.workspace_id ? { workspaceId: String(chatRecord.workspace_id) } : {}),
@@ -8343,6 +8366,7 @@ export function startRuntimeListener(
               : [...kernelMessages].reverse().find((message) => message.role === 'user')?.content;
             const turn = await createRuntimeKernelTurn({
               host,
+              assertPreparationCurrent,
               agent: runnable,
               chatId,
               ...(detail.speakReply === true && detail.accountId
@@ -8870,9 +8894,9 @@ export function startRuntimeListener(
         requestedOutputLimit,
       );
       if (tokenOptimizationMode !== 'off') {
-        const modelContextLimit =
-          getModelOptions(runnable.model.provider).find(({ id }) => id === runnable.model.model)
-            ?.contextWindowTokens ??
+        const selectedBudgetModel =
+          getModelOptions(runnable.model.provider).find(({ id }) => id === runnable.model.model);
+        const modelContextLimit = selectedBudgetModel?.contextWindowTokens ??
           Object.values(CONNECTION_MODEL_OPTIONS)
             .flatMap((options) => options ?? [])
             .find((option) => option.id === runnable.model.model)?.contextWindowTokens;
@@ -8882,6 +8906,9 @@ export function startRuntimeListener(
             providerId: runnable.model.provider,
             modelId: runnable.model.model,
             ...(modelContextLimit === undefined ? {} : { modelContextLimit }),
+            ...(selectedBudgetModel?.contextMetadataSource === undefined ? {} : {
+              contextMetadataSource: selectedBudgetModel.contextMetadataSource,
+            }),
             ...(optimizedOutputTokenLimit === undefined
               ? {}
               : { requestedOutputTokens: optimizedOutputTokenLimit }),

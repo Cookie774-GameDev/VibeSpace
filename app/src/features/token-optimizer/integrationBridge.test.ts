@@ -307,3 +307,20 @@ describe('Token Optimize integration bridge', () => {
     ).toThrow(/invalid telemetry account scope hash/i);
   });
 });
+
+it('classifies a deferred conservative receipt as native validation pending in local metrics', () => {
+  const receipt = {
+    mode: 'normal' as const, providerId: 'foundry', modelId: 'artifact--job_public',
+    modelChanged: false as const, tokenizerSource: 'conservative_estimate' as const,
+    outputTokenLimit: 320, estimatedInputTokensBefore: 10467, estimatedInputTokensAfter: 10467,
+    estimatedTokensSaved: 0, selectedCount: 1, excludedCount: 0,
+    fitsContext: false, overflowTokens: 2595, nativeValidationPending: true as const,
+    inclusions: [], exclusions: [],
+  };
+  const event = tokenOptimizationReceiptToTelemetry(receipt, { eventId: 'evt-public',
+    requestId: 'request-public', attemptNumber: 1, accountScopeHash: 'scope-hash', projectScopeHash: 'project-hash', observedAt: 1 });
+  expect(event.attributes).toMatchObject({ resultState: 'native_validation_pending',
+    tokenizerSource: 'conservative_estimate', mode: 'normal' });
+  expect(event.attributes.resultState).not.toBe('fits_context');
+  expect(JSON.stringify(event)).not.toContain('systemPrompt');
+});

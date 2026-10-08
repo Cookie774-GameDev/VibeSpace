@@ -2,19 +2,71 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createJarvisDb, type JarvisDexie } from '@/lib/db';
 import { TEST_INDEXED_DB, uniqueTestDbName } from '@/test/indexedDb';
 import { createContextPersistenceService } from '@/features/context/contextPersistence';
-import type { ProjectContextTree } from '@/features/context/tree';
+import { createHash } from 'node:crypto';
+import { useAuthStore } from '@/stores/auth';
+import type { ProjectId, WorkspaceId } from '@/types/common';
+import { buildProjectContextTreeFromSiyuanIndex, type SiyuanSafeIndex } from '@/features/context/siyuan/siyuanSafeIndex';
+import type { ContextMapRecord, ProjectContextTree } from '@/features/context/tree';
 import { useUIStore } from '@/stores/ui';
-const io=vi.hoisted(()=>({service:null as ReturnType<typeof import('@/features/context/contextPersistence').createContextPersistenceService>|null}));
+const io=vi.hoisted(()=>({write:vi.fn(),sync:vi.fn(),readMaps:vi.fn(),jobStatus:'completed',root:'C:/owned-c08-readonly',nativeCalls:[] as Array<{command:string;request:any}>,service:null as ReturnType<typeof import('@/features/context/contextPersistence').createContextPersistenceService>|null}));
+vi.mock('@/lib/fs',async original=>({
+  ...(await original<typeof import('@/lib/fs')>()),
+  listDirectory:async(path:string)=>({ok:true,path,entries:[{name:'same.txt',path:`${path}/same.txt`,isDir:false,size:4,modifiedMs:2}]}),
+  listDirectoriesStrict:async(paths:readonly string[])=>paths.map(path=>({ok:true,path,entries:[{name:'same.txt',path:`${path}/same.txt`,isDir:false,size:4,modifiedMs:2}]})),
+  statProjectPath:async(path:string,sha:boolean)=>({ok:true,path,kind:'file',size:4,modifiedMs:2,...(sha?{sha256:`sha256:${createHash('sha256').update('new!').digest('hex')}`}:{})}),
+  sha256Text:async(text:string)=>`sha256:${createHash('sha256').update(text).digest('hex')}`,
+  readTextFileSample:async(path:string)=>({ok:true,path,content:'new!',truncated:false}),
+  writeTextFile:(...args:unknown[])=>io.write(...args),
+}));
 vi.mock('@/features/context',async original=>({
   ...(await original<typeof import('@/features/context')>()),
-  loadPersistedContextMaps:async(projectId:string)=>(await io.service!.load('c04-account',projectId)).maps,
+  loadPersistedContextMaps:(projectId:string)=>io.readMaps(projectId),
+  reloadPersistedContextMaps:(projectId:string)=>io.readMaps(projectId),
   selectPersistedContextFile:async(projectId:string,path:string,target?:{mapId:string;entityId:string})=>io.service!.selectFile('c04-account',projectId,path,target),
+  savePersistedContextTree:async(tree:ProjectContextTree,options:any)=>io.service!.saveTree('c04-account',tree,options),
 }));
+vi.mock('@/features/context/contextPersistence',async original=>({
+  ...(await original<typeof import('@/features/context/contextPersistence')>()),
+  captureContextPersistenceScope:async(accountId:string,projectId:string)=>({
+    accountId,projectId,
+    loadMap:(mapId:string)=>io.service!.loadMap(accountId,projectId,mapId),
+    captureMapRestore:(mapId:string,revision:number)=>io.service!.captureMapRestore(accountId,projectId,mapId,revision),
+    saveExistingTree:(tree:ProjectContextTree,options:import('@/features/context/contextPersistence').ContextTreeSaveOptions)=>io.service!.saveTree(accountId,tree,{...options,requireExisting:true}),
+  }),
+}));
+vi.mock('@/features/context/siyuan/siyuanMapManifest',async original=>({
+  ...(await original<typeof import('@/features/context/siyuan/siyuanMapManifest')>()),
+  readSiyuanMapManifest:()=>({status:'ready',sourceRoot:io.root,sourcePolicy:{excludedPaths:[]}}),
+}));
+vi.mock('@/features/context/siyuan/siyuanIndexJobStore',async original=>({
+  ...(await original<typeof import('@/features/context/siyuan/siyuanIndexJobStore')>()),
+  readSiyuanIndexJob:async()=>({status:io.jobStatus,accountId:'c04-account',canonicalRoot:io.root}),
+}));
+vi.mock('@/features/context/siyuanContextMapIntegration',async original=>({
+  ...(await original<typeof import('@/features/context/siyuanContextMapIntegration')>()),
+  productionSiyuanContextMaps:{sync:(...args:unknown[])=>io.sync(...args)},
+}));
+vi.mock('@tauri-apps/api/core',()=>({
+  invoke:async(command:string,{request}:{request:any})=>{
+    io.nativeCalls.push({command,request:structuredClone(request)});
+    if(command==='context_search_status')return {documentCount:1,indexId:'fixture-index',engine:'tantivy-0.22.1',schemaVersion:1,needsRebuild:false,recoveredCorruption:false};
+    if(command==='context_search_begin_refresh')return 't'.repeat(32);
+    if(command==='context_search_stage_refresh')return;
+    if(command==='context_search_finish_refresh')return 1;
+    throw new Error(`Unexpected native command: ${command}`);
+  },
+}));
+import { createProductionContextAutoUpdater } from '@/features/context/contextAutoUpdate';
 import { createProductionTerminalCliRuntimeDependencies } from '@/features/terminals/terminalCliProduction';
 let database:JarvisDexie;
 const account='c04-account',project='c04-project';
 beforeEach(async()=>{
   localStorage.clear();
+  io.write.mockReset();io.write.mockResolvedValue({ok:true});
+  io.jobStatus='completed';io.nativeCalls=[];io.root='C:/owned-c08-readonly';
+  io.readMaps.mockReset();io.readMaps.mockImplementation(async(projectId:string)=>(await io.service!.load('c04-account',projectId)).maps);
+  io.sync.mockReset();io.sync.mockImplementation(async(_project:string,map:ContextMapRecord,options:{preScannedIndex:SiyuanSafeIndex})=>({tree:buildProjectContextTreeFromSiyuanIndex(map.tree,options.preScannedIndex.entries)}));
+  useAuthStore.setState({localUserId:account,cloudSession:null,workspaceId:'c08-workspace' as WorkspaceId,projectId:project as ProjectId});
   database=createJarvisDb(uniqueTestDbName('terminal-open-exact-map'),TEST_INDEXED_DB);
   io.service=createContextPersistenceService(database,localStorage);
   await io.service.initialize(account,project);
@@ -101,4 +153,65 @@ it.each(['symbol','note'] as const)('rejects a qualified %s whose path or map do
   await expect(dependencies.openContextEntity(project,{...resolved,path:'other.txt'})).rejects.toThrow();
   expect(await database.settings.toArray()).toEqual(settings);
   expect(useUIStore.getState().route).toBe('chat');
+});
+
+
+it('C08 refreshes a readable managed source without writing into its read-only root',async()=>{
+  const initial=tree('C:/owned-c08-readonly','same.txt');
+  initial.model='siyuan-managed-v1';
+  await io.service!.saveTree(account,initial,{mapId:'c08-readonly-map',sourceStatus:'ready'});
+  io.write.mockResolvedValue({ok:false,error:{code:'permission_denied',raw:'Fixture root is read-only'}});
+  const dependencies=createProductionTerminalCliRuntimeDependencies();
+  let result:unknown,error:unknown;
+  try {result=await dependencies.refreshContextMap(project,'c08-readonly-map');}catch(caught){error=caught;}
+  console.log('C08_REFRESH_JOIN',JSON.stringify({writeAttempts:io.write.mock.calls.map(call=>({path:call[0],options:call[2]})),result,error:error instanceof Error?error.message:String(error)}));
+  expect(io.write).not.toHaveBeenCalled();
+  expect(error).toBeUndefined();
+  expect(result).toMatchObject({id:'c08-readonly-map',status:'active'});
+  expect(io.sync).toHaveBeenCalledOnce();
+  expect(io.sync.mock.calls[0]![2]).toMatchObject({automaticRefresh:true,forceReconcile:true,accountId:account,workspaceId:'c08-workspace'});
+  const stages=io.nativeCalls.filter(call=>call.command==='context_search_stage_refresh');
+  expect(stages.some(call=>call.request.documents.some((doc:{documentId:string;text:string})=>doc.documentId==='c08-readonly-map:path:same.txt' && JSON.stringify(doc).includes('new!')))).toBe(true);
+  expect(io.nativeCalls.at(-1)).toMatchObject({command:'context_search_finish_refresh',request:{commit:true}});
+  const saved=(await io.service!.load(account,project)).maps.find(map=>map.id==='c08-readonly-map')!;
+  expect(saved.tree.nodes[0]).toMatchObject({id:'c08-readonly-map:path:same.txt',path:'same.txt',modifiedAt:2});
+});
+
+
+it.each(['paused','cancelled','running','failed'])('C08 refuses an initial durable job that is %s',async status=>{
+  await io.service!.saveTree(account,tree(io.root,'same.txt'),{mapId:'c08-readonly-map',sourceStatus:'ready'});
+  io.jobStatus=status;
+  await expect(createProductionTerminalCliRuntimeDependencies().refreshContextMap(project,'c08-readonly-map')).rejects.toThrow('initial_map_not_ready');
+  expect(io.sync).not.toHaveBeenCalled();expect(io.nativeCalls).toEqual([]);expect(io.write).not.toHaveBeenCalled();
+});
+
+it.each(['account','workspace','project'] as const)('C08 revokes a terminal refresh on %s ABA during its first map read',async field=>{
+  await io.service!.saveTree(account,tree(io.root,'same.txt'),{mapId:'c08-readonly-map',sourceStatus:'ready'});
+  const before=useAuthStore.getState();
+  io.readMaps.mockImplementationOnce(async(projectId:string)=>{
+    if(field==='account')useAuthStore.setState({localUserId:'foreign'});
+    if(field==='workspace')useAuthStore.setState({workspaceId:'foreign' as WorkspaceId});
+    if(field==='project')useAuthStore.setState({projectId:'foreign' as ProjectId});
+    useAuthStore.setState({localUserId:before.localUserId,workspaceId:before.workspaceId,projectId:before.projectId});
+    return (await io.service!.load(account,projectId)).maps;
+  });
+  await expect(createProductionTerminalCliRuntimeDependencies().refreshContextMap(project,'c08-readonly-map')).rejects.toThrow();
+  expect(io.sync).not.toHaveBeenCalled();expect(io.nativeCalls).toEqual([]);expect(io.write).not.toHaveBeenCalled();
+});
+
+
+it('C08 refuses a second production updater while native synchronization is held',async()=>{
+  await io.service!.saveTree(account,tree(io.root,'same.txt'),{mapId:'c08-readonly-map',sourceStatus:'ready'});
+  let release!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});
+  io.sync.mockImplementationOnce(async(_project:string,map:ContextMapRecord,options:{preScannedIndex:SiyuanSafeIndex})=>{
+    await held;return {tree:buildProjectContextTreeFromSiyuanIndex(map.tree,options.preScannedIndex.entries)};
+  });
+  const first=createProductionTerminalCliRuntimeDependencies().refreshContextMap(project,'c08-readonly-map');
+  await vi.waitFor(()=>expect(io.sync).toHaveBeenCalledOnce());
+  const second=await createProductionContextAutoUpdater({accountId:account,workspaceId:'c08-workspace',projectId:project,mapId:'c08-readonly-map'});
+  await expect(second.refresh(new AbortController().signal)).rejects.toThrow('busy');
+  expect(io.nativeCalls.filter(call=>call.command==='context_search_begin_refresh')).toHaveLength(1);
+  release();await first;
+  expect(io.write).not.toHaveBeenCalled();
 });

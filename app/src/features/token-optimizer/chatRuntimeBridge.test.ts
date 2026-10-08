@@ -210,3 +210,28 @@ describe('chat token optimization runtime tokenizers', () => {
     });
   });
 });
+
+describe('Foundry actual output allowance in planning', () => {
+  it.each([
+    [undefined, 320], [1, 1], [64, 64], [320, 320], [512, 512], [8192, 512], [0, 1],
+  ])('plans the existing native formula for requested %s', async (requestedOutputTokens, expected) => {
+    const runtime = createChatTokenOptimizationRuntime();
+    const result = await runtime.optimizeMessages({ mode: 'normal', providerId: 'foundry',
+      modelId: 'artifact--job_budget', modelContextLimit: 8192, requestedOutputTokens,
+      messages: [{ role: 'user', content: 'Public request.' }] });
+    expect(result.outputTokenLimit).toBe(expected);
+    expect(result.receipt.outputTokenLimit).toBe(expected);
+    expect(result.receipt).not.toHaveProperty('nativeValidationPending');
+  });
+
+  it('does not defer after cancellation while conservative estimates are pending', async () => {
+    const controller = new AbortController();
+    const runtime = createChatTokenOptimizationRuntime();
+    const pending = runtime.optimizeMessages({ mode: 'normal', providerId: 'foundry',
+      modelId: 'artifact--job_budget', contextMetadataSource: 'foundry_catalog_ceiling',
+      modelContextLimit: 8192, systemPrompt: 'Public policy. '.repeat(2000),
+      messages: [{ role: 'user', content: 'Latest request stays exact.' }], signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+});

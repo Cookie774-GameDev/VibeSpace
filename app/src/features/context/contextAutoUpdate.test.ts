@@ -91,7 +91,7 @@ function fixture() {
       setting = value;
     }),
   };
-  const updater = createContextAutoUpdater(ports);
+  const updater = createContextAutoUpdater(ports, setting);
   const controller = new AbortController();
   return {
     ports,
@@ -268,5 +268,89 @@ describe('unchanged-source failure status recovery', () => {
     f.index.unreadable = 1;
     await expect(f.updater.tick(f.controller.signal)).rejects.toThrow('discovery_incomplete');
     expect(f.ports.saveSetting).not.toHaveBeenCalled();
+  });
+  it('C08 excludes another updater instance before either can enter a held scan', async () => {
+    const f = fixture();
+    const other = createContextAutoUpdater(f.ports);
+    await f.updater.tick(f.controller.signal);
+    await other.tick(f.controller.signal);
+    f.advance();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const scan = f.ports.scan;
+    f.ports.scan = vi.fn(async (map: ContextMapRecord, signal: AbortSignal) => { await held; return scan(map, signal); });
+    const first = f.updater.tick(f.controller.signal);
+    await vi.waitFor(() => expect(f.ports.scan).toHaveBeenCalledTimes(1));
+    const second = other.tick(f.controller.signal).then(value => ({ value }), error => ({ error: String(error) }));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const admitted = vi.mocked(f.ports.scan).mock.calls.length;
+    release();
+    await first;
+    const result = await second;
+    console.log('C08_OWNER_JOIN', JSON.stringify({ admitted, result }));
+    expect(admitted).toBe(1);
+    expect(result).toEqual({ value: 'idle' });
+  });
+
+});
+
+
+describe('C08 explicit manual refresh', () => {
+  it.each(['absent', 'disabled'] as const)('refreshes with %s automatic consent without reading or writing that setting', async consent => {
+    const f = fixture();
+    if (consent === 'disabled') f.disable();
+    f.ports.readSetting = vi.fn(async () => consent === 'absent' ? null : { ...f.setting, enabled: false });
+    expect(await f.updater.refresh(f.controller.signal)).toBe('updated');
+    expect(f.ports.readSetting).not.toHaveBeenCalled();
+    expect(f.ports.saveSetting).not.toHaveBeenCalled();
+    expect(f.ports.stage).toHaveBeenCalledWith(expect.anything(), ['map:path:new.txt'], [], f.controller.signal, { reconcileMembership: true });
+    expect(f.transaction.commit).toHaveBeenCalledOnce();
+    expect(f.ports.saveTree).toHaveBeenCalledWith(f.map, expect.anything(), f.controller.signal, expect.any(Function));
+  });
+
+  it.each(['abort', 'account', 'revision', 'root', 'missing', 'wrong-map', 'wrong-project'] as const)('refuses %s drift while a manual scan is held', async change => {
+    const f = fixture();
+    f.ports.scan = vi.fn(async () => {
+      if (change === 'abort') f.controller.abort();
+      if (change === 'account') f.changeAccount();
+      if (change === 'revision') f.changeRevision();
+      if (change === 'root') f.ports.fingerprint = () => 'changed';
+      if (change === 'missing') f.ports.readMap = async () => null;
+      if (change === 'wrong-map') f.ports.readMap = async () => ({ ...f.map, id: 'foreign' });
+      if (change === 'wrong-project') f.ports.readMap = async () => ({ ...f.map, projectId: 'foreign' });
+      return f.index;
+    });
+    await expect(f.updater.refresh(f.controller.signal)).rejects.toThrow('scope_changed');
+    expect(f.ports.stage).not.toHaveBeenCalled();
+    expect(f.ports.saveTree).not.toHaveBeenCalled();
+    expect(f.ports.saveSetting).not.toHaveBeenCalled();
+  });
+
+  it.each(['scan', 'sync', 'commit'] as const)('reports a manual %s failure and does not publish success', async failure => {
+    const f = fixture();
+    if (failure === 'scan') f.index.unreadable = 1;
+    if (failure === 'sync') f.ports.sync = vi.fn(async () => { throw new Error('sync failed'); });
+    if (failure === 'commit') f.transaction.commit.mockRejectedValueOnce(new Error('commit failed'));
+    await expect(f.updater.refresh(f.controller.signal)).rejects.toThrow();
+    expect(f.ports.saveSetting).not.toHaveBeenCalled();
+    if (failure !== 'scan') expect(f.transaction.abort).toHaveBeenCalledOnce();
+  });
+
+  it.each(['manual', 'automatic'] as const)('excludes a %s instance until the manual owner finishes compensation', async mode => {
+    const f = fixture();
+    const other = createContextAutoUpdater(f.ports, f.setting);
+    let release!: () => void;
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    f.transaction.abort.mockImplementationOnce(async () => { await hold; });
+    f.ports.sync = vi.fn(async () => { throw new Error('held compensation'); });
+    const first = f.updater.refresh(f.controller.signal).catch(error => error);
+    await vi.waitFor(() => expect(f.transaction.abort).toHaveBeenCalledOnce());
+    if (mode === 'manual') await expect(other.refresh(f.controller.signal)).rejects.toThrow('busy');
+    else expect(await other.tick(f.controller.signal)).toBe('idle');
+    expect(f.ports.scan).toHaveBeenCalledOnce();
+    release();
+    expect(await first).toBeInstanceOf(Error);
+    f.ports.sync = vi.fn(async map => map.tree);
+    expect(await other.refresh(f.controller.signal)).toBe('updated');
   });
 });
