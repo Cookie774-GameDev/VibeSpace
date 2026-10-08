@@ -1584,6 +1584,7 @@ def infer(request_path: str) -> int:
     try:
         import torch
         from transformers import (
+            AutoConfig,
             AutoModelForCausalLM,
             AutoModelForImageTextToText,
             AutoProcessor,
@@ -1622,24 +1623,11 @@ def infer(request_path: str) -> int:
     model_class = AutoModelForImageTextToText if multimodal else AutoModelForCausalLM
     compute_device = _inference_compute_device(torch, request["trainingMetadata"])
     device = "cuda" if compute_device == "gpu" else "cpu"
-    model = model_class.from_pretrained(
-        model_source, local_files_only=True, trust_remote_code=False, torch_dtype="auto",
-        low_cpu_mem_usage=True, device_map={"": 0 if compute_device == "gpu" else "cpu"},
+    model_config = AutoConfig.from_pretrained(
+        model_source, local_files_only=True, trust_remote_code=False
     )
-    if method in ("lora", "qlora"):
-        try:
-            from peft import PeftModel
-        except Exception as error:
-            _fail(f"PEFT inference libraries are unavailable: {type(error).__name__}.")
-        model = PeftModel.from_pretrained(
-            model,
-            artifact_path,
-            is_trainable=False,
-            local_files_only=True,
-        )
-    model.to(device)
-    _assert_model_device(model, compute_device)
-    model.eval()
+    context_tokens = _inference_context_tokens(model_config, multimodal=multimodal)
+    output_budget = min(int(request["maxOutputTokens"]), context_tokens - 1)
     messages = request["messages"]
     if getattr(tokenizer, "chat_template", None):
         prompt = tokenizer.apply_chat_template(
@@ -1653,10 +1641,27 @@ def infer(request_path: str) -> int:
             for message in messages
         )
         prompt += "\n\nAssistant:"
-    configured_context = int(getattr(model.config, "max_position_embeddings", 4096))
-    context_tokens = max(256, min(configured_context, 16384))
-    output_budget = min(int(request["maxOutputTokens"]), context_tokens - 1)
     encoded = _encode_inference_prompt(tokenizer, processor, prompt, context_tokens - output_budget)
+    model = model_class.from_pretrained(
+        model_source, config=model_config, local_files_only=True, trust_remote_code=False, torch_dtype="auto",
+        low_cpu_mem_usage=True, device_map={"": 0 if compute_device == "gpu" else "cpu"},
+    )
+    if method in ("lora", "qlora"):
+        try:
+            from peft import PeftModel
+        except Exception as error:
+            _fail(f"PEFT inference libraries are unavailable: {type(error).__name__}.")
+        model = PeftModel.from_pretrained(
+            model,
+            artifact_path,
+            is_trainable=False,
+            local_files_only=True,
+        )
+    if _inference_context_tokens(model.config, multimodal=multimodal) != context_tokens:
+        _fail("The loaded model context window changed after input admission; no answer was generated.")
+    model.to(device)
+    _assert_model_device(model, compute_device)
+    model.eval()
     encoded = {key: value.to(device) for key, value in encoded.items()}
     input_tokens = int(encoded["input_ids"].shape[-1])
     with torch.inference_mode():
@@ -1693,6 +1698,29 @@ def infer(request_path: str) -> int:
     )
     temporary.replace(response_path)
     return 0
+
+
+def _inference_context_tokens(config: Any, *, multimodal: bool) -> int:
+    """Use declared text capacity, never invent a window for unknown config."""
+    declared = getattr(config, "max_position_embeddings", None)
+    nested = None
+    if multimodal:
+        text_config = getattr(config, "text_config", None)
+        nested = (
+            text_config.get("max_position_embeddings")
+            if isinstance(text_config, dict)
+            else getattr(text_config, "max_position_embeddings", None)
+        )
+    for value in (declared, nested):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 2):
+            _fail("The verified model configuration has an invalid context window.")
+    if declared is not None and nested is not None and declared != nested:
+        _fail("The verified model configuration has conflicting context windows.")
+    capacity = declared if declared is not None else nested
+    if capacity is None:
+        _fail("The verified model configuration does not declare a usable context window.")
+    # Preserve the upper safety ceiling without enlarging smaller declared windows.
+    return min(capacity, 16384)
 
 
 class InferenceInputOverflow(ValueError):
