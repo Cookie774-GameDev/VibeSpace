@@ -2441,6 +2441,48 @@ fn inference_worker_failure_message(stdout: &[u8]) -> String {
         diagnostic.input_tokens, diagnostic.input_token_budget)
 }
 
+fn inference_runtime_for_model(
+    root: &Path,
+    base_model_id: &str,
+    method: &str,
+    inspect: impl FnOnce() -> TrainingWorkerStatus,
+) -> Result<(String, PathBuf, TrainingCatalogModel), String> {
+    if !matches!(method, "full" | "lora" | "qlora") {
+        return Err("Unsupported Model Foundry inference method.".into());
+    }
+    let model_manifest = catalog_model(base_model_id)?;
+    if method == "full" && model_manifest.modalities.len() == 1 && model_manifest.modalities[0] == "text" {
+        // Training capability inspection imports ML libraries and optional training
+        // stacks. This attested inference worker performs its own real library,
+        // artifact, context and device checks; never substitute cached readiness.
+        let worker = worker_supervisor::verify_worker_source_file(&worker_path(root))?;
+        let python = private_python(root);
+        if !python.is_file() {
+            return Err("The private Model Foundry Python runtime is unavailable for local inference.".into());
+        }
+        return Ok((python.to_string_lossy().into_owned(), worker, model_manifest));
+    }
+    let status = inspect();
+    let method_available = match method {
+        "full" => status.methods.iter().any(|value| value == "full"),
+        "lora" | "qlora" => status
+            .methods
+            .iter()
+            .any(|value| matches!(value.as_str(), "lora" | "qlora")),
+        _ => false,
+    };
+    if !status.installed || !status.attested || !method_available {
+        return Err(
+            "The verified local worker cannot run this trained model on this computer.".into(),
+        );
+    }
+    let python = status
+        .python
+        .ok_or_else(|| "Python 3 is required for local trained-model inference.".to_string())?;
+    let worker = worker_path(root);
+    Ok((python, worker, model_manifest))
+}
+
 pub(crate) fn run_foundry_inference(
     app: &tauri::AppHandle,
     request_id: &str,
@@ -2478,25 +2520,9 @@ pub(crate) fn run_foundry_inference(
     let _storage_guard = MODEL_STORAGE_LOCK
         .lock()
         .map_err(|_| "Training model storage lock is unavailable.".to_string())?;
-    let status = inspect_worker(&root);
-    let method_available = match method {
-        "full" => status.methods.iter().any(|value| value == "full"),
-        "lora" | "qlora" => status
-            .methods
-            .iter()
-            .any(|value| matches!(value.as_str(), "lora" | "qlora")),
-        _ => false,
-    };
-    if !status.installed || !status.attested || !method_available {
-        return Err(
-            "The verified local worker cannot run this trained model on this computer.".into(),
-        );
-    }
-    let python = status
-        .python
-        .ok_or_else(|| "Python 3 is required for local trained-model inference.".to_string())?;
-    let worker = worker_path(&root);
-    let model_manifest = catalog_model(base_model_id)?;
+    let (python, worker, model_manifest) = inference_runtime_for_model(
+        &root, base_model_id, method, || inspect_worker(&root),
+    )?;
     verify_training_model_files(&root, &model_manifest)?;
     let model = training_model_path(&root, base_model_id)?
         .canonicalize()
@@ -2611,6 +2637,112 @@ pub(crate) fn cancel_training_worker(job_id: &str) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
+    fn inference_runtime_admission_fixture() -> (PathBuf, TrainingWorkerStatus) {
+        let root = std::env::temp_dir().join(format!("foundry-inference-admission-{}", nanoid::nanoid!()));
+        let python = private_python(&root);
+        fs::create_dir_all(python.parent().unwrap()).unwrap();
+        fs::write(&python, b"public placeholder, never executed").unwrap();
+        fs::write(worker_path(&root), WORKER_SOURCE.as_bytes()).unwrap();
+        let status = TrainingWorkerStatus { installed: true, attested: true, protocol: WORKER_PROTOCOL,
+            source_sha256: expected_source_sha256(), python: Some(python.to_string_lossy().into_owned()),
+            methods: vec!["full".into(), "lora".into(), "qlora".into()], modalities: vec!["text".into()],
+            precisions: vec!["fp32".into()], reason: None, calibration: None };
+        (root, status)
+    }
+
+    #[test]
+    fn inference_runtime_admission_full_pinned_text_never_dispatches_training_probe() {
+        let (root, status) = inference_runtime_admission_fixture();
+        let models = training_catalog().unwrap(); let mut checked = 0;
+        for model in models.iter().filter(|model| model.modalities.len() == 1 && model.modalities[0] == "text") {
+            let mut probes = 0;
+            let (python, worker, admitted) = inference_runtime_for_model(&root, &model.id, "full", || { probes += 1; status.clone() }).unwrap();
+            assert_eq!(probes, 0, "Full text must not dispatch the separate training-capability inspector");
+            assert_eq!(python, private_python(&root).to_string_lossy().into_owned());
+            assert_eq!(worker, worker_path(&root).canonicalize().unwrap());
+            assert_eq!(admitted.id, model.id); assert_eq!(admitted.revision, model.revision); checked += 1;
+        }
+        assert!(checked > 0); fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inference_runtime_admission_keeps_adapter_and_multimodal_inspection() {
+        let (root, status) = inference_runtime_admission_fixture();
+        let mut cases = vec![("smollm2-135m-instruct".to_string(), "lora"), ("smollm2-135m-instruct".to_string(), "qlora")];
+        cases.extend(training_catalog().unwrap().into_iter().filter(|model| model.modalities.len() != 1 || model.modalities[0] != "text")
+            .map(|model| (model.id, "full")));
+        assert!(cases.len() > 2);
+        for (id, method) in cases {
+            let mut probes = 0;
+            let (python, worker, _) = inference_runtime_for_model(&root, &id, method, || { probes += 1; status.clone() }).unwrap();
+            assert_eq!(probes, 1); assert_eq!(Some(python), status.python); assert_eq!(worker, worker_path(&root));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inference_runtime_admission_keeps_ineligible_method_and_attestation_failures() {
+        let (root, status) = inference_runtime_admission_fixture();
+        for case in 0..4 {
+            let mut rejected = status.clone();
+            match case { 0 => rejected.installed = false, 1 => rejected.attested = false,
+                2 => rejected.methods.clear(), _ => rejected.python = None }
+            let mut probes = 0;
+            assert!(inference_runtime_for_model(&root, "smollm2-135m-instruct", "lora", || { probes += 1; rejected }).is_err());
+            assert_eq!(probes, 1);
+        }
+        // Preserve the preexisting adapter gate: either advertised adapter method
+        // suffices here; actual adapter loading remains the worker's decision.
+        for method in ["lora", "qlora"] {
+            let mut adapter = status.clone(); adapter.methods = vec!["lora".into()];
+            assert!(inference_runtime_for_model(&root, "smollm2-135m-instruct", method, || adapter).is_ok());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inference_runtime_admission_checks_exact_worker_each_time_without_cached_readiness() {
+        let (root, status) = inference_runtime_admission_fixture();
+        let run = || inference_runtime_for_model(&root, "smollm2-135m-instruct", "full", || panic!("A cached readiness answer cannot replace exact source admission"));
+        run().unwrap(); fs::write(worker_path(&root), b"different worker bytes").unwrap(); assert!(run().is_err());
+        fs::remove_file(worker_path(&root)).unwrap(); assert!(run().is_err());
+        fs::create_dir(worker_path(&root)).unwrap(); assert!(run().is_err()); fs::remove_dir(worker_path(&root)).unwrap();
+        fs::write(worker_path(&root), WORKER_SOURCE.as_bytes()).unwrap(); run().unwrap();
+        assert!(status.attested); fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inference_runtime_admission_rejects_linked_worker_without_following_it() {
+        let (root, _) = inference_runtime_admission_fixture();
+        let actual = root.join("owned-real-worker.py");
+        fs::rename(worker_path(&root), &actual).unwrap();
+        std::os::unix::fs::symlink(&actual, worker_path(&root)).unwrap();
+        assert!(inference_runtime_for_model(&root, "smollm2-135m-instruct", "full", || panic!("no training probe")).is_err());
+        assert_eq!(fs::read(&actual).unwrap(), WORKER_SOURCE.as_bytes());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inference_runtime_admission_requires_managed_python_without_system_fallback() {
+        let (root, _) = inference_runtime_admission_fixture();
+        fs::remove_file(private_python(&root)).unwrap();
+        let error = inference_runtime_for_model(&root, "smollm2-135m-instruct", "full", || panic!("no capability probe or system fallback")).unwrap_err();
+        assert!(error.contains("private"));
+        fs::create_dir(private_python(&root)).unwrap();
+        assert!(inference_runtime_for_model(&root, "smollm2-135m-instruct", "full", || panic!("no fallback")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inference_runtime_admission_refuses_unpinned_catalog_or_unsupported_method() {
+        let (root, _) = inference_runtime_admission_fixture();
+        for (model, method) in [("not-in-the-pinned-catalog", "full"), ("smollm2-135m-instruct", "knowledge")] {
+            assert!(inference_runtime_for_model(&root, model, method, || panic!("invalid request cannot dispatch a probe")).is_err());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn inference_input_overflow_maps_only_valid_content_free_diagnostics() {
         let bytes = br#"{"protocol":1,"localOnly":true,"valid":false,"errorCode":"input_context_overflow","inputTokens":9000,"inputTokenBudget":7872}"#;
