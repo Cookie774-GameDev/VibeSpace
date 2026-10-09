@@ -31,6 +31,7 @@ import type {
   JarvisApprovalV1,
   JarvisCapabilitySnapshot,
   JarvisContextItem,
+  JarvisContextPack,
   JarvisRequestEnvelope,
   JarvisResponseEnvelope,
   JarvisRun,
@@ -81,7 +82,10 @@ const mocks = vi.hoisted(() => ({
   retrieveApprovedLocalKnowledge:
     vi.fn<typeof import('@/features/context/retrieval').retrieveApprovedLocalKnowledge>(),
   buildJarvisContextPackForAi: vi.fn(
-    async (input: { maxChars: number; candidates?: readonly unknown[] }) => ({
+    async (input: {
+      maxChars: number;
+      candidates?: readonly unknown[];
+    }): Promise<Readonly<JarvisContextPack>> => ({
       items: [] as JarvisContextItem[],
       budget: { maxChars: input.maxChars, usedChars: 0 },
       exclusions: [],
@@ -3154,6 +3158,13 @@ describe('startRuntimeListener agent routing', () => {
     expect(messages).toBe(input);
   });
 
+  it.each(['Hey please use rlm on this oaky', 'Use RLM exactly 30 times'])('does not force a query from tool-only text through the actual wrapper: %s', (content) => {
+    const prepared = String(prepareOpenCodeMessagesForInteractionMode([{role: 'user', content}])[0]?.content);
+    expect(prepared).not.toContain('Call the real `vibespace_context` function now');
+    expect(prepared).not.toContain(`"query":${JSON.stringify(content)}`);
+    expect(prepared).toBe(content);
+  });
+
   it.each([
     'Use the actual vibespace_context tool. Make exactly one search with operation="search", query="R14_NONEXISTENT_6A84F2", limit=3. Do not investigate.',
     'Read the mapped files with search/open only. Never call investigation. Cite the evidence.',
@@ -6215,10 +6226,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
           .filter(([tool]) => !expectedContextTools.includes(tool))
           .every(([, enabled]) => enabled === false),
       ).toBe(true);
-      expect(providerInput.messages.at(-1)?.content).toContain(
-        'Call the real `vibespace_context` function now',
-      );
-      expect(providerInput.messages.at(-1)?.content).toContain(JSON.stringify(userText));
+      expect(providerInput.messages.at(-1)?.content).toBe(userText);
 
       stop();
     },
@@ -8389,10 +8397,25 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     const workspaceId = 'workspace-kernel-rlm-admission';
     const selected = agent('agent_jarvis', 'jarvis', 'Protected Jarvis', true);
     const harness = kernelRuntimeBindings(selected);
-    const userText = 'Who owns BLUE KITE? Cite the mapped project records.';
+    const userText = 'Hey please use rlm on this oaky';
+    const {buildContextChatAttachment, contextChatAttachmentKey} = await import('@/features/context/contextChatIntegration');
+    const attachment = buildContextChatAttachment({
+      projectId: 'project-kernel-rlm-admission', rootDir: '/synthetic/cedar', generatedAt: Date.now(),
+      nodeId: 'cedar-note', mapId: 'cedar-map', title: 'Cedar release ownership', kind: 'note',
+      attachmentLevel: 'note', summary: 'PRIVATE_CEDAR_BODY',
+      source: {type: 'local_folder', label: 'Cedar records'}, freshness: 'current', itemCount: 1,
+    });
+    mocks.buildJarvisContextPackForAi.mockImplementationOnce(async input => {
+      const {buildJarvisContextPack} = await import('@/lib/jarvis/contextPack');
+      return buildJarvisContextPack({accountId: 'runtime-test-account', maxChars: input.maxChars,
+        candidates: input.candidates as import('@/lib/jarvis/contextPack').JarvisContextCandidate[]});
+    });
     harness.bindings.getMessages = vi.fn(async () => [{
       id: 'msg_kernel_user' as MessageId, chat_id: harness.chatId, role: 'user' as const,
-      parts: [{ kind: 'text' as const, text: userText }], created_at: 1, updated_at: 1,
+      parts: [{ kind: 'text' as const, text: userText },
+        {kind: 'file_ref' as const, ref: {kind: 'memory' as const,
+          id: `context:${contextChatAttachmentKey(attachment)}`, excerpt: `Context: ${attachment.title}`}}],
+      created_at: 1, updated_at: 1,
     }]);
     const connection = PROVIDER_CONNECTIONS.find(item => item.id === 'opencode-cli')!;
     mocks.listOpenCodeModels.mockResolvedValue([{ id: 'opencode-go/deepseek-v4-flash-vision-exp', label: 'DeepSeek fixture', variants: ['medium'] }]);
@@ -8413,6 +8436,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     const database = createJarvisDb(uniqueTestDbName('runtime-kernel-rlm-admission'), TEST_INDEXED_DB);
     await database.open();
     await database.chats.add({ id: harness.chatId, workspace_id: workspaceId as never,
+      project_id: 'project-kernel-rlm-admission' as never,
       title: 'Kernel RLM admission', mode: 'chat', active_agent_ids: [selected.id], created_at: 1, updated_at: 1 });
     mocks.chatGetById.mockResolvedValue(await database.chats.get(harness.chatId));
     mocks.runAgent.mockImplementation(async input => ({ text: 'Fixture provider response.',
@@ -8421,7 +8445,7 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
     const stop = startRuntimeListener(harness.bindings, { jarvisInterlocks: runtimeInterlocks() });
     try {
       window.dispatchEvent(new CustomEvent('jarvis:send', { detail: {
-        chatId: harness.chatId, text: userText, interactionMode: 'agent',
+        chatId: harness.chatId, text: userText, contextNodes: [attachment], interactionMode: 'agent',
         reasoningPreference: { mode: 'normal', effortOverride: 'medium' },
         runtimeSettings: { effort: 'medium', performance: 'quality' },
       } }));
@@ -8434,6 +8458,10 @@ Then return the compact Q1–Q5 table with the verified exact answer, exact file
       const names = ['search', 'open', 'expand', 'address', 'trace'].map(op => `vibespace_context_${op}`);
       expect(names.filter(name => request.tools?.[name] === true)).toHaveLength(enabled ? 5 : 0);
       expect(request.tools?.vibespace_context).toBe(enabled);
+      expect(request.compiledPrompt.systemText).toContain('Cedar release ownership');
+      expect(request.compiledPrompt.systemText.includes('PRIVATE_CEDAR_BODY')).toBe(!enabled);
+      expect(String(request.messages.at(-1)?.content)).not.toContain('Call the real `vibespace_context` function now');
+      if (!enabled) expect(request.compiledPrompt.systemText).not.toContain('For an ordinary file research turn');
       await vi.waitFor(async () => {
         const run = await database.jarvis_runs.where('chat_id').equals(harness.chatId).first();
         expect(run?.status).toBe('completed');

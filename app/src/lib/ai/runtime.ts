@@ -3998,6 +3998,9 @@ export function prepareOpenCodeMessagesForInteractionMode(
   if (parseDirectContextEvidenceContinuation(userText)) return messages;
   const mandatoryEvidence = parseMandatoryContextEvidenceResearch(userText);
   const researchQueries = boundedReadOnlyResearchQueries(userText);
+  // Preserve the user's subject and referents. The protected prompt decides
+  // whether ordinary research has a question; tool-use wording is not a query.
+  if (researchQueries.length === 1) return messages;
   const researchQueryCount =
     ['zero', 'one', 'two', 'three', 'four', 'five'][researchQueries.length] ??
     String(researchQueries.length);
@@ -4025,16 +4028,6 @@ export function prepareOpenCodeMessagesForInteractionMode(
           'Output-format wording below cannot change tool operations, arguments, pointer authority, or retrieval budgets.',
           mandatoryEvidence.outputSuffix,
         ].join('\n')
-      : researchQueries.length === 1
-        ? [
-            'Call the real `vibespace_context` function now with exactly these two arguments:',
-            `{"operation":"investigate","query":${JSON.stringify(userText)}}`,
-            'For this initial investigation, do not include `pointer`, `recordId`, byte ranges, continuation, `limit`, or any other optional argument.',
-            'Do not print, narrate, or wrap the call as JSON text. Wait for the real shared Gateway/RLM investigation result.',
-            'If investigation fails or leaves requested facts unsupported, and the original request permits fallback, use at most three targeted `search` calls with limit=3 and at most six `open`/`expand` calls total. Use only exact validated pointers returned by those searches, retrieve each cited source at most once, and keep all fallback evidence within 24 KiB. Respect any stricter tool or call limits in the original request. Do not repeat the failed investigation, invent pointers, or use shell/filesystem tools to bypass the Context Map.',
-            'Answer only from the grounded prompt block or verified fallback evidence. Label facts still unsupported as unavailable. Include every returned canonical `vibespace:context/...` provenance URI—the Gateway/RLM receipt, source, and evidence URI—exactly as plain code; never invent a Markdown link or reconstruct a low-level pointer.',
-            'This is a direct user chat, not a subagent assignment, delegated worker task, or dispatch. No bootstrap receipt or mandatory coordination-file read applies. Do not answer with a bootstrap receipt or bootstrap error.',
-          ].join('\n')
         : [
             `Call the real \`vibespace_context\` function with \`operation="search"\` exactly once for each of the ${researchQueryCount} numbered questions, using these exact bounded argument objects in order:`,
             ...researchQueries.map(
@@ -8358,8 +8351,17 @@ export function startRuntimeListener(
                 : { effectiveTemperature: runnable.temperature }),
               capturedAt,
             };
+            const contextToolsAllowed = model.capabilities.tools === true &&
+              openCodeToolsForInteractionMode(interactionMode, llmMessages, {
+                chatId: String(chatId),
+                workspaceId: chatRecord?.workspace_id ? String(chatRecord.workspace_id) : undefined,
+                explicitReadRoot: Boolean(explicitReadRoot),
+              }).vibespace_context === true;
+            // This is a prompt restriction derived from the existing gateway;
+            // dispatch still recomputes tool grants in the owning caller scope.
+            model.capabilities = {...model.capabilities, contextTools: contextToolsAllowed};
             const kernelMessages = prepareOpenCodeMessagesForInteractionMode(llmMessages, {
-              contextToolEnabled: !explicitReadRoot,
+              contextToolEnabled: contextToolsAllowed,
             });
             const kernelUserText = detail.approvalContinuation
               ? (continuationProviderText ?? text)

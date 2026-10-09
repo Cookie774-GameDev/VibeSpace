@@ -1081,6 +1081,73 @@ describe('AgenticConsole', () => {
     }
   });
 
+  it.each(['completed', 'cancelled', 'error'])(
+    'keeps working animation for Context attachments until %s',
+    (terminal) => {
+      const prompt = message('context-prompt', 'user', 5, [
+        { kind: 'text', text: 'Search the attached Context map.' },
+        {
+          kind: 'file_ref',
+          ref: {
+            kind: 'memory',
+            id: 'context:p20:project:map',
+            excerpt: 'Context: project source',
+          },
+        },
+      ]);
+      const rendered = renderConsole({
+        chatId: 'chat-console',
+        messages: [prompt],
+        activity: [],
+        sessionEvidence: { status: 'running', currentOperation: 'Working' },
+      });
+      expect(screen.getByText('context:p20:project:map')).toBeTruthy();
+      expect(
+        rendered.container
+          .querySelector('[data-live-turn-status] [data-agent-motion]')
+          ?.getAttribute('data-agent-motion'),
+      ).toBe('cursor-forge');
+      const event: ChatActivityEvent = {
+        id: 'context-search',
+        chatId: 'chat-console',
+        kind: 'tool',
+        category: 'context',
+        status: 'running',
+        title: 'Searching Context',
+        ts: 10,
+      };
+      rendered.rerender(
+        <TooltipProvider>
+          <AgenticConsole
+            chatId="chat-console"
+            messages={[prompt]}
+            activity={[event]}
+            sessionEvidence={{ status: 'running', currentOperation: 'Working' }}
+          />
+        </TooltipProvider>,
+      );
+      expect(rendered.container.querySelectorAll('[data-live-turn-status]')).toHaveLength(1);
+      expect(
+        rendered.container
+          .querySelector('[data-live-turn-status] [data-agent-motion]')
+          ?.getAttribute('data-agent-motion'),
+      ).toBe('twin-loop');
+      rendered.rerender(
+        <TooltipProvider>
+          <AgenticConsole
+            chatId="chat-console"
+            messages={[prompt]}
+            activity={[{ ...event, status: 'done', endedAt: 20 }]}
+            sessionEvidence={{ status: terminal, currentOperation: 'Finished' }}
+          />
+        </TooltipProvider>,
+      );
+      expect(rendered.container.querySelector('[data-live-turn-status]')).toBeNull();
+      expect(rendered.container.querySelector('[data-agent-motion]')).toBeNull();
+      expect(screen.getByText('context:p20:project:map')).toBeTruthy();
+    },
+  );
+
   it('shows pre-event thinking, hands off to canonical live work, and removes it at terminal state', () => {
     const providerSecret = ['sk', 'proj', '1234567890abcdefghijklmnop'].join('-');
     const baseActivity: ChatActivityEvent = {

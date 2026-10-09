@@ -1302,7 +1302,9 @@ export function AgenticConsole({
         .reverse()
         .find(
           (block) =>
-            block.kind === 'prompt' && block.message.created_at === latestUserTurnStartedAt,
+            (block.kind === 'prompt' ||
+              (block.kind === 'legacy' && block.message.role === 'user')) &&
+            block.message.created_at === latestUserTurnStartedAt,
         )?.id,
     [blocks, latestUserTurnStartedAt],
   );
