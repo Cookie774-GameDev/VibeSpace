@@ -80,6 +80,23 @@ describe('streaming preview store', () => {
     expect(getPreview('account-b', 'run-1')).toBeNull();
   });
 
+  it('keeps the current chat preview visible when an older completed run is cleaned up', () => {
+    setPreview(preview);
+    publishTurnEvent(preview, { type: 'turn.completed', at: 11 });
+    setPreview({
+      ...preview, runId: 'run-2', requestId: 'request-2', text: 'Current response', updatedAt: 12,
+    });
+    expect(getChatPreview('account-a', 'chat-1')?.runId).toBe('run-2');
+
+    clearPreview('account-a', 'run-1', { terminal: true });
+
+    expect(getPreview('account-a', 'run-1')).toBeNull();
+    expect(getPreview('account-a', 'run-2')?.text).toBe('Current response');
+    expect(getChatPreview('account-a', 'chat-1')).toMatchObject({
+      runId: 'run-2', text: 'Current response',
+    });
+  });
+
   it('detaches and freezes caller-owned preview data', () => {
     const caller = { ...preview };
     setPreview(caller);

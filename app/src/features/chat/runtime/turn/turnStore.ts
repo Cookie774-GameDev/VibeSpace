@@ -36,23 +36,21 @@ function chatKey(accountId: string, chatId: string): string {
 
 function reindexLatestChat(accountId: string, chatId: string): void {
   let bestKey: string | undefined;
-  let bestUpdatedAt = Number.NEGATIVE_INFINITY;
+  let bestChatIdKey: string | undefined;
+  // Map insertion order is turn admission order; late events must not reorder it.
   for (const [candidateKey, state] of byRun) {
-    if (state.identity.accountId !== accountId || state.identity.chatId !== chatId) continue;
-    const updatedAt = Math.max(state.public.updatedAt, state.terminalAt ?? 0, state.acceptedAt);
-    if (updatedAt >= bestUpdatedAt) {
-      bestUpdatedAt = updatedAt;
-      bestKey = candidateKey;
-    }
+    if (state.identity.chatId !== chatId) continue;
+    bestChatIdKey = candidateKey;
+    if (state.identity.accountId === accountId) bestKey = candidateKey;
   }
   const ckey = chatKey(accountId, chatId);
   if (bestKey) {
     latestByChat.set(ckey, bestKey);
-    latestByChatId.set(chatId, bestKey);
   } else {
     latestByChat.delete(ckey);
-    latestByChatId.delete(chatId);
   }
+  if (bestChatIdKey) latestByChatId.set(chatId, bestChatIdKey);
+  else latestByChatId.delete(chatId);
 }
 
 function emit(state: CanonicalTurnState): void {
@@ -69,10 +67,20 @@ function scheduleCheckpoint(state: CanonicalTurnState): void {
   const key = runKey(state.identity.accountId, state.identity.runId);
   const prior = checkpointTimers.get(key);
   if (prior !== undefined) window.clearTimeout(prior);
+  checkpointTimers.delete(key);
+  const ckey = chatKey(state.identity.accountId, state.identity.chatId);
+  if (latestByChat.get(ckey) !== key) return;
+
+  const writeIfCurrent = () => {
+    const current = byRun.get(key);
+    // A removed/rebound run or a superseded turn cannot own this checkpoint.
+    if (current?.identity === state.identity && latestByChat.get(ckey) === key) {
+      writeTurnCheckpoint(current);
+    }
+  };
 
   if (isTerminalTurnStatus(state.status) || state.revision <= 2) {
-    checkpointTimers.delete(key);
-    queueMicrotask(() => writeTurnCheckpoint(state));
+    queueMicrotask(writeIfCurrent);
     return;
   }
 
@@ -80,17 +88,19 @@ function scheduleCheckpoint(state: CanonicalTurnState): void {
     key,
     window.setTimeout(() => {
       checkpointTimers.delete(key);
-      const current = byRun.get(key);
-      if (current) writeTurnCheckpoint(current);
+      writeIfCurrent();
     }, 250),
   );
 }
 
 function commit(state: CanonicalTurnState): CanonicalTurnState {
   const key = runKey(state.identity.accountId, state.identity.runId);
+  const isNewTurn = !byRun.has(key);
   byRun.set(key, state);
-  latestByChat.set(chatKey(state.identity.accountId, state.identity.chatId), key);
-  latestByChatId.set(state.identity.chatId, key);
+  if (isNewTurn) {
+    latestByChat.set(chatKey(state.identity.accountId, state.identity.chatId), key);
+    latestByChatId.set(state.identity.chatId, key);
+  }
   // Visibility subscribers run from committed canonical state before
   // checkpoint scheduling or global diagnostic fan-out can add hot-path work.
   emit(state);
@@ -403,7 +413,10 @@ export function clearAccountTurns(accountId: string): void {
       latestByChatId.delete(state.identity.chatId);
     }
   }
-  for (const state of changedChats.values()) emit(state);
+  for (const state of changedChats.values()) {
+    reindexLatestChat(accountId, state.identity.chatId);
+    emit(state);
+  }
 }
 
 export function resetTurnStoreForTests(): void {
