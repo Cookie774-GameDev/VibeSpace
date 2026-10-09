@@ -4,6 +4,7 @@ import {
   optionalTelemetryExporter,
 } from './optionalTelemetryRuntime';
 import { TELEMETRY_AUDIT_KEY, telemetryConsentStore } from './telemetryConsent';
+import { optionalTelemetryEvent, type TelemetryBatch } from './telemetryExporter';
 import * as appDiagnosticsModule from './appDiagnostics';
 import type { IntelligenceTelemetryEvent } from '@/lib/ai/intelligenceTelemetry';
 
@@ -89,7 +90,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-it('keeps authorization and exporter state unchanged across audit deletion failure and retry', async () => {
+it('preserves a populated outbox and active send through audit failure/retry until consent is revoked', async () => {
   telemetryConsentStore.updateConsent({
     productUsage: true,
     diagnostics: true,
@@ -97,8 +98,31 @@ it('keeps authorization and exporter state unchanged across audit deletion failu
   });
   stop = startOptionalTelemetryRuntime('a');
   await vi.advanceTimersByTimeAsync(0);
+  const queuedEvents = ['completed', 'failed'].map(
+    (resultState, index) =>
+      optionalTelemetryEvent(
+        { ...event(), attributes: { resultState }, metrics: { durationMs: index + 1 } },
+        { appVersion: '1.5.0', platform: 'windows' },
+      )!,
+  );
+  for (const queued of queuedEvents) expect(optionalTelemetryExporter.enqueue(queued)).toBe(true);
+  let finish!: (value: { data: { acceptedEventIds: string[] } }) => void;
+  state.invoke.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const flight = optionalTelemetryExporter.flush();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(state.invoke).toHaveBeenCalledOnce();
+  const request = state.invoke.mock.calls[0][1] as { body: TelemetryBatch; signal: AbortSignal };
+  expect(request.body.events).toEqual(queuedEvents);
+  const outboxKey = 'vibespace-optional-telemetry-outbox-v1';
+  const persisted = localStorage.getItem(outboxKey);
+  expect(JSON.parse(persisted!)).toEqual({ accountId: 'a', events: queuedEvents });
   const before = optionalTelemetryExporter.getSnapshot();
-  expect(before.enabled).toBe(true);
+  expect(before).toMatchObject({ enabled: true, queued: 2, sending: true });
   state.consent.mockClear();
   const remove = Storage.prototype.removeItem;
   const fault = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (
@@ -109,16 +133,41 @@ it('keeps authorization and exporter state unchanged across audit deletion failu
     return remove.call(this, key);
   });
   telemetryConsentStore.deleteAudit();
+  expect(telemetryConsentStore.getSnapshot().auditDeletionError).toBe(true);
   expect(optionalTelemetryExporter.getSnapshot()).toEqual(before);
+  expect(localStorage.getItem(outboxKey)).toBe(persisted);
+  expect(request.signal.aborted).toBe(false);
   expect(state.consent).not.toHaveBeenCalled();
   fault.mockRestore();
   telemetryConsentStore.deleteAudit();
+  expect(telemetryConsentStore.getSnapshot().auditDeletionError).toBe(false);
   expect(optionalTelemetryExporter.getSnapshot()).toEqual(before);
+  expect(localStorage.getItem(outboxKey)).toBe(persisted);
+  expect(request.body.events).toEqual(queuedEvents);
+  expect(request.signal.aborted).toBe(false);
+  expect(optionalTelemetryExporter.flush()).toBe(flight);
   expect(state.consent).not.toHaveBeenCalled();
-  expect(state.invoke).not.toHaveBeenCalled();
+  expect(state.invoke).toHaveBeenCalledOnce();
   telemetryConsentStore.revoke();
-  expect(optionalTelemetryExporter.getSnapshot().enabled).toBe(false);
+  expect(request.signal.aborted).toBe(true);
+  expect(optionalTelemetryExporter.getSnapshot()).toMatchObject({
+    enabled: false,
+    queued: 0,
+    sending: false,
+  });
+  expect(localStorage.getItem(outboxKey)).toBeNull();
   expect(state.consent).toHaveBeenCalledOnce();
+  await flight;
+  finish({ data: { acceptedEventIds: queuedEvents.map((queued) => queued.eventId) } });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(optionalTelemetryExporter.getSnapshot()).toMatchObject({
+    enabled: false,
+    queued: 0,
+    sending: false,
+    acknowledged: before.acknowledged,
+  });
+  expect(localStorage.getItem(outboxKey)).toBeNull();
+  expect(state.invoke).toHaveBeenCalledOnce();
 });
 
 it('requires all local classes and current account enrollment before exporting new events', async () => {
