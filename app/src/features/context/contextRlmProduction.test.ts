@@ -1619,6 +1619,7 @@ describe('production Context Map RLM repository', () => {
   });
 
   it('evicts a rejected shared source read so a later search can retry', async () => {
+    const hash = await contentSha('Observatory Lumen uses cobalt-fern.');
     let failRead = true;
     const read = vi.fn(async (path) => {
       if (failRead) throw new Error('bounded read failure');
@@ -1632,19 +1633,21 @@ describe('production Context Map RLM repository', () => {
         kind: 'file' as const,
         size: new TextEncoder().encode('Observatory Lumen uses cobalt-fern.').length,
         modifiedMs: 20,
-        sha256: await contentSha('Observatory Lumen uses cobalt-fern.'),
+        sha256: hash,
       })),
       read,
       lexicalSearch: vi.fn(async () => []),
     });
     const scope = { accountId: 'account-1', projectId: 'project-1' };
 
-    await expect(
-      Promise.all([
-        repository.search(scope, 'Observatory Lumen'),
-        repository.search(scope, 'Observatory Lumen'),
-      ]),
-    ).rejects.toThrow('bounded read failure');
+    const rejected = await Promise.allSettled([
+      repository.search(scope, 'Observatory Lumen'),
+      repository.search(scope, 'Observatory Lumen'),
+    ]);
+    expect(rejected).toEqual([
+      { status: 'rejected', reason: new Error('bounded read failure') },
+      { status: 'rejected', reason: new Error('bounded read failure') },
+    ]);
     expect(read).toHaveBeenCalledTimes(1);
 
     failRead = false;

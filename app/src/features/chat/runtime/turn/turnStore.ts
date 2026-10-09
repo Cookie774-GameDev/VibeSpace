@@ -230,6 +230,10 @@ export function hydrateLatestTurn(
   if (existing) return existing;
   const checkpoint = readTurnCheckpoint(accountId, chatId);
   if (!checkpoint) return null;
+  const key = runKey(checkpoint.identity.accountId, checkpoint.identity.runId);
+  // A saved preview may predate a supported move to another chat. Never
+  // replace the retained incarnation or redirect its chat's current state.
+  if (byRun.has(key)) return null;
   // A renderer restart cannot prove that an old provider/controller still owns
   // a nonterminal request. Never resurrect "Running" / "Thinking" forever.
   const restored = isTerminalTurnStatus(checkpoint.status)
@@ -239,7 +243,6 @@ export function hydrateLatestTurn(
         at: Date.now(),
         reason: 'restored_without_live_owner',
       });
-  const key = runKey(restored.identity.accountId, restored.identity.runId);
   byRun.set(key, restored);
   latestByChat.set(chatKey(accountId, chatId), key);
   latestByChatId.set(chatId, key);

@@ -74,7 +74,10 @@ beforeEach(() => {
   });
   markConnectionSessionChecked(['opencode-cli']);
 });
-afterEach(() => cleanup());
+afterEach(async () => {
+  cleanup();
+  await vi.dynamicImportSettled();
+});
 
 describe('catalog diagnostic receipt ownership', () => {
   it('retains the surviving consumer receipt when a cancelled sibling settles later', async () => {
