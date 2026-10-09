@@ -4,7 +4,7 @@ import type {
   AccountTelemetryConsent,
   AccountTelemetryResult,
 } from '@/features/telemetry/accountTelemetryConsent';
-import { telemetryConsentStore } from '@/features/telemetry/telemetryConsent';
+import { TELEMETRY_AUDIT_KEY, telemetryConsentStore } from '@/features/telemetry/telemetryConsent';
 import { Telemetry } from './Telemetry';
 
 const fixture = vi.hoisted(() => ({
@@ -115,6 +115,43 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('Telemetry account and mutation lifetimes', () => {
+  it('shows a truthful audit deletion failure and clears it only after a successful retry', async () => {
+    const before = telemetryConsentStore.getSnapshot();
+    const persisted = localStorage.getItem(TELEMETRY_AUDIT_KEY);
+    render(<Telemetry />);
+    await screen.findByRole('link', { name: 'Read the financial-incentive and telemetry notice' });
+    const remove = Storage.prototype.removeItem;
+    const fault = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (
+      this: Storage,
+      key,
+    ) {
+      if (key === TELEMETRY_AUDIT_KEY) throw new Error('audit storage blocked');
+      return remove.call(this, key);
+    });
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Delete local audit' }));
+      const status = screen.getByText(
+        /Local audit could not be deleted from this device\. Retry deletion\./,
+      );
+      expect(status.getAttribute('aria-live')).toBe('polite');
+      expect(status.textContent).toContain('1 local consent record.');
+      expect(localStorage.getItem(TELEMETRY_AUDIT_KEY)).toBe(persisted);
+      expect(telemetryConsentStore.getSnapshot().consent).toEqual(before.consent);
+      expect(fixture.success).not.toHaveBeenCalled();
+      expect(fixture.update).not.toHaveBeenCalled();
+      expect(fixture.enqueue).not.toHaveBeenCalled();
+    } finally {
+      fault.mockRestore();
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Delete local audit' }));
+    expect(screen.queryByText(/Local audit could not be deleted/)).toBeNull();
+    expect(screen.getByText(/0 local consent records\./)).toBeTruthy();
+    expect(localStorage.getItem(TELEMETRY_AUDIT_KEY)).toBeNull();
+    expect(telemetryConsentStore.getSnapshot().consent).toEqual(before.consent);
+    expect(fixture.update).not.toHaveBeenCalled();
+    expect(fixture.enqueue).not.toHaveBeenCalled();
+  });
+
   it.each(['success', 'failure'] as const)(
     'ignores an old enrollment %s after account A-to-B-to-A',
     async (outcome) => {

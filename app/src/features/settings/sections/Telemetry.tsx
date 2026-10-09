@@ -500,6 +500,8 @@ export function Telemetry() {
         {withdrawal.storageError &&
           'Withdrawal could not be saved to this device. Keep the app open to retry. '}
         {snapshot.storageError && 'Consent changed here, but device storage could not save it. '}
+        {snapshot.auditDeletionError &&
+          'Local audit could not be deleted from this device. Retry deletion. '}
         {accountConsent && accountError ? `${accountError} ` : ''}
         {snapshot.audit.length} local consent {snapshot.audit.length === 1 ? 'record' : 'records'}.
       </p>

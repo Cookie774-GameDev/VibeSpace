@@ -3,6 +3,7 @@ import {
   createTelemetryConsentStore,
   canCollectAppDiagnostics,
   APP_DIAGNOSTICS_CONSENT_KEY,
+  TELEMETRY_AUDIT_KEY,
   DEFAULT_TELEMETRY_CONSENT,
   type TelemetryStorage,
 } from './telemetryConsent';
@@ -107,6 +108,54 @@ const expandedState = {
   discountPercent: 10,
   requiredDataClasses: ['product_usage', 'diagnostics', 'tool_outcomes'],
 } as const;
+
+describe('local audit deletion', () => {
+  it('preserves audit and collection eligibility on failure, then supports a successful retry', () => {
+    const storage = memoryStorage();
+    const store = createTelemetryConsentStore(storage, () => 1_000);
+    store.updateConsent({ productUsage: true, diagnostics: true, toolOutcomes: true });
+    expect(store.acceptAppDiagnostics('a', expandedState)).toBe(true);
+    const before = store.getSnapshot();
+    const persisted = storage.getItem(TELEMETRY_AUDIT_KEY);
+    const remove = storage.removeItem;
+    storage.removeItem = () => {
+      throw new Error('audit storage blocked');
+    };
+    const observations: ReturnType<typeof store.getSnapshot>[] = [];
+    store.subscribe(() => observations.push(store.getSnapshot()));
+
+    expect(() => store.deleteAudit()).not.toThrow();
+    expect(store.getSnapshot()).toEqual({ ...before, auditDeletionError: true });
+    expect(storage.getItem(TELEMETRY_AUDIT_KEY)).toBe(persisted);
+    expect(JSON.parse(store.exportAudit()).audit).toEqual(before.audit);
+    expect(createTelemetryConsentStore(storage).getSnapshot().audit).toEqual(before.audit);
+    expect(observations).toEqual([store.getSnapshot()]);
+    expect(canCollectAppDiagnostics(store.getSnapshot(), 'a', expandedState)).toBe(true);
+
+    storage.removeItem = remove;
+    store.deleteAudit();
+    expect(store.getSnapshot()).toEqual({ ...before, audit: [], auditDeletionError: false });
+    expect(storage.getItem(TELEMETRY_AUDIT_KEY)).toBeNull();
+    expect(JSON.parse(store.exportAudit()).audit).toEqual([]);
+    expect(createTelemetryConsentStore(storage).getSnapshot().audit).toEqual([]);
+    expect(observations).toHaveLength(2);
+    expect(observations[1]).toBe(store.getSnapshot());
+    expect(canCollectAppDiagnostics(store.getSnapshot(), 'a', expandedState)).toBe(true);
+  });
+
+  it('does not clear an existing consent storage error when audit deletion succeeds', () => {
+    const storage = memoryStorage();
+    const store = createTelemetryConsentStore(storage);
+    storage.setItem = () => {
+      throw new Error('consent storage blocked');
+    };
+    store.updateConsent({ productUsage: true });
+    const before = store.getSnapshot();
+    expect(before.storageError).toBe(true);
+    store.deleteAudit();
+    expect(store.getSnapshot()).toEqual({ ...before, audit: [], auditDeletionError: false });
+  });
+});
 
 describe('fresh device consent for expanded diagnostics', () => {
   it('never converts legacy all-class flags into expanded acceptance', () => {

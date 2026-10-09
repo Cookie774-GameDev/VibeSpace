@@ -3,7 +3,7 @@ import {
   startOptionalTelemetryRuntime,
   optionalTelemetryExporter,
 } from './optionalTelemetryRuntime';
-import { telemetryConsentStore } from './telemetryConsent';
+import { TELEMETRY_AUDIT_KEY, telemetryConsentStore } from './telemetryConsent';
 import * as appDiagnosticsModule from './appDiagnostics';
 import type { IntelligenceTelemetryEvent } from '@/lib/ai/intelligenceTelemetry';
 
@@ -89,6 +89,38 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
+it('keeps authorization and exporter state unchanged across audit deletion failure and retry', async () => {
+  telemetryConsentStore.updateConsent({
+    productUsage: true,
+    diagnostics: true,
+    toolOutcomes: true,
+  });
+  stop = startOptionalTelemetryRuntime('a');
+  await vi.advanceTimersByTimeAsync(0);
+  const before = optionalTelemetryExporter.getSnapshot();
+  expect(before.enabled).toBe(true);
+  state.consent.mockClear();
+  const remove = Storage.prototype.removeItem;
+  const fault = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (
+    this: Storage,
+    key,
+  ) {
+    if (key === TELEMETRY_AUDIT_KEY) throw new Error('audit storage blocked');
+    return remove.call(this, key);
+  });
+  telemetryConsentStore.deleteAudit();
+  expect(optionalTelemetryExporter.getSnapshot()).toEqual(before);
+  expect(state.consent).not.toHaveBeenCalled();
+  fault.mockRestore();
+  telemetryConsentStore.deleteAudit();
+  expect(optionalTelemetryExporter.getSnapshot()).toEqual(before);
+  expect(state.consent).not.toHaveBeenCalled();
+  expect(state.invoke).not.toHaveBeenCalled();
+  telemetryConsentStore.revoke();
+  expect(optionalTelemetryExporter.getSnapshot().enabled).toBe(false);
+  expect(state.consent).toHaveBeenCalledOnce();
+});
+
 it('requires all local classes and current account enrollment before exporting new events', async () => {
   telemetryConsentStore.updateConsent({ productUsage: true, diagnostics: true });
   stop = startOptionalTelemetryRuntime('a');

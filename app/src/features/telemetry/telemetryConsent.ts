@@ -42,6 +42,7 @@ export type TelemetryReward = Readonly<{
 
 export type TelemetrySnapshot = Readonly<{
   storageError: boolean;
+  auditDeletionError: boolean;
   revision: number;
   appDiagnosticsConsent: AppDiagnosticsConsent | null;
   consent: TelemetryConsent;
@@ -222,6 +223,7 @@ export function createTelemetryConsentStore(
   );
   let snapshot: TelemetrySnapshot = Object.freeze({
     storageError,
+    auditDeletionError: false,
     revision: 0,
     appDiagnosticsConsent: allClasses(consent) ? appDiagnosticsConsent : null,
     consent,
@@ -342,8 +344,16 @@ export function createTelemetryConsentStore(
       );
     },
     deleteAudit() {
-      snapshot = Object.freeze({ ...snapshot, audit: Object.freeze([]) });
-      storage.removeItem(TELEMETRY_AUDIT_KEY);
+      try {
+        storage.removeItem(TELEMETRY_AUDIT_KEY);
+        snapshot = Object.freeze({
+          ...snapshot,
+          audit: Object.freeze([]),
+          auditDeletionError: false,
+        });
+      } catch {
+        snapshot = Object.freeze({ ...snapshot, auditDeletionError: true });
+      }
       listeners.forEach((listener) => listener());
     },
     resetForTests() {
@@ -357,6 +367,7 @@ export function createTelemetryConsentStore(
         appDiagnosticsConsent: null,
         revision: snapshot.revision + 1,
         audit: Object.freeze([]),
+        auditDeletionError: false,
       });
       listeners.forEach((listener) => listener());
     },

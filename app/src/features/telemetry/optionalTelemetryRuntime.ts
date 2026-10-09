@@ -211,7 +211,14 @@ export function startOptionalTelemetryRuntime(accountId: string | null) {
     synchronize();
     void authorize();
   };
-  const unsubConsent = telemetryConsentStore.subscribe(consentChanged);
+  let consentRevision = telemetryConsentStore.getSnapshot().revision;
+  const unsubConsent = telemetryConsentStore.subscribe(() => {
+    const currentRevision = telemetryConsentStore.getSnapshot().revision;
+    // Audit-only notifications do not change consent or require reauthorization.
+    if (currentRevision === consentRevision) return;
+    consentRevision = currentRevision;
+    consentChanged();
+  });
   const unsubWithdrawal = telemetryWithdrawalQueue.subscribe(consentChanged);
   const unsubRejections = optionalTelemetryExporter.subscribeAuthorizationRejections(
     (rejectedAccount) => {
