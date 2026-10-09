@@ -32,7 +32,13 @@ describe('Context Map focused user-testing repairs', () => {
 
     expect(source).toContain('chooseProjectFiles(false');
     expect(source).toContain("setWorkspaceSection('sources')");
-    expect(source).not.toContain('<ContextRecoveryNotice');
+    const scopedRecovery = source.match(/const scopedRecovery = [\s\S]*?;/u)?.[0];
+    expect(scopedRecovery?.replace(/\s+/gu, ' ')).toBe(
+      'const scopedRecovery = recovery?.accountId === accountId && recovery.workspaceId === workspaceId && recovery.projectId === projectId ? recovery.summary : null;',
+    );
+    expect(source).toContain(
+      'const recoveryNotice = scopedRecovery ? <ContextRecoveryNotice recovery={scopedRecovery} /> : null;',
+    );
     expect(source.indexOf('<ContextSourceCards')).toBeLessThan(
       source.indexOf('<NightlySecondBrainPanel'),
     );
@@ -225,7 +231,7 @@ describe('Context Map focused user-testing repairs', () => {
     expect(restoreFlow).toContain("error.message === 'siyuan_summary_paused_before_run'");
     expect(workspaceBindings.length).toBeGreaterThanOrEqual(syncCalls.length);
     expect(source).toContain('[accountId, applyPersistenceState, projectId, workspaceId]');
-    expect(source).toContain('[accountId, maps, projectId, selectMap, workspaceId]');
+    expect(source).toContain('[accountId, maps, projectId, selectMap, setSiyuanTreeForMap, workspaceId]');
     expect(source).toContain('[accountId, applyPersistenceState, maps, projectId, workspaceId]');
     expect(source).toContain('(auth.workspaceId ?? null) === (workspaceId ?? null)');
   });

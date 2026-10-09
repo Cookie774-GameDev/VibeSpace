@@ -1522,6 +1522,7 @@ export function Composer({
   const [mentionCtx, setMentionCtx] = useState<MentionContext | null>(null);
   const [selectedReferenceKey, setSelectedReferenceKey] = useState<string>('');
   const [slashCtx, setSlashCtx] = useState<SlashContext | null>(null);
+  const dismissedSlashRef = useRef<string | null>(null);
   const [selectedSlashCmd, setSelectedSlashCmd] = useState<string>('');
   const [selectedSlashCommandKey, setSelectedSlashCommandKey] = useState<string>('');
   const selectedHarnessCommandRef = useRef<SlashCommandDef | null>(null);
@@ -2915,6 +2916,10 @@ export function Composer({
   const recomputeSlash = () => {
     const ta = textareaRef.current;
     if (!ta) return;
+    // Keyup and delayed input/catalog work must not undo Escape for the same draft.
+    const signature = JSON.stringify([notesDraftKey, ta.value, ta.selectionStart]);
+    if (dismissedSlashRef.current === signature) return;
+    dismissedSlashRef.current = null;
     const notes = findNotesCommand(ta.value, ta.selectionStart);
     if (notes && dismissedNotesRef.current !== ta.value) {
       setNotesCtx((current) =>
@@ -5938,6 +5943,10 @@ export function Composer({
     if (slashCtx) {
       if (e.key === 'Escape') {
         e.preventDefault();
+        const input = textareaRef.current;
+        dismissedSlashRef.current = input
+          ? JSON.stringify([notesDraftKey, input.value, input.selectionStart])
+          : null;
         setSlashCtx(null);
         return;
       }
@@ -7561,6 +7570,7 @@ export function Composer({
                 value={text}
                 rows={1}
                 onChange={(e) => {
+                  dismissedSlashRef.current = null;
                   const nextDraft = e.target.value;
                   if (selectedHarnessCommandRef.current &&
                       !nextDraft.startsWith(`/${selectedHarnessCommandRef.current.commandIdentifier}`)) {

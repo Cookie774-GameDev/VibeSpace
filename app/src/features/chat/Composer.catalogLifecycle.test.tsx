@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth';
 import { harnessRuntimeManager } from '@/lib/harness/runtimeManager';
 import { nativeOpenCodeRequest } from '@/lib/harness/openCodeNativeTransport';
 import { Composer } from './Composer';
+import { checkpointNotesComposer } from '@/features/notes/notesComposerDraft';
 
 const fixture = vi.hoisted(() => ({ empty: [] as unknown[], backend: 'opencode' as 'opencode' | 'codex' }));
 vi.mock('dexie-react-hooks', () => ({
@@ -154,4 +155,65 @@ it('updates the real Composer active descendant between local and native Codex M
   } finally {
     for (const name of ['jarvis:send', 'jarvis:steer', 'jarvis:cancel', 'jarvis:queue']) window.removeEventListener(name, interference);
   }
+});
+
+
+it('keeps Escape dismissed through keyup, a late frame, same-caret click and catalog refresh', async () => {
+  const input = mount('catalog-escape-events');
+  const interference = vi.fn();
+  const events = ['jarvis:send', 'jarvis:steer', 'jarvis:cancel', 'jarvis:queue'];
+  for (const name of events) window.addEventListener(name, interference);
+  try {
+    await act(async () => pending[0]!(response([])));
+    fireEvent.change(input, { target: { value: '/s', selectionStart: 2 } });
+    await screen.findByRole('listbox', { name: 'Slash commands' });
+    fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' });
+    fireEvent.keyUp(input, { key: 'Escape', code: 'Escape' });
+    await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' }) === null).toBe(true);
+    fireEvent.click(input);
+    await act(async () => { refresh!(); });
+    await act(async () => pending[1]!(response([command])));
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' }) === null).toBe(true);
+    expect(input.value).toBe('/s');
+    expect(interference).not.toHaveBeenCalled();
+  } finally { for (const name of events) window.removeEventListener(name, interference); }
+});
+
+it('reopens slash suggestions after a deliberate edit or changed caret', async () => {
+  const input = mount('catalog-escape-reopen');
+  await act(async () => pending[0]!(response([])));
+  fireEvent.change(input, { target: { value: '/s', selectionStart: 2 } });
+  await screen.findByRole('listbox', { name: 'Slash commands' });
+  fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' });
+  fireEvent.keyUp(input, { key: 'Escape', code: 'Escape' });
+  expect(screen.queryByRole('listbox', { name: 'Slash commands' }) === null).toBe(true);
+  fireEvent.change(input, { target: { value: '/sk', selectionStart: 3 } });
+  await screen.findByRole('listbox', { name: 'Slash commands' });
+  fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' });
+  fireEvent.keyUp(input, { key: 'Escape', code: 'Escape' });
+  input.setSelectionRange(0, 0);
+  fireEvent.keyUp(input, { key: 'ArrowLeft', code: 'ArrowLeft' });
+  expect(screen.queryByRole('listbox', { name: 'Slash commands' }) === null).toBe(true);
+  input.setSelectionRange(3, 3);
+  fireEvent.keyUp(input, { key: 'ArrowRight', code: 'ArrowRight' });
+  expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeTruthy();
+  expect(input.value).toBe('/sk');
+});
+
+it('does not carry an Escape dismissal into another chat with the same saved text and caret', async () => {
+  const view = render(<TooltipProvider><Composer chatId={'catalog-escape-scope-a' as never} /></TooltipProvider>);
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  await act(async () => pending[0]!(response([])));
+  fireEvent.change(input, { target: { value: '/s', selectionStart: 2 } });
+  await screen.findByRole('listbox', { name: 'Slash commands' });
+  fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' });
+  fireEvent.keyUp(input, { key: 'Escape', code: 'Escape' });
+  expect(screen.queryByRole('listbox', { name: 'Slash commands' }) === null).toBe(true);
+  checkpointNotesComposer({ accountId: 'catalog-owner', projectId: 'catalog-project' }, 'catalog-escape-scope-b', '/s', []);
+  view.rerender(<TooltipProvider><Composer chatId={'catalog-escape-scope-b' as never} /></TooltipProvider>);
+  await waitFor(() => expect(input.value).toBe('/s'));
+  input.setSelectionRange(2, 2);
+  fireEvent.keyUp(input, { key: 'ArrowRight', code: 'ArrowRight' });
+  expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeTruthy();
 });
